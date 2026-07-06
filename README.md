@@ -1,4 +1,4 @@
-# LD2L — Learn Dota 2 League
+# Under 5k League
 
 A cleaner, simpler, fully-functional amateur Dota 2 league site. Players sign in
 with Steam, join the current season, get drafted onto teams via a live auction,

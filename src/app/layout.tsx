@@ -7,9 +7,9 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
-  title: "LD2L — Learn Dota 2 League",
+  title: "Under 5k League",
   description:
-    "Sign in with Steam, join the season, get drafted, and compete. A friendly Dota 2 amateur league.",
+    "A sub-5000 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.",
 };
 
 export default async function RootLayout({
@@ -37,7 +37,7 @@ export default async function RootLayout({
           {children}
         </main>
         <footer className="border-t border-line/70 py-6 text-center text-sm text-muted">
-          LD2L · a cleaner Learn Dota 2 League
+          Under 5k League · a sub-5000 MMR Dota 2 league
         </footer>
         <Toaster />
       </body>

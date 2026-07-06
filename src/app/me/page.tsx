@@ -22,7 +22,7 @@ import {
   RankBadge,
 } from "@/components/ui";
 
-export const metadata = { title: "Your profile · LD2L" };
+export const metadata = { title: "Your profile · Under 5k League" };
 
 export default async function MePage() {
   const user = await getSessionUser();

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
-export const metadata = { title: "Schedule · LD2L" };
+export const metadata = { title: "Schedule · Under 5k League" };
 
 type MatchStandin = StandinAssignment & { standin: User; replaced: User | null };
 

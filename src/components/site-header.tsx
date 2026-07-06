@@ -45,10 +45,10 @@ export function SiteHeader({
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">
         <Link href="/" className="flex items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-bold text-brand-fg">
-            LD
+            5K
           </span>
           <span className="hidden text-lg font-semibold tracking-tight sm:block">
-            LD2L
+            Under 5k League
           </span>
         </Link>
 

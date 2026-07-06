@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { Card, CardBody } from "@/components/ui";
 
-export const metadata = { title: "Sign in · LD2L" };
+export const metadata = { title: "Sign in · Under 5k League" };
 
 export default async function LoginPage() {
   const user = await getSessionUser();
@@ -17,9 +17,9 @@ export default async function LoginPage() {
         <CardBody className="space-y-6 text-center">
           <div>
             <div className="mx-auto grid h-14 w-14 place-items-center rounded-xl bg-brand text-xl font-bold text-brand-fg">
-              LD
+              5K
             </div>
-            <h1 className="mt-4 text-2xl font-bold">Welcome to LD2L</h1>
+            <h1 className="mt-4 text-2xl font-bold">Welcome to Under 5k League</h1>
             <p className="mt-1 text-sm text-muted">
               Sign in with Steam to join the season.
             </p>

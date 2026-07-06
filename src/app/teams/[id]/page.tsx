@@ -14,7 +14,7 @@ import {
   Stat,
 } from "@/components/ui";
 
-export const metadata = { title: "Team · LD2L" };
+export const metadata = { title: "Team · Under 5k League" };
 
 function fmtDate(d: Date | null): string | null {
   if (!d) return null;

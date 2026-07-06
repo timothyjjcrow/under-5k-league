@@ -13,7 +13,7 @@ import {
   RankBadge,
 } from "@/components/ui";
 
-export const metadata = { title: "Players · LD2L" };
+export const metadata = { title: "Players · Under 5k League" };
 
 export default async function PlayersPage() {
   const season = await getActiveSeason();
