@@ -1,0 +1,205 @@
+// LD2L — Learn Dota 2 League
+// SQLite is used for zero-config local dev + easy end-to-end testing.
+// NOTE: SQLite does not support Prisma enums, so status/type/role fields are
+// Strings validated in app code (see src/lib/constants.ts). This is structured
+// so a later switch to Postgres (with real enums) is a mechanical change.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         String   @id @default(cuid())
+  steamId    String   @unique
+  name       String
+  avatar        String?
+  profileUrl    String?
+  dotaAccountId Int? // Dota 2 32-bit account id (defaults to one derived from steamId)
+  rankTier      Int? // OpenDota rank_tier (tens=medal, ones=stars); null if unknown
+  role          String   @default("USER") // USER | ADMIN
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  registrations       Registration[]
+  teamMemberships     TeamMember[]
+  captainedTeams      Team[]              @relation("TeamCaptain")
+  bids                Bid[]
+  standinAssignments  StandinAssignment[] @relation("StandinUser")
+  replacedAssignments StandinAssignment[] @relation("ReplacedUser")
+}
+
+model Season {
+  id             String   @id @default(cuid())
+  name           String
+  status         String   @default("SIGNUPS") // SIGNUPS | DRAFT | REGULAR_SEASON | PLAYOFFS | COMPLETE
+  minTeams       Int      @default(4)
+  teamSize       Int      @default(5)
+  draftBudget    Int      @default(100)
+  maxMmr         Int      @default(0) // signup MMR cap; players above it can't join (0 = no cap)
+  currentWeek    Int      @default(0)
+  isActive       Boolean  @default(true)
+  championTeamId String?
+  dotaLeagueId   String? // optional Valve league id, if the league is ticketed
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  registrations Registration[]
+  teams         Team[]
+  draft         Draft?
+  matches       Match[]
+  teamMembers   TeamMember[]
+  bids          Bid[]
+}
+
+model Registration {
+  id           String   @id @default(cuid())
+  seasonId     String
+  userId       String
+  type         String   @default("PLAYER") // PLAYER | STANDIN
+  mmr          Int      @default(0)
+  wantsCaptain   Boolean  @default(false)
+  roles          String   @default("") // preferred positions, comma-separated 1-5
+  favoriteHeroes String   @default("")
+  statement      String   @default("") // what the player wants from the league
+  captainNote    String   @default("") // message to captains/drafters
+  status         String   @default("ACTIVE") // ACTIVE | WITHDRAWN
+  createdAt      DateTime @default(now())
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, userId])
+}
+
+model Team {
+  id         String   @id @default(cuid())
+  seasonId   String
+  name       String
+  captainId  String
+  budget     Int      @default(100)
+  draftOrder Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  season      Season       @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  captain     User         @relation("TeamCaptain", fields: [captainId], references: [id])
+  members     TeamMember[]
+  bids        Bid[]
+  homeMatches Match[]      @relation("HomeTeam")
+  awayMatches Match[]      @relation("AwayTeam")
+
+  @@unique([seasonId, captainId])
+}
+
+model TeamMember {
+  id        String   @id @default(cuid())
+  seasonId  String
+  teamId    String
+  userId    String
+  price     Int      @default(0)
+  isCaptain Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, userId])
+}
+
+// Singleton per season — server-authoritative auction draft state.
+model Draft {
+  id               String    @id @default(cuid())
+  seasonId         String    @unique
+  status           String    @default("NOT_STARTED") // NOT_STARTED | IN_PROGRESS | PAUSED | COMPLETE
+  nominatorTeamId  String?
+  nominatedUserId  String?
+  currentBid       Int       @default(0)
+  currentBidTeamId String?
+  bidEndsAt        DateTime?
+  nominationIndex  Int       @default(0)
+  updatedAt        DateTime  @updatedAt
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  bids   Bid[]
+}
+
+model Bid {
+  id        String   @id @default(cuid())
+  draftId   String
+  seasonId  String
+  teamId    String
+  userId    String // the player being bid on
+  amount    Int
+  createdAt DateTime @default(now())
+
+  draft  Draft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+}
+
+model Match {
+  id           String    @id @default(cuid())
+  seasonId     String
+  week         Int
+  phase        String    @default("REGULAR") // REGULAR | PLAYOFF | FINAL
+  homeTeamId   String
+  awayTeamId   String
+  scheduledAt  DateTime?
+  status       String    @default("SCHEDULED") // SCHEDULED | LIVE | COMPLETED
+  homeScore    Int       @default(0)
+  awayScore    Int       @default(0)
+  winnerTeamId String?
+  bracketSlot  String?
+  createdAt    DateTime  @default(now())
+
+  season   Season              @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  homeTeam Team                @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeam Team                @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  standins StandinAssignment[]
+  games    Game[]
+}
+
+model StandinAssignment {
+  id              String   @id @default(cuid())
+  matchId         String
+  teamId          String
+  standinUserId   String
+  replacingUserId String?
+  createdAt       DateTime @default(now())
+
+  match    Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  standin  User  @relation("StandinUser", fields: [standinUserId], references: [id])
+  replaced User? @relation("ReplacedUser", fields: [replacingUserId], references: [id])
+}
+
+// An individual Dota 2 game fetched from OpenDota, rolled up into a league Match.
+// A league Match (series) can contain several games (Bo1/Bo2/Bo3…).
+model Game {
+  id            String   @id @default(cuid())
+  matchId       String
+  dotaMatchId   String   @unique
+  radiantWin    Boolean
+  durationSecs  Int      @default(0)
+  startTime     Int      @default(0)
+  radiantScore  Int      @default(0)
+  direScore     Int      @default(0)
+  radiantTeamId String?
+  direTeamId    String?
+  winnerTeamId  String?
+  players       String   @default("[]") // JSON: per-player stats mapped to our users where known
+  fetchedAt     DateTime @default(now())
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+}
+
+// Simple key/value store for global config (e.g. activeSeasonId).
+model Setting {
+  key   String @id
+  value String
+}
