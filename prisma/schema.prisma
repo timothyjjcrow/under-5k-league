@@ -121,6 +121,7 @@ model Draft {
   currentBid       Int       @default(0)
   currentBidTeamId String?
   bidEndsAt        DateTime?
+  nominationEndsAt DateTime? // deadline for the team on the clock to nominate
   nominationIndex  Int       @default(0)
   updatedAt        DateTime  @updatedAt
 

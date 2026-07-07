@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import {
+  DEFAULTS,
   DRAFT_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -133,15 +134,26 @@ export async function startDraftState(seasonId: string) {
       status: DRAFT_STATUS.IN_PROGRESS,
       nominatorTeamId: teams[0]?.id ?? null,
       nominationIndex: 0,
+      nominationEndsAt: new Date(
+        Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+      ),
     },
   });
 }
 
-/** Force the auction clock into the past so resolveExpiredNomination fires. */
+/** Force the auction (bid) clock into the past so resolveExpiredNomination fires. */
 export async function expireClock(seasonId: string) {
   await prisma.draft.update({
     where: { seasonId },
     data: { bidEndsAt: new Date(Date.now() - 1000) },
+  });
+}
+
+/** Force the nomination clock into the past so resolveStalledNomination fires. */
+export async function expireNominationClock(seasonId: string) {
+  await prisma.draft.update({
+    where: { seasonId },
+    data: { nominationEndsAt: new Date(Date.now() - 1000) },
   });
 }
 

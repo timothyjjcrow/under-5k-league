@@ -10,6 +10,7 @@ import {
   DRAFT_STATUS,
   MATCH_STATUS,
   MATCH_PHASE,
+  DEFAULTS,
   type SeasonStatus,
 } from "@/lib/constants";
 import { roundRobin } from "@/lib/schedule";
@@ -198,6 +199,9 @@ export async function startDraft(
       where: { id: season.id },
       data: { status: SEASON_STATUS.DRAFT },
     });
+    const nominationEndsAt = new Date(
+      Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+    );
     await tx.draft.upsert({
       where: { seasonId: season.id },
       create: {
@@ -205,6 +209,7 @@ export async function startDraft(
         status: DRAFT_STATUS.IN_PROGRESS,
         nominatorTeamId: teams[0].id,
         nominationIndex: 0,
+        nominationEndsAt,
       },
       update: {
         status: DRAFT_STATUS.IN_PROGRESS,
@@ -214,6 +219,7 @@ export async function startDraft(
         currentBid: 0,
         currentBidTeamId: null,
         bidEndsAt: null,
+        nominationEndsAt,
       },
     });
   });

@@ -4,9 +4,11 @@ import {
   getDraftState,
   nominatePlayer,
   placeBid,
+  resolveStalledNomination,
 } from "@/lib/draft-service";
 import {
   expireClock,
+  expireNominationClock,
   makeCaptain,
   makePlayer,
   makeSeason,
@@ -98,5 +100,39 @@ describe("draft robustness — withdrawn players", () => {
     expect(
       (await nominatePlayer(season.id, sessionFor(capA.user), quitter.id, 5)).ok,
     ).toBe(false);
+  });
+});
+
+describe("draft robustness — stall auto-advance", () => {
+  it("auto-nominates the top available player when the nomination clock runs out", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "A", 100, 0); // on the clock
+    await makeCaptain(season.id, "B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000); // highest MMR
+    await makePlayer(season.id, "Scrub", 1000);
+    await startDraftState(season.id);
+
+    await expireNominationClock(season.id);
+    expect(await resolveStalledNomination(season.id)).toBe(true);
+
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatedUserId).toBe(star.id); // top available
+    expect(draft.currentBidTeamId).toBe(capA.team.id); // for the stalled captain
+    expect(draft.currentBid).toBe(1); // at the minimum bid
+    expect(draft.bidEndsAt).not.toBeNull(); // bidding is now open
+  });
+
+  it("auto-advances through the getDraftState poll when a captain stalls", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    await makeCaptain(season.id, "A", 100, 0);
+    await makeCaptain(season.id, "B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    await startDraftState(season.id);
+
+    await expireNominationClock(season.id);
+    const state = await getDraftState(season.id, null);
+    expect(state?.nominatedPlayer?.userId).toBe(star.id);
   });
 });

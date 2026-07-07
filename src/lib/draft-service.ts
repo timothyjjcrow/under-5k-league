@@ -76,7 +76,7 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     if (nextIdx === -1) {
       await tx.draft.update({
         where: { seasonId },
-        data: { ...cleared, status: DRAFT_STATUS.COMPLETE },
+        data: { ...cleared, nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
       });
     } else {
       await tx.draft.update({
@@ -85,9 +85,78 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
           ...cleared,
           nominatorTeamId: teams[nextIdx].id,
           nominationIndex: nextIdx,
+          nominationEndsAt: new Date(
+            Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+          ),
         },
       });
     }
+    return true;
+  });
+}
+
+/**
+ * If the team on the clock lets their nomination timer run out, auto-nominate
+ * the top available player for them at the minimum bid — so a live draft never
+ * stalls on an absent captain. Idempotent; safe to call on every poll.
+ */
+export async function resolveStalledNomination(
+  seasonId: string,
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const draft = await tx.draft.findUnique({ where: { seasonId } });
+    if (
+      !draft ||
+      draft.status !== DRAFT_STATUS.IN_PROGRESS ||
+      draft.nominatedUserId ||
+      !draft.nominatorTeamId ||
+      !draft.nominationEndsAt ||
+      draft.nominationEndsAt.getTime() > Date.now()
+    ) {
+      return false;
+    }
+
+    const [season, nominator] = await Promise.all([
+      tx.season.findUnique({ where: { id: seasonId } }),
+      tx.team.findFirst({
+        where: { id: draft.nominatorTeamId },
+        include: { _count: { select: { members: true } } },
+      }),
+    ]);
+    if (!season || !nominator) return false;
+    if (teamNeed(season.teamSize, nominator._count.members) <= 0) return false;
+
+    const [regs, members] = await Promise.all([
+      tx.registration.findMany({
+        where: { seasonId, status: "ACTIVE", type: "PLAYER" },
+        orderBy: { mmr: "desc" },
+      }),
+      tx.teamMember.findMany({ where: { seasonId }, select: { userId: true } }),
+    ]);
+    const drafted = new Set(members.map((m) => m.userId));
+    const pick = regs.find((r) => !drafted.has(r.userId));
+    if (!pick) return false;
+
+    const amount = DEFAULTS.MIN_BID;
+    await tx.draft.update({
+      where: { seasonId },
+      data: {
+        nominatedUserId: pick.userId,
+        currentBid: amount,
+        currentBidTeamId: nominator.id,
+        bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000),
+        nominationEndsAt: null,
+      },
+    });
+    await tx.bid.create({
+      data: {
+        draftId: draft.id,
+        seasonId,
+        teamId: nominator.id,
+        userId: pick.userId,
+        amount,
+      },
+    });
     return true;
   });
 }
@@ -107,6 +176,7 @@ async function loadTeamsWithCounts(seasonId: string) {
 /** Everything the draft room client needs, tailored to the viewing user. */
 export async function getDraftState(seasonId: string, viewer: SessionUser | null) {
   await resolveExpiredNomination(seasonId);
+  await resolveStalledNomination(seasonId);
 
   const [season, draft, teams, playerRegs, members] = await Promise.all([
     prisma.season.findUnique({ where: { id: seasonId } }),
@@ -174,6 +244,9 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
     minBid: DEFAULTS.MIN_BID,
     now,
     bidEndsAt: draft?.bidEndsAt ? draft.bidEndsAt.getTime() : null,
+    nominationEndsAt: draft?.nominationEndsAt
+      ? draft.nominationEndsAt.getTime()
+      : null,
     nominatorTeamId: draft?.nominatorTeamId ?? null,
     currentBid: draft?.currentBid ?? 0,
     currentBidTeamId: draft?.currentBidTeamId ?? null,
@@ -277,6 +350,7 @@ export async function nominatePlayer(
         currentBid: amount,
         currentBidTeamId: nominator.id,
         bidEndsAt,
+        nominationEndsAt: null,
       },
     });
     await tx.bid.create({

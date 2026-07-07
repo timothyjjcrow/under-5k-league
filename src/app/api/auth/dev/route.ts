@@ -4,9 +4,13 @@ import { createSession } from "@/lib/auth";
 import { upsertLeagueUser } from "@/lib/users";
 
 // Mock login for local development and automated tests. Disabled unless
-// ALLOW_DEV_LOGIN=true. Never enable in production.
+// ALLOW_DEV_LOGIN=true, and hard-blocked in production regardless (defense in
+// depth so a stray env var can never open this backdoor on the live site).
 export async function GET(req: NextRequest) {
-  if (process.env.ALLOW_DEV_LOGIN !== "true") {
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.ALLOW_DEV_LOGIN !== "true"
+  ) {
     return NextResponse.json({ error: "dev login disabled" }, { status: 403 });
   }
   const p = req.nextUrl.searchParams;

@@ -62,6 +62,9 @@ export const DEFAULTS = {
   DRAFT_BUDGET: 100,
   // Seconds the auction clock runs for a nominated player; each new bid resets it.
   BID_TIMER_SECONDS: 30,
+  // Seconds the team on the clock has to nominate before the draft auto-picks
+  // the top available player for them (keeps a live draft from stalling).
+  NOMINATION_TIMER_SECONDS: 90,
   // Minimum opening nomination bid.
   MIN_BID: 1,
 } as const;
