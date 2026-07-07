@@ -2,8 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Avatar } from "@/components/ui";
+import { Avatar, Badge } from "@/components/ui";
 import { cn } from "@/lib/utils";
+
+const PHASE_LABEL: Record<string, string> = {
+  SIGNUPS: "Signups",
+  DRAFT: "Draft",
+  REGULAR_SEASON: "Regular season",
+  PLAYOFFS: "Playoffs",
+  COMPLETE: "Complete",
+};
+
+const PHASE_TONE: Record<string, "brand" | "accent" | "success" | "info"> = {
+  SIGNUPS: "info",
+  DRAFT: "accent",
+  REGULAR_SEASON: "success",
+  PLAYOFFS: "accent",
+  COMPLETE: "brand",
+};
 
 type HeaderUser = {
   name: string;
@@ -77,9 +93,14 @@ export function SiteHeader({
 
         <div className="ml-auto flex items-center gap-3">
           {seasonName ? (
-            <span className="hidden text-sm text-muted md:block">
-              {seasonName}
-            </span>
+            <div className="hidden items-center gap-2 md:flex">
+              {phase ? (
+                <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+                  {PHASE_LABEL[phase] ?? phase}
+                </Badge>
+              ) : null}
+              <span className="text-sm text-muted">{seasonName}</span>
+            </div>
           ) : null}
 
           {user ? (
