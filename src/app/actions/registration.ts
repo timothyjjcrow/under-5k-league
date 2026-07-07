@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
-import { SEASON_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
+import { REGISTRATION_TYPE } from "@/lib/constants";
+import { registrationGate } from "@/lib/registration";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -45,26 +46,19 @@ export async function saveRegistration(
   const statement = str(formData, "statement").slice(0, 1000);
   const captainNote = str(formData, "captainNote").slice(0, 1000);
 
-  if (season.maxMmr > 0 && mmr > season.maxMmr) {
-    return {
-      error: `This league is capped at ${season.maxMmr} MMR — you entered ${mmr}.`,
-    };
-  }
-
   const existing = await prisma.registration.findUnique({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
   });
 
-  // Full players can only newly join during SIGNUPS. Standins may sign up any
-  // time (they fill in during the running season). Existing signups can always
-  // be updated.
-  if (
-    !existing &&
-    type === REGISTRATION_TYPE.PLAYER &&
-    season.status !== SEASON_STATUS.SIGNUPS
-  ) {
-    return { error: "Player signups are closed for this season" };
-  }
+  // MMR cap + "new full players only during SIGNUPS" (standins any time;
+  // existing signups can always be updated). Rules live in registrationGate.
+  const gateError = registrationGate({
+    season,
+    type,
+    mmr,
+    hasExisting: !!existing,
+  });
+  if (gateError) return { error: gateError };
 
   await prisma.registration.upsert({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
