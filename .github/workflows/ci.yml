@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: types, unit, integration
+    runs-on: ubuntu-latest
+    env:
+      # Unit tests are pure; integration tests override this with their own
+      # test.db. A value is set so Prisma Client construction is happy.
+      DATABASE_URL: "file:./prisma/ci.db"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18"
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npm test
+      - name: Integration tests
+        run: npm run test:integration
+
+  e2e:
+    name: playwright e2e
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "file:./prisma/dev.db"
+      ALLOW_DEV_LOGIN: "true"
+      AUTH_SECRET: "ci-secret-please-change-0123456789abcdef"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18"
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Create the dev database schema
+        run: npx prisma db push --skip-generate
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run e2e (seeds the DB + boots next dev)
+        run: npm run test:e2e
