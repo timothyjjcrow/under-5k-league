@@ -6,6 +6,12 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { roundRobin } from "@/lib/schedule";
+import {
+  getDraftState,
+  nominatePlayer,
+  resolveExpiredNomination,
+} from "@/lib/draft-service";
+import { advancePlayoffBracket } from "@/lib/playoff-service";
 import type { SessionUser } from "@/lib/auth";
 
 /** Wipe every table (children first) so each test starts from empty. */
@@ -172,6 +178,26 @@ export async function generateRegularSchedule(seasonId: string) {
   return prisma.match.findMany({ where: { seasonId }, orderBy: { week: "asc" } });
 }
 
+/** Auto-run the auction: the team on the clock nominates the top available
+ *  player at the minimum bid, unopposed, until every roster is full. */
+export async function runDraftToCompletion(seasonId: string) {
+  for (let step = 0; step < 500; step++) {
+    const state = await getDraftState(seasonId, null);
+    if (!state || state.status === DRAFT_STATUS.COMPLETE) return;
+    const nominatorTeamId = state.nominatorTeamId;
+    const pick = state.available[0];
+    if (!nominatorTeamId || !pick) return;
+    const team = await prisma.team.findUniqueOrThrow({
+      where: { id: nominatorTeamId },
+      include: { captain: true },
+    });
+    await nominatePlayer(seasonId, sessionFor(team.captain), pick.userId, state.minBid);
+    await expireClock(seasonId);
+    await resolveExpiredNomination(seasonId);
+  }
+  throw new Error("draft did not complete within the step budget");
+}
+
 /** Record a match result the way the recordResult action does. */
 export async function recordMatch(
   matchId: string,
@@ -195,4 +221,27 @@ export async function recordMatch(
     },
   });
   return winnerTeamId;
+}
+
+/** Play out every playoff round (home team wins) until a champion is crowned. */
+export async function drivePlayoffsToChampion(seasonId: string) {
+  for (let guard = 0; guard < 20; guard++) {
+    const season = await prisma.season.findUniqueOrThrow({
+      where: { id: seasonId },
+    });
+    if (season.status === SEASON_STATUS.COMPLETE) return season;
+    const open = await prisma.match.findMany({
+      where: {
+        seasonId,
+        phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+        status: { not: MATCH_STATUS.COMPLETED },
+      },
+    });
+    if (open.length === 0) break;
+    for (const m of open) {
+      await recordMatch(m.id, 2, 0);
+      await advancePlayoffBracket(seasonId);
+    }
+  }
+  return prisma.season.findUniqueOrThrow({ where: { id: seasonId } });
 }
