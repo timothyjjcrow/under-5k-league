@@ -11,6 +11,8 @@ import {
   CardHeader,
   EmptyState,
   Progress,
+  RankBadge,
+  RoleBadges,
   Stat,
   buttonClasses,
 } from "@/components/ui";
@@ -328,7 +330,9 @@ async function RecentSignups({ seasonId }: { seasonId: string }) {
         >
           <Avatar name={r.user.name} src={r.user.avatar} size={26} />
           <span className="text-sm">{r.user.name}</span>
-          <span className="text-xs text-muted">{r.mmr} MMR</span>
+          <RankBadge rankTier={r.user.rankTier} />
+          <RoleBadges roles={r.roles} />
+          <span className="text-xs text-muted">{r.mmr}</span>
         </div>
       ))}
     </div>
