@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Under 5k League">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f24a4a"/>
+      <stop offset="1" stop-color="#d12f2f"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="15" fill="url(#g)"/>
+  <text x="32" y="33" text-anchor="middle" dominant-baseline="central"
+        font-family="Arial, Helvetica, ui-sans-serif, system-ui, sans-serif"
+        font-size="30" font-weight="700" letter-spacing="-1" fill="#ffffff">5K</text>
+</svg>

@@ -1,15 +1,35 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
+import { SiteFooter } from "@/components/site-footer";
 import { Toaster } from "@/components/toaster";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+const DESCRIPTION =
+  "A sub-5000 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.";
+
 export const metadata: Metadata = {
-  title: "Under 5k League",
-  description:
-    "A sub-5000 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: "Under 5k League",
+    template: "%s · Under 5k League",
+  },
+  description: DESCRIPTION,
+  applicationName: "Under 5k League",
+  openGraph: {
+    title: "Under 5k League",
+    description: DESCRIPTION,
+    siteName: "Under 5k League",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Under 5k League",
+    description: DESCRIPTION,
+  },
 };
 
 export default async function RootLayout({
@@ -36,9 +56,10 @@ export default async function RootLayout({
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
           {children}
         </main>
-        <footer className="border-t border-line/70 py-6 text-center text-sm text-muted">
-          Under 5k League · a sub-5000 MMR Dota 2 league
-        </footer>
+        <SiteFooter
+          seasonName={season?.name ?? null}
+          phase={season?.status ?? null}
+        />
         <Toaster />
       </body>
     </html>

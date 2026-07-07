@@ -12,6 +12,7 @@ import {
 import { steamIdToAccountId } from "@/lib/dota";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { HeroPicker } from "@/components/hero-picker";
 import {
   Avatar,
   Badge,
@@ -22,7 +23,7 @@ import {
   RankBadge,
 } from "@/components/ui";
 
-export const metadata = { title: "Your profile · Under 5k League" };
+export const metadata = { title: "Your profile" };
 
 export default async function MePage() {
   const user = await getSessionUser();
@@ -183,19 +184,17 @@ export default async function MePage() {
               </div>
 
               <div>
-                <label
-                  htmlFor="favoriteHeroes"
-                  className="mb-1.5 block text-sm font-medium"
-                >
+                <label className="mb-1.5 block text-sm font-medium">
                   Favorite heroes
                 </label>
-                <input
-                  id="favoriteHeroes"
+                <HeroPicker
                   name="favoriteHeroes"
-                  defaultValue={reg?.favoriteHeroes ?? ""}
-                  placeholder="e.g. Invoker, Pudge, Juggernaut"
-                  className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+                  defaultValue={reg?.favoriteHeroes}
                 />
+                <p className="mt-1 text-xs text-muted">
+                  Pick the heroes you&apos;re known for — captains see these
+                  during the draft.
+                </p>
               </div>
 
               <div>

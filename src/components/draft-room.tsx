@@ -1,9 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Avatar, Badge, RankBadge, buttonClasses } from "@/components/ui";
+import {
+  Avatar,
+  Badge,
+  HeroList,
+  RankBadge,
+  RoleBadges,
+  buttonClasses,
+} from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { parseRoles } from "@/lib/roles";
 import type { DraftState } from "@/lib/draft-service";
 
 export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
@@ -141,11 +147,7 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted">
                     {state.nominatedPlayer.mmr} MMR
                     <RankBadge rankTier={state.nominatedPlayer.rankTier} />
-                    {parseRoles(state.nominatedPlayer.roles).length > 0 ? (
-                      <span className="text-xs">
-                        Pos {parseRoles(state.nominatedPlayer.roles).join("/")}
-                      </span>
-                    ) : null}
+                    <RoleBadges roles={state.nominatedPlayer.roles} />
                   </div>
                 </div>
               </div>
@@ -164,9 +166,12 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
               state.nominatedPlayer.captainNote ? (
                 <div className="w-full space-y-1 border-t border-line pt-3 text-sm">
                   {state.nominatedPlayer.favoriteHeroes ? (
-                    <div>
-                      <span className="text-muted">Heroes:</span>{" "}
-                      {state.nominatedPlayer.favoriteHeroes}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-muted">Heroes:</span>
+                      <HeroList
+                        value={state.nominatedPlayer.favoriteHeroes}
+                        size={30}
+                      />
                     </div>
                   ) : null}
                   {state.nominatedPlayer.captainNote ? (
@@ -280,11 +285,7 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
                       {p.name}
                     </span>
                     <span className="flex items-center gap-2 text-xs text-muted">
-                      {parseRoles(p.roles).length > 0 ? (
-                        <span className="text-[10px]">
-                          {parseRoles(p.roles).join("/")}
-                        </span>
-                      ) : null}
+                      <RoleBadges roles={p.roles} />
                       <RankBadge rankTier={p.rankTier} />
                       {p.mmr}
                     </span>

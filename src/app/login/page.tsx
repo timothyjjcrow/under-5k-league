@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { Card, CardBody } from "@/components/ui";
 
-export const metadata = { title: "Sign in · Under 5k League" };
+export const metadata = { title: "Sign in" };
 
 export default async function LoginPage() {
   const user = await getSessionUser();
@@ -16,11 +16,15 @@ export default async function LoginPage() {
       <Card>
         <CardBody className="space-y-6 text-center">
           <div>
-            <div className="mx-auto grid h-14 w-14 place-items-center rounded-xl bg-brand text-xl font-bold text-brand-fg">
-              5K
-            </div>
-            <h1 className="mt-4 text-2xl font-bold">Welcome to Under 5k League</h1>
-            <p className="mt-1 text-sm text-muted">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/banner.png"
+              alt="Under 5k League — amateur Dota 2 for players under 5000 MMR"
+              width={1024}
+              height={400}
+              className="mx-auto w-full rounded-lg border border-line/70 shadow-sm"
+            />
+            <p className="mt-4 text-sm text-muted">
               Sign in with Steam to join the season.
             </p>
           </div>

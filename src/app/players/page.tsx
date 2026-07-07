@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
-import { parseRoles } from "@/lib/roles";
+import { steamIdToAccountId } from "@/lib/dota";
+import { PlayerPool } from "@/components/player-pool";
 import {
   Avatar,
   Badge,
@@ -11,9 +12,10 @@ import {
   EmptyState,
   PageTitle,
   RankBadge,
+  RoleBadges,
 } from "@/components/ui";
 
-export const metadata = { title: "Players · Under 5k League" };
+export const metadata = { title: "Players" };
 
 export default async function PlayersPage() {
   const season = await getActiveSeason();
@@ -51,6 +53,21 @@ export default async function PlayersPage() {
   const draftedUserIds = new Set(
     teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
+  const poolPlayers = players.map((p) => ({
+    userId: p.userId,
+    name: p.user.name,
+    avatar: p.user.avatar,
+    mmr: p.mmr,
+    rankTier: p.user.rankTier,
+    roles: p.roles,
+    favoriteHeroes: p.favoriteHeroes,
+    captainNote: p.captainNote,
+    wantsCaptain: p.wantsCaptain,
+    drafted: draftedUserIds.has(p.userId),
+    accountId: p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId),
+  }));
+  const captainHopefuls = players.filter((p) => p.wantsCaptain);
+  const preDraft = season.status === "SIGNUPS" || season.status === "DRAFT";
 
   return (
     <div className="space-y-8">
@@ -102,6 +119,56 @@ export default async function PlayersPage() {
         </section>
       ) : null}
 
+      {preDraft && captainHopefuls.length > 0 ? (
+        <section className="space-y-4">
+          <h2 className="text-lg font-semibold">
+            Captain hopefuls{" "}
+            <span className="text-sm font-normal text-muted">
+              · {captainHopefuls.length} volunteered to lead a team
+            </span>
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {captainHopefuls.map((p) => {
+              const accountId =
+                p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
+              return (
+                <Card key={p.id}>
+                  <CardBody className="flex items-start gap-3">
+                    <Avatar name={p.user.name} src={p.user.avatar} size={40} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{p.user.name}</span>
+                        <Badge tone="brand">Wants to captain</Badge>
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+                        {p.mmr} MMR
+                        <RankBadge rankTier={p.user.rankTier} />
+                        <RoleBadges roles={p.roles} />
+                        {accountId ? (
+                          <a
+                            href={`https://www.dotabuff.com/players/${accountId}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-info hover:underline"
+                          >
+                            Dotabuff ↗
+                          </a>
+                        ) : null}
+                      </div>
+                      {p.captainNote ? (
+                        <p className="mt-1.5 line-clamp-2 text-xs italic text-muted">
+                          &ldquo;{p.captainNote}&rdquo;
+                        </p>
+                      ) : null}
+                    </div>
+                  </CardBody>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       <section className="space-y-4">
         <h2 className="text-lg font-semibold">
           {draftDone ? "Player pool" : "Signed up to play"}
@@ -112,54 +179,10 @@ export default async function PlayersPage() {
             description="Signups will appear here."
           />
         ) : (
-          <Card>
-            <CardBody className="p-0">
-              <ul className="divide-y divide-line/60">
-                {players.map((p) => (
-                  <li
-                    key={p.id}
-                    className="flex items-center justify-between px-5 py-3"
-                  >
-                    <span className="flex items-center gap-3">
-                      <Avatar name={p.user.name} src={p.user.avatar} size={32} />
-                      <span>
-                        <span className="block text-sm font-medium">
-                          {p.user.name}
-                        </span>
-                        <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted">
-                          {p.mmr} MMR
-                          <RankBadge rankTier={p.user.rankTier} />
-                          {parseRoles(p.roles).length > 0 ? (
-                            <span>Pos {parseRoles(p.roles).join("/")}</span>
-                          ) : null}
-                        </span>
-                        {p.favoriteHeroes ? (
-                          <span className="mt-0.5 block text-xs text-muted">
-                            Heroes: {p.favoriteHeroes}
-                          </span>
-                        ) : null}
-                        {p.captainNote ? (
-                          <span className="mt-0.5 block max-w-xl text-xs italic text-muted">
-                            &ldquo;{p.captainNote}&rdquo;
-                          </span>
-                        ) : null}
-                      </span>
-                    </span>
-                    <span className="flex items-center gap-2">
-                      {p.wantsCaptain ? (
-                        <Badge tone="brand">Wants captain</Badge>
-                      ) : null}
-                      {draftedUserIds.has(p.userId) ? (
-                        <Badge tone="success">Drafted</Badge>
-                      ) : season.status !== "SIGNUPS" ? (
-                        <Badge>Undrafted</Badge>
-                      ) : null}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </CardBody>
-          </Card>
+          <PlayerPool
+            players={poolPlayers}
+            showDraftStatus={season.status !== "SIGNUPS"}
+          />
         )}
       </section>
 

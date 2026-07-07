@@ -14,6 +14,8 @@ import {
   Stat,
   buttonClasses,
 } from "@/components/ui";
+import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
+import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups open",
@@ -29,6 +31,22 @@ const PHASE_TONE: Record<string, "brand" | "accent" | "success" | "info"> = {
   REGULAR_SEASON: "success",
   PLAYOFFS: "accent",
   COMPLETE: "brand",
+};
+
+const PHASE_ORDER = [
+  "SIGNUPS",
+  "DRAFT",
+  "REGULAR_SEASON",
+  "PLAYOFFS",
+  "COMPLETE",
+] as const;
+
+const PHASE_STEP: Record<string, string> = {
+  SIGNUPS: "Signups",
+  DRAFT: "Draft",
+  REGULAR_SEASON: "Season",
+  PLAYOFFS: "Playoffs",
+  COMPLETE: "Champion",
 };
 
 function fmtWhen(d: Date | null): string | null {
@@ -74,6 +92,7 @@ export default async function Home() {
         title={season.name}
         subtitle={phaseSubtitle(season.status)}
       />
+      <SeasonTimeline phase={season.status} />
       {season.status === "SIGNUPS" && (
         <SignupsView snapshot={snapshot} loggedIn={!!user} />
       )}
@@ -115,14 +134,84 @@ function Hero({
   subtitle: string;
 }) {
   return (
-    <div className="overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-10 text-center sm:px-10 sm:py-12">
-      {phase ? (
-        <Badge tone={PHASE_TONE[phase] ?? "neutral"} className="mb-4">
-          {PHASE_LABEL[phase] ?? phase}
-        </Badge>
-      ) : null}
-      <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{title}</h1>
-      <p className="mx-auto mt-3 max-w-xl text-muted">{subtitle}</p>
+    <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-12 text-center sm:px-10 sm:py-14">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-0 h-48 w-48 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/20 blur-3xl"
+      />
+      <div className="relative">
+        <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-brand text-2xl font-bold text-brand-fg shadow-lg shadow-brand/30 ring-1 ring-white/10">
+          5K
+        </div>
+        {phase ? (
+          <Badge tone={PHASE_TONE[phase] ?? "neutral"} className="mb-4">
+            {PHASE_LABEL[phase] ?? phase}
+          </Badge>
+        ) : null}
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{title}</h1>
+        <p className="mx-auto mt-3 max-w-xl text-muted">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+// A slim stepper showing where the season is in its lifecycle.
+function SeasonTimeline({ phase }: { phase: string }) {
+  const current = PHASE_ORDER.findIndex((p) => p === phase);
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/60 px-3 py-4 sm:px-6">
+      <div className="flex items-start">
+        {PHASE_ORDER.map((p, i) => {
+          const done = current >= 0 && i < current;
+          const isCurrent = i === current;
+          return (
+            <div key={p} className="flex flex-1 flex-col items-center gap-1.5">
+              <div className="flex w-full items-center">
+                <div
+                  className={cn(
+                    "h-0.5 flex-1 rounded",
+                    i === 0
+                      ? "opacity-0"
+                      : current >= 0 && i <= current
+                        ? "bg-success/50"
+                        : "bg-line",
+                  )}
+                />
+                <div
+                  className={cn(
+                    "grid h-8 w-8 shrink-0 place-items-center rounded-full border text-xs font-semibold",
+                    isCurrent
+                      ? "border-accent bg-accent/15 text-accent"
+                      : done
+                        ? "border-success/50 bg-success/10 text-success"
+                        : "border-line bg-surface-2 text-muted",
+                  )}
+                >
+                  {done ? "✓" : i + 1}
+                </div>
+                <div
+                  className={cn(
+                    "h-0.5 flex-1 rounded",
+                    i === PHASE_ORDER.length - 1
+                      ? "opacity-0"
+                      : current >= 0 && i < current
+                        ? "bg-success/50"
+                        : "bg-line",
+                  )}
+                />
+              </div>
+              <span
+                className={cn(
+                  "text-center text-[11px] leading-tight",
+                  isCurrent ? "font-medium text-fg" : "text-muted",
+                )}
+              >
+                {PHASE_STEP[p]}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -195,6 +284,8 @@ function SignupsView({
         </CardBody>
       </Card>
 
+      <PoolComposition seasonId={season.id} />
+
       <Card>
         <CardHeader
           title="Who's in"
@@ -240,6 +331,87 @@ async function RecentSignups({ seasonId }: { seasonId: string }) {
           <span className="text-xs text-muted">{r.mmr} MMR</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+async function PoolComposition({ seasonId }: { seasonId: string }) {
+  const regs = await prisma.registration.findMany({
+    where: { seasonId, status: "ACTIVE", type: "PLAYER" },
+    select: { roles: true, mmr: true },
+  });
+  if (regs.length === 0) return null;
+
+  const roles = roleCoverage(regs);
+  const dist = mmrDistribution(regs);
+  const avg = averageMmr(regs);
+  const maxRole = Math.max(1, ...roles.map((r) => r.count));
+  const maxBucket = Math.max(1, ...dist.map((b) => b.count));
+
+  return (
+    <Card>
+      <CardHeader
+        title="Pool composition"
+        subtitle={`Role coverage & MMR spread · avg ${avg} MMR`}
+      />
+      <CardBody className="grid gap-x-8 gap-y-6 sm:grid-cols-2">
+        <div className="space-y-2">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted">
+            Preferred roles
+          </div>
+          {roles.map((r) => (
+            <StatBar
+              key={r.key}
+              label={r.label}
+              count={r.count}
+              max={maxRole}
+              tone="brand"
+            />
+          ))}
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted">
+            MMR distribution
+          </div>
+          {dist.map((b) => (
+            <StatBar
+              key={b.label}
+              label={b.label}
+              count={b.count}
+              max={maxBucket}
+              tone="accent"
+            />
+          ))}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function StatBar({
+  label,
+  count,
+  max,
+  tone,
+}: {
+  label: string;
+  count: number;
+  max: number;
+  tone: "brand" | "accent";
+}) {
+  const pct = max > 0 ? Math.round((count / max) * 100) : 0;
+  return (
+    <div className="flex items-center gap-3 text-sm">
+      <span className="w-24 shrink-0 truncate text-muted" title={label}>
+        {label}
+      </span>
+      <div className="h-2.5 flex-1 rounded-full bg-surface-2">
+        <div
+          className={`h-full rounded-full ${tone === "brand" ? "bg-brand" : "bg-accent"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="w-6 shrink-0 text-right tabular-nums">{count}</span>
     </div>
   );
 }

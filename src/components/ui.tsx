@@ -1,6 +1,8 @@
 import * as React from "react";
 import { cn, initials } from "@/lib/utils";
 import { rankMedalName, rankMedalTier } from "@/lib/rank";
+import { type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
+import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 
 // ---------- Button ----------
 
@@ -170,6 +172,47 @@ export function RankBadge({
   );
 }
 
+// ---------- Role badges ----------
+
+const ROLE_TONE: Record<string, string> = {
+  "1": "bg-rose-500/15 text-rose-300 border-rose-500/30",
+  "2": "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  "3": "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  "4": "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  "5": "bg-violet-500/15 text-violet-300 border-violet-500/30",
+};
+
+/** Colored position pills (1–5) parsed from a stored roles string. */
+export function RoleBadges({
+  roles,
+  className,
+}: {
+  roles: string | null | undefined;
+  className?: string;
+}) {
+  const keys = parseRoles(roles);
+  if (keys.length === 0) return null;
+  return (
+    <span className={cn("inline-flex flex-wrap items-center gap-1", className)}>
+      {keys.map((k) => {
+        const role = DOTA_ROLES.find((r) => r.key === k);
+        return (
+          <span
+            key={k}
+            title={role ? `${role.short} · ${role.label}` : undefined}
+            className={cn(
+              "inline-flex h-5 min-w-5 items-center justify-center rounded border px-1 text-[11px] font-semibold tabular-nums",
+              ROLE_TONE[k],
+            )}
+          >
+            {k}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 // ---------- Avatar ----------
 
 export function Avatar({
@@ -296,5 +339,68 @@ export function PageTitle({
       </div>
       {action}
     </div>
+  );
+}
+
+// ---------- Hero icons ----------
+
+export function HeroIcon({
+  hero,
+  size = 26,
+  className,
+}: {
+  hero: Hero;
+  size?: number;
+  className?: string;
+}) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={heroIcon(hero)}
+      alt={hero.name}
+      title={hero.name}
+      width={size}
+      height={size}
+      loading="lazy"
+      style={{ width: size, height: size }}
+      className={cn(
+        "shrink-0 rounded-md border border-line/70 bg-surface-2 object-cover",
+        className,
+      )}
+    />
+  );
+}
+
+/**
+ * Renders a free-text favorite-heroes string as a row of hero icons, falling
+ * back to plain text for any tokens we couldn't match to a hero.
+ */
+export function HeroList({
+  value,
+  size = 26,
+  max = 10,
+  className,
+}: {
+  value: string | null | undefined;
+  size?: number;
+  max?: number;
+  className?: string;
+}) {
+  const { matched, unmatched } = parseHeroList(value);
+  if (matched.length === 0 && unmatched.length === 0) return null;
+  const shown = matched.slice(0, max);
+  const extra = matched.length - shown.length;
+  return (
+    <span className={cn("inline-flex flex-wrap items-center gap-1", className)}>
+      {shown.map((hero) => (
+        <HeroIcon key={hero.id} hero={hero} size={size} />
+      ))}
+      {extra > 0 ? (
+        <span className="text-xs text-muted">+{extra}</span>
+      ) : null}
+      {unmatched.length > 0 ? (
+        <span className="text-xs text-muted">{unmatched.join(", ")}</span>
+      ) : null}
+    </span>
   );
 }

@@ -14,7 +14,7 @@ import {
   buttonClasses,
 } from "@/components/ui";
 
-export const metadata = { title: "Match · Under 5k League" };
+export const metadata = { title: "Match" };
 
 export default async function MatchDetailPage({
   params,
