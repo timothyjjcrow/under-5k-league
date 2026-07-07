@@ -63,6 +63,9 @@ type SeasonOverrides = Partial<{
   maxMmr: number;
   status: string;
   isActive: boolean;
+  regularBestOf: number;
+  playoffBestOf: number;
+  finalBestOf: number;
 }>;
 
 export async function makeSeason(overrides: SeasonOverrides = {}) {
@@ -172,10 +175,10 @@ export async function makeTeam(
 
 /** Generate a regular-season round-robin, like the generateSchedule action. */
 export async function generateRegularSchedule(seasonId: string) {
-  const teams = await prisma.team.findMany({
-    where: { seasonId },
-    orderBy: { draftOrder: "asc" },
-  });
+  const [season, teams] = await Promise.all([
+    prisma.season.findUniqueOrThrow({ where: { id: seasonId } }),
+    prisma.team.findMany({ where: { seasonId }, orderBy: { draftOrder: "asc" } }),
+  ]);
   const rounds = roundRobin(teams.map((t) => t.id));
   const rows = rounds.flatMap((round, i) =>
     round.map((p) => ({
@@ -184,6 +187,7 @@ export async function generateRegularSchedule(seasonId: string) {
       phase: MATCH_PHASE.REGULAR,
       homeTeamId: p.home,
       awayTeamId: p.away,
+      bestOf: season.regularBestOf,
     })),
   );
   await prisma.match.createMany({ data: rows });

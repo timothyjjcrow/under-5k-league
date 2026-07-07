@@ -16,6 +16,7 @@ export type TeamStanding = {
   teamId: string;
   played: number;
   wins: number;
+  draws: number;
   losses: number;
   points: number;
   gameWins: number;
@@ -33,6 +34,7 @@ export function computeStandings(
       teamId: id,
       played: 0,
       wins: 0,
+      draws: 0,
       losses: 0,
       points: 0,
       gameWins: 0,
@@ -63,6 +65,12 @@ export function computeStandings(
       away.wins++;
       away.points += 3;
       home.losses++;
+    } else {
+      // A drawn series (e.g. a 1-1 best-of-2) — a point each.
+      home.draws++;
+      away.draws++;
+      home.points += 1;
+      away.points += 1;
     }
   }
 

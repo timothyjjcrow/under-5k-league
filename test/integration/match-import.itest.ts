@@ -99,6 +99,35 @@ describe("recomputeSeries", () => {
     expect(m.winnerTeamId).toBe(home.id);
     expect(m.homeScore).toBe(2);
   });
+
+  it("completes a best-of-2 as a draw when it ends 1-1", async () => {
+    const season = await makeSeason();
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+        bestOf: 2,
+      },
+    });
+
+    await addGame(match.id, "g1", home.id); // 1-0: Bo2 not finished yet
+    await recomputeSeries(match.id);
+    let m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.status).toBe("LIVE");
+
+    await addGame(match.id, "g2", away.id); // 1-1: all games played → draw
+    await recomputeSeries(match.id);
+    m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.status).toBe("COMPLETED");
+    expect(m.winnerTeamId).toBeNull();
+    expect(m.homeScore).toBe(1);
+    expect(m.awayScore).toBe(1);
+  });
 });
 
 describe("gatherTeamAccounts", () => {

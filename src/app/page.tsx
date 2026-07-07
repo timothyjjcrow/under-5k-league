@@ -603,6 +603,7 @@ export function StandingsTable({
           <th className="px-5 py-2.5 font-medium">#</th>
           <th className="px-2 py-2.5 font-medium">Team</th>
           <th className="px-2 py-2.5 text-center font-medium">W</th>
+          <th className="px-2 py-2.5 text-center font-medium">D</th>
           <th className="px-2 py-2.5 text-center font-medium">L</th>
           <th className="px-2 py-2.5 text-center font-medium">Diff</th>
           <th className="px-5 py-2.5 text-right font-medium">Pts</th>
@@ -621,6 +622,7 @@ export function StandingsTable({
               </Link>
             </td>
             <td className="px-2 py-2.5 text-center">{row.wins}</td>
+            <td className="px-2 py-2.5 text-center text-muted">{row.draws}</td>
             <td className="px-2 py-2.5 text-center">{row.losses}</td>
             <td className="px-2 py-2.5 text-center text-muted">
               {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}

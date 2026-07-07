@@ -118,6 +118,33 @@ describe("playoffs bracket + champion (integration)", () => {
     expect(final.championTeamId).toBe(ids[0]);
   });
 
+  it("uses playoffBestOf for rounds and finalBestOf for the grand final", async () => {
+    const season = await makeSeason({
+      teamSize: 3,
+      minTeams: 4,
+      playoffBestOf: 3,
+      finalBestOf: 5,
+    });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+
+    const semis = (await playoffMatches(season.id)).filter((m) =>
+      m.bracketSlot?.startsWith("R0"),
+    );
+    expect(semis).toHaveLength(2);
+    expect(semis.every((m) => m.bestOf === 3 && m.phase === "PLAYOFF")).toBe(true);
+
+    // Play the semifinals so the final is created, then check its length.
+    for (const m of semis) {
+      await recordMatch(m.id, 2, 0);
+      await advancePlayoffBracket(season.id);
+    }
+    const final = (await playoffMatches(season.id)).find(
+      (m) => m.phase === "FINAL",
+    );
+    expect(final?.bestOf).toBe(5);
+  });
+
   it("refuses to create a bracket with fewer than 2 teams", async () => {
     const season = await makeSeason();
     await makeTeam(season.id, "Solo", 0);

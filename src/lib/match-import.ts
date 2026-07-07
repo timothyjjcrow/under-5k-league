@@ -149,16 +149,19 @@ export async function recomputeSeries(matchId: string) {
 
   const homeWins = match.games.filter((g) => g.winnerTeamId === match.homeTeamId).length;
   const awayWins = match.games.filter((g) => g.winnerTeamId === match.awayTeamId).length;
-  // A best-of-N series is decided once a team wins the majority of games. For
-  // Bo1 (the default) that's the first game; for Bo3 it's 2, etc.
-  const needed = Math.floor(match.bestOf / 2) + 1;
-  const clinched = homeWins >= needed || awayWins >= needed;
-  const winnerTeamId =
-    homeWins >= needed
+  // A series is decided when a team clinches the majority (Bo3 → 2, Bo5 → 3) or
+  // when every game has been played (a Bo2 can end 1-1 = a draw).
+  const clinchAt = Math.floor(match.bestOf / 2) + 1;
+  const clinched = homeWins >= clinchAt || awayWins >= clinchAt;
+  const allPlayed = homeWins + awayWins >= match.bestOf;
+  const decided = clinched || allPlayed;
+  const winnerTeamId = !decided
+    ? null
+    : homeWins > awayWins
       ? match.homeTeamId
-      : awayWins >= needed
+      : awayWins > homeWins
         ? match.awayTeamId
-        : null;
+        : null; // drawn series (e.g. a 1-1 best-of-2)
 
   await prisma.match.update({
     where: { id: matchId },
@@ -166,7 +169,7 @@ export async function recomputeSeries(matchId: string) {
       homeScore: homeWins,
       awayScore: awayWins,
       winnerTeamId,
-      status: clinched
+      status: decided
         ? MATCH_STATUS.COMPLETED
         : match.games.length > 0
           ? MATCH_STATUS.LIVE
@@ -174,8 +177,8 @@ export async function recomputeSeries(matchId: string) {
     },
   });
 
-  // Only advance the playoff bracket once the series is actually decided.
-  if (match.phase !== MATCH_PHASE.REGULAR && clinched) {
+  // Advance the playoff bracket only once the series has a decided winner.
+  if (match.phase !== MATCH_PHASE.REGULAR && decided && winnerTeamId) {
     await advancePlayoffBracket(match.seasonId);
   }
 }

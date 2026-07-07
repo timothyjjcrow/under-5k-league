@@ -55,7 +55,7 @@ describe("regular season → standings (integration)", () => {
     expect(standings.filter((s) => s.wins > 0)).toHaveLength(1);
   });
 
-  it("treats a tied series as played with no points for either team", async () => {
+  it("awards a point to each team for a drawn series (e.g. a Bo2 1-1)", async () => {
     const season = await makeSeason({ teamSize: 3, minTeams: 2 });
     const a = await makeTeam(season.id, "A", 0);
     const b = await makeTeam(season.id, "B", 1);
@@ -63,6 +63,8 @@ describe("regular season → standings (integration)", () => {
     expect(await recordMatch(matches[0].id, 1, 1)).toBeNull(); // no winner
 
     const standings = computeStandings([a.id, b.id], await matchesOf(season.id));
-    expect(standings.every((s) => s.points === 0 && s.played === 1)).toBe(true);
+    expect(
+      standings.every((s) => s.points === 1 && s.draws === 1 && s.played === 1),
+    ).toBe(true);
   });
 });

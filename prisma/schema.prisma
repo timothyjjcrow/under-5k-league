@@ -41,7 +41,9 @@ model Season {
   teamSize       Int      @default(5)
   draftBudget    Int      @default(100)
   maxMmr         Int      @default(0) // signup MMR cap; players above it can't join (0 = no cap)
-  playoffBestOf  Int      @default(1) // series length for playoff matches (1/3/5/7)
+  regularBestOf  Int      @default(2) // series length for regular-season matches
+  playoffBestOf  Int      @default(3) // series length for playoff (non-final) matches
+  finalBestOf    Int      @default(5) // series length for the grand final
   currentWeek    Int      @default(0)
   isActive       Boolean  @default(true)
   championTeamId String?

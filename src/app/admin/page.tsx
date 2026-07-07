@@ -21,7 +21,7 @@ import {
   syncPlayerRanks,
   syncSteamProfiles,
   setMaxMmr,
-  setPlayoffBestOf,
+  setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
 } from "@/app/actions/admin";
@@ -276,6 +276,35 @@ function SeasonControls({
             {season.maxMmr > 0
               ? `players over ${season.maxMmr} MMR can't join`
               : "no cap — anyone can join"}
+          </span>
+        </form>
+        <form
+          action={setSeriesLengths}
+          className="flex flex-wrap items-end gap-3 border-t border-line pt-3 text-sm"
+        >
+          <SeriesField
+            label="Regular season"
+            name="regularBestOf"
+            value={season.regularBestOf}
+            options={[1, 2, 3]}
+          />
+          <SeriesField
+            label="Playoffs"
+            name="playoffBestOf"
+            value={season.playoffBestOf}
+            options={[1, 3, 5, 7]}
+          />
+          <SeriesField
+            label="Grand final"
+            name="finalBestOf"
+            value={season.finalBestOf}
+            options={[1, 3, 5, 7]}
+          />
+          <SubmitButton variant="secondary" size="sm">
+            Save series lengths
+          </SubmitButton>
+          <span className="text-xs text-muted">
+            games per match; set before generating the schedule / bracket
           </span>
         </form>
       </CardBody>
@@ -618,32 +647,10 @@ function PlayoffControls({
             standings. Start this after the regular season is finished.
           </p>
         )}
-        <form
-          action={setPlayoffBestOf}
-          className="flex flex-wrap items-center gap-2 border-t border-line pt-3"
-        >
-          <label htmlFor="playoffBestOf" className="text-muted">
-            Series length
-          </label>
-          <select
-            id="playoffBestOf"
-            name="playoffBestOf"
-            defaultValue={season.playoffBestOf}
-            className={selectCls}
-          >
-            {[1, 3, 5, 7].map((n) => (
-              <option key={n} value={n}>
-                Best of {n}
-              </option>
-            ))}
-          </select>
-          <SubmitButton variant="secondary" size="sm">
-            Save
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            applies to new brackets — set before starting playoffs
-          </span>
-        </form>
+        <p className="text-xs text-muted">
+          Series lengths (regular / playoffs / final) are set in the phase-control
+          panel above.
+        </p>
       </CardBody>
     </Card>
   );
@@ -847,6 +854,33 @@ const inputCls =
 
 const selectCls =
   "h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60";
+
+function SeriesField({
+  label,
+  name,
+  value,
+  options,
+}: {
+  label: string;
+  name: string;
+  value: number;
+  options: number[];
+}) {
+  return (
+    <div>
+      <label htmlFor={name} className="mb-1 block text-xs text-muted">
+        {label}
+      </label>
+      <select id={name} name={name} defaultValue={value} className={selectCls}>
+        {options.map((n) => (
+          <option key={n} value={n}>
+            Best of {n}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 function Field({
   label,

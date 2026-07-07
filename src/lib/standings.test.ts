@@ -55,6 +55,16 @@ describe("computeStandings", () => {
     expect(s.indexOf(a)).toBeLessThan(s.indexOf(b));
   });
 
+  it("gives a point to each team for a drawn (tied) series", () => {
+    const s = computeStandings(["a", "b"], [match("a", "b", 1, 1)]);
+    const a = s.find((x) => x.teamId === "a")!;
+    const b = s.find((x) => x.teamId === "b")!;
+    expect(a.points).toBe(1);
+    expect(a.draws).toBe(1);
+    expect(a.wins).toBe(0);
+    expect(b.points).toBe(1);
+  });
+
   it("counts a team with no matches", () => {
     const s = computeStandings(["a"], []);
     expect(s).toHaveLength(1);

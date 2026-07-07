@@ -39,6 +39,8 @@ export async function createPlayoffBracket(seasonId: string) {
     .filter((m) => m.phase === MATCH_PHASE.REGULAR)
     .reduce((mx, m) => Math.max(mx, m.week), 0);
   const phase = pairings.length === 1 ? MATCH_PHASE.FINAL : MATCH_PHASE.PLAYOFF;
+  const bestOf =
+    phase === MATCH_PHASE.FINAL ? season.finalBestOf : season.playoffBestOf;
 
   await prisma.$transaction([
     prisma.match.deleteMany({
@@ -55,7 +57,7 @@ export async function createPlayoffBracket(seasonId: string) {
         homeTeamId: p.home,
         awayTeamId: p.away,
         bracketSlot: `R0M${i}`,
-        bestOf: season.playoffBestOf,
+        bestOf,
       })),
     }),
     prisma.season.update({
@@ -108,6 +110,8 @@ export async function advancePlayoffBracket(seasonId: string) {
   const pairings = nextRoundPairings(winners);
   const nextRound = maxRound + 1;
   const phase = pairings.length === 1 ? MATCH_PHASE.FINAL : MATCH_PHASE.PLAYOFF;
+  const bestOf =
+    phase === MATCH_PHASE.FINAL ? season.finalBestOf : season.playoffBestOf;
   const week = Math.max(...playoff.map((m) => m.week)) + 1;
 
   await prisma.match.createMany({
@@ -118,7 +122,7 @@ export async function advancePlayoffBracket(seasonId: string) {
       homeTeamId: p.home,
       awayTeamId: p.away,
       bracketSlot: `R${nextRound}M${i}`,
-      bestOf: season.playoffBestOf,
+      bestOf,
     })),
   });
 }

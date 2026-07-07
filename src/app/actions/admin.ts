@@ -253,6 +253,7 @@ export async function generateSchedule(
       phase: MATCH_PHASE.REGULAR,
       homeTeamId: p.home,
       awayTeamId: p.away,
+      bestOf: season.regularBestOf,
     })),
   );
 
@@ -463,17 +464,23 @@ export async function setMaxMmr(formData: FormData) {
   refresh();
 }
 
-/** Set the playoff series length (best-of-N; forced odd). Applies to brackets
- *  created after this — set it before starting playoffs. */
-export async function setPlayoffBestOf(formData: FormData) {
+/**
+ * Set the best-of series lengths for regular / playoff / final matches. Regular
+ * may be even (a Bo2 can draw 1-1); playoff & final are forced odd so they can't
+ * tie. Applied to schedules/brackets created after this — set before generating.
+ */
+export async function setSeriesLengths(formData: FormData) {
   await requireAdmin();
   const season = await getActiveSeason();
   if (!season) return;
-  let bestOf = clampInt(formData, "playoffBestOf", 1, 1, 15);
-  if (bestOf % 2 === 0) bestOf += 1;
+  const regularBestOf = clampInt(formData, "regularBestOf", 2, 1, 15);
+  let playoffBestOf = clampInt(formData, "playoffBestOf", 3, 1, 15);
+  let finalBestOf = clampInt(formData, "finalBestOf", 5, 1, 15);
+  if (playoffBestOf % 2 === 0) playoffBestOf += 1;
+  if (finalBestOf % 2 === 0) finalBestOf += 1;
   await prisma.season.update({
     where: { id: season.id },
-    data: { playoffBestOf: bestOf },
+    data: { regularBestOf, playoffBestOf, finalBestOf },
   });
   refresh();
 }
