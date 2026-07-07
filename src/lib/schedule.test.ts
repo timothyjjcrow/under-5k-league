@@ -7,6 +7,8 @@ import {
   bracketRounds,
   roundName,
   nextRoundPairings,
+  slotRound,
+  groupPlayoffRounds,
 } from "./schedule";
 
 describe("roundRobin", () => {
@@ -110,5 +112,37 @@ describe("nextRoundPairings", () => {
       { home: "a", away: "b" },
       { home: "c", away: "d" },
     ]);
+  });
+});
+
+describe("slotRound", () => {
+  it("reads the round index from a bracket slot", () => {
+    expect(slotRound("R0M1")).toBe(0);
+    expect(slotRound("R2M3")).toBe(2);
+    expect(slotRound(null)).toBe(0);
+    expect(slotRound("weird")).toBe(0);
+  });
+});
+
+describe("groupPlayoffRounds", () => {
+  it("groups a 4-team bracket into ordered rounds and reports total rounds", () => {
+    const matches = [
+      { bracketSlot: "R0M1" },
+      { bracketSlot: "R0M0" },
+      { bracketSlot: "R1M0" }, // final
+    ];
+    const { totalRounds, rounds } = groupPlayoffRounds(matches);
+    expect(totalRounds).toBe(2); // 2 first-round matches -> 4-team bracket
+    expect(rounds.map((r) => r.round)).toEqual([0, 1]);
+    // round 0 matches sorted by slot
+    expect(rounds[0].matches.map((m) => m.bracketSlot)).toEqual([
+      "R0M0",
+      "R0M1",
+    ]);
+    expect(rounds[1].matches).toHaveLength(1);
+  });
+
+  it("returns empty when there are no playoff matches", () => {
+    expect(groupPlayoffRounds([])).toEqual({ totalRounds: 0, rounds: [] });
   });
 });

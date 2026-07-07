@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
-import { bracketRounds, roundName } from "@/lib/schedule";
+import { groupPlayoffRounds, roundName } from "@/lib/schedule";
 import {
   regularSeasonStatus,
   pendingResultsMessage,
@@ -21,11 +21,6 @@ import type { Match, StandinAssignment, User } from "@prisma/client";
 export const metadata = { title: "Schedule · Under 5k League" };
 
 type MatchStandin = StandinAssignment & { standin: User; replaced: User | null };
-
-function slotRound(slot: string | null): number {
-  const m = slot?.match(/^R(\d+)M/);
-  return m ? Number(m[1]) : 0;
-}
 
 function fmtWhen(d: Date | null): string | null {
   if (!d) return null;
@@ -85,18 +80,7 @@ export default async function SchedulePage() {
       : null;
 
   // Group playoff matches into rounds for a simple bracket view.
-  const firstRoundCount = playoff.filter(
-    (m) => slotRound(m.bracketSlot) === 0,
-  ).length;
-  const totalRounds = firstRoundCount > 0 ? bracketRounds(firstRoundCount * 2) : 0;
-  const playoffRounds = [...new Set(playoff.map((m) => slotRound(m.bracketSlot)))]
-    .sort((a, b) => a - b)
-    .map((r) => ({
-      round: r,
-      matches: playoff
-        .filter((m) => slotRound(m.bracketSlot) === r)
-        .sort((a, b) => (a.bracketSlot ?? "").localeCompare(b.bracketSlot ?? "")),
-    }));
+  const { totalRounds, rounds: playoffRounds } = groupPlayoffRounds(playoff);
 
   return (
     <div className="space-y-8">
@@ -219,11 +203,12 @@ function MatchRow({
     <div>
       <div className="flex items-center justify-between gap-3 px-5 py-3">
         <div className="flex flex-1 items-center justify-end text-sm">
-          <span
-            className={m.winnerTeamId === m.homeTeamId ? "font-semibold" : ""}
+          <Link
+            href={`/teams/${m.homeTeamId}`}
+            className={`hover:text-info ${m.winnerTeamId === m.homeTeamId ? "font-semibold" : ""}`}
           >
             {teamName.get(m.homeTeamId) ?? "?"}
-          </span>
+          </Link>
         </div>
         <div className="shrink-0 text-center">
           {m.status === "COMPLETED" ? (
@@ -235,11 +220,12 @@ function MatchRow({
           )}
         </div>
         <div className="flex flex-1 items-center text-sm">
-          <span
-            className={m.winnerTeamId === m.awayTeamId ? "font-semibold" : ""}
+          <Link
+            href={`/teams/${m.awayTeamId}`}
+            className={`hover:text-info ${m.winnerTeamId === m.awayTeamId ? "font-semibold" : ""}`}
           >
             {teamName.get(m.awayTeamId) ?? "?"}
-          </span>
+          </Link>
         </div>
         {m.scheduledAt ? (
           <span className="shrink-0 text-xs text-muted">

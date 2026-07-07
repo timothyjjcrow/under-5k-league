@@ -1,4 +1,5 @@
 import * as React from "react";
+import Link from "next/link";
 import { cn, initials } from "@/lib/utils";
 import { rankMedalName, rankMedalTier } from "@/lib/rank";
 import { type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
@@ -210,6 +211,31 @@ export function RoleBadges({
         );
       })}
     </span>
+  );
+}
+
+// ---------- Player link ----------
+
+/**
+ * Wraps a player's name/avatar in a link to their season profile. Server-safe,
+ * so it works in both server pages and the client player-pool.
+ */
+export function PlayerLink({
+  userId,
+  className,
+  children,
+}: {
+  userId: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={`/players/${userId}`}
+      className={cn("hover:text-info hover:underline", className)}
+    >
+      {children}
+    </Link>
   );
 }
 

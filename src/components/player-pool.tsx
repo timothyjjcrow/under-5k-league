@@ -6,6 +6,7 @@ import {
   Badge,
   EmptyState,
   HeroList,
+  PlayerLink,
   RankBadge,
   RoleBadges,
 } from "@/components/ui";
@@ -102,11 +103,16 @@ export function PlayerPool({
                 className="flex items-center justify-between gap-3 px-5 py-3"
               >
                 <span className="flex min-w-0 items-center gap-3">
-                  <Avatar name={p.name} src={p.avatar} size={32} />
+                  <PlayerLink userId={p.userId}>
+                    <Avatar name={p.name} src={p.avatar} size={32} />
+                  </PlayerLink>
                   <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium">
+                    <PlayerLink
+                      userId={p.userId}
+                      className="block truncate text-sm font-medium"
+                    >
                       {p.name}
-                    </span>
+                    </PlayerLink>
                     <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted">
                       {p.mmr} MMR
                       <RankBadge rankTier={p.rankTier} />

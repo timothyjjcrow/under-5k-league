@@ -3,6 +3,7 @@ import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
+import { groupPlayoffRounds, roundName } from "@/lib/schedule";
 import {
   Avatar,
   Badge,
@@ -10,6 +11,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  PlayerLink,
   Progress,
   RankBadge,
   RoleBadges,
@@ -324,16 +326,17 @@ async function RecentSignups({ seasonId }: { seasonId: string }) {
   return (
     <div className="flex flex-wrap gap-2">
       {regs.map((r) => (
-        <div
+        <PlayerLink
           key={r.id}
-          className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3"
+          userId={r.userId}
+          className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
         >
           <Avatar name={r.user.name} src={r.user.avatar} size={26} />
           <span className="text-sm">{r.user.name}</span>
           <RankBadge rankTier={r.user.rankTier} />
           <RoleBadges roles={r.roles} />
           <span className="text-xs text-muted">{r.mmr}</span>
-        </div>
+        </PlayerLink>
       ))}
     </div>
   );
@@ -435,8 +438,19 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
         {teams.map((t) => (
           <Card key={t.id}>
             <CardHeader
-              title={t.name}
-              subtitle={`Captain: ${t.captain.name}`}
+              title={
+                <Link href={`/teams/${t.id}`} className="hover:text-info">
+                  {t.name}
+                </Link>
+              }
+              subtitle={
+                <span>
+                  Captain:{" "}
+                  <PlayerLink userId={t.captainId} className="text-muted">
+                    {t.captain.name}
+                  </PlayerLink>
+                </span>
+              }
               action={<Badge tone="accent">${t.budget} left</Badge>}
             />
             <CardBody>
@@ -473,7 +487,7 @@ function RosterList({
               <>
                 <span className="flex items-center gap-2">
                   <Avatar name={m.user.name} src={m.user.avatar} size={22} />
-                  {m.user.name}
+                  <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
                   {m.isCaptain ? (
                     <Badge tone="accent" className="ml-1">
                       C
@@ -525,59 +539,228 @@ async function SeasonView({
       )
     : undefined;
 
+  const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
+  const { totalRounds, rounds: playoffRounds } =
+    groupPlayoffRounds(playoffMatches);
+  const showBracket =
+    season.status === "PLAYOFFS" && playoffRounds.length > 0;
+
+  const recentResults = matches
+    .filter((m) => m.status === "COMPLETED")
+    .sort(
+      (a, b) =>
+        b.week - a.week || b.createdAt.getTime() - a.createdAt.getTime(),
+    )
+    .slice(0, 5);
+
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
-      <div className="space-y-6 lg:col-span-2">
+    <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
+          <Card>
+            <CardHeader
+              title="Standings"
+              action={
+                <Link
+                  href="/schedule"
+                  className="text-sm text-info hover:underline"
+                >
+                  Full schedule →
+                </Link>
+              }
+            />
+            <CardBody className="p-0">
+              <StandingsTable
+                standings={standings.slice(0, 8)}
+                teamName={teamName}
+              />
+            </CardBody>
+          </Card>
+        </div>
+        <div className="space-y-6">
+          {myTeam ? (
+            <Card>
+              <CardHeader title="Your team" subtitle={myTeam.name} />
+              <CardBody className="space-y-3">
+                {myNextMatch ? (
+                  <Link
+                    href={`/matches/${myNextMatch.id}`}
+                    className="block rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
+                  >
+                    <div className="text-xs uppercase text-muted">
+                      Week {myNextMatch.week} · next up
+                    </div>
+                    <div className="mt-1 font-medium">
+                      {teamName.get(myNextMatch.homeTeamId)} vs{" "}
+                      {teamName.get(myNextMatch.awayTeamId)}
+                    </div>
+                    {myNextMatch.scheduledAt ? (
+                      <div className="mt-1 text-xs text-muted">
+                        {fmtWhen(myNextMatch.scheduledAt)}
+                      </div>
+                    ) : null}
+                  </Link>
+                ) : (
+                  <p className="text-sm text-muted">No upcoming matches.</p>
+                )}
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {recentResults.length > 0 ? (
+            <Card>
+              <CardHeader title="Recent results" />
+              <CardBody className="p-0">
+                <ul className="divide-y divide-line/60">
+                  {recentResults.map((m) => (
+                    <li key={m.id}>
+                      <Link
+                        href={`/matches/${m.id}`}
+                        className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-surface-2/40"
+                      >
+                        <span className="min-w-0 flex-1 truncate">
+                          <span
+                            className={
+                              m.winnerTeamId === m.homeTeamId
+                                ? "font-semibold"
+                                : "text-muted"
+                            }
+                          >
+                            {teamName.get(m.homeTeamId) ?? "?"}
+                          </span>
+                          <span className="text-muted"> v </span>
+                          <span
+                            className={
+                              m.winnerTeamId === m.awayTeamId
+                                ? "font-semibold"
+                                : "text-muted"
+                            }
+                          >
+                            {teamName.get(m.awayTeamId) ?? "?"}
+                          </span>
+                        </span>
+                        <span className="shrink-0 font-mono text-xs tabular-nums">
+                          {m.homeScore}–{m.awayScore}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </CardBody>
+            </Card>
+          ) : null}
+        </div>
+      </div>
+
+      {showBracket ? (
         <Card>
           <CardHeader
-            title="Standings"
+            title="Playoff bracket"
             action={
               <Link
                 href="/schedule"
                 className="text-sm text-info hover:underline"
               >
-                Full schedule →
+                Full bracket →
               </Link>
             }
           />
-          <CardBody className="p-0">
-            <StandingsTable
-              standings={standings.slice(0, 8)}
+          <CardBody>
+            <MiniBracket
+              rounds={playoffRounds}
+              totalRounds={totalRounds}
               teamName={teamName}
             />
           </CardBody>
         </Card>
-      </div>
-      <div className="space-y-6">
-        {myTeam ? (
-          <Card>
-            <CardHeader title="Your team" subtitle={myTeam.name} />
-            <CardBody className="space-y-3">
-              {myNextMatch ? (
-                <Link
-                  href={`/matches/${myNextMatch.id}`}
-                  className="block rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
-                >
-                  <div className="text-xs uppercase text-muted">
-                    Week {myNextMatch.week} · next up
-                  </div>
-                  <div className="mt-1 font-medium">
-                    {teamName.get(myNextMatch.homeTeamId)} vs{" "}
-                    {teamName.get(myNextMatch.awayTeamId)}
-                  </div>
-                  {myNextMatch.scheduledAt ? (
-                    <div className="mt-1 text-xs text-muted">
-                      {fmtWhen(myNextMatch.scheduledAt)}
-                    </div>
-                  ) : null}
-                </Link>
-              ) : (
-                <p className="text-sm text-muted">No upcoming matches.</p>
-              )}
-            </CardBody>
-          </Card>
-        ) : null}
-      </div>
+      ) : null}
+    </div>
+  );
+}
+
+type BracketMatch = {
+  id: string;
+  homeTeamId: string;
+  awayTeamId: string;
+  homeScore: number;
+  awayScore: number;
+  winnerTeamId: string | null;
+  status: string;
+};
+
+function MiniBracket({
+  rounds,
+  totalRounds,
+  teamName,
+}: {
+  rounds: { round: number; matches: BracketMatch[] }[];
+  totalRounds: number;
+  teamName: Map<string, string>;
+}) {
+  return (
+    <div className="flex gap-4 overflow-x-auto pb-1">
+      {rounds.map(({ round, matches }) => (
+        <div key={round} className="min-w-[12rem] flex-1 space-y-2">
+          <h4 className="text-xs font-medium uppercase tracking-wide text-muted">
+            {roundName(round, totalRounds)}
+          </h4>
+          {matches.map((m) => {
+            const done = m.status === "COMPLETED";
+            return (
+              <div
+                key={m.id}
+                className="space-y-1 rounded-lg border border-line bg-surface-2/40 p-2 text-sm"
+              >
+                <BracketSide
+                  id={m.homeTeamId}
+                  name={teamName.get(m.homeTeamId)}
+                  score={m.homeScore}
+                  win={m.winnerTeamId === m.homeTeamId}
+                  done={done}
+                />
+                <BracketSide
+                  id={m.awayTeamId}
+                  name={teamName.get(m.awayTeamId)}
+                  score={m.awayScore}
+                  win={m.winnerTeamId === m.awayTeamId}
+                  done={done}
+                />
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BracketSide({
+  id,
+  name,
+  score,
+  win,
+  done,
+}: {
+  id: string;
+  name: string | undefined;
+  score: number;
+  win: boolean;
+  done: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <Link
+        href={`/teams/${id}`}
+        className={cn(
+          "truncate hover:text-info",
+          win ? "font-semibold" : done ? "text-muted" : "",
+        )}
+      >
+        {name ?? "TBD"}
+      </Link>
+      {done ? (
+        <span className="shrink-0 font-mono text-xs tabular-nums">{score}</span>
+      ) : null}
     </div>
   );
 }
@@ -639,9 +822,19 @@ export function StandingsTable({
 
 // ---------- COMPLETE ----------
 
-function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
+async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
   const { teams, season } = snapshot;
   const champion = teams.find((t) => t.id === season.championTeamId);
+  const matches = await prisma.match.findMany({
+    where: { seasonId: season.id },
+    orderBy: [{ week: "asc" }],
+  });
+  const standings = computeStandings(
+    teams.map((t) => t.id),
+    matches,
+  );
+  const teamName = new Map(teams.map((t) => [t.id, t.name]));
+
   return (
     <div className="space-y-6">
       <Card>
@@ -651,13 +844,64 @@ function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
             Champion
           </div>
           <div className="text-2xl font-bold">
-            {champion ? champion.name : "To be crowned"}
+            {champion ? (
+              <Link href={`/teams/${champion.id}`} className="hover:text-info">
+                {champion.name}
+              </Link>
+            ) : (
+              "To be crowned"
+            )}
           </div>
-          <Link href="/schedule" className={buttonClasses("secondary")}>
-            View final standings
-          </Link>
+          {champion ? (
+            <div className="mt-1 flex flex-wrap justify-center gap-1.5">
+              {champion.members.map((m) => (
+                <PlayerLink
+                  key={m.id}
+                  userId={m.userId}
+                  className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
+                >
+                  <Avatar name={m.user.name} src={m.user.avatar} size={20} />
+                  <span>{m.user.name}</span>
+                </PlayerLink>
+              ))}
+            </div>
+          ) : null}
         </CardBody>
       </Card>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader
+              title="Final standings"
+              action={
+                <Link
+                  href="/schedule"
+                  className="text-sm text-info hover:underline"
+                >
+                  Full schedule →
+                </Link>
+              }
+            />
+            <CardBody className="p-0">
+              <StandingsTable standings={standings} teamName={teamName} />
+            </CardBody>
+          </Card>
+        </div>
+        <div>
+          <Card>
+            <CardHeader title="Season stats" />
+            <CardBody className="space-y-3 text-sm">
+              <p className="text-muted">
+                See who topped the league across every game of the season.
+              </p>
+              <Link href="/leaders" className={buttonClasses("secondary")}>
+                View leaderboards →
+              </Link>
+            </CardBody>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

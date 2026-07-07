@@ -11,6 +11,7 @@ import {
   CardHeader,
   EmptyState,
   PageTitle,
+  PlayerLink,
   RankBadge,
   RoleBadges,
 } from "@/components/ui";
@@ -103,7 +104,7 @@ export default async function PlayersPage() {
                     >
                       <span className="flex items-center gap-2">
                         <Avatar name={m.user.name} src={m.user.avatar} size={24} />
-                        {m.user.name}
+                        <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
                         {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
                         <RankBadge rankTier={m.user.rankTier} />
                       </span>
@@ -134,10 +135,14 @@ export default async function PlayersPage() {
               return (
                 <Card key={p.id}>
                   <CardBody className="flex items-start gap-3">
-                    <Avatar name={p.user.name} src={p.user.avatar} size={40} />
+                    <PlayerLink userId={p.userId}>
+                      <Avatar name={p.user.name} src={p.user.avatar} size={40} />
+                    </PlayerLink>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">{p.user.name}</span>
+                        <PlayerLink userId={p.userId} className="font-medium">
+                          {p.user.name}
+                        </PlayerLink>
                         <Badge tone="brand">Wants to captain</Badge>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -196,15 +201,16 @@ export default async function PlayersPage() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {standins.map((s) => (
-              <div
+              <PlayerLink
                 key={s.id}
-                className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3"
+                userId={s.userId}
+                className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
               >
                 <Avatar name={s.user.name} src={s.user.avatar} size={26} />
                 <span className="text-sm">{s.user.name}</span>
                 <RankBadge rankTier={s.user.rankTier} />
                 <span className="text-xs text-muted">{s.mmr}</span>
-              </div>
+              </PlayerLink>
             ))}
           </div>
         )}

@@ -133,3 +133,33 @@ export function nextRoundPairings(winnersInOrder: string[]): Pairing[] {
   }
   return pairings;
 }
+
+/** Round index encoded in a bracket slot like "R2M1" (0 for non-bracket). */
+export function slotRound(slot: string | null | undefined): number {
+  const m = slot?.match(/^R(\d+)M/);
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * Group playoff matches into ordered rounds for a bracket view, and report how
+ * many rounds the bracket has (derived from the first round's match count).
+ * Pure so the schedule + dashboard render the same structure.
+ */
+export function groupPlayoffRounds<T extends { bracketSlot: string | null }>(
+  matches: T[],
+): { totalRounds: number; rounds: { round: number; matches: T[] }[] } {
+  const firstRoundCount = matches.filter(
+    (m) => slotRound(m.bracketSlot) === 0,
+  ).length;
+  const totalRounds = firstRoundCount > 0 ? bracketRounds(firstRoundCount * 2) : 0;
+  const roundNums = [
+    ...new Set(matches.map((m) => slotRound(m.bracketSlot))),
+  ].sort((a, b) => a - b);
+  const rounds = roundNums.map((round) => ({
+    round,
+    matches: matches
+      .filter((m) => slotRound(m.bracketSlot) === round)
+      .sort((a, b) => (a.bracketSlot ?? "").localeCompare(b.bracketSlot ?? "")),
+  }));
+  return { totalRounds, rounds };
+}

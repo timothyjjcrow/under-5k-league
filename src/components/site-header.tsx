@@ -34,12 +34,39 @@ function navItems(phase: string | null, myTeamId: string | null) {
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },
   ];
+  const teamsExist =
+    phase === "DRAFT" ||
+    phase === "REGULAR_SEASON" ||
+    phase === "PLAYOFFS" ||
+    phase === "COMPLETE";
+  if (teamsExist) items.push({ href: "/teams", label: "Teams" });
   if (myTeamId) items.push({ href: `/teams/${myTeamId}`, label: "My Team" });
   if (phase === "DRAFT") items.push({ href: "/draft", label: "Draft" });
   if (phase === "REGULAR_SEASON" || phase === "PLAYOFFS" || phase === "COMPLETE") {
     items.push({ href: "/schedule", label: "Schedule" });
+    items.push({ href: "/leaders", label: "Leaders" });
   }
   return items;
+}
+
+// Highlight the current section. "/teams" (index) and "My Team" (/teams/<id>)
+// overlap, so the more specific "My Team" wins on that exact page.
+function isActive(
+  pathname: string,
+  href: string,
+  myTeamHref: string | null,
+): boolean {
+  if (href === "/") return pathname === "/";
+  const onPath = pathname === href || pathname.startsWith(href + "/");
+  if (!onPath) return false;
+  if (
+    href === "/teams" &&
+    myTeamHref &&
+    (pathname === myTeamHref || pathname.startsWith(myTeamHref + "/"))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function SiteHeader({
@@ -59,7 +86,7 @@ export function SiteHeader({
   return (
     <header className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/" className="flex shrink-0 items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-bold text-brand-fg">
             5K
           </span>
@@ -68,18 +95,15 @@ export function SiteHeader({
           </span>
         </Link>
 
-        <nav className="flex items-center gap-1">
+        <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {items.map((item) => {
-            const active =
-              item.href === "/"
-                ? pathname === "/"
-                : pathname.startsWith(item.href);
+            const active = isActive(pathname, item.href, myTeamId ? `/teams/${myTeamId}` : null);
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                   active
                     ? "bg-surface-2 text-fg"
                     : "text-muted hover:bg-surface-2/60 hover:text-fg",
@@ -91,7 +115,7 @@ export function SiteHeader({
           })}
         </nav>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3 pl-2">
           {seasonName ? (
             <div className="hidden items-center gap-2 md:flex">
               {phase ? (

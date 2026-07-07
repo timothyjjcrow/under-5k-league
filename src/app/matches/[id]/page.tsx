@@ -11,6 +11,7 @@ import {
   CardHeader,
   EmptyState,
   PageTitle,
+  PlayerLink,
   buttonClasses,
 } from "@/components/ui";
 
@@ -67,9 +68,9 @@ export default async function MatchDetailPage({
 
       <Card>
         <CardBody className="flex items-center justify-center gap-6 py-6">
-          <TeamSide name={match.homeTeam.name} score={match.homeScore} win={match.winnerTeamId === match.homeTeamId} />
+          <TeamSide name={match.homeTeam.name} href={`/teams/${match.homeTeamId}`} score={match.homeScore} win={match.winnerTeamId === match.homeTeamId} />
           <span className="text-sm text-muted">series</span>
-          <TeamSide name={match.awayTeam.name} score={match.awayScore} win={match.winnerTeamId === match.awayTeamId} right />
+          <TeamSide name={match.awayTeam.name} href={`/teams/${match.awayTeamId}`} score={match.awayScore} win={match.winnerTeamId === match.awayTeamId} right />
         </CardBody>
       </Card>
 
@@ -130,20 +131,31 @@ export default async function MatchDetailPage({
 
 function TeamSide({
   name,
+  href,
   score,
   win,
   right,
 }: {
   name: string;
+  href?: string;
   score: number;
   win: boolean;
   right?: boolean;
 }) {
   return (
     <div className={`flex items-center gap-3 ${right ? "flex-row-reverse" : ""}`}>
-      <span className={`text-lg font-semibold ${win ? "text-fg" : "text-muted"}`}>
-        {name}
-      </span>
+      {href ? (
+        <Link
+          href={href}
+          className={`text-lg font-semibold hover:text-info ${win ? "text-fg" : "text-muted"}`}
+        >
+          {name}
+        </Link>
+      ) : (
+        <span className={`text-lg font-semibold ${win ? "text-fg" : "text-muted"}`}>
+          {name}
+        </span>
+      )}
       <span className="text-3xl font-bold tabular-nums">{score}</span>
     </div>
   );
@@ -184,7 +196,13 @@ function SidePlayers({
                 {p.userId ? (
                   <Avatar name={displayName} src={userAvatar.get(p.userId) ?? null} size={20} />
                 ) : null}
-                <span className="truncate">{displayName}</span>
+                {p.userId ? (
+                  <PlayerLink userId={p.userId} className="truncate">
+                    {displayName}
+                  </PlayerLink>
+                ) : (
+                  <span className="truncate">{displayName}</span>
+                )}
                 <span className="shrink-0 text-xs text-muted">
                   {heroes[p.heroId] ?? `Hero ${p.heroId}`}
                 </span>

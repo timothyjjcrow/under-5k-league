@@ -88,6 +88,31 @@ renders per-phase so unused features stay hidden.
   `captainNote` — captured on `/me`, surfaced in the player pool and draft room
   (`getDraftState` carries roles/heroes/note for the nominated player).
 
+## Player-facing navigation & info pages (done)
+
+Purely additive UX layer — no league logic changed. Every player/team name in
+the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
+`next/link` to `/teams/[id]` for teams).
+
+- **Player profiles** `/players/[id]` — season registration (roles, heroes,
+  goals, captain note), team + draft price, career record/KDA, most-played
+  heroes, and match history. Career stats roll up from each `Game`'s stored
+  player JSON via pure `summarizePlayerGames` (`src/lib/player-stats.ts`, tested).
+- **Teams index** `/teams` — phase-aware: budgets/rosters during DRAFT, then
+  re-sorts by standings with W–L(–D), points, and diff. Team detail
+  (`/teams/[id]`) adds recent-form chips + head-to-head (pure `recentForm` /
+  `headToHead` in `src/lib/team-matches.ts`, tested) and a draft-spend summary.
+- **Leaders** `/leaders` — six leaderboards (wins, KDA, win rate, kills,
+  assists, games) via pure `topBy` (`player-stats.ts`); rate boards use an
+  adaptive min-games floor.
+- **Dashboard** (`src/app/page.tsx`) shows a compact playoff bracket during
+  PLAYOFFS and a champion/final-standings recap on COMPLETE. Bracket
+  round-grouping is pure `slotRound` / `groupPlayoffRounds` (`schedule.ts`,
+  tested), shared with `/schedule`.
+- **Nav** (`site-header.tsx`) gates links by phase: Teams appears from DRAFT on;
+  Schedule + Leaders from REGULAR_SEASON on. `isActive` keeps "Teams" and
+  "My Team" from both highlighting on your own team page.
+
 ## Good next steps
 
 - Nomination timer/auto-skip in the draft if a captain stalls (right now the

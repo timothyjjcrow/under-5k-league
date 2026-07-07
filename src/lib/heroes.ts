@@ -196,6 +196,13 @@ export function findHero(query: string): Hero | null {
   return n ? BY_NORM.get(n) ?? null : null;
 }
 
+const BY_ID = new Map<number, Hero>(HEROES.map((h) => [h.id, h]));
+
+/** Look up a hero by its Dota 2 numeric id (as used by OpenDota). */
+export function heroById(id: number): Hero | null {
+  return BY_ID.get(id) ?? null;
+}
+
 export type ParsedHeroes = { matched: Hero[]; unmatched: string[] };
 
 /**

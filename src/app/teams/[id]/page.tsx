@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
+import { headToHead, recentForm, type FormResult } from "@/lib/team-matches";
 import {
   Avatar,
   Badge,
@@ -10,9 +11,31 @@ import {
   CardHeader,
   EmptyState,
   PageTitle,
+  PlayerLink,
   RankBadge,
   Stat,
 } from "@/components/ui";
+
+const FORM_TONE: Record<FormResult, string> = {
+  W: "bg-success/15 text-success border-success/30",
+  L: "bg-danger/15 text-danger border-danger/30",
+  D: "bg-surface-2 text-muted border-line",
+};
+
+function FormStrip({ form }: { form: FormResult[] }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {form.map((r, i) => (
+        <span
+          key={i}
+          className={`grid h-6 w-6 place-items-center rounded border text-xs font-semibold ${FORM_TONE[r]}`}
+        >
+          {r}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export const metadata = { title: "Team · Under 5k League" };
 
@@ -63,17 +86,40 @@ export default async function TeamPage({
   const row = standings.find((s) => s.teamId === id);
   const teamName = new Map(allTeams.map((t) => [t.id, t.name]));
 
+  const form = recentForm(id, myMatches);
+  const h2h = headToHead(id, myMatches).sort(
+    (a, b) => b.wins - a.wins || a.losses - b.losses,
+  );
+  const spent = team.members.reduce((sum, m) => sum + m.price, 0);
+
   return (
     <div className="space-y-6">
       <PageTitle
         title={team.name}
-        subtitle={`${team.season.name} · captained by ${team.captain.name}`}
+        subtitle={team.season.name}
         action={
           <Link href="/schedule" className="text-sm text-info hover:underline">
             Standings →
           </Link>
         }
       />
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <span className="text-muted">
+          Captained by{" "}
+          <PlayerLink userId={team.captainId} className="text-fg">
+            {team.captain.name}
+          </PlayerLink>
+        </span>
+        {form.length > 0 ? (
+          <span className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-wide text-muted">
+              Form
+            </span>
+            <FormStrip form={form} />
+          </span>
+        ) : null}
+      </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Record" value={`${row?.wins ?? 0}–${row?.losses ?? 0}`} />
@@ -94,7 +140,14 @@ export default async function TeamPage({
       </div>
 
       <Card>
-        <CardHeader title="Roster" />
+        <CardHeader
+          title="Roster"
+          subtitle={
+            spent > 0
+              ? `Spent $${spent} · $${team.budget} left`
+              : undefined
+          }
+        />
         <CardBody className="space-y-1.5">
           {team.members.length === 0 ? (
             <p className="text-sm text-muted">No players yet.</p>
@@ -106,7 +159,7 @@ export default async function TeamPage({
               >
                 <span className="flex items-center gap-2">
                   <Avatar name={m.user.name} src={m.user.avatar} size={26} />
-                  {m.user.name}
+                  <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
                   {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
                   <RankBadge rankTier={m.user.rankTier} />
                 </span>
@@ -118,6 +171,40 @@ export default async function TeamPage({
           )}
         </CardBody>
       </Card>
+
+      {h2h.length > 0 ? (
+        <Card>
+          <CardHeader title="Head-to-head" subtitle="Completed series by opponent" />
+          <CardBody className="p-0">
+            <ul className="divide-y divide-line/60">
+              {h2h.map((r) => {
+                const record = `${r.wins}–${r.losses}${r.draws > 0 ? `–${r.draws}` : ""}`;
+                const edge =
+                  r.wins > r.losses ? "success" : r.losses > r.wins ? "danger" : "neutral";
+                return (
+                  <li
+                    key={r.opponentId}
+                    className="flex items-center justify-between px-5 py-2.5 text-sm"
+                  >
+                    <Link
+                      href={`/teams/${r.opponentId}`}
+                      className="font-medium hover:text-info"
+                    >
+                      {teamName.get(r.opponentId) ?? "?"}
+                    </Link>
+                    <span className="flex items-center gap-3">
+                      <span className="text-xs text-muted">
+                        {r.gamesFor}–{r.gamesAgainst} games
+                      </span>
+                      <Badge tone={edge}>{record}</Badge>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </CardBody>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader title="Matches" />
