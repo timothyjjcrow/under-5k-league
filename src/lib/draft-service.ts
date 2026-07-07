@@ -402,14 +402,25 @@ export async function placeBid(
       return { ok: false as const, error: "Invalid bid amount" };
 
     const bidEndsAt = new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000);
-    await tx.draft.update({
-      where: { seasonId },
+    // Optimistic lock: only apply the bid if the auction is still exactly as we
+    // read it. If a concurrent bid landed first (possible under Postgres's
+    // connection pool), the WHERE matches no rows and we reject — so two
+    // simultaneous bids can never both "win".
+    const applied = await tx.draft.updateMany({
+      where: {
+        seasonId,
+        nominatedUserId: draft.nominatedUserId,
+        currentBid: draft.currentBid,
+      },
       data: {
         currentBid: amount,
         currentBidTeamId: myTeam.id,
         bidEndsAt,
       },
     });
+    if (applied.count === 0) {
+      return { ok: false as const, error: "Another bid just landed — try again" };
+    }
     await tx.bid.create({
       data: {
         draftId: draft.id,

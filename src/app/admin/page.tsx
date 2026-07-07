@@ -21,6 +21,7 @@ import {
   syncPlayerRanks,
   syncSteamProfiles,
   setMaxMmr,
+  setPlayoffBestOf,
   setLeagueId,
   syncLeagueAction,
 } from "@/app/actions/admin";
@@ -617,6 +618,32 @@ function PlayoffControls({
             standings. Start this after the regular season is finished.
           </p>
         )}
+        <form
+          action={setPlayoffBestOf}
+          className="flex flex-wrap items-center gap-2 border-t border-line pt-3"
+        >
+          <label htmlFor="playoffBestOf" className="text-muted">
+            Series length
+          </label>
+          <select
+            id="playoffBestOf"
+            name="playoffBestOf"
+            defaultValue={season.playoffBestOf}
+            className={selectCls}
+          >
+            {[1, 3, 5, 7].map((n) => (
+              <option key={n} value={n}>
+                Best of {n}
+              </option>
+            ))}
+          </select>
+          <SubmitButton variant="secondary" size="sm">
+            Save
+          </SubmitButton>
+          <span className="text-xs text-muted">
+            applies to new brackets — set before starting playoffs
+          </span>
+        </form>
       </CardBody>
     </Card>
   );

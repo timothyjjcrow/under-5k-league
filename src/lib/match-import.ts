@@ -149,10 +149,14 @@ export async function recomputeSeries(matchId: string) {
 
   const homeWins = match.games.filter((g) => g.winnerTeamId === match.homeTeamId).length;
   const awayWins = match.games.filter((g) => g.winnerTeamId === match.awayTeamId).length;
+  // A best-of-N series is decided once a team wins the majority of games. For
+  // Bo1 (the default) that's the first game; for Bo3 it's 2, etc.
+  const needed = Math.floor(match.bestOf / 2) + 1;
+  const clinched = homeWins >= needed || awayWins >= needed;
   const winnerTeamId =
-    homeWins > awayWins
+    homeWins >= needed
       ? match.homeTeamId
-      : awayWins > homeWins
+      : awayWins >= needed
         ? match.awayTeamId
         : null;
 
@@ -162,12 +166,16 @@ export async function recomputeSeries(matchId: string) {
       homeScore: homeWins,
       awayScore: awayWins,
       winnerTeamId,
-      status:
-        match.games.length > 0 ? MATCH_STATUS.COMPLETED : MATCH_STATUS.SCHEDULED,
+      status: clinched
+        ? MATCH_STATUS.COMPLETED
+        : match.games.length > 0
+          ? MATCH_STATUS.LIVE
+          : MATCH_STATUS.SCHEDULED,
     },
   });
 
-  if (match.phase !== MATCH_PHASE.REGULAR && match.games.length > 0) {
+  // Only advance the playoff bracket once the series is actually decided.
+  if (match.phase !== MATCH_PHASE.REGULAR && clinched) {
     await advancePlayoffBracket(match.seasonId);
   }
 }

@@ -70,6 +70,35 @@ describe("recomputeSeries", () => {
     expect(m.status).toBe("SCHEDULED");
     expect(m.winnerTeamId).toBeNull();
   });
+
+  it("stays LIVE until a team clinches a best-of-3, then completes", async () => {
+    const season = await makeSeason();
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+        bestOf: 3,
+      },
+    });
+
+    await addGame(match.id, "g1", home.id); // 1-0: not clinched (needs 2)
+    await recomputeSeries(match.id);
+    let m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.status).toBe("LIVE");
+    expect(m.winnerTeamId).toBeNull();
+
+    await addGame(match.id, "g2", home.id); // 2-0: clinched
+    await recomputeSeries(match.id);
+    m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.status).toBe("COMPLETED");
+    expect(m.winnerTeamId).toBe(home.id);
+    expect(m.homeScore).toBe(2);
+  });
 });
 
 describe("gatherTeamAccounts", () => {

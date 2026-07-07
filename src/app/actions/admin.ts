@@ -463,6 +463,21 @@ export async function setMaxMmr(formData: FormData) {
   refresh();
 }
 
+/** Set the playoff series length (best-of-N; forced odd). Applies to brackets
+ *  created after this — set it before starting playoffs. */
+export async function setPlayoffBestOf(formData: FormData) {
+  await requireAdmin();
+  const season = await getActiveSeason();
+  if (!season) return;
+  let bestOf = clampInt(formData, "playoffBestOf", 1, 1, 15);
+  if (bestOf % 2 === 0) bestOf += 1;
+  await prisma.season.update({
+    where: { id: season.id },
+    data: { playoffBestOf: bestOf },
+  });
+  refresh();
+}
+
 /** Set (or clear) the season's Valve league id for in-client league games. */
 export async function setLeagueId(formData: FormData) {
   await requireAdmin();

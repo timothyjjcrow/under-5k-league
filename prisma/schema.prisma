@@ -41,6 +41,7 @@ model Season {
   teamSize       Int      @default(5)
   draftBudget    Int      @default(100)
   maxMmr         Int      @default(0) // signup MMR cap; players above it can't join (0 = no cap)
+  playoffBestOf  Int      @default(1) // series length for playoff matches (1/3/5/7)
   currentWeek    Int      @default(0)
   isActive       Boolean  @default(true)
   championTeamId String?
@@ -155,6 +156,7 @@ model Match {
   status       String    @default("SCHEDULED") // SCHEDULED | LIVE | COMPLETED
   homeScore    Int       @default(0)
   awayScore    Int       @default(0)
+  bestOf       Int       @default(1) // series length; a team clinches at floor(bestOf/2)+1
   winnerTeamId String?
   bracketSlot  String?
   createdAt    DateTime  @default(now())

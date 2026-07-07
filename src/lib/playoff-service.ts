@@ -55,6 +55,7 @@ export async function createPlayoffBracket(seasonId: string) {
         homeTeamId: p.home,
         awayTeamId: p.away,
         bracketSlot: `R0M${i}`,
+        bestOf: season.playoffBestOf,
       })),
     }),
     prisma.season.update({
@@ -117,6 +118,7 @@ export async function advancePlayoffBracket(seasonId: string) {
       homeTeamId: p.home,
       awayTeamId: p.away,
       bracketSlot: `R${nextRound}M${i}`,
+      bestOf: season.playoffBestOf,
     })),
   });
 }
