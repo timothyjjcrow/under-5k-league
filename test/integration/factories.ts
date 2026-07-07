@@ -1,5 +1,11 @@
 import { prisma } from "@/lib/prisma";
-import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  DRAFT_STATUS,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SEASON_STATUS,
+} from "@/lib/constants";
+import { roundRobin } from "@/lib/schedule";
 import type { SessionUser } from "@/lib/auth";
 
 /** Wipe every table (children first) so each test starts from empty. */
@@ -131,4 +137,62 @@ export async function expireClock(seasonId: string) {
     where: { seasonId },
     data: { bidEndsAt: new Date(Date.now() - 1000) },
   });
+}
+
+/** A team with a captain user but no drafted roster (enough for standings/playoffs). */
+export async function makeTeam(
+  seasonId: string,
+  name: string,
+  draftOrder: number,
+  budget = 100,
+) {
+  const captain = await makeUser(`${name} Captain`);
+  return prisma.team.create({
+    data: { seasonId, name, captainId: captain.id, budget, draftOrder },
+  });
+}
+
+/** Generate a regular-season round-robin, like the generateSchedule action. */
+export async function generateRegularSchedule(seasonId: string) {
+  const teams = await prisma.team.findMany({
+    where: { seasonId },
+    orderBy: { draftOrder: "asc" },
+  });
+  const rounds = roundRobin(teams.map((t) => t.id));
+  const rows = rounds.flatMap((round, i) =>
+    round.map((p) => ({
+      seasonId,
+      week: i + 1,
+      phase: MATCH_PHASE.REGULAR,
+      homeTeamId: p.home,
+      awayTeamId: p.away,
+    })),
+  );
+  await prisma.match.createMany({ data: rows });
+  return prisma.match.findMany({ where: { seasonId }, orderBy: { week: "asc" } });
+}
+
+/** Record a match result the way the recordResult action does. */
+export async function recordMatch(
+  matchId: string,
+  homeScore: number,
+  awayScore: number,
+) {
+  const m = await prisma.match.findUniqueOrThrow({ where: { id: matchId } });
+  const winnerTeamId =
+    homeScore > awayScore
+      ? m.homeTeamId
+      : awayScore > homeScore
+        ? m.awayTeamId
+        : null;
+  await prisma.match.update({
+    where: { id: matchId },
+    data: {
+      homeScore,
+      awayScore,
+      winnerTeamId,
+      status: MATCH_STATUS.COMPLETED,
+    },
+  });
+  return winnerTeamId;
 }
