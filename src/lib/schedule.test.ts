@@ -37,6 +37,28 @@ describe("roundRobin", () => {
   });
 });
 
+describe("roundRobin home/away balance", () => {
+  for (const n of [3, 4, 5, 6, 7, 8, 10]) {
+    it(`keeps each team's home vs away within 1 for ${n} teams`, () => {
+      const teams = Array.from({ length: n }, (_, i) => `t${i}`);
+      const rounds = roundRobin(teams);
+      const home = new Map(teams.map((t) => [t, 0]));
+      const away = new Map(teams.map((t) => [t, 0]));
+      for (const r of rounds)
+        for (const p of r) {
+          home.set(p.home, (home.get(p.home) ?? 0) + 1);
+          away.set(p.away, (away.get(p.away) ?? 0) + 1);
+        }
+      for (const t of teams) {
+        expect(
+          Math.abs((home.get(t) ?? 0) - (away.get(t) ?? 0)),
+          `${t} has ${home.get(t)}H / ${away.get(t)}A`,
+        ).toBeLessThanOrEqual(1);
+      }
+    });
+  }
+});
+
 describe("seedOrder", () => {
   it("produces standard bracket ordering", () => {
     expect(seedOrder(4)).toEqual([1, 4, 2, 3]);

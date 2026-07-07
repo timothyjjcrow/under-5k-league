@@ -18,6 +18,11 @@ export function roundRobin(teamIds: string[], doubleRound = false): Pairing[][] 
   const n = teams.length;
   const arr = [...teams];
   const rounds: Pairing[][] = [];
+  // Running (home − away) tally per team. Each pairing's home goes to whichever
+  // team has hosted least so far, keeping the season's home/away split fair
+  // (|home − away| ≤ 1). A plain round-parity rule leaves the circle-method's
+  // fixed team badly imbalanced (e.g. all-away).
+  const venue = new Map<string, number>();
 
   for (let r = 0; r < n - 1; r++) {
     const pairings: Pairing[] = [];
@@ -25,8 +30,21 @@ export function roundRobin(teamIds: string[], doubleRound = false): Pairing[][] 
       const a = arr[i];
       const b = arr[n - 1 - i];
       if (a !== BYE && b !== BYE) {
-        // Alternate home/away by round so it's roughly balanced.
-        pairings.push(r % 2 === 0 ? { home: a, away: b } : { home: b, away: a });
+        const ba = venue.get(a) ?? 0;
+        const bb = venue.get(b) ?? 0;
+        // Host the team that has hosted least; break ties by round+position
+        // parity. This keeps every team's home/away split within 1 all season.
+        const [home, away] =
+          ba !== bb
+            ? ba < bb
+              ? [a, b]
+              : [b, a]
+            : (r + i) % 2 === 0
+              ? [a, b]
+              : [b, a];
+        pairings.push({ home, away });
+        venue.set(home, (venue.get(home) ?? 0) + 1);
+        venue.set(away, (venue.get(away) ?? 0) - 1);
       }
     }
     rounds.push(pairings);
