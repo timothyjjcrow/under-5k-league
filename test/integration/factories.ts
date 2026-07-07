@@ -239,6 +239,17 @@ export async function recordMatch(
   return winnerTeamId;
 }
 
+/** Attach a single imported Game (won by winnerTeamId) to a match. */
+export async function addGameToMatch(
+  matchId: string,
+  dotaMatchId: string,
+  winnerTeamId: string,
+) {
+  return prisma.game.create({
+    data: { matchId, dotaMatchId, radiantWin: true, winnerTeamId, players: "[]" },
+  });
+}
+
 /** Play out every playoff round (home team wins) until a champion is crowned. */
 export async function drivePlayoffsToChampion(seasonId: string) {
   for (let guard = 0; guard < 20; guard++) {
