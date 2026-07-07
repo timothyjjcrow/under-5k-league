@@ -1,0 +1,33 @@
+import { test, expect } from "@playwright/test";
+
+// Read-only render checks for the enhanced UI — these catch client-render /
+// hydration errors a browser sees but a raw HTML fetch would not. They must not
+// mutate season state (so they stay compatible with the smoke tests).
+
+test("players page renders the pool scouting tools", async ({ page }) => {
+  await page.goto("/players");
+  await expect(page.getByPlaceholder("Search players…")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Wants captain" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Filter by role" })).toBeVisible();
+});
+
+test("home renders the season timeline, pool composition, and footer", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Pool composition")).toBeVisible();
+  await expect(
+    page.getByText(
+      "A drafted, team-based Dota 2 league for players under 5000 MMR.",
+    ),
+  ).toBeVisible();
+});
+
+test("profile page renders the searchable hero picker", async ({ page }) => {
+  const steamId = "76561199" + String(Date.now()).slice(-9);
+  await page.goto(
+    `/api/auth/dev?name=HeroFan&steamId=${steamId}&redirect=/me`,
+  );
+  await expect(page.getByRole("heading", { name: "Your profile" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "+ Add heroes" })).toBeVisible();
+});
