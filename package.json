@@ -13,6 +13,7 @@
     "db:reset": "prisma db push --force-reset --skip-generate && npm run db:seed",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.mts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

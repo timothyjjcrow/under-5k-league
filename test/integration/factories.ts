@@ -1,0 +1,134 @@
+import { prisma } from "@/lib/prisma";
+import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
+import type { SessionUser } from "@/lib/auth";
+
+/** Wipe every table (children first) so each test starts from empty. */
+export async function resetDb() {
+  await prisma.game.deleteMany();
+  await prisma.standinAssignment.deleteMany();
+  await prisma.bid.deleteMany();
+  await prisma.teamMember.deleteMany();
+  await prisma.match.deleteMany();
+  await prisma.draft.deleteMany();
+  await prisma.team.deleteMany();
+  await prisma.registration.deleteMany();
+  await prisma.season.deleteMany();
+  await prisma.user.deleteMany();
+}
+
+let seq = 0;
+function uniqueSteamId(): string {
+  seq += 1;
+  // Above the SteamID64 base so it maps to a real 32-bit account id.
+  return (BigInt("76561197960265728") + BigInt(seq)).toString();
+}
+
+export async function makeUser(name: string, role = "USER") {
+  return prisma.user.create({ data: { steamId: uniqueSteamId(), name, role } });
+}
+
+export function sessionFor(user: {
+  id: string;
+  steamId: string;
+  name: string;
+  role: string;
+}): SessionUser {
+  return {
+    id: user.id,
+    steamId: user.steamId,
+    name: user.name,
+    avatar: null,
+    role: user.role,
+  };
+}
+
+type SeasonOverrides = Partial<{
+  name: string;
+  teamSize: number;
+  minTeams: number;
+  draftBudget: number;
+  maxMmr: number;
+  status: string;
+  isActive: boolean;
+}>;
+
+export async function makeSeason(overrides: SeasonOverrides = {}) {
+  return prisma.season.create({
+    data: {
+      name: "Test Season",
+      teamSize: 3,
+      minTeams: 2,
+      draftBudget: 100,
+      maxMmr: 0,
+      status: SEASON_STATUS.SIGNUPS,
+      isActive: true,
+      ...overrides,
+    },
+  });
+}
+
+export async function makePlayer(
+  seasonId: string,
+  name: string,
+  mmr: number,
+  extra: { wantsCaptain?: boolean; roles?: string } = {},
+) {
+  const user = await makeUser(name);
+  await prisma.registration.create({
+    data: {
+      seasonId,
+      userId: user.id,
+      type: "PLAYER",
+      status: "ACTIVE",
+      mmr,
+      wantsCaptain: extra.wantsCaptain ?? false,
+      roles: extra.roles ?? "",
+    },
+  });
+  return user;
+}
+
+/** Register a player AND make them a captain (creates their team + roster slot). */
+export async function makeCaptain(
+  seasonId: string,
+  name: string,
+  budget: number,
+  draftOrder: number,
+) {
+  const user = await makePlayer(seasonId, name, 3000, { wantsCaptain: true });
+  const team = await prisma.team.create({
+    data: { seasonId, name: `${name}'s Team`, captainId: user.id, budget, draftOrder },
+  });
+  await prisma.teamMember.create({
+    data: { seasonId, teamId: team.id, userId: user.id, isCaptain: true, price: 0 },
+  });
+  return { user, team };
+}
+
+/** Replicate the non-auth part of the startDraft admin action. */
+export async function startDraftState(seasonId: string) {
+  const teams = await prisma.team.findMany({
+    where: { seasonId },
+    orderBy: { draftOrder: "asc" },
+  });
+  await prisma.season.update({
+    where: { id: seasonId },
+    data: { status: SEASON_STATUS.DRAFT },
+  });
+  await prisma.draft.create({
+    data: {
+      seasonId,
+      status: DRAFT_STATUS.IN_PROGRESS,
+      nominatorTeamId: teams[0]?.id ?? null,
+      nominationIndex: 0,
+    },
+  });
+}
+
+/** Force the auction clock into the past so resolveExpiredNomination fires. */
+export async function expireClock(seasonId: string) {
+  await prisma.draft.update({
+    where: { seasonId },
+    data: { bidEndsAt: new Date(Date.now() - 1000) },
+  });
+}
