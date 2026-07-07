@@ -3,6 +3,10 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { bracketRounds, roundName } from "@/lib/schedule";
+import {
+  regularSeasonStatus,
+  pendingResultsMessage,
+} from "@/lib/schedule-status";
 import { StandingsTable } from "@/app/page";
 import {
   Badge,
@@ -71,6 +75,9 @@ export default async function SchedulePage() {
   const regular = matches.filter((m) => m.phase === "REGULAR");
   const playoff = matches.filter((m) => m.phase !== "REGULAR");
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
+  const status = regularSeasonStatus(matches);
+  const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
+  const pendingMsg = pendingResultsMessage(status);
 
   const champion =
     season.championTeamId && teamName.get(season.championTeamId)
@@ -94,6 +101,19 @@ export default async function SchedulePage() {
   return (
     <div className="space-y-8">
       <PageTitle title="Schedule & Standings" subtitle={season.name} />
+
+      {pendingMsg && season.status === "REGULAR_SEASON" ? (
+        <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+          <span className="text-lg leading-none">⏳</span>
+          <div>
+            <div className="font-medium">Results outstanding</div>
+            <div className="text-muted">
+              {pendingMsg} Standings &amp; playoff seeding update once they&apos;re
+              entered.
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {champion ? (
         <div className="flex items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-4">
@@ -149,10 +169,18 @@ export default async function SchedulePage() {
           />
         ) : (
           <div className="space-y-5">
-            {weeks.map((week) => (
+            {weeks.map((week) => {
+              const ws = weekStatus.get(week);
+              const incomplete = !!ws && ws.pending > 0;
+              return (
               <div key={week}>
-                <h3 className="mb-2 text-sm font-medium uppercase tracking-wide text-muted">
-                  Week {week}
+                <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-muted">
+                  <span>Week {week}</span>
+                  {ws ? (
+                    <span className={incomplete ? "text-accent" : "text-success"}>
+                      {ws.completed}/{ws.total} results in
+                    </span>
+                  ) : null}
                 </h3>
                 <Card>
                   <CardBody className="divide-y divide-line/60 p-0">
@@ -169,7 +197,8 @@ export default async function SchedulePage() {
                   </CardBody>
                 </Card>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

@@ -19,6 +19,10 @@ import {
   advancePlayoffBracket,
 } from "@/lib/playoff-service";
 import {
+  regularSeasonStatus,
+  pendingResultsMessage,
+} from "@/lib/schedule-status";
+import {
   importGameForMatch,
   autoDetectGamesForMatch,
   recomputeSeries,
@@ -279,6 +283,18 @@ export async function startPlayoffs(
   }
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
+
+  // Don't seed the bracket on an incomplete regular season — missing results
+  // would give the wrong standings and the wrong seeding.
+  const matches = await prisma.match.findMany({
+    where: { seasonId: season.id },
+    select: { week: true, phase: true, status: true },
+  });
+  const pending = pendingResultsMessage(regularSeasonStatus(matches));
+  if (pending) {
+    return { error: `${pending} Enter them before starting the playoffs.` };
+  }
+
   try {
     await createPlayoffBracket(season.id);
   } catch (e) {

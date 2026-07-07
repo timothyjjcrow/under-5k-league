@@ -26,6 +26,10 @@ import {
   syncLeagueAction,
 } from "@/app/actions/admin";
 import { pickBracketSize } from "@/lib/schedule";
+import {
+  regularSeasonStatus,
+  pendingResultsMessage,
+} from "@/lib/schedule-status";
 import { MatchImportControls } from "@/components/match-import-controls";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
@@ -459,6 +463,7 @@ function ScheduleControls({
   season: Season;
   data: AdminData;
 }) {
+  const status = regularSeasonStatus(data.matches);
   return (
     <Card>
       <CardHeader
@@ -484,6 +489,19 @@ function ScheduleControls({
           </p>
         ) : (
           <div className="space-y-2">
+            {status.total > 0 ? (
+              <div
+                className={`rounded-lg border px-3 py-2 text-sm ${
+                  status.pending > 0
+                    ? "border-accent/40 bg-accent/10"
+                    : "border-success/40 bg-success/10 text-success"
+                }`}
+              >
+                {status.pending > 0
+                  ? `⏳ ${pendingResultsMessage(status)} Enter them to keep standings & seeding correct.`
+                  : `✓ All ${status.total} results in — ready to start the playoffs.`}
+              </div>
+            ) : null}
             <p className="text-xs text-muted">
               Enter scores manually, or fetch the real games from Dota (OpenDota).
               Auto-fetch needs players to have &ldquo;Expose Public Match
@@ -603,6 +621,7 @@ function PlayoffControls({
 }) {
   const playoffMatches = data.matches.filter((m) => m.phase !== "REGULAR");
   const bracketSize = pickBracketSize(data.teams.length);
+  const status = regularSeasonStatus(data.matches);
   const champion = season.championTeamId
     ? data.teams.find((t) => t.id === season.championTeamId)
     : null;
@@ -633,6 +652,14 @@ function PlayoffControls({
         {champion ? (
           <div className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2">
             🏆 Champion: <b>{champion.name}</b>
+          </div>
+        ) : null}
+        {status.pending > 0 && playoffMatches.length === 0 ? (
+          <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+            ⚠ {status.pending} regular-season result
+            {status.pending === 1 ? "" : "s"} still needed — the playoffs are
+            locked until every match is entered (weeks{" "}
+            {status.pendingWeeks.join(", ")}).
           </div>
         ) : null}
         {playoffMatches.length > 0 ? (

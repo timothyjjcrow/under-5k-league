@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { recomputeSeries } from "@/lib/match-import";
 import { createPlayoffBracket } from "@/lib/playoff-service";
+import { regularSeasonStatus } from "@/lib/schedule-status";
 import {
   addGameToMatch,
   drivePlayoffsToChampion,
@@ -143,5 +144,34 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     const finalSeason = await drivePlayoffsToChampion(season.id);
     expect(finalSeason.status).toBe("COMPLETE");
     expect(finalSeason.championTeamId).not.toBeNull();
+  });
+
+  it("flags an unfinished Bo2 as outstanding (so playoffs stay locked) until it's entered", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 2, regularBestOf: 2 });
+    const a = await makeTeam(season.id, "A", 0);
+    await makeTeam(season.id, "B", 1);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: "REGULAR_SEASON" },
+    });
+    const [match] = await generateRegularSchedule(season.id);
+
+    // Only ONE game of the Bo2 is in → the match is LIVE, not COMPLETED.
+    await addGameToMatch(match.id, "g1", a.id);
+    await recomputeSeries(match.id);
+    let status = regularSeasonStatus(
+      await prisma.match.findMany({ where: { seasonId: season.id } }),
+    );
+    expect(status.pending).toBe(1);
+    expect(status.allComplete).toBe(false);
+
+    // Finishing the series clears the outstanding flag.
+    await addGameToMatch(match.id, "g2", a.id); // 2-0 → COMPLETED
+    await recomputeSeries(match.id);
+    status = regularSeasonStatus(
+      await prisma.match.findMany({ where: { seasonId: season.id } }),
+    );
+    expect(status.pending).toBe(0);
+    expect(status.allComplete).toBe(true);
   });
 });
