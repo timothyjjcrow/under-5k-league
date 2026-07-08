@@ -9,6 +9,7 @@ import {
   PlayerLink,
   RankBadge,
   RoleBadges,
+  buttonClasses,
 } from "@/components/ui";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
@@ -94,6 +95,19 @@ export function PlayerPool({
         <EmptyState
           title="No players match"
           description="Try clearing the search or role filters."
+          action={
+            <button
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setRole(null);
+                setCaptainOnly(false);
+              }}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Clear filters
+            </button>
+          }
         />
       ) : (
         <ul className="divide-y divide-line/60 overflow-hidden rounded-[var(--radius)] border border-line bg-surface/80">
