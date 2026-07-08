@@ -49,6 +49,24 @@ a {
   color: inherit;
 }
 
+@layer base {
+  /* Brand-tinted text selection. */
+  ::selection {
+    background: color-mix(in srgb, var(--color-brand) 35%, transparent);
+    color: var(--color-fg);
+  }
+
+  /* Smooth in-page scrolling (e.g. the skip link jumping to #main). */
+  html {
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}
+
 /* ---------- Hero / ambient graphics ---------- */
 
 /* Looping hero background video — dimmed and masked so it fades into the card
