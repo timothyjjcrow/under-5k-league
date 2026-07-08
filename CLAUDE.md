@@ -141,16 +141,30 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   PICK_SECONDS 60; `CAPTAIN_METHOD` labels).
 - **Service (DB, transactional)**: `src/lib/inhouse-service.ts` —
   `getInhouseState` (calls `maybeFormLobby` + `resolveCaptainVote` +
-  `resolveStalledPick` on every read, like the league draft),
-  `joinQueue`/`leaveQueue`, `castVote`, `makePick`, `startGame`, `reportResult`,
-  `cancelLobby` (admin). Queue hits 10 → lobby forms on the next poll; the vote
-  and a stalled pick clock both auto-resolve lazily on poll.
+  `resolveStalledPick` + `maybeAutoDetectResult` on every read, like the league
+  draft), `joinQueue`/`leaveQueue`, `castVote`, `makePick`, `startGame`,
+  `autoDetectResult`, `recordMatch`, `cancelLobby` (admin). Queue hits 10 →
+  lobby forms on the next poll; the vote, a stalled pick clock, and the result
+  scan all auto-resolve lazily on poll.
+- **Results (OpenDota only — no manual winner)**: a result is recorded solely
+  from a real Dota match. `buildResult` fetches an OpenDota match, validates it
+  with the league's pure `classifyGame` (rosters on opposite sides → winner +
+  which side was Radiant), and stores the full per-player **box score** (hero,
+  KDA, net worth) as `InhouseLobby.boxScore` JSON + `winnerTeam`/`radiantTeam`/
+  `durationSecs`/`radiantScore`/`direScore`/`dotaMatchId`. Two entry points:
+  `recordMatch` (paste a match ID) and `autoDetectResult` — `findInhouseGame`
+  scans the 10 players' recent matches in parallel, finds the shared game, and
+  takes the most recent one that started after the lobby formed. Auto-detect also
+  runs on poll (`maybeAutoDetectResult`, gated by `DETECT_MIN_MINUTES`, throttled
+  via an atomic `detectedAt` claim — one active lobby, so API usage is bounded).
+  Needs players' "Expose Public Match Data" on. The page renders the box score as
+  a `GameResultCard` (hero icons via `heroById`/`HeroIcon`, names, KDA, winner).
 - **API**: one dispatch endpoint `POST /api/inhouse` (`{ action, ... }`; actions:
-  `state`/`join`/`leave`/`vote`/`pick`/`start`/`result`/`cancel`), always returns
-  fresh viewer-tailored state. Polled by `src/components/inhouse-room.tsx`
+  `state`/`join`/`leave`/`vote`/`pick`/`start`/`detect`/`record`/`cancel`),
+  always returns fresh viewer-tailored state. Polled by `src/components/inhouse-room.tsx`
   (`"use client"`, one view per phase incl. `VoteView`; syncs the vote/pick clocks
   via server `now` offset like `draft-room.tsx`; `router.refresh()` on lobby end
-  to update the server-rendered leaderboard). Page: `src/app/inhouse/page.tsx`.
+  to update the server-rendered leaderboard + results). Page: `src/app/inhouse/page.tsx`.
   Nav link is always visible (season-independent).
 - **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
   players so `/inhouse` isn't empty on a fresh DB.

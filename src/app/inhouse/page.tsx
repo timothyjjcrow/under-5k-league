@@ -2,6 +2,7 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { INHOUSE_STATUS } from "@/lib/constants";
 import { summarizeInhouse, type FinishedLobby } from "@/lib/inhouse-stats";
+import { heroById } from "@/lib/heroes";
 import { InhouseRoom } from "@/components/inhouse-room";
 import {
   Avatar,
@@ -10,10 +11,34 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  HeroIcon,
   PageTitle,
   PlayerLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+
+// One per-player line of a stored inhouse box score (see inhouse-service).
+type BoxPlayer = {
+  userId: string | null;
+  name: string | null;
+  team: number | null;
+  isRadiant: boolean;
+  heroId: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  netWorth: number | null;
+  gpm: number | null;
+};
+
+function parseBox(json: string): BoxPlayer[] {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? (v as BoxPlayer[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 export const metadata = { title: "Inhouse · Under 5k League" };
 
@@ -49,6 +74,26 @@ export default async function InhousePage() {
   }));
   const leaderboard = summarizeInhouse(finished);
 
+  // Recent games that have a fetched box score → rich result cards.
+  const results = completed
+    .map((l) => ({ lobby: l, players: parseBox(l.boxScore) }))
+    .filter((r) => r.players.length > 0)
+    .slice(0, 4);
+  const avatarIds = [
+    ...new Set(
+      results.flatMap((r) =>
+        r.players.map((p) => p.userId).filter((x): x is string => !!x),
+      ),
+    ),
+  ];
+  const avatarUsers = avatarIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: avatarIds } },
+        select: { id: true, avatar: true },
+      })
+    : [];
+  const avatarMap = new Map(avatarUsers.map((u) => [u.id, u.avatar]));
+
   return (
     <div className="space-y-8">
       <PageTitle
@@ -59,27 +104,158 @@ export default async function InhousePage() {
 
       <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} />
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader
-              title="Inhouse leaderboard"
-              subtitle="All-time records across completed inhouse games"
+      {results.length > 0 ? (
+        <div className="space-y-4">
+          <h2 className="text-lg font-semibold">Recent results</h2>
+          {results.map((r) => (
+            <GameResultCard
+              key={r.lobby.id}
+              lobby={r.lobby}
+              players={r.players}
+              avatarMap={avatarMap}
             />
-            <CardBody className="p-0">
-              <Leaderboard rows={leaderboard} meId={user?.id ?? null} />
-            </CardBody>
-          </Card>
+          ))}
         </div>
-        <div>
-          <Card>
-            <CardHeader title="Recent games" />
-            <CardBody className="p-0">
-              <RecentGames lobbies={completed.slice(0, 8)} />
-            </CardBody>
-          </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader
+          title="Inhouse leaderboard"
+          subtitle="All-time records across completed inhouse games"
+        />
+        <CardBody className="p-0">
+          <Leaderboard rows={leaderboard} meId={user?.id ?? null} />
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+// ---------- Box-score result card ----------
+
+function GameResultCard({
+  lobby,
+  players,
+  avatarMap,
+}: {
+  lobby: {
+    id: string;
+    winnerTeam: number | null;
+    radiantTeam: number;
+    dotaMatchId: string | null;
+    durationSecs: number | null;
+    radiantScore: number | null;
+    direScore: number | null;
+  };
+  players: BoxPlayer[];
+  avatarMap: Map<string, string | null>;
+}) {
+  const radiantWin = lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
+  const radiant = players.filter((p) => p.isRadiant);
+  const dire = players.filter((p) => !p.isRadiant);
+  const dur = lobby.durationSecs ?? 0;
+  const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
+        <div className="flex items-center gap-3">
+          <span className={cn("text-sm font-semibold", radiantWin ? "text-success" : "text-muted")}>
+            Radiant
+          </span>
+          <span className="font-mono text-xl font-bold tabular-nums">
+            {lobby.radiantScore ?? 0}
+            <span className="px-1.5 text-muted">–</span>
+            {lobby.direScore ?? 0}
+          </span>
+          <span className={cn("text-sm font-semibold", !radiantWin ? "text-danger" : "text-muted")}>
+            Dire
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-xs text-muted">
+          <Badge tone={radiantWin ? "success" : "danger"}>
+            {radiantWin ? "Radiant" : "Dire"} victory
+          </Badge>
+          <span className="tabular-nums">{durStr}</span>
+          {lobby.dotaMatchId ? (
+            <a
+              href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-info hover:underline"
+            >
+              OpenDota ↗
+            </a>
+          ) : null}
         </div>
       </div>
+      <CardBody className="grid gap-4 md:grid-cols-2">
+        <SideBox label="Radiant" win={radiantWin} players={radiant} avatarMap={avatarMap} />
+        <SideBox label="Dire" win={!radiantWin} players={dire} avatarMap={avatarMap} />
+      </CardBody>
+    </Card>
+  );
+}
+
+function SideBox({
+  label,
+  win,
+  players,
+  avatarMap,
+}: {
+  label: string;
+  win: boolean;
+  players: BoxPlayer[];
+  avatarMap: Map<string, string | null>;
+}) {
+  const isRadiant = label === "Radiant";
+  return (
+    <div
+      className={cn(
+        "rounded-lg border p-3",
+        win
+          ? isRadiant
+            ? "border-success/40 bg-success/5"
+            : "border-danger/40 bg-danger/5"
+          : "border-line",
+      )}
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <span className="flex items-center gap-2 text-sm font-semibold">
+          <span className={cn("h-2.5 w-2.5 rounded-full", isRadiant ? "bg-success" : "bg-danger")} />
+          {label}
+        </span>
+        <Badge tone={win ? "success" : "neutral"}>{win ? "Win" : "Loss"}</Badge>
+      </div>
+      <ul className="space-y-1">
+        {players.map((p, i) => {
+          const hero = heroById(p.heroId);
+          return (
+            <li key={i} className="flex items-center gap-2 text-sm">
+              {hero ? (
+                <HeroIcon hero={hero} size={26} />
+              ) : (
+                <span className="h-[26px] w-[26px] shrink-0 rounded-md border border-line/70 bg-surface-2" />
+              )}
+              {p.userId ? (
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <Avatar name={p.name ?? "?"} src={avatarMap.get(p.userId) ?? null} size={18} />
+                  <PlayerLink userId={p.userId} className="truncate">
+                    {p.name ?? "Unknown"}
+                  </PlayerLink>
+                </span>
+              ) : (
+                <span className="truncate text-muted">{p.name ?? "Unknown"}</span>
+              )}
+              <span className="ml-auto shrink-0 font-mono text-xs tabular-nums">
+                <span className="text-fg">{p.kills}</span>
+                <span className="text-muted">/{p.deaths}/</span>
+                <span className="text-muted">{p.assists}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -159,44 +335,3 @@ function Leaderboard({
   );
 }
 
-function RecentGames({
-  lobbies,
-}: {
-  lobbies: {
-    id: string;
-    winnerTeam: number | null;
-    radiantTeam: number;
-    createdAt: Date;
-    players: { team: number | null; isCaptain: boolean; user: { name: string } }[];
-  }[];
-}) {
-  if (lobbies.length === 0) {
-    return <p className="p-5 text-sm text-muted">No completed games yet.</p>;
-  }
-  return (
-    <ul className="divide-y divide-line/60">
-      {lobbies.map((l) => {
-        const cap = (team: number) =>
-          l.players.find((p) => p.team === team && p.isCaptain)?.user.name ??
-          `Team ${team}`;
-        const radiantWon = l.winnerTeam === l.radiantTeam;
-        return (
-          <li key={l.id} className="flex items-center justify-between gap-2 px-4 py-3 text-sm">
-            <span className="min-w-0 flex-1 truncate">
-              <span className={cn(radiantWon ? "font-semibold text-success" : "text-muted")}>
-                {cap(l.radiantTeam)}
-              </span>
-              <span className="text-muted"> vs </span>
-              <span className={cn(!radiantWon ? "font-semibold text-danger" : "text-muted")}>
-                {cap(l.radiantTeam === 1 ? 2 : 1)}
-              </span>
-            </span>
-            <Badge tone={radiantWon ? "success" : "danger"}>
-              {radiantWon ? "Radiant" : "Dire"}
-            </Badge>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}

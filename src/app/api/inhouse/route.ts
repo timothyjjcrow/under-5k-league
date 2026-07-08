@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import {
+  autoDetectResult,
   cancelLobby,
   castVote,
   getInhouseState,
   joinQueue,
   leaveQueue,
   makePick,
-  reportResult,
+  recordMatch,
   startGame,
 } from "@/lib/inhouse-service";
 
@@ -47,8 +48,11 @@ export async function POST(req: NextRequest) {
     case "start":
       res = await startGame(user);
       break;
-    case "result":
-      res = await reportResult(user, Number(body.winnerTeam));
+    case "record":
+      res = await recordMatch(user, String(body.matchId ?? ""));
+      break;
+    case "detect":
+      res = await autoDetectResult(user);
       break;
     case "cancel":
       res = await cancelLobby(user);

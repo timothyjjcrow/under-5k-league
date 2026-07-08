@@ -240,6 +240,13 @@ model InhouseLobby {
   radiantTeam Int       @default(1) // which team (1|2) plays Radiant
   winnerTeam  Int? // 1 | 2 once a result is reported
   startedById String? // who launched the in-game lobby
+  startedAt   DateTime? // when the game was launched (IN_PROGRESS)
+  dotaMatchId String? // OpenDota match id, once the result is recorded
+  detectedAt  DateTime? // throttles the automatic OpenDota result scan
+  durationSecs Int? // game length once recorded
+  radiantScore Int? // Radiant kills (box-score header)
+  direScore    Int? // Dire kills
+  boxScore     String    @default("[]") // JSON per-player breakdown (hero, KDA…)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

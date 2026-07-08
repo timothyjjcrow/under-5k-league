@@ -13,6 +13,14 @@ import {
   type CaptainMethod,
 } from "./inhouse";
 import { summarizeInhouse } from "./inhouse-stats";
+import {
+  fetchOpenDotaMatch,
+  fetchRecentMatchIds,
+  parseMatchId,
+  steamIdToAccountId,
+  type OpenDotaMatch,
+} from "./dota";
+import { classifyGame } from "./match-import";
 import type { SessionUser } from "./auth";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -372,36 +380,281 @@ export async function startGame(viewer: SessionUser): Promise<ActionResult> {
     }
     await tx.inhouseLobby.update({
       where: { id: lobby.id },
-      data: { status: INHOUSE_STATUS.IN_PROGRESS, startedById: viewer.id },
+      data: {
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        startedById: viewer.id,
+        startedAt: new Date(),
+      },
     });
     return { ok: true as const };
   });
 }
 
-/** Report which side won, closing out the lobby and feeding the leaderboard. */
-export async function reportResult(
-  viewer: SessionUser,
-  winnerTeam: number,
-): Promise<ActionResult> {
-  if (winnerTeam !== 1 && winnerTeam !== 2) {
-    return { ok: false, error: "Pick a winning side" };
+// ---- Result recording (OpenDota only — no manual winner) ------------------
+
+type LobbyPlayerFull = {
+  userId: string;
+  team: number | null;
+  user: { name: string; dotaAccountId: number | null; steamId: string };
+};
+
+// One per-player line of the stored box score (mirrors the league Game blob).
+type BoxScorePlayer = {
+  userId: string | null;
+  name: string | null;
+  team: number | null;
+  isRadiant: boolean;
+  heroId: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  netWorth: number | null;
+  gpm: number | null;
+};
+
+type BuiltResult = {
+  winnerTeam: number;
+  radiantTeam: number;
+  dotaMatchId: string;
+  durationSecs: number;
+  radiantScore: number;
+  direScore: number;
+  boxScore: BoxScorePlayer[];
+  startTime: number;
+};
+
+/**
+ * Validate a fetched OpenDota match against the lobby's two rosters and, if it's
+ * genuinely this game, build the full result + per-player box score. Returns
+ * null when the match isn't between these teams. Reuses the unit-tested
+ * classifyGame (rosters on opposite sides → winner + which side was Radiant).
+ */
+function buildResult(
+  od: OpenDotaMatch,
+  players: LobbyPlayerFull[],
+): BuiltResult | null {
+  const accountMap = new Map<
+    number,
+    { userId: string; name: string; team: number }
+  >();
+  const team1 = new Set<number>();
+  const team2 = new Set<number>();
+  for (const p of players) {
+    const acc = p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
+    if (acc == null || p.team == null) continue;
+    accountMap.set(acc, { userId: p.userId, name: p.user.name, team: p.team });
+    (p.team === 1 ? team1 : team2).add(acc);
   }
-  return prisma.$transaction(async (tx) => {
-    const lobby = await tx.inhouseLobby.findFirst({
-      where: { status: INHOUSE_STATUS.IN_PROGRESS },
-      include: { players: true },
-    });
-    if (!lobby) return { ok: false as const, error: "No game is in progress" };
-    const isMember = lobby.players.some((p) => p.userId === viewer.id);
-    if (!isMember && viewer.role !== "ADMIN") {
-      return { ok: false as const, error: "Only players in the game can report it" };
-    }
-    await tx.inhouseLobby.update({
-      where: { id: lobby.id },
-      data: { status: INHOUSE_STATUS.COMPLETED, winnerTeam },
-    });
-    return { ok: true as const };
+  if (team1.size === 0 || team2.size === 0) return null;
+
+  const cls = classifyGame(
+    od,
+    { teamId: "1", accountIds: team1 },
+    { teamId: "2", accountIds: team2 },
+    3,
+  );
+  if (!cls.ok || !cls.winnerTeamId) return null;
+
+  const boxScore: BoxScorePlayer[] = od.players.map((pl) => {
+    const isRadiant = pl.isRadiant ?? pl.player_slot < 128;
+    const m = pl.account_id != null ? accountMap.get(pl.account_id) : undefined;
+    return {
+      userId: m?.userId ?? null,
+      name: m?.name ?? pl.personaname ?? null,
+      team: m?.team ?? null,
+      isRadiant,
+      heroId: pl.hero_id,
+      kills: pl.kills,
+      deaths: pl.deaths,
+      assists: pl.assists,
+      netWorth: pl.net_worth ?? null,
+      gpm: pl.gold_per_min ?? null,
+    };
   });
+
+  return {
+    winnerTeam: cls.winnerTeamId === "1" ? 1 : 2,
+    radiantTeam: cls.radiantTeamId === "1" ? 1 : 2,
+    dotaMatchId: String(od.match_id),
+    durationSecs: od.duration,
+    radiantScore: od.radiant_score ?? 0,
+    direScore: od.dire_score ?? 0,
+    boxScore,
+    startTime: od.start_time,
+  };
+}
+
+/** Write a built result onto the lobby and close it out. */
+async function applyResult(lobbyId: string, r: BuiltResult) {
+  await prisma.inhouseLobby.update({
+    where: { id: lobbyId },
+    data: {
+      status: INHOUSE_STATUS.COMPLETED,
+      winnerTeam: r.winnerTeam,
+      radiantTeam: r.radiantTeam,
+      dotaMatchId: r.dotaMatchId,
+      durationSecs: r.durationSecs,
+      radiantScore: r.radiantScore,
+      direScore: r.direScore,
+      boxScore: JSON.stringify(r.boxScore),
+    },
+  });
+}
+
+/**
+ * Find this inhouse game on OpenDota: scan the 10 players' recent matches (in
+ * parallel), take the one they share, validate it, and return the most recent
+ * match that started after the lobby formed — so a prior game with the same
+ * players can't be mistaken for this one.
+ */
+async function findInhouseGame(
+  players: LobbyPlayerFull[],
+  floorSeconds: number,
+): Promise<BuiltResult | null> {
+  const accounts = players
+    .map((p) => p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId))
+    .filter((a): a is number => a != null);
+  if (accounts.length === 0) return null;
+
+  const lists = await Promise.all(
+    accounts.map((acc) => fetchRecentMatchIds(acc, 10)),
+  );
+  const counts = new Map<number, number>();
+  for (const ids of lists) {
+    for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  // A game shared by several of our players is a candidate; buildResult does the
+  // real validation. Cap the full-match fetches to keep API usage sane.
+  const candidateIds = [...counts.entries()]
+    .filter(([, c]) => c >= 4)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([id]) => id);
+  if (candidateIds.length === 0) return null;
+
+  const matches = await Promise.all(
+    candidateIds.map((id) => fetchOpenDotaMatch(String(id))),
+  );
+  let best: BuiltResult | null = null;
+  for (const od of matches) {
+    if (!od || od.start_time < floorSeconds) continue;
+    const r = buildResult(od, players);
+    if (r && (!best || r.startTime > best.startTime)) best = r;
+  }
+  return best;
+}
+
+/**
+ * On-demand: look up the result on OpenDota by scanning the players' recent
+ * games. Needs the game finished + public match data enabled.
+ */
+export async function autoDetectResult(
+  viewer: SessionUser,
+): Promise<ActionResult> {
+  const lobby = await prisma.inhouseLobby.findFirst({
+    where: { status: INHOUSE_STATUS.IN_PROGRESS },
+    include: { players: { include: { user: true } } },
+  });
+  if (!lobby) return { ok: false, error: "No game is in progress" };
+  if (
+    !lobby.players.some((p) => p.userId === viewer.id) &&
+    viewer.role !== "ADMIN"
+  ) {
+    return { ok: false, error: "Only players in the game can do that" };
+  }
+  await prisma.inhouseLobby.update({
+    where: { id: lobby.id },
+    data: { detectedAt: new Date() },
+  });
+  const found = await findInhouseGame(
+    lobby.players,
+    Math.floor(lobby.createdAt.getTime() / 1000),
+  );
+  if (!found) {
+    return {
+      ok: false,
+      error:
+        "Couldn't find the game on OpenDota yet — make sure it's finished and players have 'Expose Public Match Data' on. You can also paste the match ID.",
+    };
+  }
+  await applyResult(lobby.id, found);
+  return { ok: true };
+}
+
+/** Record the result from a specific Dota match id/URL (fetched via OpenDota). */
+export async function recordMatch(
+  viewer: SessionUser,
+  input: string,
+): Promise<ActionResult> {
+  const matchId = parseMatchId(input);
+  if (!matchId) return { ok: false, error: "Enter a valid Dota match ID or link" };
+
+  const lobby = await prisma.inhouseLobby.findFirst({
+    where: { status: INHOUSE_STATUS.IN_PROGRESS },
+    include: { players: { include: { user: true } } },
+  });
+  if (!lobby) return { ok: false, error: "No game is in progress" };
+  if (
+    !lobby.players.some((p) => p.userId === viewer.id) &&
+    viewer.role !== "ADMIN"
+  ) {
+    return { ok: false, error: "Only players in the game can do that" };
+  }
+
+  const od = await fetchOpenDotaMatch(matchId);
+  if (!od) {
+    return {
+      ok: false,
+      error: "Couldn't fetch that match from OpenDota (is the ID right and public?)",
+    };
+  }
+  const built = buildResult(od, lobby.players);
+  if (!built) {
+    return {
+      ok: false,
+      error: "That match isn't between these two teams — check the ID.",
+    };
+  }
+  await applyResult(lobby.id, built);
+  return { ok: true };
+}
+
+/**
+ * Automatic, throttled result detection run on poll: once a game has been going
+ * long enough, quietly try OpenDota at most once per interval and close the
+ * lobby out if we find it. Safe to call on every poll (claims the attempt
+ * atomically so concurrent pollers don't all scan). Idempotent.
+ */
+export async function maybeAutoDetectResult(): Promise<boolean> {
+  const now = Date.now();
+  const lobby = await prisma.inhouseLobby.findFirst({
+    where: { status: INHOUSE_STATUS.IN_PROGRESS },
+    include: { players: { include: { user: true } } },
+  });
+  if (!lobby || !lobby.startedAt) return false;
+  if (now - lobby.startedAt.getTime() < INHOUSE.DETECT_MIN_MINUTES * 60_000) {
+    return false; // too early — the game can't be over yet
+  }
+
+  // Claim this attempt so only one concurrent poll actually hits OpenDota.
+  const cutoff = new Date(now - INHOUSE.DETECT_INTERVAL_SECONDS * 1000);
+  const claim = await prisma.inhouseLobby.updateMany({
+    where: {
+      id: lobby.id,
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      OR: [{ detectedAt: null }, { detectedAt: { lt: cutoff } }],
+    },
+    data: { detectedAt: new Date(now) },
+  });
+  if (claim.count === 0) return false;
+
+  const found = await findInhouseGame(
+    lobby.players,
+    Math.floor(lobby.createdAt.getTime() / 1000),
+  );
+  if (!found) return false;
+  await applyResult(lobby.id, found);
+  return true;
 }
 
 /** Admin: scrap the current lobby (stuck draft, no-shows). Players can requeue. */
@@ -455,6 +708,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
   await maybeFormLobby();
   await resolveCaptainVote();
   await resolveStalledPick();
+  await maybeAutoDetectResult();
 
   const [queue, lobbyRow] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
@@ -631,7 +885,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
       canStart:
         lobby?.status === INHOUSE_STATUS.READY &&
         (inLobby || viewer?.role === "ADMIN"),
-      canReport:
+      canRecord:
         lobby?.status === INHOUSE_STATUS.IN_PROGRESS &&
         (inLobby || viewer?.role === "ADMIN"),
       canCancel: !!lobby && viewer?.role === "ADMIN",

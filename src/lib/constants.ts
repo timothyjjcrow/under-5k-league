@@ -118,6 +118,11 @@ export const INHOUSE = {
   // The lower-seeded captain (team 2) drafts first, a small nod to the fact
   // that team 1's captain is the higher-seeded player. Strict back-and-forth after.
   FIRST_PICK_TEAM: 2,
+  // Auto result detection (OpenDota): don't scan until a game could plausibly be
+  // over, and don't scan more than once per interval (there's only ever one
+  // active lobby, so this bounds API usage globally).
+  DETECT_MIN_MINUTES: 8,
+  DETECT_INTERVAL_SECONDS: 180,
 } as const;
 
 export const SESSION_COOKIE = "ld2l_session";

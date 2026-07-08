@@ -758,13 +758,7 @@ function InProgressView({
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
 }) {
-  const report = (team: LobbyTeam) => {
-    const meta = sideMeta(team.isRadiant);
-    if (window.confirm(`Report ${meta.name} as the winner?`)) {
-      act({ action: "result", winnerTeam: team.team });
-      pushToast("success", `${meta.name} win recorded`);
-    }
-  };
+  const [matchId, setMatchId] = useState("");
 
   return (
     <div className="space-y-5">
@@ -777,35 +771,44 @@ function InProgressView({
           Game in progress
         </div>
         {lobby.startedByName ? (
-          <p className="mt-1 text-sm text-muted">
-            Hosted by {lobby.startedByName}
-          </p>
+          <p className="mt-1 text-sm text-muted">Hosted by {lobby.startedByName}</p>
         ) : null}
-        {me.canReport ? (
-          <div className="mt-4">
-            <div className="text-sm text-muted">Who won?</div>
-            <div className="mt-2 flex flex-wrap justify-center gap-2">
-              {lobby.teams.map((t) => {
-                const meta = sideMeta(t.isRadiant);
-                return (
-                  <button
-                    key={t.team}
-                    disabled={pending}
-                    onClick={() => report(t)}
-                    className={buttonClasses(
-                      t.isRadiant ? "primary" : "danger",
-                      "md",
-                    )}
-                  >
-                    {meta.name} won
-                  </button>
-                );
-              })}
+        {me.canRecord ? (
+          <div className="mt-4 space-y-3">
+            <div>
+              <button
+                disabled={pending}
+                onClick={() => act({ action: "detect" })}
+                className={buttonClasses("accent", "md")}
+              >
+                {pending ? "Fetching from OpenDota…" : "Auto-detect result"}
+              </button>
+              <p className="mx-auto mt-1.5 max-w-sm text-xs text-muted">
+                Finds your game on OpenDota and pulls the full box score. Also runs
+                automatically every few minutes once the game&apos;s finished (needs
+                players&apos; &ldquo;Expose Public Match Data&rdquo; on).
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2 border-t border-info/20 pt-3">
+              <span className="text-xs text-muted">or paste the match ID:</span>
+              <input
+                value={matchId}
+                onChange={(e) => setMatchId(e.target.value)}
+                placeholder="e.g. 7891234567"
+                className="h-9 w-44 rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+              />
+              <button
+                disabled={pending || !matchId.trim()}
+                onClick={() => act({ action: "record", matchId: matchId.trim() })}
+                className={buttonClasses("secondary", "sm")}
+              >
+                Record
+              </button>
             </div>
           </div>
         ) : (
           <p className="mt-3 text-sm text-muted">
-            A player will report the result when it&apos;s done.
+            The result is pulled from OpenDota automatically once the game ends.
           </p>
         )}
       </div>
