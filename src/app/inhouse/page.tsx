@@ -5,6 +5,7 @@ import { INHOUSE_STATUS } from "@/lib/constants";
 import { summarizeInhouse, type FinishedLobby } from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
 import { InhouseRoom } from "@/components/inhouse-room";
+import { HeroVideo } from "@/components/hero-video";
 import {
   Avatar,
   Badge,
@@ -13,7 +14,6 @@ import {
   CardHeader,
   EmptyState,
   HeroIcon,
-  PageTitle,
   PlayerLink,
 } from "@/components/ui";
 import { cn, formatNetWorth } from "@/lib/utils";
@@ -97,11 +97,41 @@ export default async function InhousePage() {
 
   return (
     <div className="space-y-8">
-      <PageTitle
-        title="Inhouse"
-        subtitle="Pick-up games, drafted live. Queue up, get captained, and play — no season required."
-        action={<Badge tone="accent">Casual mode</Badge>}
-      />
+      {/* Hero — slightly larger than the home hero, with its own looping video. */}
+      <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-16 text-center sm:px-10 sm:py-24">
+        {/* Looping background video — fades in/out at the loop seam to hide the jump. */}
+        <HeroVideo src="/inhouse-loop.mp4" />
+        {/* Themed tint over the video for contrast + palette cohesion. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-surface/40 via-bg/45 to-surface/75"
+        />
+        {/* Masked grid + dual neon glows. */}
+        <div
+          aria-hidden
+          className="hero-grid pointer-events-none absolute inset-0 opacity-60"
+        />
+        <div
+          aria-hidden
+          className="animate-hero-glow pointer-events-none absolute left-1/2 top-0 h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent/25 blur-3xl"
+        />
+        <div
+          aria-hidden
+          className="animate-hero-glow-alt pointer-events-none absolute -right-12 bottom-0 h-48 w-48 translate-y-1/3 rounded-full bg-brand/20 blur-3xl"
+        />
+        <div className="relative">
+          <Badge tone="accent" className="mb-4">
+            Casual mode
+          </Badge>
+          <h1 className="font-display text-5xl font-bold tracking-tight sm:text-6xl">
+            Inhouse
+          </h1>
+          <p className="mx-auto mt-3 max-w-xl text-muted sm:text-lg">
+            Pick-up games, drafted live. Queue up, get captained, and play — no
+            season required.
+          </p>
+        </div>
+      </div>
 
       <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} />
 

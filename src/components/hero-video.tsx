@@ -12,7 +12,7 @@ const PEAK_OPACITY = 0.45; // matches the previous static hero-video opacity
  * currentTime — not a CSS timer — so it can never drift out of sync with the
  * seam. Under prefers-reduced-motion the CSS hides the element entirely.
  */
-export function HeroVideo() {
+export function HeroVideo({ src = "/hero-loop.mp4" }: { src?: string }) {
   const ref = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -49,7 +49,7 @@ export function HeroVideo() {
       playsInline
       preload="auto"
     >
-      <source src="/hero-loop.mp4" type="video/mp4" />
+      <source src={src} type="video/mp4" />
     </video>
   );
 }
