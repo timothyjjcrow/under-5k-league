@@ -21,12 +21,14 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  FormStrip,
   HeroIcon,
   HeroList,
   RankMedal,
   RoleBadges,
   Stat,
 } from "@/components/ui";
+import type { FormResult } from "@/lib/team-matches";
 
 export async function generateMetadata({
   params,
@@ -113,6 +115,10 @@ export default async function PlayerProfilePage({
   const streak = currentStreak(lines); // `lines` is newest-first (games desc)
   const streakLabel =
     streak.count > 1 ? `${streak.type}${streak.count} streak` : undefined;
+  // Recent W/L form (newest first), reusing the team form strip.
+  const recentFormStrip: FormResult[] = lines
+    .slice(0, 8)
+    .map((l) => (wonGame(l) ? "W" : "L"));
 
   // Team + record for this season, if drafted.
   const team = membership?.team ?? null;
@@ -467,7 +473,15 @@ export default async function PlayerProfilePage({
       ) : null}
 
       <Card>
-        <CardHeader title="Match history" subtitle={season?.name} />
+        <CardHeader
+          title="Match history"
+          subtitle={season?.name}
+          action={
+            recentFormStrip.length > 0 ? (
+              <FormStrip form={recentFormStrip} size={5} />
+            ) : undefined
+          }
+        />
         <CardBody className="p-0">
           {gameRows.length === 0 ? (
             <div className="p-5">
