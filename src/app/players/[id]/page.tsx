@@ -25,6 +25,7 @@ import {
   FormStrip,
   HeroIcon,
   HeroList,
+  KDA,
   RankMedal,
   RoleBadges,
   Sparkline,
@@ -264,8 +265,8 @@ export default async function PlayerProfilePage({
               className="shrink-0 shadow-lg shadow-black/40 ring-2 ring-line/80"
             />
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                   {user.name}
                 </h1>
                 {user.role === "ADMIN" ? (
@@ -418,9 +419,12 @@ export default async function PlayerProfilePage({
                   </span>
                 </span>
                 <span className="shrink-0 text-right">
-                  <span className="block font-mono text-xs tabular-nums">
-                    {bestView.kills}/{bestView.deaths}/{bestView.assists}
-                  </span>
+                  <KDA
+                    kills={bestView.kills}
+                    deaths={bestView.deaths}
+                    assists={bestView.assists}
+                    className="block text-xs"
+                  />
                   <span className="block text-xs text-muted">
                     {formatNetWorth(bestView.netWorth)}
                     {bestView.gpm != null ? ` · ${bestView.gpm} GPM` : ""}
@@ -558,9 +562,12 @@ export default async function PlayerProfilePage({
                             : ""}
                         </span>
                       </span>
-                      <span className="shrink-0 font-mono text-xs">
-                        {stat.kills}/{stat.deaths}/{stat.assists}
-                      </span>
+                      <KDA
+                        kills={stat.kills}
+                        deaths={stat.deaths}
+                        assists={stat.assists}
+                        className="shrink-0 text-xs"
+                      />
                     </Link>
                   </li>
                 );

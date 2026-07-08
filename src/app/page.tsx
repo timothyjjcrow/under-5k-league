@@ -1,10 +1,10 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
-import { groupPlayoffRounds, roundName } from "@/lib/schedule";
+import { groupPlayoffRounds, pickBracketSize, roundName } from "@/lib/schedule";
 import { formByTeam, type FormResult } from "@/lib/team-matches";
 import {
   Avatar,
@@ -25,6 +25,7 @@ import {
 } from "@/components/ui";
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
 import { HeroVideo } from "@/components/hero-video";
+import { CountUp } from "@/components/count-up";
 import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -120,6 +121,48 @@ export default async function Home() {
     );
   }
 
+  // Live, animated figures surfaced right in the hero for a sense of momentum.
+  let heroMeta: ReactNode = null;
+  if (season.status === "SIGNUPS") {
+    const { playerCount, capacity } = snapshot;
+    heroMeta = (
+      <>
+        <HeroStat
+          value={playerCount}
+          label={playerCount === 1 ? "player signed up" : "players signed up"}
+        />
+        {capacity.canDraft ? (
+          <Badge tone="success">Ready to draft</Badge>
+        ) : (
+          <HeroStat
+            value={capacity.needed}
+            label="more to start the draft"
+            tone="accent"
+          />
+        )}
+      </>
+    );
+  } else if (season.status === "DRAFT") {
+    heroMeta = (
+      <HeroStat
+        value={snapshot.teams.length}
+        label={snapshot.teams.length === 1 ? "team drafting" : "teams drafting"}
+      />
+    );
+  } else if (
+    season.status === "REGULAR_SEASON" ||
+    season.status === "PLAYOFFS"
+  ) {
+    heroMeta = (
+      <HeroStat
+        value={snapshot.teams.length}
+        label={
+          snapshot.teams.length === 1 ? "team competing" : "teams competing"
+        }
+      />
+    );
+  }
+
   return (
     <div className="space-y-8">
       <Hero
@@ -127,6 +170,7 @@ export default async function Home() {
         title={season.name}
         subtitle={phaseSubtitle(season.status)}
         action={heroAction}
+        meta={heroMeta}
       />
       <SeasonTimeline phase={season.status} />
       {season.status === "SIGNUPS" && (
@@ -160,16 +204,43 @@ function phaseSubtitle(status: string) {
 
 // ---------- Hero ----------
 
+// A single animated hero figure — big count-up number + a muted label.
+function HeroStat({
+  value,
+  label,
+  tone,
+}: {
+  value: number;
+  label: string;
+  tone?: "accent";
+}) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span
+        className={cn(
+          "font-display text-2xl font-bold tabular-nums sm:text-3xl",
+          tone === "accent" ? "text-accent" : "text-fg",
+        )}
+      >
+        <CountUp value={value} />
+      </span>
+      <span className="text-sm text-muted">{label}</span>
+    </span>
+  );
+}
+
 function Hero({
   phase,
   title,
   subtitle,
   action,
+  meta,
 }: {
   phase: string | null;
   title: string;
   subtitle: string;
   action?: ReactNode;
+  meta?: ReactNode;
 }) {
   const live = !!phase && phase !== "COMPLETE";
   return (
@@ -210,6 +281,11 @@ function Hero({
           {title}
         </h1>
         <p className="mx-auto mt-3 max-w-xl text-muted sm:text-lg">{subtitle}</p>
+        {meta ? (
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+            {meta}
+          </div>
+        ) : null}
         {action ? (
           <div className="mt-6 flex flex-wrap justify-center gap-3">
             {action}
@@ -644,6 +720,11 @@ async function SeasonView({
                 standings={standings.slice(0, 8)}
                 teamName={teamName}
                 formByTeam={teamForm}
+                playoffCut={
+                  season.status === "REGULAR_SEASON"
+                    ? pickBracketSize(teams.length)
+                    : undefined
+                }
               />
             </CardBody>
           </Card>
@@ -840,10 +921,13 @@ export function StandingsTable({
   standings,
   teamName,
   formByTeam,
+  playoffCut,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
   formByTeam?: Map<string, FormResult[]>;
+  /** How many top teams make playoffs — draws a "playoff cut" line when set. */
+  playoffCut?: number;
 }) {
   if (standings.length === 0) {
     return (
@@ -852,6 +936,10 @@ export function StandingsTable({
       </div>
     );
   }
+  // Only draw the cut line when some teams actually miss the bracket.
+  const hasCut =
+    playoffCut != null && playoffCut > 0 && playoffCut < standings.length;
+  const cols = formByTeam ? 8 : 7;
   return (
     <table className="w-full text-sm">
       <thead>
@@ -871,46 +959,76 @@ export function StandingsTable({
         </tr>
       </thead>
       <tbody>
-        {standings.map((row, i) => (
-          <tr
-            key={row.teamId}
-            className="border-b border-line/50 transition-colors last:border-0 hover:bg-surface-2/40"
-          >
-            <td className="px-5 py-2.5 text-muted">{i + 1}</td>
-            <td className="px-2 py-2.5 font-medium">
-              <Link
-                href={`/teams/${row.teamId}`}
-                className="flex items-center gap-2 hover:text-info"
+        {standings.map((row, i) => {
+          const inCut = hasCut && i < playoffCut!;
+          return (
+            <Fragment key={row.teamId}>
+              <tr
+                className={cn(
+                  "border-b border-line/50 transition-colors last:border-0 hover:bg-surface-2/40",
+                  inCut && "bg-success/[0.04]",
+                )}
               >
-                <TeamCrest
-                  name={teamName.get(row.teamId) ?? "?"}
-                  seed={row.teamId}
-                  size={22}
-                  className="rounded-md"
-                />
-                <span className="truncate">
-                  {teamName.get(row.teamId) ?? "—"}
-                </span>
-              </Link>
-            </td>
-            <td className="px-2 py-2.5 text-center">{row.wins}</td>
-            <td className="px-2 py-2.5 text-center text-muted">{row.draws}</td>
-            <td className="px-2 py-2.5 text-center">{row.losses}</td>
-            <td className="px-2 py-2.5 text-center text-muted">
-              {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
-            </td>
-            {formByTeam ? (
-              <td className="hidden px-2 py-2.5 sm:table-cell">
-                <span className="flex justify-center">
-                  <FormStrip form={formByTeam.get(row.teamId) ?? []} size={5} />
-                </span>
-              </td>
-            ) : null}
-            <td className="px-5 py-2.5 text-right font-semibold">
-              {row.points}
-            </td>
-          </tr>
-        ))}
+                <td
+                  className={cn(
+                    "px-5 py-2.5",
+                    inCut ? "font-medium text-success/80" : "text-muted",
+                  )}
+                >
+                  {i + 1}
+                </td>
+                <td className="px-2 py-2.5 font-medium">
+                  <Link
+                    href={`/teams/${row.teamId}`}
+                    className="flex items-center gap-2 hover:text-info"
+                  >
+                    <TeamCrest
+                      name={teamName.get(row.teamId) ?? "?"}
+                      seed={row.teamId}
+                      size={22}
+                      className="rounded-md"
+                    />
+                    <span className="truncate">
+                      {teamName.get(row.teamId) ?? "—"}
+                    </span>
+                  </Link>
+                </td>
+                <td className="px-2 py-2.5 text-center">{row.wins}</td>
+                <td className="px-2 py-2.5 text-center text-muted">
+                  {row.draws}
+                </td>
+                <td className="px-2 py-2.5 text-center">{row.losses}</td>
+                <td className="px-2 py-2.5 text-center text-muted">
+                  {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
+                </td>
+                {formByTeam ? (
+                  <td className="hidden px-2 py-2.5 sm:table-cell">
+                    <span className="flex justify-center">
+                      <FormStrip
+                        form={formByTeam.get(row.teamId) ?? []}
+                        size={5}
+                      />
+                    </span>
+                  </td>
+                ) : null}
+                <td className="px-5 py-2.5 text-right font-semibold">
+                  {row.points}
+                </td>
+              </tr>
+              {hasCut && i === playoffCut! - 1 ? (
+                <tr aria-hidden className="bg-success/[0.03]">
+                  <td colSpan={cols} className="px-5 py-1">
+                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-success/80">
+                      <span className="h-px flex-1 bg-gradient-to-r from-transparent to-success/40" />
+                      Playoff cut
+                      <span className="h-px flex-1 bg-gradient-to-l from-transparent to-success/40" />
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+            </Fragment>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -934,15 +1052,39 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
     teams.map((t) => t.id),
     matches,
   );
+  const championRow = champion
+    ? standings.find((s) => s.teamId === champion.id)
+    : undefined;
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardBody className="flex flex-col items-center gap-3 py-10 text-center">
-          <div className="text-5xl">🏆</div>
-          <div className="text-sm uppercase tracking-wide text-muted">
-            Champion
+      <Card className="relative overflow-hidden">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-0 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-400/15 blur-3xl"
+        />
+        <CardBody className="relative flex flex-col items-center gap-3 py-10 text-center">
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-amber-300/90">
+            {season.name} Champion
           </div>
+          {champion ? (
+            <div className="relative">
+              <TeamCrest
+                name={champion.name}
+                seed={champion.id}
+                size={76}
+                className="rounded-2xl shadow-lg ring-2 ring-amber-400/50"
+              />
+              <span
+                aria-hidden
+                className="absolute -bottom-2 -right-2 grid h-8 w-8 place-items-center rounded-full border border-amber-400/40 bg-surface text-lg shadow-md"
+              >
+                🏆
+              </span>
+            </div>
+          ) : (
+            <div className="text-5xl">🏆</div>
+          )}
           <div className="text-2xl font-bold">
             {champion ? (
               <Link href={`/teams/${champion.id}`} className="hover:text-info">
@@ -952,7 +1094,16 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
               "To be crowned"
             )}
           </div>
-          {champion ? (
+          {championRow ? (
+            <div className="text-sm text-muted">
+              <span className="font-medium text-fg">
+                {championRow.wins}–{championRow.losses}
+                {championRow.draws > 0 ? `–${championRow.draws}` : ""}
+              </span>{" "}
+              regular season · {championRow.points} pts
+            </div>
+          ) : null}
+          {champion && champion.members.length > 0 ? (
             <div className="mt-1 flex flex-wrap justify-center gap-1.5">
               {champion.members.map((m) => (
                 <PlayerLink

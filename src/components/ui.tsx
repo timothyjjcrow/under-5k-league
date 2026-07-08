@@ -323,6 +323,31 @@ export function FormStrip({
   );
 }
 
+// A kills/deaths/assists line with consistent semantic coloring — green
+// kills, red deaths, blue assists — used anywhere a KDA appears (box scores,
+// match history, standout games) so the stat reads the same everywhere.
+export function KDA({
+  kills,
+  deaths,
+  assists,
+  className,
+}: {
+  kills: number;
+  deaths: number;
+  assists: number;
+  className?: string;
+}) {
+  return (
+    <span className={cn("font-mono tabular-nums", className)}>
+      <span className="text-success">{kills}</span>
+      <span className="text-muted">/</span>
+      <span className="text-danger">{deaths}</span>
+      <span className="text-muted">/</span>
+      <span className="text-info">{assists}</span>
+    </span>
+  );
+}
+
 // ---------- Avatar ----------
 
 export function Avatar({

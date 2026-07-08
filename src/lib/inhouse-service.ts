@@ -410,6 +410,7 @@ type BoxScorePlayer = {
   assists: number;
   netWorth: number | null;
   gpm: number | null;
+  lastHits: number | null;
 };
 
 type BuiltResult = {
@@ -469,6 +470,7 @@ function buildResult(
       assists: pl.assists,
       netWorth: pl.net_worth ?? null,
       gpm: pl.gold_per_min ?? null,
+      lastHits: pl.last_hits ?? null,
     };
   });
 

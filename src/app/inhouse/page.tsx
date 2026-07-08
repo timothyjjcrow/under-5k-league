@@ -14,6 +14,7 @@ import {
   CardHeader,
   EmptyState,
   HeroIcon,
+  KDA,
   PageTitle,
   PlayerLink,
   SectionTitle,
@@ -32,6 +33,7 @@ type BoxPlayer = {
   assists: number;
   netWorth: number | null;
   gpm: number | null;
+  lastHits: number | null;
 };
 
 function parseBox(json: string): BoxPlayer[] {
@@ -369,6 +371,7 @@ function SideBox({
   const isRadiant = label === "Radiant";
   const hasNet = players.some((p) => p.netWorth != null);
   const hasGpm = players.some((p) => p.gpm != null);
+  const hasLh = players.some((p) => p.lastHits != null);
   // Sort by farm so the gold bars descend, like Dota's post-game screen.
   const ordered = [...players].sort(
     (a, b) => (b.netWorth ?? 0) - (a.netWorth ?? 0) || b.kills - a.kills,
@@ -431,16 +434,20 @@ function SideBox({
                   ) : null}
                 </div>
                 <div className="shrink-0 text-right">
-                  <div className="font-mono text-xs tabular-nums">
-                    <span className="text-success">{p.kills}</span>
-                    <span className="text-muted">/</span>
-                    <span className="text-danger">{p.deaths}</span>
-                    <span className="text-muted">/</span>
-                    <span className="text-info">{p.assists}</span>
-                  </div>
-                  {hasGpm ? (
+                  <KDA
+                    kills={p.kills}
+                    deaths={p.deaths}
+                    assists={p.assists}
+                    className="block text-xs"
+                  />
+                  {hasGpm || hasLh ? (
                     <div className="text-[11px] tabular-nums text-muted">
-                      {p.gpm ?? "—"} gpm
+                      {[
+                        hasGpm ? `${p.gpm ?? "—"} gpm` : null,
+                        hasLh ? `${p.lastHits ?? "—"} lh` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </div>
                   ) : null}
                 </div>

@@ -177,8 +177,8 @@ export default async function TeamPage({
               className="rounded-2xl shadow-lg"
             />
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                   {team.name}
                 </h1>
                 {rank > 0 ? (
