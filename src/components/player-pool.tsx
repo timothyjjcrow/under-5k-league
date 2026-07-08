@@ -39,12 +39,24 @@ export function PlayerPool({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search players…"
-          className="h-9 min-w-[9rem] flex-1 rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-        />
+        <div className="relative min-w-[9rem] flex-1">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search players…"
+            className="h-9 w-full rounded-lg border border-line bg-surface-2/50 pl-3 pr-8 text-sm outline-none focus:border-accent/60"
+          />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            >
+              ✕
+            </button>
+          ) : null}
+        </div>
 
         <div className="flex items-center gap-1" role="group" aria-label="Filter by role">
           <RoleChip active={role === null} onClick={() => setRole(null)}>
