@@ -169,9 +169,6 @@ function Hero({
         className="animate-hero-glow-alt pointer-events-none absolute -right-12 bottom-0 h-48 w-48 translate-y-1/3 rounded-full bg-accent/20 blur-3xl"
       />
       <div className="relative">
-        <div className="animate-hero-float mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-brand to-brand/60 text-2xl font-black tracking-tight text-brand-fg shadow-lg shadow-brand/40 ring-1 ring-white/15">
-          5K
-        </div>
         {phase ? (
           <Badge tone={PHASE_TONE[phase] ?? "neutral"} className="mb-4">
             {live ? (
