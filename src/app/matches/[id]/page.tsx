@@ -15,6 +15,7 @@ import {
   HeroIcon,
   PageTitle,
   PlayerLink,
+  TeamCrest,
   buttonClasses,
 } from "@/components/ui";
 
@@ -69,11 +70,28 @@ export default async function MatchDetailPage({
         }
       />
 
-      <Card>
-        <CardBody className="flex items-center justify-center gap-6 py-6">
-          <TeamSide name={match.homeTeam.name} href={`/teams/${match.homeTeamId}`} score={match.homeScore} win={match.winnerTeamId === match.homeTeamId} />
-          <span className="text-sm text-muted">series</span>
-          <TeamSide name={match.awayTeam.name} href={`/teams/${match.awayTeamId}`} score={match.awayScore} win={match.winnerTeamId === match.awayTeamId} right />
+      <Card className="relative overflow-hidden">
+        <div
+          aria-hidden
+          className="hero-grid pointer-events-none absolute inset-0 opacity-40"
+        />
+        <CardBody className="relative flex items-center gap-3 py-7 sm:gap-6">
+          <TeamSide
+            name={match.homeTeam.name}
+            teamId={match.homeTeamId}
+            score={match.homeScore}
+            win={match.winnerTeamId === match.homeTeamId}
+          />
+          <span className="shrink-0 text-[10px] font-medium uppercase tracking-widest text-muted">
+            series
+          </span>
+          <TeamSide
+            name={match.awayTeam.name}
+            teamId={match.awayTeamId}
+            score={match.awayScore}
+            win={match.winnerTeamId === match.awayTeamId}
+            right
+          />
         </CardBody>
       </Card>
 
@@ -151,32 +169,43 @@ export default async function MatchDetailPage({
 
 function TeamSide({
   name,
-  href,
+  teamId,
   score,
   win,
   right,
 }: {
   name: string;
-  href?: string;
+  teamId: string;
   score: number;
   win: boolean;
   right?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-3 ${right ? "flex-row-reverse" : ""}`}>
-      {href ? (
-        <Link
-          href={href}
-          className={`text-lg font-semibold hover:text-info ${win ? "text-fg" : "text-muted"}`}
-        >
-          {name}
-        </Link>
-      ) : (
-        <span className={`text-lg font-semibold ${win ? "text-fg" : "text-muted"}`}>
-          {name}
-        </span>
+    <div
+      className={cn(
+        "flex min-w-0 flex-1 items-center gap-3",
+        right && "flex-row-reverse",
       )}
-      <span className="text-3xl font-bold tabular-nums">{score}</span>
+    >
+      <TeamCrest name={name} seed={teamId} size={44} />
+      <Link
+        href={`/teams/${teamId}`}
+        className={cn(
+          "min-w-0 flex-1 truncate font-display text-lg font-semibold hover:text-info",
+          right && "text-right",
+          win ? "text-fg" : "text-muted",
+        )}
+      >
+        {name}
+      </Link>
+      <span
+        className={cn(
+          "shrink-0 font-display text-4xl font-bold tabular-nums",
+          win ? "text-fg" : "text-muted",
+        )}
+      >
+        {score}
+      </span>
     </div>
   );
 }
