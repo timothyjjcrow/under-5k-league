@@ -9,7 +9,7 @@ import {
   type PlayerGameLine,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
-import { formatNetWorth } from "@/lib/utils";
+import { cn, formatNetWorth } from "@/lib/utils";
 import {
   Avatar,
   Card,
@@ -204,6 +204,7 @@ function LeaderCard({
   format: (r: LeaderRow) => string;
   hint: (r: LeaderRow) => string;
 }) {
+  const max = rows.length ? Math.max(...rows.map((r) => r.value)) : 0;
   return (
     <Card>
       <CardHeader title={title} subtitle={subtitle} />
@@ -214,27 +215,52 @@ function LeaderCard({
           <ul className="divide-y divide-line/60">
             {rows.map((r, i) => {
               const u = userMap.get(r.id);
+              const rank = i + 1;
+              const pct =
+                max > 0 ? Math.max(4, Math.round((r.value / max) * 100)) : 0;
               return (
                 <li
                   key={r.id}
-                  className="flex items-center gap-3 px-5 py-2.5 text-sm"
+                  className={cn(
+                    "px-5 py-2.5 text-sm",
+                    rank === 1 && "bg-accent/5",
+                  )}
                 >
-                  <span className="w-4 text-center text-xs text-muted">
-                    {i + 1}
-                  </span>
-                  <Avatar name={u?.name ?? "?"} src={u?.avatar} size={26} />
-                  <span className="min-w-0 flex-1 truncate">
-                    <PlayerLink userId={r.id} className="font-medium">
-                      {u?.name ?? "Unknown"}
-                    </PlayerLink>
-                    <RankBadge rankTier={u?.rankTier} className="ml-1.5" />
-                  </span>
-                  <span className="shrink-0 text-right">
-                    <span className="font-semibold tabular-nums">
-                      {format(r)}
+                  <div className="flex items-center gap-3">
+                    <LeaderRank rank={rank} />
+                    <Avatar name={u?.name ?? "?"} src={u?.avatar} size={26} />
+                    <span className="min-w-0 flex-1 truncate">
+                      <PlayerLink
+                        userId={r.id}
+                        className={cn(
+                          "font-medium",
+                          rank === 1 && "font-semibold",
+                        )}
+                      >
+                        {u?.name ?? "Unknown"}
+                      </PlayerLink>
+                      <RankBadge rankTier={u?.rankTier} className="ml-1.5" />
                     </span>
-                    <span className="block text-xs text-muted">{hint(r)}</span>
-                  </span>
+                    <span className="shrink-0 text-right">
+                      <span className="font-display text-base font-bold tabular-nums">
+                        {format(r)}
+                      </span>
+                      <span className="block text-xs text-muted">{hint(r)}</span>
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-surface-2">
+                    <div
+                      className={cn(
+                        "bar-fill h-full rounded-full",
+                        rank === 1
+                          ? "bg-accent"
+                          : rank <= 3
+                            ? "bg-accent/60"
+                            : "bg-brand/45",
+                      )}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
                 </li>
               );
             })}
@@ -242,5 +268,30 @@ function LeaderCard({
         )}
       </CardBody>
     </Card>
+  );
+}
+
+// Top-3 get a colored medal rank (gold/silver/bronze); the rest a plain number.
+function LeaderRank({ rank }: { rank: number }) {
+  if (rank > 3) {
+    return (
+      <span className="w-6 shrink-0 text-center text-xs text-muted">{rank}</span>
+    );
+  }
+  const tone =
+    rank === 1
+      ? "bg-amber-400/20 text-amber-300 ring-amber-400/40"
+      : rank === 2
+        ? "bg-slate-300/15 text-slate-200 ring-slate-300/40"
+        : "bg-orange-500/15 text-orange-300 ring-orange-500/40";
+  return (
+    <span
+      className={cn(
+        "grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold ring-1",
+        tone,
+      )}
+    >
+      {rank}
+    </span>
   );
 }
