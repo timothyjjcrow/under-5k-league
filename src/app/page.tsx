@@ -147,10 +147,27 @@ function Hero({
   const live = !!phase && phase !== "COMPLETE";
   return (
     <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-14 text-center sm:px-10 sm:py-16">
+      {/* Looping background video, dimmed + edge-masked so it reads as ambiance. */}
+      <video
+        aria-hidden
+        className="hero-video pointer-events-none absolute inset-0 h-full w-full object-cover opacity-45"
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="auto"
+      >
+        <source src="/hero-loop.mp4" type="video/mp4" />
+      </video>
+      {/* Themed tint over the video for contrast + palette cohesion. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-surface/40 via-bg/45 to-surface/75"
+      />
       {/* Layered ambient background: masked grid + dual neon glows. */}
       <div
         aria-hidden
-        className="hero-grid pointer-events-none absolute inset-0 opacity-70"
+        className="hero-grid pointer-events-none absolute inset-0 opacity-60"
       />
       <div
         aria-hidden

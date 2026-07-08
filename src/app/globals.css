@@ -51,6 +51,28 @@ a {
 
 /* ---------- Hero / ambient graphics ---------- */
 
+/* Looping hero background video — dimmed and masked so it fades into the card
+   edges (an atmosphere layer, not a hard rectangle). */
+.hero-video {
+  -webkit-mask-image: radial-gradient(
+    ellipse 100% 92% at 50% 42%,
+    #000 45%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 100% 92% at 50% 42%,
+    #000 45%,
+    transparent 100%
+  );
+}
+
+/* Respect reduced-motion: drop the moving video, keep the static gradient. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-video {
+    display: none;
+  }
+}
+
 /* Masked grid overlay that fades out toward the edges — adds depth without noise. */
 .hero-grid {
   background-image:
