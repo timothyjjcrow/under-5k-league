@@ -445,7 +445,7 @@ function StatBar({
       </span>
       <div className="h-2.5 flex-1 rounded-full bg-surface-2">
         <div
-          className={`h-full rounded-full ${tone === "brand" ? "bg-brand" : "bg-accent"}`}
+          className={`bar-fill h-full rounded-full ${tone === "brand" ? "bg-brand" : "bg-accent"}`}
           style={{ width: `${pct}%` }}
         />
       </div>

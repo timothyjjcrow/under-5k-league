@@ -166,3 +166,21 @@ a {
     animation: none;
   }
 }
+
+/* Bars grow in from the left on load (GPU-friendly scaleX — no layout thrash).
+   Opt-in via no-preference so reduced-motion users get the final width with no
+   flash. The real width is always set inline, so SSR/no-JS render correctly. */
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bar-fill {
+    transform-origin: left;
+    animation: bar-grow 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
