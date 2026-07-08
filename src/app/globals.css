@@ -261,11 +261,47 @@ a {
   animation: live-pulse 1.8s ease-in-out infinite;
 }
 
+/* Draft spectacle: the "SOLD!" flash pops in; the countdown pulses when time
+   is nearly up. */
+@keyframes sold-pop {
+  0% {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.02);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.sold-flash {
+  animation: sold-pop 0.4s ease-out;
+}
+
+@keyframes countdown-urgent {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
+}
+.animate-countdown-urgent {
+  animation: countdown-urgent 0.6s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-hero-glow,
   .animate-hero-glow-alt,
   .animate-hero-float,
-  .animate-live-pulse {
+  .animate-live-pulse,
+  .animate-countdown-urgent {
+    animation: none;
+  }
+  .sold-flash {
     animation: none;
   }
 }

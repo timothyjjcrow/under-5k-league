@@ -13,6 +13,14 @@ import {
 import { cn } from "@/lib/utils";
 import type { DraftState } from "@/lib/draft-service";
 
+// A single line in the live feed, derived purely from state transitions.
+type FeedEvent = {
+  id: number;
+  kind: "nominate" | "bid" | "sold";
+  text: string;
+  amount: number;
+};
+
 export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   const [state, setState] = useState<DraftState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +29,16 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   const offsetRef = useRef(0); // serverNow - clientNow, to sync the countdown
   const [selected, setSelected] = useState<string | null>(null);
   const [nomAmount, setNomAmount] = useState(1);
+  // Live feed + "SOLD!" flash — derived client-side by diffing successive
+  // polled states, so no changes to the server-authoritative draft engine.
+  const prevRef = useRef<DraftState | null>(null);
+  const eventIdRef = useRef(0);
+  const [events, setEvents] = useState<FeedEvent[]>([]);
+  const [soldFlash, setSoldFlash] = useState<{
+    name: string;
+    team: string;
+    price: number;
+  } | null>(null);
 
   const apply = useCallback((s: DraftState) => {
     offsetRef.current = s.now - Date.now();
@@ -46,6 +64,62 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     const id = setInterval(() => forceTick((t) => t + 1), 250);
     return () => clearInterval(id);
   }, []);
+
+  // Diff each new state against the previous one to build the live feed +
+  // trigger the SOLD! flash. Read-only — never mutates draft state.
+  useEffect(() => {
+    if (!state) return;
+    const prev = prevRef.current;
+    prevRef.current = state;
+    if (!prev) return;
+    const nameOf = (id: string | null) =>
+      state.teams.find((t) => t.id === id)?.name ?? "—";
+    const add: FeedEvent[] = [];
+
+    // A sale = any new non-captain roster member appearing on a team.
+    const prevRostered = new Set(
+      prev.teams.flatMap((t) => t.members.map((m) => m.userId)),
+    );
+    for (const t of state.teams) {
+      for (const m of t.members) {
+        if (!m.isCaptain && !prevRostered.has(m.userId)) {
+          add.push({
+            id: eventIdRef.current++,
+            kind: "sold",
+            text: `${m.name} → ${t.name}`,
+            amount: m.price,
+          });
+          setSoldFlash({ name: m.name, team: t.name, price: m.price });
+        }
+      }
+    }
+
+    const prevNom = prev.nominatedPlayer?.userId ?? null;
+    const curNom = state.nominatedPlayer?.userId ?? null;
+    if (curNom && curNom !== prevNom) {
+      add.push({
+        id: eventIdRef.current++,
+        kind: "nominate",
+        text: `${nameOf(state.nominatorTeamId)} nominated ${state.nominatedPlayer!.name}`,
+        amount: state.currentBid,
+      });
+    } else if (curNom && curNom === prevNom && state.currentBid > prev.currentBid) {
+      add.push({
+        id: eventIdRef.current++,
+        kind: "bid",
+        text: `${nameOf(state.currentBidTeamId)} bid`,
+        amount: state.currentBid,
+      });
+    }
+
+    if (add.length) setEvents((e) => [...add, ...e].slice(0, 12));
+  }, [state]);
+
+  useEffect(() => {
+    if (!soldFlash) return;
+    const id = setTimeout(() => setSoldFlash(null), 3600);
+    return () => clearTimeout(id);
+  }, [soldFlash]);
 
   async function act(url: string, body: Record<string, unknown>) {
     setPending(true);
@@ -114,6 +188,19 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
         </div>
       ) : null}
 
+      {soldFlash ? (
+        <div className="sold-flash flex flex-col items-center gap-1 rounded-[var(--radius)] border border-success/50 bg-gradient-to-r from-success/15 via-success/10 to-success/15 px-5 py-4 text-center">
+          <div className="font-display text-2xl font-black uppercase tracking-widest text-success">
+            Sold!
+          </div>
+          <div className="text-sm">
+            <span className="font-semibold">{soldFlash.name}</span> →{" "}
+            {soldFlash.team} for{" "}
+            <span className="font-bold text-accent">${soldFlash.price}</span>
+          </div>
+        </div>
+      ) : null}
+
       {/* On the block */}
       <div className="rounded-[var(--radius)] border border-line bg-surface/80">
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
@@ -123,11 +210,19 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
           {state.nominatedPlayer ? (
             <div
               className={cn(
-                "font-mono text-lg font-bold tabular-nums",
+                "flex items-center gap-2 font-mono text-2xl font-bold tabular-nums",
                 seconds <= 5 ? "text-danger" : "text-accent",
               )}
             >
-              {seconds}s
+              {seconds <= 5 ? (
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
+                </span>
+              ) : null}
+              <span className={seconds <= 5 ? "animate-countdown-urgent" : ""}>
+                {seconds}s
+              </span>
             </div>
           ) : null}
         </div>
@@ -257,7 +352,8 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
         <div className="lg:col-span-2">
           <TeamsGrid state={state} />
         </div>
-        <div>
+        <div className="space-y-6">
+          <BidFeed events={events} />
           <div className="rounded-[var(--radius)] border border-line bg-surface/80">
             <div className="border-b border-line px-5 py-3 text-sm font-semibold">
               Available · {state.available.length}
@@ -299,6 +395,49 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BidFeed({ events }: { events: FeedEvent[] }) {
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/80">
+      <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-sm font-semibold">
+        <span className="animate-live-pulse inline-block h-1.5 w-1.5 rounded-full bg-danger" />
+        Live feed
+      </div>
+      <div className="max-h-64 space-y-0.5 overflow-y-auto p-3">
+        {events.length === 0 ? (
+          <p className="p-2 text-sm text-muted">
+            Nominations, bids, and picks appear here…
+          </p>
+        ) : (
+          events.map((e) => (
+            <div
+              key={e.id}
+              className={cn(
+                "flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm",
+                e.kind === "sold" && "bg-success/5",
+              )}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span aria-hidden>
+                  {e.kind === "sold" ? "✅" : e.kind === "bid" ? "💰" : "🎯"}
+                </span>
+                <span className="truncate">{e.text}</span>
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 font-mono text-xs tabular-nums",
+                  e.kind === "sold" ? "font-bold text-success" : "text-accent",
+                )}
+              >
+                ${e.amount}
+              </span>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
@@ -371,8 +510,12 @@ function TeamsGrid({ state }: { state: DraftState }) {
           <div
             key={t.id}
             className={cn(
-              "rounded-[var(--radius)] border bg-surface/80",
-              onClock ? "border-accent/60" : "border-line",
+              "rounded-[var(--radius)] border bg-surface/80 transition-all",
+              onClock
+                ? "border-accent/70 ring-2 ring-accent/30"
+                : highBid
+                  ? "border-success/50 ring-1 ring-success/25"
+                  : "border-line",
             )}
           >
             <div className="flex items-center justify-between border-b border-line px-4 py-3">
