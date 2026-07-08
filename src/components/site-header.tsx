@@ -123,9 +123,9 @@ export function SiteHeader({
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
                   active
-                    ? "bg-surface-2 text-fg"
+                    ? "bg-accent/15 text-fg"
                     : "text-muted hover:bg-surface-2/60 hover:text-fg",
                 )}
               >
@@ -213,9 +213,9 @@ export function SiteHeader({
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                    "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
                     active
-                      ? "bg-surface-2 text-fg"
+                      ? "bg-accent/15 text-fg"
                       : "text-muted hover:bg-surface-2/60 hover:text-fg",
                   )}
                 >
