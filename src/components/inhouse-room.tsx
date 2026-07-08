@@ -353,42 +353,50 @@ function QueueView({
         </div>
 
         <div className="border-t border-line bg-surface/40 px-4 py-4">
-          {queue.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted">
-              Queue&apos;s empty — be the first in. Once {lobbySize} players are
-              in, the lobby votes on how captains are chosen, then they draft the
-              teams.
-            </p>
-          ) : (
-            <ul className="grid gap-2 sm:grid-cols-2">
-              {queue.map((q, i) => {
-                const isMe = q.userId === me.userId;
+          {/* All lobby slots — filled players + open placeholders, so the
+              lobby visibly fills up as people queue. */}
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {Array.from({ length: lobbySize }).map((_, i) => {
+              const q = queue[i];
+              if (!q) {
                 return (
                   <li
-                    key={q.userId}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg border px-3 py-2",
-                      isMe
-                        ? "border-accent/50 bg-accent/10"
-                        : "border-line bg-surface-2/40",
-                    )}
+                    key={`open-${i}`}
+                    className="flex items-center gap-3 rounded-lg border border-dashed border-line/60 px-3 py-2"
                   >
-                    <span className="w-5 shrink-0 text-center text-xs text-muted tabular-nums">
+                    <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full border border-dashed border-line/60 text-xs tabular-nums text-muted/60">
                       {i + 1}
                     </span>
-                    <Avatar name={q.name} src={q.avatar} size={30} />
-                    <PlayerLink userId={q.userId} className="truncate text-sm font-medium">
-                      {q.name}
-                    </PlayerLink>
-                    <span className="ml-auto flex items-center gap-2 text-xs text-muted">
-                      <RankBadge rankTier={q.rankTier} />
-                      {q.mmr > 0 ? <span>{q.mmr}</span> : null}
-                    </span>
+                    <span className="text-sm text-muted/60">Open slot</span>
                   </li>
                 );
-              })}
-            </ul>
-          )}
+              }
+              const isMe = q.userId === me.userId;
+              return (
+                <li
+                  key={q.userId}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg border px-3 py-2",
+                    isMe
+                      ? "border-accent/50 bg-accent/10"
+                      : "border-line bg-surface-2/40",
+                  )}
+                >
+                  <span className="w-5 shrink-0 text-center text-xs text-muted tabular-nums">
+                    {i + 1}
+                  </span>
+                  <Avatar name={q.name} src={q.avatar} size={30} />
+                  <PlayerLink userId={q.userId} className="truncate text-sm font-medium">
+                    {q.name}
+                  </PlayerLink>
+                  <span className="ml-auto flex items-center gap-2 text-xs text-muted">
+                    <RankBadge rankTier={q.rankTier} />
+                    {q.mmr > 0 ? <span>{q.mmr}</span> : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       </div>
 
