@@ -6,6 +6,7 @@ import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
+import { CountUp } from "./count-up";
 
 // ---------- Button ----------
 
@@ -421,7 +422,7 @@ export function Stat({
     <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
       <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
       <div className="mt-1 font-display text-3xl font-bold tabular-nums text-fg">
-        {value}
+        {typeof value === "number" ? <CountUp value={value} /> : value}
       </div>
       {hint ? <div className="mt-0.5 text-xs text-muted">{hint}</div> : null}
     </div>
