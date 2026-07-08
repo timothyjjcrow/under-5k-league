@@ -229,7 +229,7 @@ function QueueView({
                   value={mmr || ""}
                   placeholder="0"
                   onChange={(e) => setMmr(Number(e.target.value))}
-                  title="Seeds captain selection — top 2 MMR captain the teams"
+                  title="Used to rank players if the lobby votes to pick captains by MMR"
                   className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
                 />
                 <button
@@ -247,8 +247,9 @@ function QueueView({
         <div className="border-t border-line bg-surface/40 px-4 py-4">
           {queue.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted">
-              Queue&apos;s empty — be the first in. The two highest-MMR players
-              become captains and draft the rest.
+              Queue&apos;s empty — be the first in. Once {lobbySize} players are
+              in, the lobby votes on how captains are chosen, then they draft the
+              teams.
             </p>
           ) : (
             <ul className="grid gap-2 sm:grid-cols-2">
@@ -271,7 +272,6 @@ function QueueView({
                     <PlayerLink userId={q.userId} className="truncate text-sm font-medium">
                       {q.name}
                     </PlayerLink>
-                    {i < 2 ? <Badge tone="brand">seed</Badge> : null}
                     <span className="ml-auto flex items-center gap-2 text-xs text-muted">
                       <RankBadge rankTier={q.rankTier} />
                       {q.mmr > 0 ? <span>{q.mmr}</span> : null}
