@@ -73,6 +73,36 @@ a {
   }
 }
 
+/* Shimmering skeleton placeholder for loading states. */
+@keyframes skeleton-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-surface-2) 70%, transparent);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-line) 55%, transparent),
+    transparent
+  );
+  animation: skeleton-shimmer 1.5s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
+}
+
 /* A player's signature hero portrait sitting on the right of their profile
    banner, fading out toward the left so it blends behind the content. */
 .profile-hero-bg {

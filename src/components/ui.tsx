@@ -431,6 +431,13 @@ export function Progress({
   );
 }
 
+// ---------- Skeleton ----------
+
+/** A shimmering placeholder block for loading states. */
+export function Skeleton({ className }: { className?: string }) {
+  return <div className={cn("skeleton rounded-md", className)} />;
+}
+
 // ---------- Empty state ----------
 
 function EmptyGlyph() {
