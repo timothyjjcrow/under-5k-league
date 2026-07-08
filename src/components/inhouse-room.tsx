@@ -10,6 +10,58 @@ import type { InhouseState } from "@/lib/inhouse-service";
 type LobbyTeam = NonNullable<InhouseState["lobby"]>["teams"][number];
 type Player = LobbyTeam["players"][number];
 
+// ---- Bell "dong" notification (synthesized, no audio asset needed) ----------
+
+let audioCtx: AudioContext | null = null;
+
+/** Get (and resume) a shared AudioContext. Must be primed by a user gesture. */
+function ensureAudioCtx(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  const Ctor =
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!Ctor) return null;
+  if (!audioCtx) audioCtx = new Ctor();
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
+/** Unlock audio on a user gesture (browsers block sound until then). */
+function unlockAudio() {
+  ensureAudioCtx();
+}
+
+/** A short bell "dong": a stack of decaying partials struck together. */
+function playChime() {
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.value = 0.32;
+  master.connect(ctx.destination);
+  // Fundamental + bell-like overtones, each ringing out and fading.
+  const partials: [number, number, number][] = [
+    [523.25, 1.0, 1.7], // C5
+    [1046.5, 0.5, 1.2],
+    [1568.0, 0.22, 0.8],
+    [2093.0, 0.1, 0.5],
+  ];
+  for (const [freq, gain, decay] of partials) {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(gain, now + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+    osc.connect(g);
+    g.connect(master);
+    osc.start(now);
+    osc.stop(now + decay + 0.05);
+  }
+}
+
 // Radiant = green, Dire = red — matching the in-client colors so it reads fast.
 function sideMeta(isRadiant: boolean) {
   return isRadiant
@@ -43,8 +95,26 @@ export function InhouseRoom({
   const [, forceTick] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [mmr, setMmr] = useState<number>(defaultMmr);
+  const [soundOn, setSoundOn] = useState(true);
   const offsetRef = useRef(0); // serverNow - clientNow, to sync the clock
   const prevLobbyId = useRef<string | null>(null);
+  // For the bell notification: remember what we saw last poll.
+  const soundInitRef = useRef(false);
+  const prevStatusRef = useRef<string | null>(null);
+  const prevOnClockRef = useRef(false);
+
+  useEffect(() => {
+    setSoundOn(localStorage.getItem("inhouseSound") !== "off");
+  }, []);
+
+  const toggleSound = useCallback(() => {
+    setSoundOn((on) => {
+      const next = !on;
+      localStorage.setItem("inhouseSound", next ? "on" : "off");
+      if (next) playChime(); // confirm + unlock audio on this gesture
+      return next;
+    });
+  }, []);
 
   const apply = useCallback((s: InhouseState) => {
     offsetRef.current = s.now - Date.now();
@@ -84,8 +154,29 @@ export function InhouseRoom({
     prevLobbyId.current = cur;
   }, [state?.lobby?.id, router]);
 
+  // Ring a bell on the moments that matter to this viewer: their lobby forming,
+  // their turn to pick, and teams locking in. Skips the initial page load.
+  useEffect(() => {
+    if (!state) return;
+    const status = state.lobby?.status ?? null;
+    const isOnClock = state.me.isOnClock;
+    const inLobby = state.me.inLobby;
+
+    if (soundInitRef.current && soundOn) {
+      const lobbyFormed = status !== null && prevStatusRef.current === null && inLobby;
+      const myTurn = isOnClock && !prevOnClockRef.current;
+      const teamsReady =
+        status === "READY" && prevStatusRef.current !== "READY" && inLobby;
+      if (lobbyFormed || myTurn || teamsReady) playChime();
+    }
+    prevStatusRef.current = status;
+    prevOnClockRef.current = isOnClock;
+    soundInitRef.current = true;
+  }, [state, soundOn]);
+
   const act = useCallback(
     async (body: Record<string, unknown>) => {
+      unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
       setError(null);
       try {
@@ -118,6 +209,23 @@ export function InhouseRoom({
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          onClick={toggleSound}
+          aria-pressed={soundOn}
+          title={
+            soundOn
+              ? "Notification sound on — click to mute"
+              : "Notifications muted — click to enable a bell"
+          }
+          className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
+        >
+          <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
+          {soundOn ? "Sound on" : "Muted"}
+        </button>
+      </div>
+
       {error ? (
         <div className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
           {error}
