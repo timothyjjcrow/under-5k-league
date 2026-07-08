@@ -211,6 +211,7 @@ export default async function MePage() {
                   id="statement"
                   name="statement"
                   rows={3}
+                  maxLength={1000}
                   defaultValue={reg?.statement ?? ""}
                   placeholder="Why you're here, your goals, availability…"
                   className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
@@ -228,6 +229,7 @@ export default async function MePage() {
                   id="captainNote"
                   name="captainNote"
                   rows={3}
+                  maxLength={1000}
                   defaultValue={reg?.captainNote ?? ""}
                   placeholder="What should captains know about you as a player?"
                   className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
