@@ -1,5 +1,15 @@
 import type { Metadata } from "next";
+import { Oswald } from "next/font/google";
 import "./globals.css";
+
+// Condensed display face for headings & stat numbers — the "jersey/billboard"
+// esports voice. Body text stays on the neutral system sans for readability.
+const display = Oswald({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-oswald",
+  display: "swap",
+});
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Toaster } from "@/components/toaster";
@@ -57,7 +67,7 @@ export default async function RootLayout({
       : null;
 
   return (
-    <html lang="en" className="h-full antialiased">
+    <html lang="en" className={`h-full antialiased ${display.variable}`}>
       <body className="flex min-h-full flex-col">
         <SiteHeader
           user={user}

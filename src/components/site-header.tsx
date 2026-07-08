@@ -104,7 +104,7 @@ export function SiteHeader({
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-bold text-brand-fg">
             5K
           </span>
-          <span className="hidden text-lg font-semibold tracking-tight sm:block">
+          <span className="hidden font-display text-lg font-semibold uppercase tracking-wide sm:block">
             Under 5k League
           </span>
         </Link>

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { roleCoverage } from "@/lib/pool-stats";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 import {
   Avatar,
   Badge,
@@ -13,13 +13,20 @@ import {
   CardHeader,
   EmptyState,
   FormStrip,
-  PageTitle,
   PlayerLink,
   RankBadge,
   Stat,
 } from "@/components/ui";
 
 export const metadata = { title: "Team · Under 5k League" };
+
+// Deterministic hue (0–359) from a string, so each team gets a stable, distinct
+// color identity for its crest + banner glow (teams have no uploaded logos).
+function hueFromString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+}
 
 function fmtDate(d: Date | null): string | null {
   if (!d) return null;
@@ -82,34 +89,82 @@ export default async function TeamPage({
   const spent = team.members.reduce((sum, m) => sum + m.price, 0);
   const coverage = roleCoverage(rosterRegs);
   const hasRoleData = coverage.some((r) => r.count > 0);
+  const hue = hueFromString(team.id);
 
   return (
     <div className="space-y-6">
-      <PageTitle
-        title={team.name}
-        subtitle={team.season.name}
-        action={
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <Link href="/teams" className="text-sm text-info hover:underline">
+            ← All teams
+          </Link>
           <Link href="/schedule" className="text-sm text-info hover:underline">
             Standings →
           </Link>
-        }
-      />
-
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-        <span className="text-muted">
-          Captained by{" "}
-          <PlayerLink userId={team.captainId} className="text-fg">
-            {team.captain.name}
-          </PlayerLink>
-        </span>
-        {form.length > 0 ? (
-          <span className="flex items-center gap-2">
-            <span className="text-xs uppercase tracking-wide text-muted">
-              Form
-            </span>
-            <FormStrip form={form} />
-          </span>
-        ) : null}
+        </div>
+        <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
+          {/* Ambient graphics tinted with the team's own color identity. */}
+          <div
+            aria-hidden
+            className="hero-grid pointer-events-none absolute inset-0 opacity-50"
+          />
+          <div
+            aria-hidden
+            className="animate-hero-glow pointer-events-none absolute -left-8 top-0 h-40 w-40 -translate-y-1/3 rounded-full blur-3xl"
+            style={{ backgroundColor: `hsl(${hue} 70% 50% / 0.22)` }}
+          />
+          <div
+            aria-hidden
+            className="animate-hero-glow-alt pointer-events-none absolute -right-8 bottom-0 h-40 w-40 translate-y-1/3 rounded-full bg-accent/15 blur-3xl"
+          />
+          <div className="relative flex flex-wrap items-center gap-5 p-6">
+            <div
+              className="grid h-20 w-20 shrink-0 place-items-center rounded-2xl font-display text-2xl font-bold uppercase text-white shadow-lg ring-1 ring-white/15"
+              style={{
+                backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
+              }}
+            >
+              {initials(team.name)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
+                  {team.name}
+                </h1>
+                {rank > 0 ? (
+                  <Badge tone="accent">
+                    #{rank} of {allTeams.length}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="mt-1 text-sm text-muted">{team.season.name}</div>
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
+                <span className="flex items-center gap-1.5 text-muted">
+                  Captain
+                  <PlayerLink
+                    userId={team.captainId}
+                    className="flex items-center gap-1.5 text-fg hover:no-underline"
+                  >
+                    <Avatar
+                      name={team.captain.name}
+                      src={team.captain.avatar}
+                      size={20}
+                    />
+                    <span className="font-medium">{team.captain.name}</span>
+                  </PlayerLink>
+                </span>
+                {form.length > 0 ? (
+                  <span className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wide text-muted">
+                      Form
+                    </span>
+                    <FormStrip form={form} />
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

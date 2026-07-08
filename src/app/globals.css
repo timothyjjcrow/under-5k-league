@@ -21,6 +21,12 @@
   --radius: 0.75rem;
 }
 
+/* `inline` so the utility bakes in the value directly — the referenced
+   `--font-oswald` is injected at runtime by next/font on <html>. */
+@theme inline {
+  --font-display: var(--font-oswald), ui-sans-serif, system-ui, sans-serif;
+}
+
 :root {
   color-scheme: dark;
 }
@@ -41,4 +47,100 @@ body {
 
 a {
   color: inherit;
+}
+
+/* ---------- Hero / ambient graphics ---------- */
+
+/* Masked grid overlay that fades out toward the edges — adds depth without noise. */
+.hero-grid {
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--color-line) 60%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-line) 60%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 34px 34px;
+  -webkit-mask-image: radial-gradient(
+    ellipse 72% 78% at 50% 38%,
+    #000 28%,
+    transparent 76%
+  );
+  mask-image: radial-gradient(
+    ellipse 72% 78% at 50% 38%,
+    #000 28%,
+    transparent 76%
+  );
+}
+
+@keyframes hero-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(1.14);
+  }
+}
+
+@keyframes hero-glow-alt {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.12);
+  }
+}
+
+@keyframes hero-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.72);
+  }
+}
+
+.animate-hero-glow {
+  animation: hero-glow 7s ease-in-out infinite;
+}
+.animate-hero-glow-alt {
+  animation: hero-glow-alt 9s ease-in-out infinite;
+}
+.animate-hero-float {
+  animation: hero-float 5.5s ease-in-out infinite;
+}
+.animate-live-pulse {
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-hero-glow,
+  .animate-hero-glow-alt,
+  .animate-hero-float,
+  .animate-live-pulse {
+    animation: none;
+  }
 }

@@ -144,23 +144,41 @@ function Hero({
   title: string;
   subtitle: string;
 }) {
+  const live = !!phase && phase !== "COMPLETE";
   return (
-    <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-12 text-center sm:px-10 sm:py-14">
+    <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-14 text-center sm:px-10 sm:py-16">
+      {/* Layered ambient background: masked grid + dual neon glows. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute left-1/2 top-0 h-48 w-48 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/20 blur-3xl"
+        className="hero-grid pointer-events-none absolute inset-0 opacity-70"
+      />
+      <div
+        aria-hidden
+        className="animate-hero-glow pointer-events-none absolute left-1/2 top-0 h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/25 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="animate-hero-glow-alt pointer-events-none absolute -right-12 bottom-0 h-48 w-48 translate-y-1/3 rounded-full bg-accent/20 blur-3xl"
       />
       <div className="relative">
-        <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-brand text-2xl font-bold text-brand-fg shadow-lg shadow-brand/30 ring-1 ring-white/10">
+        <div className="animate-hero-float mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-brand to-brand/60 text-2xl font-black tracking-tight text-brand-fg shadow-lg shadow-brand/40 ring-1 ring-white/15">
           5K
         </div>
         {phase ? (
           <Badge tone={PHASE_TONE[phase] ?? "neutral"} className="mb-4">
+            {live ? (
+              <span
+                aria-hidden
+                className="animate-live-pulse mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-current"
+              />
+            ) : null}
             {PHASE_LABEL[phase] ?? phase}
           </Badge>
         ) : null}
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{title}</h1>
-        <p className="mx-auto mt-3 max-w-xl text-muted">{subtitle}</p>
+        <h1 className="font-display text-5xl font-bold tracking-tight sm:text-6xl">
+          {title}
+        </h1>
+        <p className="mx-auto mt-3 max-w-xl text-muted sm:text-lg">{subtitle}</p>
       </div>
     </div>
   );

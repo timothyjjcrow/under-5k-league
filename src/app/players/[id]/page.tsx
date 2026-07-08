@@ -23,8 +23,7 @@ import {
   EmptyState,
   HeroIcon,
   HeroList,
-  PageTitle,
-  RankBadge,
+  RankMedal,
   RoleBadges,
   Stat,
 } from "@/components/ui";
@@ -132,6 +131,15 @@ export default async function PlayerProfilePage({
   const roles = roleLabels(registration?.roles);
   const isStandin = registration?.type === "STANDIN";
   const isCaptain = !!membership?.isCaptain;
+  const subtitle = season
+    ? isStandin
+      ? `Standin · ${season.name}`
+      : team
+        ? `${isCaptain ? "Captain" : "Player"} · ${team.name}`
+        : registration
+          ? `Registered · ${season.name}`
+          : season.name
+    : null;
 
   // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
   // game (older imports may lack them), so average only over games that have it.
@@ -189,92 +197,113 @@ export default async function PlayerProfilePage({
 
   return (
     <div className="space-y-6">
-      <PageTitle
-        title={user.name}
-        subtitle={
-          season
-            ? isStandin
-              ? `Standin · ${season.name}`
-              : team
-                ? `${isCaptain ? "Captain" : "Player"} · ${team.name}`
-                : registration
-                  ? `Registered · ${season.name}`
-                  : season.name
-            : undefined
-        }
-        action={
+      <div>
+        <div className="mb-3">
           <Link href="/players" className="text-sm text-info hover:underline">
             ← All players
           </Link>
-        }
-      />
-
-      <Card>
-        <CardBody className="flex flex-wrap items-center gap-4">
-          <Avatar name={user.name} src={user.avatar} size={64} />
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-lg font-semibold">{user.name}</span>
-              {user.role === "ADMIN" ? <Badge tone="accent">Admin</Badge> : null}
-              {isCaptain ? <Badge tone="brand">Captain</Badge> : null}
-              {isStandin ? <Badge tone="info">Standin</Badge> : null}
-              <RankBadge rankTier={user.rankTier} />
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted">
-              {registration ? <span>{registration.mmr} MMR</span> : null}
-              {roles.length > 0 ? <RoleBadges roles={registration?.roles} /> : null}
-              {user.profileUrl ? (
-                <a
-                  href={user.profileUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-info hover:underline"
-                >
-                  Steam ↗
-                </a>
-              ) : null}
-              {accountId ? (
-                <>
-                  <a
-                    href={`https://www.dotabuff.com/players/${accountId}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-info hover:underline"
-                  >
-                    Dotabuff ↗
-                  </a>
-                  <a
-                    href={`https://www.opendota.com/players/${accountId}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-info hover:underline"
-                  >
-                    OpenDota ↗
-                  </a>
-                </>
-              ) : null}
-            </div>
-          </div>
-          {team ? (
-            <Link
-              href={`/teams/${team.id}`}
-              className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm transition-colors hover:border-muted/60"
-            >
-              <div className="text-xs uppercase tracking-wide text-muted">
-                Team
+        </div>
+        <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
+          {/* Ambient graphics shared with the home hero for brand cohesion. */}
+          <div
+            aria-hidden
+            className="hero-grid pointer-events-none absolute inset-0 opacity-50"
+          />
+          <div
+            aria-hidden
+            className="animate-hero-glow pointer-events-none absolute -left-8 top-0 h-40 w-40 -translate-y-1/3 rounded-full bg-brand/20 blur-3xl"
+          />
+          <div
+            aria-hidden
+            className="animate-hero-glow-alt pointer-events-none absolute -right-8 bottom-0 h-40 w-40 translate-y-1/3 rounded-full bg-accent/15 blur-3xl"
+          />
+          <div className="relative flex flex-wrap items-center gap-5 p-6">
+            <Avatar
+              name={user.name}
+              src={user.avatar}
+              size={88}
+              className="shrink-0 shadow-lg shadow-black/40 ring-2 ring-line/80"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
+                  {user.name}
+                </h1>
+                {user.role === "ADMIN" ? (
+                  <Badge tone="accent">Admin</Badge>
+                ) : null}
+                {isCaptain ? <Badge tone="brand">Captain</Badge> : null}
+                {isStandin ? <Badge tone="info">Standin</Badge> : null}
+                <RankMedal rankTier={user.rankTier} size={34} showLabel />
               </div>
-              <div className="font-medium">{team.name}</div>
-              {membership ? (
-                <div className="text-xs text-muted">
-                  {membership.isCaptain
-                    ? "Captain"
-                    : `Drafted for $${membership.price}`}
-                </div>
+              {subtitle ? (
+                <div className="mt-1 text-sm text-muted">{subtitle}</div>
               ) : null}
-            </Link>
-          ) : null}
-        </CardBody>
-      </Card>
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted">
+                {registration ? (
+                  <span>
+                    <span className="font-semibold text-fg">
+                      {registration.mmr}
+                    </span>{" "}
+                    MMR
+                  </span>
+                ) : null}
+                {roles.length > 0 ? (
+                  <RoleBadges roles={registration?.roles} />
+                ) : null}
+                {user.profileUrl ? (
+                  <a
+                    href={user.profileUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-info hover:underline"
+                  >
+                    Steam ↗
+                  </a>
+                ) : null}
+                {accountId ? (
+                  <>
+                    <a
+                      href={`https://www.dotabuff.com/players/${accountId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-info hover:underline"
+                    >
+                      Dotabuff ↗
+                    </a>
+                    <a
+                      href={`https://www.opendota.com/players/${accountId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-info hover:underline"
+                    >
+                      OpenDota ↗
+                    </a>
+                  </>
+                ) : null}
+              </div>
+            </div>
+            {team ? (
+              <Link
+                href={`/teams/${team.id}`}
+                className="rounded-lg border border-line bg-surface/60 px-4 py-2 text-sm backdrop-blur transition-colors hover:border-muted/60"
+              >
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  Team
+                </div>
+                <div className="font-medium">{team.name}</div>
+                {membership ? (
+                  <div className="text-xs text-muted">
+                    {membership.isCaptain
+                      ? "Captain"
+                      : `Drafted for $${membership.price}`}
+                  </div>
+                ) : null}
+              </Link>
+            ) : null}
+          </div>
+        </div>
+      </div>
 
       {summary.games > 0 ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

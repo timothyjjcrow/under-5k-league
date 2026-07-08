@@ -2,7 +2,7 @@ import * as React from "react";
 import Link from "next/link";
 import { DISCORD_INVITE_URL } from "@/lib/constants";
 import { cn, initials } from "@/lib/utils";
-import { rankMedalName, rankMedalTier } from "@/lib/rank";
+import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
@@ -91,7 +91,7 @@ export function CardHeader({
       )}
     >
       <div>
-        <h3 className="text-base font-semibold text-fg">{title}</h3>
+        <h3 className="font-display text-lg font-semibold text-fg">{title}</h3>
         {subtitle ? (
           <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
         ) : null}
@@ -140,19 +140,72 @@ export function Badge({
 
 // ---------- Rank medal ----------
 
-const RANK_TONE: Record<number, string> = {
-  0: "bg-surface-2 text-muted border-line",
-  1: "bg-stone-500/15 text-stone-300 border-stone-500/30",
-  2: "bg-green-500/15 text-green-300 border-green-500/30",
-  3: "bg-teal-500/15 text-teal-300 border-teal-500/30",
-  4: "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  5: "bg-violet-500/15 text-violet-300 border-violet-500/30",
-  6: "bg-rose-500/15 text-rose-300 border-rose-500/30",
-  7: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
-  8: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-};
+/**
+ * The actual Dota 2 ranked-medal graphic: the base medallion (`rank_icon_*`)
+ * with the star-ring overlay (`rank_star_*`) composited on top, both bundled
+ * under `/public/ranks`. Immortal (tier 8) has no stars. Renders nothing when
+ * the medal is unknown/unranked. Hover shows the medal name.
+ */
+export function RankMedal({
+  rankTier,
+  size = 24,
+  showLabel = false,
+  className,
+}: {
+  rankTier: number | null | undefined;
+  size?: number;
+  showLabel?: boolean;
+  className?: string;
+}) {
+  const tier = rankMedalTier(rankTier);
+  if (tier === 0) return null;
+  const stars = rankStars(rankTier);
+  const name = rankMedalName(rankTier);
+  const medal = (
+    <span
+      className="relative inline-block shrink-0"
+      style={{ width: size, height: size }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`/ranks/rank_icon_${tier}.png`}
+        alt=""
+        width={size}
+        height={size}
+        loading="lazy"
+        className="absolute inset-0 h-full w-full object-contain"
+      />
+      {tier < 8 && stars > 0 ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={`/ranks/rank_star_${stars}.png`}
+          alt=""
+          width={size}
+          height={size}
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-contain"
+        />
+      ) : null}
+    </span>
+  );
+  return (
+    <span
+      className={cn("inline-flex items-center gap-1.5", className)}
+      title={name}
+      aria-label={name}
+    >
+      {medal}
+      {showLabel ? (
+        <span className="text-xs font-medium text-muted">{name}</span>
+      ) : null}
+    </span>
+  );
+}
 
-/** Colored ranked-medal pill. Renders nothing when the medal is unknown. */
+/**
+ * Back-compat wrapper — every existing call site now renders the real medal
+ * graphic instead of a text pill.
+ */
 export function RankBadge({
   rankTier,
   className,
@@ -160,19 +213,7 @@ export function RankBadge({
   rankTier: number | null | undefined;
   className?: string;
 }) {
-  const tier = rankMedalTier(rankTier);
-  if (tier === 0) return null;
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
-        RANK_TONE[tier],
-        className,
-      )}
-    >
-      {rankMedalName(rankTier)}
-    </span>
-  );
+  return <RankMedal rankTier={rankTier} className={className} />;
 }
 
 // ---------- Role badges ----------
@@ -379,7 +420,9 @@ export function Stat({
   return (
     <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
       <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-fg">{value}</div>
+      <div className="mt-1 font-display text-3xl font-bold tabular-nums text-fg">
+        {value}
+      </div>
       {hint ? <div className="mt-0.5 text-xs text-muted">{hint}</div> : null}
     </div>
   );
@@ -397,7 +440,7 @@ export function PageTitle({
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-fg sm:text-3xl">
+        <h1 className="font-display text-3xl font-bold text-fg sm:text-4xl">
           {title}
         </h1>
         {subtitle ? <p className="mt-1 text-muted">{subtitle}</p> : null}
