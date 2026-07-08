@@ -18,10 +18,16 @@ const DEFAULT_PEAK = 0.45; // matches the previous static hero-video opacity
 export function HeroVideo({
   src = "/hero-loop.mp4",
   peakOpacity = DEFAULT_PEAK,
+  playbackRate = 1,
+  trimEnd = 0,
   className,
 }: {
   src?: string;
   peakOpacity?: number;
+  /** Playback speed (e.g. 0.5 = half speed, less jarring). */
+  playbackRate?: number;
+  /** Seconds to crop off the tail — the loop restarts this early. */
+  trimEnd?: number;
   className?: string;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -48,20 +54,30 @@ export function HeroVideo({
 
     let raf = 0;
     const update = () => {
+      // Re-assert playback rate each frame — some browsers reset it on load.
+      if (v.playbackRate !== playbackRate) v.playbackRate = playbackRate;
       const d = v.duration;
       const t = v.currentTime;
+      // Effective end, cropping `trimEnd` seconds off the tail.
+      const end = d && trimEnd ? Math.max(FADE_SECONDS, d - trimEnd) : d;
+      if (end && t >= end) {
+        v.currentTime = 0; // manual loop, so the trimmed tail never plays
+        v.style.opacity = "0";
+        raf = requestAnimationFrame(update);
+        return;
+      }
       let o = peakOpacity;
       if (t < FADE_SECONDS) {
         o = peakOpacity * (t / FADE_SECONDS); // fade in
-      } else if (d && d - t < FADE_SECONDS) {
-        o = peakOpacity * ((d - t) / FADE_SECONDS); // fade out
+      } else if (end && end - t < FADE_SECONDS) {
+        o = peakOpacity * ((end - t) / FADE_SECONDS); // fade out
       }
       v.style.opacity = String(Math.max(0, Math.min(peakOpacity, o)));
       raf = requestAnimationFrame(update);
     };
     raf = requestAnimationFrame(update);
     return () => cancelAnimationFrame(raf);
-  }, [src, peakOpacity]);
+  }, [src, peakOpacity, playbackRate, trimEnd]);
 
   return (
     <video

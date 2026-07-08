@@ -103,7 +103,12 @@ export default async function InhousePage() {
         aria-hidden
         className="pointer-events-none fixed inset-0 -z-10 overflow-hidden"
       >
-        <HeroVideo src="/inhouse-bg.mp4" peakOpacity={0.55} />
+        <HeroVideo
+          src="/inhouse-bg.mp4"
+          peakOpacity={0.4}
+          playbackRate={0.5}
+          trimEnd={1}
+        />
         {/* Dark tint so the content stays readable over the footage. */}
         <div className="absolute inset-0 bg-bg/40" />
       </div>
