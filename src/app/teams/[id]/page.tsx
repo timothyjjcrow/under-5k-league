@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { roleCoverage } from "@/lib/pool-stats";
+import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { cn } from "@/lib/utils";
 import {
   Avatar,
@@ -63,7 +64,7 @@ export default async function TeamPage({
     memberIds.length
       ? prisma.registration.findMany({
           where: { seasonId: team.seasonId, userId: { in: memberIds } },
-          select: { roles: true },
+          select: { roles: true, favoriteHeroes: true },
         })
       : Promise.resolve([]),
   ]);
@@ -84,6 +85,23 @@ export default async function TeamPage({
   const coverage = roleCoverage(rosterRegs);
   const hasRoleData = coverage.some((r) => r.count > 0);
   const hue = teamHue(team.id);
+  // The roster's most-commonly listed hero → a faint banner backdrop. Kept
+  // subtle so the team's color identity (crest + glow) stays dominant.
+  const heroCounts = new Map<number, number>();
+  for (const r of rosterRegs) {
+    for (const h of parseHeroList(r.favoriteHeroes).matched) {
+      heroCounts.set(h.id, (heroCounts.get(h.id) ?? 0) + 1);
+    }
+  }
+  let teamHeroId: number | null = null;
+  let bestCount = 0;
+  for (const [hid, count] of heroCounts) {
+    if (count > bestCount) {
+      bestCount = count;
+      teamHeroId = hid;
+    }
+  }
+  const teamHero = teamHeroId != null ? heroById(teamHeroId) : null;
 
   return (
     <div className="space-y-6">
@@ -97,6 +115,20 @@ export default async function TeamPage({
           </Link>
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
+          {/* The roster's signature hero, very faint on the right. */}
+          {teamHero ? (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0 w-2/3 sm:w-1/2"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={heroPortrait(teamHero)}
+                alt=""
+                className="profile-hero-bg h-full w-full object-cover object-center opacity-20"
+              />
+            </div>
+          ) : null}
           {/* Ambient graphics tinted with the team's own color identity. */}
           <div
             aria-hidden
