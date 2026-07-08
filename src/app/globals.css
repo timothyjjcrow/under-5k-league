@@ -73,6 +73,13 @@ a {
   }
 }
 
+/* A player's signature hero portrait sitting on the right of their profile
+   banner, fading out toward the left so it blends behind the content. */
+.profile-hero-bg {
+  -webkit-mask-image: linear-gradient(to left, #000 8%, transparent 82%);
+  mask-image: linear-gradient(to left, #000 8%, transparent 82%);
+}
+
 /* Masked grid overlay that fades out toward the edges — adds depth without noise. */
 .hero-grid {
   background-image:

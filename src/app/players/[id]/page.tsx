@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { steamIdToAccountId, getHeroNames } from "@/lib/dota";
-import { heroById } from "@/lib/heroes";
+import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
 import {
@@ -140,6 +140,12 @@ export default async function PlayerProfilePage({
           ? `Registered · ${season.name}`
           : season.name
     : null;
+  // A signature hero for the banner backdrop: most-played if we have games,
+  // otherwise the player's first listed favorite.
+  const signatureHero =
+    (summary.topHeroes[0] ? heroById(summary.topHeroes[0].heroId) : null) ??
+    parseHeroList(registration?.favoriteHeroes).matched[0] ??
+    null;
 
   // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
   // game (older imports may lack them), so average only over games that have it.
@@ -204,6 +210,20 @@ export default async function PlayerProfilePage({
           </Link>
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
+          {/* Signature hero portrait fading in from the right. */}
+          {signatureHero ? (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0 w-2/3 sm:w-1/2"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={heroPortrait(signatureHero)}
+                alt=""
+                className="profile-hero-bg h-full w-full object-cover object-center opacity-30"
+              />
+            </div>
+          ) : null}
           {/* Ambient graphics shared with the home hero for brand cohesion. */}
           <div
             aria-hidden
