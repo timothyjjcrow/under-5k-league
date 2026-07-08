@@ -16,18 +16,7 @@ import { Toaster } from "@/components/toaster";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
-
-// The canonical site origin, used as `metadataBase` so OG/Twitter preview images
-// resolve to absolute public URLs (Discord/Slack/etc. can't load a localhost
-// image). Prefer an explicit override, then Vercel's auto-provided production
-// domain, then localhost for dev.
-function resolveSiteUrl(): string {
-  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL;
-  const vercelHost =
-    process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
-  if (vercelHost) return `https://${vercelHost}`;
-  return "http://localhost:3000";
-}
+import { resolveSiteUrl } from "@/lib/site-url";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
