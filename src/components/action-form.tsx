@@ -72,7 +72,17 @@ export function SubmitButton({
       }
       className={buttonClasses(variant, size, className)}
     >
-      {pending ? "Working…" : children}
+      {pending ? (
+        <>
+          <span
+            aria-hidden
+            className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-current/30 border-t-current"
+          />
+          Working…
+        </>
+      ) : (
+        children
+      )}
     </button>
   );
 }
