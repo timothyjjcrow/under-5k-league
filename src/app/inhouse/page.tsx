@@ -16,6 +16,7 @@ import {
   HeroIcon,
   PageTitle,
   PlayerLink,
+  SectionTitle,
 } from "@/components/ui";
 import { cn, formatNetWorth } from "@/lib/utils";
 
@@ -126,7 +127,7 @@ export default async function InhousePage() {
 
       {results.length > 0 ? (
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Recent results</h2>
+          <SectionTitle>Recent results</SectionTitle>
           {results.map((r) => (
             <GameResultCard
               key={r.lobby.id}

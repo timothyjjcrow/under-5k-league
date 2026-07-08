@@ -499,6 +499,34 @@ export function PageTitle({
   );
 }
 
+// ---------- Section title ----------
+
+/** A page-section heading in the display font with an accent tick marker. */
+export function SectionTitle({
+  children,
+  aside,
+  className,
+}: {
+  children: React.ReactNode;
+  aside?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <h2
+      className={cn(
+        "flex items-center gap-2.5 font-display text-lg font-semibold",
+        className,
+      )}
+    >
+      <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-accent" />
+      <span>{children}</span>
+      {aside ? (
+        <span className="font-sans text-sm font-normal text-muted">{aside}</span>
+      ) : null}
+    </h2>
+  );
+}
+
 // ---------- Hero icons ----------
 
 export function HeroIcon({

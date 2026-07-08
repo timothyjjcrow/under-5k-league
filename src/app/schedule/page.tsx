@@ -16,6 +16,7 @@ import {
   CardHeader,
   EmptyState,
   PageTitle,
+  SectionTitle,
   TeamCrest,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -131,7 +132,7 @@ export default async function SchedulePage() {
 
       {playoff.length > 0 ? (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold">Playoff bracket</h2>
+          <SectionTitle>Playoff bracket</SectionTitle>
           <div className="flex gap-4 overflow-x-auto pb-2">
             {playoffRounds.map(({ round, matches: roundMatches }) => (
               <div key={round} className="min-w-[16rem] flex-1 space-y-3">
@@ -156,7 +157,7 @@ export default async function SchedulePage() {
       ) : null}
 
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Regular season</h2>
+        <SectionTitle>Regular season</SectionTitle>
         {regular.length === 0 ? (
           <EmptyState
             title="No matches scheduled yet"

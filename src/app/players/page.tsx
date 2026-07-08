@@ -14,6 +14,7 @@ import {
   PlayerLink,
   RankBadge,
   RoleBadges,
+  SectionTitle,
 } from "@/components/ui";
 
 export const metadata = { title: "Players" };
@@ -79,7 +80,7 @@ export default async function PlayersPage() {
 
       {teams.length > 0 ? (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold">Teams</h2>
+          <SectionTitle>Teams</SectionTitle>
           <div className="grid gap-4 sm:grid-cols-2">
             {teams.map((t) => (
               <Card key={t.id}>
@@ -122,12 +123,11 @@ export default async function PlayersPage() {
 
       {preDraft && captainHopefuls.length > 0 ? (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold">
-            Captain hopefuls{" "}
-            <span className="text-sm font-normal text-muted">
-              · {captainHopefuls.length} volunteered to lead a team
-            </span>
-          </h2>
+          <SectionTitle
+            aside={`· ${captainHopefuls.length} volunteered to lead a team`}
+          >
+            Captain hopefuls
+          </SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
             {captainHopefuls.map((p) => {
               const accountId =
@@ -175,9 +175,9 @@ export default async function PlayersPage() {
       ) : null}
 
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">
+        <SectionTitle>
           {draftDone ? "Player pool" : "Signed up to play"}
-        </h2>
+        </SectionTitle>
         {players.length === 0 ? (
           <EmptyState
             title="No players yet"
@@ -192,7 +192,7 @@ export default async function PlayersPage() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Standins</h2>
+        <SectionTitle>Standins</SectionTitle>
         {standins.length === 0 ? (
           <EmptyState
             title="No standins yet"
