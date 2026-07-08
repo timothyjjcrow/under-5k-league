@@ -21,8 +21,11 @@ renders per-phase so unused features stay hidden.
 - **Mutations**: server actions in `src/app/actions/*` (forms) and JSON route
   handlers in `src/app/api/draft/*` (the live draft).
 - **Auth**: `src/lib/auth.ts` (jose-signed cookie session), `steam.ts` (OpenID
-  2.0), `users.ts` (upsert + admin granting). Dev/mock login: `/api/auth/dev`
-  (gated by `ALLOW_DEV_LOGIN`). First-ever user is auto-admin. Steam name/avatar
+  2.0), `users.ts` (upsert + `resolveRole`). Dev/mock login: `/api/auth/dev`
+  (gated by `ALLOW_DEV_LOGIN`). Admin: if `ADMIN_STEAM_IDS` is set it's
+  authoritative (exactly those SteamID64s are admin; others demoted on login);
+  otherwise the first-ever user bootstraps as admin. `npm run set-admins`
+  reconciles existing accounts to the allowlist in one shot. Steam name/avatar
   come from `fetchSteamProfile`/`fetchSteamProfiles` (GetPlayerSummaries, needs
   `STEAM_API_KEY`) — set on login, bulk-refreshed via admin `syncSteamProfiles`,
   and per-user via profile `refreshSteamProfile`. `<Avatar>` falls back to
