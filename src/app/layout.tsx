@@ -7,7 +7,19 @@ import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+// The canonical site origin, used as `metadataBase` so OG/Twitter preview images
+// resolve to absolute public URLs (Discord/Slack/etc. can't load a localhost
+// image). Prefer an explicit override, then Vercel's auto-provided production
+// domain, then localhost for dev.
+function resolveSiteUrl(): string {
+  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL;
+  const vercelHost =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (vercelHost) return `https://${vercelHost}`;
+  return "http://localhost:3000";
+}
+
+const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
   "A sub-5000 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.";
 
