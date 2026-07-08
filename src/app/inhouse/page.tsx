@@ -104,9 +104,9 @@ export default async function InhousePage() {
         className="pointer-events-none fixed inset-0 -z-10 overflow-hidden"
       >
         <HeroVideo
-          src="/inhouse-bg.mp4"
+          src="/hero-loop.mp4"
           peakOpacity={0.15}
-          playbackRate={0.5}
+          playbackRate={0.65}
           trimEnd={1}
         />
         {/* Dark tint so the content stays readable over the footage. */}

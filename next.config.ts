@@ -5,7 +5,7 @@ import type { NextConfig } from "next";
 // "per new visitor". If a clip is ever updated, give it a new filename to bust
 // the cache.
 const LONG_CACHE = "public, max-age=31536000, immutable";
-const CACHED_MEDIA = ["/hero-loop.mp4", "/inhouse-bg.mp4"];
+const CACHED_MEDIA = ["/hero-loop.mp4"];
 
 const nextConfig: NextConfig = {
   async headers() {
