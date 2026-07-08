@@ -149,7 +149,7 @@ export default async function MePage() {
                   name="mmr"
                   type="number"
                   min={0}
-                  max={12000}
+                  max={season.maxMmr > 0 ? season.maxMmr : 12000}
                   defaultValue={reg?.mmr ?? ""}
                   placeholder="e.g. 3200"
                   className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
