@@ -43,7 +43,7 @@ function parseBox(json: string): BoxPlayer[] {
   }
 }
 
-export const metadata = { title: "Inhouse · Under 5k League" };
+export const metadata = { title: "Inhouse" };
 
 export default async function InhousePage() {
   const user = await getSessionUser();

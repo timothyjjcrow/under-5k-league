@@ -51,7 +51,7 @@ function fmtDateTimeLocal(d: Date | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export const metadata = { title: "Admin · Under 5k League" };
+export const metadata = { title: "Admin" };
 
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups",

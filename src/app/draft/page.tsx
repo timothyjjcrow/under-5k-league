@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { DraftRoom } from "@/components/draft-room";
 import { EmptyState, PageTitle, Badge, buttonClasses } from "@/components/ui";
 
-export const metadata = { title: "Draft · Under 5k League" };
+export const metadata = { title: "Draft" };
 
 export default async function DraftPage() {
   const season = await getActiveSeason();

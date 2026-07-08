@@ -22,7 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
-export const metadata = { title: "Schedule · Under 5k League" };
+export const metadata = { title: "Schedule" };
 
 type MatchStandin = StandinAssignment & { standin: User; replaced: User | null };
 
