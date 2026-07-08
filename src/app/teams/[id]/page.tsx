@@ -334,7 +334,7 @@ export default async function TeamPage({
                 return (
                   <li
                     key={r.opponentId}
-                    className="flex items-center justify-between px-5 py-2.5 text-sm"
+                    className="flex items-center justify-between px-5 py-2.5 text-sm transition-colors hover:bg-surface-2/40"
                   >
                     <Link
                       href={`/teams/${r.opponentId}`}
