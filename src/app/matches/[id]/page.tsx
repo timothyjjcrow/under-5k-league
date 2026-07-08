@@ -19,7 +19,25 @@ import {
   buttonClasses,
 } from "@/components/ui";
 
-export const metadata = { title: "Match" };
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const match = await prisma.match.findUnique({
+    where: { id },
+    select: {
+      homeTeam: { select: { name: true } },
+      awayTeam: { select: { name: true } },
+    },
+  });
+  return {
+    title: match
+      ? `${match.homeTeam.name} vs ${match.awayTeam.name}`
+      : "Match",
+  };
+}
 
 export default async function MatchDetailPage({
   params,

@@ -22,7 +22,18 @@ import {
   teamHue,
 } from "@/components/ui";
 
-export const metadata = { title: "Team · Under 5k League" };
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const team = await prisma.team.findUnique({
+    where: { id },
+    select: { name: true },
+  });
+  return { title: team ? team.name : "Team" };
+}
 
 function fmtDate(d: Date | null): string | null {
   if (!d) return null;
