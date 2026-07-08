@@ -5,6 +5,12 @@ import { shareMetadata } from "@/lib/share-metadata";
 import { computeStandings } from "@/lib/standings";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { roleCoverage } from "@/lib/pool-stats";
+import {
+  summarizePlayerGames,
+  type PlayerGameLine,
+} from "@/lib/player-stats";
+import type { PlayerStat } from "@/lib/match-import";
+import { getHeroNames } from "@/lib/dota";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { cn } from "@/lib/utils";
 import {
@@ -15,6 +21,7 @@ import {
   CardHeader,
   EmptyState,
   FormStrip,
+  HeroPool,
   PlayerLink,
   RankBadge,
   Sparkline,
@@ -68,23 +75,52 @@ export default async function TeamPage({
   if (!team) notFound();
 
   const memberIds = team.members.map((m) => m.userId);
-  const [allTeams, allMatches, myMatches, rosterRegs] = await Promise.all([
-    prisma.team.findMany({ where: { seasonId: team.seasonId } }),
-    prisma.match.findMany({ where: { seasonId: team.seasonId } }),
-    prisma.match.findMany({
-      where: {
-        seasonId: team.seasonId,
-        OR: [{ homeTeamId: id }, { awayTeamId: id }],
-      },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
-    }),
-    memberIds.length
-      ? prisma.registration.findMany({
-          where: { seasonId: team.seasonId, userId: { in: memberIds } },
-          select: { roles: true, favoriteHeroes: true },
-        })
-      : Promise.resolve([]),
-  ]);
+  const [allTeams, allMatches, myMatches, rosterRegs, seasonGames] =
+    await Promise.all([
+      prisma.team.findMany({ where: { seasonId: team.seasonId } }),
+      prisma.match.findMany({ where: { seasonId: team.seasonId } }),
+      prisma.match.findMany({
+        where: {
+          seasonId: team.seasonId,
+          OR: [{ homeTeamId: id }, { awayTeamId: id }],
+        },
+        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+      }),
+      memberIds.length
+        ? prisma.registration.findMany({
+            where: { seasonId: team.seasonId, userId: { in: memberIds } },
+            select: { roles: true, favoriteHeroes: true },
+          })
+        : Promise.resolve([]),
+      memberIds.length
+        ? prisma.game.findMany({
+            where: { match: { seasonId: team.seasonId } },
+            select: { players: true, radiantWin: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+  // Aggregate every rostered player's game lines into the team's hero pool.
+  const memberIdSet = new Set(memberIds);
+  const teamLines: PlayerGameLine[] = [];
+  for (const g of seasonGames) {
+    for (const pl of safeParse(g.players)) {
+      if (pl.userId && memberIdSet.has(pl.userId)) {
+        teamLines.push({
+          isRadiant: pl.isRadiant,
+          radiantWin: g.radiantWin,
+          kills: pl.kills,
+          deaths: pl.deaths,
+          assists: pl.assists,
+          heroId: pl.heroId,
+          netWorth: pl.netWorth,
+          gpm: pl.gpm,
+        });
+      }
+    }
+  }
+  const teamHeroes = summarizePlayerGames(teamLines).topHeroes;
+  const heroNames = teamHeroes.length ? await getHeroNames() : {};
 
   const standings = computeStandings(
     allTeams.map((t) => t.id),
@@ -322,6 +358,18 @@ export default async function TeamPage({
         </Card>
       ) : null}
 
+      {teamHeroes.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="Team hero pool"
+            subtitle="Most-played heroes across the roster, with win rate"
+          />
+          <CardBody>
+            <HeroPool heroes={teamHeroes} heroNames={heroNames} />
+          </CardBody>
+        </Card>
+      ) : null}
+
       {h2h.length > 0 ? (
         <Card>
           <CardHeader title="Head-to-head" subtitle="Completed series by opponent" />
@@ -418,4 +466,13 @@ export default async function TeamPage({
       </Card>
     </div>
   );
+}
+
+function safeParse(json: string): PlayerStat[] {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
 }

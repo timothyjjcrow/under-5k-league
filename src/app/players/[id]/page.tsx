@@ -14,7 +14,7 @@ import {
   type PlayerGameLine,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
-import { formatNetWorth } from "@/lib/utils";
+import { formatNetWorth, cn } from "@/lib/utils";
 import {
   Avatar,
   Badge,
@@ -25,6 +25,7 @@ import {
   FormStrip,
   HeroIcon,
   HeroList,
+  HeroPool,
   KDA,
   RankMedal,
   RoleBadges,
@@ -475,29 +476,7 @@ export default async function PlayerProfilePage({
         <Card>
           <CardHeader title="Most played heroes" />
           <CardBody>
-            <div className="flex flex-wrap gap-3">
-              {summary.topHeroes.slice(0, 8).map((h) => {
-                const hero = heroById(h.heroId);
-                return (
-                  <div
-                    key={h.heroId}
-                    className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-2.5 py-1.5"
-                  >
-                    {hero ? (
-                      <HeroIcon hero={hero} size={30} />
-                    ) : null}
-                    <div className="text-xs">
-                      <div className="font-medium">
-                        {hero?.name ?? heroNames[h.heroId] ?? `Hero ${h.heroId}`}
-                      </div>
-                      <div className="text-muted">
-                        {h.games}g · {Math.round((h.wins / h.games) * 100)}% W
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <HeroPool heroes={summary.topHeroes} heroNames={heroNames} />
           </CardBody>
         </Card>
       ) : null}

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
 import { cn, initials } from "@/lib/utils";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
-import { type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
+import { type Hero, heroById, heroIcon, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
 import { CountUp } from "./count-up";
@@ -663,6 +663,80 @@ export function HeroIcon({
         className,
       )}
     />
+  );
+}
+
+/**
+ * A grid of a player's or team's most-played heroes, each with a win-rate
+ * bar colored by performance (green winning / neutral even / red losing).
+ * Shared by the player profile and team pages.
+ */
+export function HeroPool({
+  heroes,
+  heroNames,
+  limit = 8,
+}: {
+  heroes: { heroId: number; games: number; wins: number }[];
+  heroNames?: Record<number, string>;
+  limit?: number;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+      {heroes.slice(0, limit).map((h) => {
+        const hero = heroById(h.heroId);
+        const winPct = Math.round((h.wins / h.games) * 100);
+        // Green when clearly winning, red when clearly losing, neutral around even.
+        const tone = winPct >= 60 ? "win" : winPct >= 40 ? "even" : "loss";
+        return (
+          <div
+            key={h.heroId}
+            className="rounded-lg border border-line bg-surface-2/40 p-2"
+          >
+            <div className="flex items-center gap-2">
+              {hero ? (
+                <HeroIcon hero={hero} size={30} />
+              ) : (
+                <span className="h-[30px] w-[30px] shrink-0 rounded-md border border-line/70 bg-surface-2" />
+              )}
+              <div className="min-w-0 text-xs">
+                <div className="truncate font-medium">
+                  {hero?.name ?? heroNames?.[h.heroId] ?? `Hero ${h.heroId}`}
+                </div>
+                <div className="text-muted">
+                  {h.games}g ·{" "}
+                  <span
+                    className={cn(
+                      "font-semibold",
+                      tone === "win"
+                        ? "text-success"
+                        : tone === "loss"
+                          ? "text-danger"
+                          : "text-fg",
+                    )}
+                  >
+                    {winPct}%
+                  </span>{" "}
+                  W
+                </div>
+              </div>
+            </div>
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2">
+              <div
+                className={cn(
+                  "bar-fill h-full rounded-full",
+                  tone === "win"
+                    ? "bg-success/70"
+                    : tone === "loss"
+                      ? "bg-danger/70"
+                      : "bg-muted/60",
+                )}
+                style={{ width: `${winPct}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
