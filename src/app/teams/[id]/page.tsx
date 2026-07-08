@@ -16,6 +16,7 @@ import {
   FormStrip,
   PlayerLink,
   RankBadge,
+  Sparkline,
   Stat,
   TeamCrest,
   teamHue,
@@ -78,6 +79,15 @@ export default async function TeamPage({
   const teamName = new Map(allTeams.map((t) => [t.id, t.name]));
 
   const form = recentForm(id, myMatches);
+  // Game differential per completed match (chronological) → a form trend.
+  const diffTrend = myMatches
+    .filter((m) => m.status === "COMPLETED")
+    .map((m) => {
+      const isHome = m.homeTeamId === id;
+      const myS = isHome ? m.homeScore : m.awayScore;
+      const oppS = isHome ? m.awayScore : m.homeScore;
+      return myS - oppS;
+    });
   const h2h = headToHead(id, myMatches).sort(
     (a, b) => b.wins - a.wins || a.losses - b.losses,
   );
@@ -208,6 +218,22 @@ export default async function TeamPage({
           }
         />
       </div>
+
+      {diffTrend.length >= 2 ? (
+        <Card>
+          <CardBody className="flex items-center justify-between gap-4 py-3">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-muted">
+                Game diff by match
+              </div>
+              <div className="text-xs text-muted">
+                last {diffTrend.length} played
+              </div>
+            </div>
+            <Sparkline values={diffTrend} width={180} height={40} />
+          </CardBody>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader
