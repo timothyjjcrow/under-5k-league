@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Oswald } from "next/font/google";
 import "./globals.css";
 
@@ -52,6 +52,10 @@ export const metadata: Metadata = {
     title: "Under 5k League",
     description: DESCRIPTION,
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0b0f17",
 };
 
 export default async function RootLayout({
