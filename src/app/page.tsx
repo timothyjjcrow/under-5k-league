@@ -872,7 +872,10 @@ export function StandingsTable({
       </thead>
       <tbody>
         {standings.map((row, i) => (
-          <tr key={row.teamId} className="border-b border-line/50 last:border-0">
+          <tr
+            key={row.teamId}
+            className="border-b border-line/50 transition-colors last:border-0 hover:bg-surface-2/40"
+          >
             <td className="px-5 py-2.5 text-muted">{i + 1}</td>
             <td className="px-2 py-2.5 font-medium">
               <Link
