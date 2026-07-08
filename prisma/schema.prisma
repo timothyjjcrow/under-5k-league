@@ -31,6 +31,9 @@ model User {
   bids                Bid[]
   standinAssignments  StandinAssignment[] @relation("StandinUser")
   replacedAssignments StandinAssignment[] @relation("ReplacedUser")
+  inhouseQueue        InhouseQueueEntry?
+  inhouseLobbies      InhouseLobbyPlayer[]
+  startedInhouses     InhouseLobby[]      @relation("InhouseStarter")
 }
 
 model Season {
@@ -207,4 +210,57 @@ model Game {
 model Setting {
   key   String @id
   value String
+}
+
+// ---------------------------------------------------------------------------
+// Inhouse — a casual pick-up-game mode, entirely separate from the league. A
+// rolling queue: once INHOUSE.LOBBY_SIZE players are waiting a lobby forms, the
+// two highest-MMR players captain, and they draft the rest back-and-forth.
+// ---------------------------------------------------------------------------
+
+// A single global queue of players waiting for the next inhouse. One row per
+// user (a user can only wait once); the earliest to join are pulled into a lobby.
+model InhouseQueueEntry {
+  id       String   @id @default(cuid())
+  userId   String   @unique
+  mmr      Int      @default(0) // snapshot used to seed captains
+  joinedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// A formed inhouse game + its live captain draft. Server-authoritative, like the
+// league Draft: the pick clock is enforced lazily on poll (no cron/websocket).
+model InhouseLobby {
+  id          String    @id @default(cuid())
+  status      String    @default("CAPTAIN_VOTE") // CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | COMPLETED | CANCELLED
+  voteEndsAt  DateTime? // captain-selection vote deadline (CAPTAIN_VOTE phase)
+  pickTeam    Int? // 1 | 2 — team on the clock while DRAFTING
+  pickEndsAt  DateTime? // captain auto-picks when this passes
+  radiantTeam Int       @default(1) // which team (1|2) plays Radiant
+  winnerTeam  Int? // 1 | 2 once a result is reported
+  startedById String? // who launched the in-game lobby
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  players   InhouseLobbyPlayer[]
+  startedBy User?                @relation("InhouseStarter", fields: [startedById], references: [id])
+}
+
+model InhouseLobbyPlayer {
+  id             String   @id @default(cuid())
+  lobbyId        String
+  userId         String
+  team           Int? // null = still in the draft pool; 1|2 once picked
+  isCaptain      Boolean  @default(false)
+  pickIndex      Int? // 0-based order picked (captains stay null)
+  mmr            Int      @default(0)
+  votedMethod    String? // CAPTAIN_VOTE ballot: MMR | RECORD | VOTE
+  votedNomineeId String? // player they nominated as captain (when votedMethod = VOTE)
+  createdAt      DateTime @default(now())
+
+  lobby InhouseLobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([lobbyId, userId])
 }

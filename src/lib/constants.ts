@@ -69,4 +69,55 @@ export const DEFAULTS = {
   MIN_BID: 1,
 } as const;
 
+// ---------- Inhouse (casual pick-up mode, separate from the league) ----------
+
+export const INHOUSE_STATUS = {
+  CAPTAIN_VOTE: "CAPTAIN_VOTE",
+  DRAFTING: "DRAFTING",
+  READY: "READY",
+  IN_PROGRESS: "IN_PROGRESS",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+} as const;
+export type InhouseStatus = (typeof INHOUSE_STATUS)[keyof typeof INHOUSE_STATUS];
+
+// A lobby is "active" (occupies the single live slot) until it ends.
+export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
+  INHOUSE_STATUS.CAPTAIN_VOTE,
+  INHOUSE_STATUS.DRAFTING,
+  INHOUSE_STATUS.READY,
+  INHOUSE_STATUS.IN_PROGRESS,
+];
+
+// How a filled lobby elects its captains — players vote on this each game.
+export const CAPTAIN_METHOD = {
+  VOTE: {
+    key: "VOTE",
+    label: "Elect captains",
+    hint: "Vote for the players you want to captain",
+  },
+  MMR: {
+    key: "MMR",
+    label: "Highest MMR",
+    hint: "The two highest-MMR players captain",
+  },
+  RECORD: {
+    key: "RECORD",
+    label: "Best record",
+    hint: "The two best inhouse records captain",
+  },
+} as const;
+
+export const INHOUSE = {
+  TEAM_SIZE: 5,
+  LOBBY_SIZE: 10, // players needed before a lobby forms
+  // Seconds players get to vote on how captains are chosen once a lobby fills.
+  VOTE_SECONDS: 25,
+  // Seconds a captain has to pick before the draft auto-picks the top player.
+  PICK_SECONDS: 60,
+  // The lower-seeded captain (team 2) drafts first, a small nod to the fact
+  // that team 1's captain is the higher-seeded player. Strict back-and-forth after.
+  FIRST_PICK_TEAM: 2,
+} as const;
+
 export const SESSION_COOKIE = "ld2l_session";

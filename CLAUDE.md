@@ -113,6 +113,48 @@ the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
   Schedule + Leaders from REGULAR_SEASON on. `isActive` keeps "Teams" and
   "My Team" from both highlighting on your own team page.
 
+## Inhouse (done)
+
+A casual pick-up mode, **entirely separate from the league** (no `Season`
+coupling — touches only `User`). Mirrors the draft engine's architecture:
+server-authoritative, resolves lazily on poll (no cron/websocket).
+
+- **Models** (`schema.prisma`): `InhouseQueueEntry` (one global rolling queue,
+  `userId` unique), `InhouseLobby` (the game + its state machine:
+  `CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS → COMPLETED`/`CANCELLED`),
+  `InhouseLobbyPlayer` (`team` 1/2, `isCaptain`, `pickIndex`, `mmr` snapshot,
+  `votedMethod`/`votedNomineeId` for the captain vote). One active lobby at a
+  time (`INHOUSE_ACTIVE_STATUSES`).
+- **Captain-selection vote**: when a lobby fills it opens in `CAPTAIN_VOTE` — the
+  10 players vote how captains are chosen so it isn't always the same top-2 MMR
+  pair: `VOTE` (elect specific players), `MMR` (highest 2), or `RECORD` (best 2
+  inhouse records). Resolves when everyone votes or the timer expires, then
+  installs the top two and drops into `DRAFTING`.
+- **Pure, tested logic**: `src/lib/inhouse.ts` — `tallyMethod` (winning method,
+  ties lean `VOTE > RECORD > MMR`), `orderCaptains(method, candidates)` (ranks
+  captains per method, always MMR/join fallback), `nextPickTeam` (strict
+  back-and-forth; team 2 — the lower seed — picks first via
+  `INHOUSE.FIRST_PICK_TEAM`), `isDraftComplete`, `playersNeeded`.
+  `src/lib/inhouse-stats.ts` — `summarizeInhouse` leaderboard
+  (wins/losses/win%/streak; also feeds the RECORD method). Tunables in
+  `constants.ts` (`INHOUSE`: LOBBY_SIZE 10, TEAM_SIZE 5, VOTE_SECONDS 25,
+  PICK_SECONDS 60; `CAPTAIN_METHOD` labels).
+- **Service (DB, transactional)**: `src/lib/inhouse-service.ts` —
+  `getInhouseState` (calls `maybeFormLobby` + `resolveCaptainVote` +
+  `resolveStalledPick` on every read, like the league draft),
+  `joinQueue`/`leaveQueue`, `castVote`, `makePick`, `startGame`, `reportResult`,
+  `cancelLobby` (admin). Queue hits 10 → lobby forms on the next poll; the vote
+  and a stalled pick clock both auto-resolve lazily on poll.
+- **API**: one dispatch endpoint `POST /api/inhouse` (`{ action, ... }`; actions:
+  `state`/`join`/`leave`/`vote`/`pick`/`start`/`result`/`cancel`), always returns
+  fresh viewer-tailored state. Polled by `src/components/inhouse-room.tsx`
+  (`"use client"`, one view per phase incl. `VoteView`; syncs the vote/pick clocks
+  via server `now` offset like `draft-room.tsx`; `router.refresh()` on lobby end
+  to update the server-rendered leaderboard). Page: `src/app/inhouse/page.tsx`.
+  Nav link is always visible (season-independent).
+- **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
+  players so `/inhouse` isn't empty on a fresh DB.
+
 ## Good next steps
 
 - Nomination timer/auto-skip in the draft if a captain stalls (right now the

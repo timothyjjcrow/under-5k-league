@@ -60,6 +60,9 @@ async function main() {
   await prisma.draft.deleteMany();
   await prisma.team.deleteMany();
   await prisma.registration.deleteMany();
+  await prisma.inhouseLobbyPlayer.deleteMany();
+  await prisma.inhouseLobby.deleteMany();
+  await prisma.inhouseQueueEntry.deleteMany();
   await prisma.season.deleteMany();
   await prisma.user.deleteMany();
   await prisma.setting.deleteMany();
@@ -101,6 +104,7 @@ async function main() {
   console.log("Creating players…");
   // 16 more players -> 17 total (needs 20 for 4 teams: shows "3 more needed").
   const players = HANDLES.slice(0, 16);
+  const playerSeeds: { id: string; mmr: number }[] = [];
   let idx = 2;
   for (const name of players) {
     const user = await prisma.user.create({
@@ -111,12 +115,13 @@ async function main() {
         rankTier: randomRank(),
       },
     });
+    const mmr = 1500 + Math.floor(Math.random() * 3400);
     await prisma.registration.create({
       data: {
         seasonId: season.id,
         userId: user.id,
         type: "PLAYER",
-        mmr: 1500 + Math.floor(Math.random() * 3400),
+        mmr,
         wantsCaptain: Math.random() < 0.25,
         roles: randRoles(),
         favoriteHeroes: [pick(HEROES), pick(HEROES)].join(", "),
@@ -124,7 +129,18 @@ async function main() {
         captainNote: pick(NOTES),
       },
     });
+    playerSeeds.push({ id: user.id, mmr });
     idx++;
+  }
+
+  console.log("Seeding an inhouse queue (6/10) for demo…");
+  // Independent of the league — puts a partial queue on /inhouse out of the box.
+  let joined = Date.now() - 6 * 60_000;
+  for (const p of playerSeeds.slice(0, 6)) {
+    await prisma.inhouseQueueEntry.create({
+      data: { userId: p.id, mmr: p.mmr, joinedAt: new Date(joined) },
+    });
+    joined += 60_000;
   }
 
   console.log("Creating standins…");

@@ -1,0 +1,64 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
+import {
+  cancelLobby,
+  castVote,
+  getInhouseState,
+  joinQueue,
+  leaveQueue,
+  makePick,
+  reportResult,
+  startGame,
+} from "@/lib/inhouse-service";
+
+export const dynamic = "force-dynamic";
+
+// One JSON endpoint for the whole inhouse room. `state` is polled; the rest are
+// mutations. Every response is the fresh, viewer-tailored state (or { error }),
+// so the client stays in sync without extra round-trips.
+export async function POST(req: NextRequest) {
+  const user = await getSessionUser();
+  const body = await req.json().catch(() => ({}));
+  const action = String(body.action ?? "state");
+
+  // Read-only poll — allowed for anyone (spectators included).
+  if (action === "state") {
+    return NextResponse.json(await getInhouseState(user));
+  }
+
+  if (!user) {
+    return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+  }
+
+  let res: { ok: true } | { ok: false; error: string };
+  switch (action) {
+    case "join":
+      res = await joinQueue(user, Number(body.mmr));
+      break;
+    case "leave":
+      res = await leaveQueue(user);
+      break;
+    case "vote":
+      res = await castVote(user, String(body.method ?? ""), body.nomineeId ? String(body.nomineeId) : undefined);
+      break;
+    case "pick":
+      res = await makePick(user, String(body.userId ?? ""));
+      break;
+    case "start":
+      res = await startGame(user);
+      break;
+    case "result":
+      res = await reportResult(user, Number(body.winnerTeam));
+      break;
+    case "cancel":
+      res = await cancelLobby(user);
+      break;
+    default:
+      return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  }
+
+  if (!res.ok) {
+    return NextResponse.json({ error: res.error }, { status: 400 });
+  }
+  return NextResponse.json(await getInhouseState(user));
+}

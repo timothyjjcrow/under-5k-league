@@ -76,15 +76,18 @@ export default async function Home() {
         <Hero
           phase={null}
           title="No season is running yet"
-          subtitle="Check back soon — a new season will open for signups shortly."
+          subtitle="Check back soon — a new season will open for signups shortly. In the meantime, jump into an inhouse."
         />
-        {user?.role === "ADMIN" ? (
-          <div className="mt-6 text-center">
-            <Link href="/admin" className={buttonClasses("accent")}>
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <Link href="/inhouse" className={buttonClasses("accent")}>
+            Play an inhouse →
+          </Link>
+          {user?.role === "ADMIN" ? (
+            <Link href="/admin" className={buttonClasses("secondary")}>
               Create the first season
             </Link>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </div>
     );
   }
