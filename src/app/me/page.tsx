@@ -21,6 +21,7 @@ import {
   CardHeader,
   PageTitle,
   RankBadge,
+  ScheduleCallout,
 } from "@/components/ui";
 
 export const metadata = { title: "Your profile" };
@@ -106,7 +107,8 @@ export default async function MePage() {
               ) : null
             }
           />
-          <CardBody>
+          <CardBody className="space-y-5">
+            <ScheduleCallout label={season.matchSchedule} />
             <ActionForm action={saveRegistration} className="space-y-5">
               <div>
                 <label className="mb-1.5 block text-sm font-medium">

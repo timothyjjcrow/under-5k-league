@@ -1,6 +1,6 @@
 import * as React from "react";
 import Link from "next/link";
-import { DISCORD_INVITE_URL } from "@/lib/constants";
+import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
 import { cn, initials } from "@/lib/utils";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
@@ -720,6 +720,70 @@ export function DiscordIcon({
     >
       <path d="M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.865-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.291a.077.077 0 0 1-.006.128 12.3 12.3 0 0 1-1.873.891.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z" />
     </svg>
+  );
+}
+
+export function CalendarIcon({
+  size = 18,
+  className,
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={cn("shrink-0", className)}
+    >
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+  );
+}
+
+/**
+ * Prominent "match night" callout — surfaces the weekly game slot before
+ * players commit to signing up. Pass the season's `matchSchedule`; falls back
+ * to the app-wide MATCH_SCHEDULE default when unset.
+ */
+export function ScheduleCallout({
+  label,
+  className,
+}: {
+  label?: string | null;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3",
+        className,
+      )}
+    >
+      <span
+        aria-hidden
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-info/15 text-info"
+      >
+        <CalendarIcon size={20} />
+      </span>
+      <div className="min-w-0 text-sm">
+        <div className="font-medium">
+          Match night —{" "}
+          <span className="text-info">{label || MATCH_SCHEDULE.label}</span>
+        </div>
+        <div className="text-xs text-muted">
+          Games run weekly. Make sure you can play before you sign up.
+        </div>
+      </div>
+    </div>
   );
 }
 

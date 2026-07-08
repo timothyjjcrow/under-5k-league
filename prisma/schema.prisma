@@ -51,6 +51,7 @@ model Season {
   isActive       Boolean  @default(true)
   championTeamId String?
   dotaLeagueId   String? // optional Valve league id, if the league is ticketed
+  matchSchedule  String? // weekly match slot shown before signup (null = app default)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

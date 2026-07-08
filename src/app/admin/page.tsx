@@ -21,11 +21,13 @@ import {
   syncPlayerRanks,
   syncSteamProfiles,
   setMaxMmr,
+  setMatchSchedule,
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
 } from "@/app/actions/admin";
 import { pickBracketSize } from "@/lib/schedule";
+import { MATCH_SCHEDULE } from "@/lib/constants";
 import {
   regularSeasonStatus,
   pendingResultsMessage,
@@ -281,6 +283,29 @@ function SeasonControls({
             {season.maxMmr > 0
               ? `players over ${season.maxMmr} MMR can't join`
               : "no cap — anyone can join"}
+          </span>
+        </form>
+        <form
+          action={setMatchSchedule}
+          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+        >
+          <label htmlFor="matchSchedule" className="text-muted">
+            Match night
+          </label>
+          <input
+            id="matchSchedule"
+            name="matchSchedule"
+            type="text"
+            maxLength={80}
+            defaultValue={season.matchSchedule ?? ""}
+            placeholder={MATCH_SCHEDULE.label}
+            className="h-9 w-64 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+          />
+          <SubmitButton variant="secondary" size="sm">
+            Save schedule
+          </SubmitButton>
+          <span className="text-xs text-muted">
+            shown before signup{season.matchSchedule ? "" : " · using default"}
           </span>
         </form>
         <form

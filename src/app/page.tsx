@@ -19,6 +19,7 @@ import {
   Progress,
   RankBadge,
   RoleBadges,
+  ScheduleCallout,
   Stat,
   TeamCrest,
   buttonClasses,
@@ -373,6 +374,7 @@ function SignupsView({
 
   return (
     <div className="space-y-6">
+      <ScheduleCallout label={season.matchSchedule} />
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-center justify-between text-sm">

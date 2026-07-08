@@ -16,6 +16,7 @@ import {
   CardHeader,
   EmptyState,
   PageTitle,
+  ScheduleCallout,
   SectionTitle,
   TeamCrest,
 } from "@/components/ui";
@@ -93,6 +94,8 @@ export default async function SchedulePage() {
   return (
     <div className="space-y-8">
       <PageTitle title="Schedule & Standings" subtitle={season.name} />
+
+      <ScheduleCallout label={season.matchSchedule} />
 
       {pendingMsg && season.status === "REGULAR_SEASON" ? (
         <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">

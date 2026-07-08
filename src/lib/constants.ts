@@ -129,3 +129,13 @@ export const SESSION_COOKIE = "ld2l_session";
 
 // Community — the league's Discord invite.
 export const DISCORD_INVITE_URL = "https://discord.gg/YkTWVfZRY";
+
+// Weekly match slot — surfaced before signup so players know the commitment.
+// Change here to adjust it league-wide (can become a per-season setting later).
+export const MATCH_SCHEDULE = {
+  day: "Sundays",
+  time: "6:00 PM",
+  timezone: "PST",
+  /** Full human label shown wherever the match time appears. */
+  label: "Sundays at 6:00 PM PST",
+} as const;

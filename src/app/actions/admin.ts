@@ -515,6 +515,22 @@ export async function setLeagueId(formData: FormData) {
   refresh();
 }
 
+/**
+ * Set (or clear) the per-season weekly match slot shown before signup.
+ * Empty clears it back to the app-wide default (MATCH_SCHEDULE.label).
+ */
+export async function setMatchSchedule(formData: FormData) {
+  await requireAdmin();
+  const season = await getActiveSeason();
+  if (!season) return;
+  const value = str(formData, "matchSchedule").trim().slice(0, 80);
+  await prisma.season.update({
+    where: { id: season.id },
+    data: { matchSchedule: value || null },
+  });
+  refresh();
+}
+
 /** Import all games from the season's Dota league id (OpenDota). */
 export async function syncLeagueAction(
   _prev: ActionResult,
