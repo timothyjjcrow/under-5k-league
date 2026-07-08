@@ -133,7 +133,7 @@ export default async function PlayersPage() {
               const accountId =
                 p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
               return (
-                <Card key={p.id}>
+                <Card key={p.id} interactive>
                   <CardBody className="flex items-start gap-3">
                     <PlayerLink userId={p.userId}>
                       <Avatar name={p.user.name} src={p.user.avatar} size={40} />

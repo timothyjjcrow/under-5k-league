@@ -60,12 +60,15 @@ export function Button({
 
 export function Card({
   className,
+  interactive,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+}: React.HTMLAttributes<HTMLDivElement> & { interactive?: boolean }) {
   return (
     <div
       className={cn(
         "rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur",
+        interactive &&
+          "transition duration-200 hover:-translate-y-0.5 hover:border-muted/60 hover:shadow-lg hover:shadow-black/30 motion-reduce:transform-none motion-reduce:transition-none",
         className,
       )}
       {...props}

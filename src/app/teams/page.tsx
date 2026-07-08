@@ -87,10 +87,8 @@ export default async function TeamsPage() {
           return (
             <Card
               key={t.id}
-              className={cn(
-                "transition-colors hover:border-muted/50",
-                isChampion ? "ring-1 ring-accent/40" : undefined,
-              )}
+              interactive
+              className={cn(isChampion ? "ring-1 ring-accent/40" : undefined)}
             >
               <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
                 <div className="flex min-w-0 items-center gap-3">
