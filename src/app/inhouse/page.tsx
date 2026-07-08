@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { INHOUSE_STATUS } from "@/lib/constants";
@@ -104,6 +105,8 @@ export default async function InhousePage() {
 
       <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} />
 
+      <OpenDotaGuide />
+
       {results.length > 0 ? (
         <div className="space-y-4">
           <h2 className="text-lg font-semibold">Recent results</h2>
@@ -128,6 +131,80 @@ export default async function InhousePage() {
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+// ---------- OpenDota "be findable" guide ----------
+
+function OpenDotaGuide() {
+  return (
+    <details
+      open
+      className="group rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
+        <div className="flex items-center gap-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-info/15 text-info">
+            🔎
+          </span>
+          <div>
+            <h3 className="text-base font-semibold text-fg">
+              Make your games auto-detect
+            </h3>
+            <p className="mt-0.5 text-sm text-muted">
+              Inhouse results are pulled from OpenDota — here&apos;s how to be
+              findable.
+            </p>
+          </div>
+        </div>
+        <span className="shrink-0 text-muted transition-transform group-open:rotate-180">
+          ▾
+        </span>
+      </summary>
+      <div className="space-y-3 border-t border-line px-5 py-4 text-sm">
+        <ol className="space-y-3">
+          <li className="flex gap-3">
+            <GuideStep n={1} />
+            <span>
+              In Dota 2, open <b>Settings → Options</b> and turn on{" "}
+              <b>&ldquo;Expose Public Match Data&rdquo;</b>. This lets OpenDota
+              (and us) see your match history.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <GuideStep n={2} />
+            <span>
+              Link your Dota account on your{" "}
+              <Link href="/me" className="text-info hover:underline">
+                profile
+              </Link>{" "}
+              so we can match you in games — or we derive it from your Steam ID.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <GuideStep n={3} />
+            <span>
+              Play your inhouse. When it ends, the result is fetched from OpenDota
+              automatically (usually within a few minutes) — or anyone in the game
+              can paste the match ID.
+            </span>
+          </li>
+        </ol>
+        <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs text-muted">
+          Not everyone needs this on — a few players per side is enough — but the
+          more the better. It only exposes games played <b>after</b> you enable
+          it, and OpenDota can take a few minutes to index a finished game.
+        </p>
+      </div>
+    </details>
+  );
+}
+
+function GuideStep({ n }: { n: number }) {
+  return (
+    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-accent/40 bg-accent/10 text-xs font-semibold text-accent">
+      {n}
+    </span>
   );
 }
 
