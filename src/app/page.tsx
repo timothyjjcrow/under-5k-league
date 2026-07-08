@@ -22,6 +22,7 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
+import { HeroVideo } from "@/components/hero-video";
 import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -147,18 +148,8 @@ function Hero({
   const live = !!phase && phase !== "COMPLETE";
   return (
     <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-14 text-center sm:px-10 sm:py-16">
-      {/* Looping background video, dimmed + edge-masked so it reads as ambiance. */}
-      <video
-        aria-hidden
-        className="hero-video pointer-events-none absolute inset-0 h-full w-full object-cover opacity-45"
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="auto"
-      >
-        <source src="/hero-loop.mp4" type="video/mp4" />
-      </video>
+      {/* Looping background video — fades in/out at the loop seam to hide the jump. */}
+      <HeroVideo />
       {/* Themed tint over the video for contrast + palette cohesion. */}
       <div
         aria-hidden
