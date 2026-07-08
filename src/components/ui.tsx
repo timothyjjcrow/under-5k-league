@@ -888,3 +888,56 @@ export function DiscordButton({
     </a>
   );
 }
+
+export function ShieldCheckIcon({
+  size = 18,
+  className,
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={cn("shrink-0", className)}
+    >
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
+/**
+ * Reassurance for players wary of "Sign in with Steam" — explains, plainly,
+ * that it's used only to grab their name + profile and the Steam API is safe.
+ */
+export function SteamSafetyNote({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border border-line bg-surface-2/40 p-4 text-left",
+        className,
+      )}
+    >
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <ShieldCheckIcon size={18} className="text-success" />
+        Why Steam sign-in?
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-muted">
+        Only to get your{" "}
+        <b className="font-medium text-fg">name and profile</b> — nothing else.
+        You log in on Steam&apos;s own site, so we never see your password, and
+        Steam&apos;s API only shares public info — it can&apos;t touch your
+        account.
+      </p>
+    </div>
+  );
+}

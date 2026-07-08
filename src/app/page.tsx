@@ -21,6 +21,7 @@ import {
   RoleBadges,
   ScheduleCallout,
   Stat,
+  SteamSafetyNote,
   TeamCrest,
   buttonClasses,
 } from "@/components/ui";
@@ -425,6 +426,8 @@ function SignupsView({
             )}
             <DiscordButton size="lg" />
           </div>
+
+          {!loggedIn ? <SteamSafetyNote /> : null}
         </CardBody>
       </Card>
 

@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
-import { Card, CardBody, DiscordButton } from "@/components/ui";
+import {
+  Card,
+  CardBody,
+  DiscordButton,
+  ShieldCheckIcon,
+  SteamSafetyNote,
+} from "@/components/ui";
 
 export const metadata = { title: "Sign in" };
 
@@ -29,13 +35,21 @@ export default async function LoginPage() {
             </p>
           </div>
 
-          <a
-            href="/api/auth/steam"
-            className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-[#1b2838] px-4 font-medium text-white transition-colors hover:bg-[#223247]"
-          >
-            <SteamIcon />
-            Sign in through Steam
-          </a>
+          <div className="space-y-2">
+            <a
+              href="/api/auth/steam"
+              className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-[#1b2838] px-4 font-medium text-white transition-colors hover:bg-[#223247]"
+            >
+              <SteamIcon />
+              Sign in through Steam
+            </a>
+            <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted">
+              <ShieldCheckIcon size={13} className="text-success" />
+              Secure — you sign in on Steam, no password shared.
+            </p>
+          </div>
+
+          <SteamSafetyNote />
 
           <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-muted">
             <span className="h-px flex-1 bg-line" />
@@ -69,6 +83,13 @@ export default async function LoginPage() {
       </Card>
 
       <p className="mt-6 text-center text-sm text-muted">
+        Just looking? You can{" "}
+        <Link href="/players" className="text-info hover:underline">
+          browse the league
+        </Link>{" "}
+        without signing in — you only need Steam to join.
+      </p>
+      <p className="mt-2 text-center text-sm text-muted">
         <Link href="/" className="hover:text-fg">
           ← Back to home
         </Link>
