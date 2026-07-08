@@ -49,11 +49,14 @@ export default async function MePage() {
         <CardBody className="flex items-center gap-4">
           <Avatar name={user.name} src={user.avatar} size={56} />
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold">{user.name}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-display text-xl font-semibold">
+                {user.name}
+              </span>
               {user.role === "ADMIN" ? (
                 <Badge tone="accent">Admin</Badge>
               ) : null}
+              <RankBadge rankTier={dbUser?.rankTier} />
             </div>
             <a
               href={dbUser?.profileUrl ?? "#"}
