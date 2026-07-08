@@ -4,6 +4,7 @@ import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { groupPlayoffRounds, roundName } from "@/lib/schedule";
+import { formByTeam, type FormResult } from "@/lib/team-matches";
 import {
   Avatar,
   Badge,
@@ -11,6 +12,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  FormStrip,
   PlayerLink,
   Progress,
   RankBadge,
@@ -527,6 +529,10 @@ async function SeasonView({
     matches,
   );
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const teamForm = formByTeam(
+    teams.map((t) => t.id),
+    matches,
+  );
 
   const myTeam = userId
     ? teams.find((t) => t.members.some((m) => m.userId === userId))
@@ -573,6 +579,7 @@ async function SeasonView({
               <StandingsTable
                 standings={standings.slice(0, 8)}
                 teamName={teamName}
+                formByTeam={teamForm}
               />
             </CardBody>
           </Card>
@@ -768,9 +775,11 @@ function BracketSide({
 export function StandingsTable({
   standings,
   teamName,
+  formByTeam,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
+  formByTeam?: Map<string, FormResult[]>;
 }) {
   if (standings.length === 0) {
     return (
@@ -789,6 +798,11 @@ export function StandingsTable({
           <th className="px-2 py-2.5 text-center font-medium">D</th>
           <th className="px-2 py-2.5 text-center font-medium">L</th>
           <th className="px-2 py-2.5 text-center font-medium">Diff</th>
+          {formByTeam ? (
+            <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+              Form
+            </th>
+          ) : null}
           <th className="px-5 py-2.5 text-right font-medium">Pts</th>
         </tr>
       </thead>
@@ -810,6 +824,13 @@ export function StandingsTable({
             <td className="px-2 py-2.5 text-center text-muted">
               {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
             </td>
+            {formByTeam ? (
+              <td className="hidden px-2 py-2.5 sm:table-cell">
+                <span className="flex justify-center">
+                  <FormStrip form={formByTeam.get(row.teamId) ?? []} size={5} />
+                </span>
+              </td>
+            ) : null}
             <td className="px-5 py-2.5 text-right font-semibold">
               {row.points}
             </td>
@@ -834,6 +855,10 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
     matches,
   );
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const teamForm = formByTeam(
+    teams.map((t) => t.id),
+    matches,
+  );
 
   return (
     <div className="space-y-6">
@@ -884,7 +909,11 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
               }
             />
             <CardBody className="p-0">
-              <StandingsTable standings={standings} teamName={teamName} />
+              <StandingsTable
+                standings={standings}
+                teamName={teamName}
+                formByTeam={teamForm}
+              />
             </CardBody>
           </Card>
         </div>

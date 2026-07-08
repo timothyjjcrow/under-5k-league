@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  currentStreak,
   summarizePlayerGames,
   topBy,
   wonGame,
@@ -28,6 +29,23 @@ describe("wonGame", () => {
   });
   it("radiant player loses when radiant loses", () => {
     expect(wonGame(line({ isRadiant: true, radiantWin: false }))).toBe(false);
+  });
+});
+
+describe("currentStreak", () => {
+  const w = () => line({ isRadiant: true, radiantWin: true });
+  const l = () => line({ isRadiant: true, radiantWin: false });
+
+  it("returns null streak for no games", () => {
+    expect(currentStreak([])).toEqual({ type: null, count: 0 });
+  });
+
+  it("counts the leading run of wins (newest first)", () => {
+    expect(currentStreak([w(), w(), w(), l()])).toEqual({ type: "W", count: 3 });
+  });
+
+  it("counts the leading run of losses", () => {
+    expect(currentStreak([l(), l(), w()])).toEqual({ type: "L", count: 2 });
   });
 });
 
@@ -76,6 +94,22 @@ describe("summarizePlayerGames", () => {
     expect(s.kda).toBe(4); // (3 + 1) / max(1, 0)
   });
 
+  it("averages net worth/GPM only over games that reported them", () => {
+    const s = summarizePlayerGames([
+      line({ netWorth: 10000, gpm: 500 }),
+      line({ netWorth: 20000, gpm: 700 }),
+      line({ netWorth: null, gpm: null }), // missing -> excluded from the average
+    ]);
+    expect(s.avgNetWorth).toBe(15000);
+    expect(s.avgGpm).toBe(600);
+  });
+
+  it("reports null economy averages when no game has the data", () => {
+    const s = summarizePlayerGames([line({}), line({})]);
+    expect(s.avgNetWorth).toBeNull();
+    expect(s.avgGpm).toBeNull();
+  });
+
   it("ranks heroes by games then wins", () => {
     const s = summarizePlayerGames([
       line({ heroId: 5, isRadiant: true, radiantWin: true }), // win
@@ -118,6 +152,15 @@ describe("topBy", () => {
     expect(topBy(entries, "winRate", { minGames: 3 }).map((r) => r.id)).toEqual([
       "grinder",
     ]);
+  });
+
+  it("ranks by average GPM and excludes players with no economy data", () => {
+    const entries = [
+      entry("rich", [line({ gpm: 700 }), line({ gpm: 500 })]), // avg 600
+      entry("poor", [line({ gpm: 300 }), line({ gpm: 300 })]), // avg 300
+      entry("nodata", [line({}), line({})]), // no gpm -> value 0 -> excluded
+    ];
+    expect(topBy(entries, "gpm").map((r) => r.id)).toEqual(["rich", "poor"]);
   });
 
   it("drops zero-value rows and respects the limit", () => {

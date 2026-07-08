@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formByTeam,
   headToHead,
   recentForm,
   resultFor,
@@ -78,5 +79,19 @@ describe("headToHead", () => {
       m({ homeTeamId: A, awayTeamId: B, status: "SCHEDULED", winnerTeamId: null }),
     ];
     expect(headToHead(A, matches)).toEqual([]);
+  });
+});
+
+describe("formByTeam", () => {
+  it("builds per-team form from each team's own matches", () => {
+    const matches = [
+      m({ homeTeamId: A, awayTeamId: B, winnerTeamId: A }), // A W, B L
+      m({ homeTeamId: A, awayTeamId: C, winnerTeamId: C }), // A L, C W
+      m({ homeTeamId: B, awayTeamId: C, winnerTeamId: null }), // B D, C D
+    ];
+    const map = formByTeam([A, B, C], matches);
+    expect(map.get(A)).toEqual(["L", "W"]); // newest-first
+    expect(map.get(B)).toEqual(["D", "L"]);
+    expect(map.get(C)).toEqual(["D", "W"]);
   });
 });

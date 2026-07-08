@@ -9,6 +9,7 @@ import {
   type PlayerGameLine,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
+import { formatNetWorth } from "@/lib/utils";
 import {
   Avatar,
   Card,
@@ -62,6 +63,8 @@ export default async function LeadersPage() {
         deaths: p.deaths,
         assists: p.assists,
         heroId: p.heroId,
+        netWorth: p.netWorth,
+        gpm: p.gpm,
       });
       linesByUser.set(p.userId, arr);
     }
@@ -144,6 +147,22 @@ export default async function LeadersPage() {
       key: "games",
       format: (r) => `${r.value}`,
       hint: (r) => `${r.summary.wins}–${r.summary.losses}`,
+    },
+    {
+      title: "Best avg GPM",
+      subtitle: `min ${rateFloor} game${rateFloor > 1 ? "s" : ""}`,
+      key: "gpm",
+      minGames: rateFloor,
+      format: (r) => `${r.value}`,
+      hint: (r) => `${r.summary.games} games`,
+    },
+    {
+      title: "Richest (avg net worth)",
+      subtitle: `min ${rateFloor} game${rateFloor > 1 ? "s" : ""}`,
+      key: "netWorth",
+      minGames: rateFloor,
+      format: (r) => formatNetWorth(r.value),
+      hint: (r) => `${r.summary.games} games`,
     },
   ];
 

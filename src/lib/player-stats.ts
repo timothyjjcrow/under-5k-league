@@ -9,6 +9,8 @@ export type PlayerGameLine = {
   deaths: number;
   assists: number;
   heroId: number;
+  netWorth?: number | null;
+  gpm?: number | null;
 };
 
 export type HeroTally = {
@@ -29,12 +31,31 @@ export type PlayerSummary = {
   avgDeaths: number;
   avgAssists: number;
   kda: number; // (kills + assists) / max(1, deaths), one decimal
+  avgNetWorth: number | null; // averaged over games that reported it; null if none
+  avgGpm: number | null;
   topHeroes: HeroTally[]; // most-played first, then most wins
 };
 
 /** True when this player's side won the game. */
 export function wonGame(line: PlayerGameLine): boolean {
   return line.isRadiant === line.radiantWin;
+}
+
+export type Streak = { type: "W" | "L" | null; count: number };
+
+/**
+ * Current win/loss streak from a newest-first list of games. Returns the run of
+ * same-result games at the front. `{ type: null, count: 0 }` when there are none.
+ */
+export function currentStreak(linesNewestFirst: PlayerGameLine[]): Streak {
+  if (linesNewestFirst.length === 0) return { type: null, count: 0 };
+  const won = wonGame(linesNewestFirst[0]);
+  let count = 0;
+  for (const line of linesNewestFirst) {
+    if (wonGame(line) !== won) break;
+    count++;
+  }
+  return { type: won ? "W" : "L", count };
 }
 
 // ---------- Leaderboards ----------
@@ -45,7 +66,9 @@ export type LeaderboardKey =
   | "winRate"
   | "kills"
   | "assists"
-  | "games";
+  | "games"
+  | "gpm"
+  | "netWorth";
 
 export type LeaderEntry = { id: string; summary: PlayerSummary };
 
@@ -58,6 +81,8 @@ const LEADER_VALUE: Record<LeaderboardKey, (s: PlayerSummary) => number> = {
   kills: (s) => s.kills,
   assists: (s) => s.assists,
   games: (s) => s.games,
+  gpm: (s) => s.avgGpm ?? 0,
+  netWorth: (s) => s.avgNetWorth ?? 0,
 };
 
 /**
@@ -93,6 +118,10 @@ export function summarizePlayerGames(lines: PlayerGameLine[]): PlayerSummary {
   let kills = 0;
   let deaths = 0;
   let assists = 0;
+  let netWorthSum = 0;
+  let netWorthGames = 0;
+  let gpmSum = 0;
+  let gpmGames = 0;
   const heroes = new Map<number, HeroTally>();
 
   for (const line of lines) {
@@ -101,6 +130,14 @@ export function summarizePlayerGames(lines: PlayerGameLine[]): PlayerSummary {
     kills += line.kills;
     deaths += line.deaths;
     assists += line.assists;
+    if (line.netWorth != null) {
+      netWorthSum += line.netWorth;
+      netWorthGames++;
+    }
+    if (line.gpm != null) {
+      gpmSum += line.gpm;
+      gpmGames++;
+    }
 
     const tally = heroes.get(line.heroId) ?? {
       heroId: line.heroId,
@@ -128,6 +165,8 @@ export function summarizePlayerGames(lines: PlayerGameLine[]): PlayerSummary {
     avgDeaths: games > 0 ? round1(deaths / games) : 0,
     avgAssists: games > 0 ? round1(assists / games) : 0,
     kda: round1((kills + assists) / Math.max(1, deaths)),
+    avgNetWorth: netWorthGames > 0 ? Math.round(netWorthSum / netWorthGames) : null,
+    avgGpm: gpmGames > 0 ? Math.round(gpmSum / gpmGames) : null,
     topHeroes,
   };
 }

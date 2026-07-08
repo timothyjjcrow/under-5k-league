@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getHeroNames } from "@/lib/dota";
+import { formatNetWorth } from "@/lib/utils";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   Avatar,
@@ -176,44 +177,81 @@ function SidePlayers({
   userName: Map<string, string>;
   userAvatar: Map<string, string | null>;
 }) {
+  const totalNet = players.reduce((s, p) => s + (p.netWorth ?? 0), 0);
+  const hasNet = players.some((p) => p.netWorth != null);
+  const hasGpm = players.some((p) => p.gpm != null);
   return (
     <div>
-      <div className="mb-2 flex items-center gap-2">
-        <span className="font-semibold">{label}</span>
-        {win ? <Badge tone="success">Win</Badge> : <Badge>Loss</Badge>}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-2">
+          <span className="font-semibold">{label}</span>
+          {win ? <Badge tone="success">Win</Badge> : <Badge>Loss</Badge>}
+        </span>
+        {hasNet ? (
+          <span className="text-xs text-muted">
+            Net worth <span className="font-mono text-fg">{formatNetWorth(totalNet)}</span>
+          </span>
+        ) : null}
       </div>
-      <div className="space-y-1">
-        {players.map((p, idx) => {
-          const displayName = p.userId
-            ? (userName.get(p.userId) ?? p.personaname ?? "Unknown")
-            : (p.personaname ?? "Unknown");
-          return (
-            <div
-              key={idx}
-              className="flex items-center justify-between rounded-md border border-line/60 px-2.5 py-1.5 text-sm"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                {p.userId ? (
-                  <Avatar name={displayName} src={userAvatar.get(p.userId) ?? null} size={20} />
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-wide text-muted">
+            <th className="py-1 text-left font-medium">Player</th>
+            <th className="px-1 py-1 text-right font-medium">K/D/A</th>
+            {hasNet ? (
+              <th className="px-1 py-1 text-right font-medium">NW</th>
+            ) : null}
+            {hasGpm ? (
+              <th className="px-1 py-1 text-right font-medium">GPM</th>
+            ) : null}
+          </tr>
+        </thead>
+        <tbody>
+          {players.map((p, idx) => {
+            const displayName = p.userId
+              ? (userName.get(p.userId) ?? p.personaname ?? "Unknown")
+              : (p.personaname ?? "Unknown");
+            return (
+              <tr key={idx} className="border-t border-line/40">
+                <td className="py-1.5">
+                  <span className="flex min-w-0 items-center gap-2">
+                    {p.userId ? (
+                      <Avatar
+                        name={displayName}
+                        src={userAvatar.get(p.userId) ?? null}
+                        size={20}
+                      />
+                    ) : null}
+                    {p.userId ? (
+                      <PlayerLink userId={p.userId} className="truncate">
+                        {displayName}
+                      </PlayerLink>
+                    ) : (
+                      <span className="truncate">{displayName}</span>
+                    )}
+                    <span className="shrink-0 text-xs text-muted">
+                      {heroes[p.heroId] ?? `Hero ${p.heroId}`}
+                    </span>
+                  </span>
+                </td>
+                <td className="px-1 text-right font-mono text-xs tabular-nums">
+                  {p.kills}/{p.deaths}/{p.assists}
+                </td>
+                {hasNet ? (
+                  <td className="px-1 text-right font-mono text-xs tabular-nums">
+                    {formatNetWorth(p.netWorth)}
+                  </td>
                 ) : null}
-                {p.userId ? (
-                  <PlayerLink userId={p.userId} className="truncate">
-                    {displayName}
-                  </PlayerLink>
-                ) : (
-                  <span className="truncate">{displayName}</span>
-                )}
-                <span className="shrink-0 text-xs text-muted">
-                  {heroes[p.heroId] ?? `Hero ${p.heroId}`}
-                </span>
-              </span>
-              <span className="shrink-0 font-mono text-xs">
-                {p.kills}/{p.deaths}/{p.assists}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+                {hasGpm ? (
+                  <td className="px-1 text-right font-mono text-xs tabular-nums">
+                    {p.gpm ?? "—"}
+                  </td>
+                ) : null}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

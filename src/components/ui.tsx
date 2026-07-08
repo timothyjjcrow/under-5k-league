@@ -4,6 +4,7 @@ import { cn, initials } from "@/lib/utils";
 import { rankMedalName, rankMedalTier } from "@/lib/rank";
 import { type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
+import type { FormResult } from "@/lib/team-matches";
 
 // ---------- Button ----------
 
@@ -236,6 +237,43 @@ export function PlayerLink({
     >
       {children}
     </Link>
+  );
+}
+
+// ---------- Form strip ----------
+
+const FORM_TONE: Record<FormResult, string> = {
+  W: "bg-success/15 text-success border-success/30",
+  L: "bg-danger/15 text-danger border-danger/30",
+  D: "bg-surface-2 text-muted border-line",
+};
+
+/** Row of recent W/L/D chips (most-recent first). Renders nothing when empty. */
+export function FormStrip({
+  form,
+  size = 6,
+  className,
+}: {
+  form: FormResult[];
+  size?: number;
+  className?: string;
+}) {
+  if (form.length === 0) return null;
+  return (
+    <span className={cn("inline-flex items-center gap-1", className)}>
+      {form.map((r, i) => (
+        <span
+          key={i}
+          style={{ width: `${size * 4}px`, height: `${size * 4}px` }}
+          className={cn(
+            "grid place-items-center rounded border text-[11px] font-semibold",
+            FORM_TONE[r],
+          )}
+        >
+          {r}
+        </span>
+      ))}
+    </span>
   );
 }
 

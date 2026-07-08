@@ -35,6 +35,25 @@ export function recentForm(
     .map((m) => resultFor(teamId, m));
 }
 
+/**
+ * Recent form for every team, keyed by id. `orderedMatches` should be the
+ * season's matches in chronological order; each team's slice preserves it.
+ */
+export function formByTeam(
+  teamIds: string[],
+  orderedMatches: TeamMatchLike[],
+  limit = 5,
+): Map<string, FormResult[]> {
+  const map = new Map<string, FormResult[]>();
+  for (const id of teamIds) {
+    const mine = orderedMatches.filter(
+      (m) => m.homeTeamId === id || m.awayTeamId === id,
+    );
+    map.set(id, recentForm(id, mine, limit));
+  }
+  return map;
+}
+
 export type HeadToHead = {
   opponentId: string;
   wins: number;

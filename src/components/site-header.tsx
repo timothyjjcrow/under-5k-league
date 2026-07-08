@@ -86,7 +86,11 @@ export function SiteHeader({
   return (
     <header className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">
-        <Link href="/" className="flex shrink-0 items-center gap-2">
+        <Link
+          href="/"
+          aria-label="Under 5k League — home"
+          className="flex shrink-0 items-center gap-2"
+        >
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-bold text-brand-fg">
             5K
           </span>
@@ -95,13 +99,17 @@ export function SiteHeader({
           </span>
         </Link>
 
-        <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <nav
+          aria-label="Primary"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
           {items.map((item) => {
             const active = isActive(pathname, item.href, myTeamId ? `/teams/${myTeamId}` : null);
             return (
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={active ? "page" : undefined}
                 className={cn(
                   "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                   active

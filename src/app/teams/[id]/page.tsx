@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
-import { headToHead, recentForm, type FormResult } from "@/lib/team-matches";
+import { headToHead, recentForm } from "@/lib/team-matches";
+import { roleCoverage } from "@/lib/pool-stats";
+import { cn } from "@/lib/utils";
 import {
   Avatar,
   Badge,
@@ -10,32 +12,12 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  FormStrip,
   PageTitle,
   PlayerLink,
   RankBadge,
   Stat,
 } from "@/components/ui";
-
-const FORM_TONE: Record<FormResult, string> = {
-  W: "bg-success/15 text-success border-success/30",
-  L: "bg-danger/15 text-danger border-danger/30",
-  D: "bg-surface-2 text-muted border-line",
-};
-
-function FormStrip({ form }: { form: FormResult[] }) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      {form.map((r, i) => (
-        <span
-          key={i}
-          className={`grid h-6 w-6 place-items-center rounded border text-xs font-semibold ${FORM_TONE[r]}`}
-        >
-          {r}
-        </span>
-      ))}
-    </span>
-  );
-}
 
 export const metadata = { title: "Team · Under 5k League" };
 
@@ -66,7 +48,8 @@ export default async function TeamPage({
   });
   if (!team) notFound();
 
-  const [allTeams, allMatches, myMatches] = await Promise.all([
+  const memberIds = team.members.map((m) => m.userId);
+  const [allTeams, allMatches, myMatches, rosterRegs] = await Promise.all([
     prisma.team.findMany({ where: { seasonId: team.seasonId } }),
     prisma.match.findMany({ where: { seasonId: team.seasonId } }),
     prisma.match.findMany({
@@ -76,6 +59,12 @@ export default async function TeamPage({
       },
       orderBy: [{ week: "asc" }, { createdAt: "asc" }],
     }),
+    memberIds.length
+      ? prisma.registration.findMany({
+          where: { seasonId: team.seasonId, userId: { in: memberIds } },
+          select: { roles: true },
+        })
+      : Promise.resolve([]),
   ]);
 
   const standings = computeStandings(
@@ -91,6 +80,8 @@ export default async function TeamPage({
     (a, b) => b.wins - a.wins || a.losses - b.losses,
   );
   const spent = team.members.reduce((sum, m) => sum + m.price, 0);
+  const coverage = roleCoverage(rosterRegs);
+  const hasRoleData = coverage.some((r) => r.count > 0);
 
   return (
     <div className="space-y-6">
@@ -171,6 +162,44 @@ export default async function TeamPage({
           )}
         </CardBody>
       </Card>
+
+      {hasRoleData ? (
+        <Card>
+          <CardHeader
+            title="Role coverage"
+            subtitle="Positions the roster prefers to play"
+          />
+          <CardBody>
+            <div className="grid grid-cols-5 gap-2">
+              {coverage.map((r) => (
+                <div
+                  key={r.key}
+                  className={cn(
+                    "rounded-lg border px-2 py-3 text-center",
+                    r.count > 0
+                      ? "border-line bg-surface-2/40"
+                      : "border-dashed border-danger/40 bg-danger/5",
+                  )}
+                  title={r.label}
+                >
+                  <div className="text-xs font-medium text-muted">{r.short}</div>
+                  <div
+                    className={cn(
+                      "mt-1 text-lg font-semibold tabular-nums",
+                      r.count === 0 ? "text-danger" : "text-fg",
+                    )}
+                  >
+                    {r.count}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted">
+                    {r.count === 0 ? "gap" : r.count === 1 ? "player" : "players"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
 
       {h2h.length > 0 ? (
         <Card>

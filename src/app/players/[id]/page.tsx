@@ -7,11 +7,13 @@ import { heroById } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
 import {
+  currentStreak,
   summarizePlayerGames,
   wonGame,
   type PlayerGameLine,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
+import { formatNetWorth } from "@/lib/utils";
 import {
   Avatar,
   Badge,
@@ -109,6 +111,9 @@ export default async function PlayerProfilePage({
     heroId: stat.heroId,
   }));
   const summary = summarizePlayerGames(lines);
+  const streak = currentStreak(lines); // `lines` is newest-first (games desc)
+  const streakLabel =
+    streak.count > 1 ? `${streak.type}${streak.count} streak` : undefined;
 
   // Team + record for this season, if drafted.
   const team = membership?.team ?? null;
@@ -127,6 +132,60 @@ export default async function PlayerProfilePage({
   const roles = roleLabels(registration?.roles);
   const isStandin = registration?.type === "STANDIN";
   const isCaptain = !!membership?.isCaptain;
+
+  // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
+  // game (older imports may lack them), so average only over games that have it.
+  type GameRow = (typeof gameRows)[number];
+  const avgOf = (
+    rows: GameRow[],
+    pick: (s: PlayerStat) => number | null | undefined,
+  ) =>
+    rows.length
+      ? Math.round(
+          rows.reduce((sum, r) => sum + (pick(r.stat) ?? 0), 0) / rows.length,
+        )
+      : null;
+  const avgNet = avgOf(
+    gameRows.filter((r) => r.stat.netWorth != null),
+    (s) => s.netWorth,
+  );
+  const avgGpm = avgOf(
+    gameRows.filter((r) => r.stat.gpm != null),
+    (s) => s.gpm,
+  );
+  const avgLh = avgOf(
+    gameRows.filter((r) => r.stat.lastHits != null),
+    (s) => s.lastHits,
+  );
+  const bestGame =
+    gameRows.length > 0
+      ? [...gameRows].sort(
+          (a, b) =>
+            (b.stat.netWorth ?? 0) - (a.stat.netWorth ?? 0) ||
+            b.stat.kills + b.stat.assists - (a.stat.kills + a.stat.assists),
+        )[0]
+      : null;
+  const hasPerf = avgNet != null || avgGpm != null;
+  const bestView = bestGame
+    ? {
+        matchId: bestGame.game.matchId,
+        hero: heroById(bestGame.stat.heroId),
+        heroId: bestGame.stat.heroId,
+        won: bestGame.stat.isRadiant === bestGame.game.radiantWin,
+        kills: bestGame.stat.kills,
+        deaths: bestGame.stat.deaths,
+        assists: bestGame.stat.assists,
+        netWorth: bestGame.stat.netWorth,
+        gpm: bestGame.stat.gpm,
+        week: bestGame.game.match.week,
+        opponent:
+          bestGame.stat.teamId === bestGame.game.match.homeTeamId
+            ? bestGame.game.match.awayTeam.name
+            : bestGame.stat.teamId === bestGame.game.match.awayTeamId
+              ? bestGame.game.match.homeTeam.name
+              : `${bestGame.game.match.homeTeam.name} / ${bestGame.game.match.awayTeam.name}`,
+      }
+    : null;
 
   return (
     <div className="space-y-6">
@@ -224,7 +283,7 @@ export default async function PlayerProfilePage({
             value={`${summary.wins}–${summary.losses}`}
             hint={`${summary.winRate}% win rate`}
           />
-          <Stat label="Games" value={summary.games} />
+          <Stat label="Games" value={summary.games} hint={streakLabel} />
           <Stat
             label="Avg KDA"
             value={`${summary.avgKills}/${summary.avgDeaths}/${summary.avgAssists}`}
@@ -242,6 +301,57 @@ export default async function PlayerProfilePage({
             <Stat label="Hero pool" value={summary.topHeroes.length} hint="heroes played" />
           )}
         </div>
+      ) : null}
+
+      {hasPerf ? (
+        <Card>
+          <CardHeader
+            title="Performance"
+            subtitle="Averages across imported games"
+          />
+          <CardBody className="space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              {avgNet != null ? (
+                <Stat label="Avg net worth" value={formatNetWorth(avgNet)} />
+              ) : null}
+              {avgGpm != null ? <Stat label="Avg GPM" value={avgGpm} /> : null}
+              {avgLh != null ? <Stat label="Avg last hits" value={avgLh} /> : null}
+            </div>
+            {bestView ? (
+              <Link
+                href={`/matches/${bestView.matchId}`}
+                className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
+              >
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted">
+                  Standout
+                </span>
+                {bestView.hero ? (
+                  <HeroIcon hero={bestView.hero} size={30} />
+                ) : null}
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium">
+                    {bestView.hero?.name ?? `Hero ${bestView.heroId}`}
+                  </span>
+                  <span className="block text-xs text-muted">
+                    vs {bestView.opponent} · Wk {bestView.week}
+                  </span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="block font-mono text-xs tabular-nums">
+                    {bestView.kills}/{bestView.deaths}/{bestView.assists}
+                  </span>
+                  <span className="block text-xs text-muted">
+                    {formatNetWorth(bestView.netWorth)}
+                    {bestView.gpm != null ? ` · ${bestView.gpm} GPM` : ""}
+                  </span>
+                </span>
+                <Badge tone={bestView.won ? "success" : "danger"}>
+                  {bestView.won ? "W" : "L"}
+                </Badge>
+              </Link>
+            ) : null}
+          </CardBody>
+        </Card>
       ) : null}
 
       {registration &&
@@ -296,7 +406,7 @@ export default async function PlayerProfilePage({
                         {hero?.name ?? heroNames[h.heroId] ?? `Hero ${h.heroId}`}
                       </div>
                       <div className="text-muted">
-                        {h.games}g · {h.wins}W
+                        {h.games}g · {Math.round((h.wins / h.games) * 100)}% W
                       </div>
                     </div>
                   </div>

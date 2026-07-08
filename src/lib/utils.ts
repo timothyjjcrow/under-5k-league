@@ -14,3 +14,9 @@ export function initials(name: string): string {
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
 }
+
+/** Compact net-worth/gold formatting, e.g. 12500 -> "12.5k", null -> "—". */
+export function formatNetWorth(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+}

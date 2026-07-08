@@ -3,6 +3,7 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { groupPlayoffRounds, roundName } from "@/lib/schedule";
+import { formByTeam } from "@/lib/team-matches";
 import {
   regularSeasonStatus,
   pendingResultsMessage,
@@ -66,6 +67,10 @@ export default async function SchedulePage() {
     teams.map((t) => t.id),
     matches,
   );
+  const teamForm = formByTeam(
+    teams.map((t) => t.id),
+    matches,
+  );
 
   const regular = matches.filter((m) => m.phase === "REGULAR");
   const playoff = matches.filter((m) => m.phase !== "REGULAR");
@@ -114,7 +119,11 @@ export default async function SchedulePage() {
       <Card>
         <CardHeader title="Standings" />
         <CardBody className="p-0">
-          <StandingsTable standings={standings} teamName={teamName} />
+          <StandingsTable
+            standings={standings}
+            teamName={teamName}
+            formByTeam={teamForm}
+          />
         </CardBody>
       </Card>
 
