@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
-import { Card, CardBody } from "@/components/ui";
+import { Card, CardBody, DiscordButton } from "@/components/ui";
 
 export const metadata = { title: "Sign in" };
 
@@ -36,6 +36,13 @@ export default async function LoginPage() {
             <SteamIcon />
             Sign in through Steam
           </a>
+
+          <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-muted">
+            <span className="h-px flex-1 bg-line" />
+            or
+            <span className="h-px flex-1 bg-line" />
+          </div>
+          <DiscordButton label="Join the community Discord" className="w-full" />
 
           {devLogin ? (
             <div className="space-y-3 border-t border-line pt-5 text-left">

@@ -126,3 +126,6 @@ export const INHOUSE = {
 } as const;
 
 export const SESSION_COOKIE = "ld2l_session";
+
+// Community — the league's Discord invite.
+export const DISCORD_INVITE_URL = "https://discord.gg/YkTWVfZRY";

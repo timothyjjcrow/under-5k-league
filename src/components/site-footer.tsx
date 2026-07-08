@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { DiscordButton } from "@/components/ui";
 
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups open",
@@ -45,6 +46,7 @@ export function SiteFooter({
             <p className="mt-2 text-sm text-muted">
               A drafted, team-based Dota 2 league for players under 5000 MMR.
             </p>
+            <DiscordButton size="sm" className="mt-4" />
           </div>
           <nav className="flex flex-col gap-2 text-sm">
             <span className="text-xs font-medium uppercase tracking-wide text-muted">

@@ -11,6 +11,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  DiscordButton,
   EmptyState,
   FormStrip,
   PlayerLink,
@@ -82,6 +83,7 @@ export default async function Home() {
           <Link href="/inhouse" className={buttonClasses("accent")}>
             Play an inhouse →
           </Link>
+          <DiscordButton />
           {user?.role === "ADMIN" ? (
             <Link href="/admin" className={buttonClasses("secondary")}>
               Create the first season
@@ -265,7 +267,7 @@ function SignupsView({
             <Stat label="Team size" value={season.teamSize} />
           </div>
 
-          <div className="pt-1">
+          <div className="flex flex-wrap items-center gap-3 pt-1">
             {!loggedIn ? (
               <Link href="/login" className={buttonClasses("primary", "lg")}>
                 Sign in with Steam to join
@@ -289,6 +291,7 @@ function SignupsView({
                 Join the season →
               </Link>
             )}
+            <DiscordButton size="lg" />
           </div>
         </CardBody>
       </Card>
