@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { cn } from "@/lib/utils";
 
 const FADE_SECONDS = 0.5; // fade in over the first / out over the last half-second
-const PEAK_OPACITY = 0.45; // matches the previous static hero-video opacity
+const DEFAULT_PEAK = 0.45; // matches the previous static hero-video opacity
 
 /**
  * Background hero loop. To avoid wasting data, the video is only downloaded and
@@ -14,7 +15,15 @@ const PEAK_OPACITY = 0.45; // matches the previous static hero-video opacity
  * and 0.45 -> 0 over the last, driven off the video's real currentTime, so the
  * (non-seamless) loop point is hidden behind opacity ~0 rather than a hard jump.
  */
-export function HeroVideo({ src = "/hero-loop.mp4" }: { src?: string }) {
+export function HeroVideo({
+  src = "/hero-loop.mp4",
+  peakOpacity = DEFAULT_PEAK,
+  className,
+}: {
+  src?: string;
+  peakOpacity?: number;
+  className?: string;
+}) {
   const ref = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -41,24 +50,27 @@ export function HeroVideo({ src = "/hero-loop.mp4" }: { src?: string }) {
     const update = () => {
       const d = v.duration;
       const t = v.currentTime;
-      let o = PEAK_OPACITY;
+      let o = peakOpacity;
       if (t < FADE_SECONDS) {
-        o = PEAK_OPACITY * (t / FADE_SECONDS); // fade in
+        o = peakOpacity * (t / FADE_SECONDS); // fade in
       } else if (d && d - t < FADE_SECONDS) {
-        o = PEAK_OPACITY * ((d - t) / FADE_SECONDS); // fade out
+        o = peakOpacity * ((d - t) / FADE_SECONDS); // fade out
       }
-      v.style.opacity = String(Math.max(0, Math.min(PEAK_OPACITY, o)));
+      v.style.opacity = String(Math.max(0, Math.min(peakOpacity, o)));
       raf = requestAnimationFrame(update);
     };
     raf = requestAnimationFrame(update);
     return () => cancelAnimationFrame(raf);
-  }, [src]);
+  }, [src, peakOpacity]);
 
   return (
     <video
       ref={ref}
       aria-hidden
-      className="hero-video pointer-events-none absolute inset-0 h-full w-full object-cover"
+      className={cn(
+        "hero-video pointer-events-none absolute inset-0 h-full w-full object-cover",
+        className,
+      )}
       style={{ opacity: 0 }}
       muted
       loop
