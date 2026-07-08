@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { shareMetadata } from "@/lib/share-metadata";
 import { computeStandings } from "@/lib/standings";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { roleCoverage } from "@/lib/pool-stats";
@@ -32,7 +33,11 @@ export async function generateMetadata({
     where: { id },
     select: { name: true },
   });
-  return { title: team ? team.name : "Team" };
+  if (!team) return { title: "Team" };
+  return shareMetadata(
+    team.name,
+    `${team.name} — roster, results, and stats in the Under 5k League.`,
+  );
 }
 
 function fmtDate(d: Date | null): string | null {

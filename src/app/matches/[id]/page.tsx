@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { shareMetadata } from "@/lib/share-metadata";
 import { getHeroNames } from "@/lib/dota";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
@@ -32,11 +33,12 @@ export async function generateMetadata({
       awayTeam: { select: { name: true } },
     },
   });
-  return {
-    title: match
-      ? `${match.homeTeam.name} vs ${match.awayTeam.name}`
-      : "Match",
-  };
+  if (!match) return { title: "Match" };
+  const title = `${match.homeTeam.name} vs ${match.awayTeam.name}`;
+  return shareMetadata(
+    title,
+    `${title} — box score and results in the Under 5k League.`,
+  );
 }
 
 export default async function MatchDetailPage({

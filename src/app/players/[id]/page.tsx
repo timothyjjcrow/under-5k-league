@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { shareMetadata } from "@/lib/share-metadata";
 import { getActiveSeason } from "@/lib/season";
 import { steamIdToAccountId, getHeroNames } from "@/lib/dota";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
@@ -41,7 +42,11 @@ export async function generateMetadata({
     where: { id },
     select: { name: true },
   });
-  return { title: user ? `${user.name} · Player` : "Player" };
+  if (!user) return { title: "Player" };
+  return shareMetadata(
+    `${user.name} · Player`,
+    `${user.name}'s player profile — record, heroes, and match history in the Under 5k League.`,
+  );
 }
 
 function safeParse(json: string): PlayerStat[] {
