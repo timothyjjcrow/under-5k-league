@@ -69,13 +69,19 @@ export default async function RootLayout({
   return (
     <html lang="en" className={`h-full antialiased ${display.variable}`}>
       <body className="flex min-h-full flex-col">
+        <a href="#main" className="skip-link">
+          Skip to main content
+        </a>
         <SiteHeader
           user={user}
           phase={season?.status ?? null}
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}
         />
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
+        <main
+          id="main"
+          className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6"
+        >
           {children}
         </main>
         <SiteFooter

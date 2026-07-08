@@ -73,6 +73,34 @@ a {
   }
 }
 
+/* Skip-to-content link: off-screen until keyboard-focused, then slides in. */
+.skip-link {
+  position: fixed;
+  left: 1rem;
+  top: -4rem;
+  z-index: 60;
+  border-radius: 0.5rem;
+  background: var(--color-brand);
+  color: var(--color-brand-fg);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.3);
+  transition: top 0.2s ease;
+}
+.skip-link:focus {
+  top: 0.75rem;
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgb(255 255 255 / 0.5),
+    0 10px 15px -3px rgb(0 0 0 / 0.3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .skip-link {
+    transition: none;
+  }
+}
+
 /* Shimmering skeleton placeholder for loading states. */
 @keyframes skeleton-shimmer {
   100% {
