@@ -16,7 +16,9 @@ import {
   CardHeader,
   EmptyState,
   PageTitle,
+  TeamCrest,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
 export const metadata = { title: "Schedule · Under 5k League" };
@@ -208,40 +210,72 @@ function MatchRow({
   teamName: Map<string, string>;
   standins?: MatchStandin[];
 }) {
+  const homeName = teamName.get(m.homeTeamId) ?? "?";
+  const awayName = teamName.get(m.awayTeamId) ?? "?";
+  const done = m.status === "COMPLETED";
+  const homeWin = m.winnerTeamId === m.homeTeamId;
+  const awayWin = m.winnerTeamId === m.awayTeamId;
   return (
-    <div>
-      <div className="flex items-center justify-between gap-3 px-5 py-3">
-        <div className="flex flex-1 items-center justify-end text-sm">
+    <div className="transition-colors hover:bg-surface-2/30">
+      <div className="flex items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-5">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-2 text-sm">
           <Link
             href={`/teams/${m.homeTeamId}`}
-            className={`hover:text-info ${m.winnerTeamId === m.homeTeamId ? "font-semibold" : ""}`}
+            className={cn(
+              "truncate hover:text-info",
+              done && (homeWin ? "font-semibold text-fg" : "text-muted"),
+            )}
           >
-            {teamName.get(m.homeTeamId) ?? "?"}
+            {homeName}
           </Link>
+          <TeamCrest
+            name={homeName}
+            seed={m.homeTeamId}
+            size={24}
+            className="rounded-lg"
+          />
         </div>
         <div className="shrink-0 text-center">
-          {m.status === "COMPLETED" ? (
-            <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm">
-              {m.homeScore} – {m.awayScore}
+          {done ? (
+            <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm tabular-nums">
+              <span className={homeWin ? "font-semibold text-fg" : "text-muted"}>
+                {m.homeScore}
+              </span>
+              <span className="px-1 text-muted">–</span>
+              <span className={awayWin ? "font-semibold text-fg" : "text-muted"}>
+                {m.awayScore}
+              </span>
+            </span>
+          ) : m.scheduledAt ? (
+            <span className="whitespace-nowrap text-xs text-muted">
+              {fmtWhen(m.scheduledAt)}
             </span>
           ) : (
             <span className="text-xs text-muted">vs</span>
           )}
         </div>
-        <div className="flex flex-1 items-center text-sm">
+        <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
+          <TeamCrest
+            name={awayName}
+            seed={m.awayTeamId}
+            size={24}
+            className="rounded-lg"
+          />
           <Link
             href={`/teams/${m.awayTeamId}`}
-            className={`hover:text-info ${m.winnerTeamId === m.awayTeamId ? "font-semibold" : ""}`}
+            className={cn(
+              "truncate hover:text-info",
+              done && (awayWin ? "font-semibold text-fg" : "text-muted"),
+            )}
           >
-            {teamName.get(m.awayTeamId) ?? "?"}
+            {awayName}
           </Link>
         </div>
-        {m.scheduledAt ? (
-          <span className="shrink-0 text-xs text-muted">
-            {fmtWhen(m.scheduledAt)}
-          </span>
+        {m.phase === "FINAL" ? (
+          <Badge tone="accent" className="shrink-0">
+            Final
+          </Badge>
         ) : null}
-        {m.phase === "FINAL" ? <Badge tone="accent">Final</Badge> : null}
         <Link
           href={`/matches/${m.id}`}
           className="shrink-0 text-xs text-muted hover:text-info"
