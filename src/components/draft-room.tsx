@@ -7,6 +7,7 @@ import {
   HeroList,
   RankBadge,
   RoleBadges,
+  TeamCrest,
   buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -376,7 +377,13 @@ function TeamsGrid({ state }: { state: DraftState }) {
           >
             <div className="flex items-center justify-between border-b border-line px-4 py-3">
               <div>
-                <div className="flex items-center gap-2 font-semibold">
+                <div className="flex items-center gap-2 font-display text-base font-semibold">
+                  <TeamCrest
+                    name={t.name}
+                    seed={t.id}
+                    size={22}
+                    className="rounded-md"
+                  />
                   {t.name}
                   {onClock ? <Badge tone="accent">on clock</Badge> : null}
                   {highBid ? <Badge tone="success">high bid</Badge> : null}
