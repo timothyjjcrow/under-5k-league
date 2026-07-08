@@ -772,23 +772,37 @@ async function SeasonView({
                         href={`/matches/${m.id}`}
                         className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-surface-2/40"
                       >
-                        <span className="min-w-0 flex-1 truncate">
+                        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <TeamCrest
+                            name={teamName.get(m.homeTeamId) ?? "?"}
+                            seed={m.homeTeamId}
+                            size={16}
+                            className="rounded"
+                          />
                           <span
-                            className={
+                            className={cn(
+                              "min-w-0 flex-1 truncate",
                               m.winnerTeamId === m.homeTeamId
                                 ? "font-semibold"
-                                : "text-muted"
-                            }
+                                : "text-muted",
+                            )}
                           >
                             {teamName.get(m.homeTeamId) ?? "?"}
                           </span>
-                          <span className="text-muted"> v </span>
+                          <span className="shrink-0 text-xs text-muted">v</span>
+                          <TeamCrest
+                            name={teamName.get(m.awayTeamId) ?? "?"}
+                            seed={m.awayTeamId}
+                            size={16}
+                            className="rounded"
+                          />
                           <span
-                            className={
+                            className={cn(
+                              "min-w-0 flex-1 truncate",
                               m.winnerTeamId === m.awayTeamId
                                 ? "font-semibold"
-                                : "text-muted"
-                            }
+                                : "text-muted",
+                            )}
                           >
                             {teamName.get(m.awayTeamId) ?? "?"}
                           </span>
@@ -1150,11 +1164,17 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
             <CardHeader title="Season stats" />
             <CardBody className="space-y-3 text-sm">
               <p className="text-muted">
-                See who topped the league across every game of the season.
+                Relive the season — awards, superlatives, and who topped the
+                league across every game.
               </p>
-              <Link href="/leaders" className={buttonClasses("secondary")}>
-                View leaderboards →
-              </Link>
+              <div className="flex flex-wrap gap-2">
+                <Link href="/recap" className={buttonClasses("accent")}>
+                  🏆 Season recap →
+                </Link>
+                <Link href="/leaders" className={buttonClasses("secondary")}>
+                  Leaderboards
+                </Link>
+              </div>
             </CardBody>
           </Card>
         </div>

@@ -49,6 +49,9 @@ function navItems(phase: string | null, myTeamId: string | null) {
     items.push({ href: "/schedule", label: "Schedule" });
     items.push({ href: "/leaders", label: "Leaders" });
   }
+  // The recap is the season's headline once it wraps; in-season it's reachable
+  // from the Leaders page ("awards so far") to keep the nav from crowding.
+  if (phase === "COMPLETE") items.push({ href: "/recap", label: "Recap" });
   return items;
 }
 

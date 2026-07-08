@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import {
@@ -12,6 +13,7 @@ import type { PlayerStat } from "@/lib/match-import";
 import { cn, formatNetWorth } from "@/lib/utils";
 import {
   Avatar,
+  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -171,6 +173,11 @@ export default async function LeadersPage() {
       <PageTitle
         title="Leaders"
         subtitle={`${season.name} · from ${games.length} imported game${games.length === 1 ? "" : "s"}`}
+        action={
+          <Link href="/recap" className={buttonClasses("secondary", "sm")}>
+            Season recap →
+          </Link>
+        }
       />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {boards.map((b) => (
