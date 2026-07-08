@@ -35,6 +35,12 @@ export function PlayerPool({
     () => filterAndSortPlayers(players, { query, role, sort, captainOnly }),
     [players, query, role, sort, captainOnly],
   );
+  const filtersActive = query !== "" || role !== null || captainOnly;
+  const resetFilters = () => {
+    setQuery("");
+    setRole(null);
+    setCaptainOnly(false);
+  };
 
   return (
     <div className="space-y-3">
@@ -99,8 +105,19 @@ export function PlayerPool({
         </select>
       </div>
 
-      <div className="text-xs text-muted">
-        {filtered.length} of {players.length} players
+      <div className="flex items-center gap-2 text-xs text-muted">
+        <span>
+          {filtered.length} of {players.length} players
+        </span>
+        {filtersActive ? (
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="text-info hover:underline"
+          >
+            Clear filters
+          </button>
+        ) : null}
       </div>
 
       {filtered.length === 0 ? (
@@ -110,11 +127,7 @@ export function PlayerPool({
           action={
             <button
               type="button"
-              onClick={() => {
-                setQuery("");
-                setRole(null);
-                setCaptainOnly(false);
-              }}
+              onClick={resetFilters}
               className={buttonClasses("secondary", "sm")}
             >
               Clear filters
