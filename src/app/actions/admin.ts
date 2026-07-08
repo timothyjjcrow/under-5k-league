@@ -51,7 +51,7 @@ export async function createSeason(
   } catch {
     return { error: "Not authorized" };
   }
-  const name = str(formData, "name").trim() || "New Season";
+  const name = str(formData, "name").trim().slice(0, 60) || "New Season";
   const teamSize = clampInt(formData, "teamSize", 5, 2, 10);
   const minTeams = clampInt(formData, "minTeams", 4, 2, 32);
   const draftBudget = clampInt(formData, "draftBudget", 100, 10, 100000);

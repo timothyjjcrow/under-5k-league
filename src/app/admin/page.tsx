@@ -111,6 +111,7 @@ export default async function AdminPage() {
                 id="name"
                 name="name"
                 required
+                maxLength={60}
                 placeholder="Season 1"
                 className={inputCls}
               />
