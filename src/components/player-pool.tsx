@@ -100,7 +100,7 @@ export function PlayerPool({
           {filtered.map((p) => (
               <li
                 key={p.userId}
-                className="flex items-center justify-between gap-3 px-5 py-3"
+                className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-surface-2/40"
               >
                 <span className="flex min-w-0 items-center gap-3">
                   <PlayerLink userId={p.userId}>
