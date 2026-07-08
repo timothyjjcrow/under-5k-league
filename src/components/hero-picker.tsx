@@ -96,14 +96,26 @@ export function HeroPicker({
         </button>
       ) : (
         <div className="rounded-lg border border-line bg-surface-2/30 p-2">
-          <input
-            type="text"
-            value={query}
-            autoFocus
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search heroes…"
-            className="mb-2 h-9 w-full rounded-md border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-          />
+          <div className="relative mb-2">
+            <input
+              type="text"
+              value={query}
+              autoFocus
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search heroes…"
+              className="h-9 w-full rounded-md border border-line bg-surface-2/50 pl-3 pr-8 text-sm outline-none focus:border-accent/60"
+            />
+            {query ? (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+              >
+                ✕
+              </button>
+            ) : null}
+          </div>
           <div className="grid max-h-56 grid-cols-2 gap-1 overflow-y-auto sm:grid-cols-3">
             {results.map((h) => {
               const isSel = selectedIds.has(h.id);
