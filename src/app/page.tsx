@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
@@ -97,12 +98,28 @@ export default async function Home() {
 
   const { season } = snapshot;
 
+  // Primary call-to-action, surfaced right in the hero during signups.
+  const isActiveReg = snapshot.myReg?.status === "ACTIVE";
+  let heroAction: ReactNode = null;
+  if (season.status === "SIGNUPS") {
+    heroAction = !user ? (
+      <Link href="/login" className={buttonClasses("primary", "lg")}>
+        Sign in with Steam to join →
+      </Link>
+    ) : !isActiveReg ? (
+      <Link href="/me" className={buttonClasses("primary", "lg")}>
+        Join the season →
+      </Link>
+    ) : null;
+  }
+
   return (
     <div className="space-y-8">
       <Hero
         phase={season.status}
         title={season.name}
         subtitle={phaseSubtitle(season.status)}
+        action={heroAction}
       />
       <SeasonTimeline phase={season.status} />
       {season.status === "SIGNUPS" && (
@@ -140,10 +157,12 @@ function Hero({
   phase,
   title,
   subtitle,
+  action,
 }: {
   phase: string | null;
   title: string;
   subtitle: string;
+  action?: ReactNode;
 }) {
   const live = !!phase && phase !== "COMPLETE";
   return (
@@ -184,6 +203,11 @@ function Hero({
           {title}
         </h1>
         <p className="mx-auto mt-3 max-w-xl text-muted sm:text-lg">{subtitle}</p>
+        {action ? (
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            {action}
+          </div>
+        ) : null}
       </div>
     </div>
   );
