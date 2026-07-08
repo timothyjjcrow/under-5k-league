@@ -105,7 +105,7 @@ export default async function InhousePage() {
       >
         <HeroVideo
           src="/inhouse-bg.mp4"
-          peakOpacity={0.25}
+          peakOpacity={0.15}
           playbackRate={0.5}
           trimEnd={1}
         />
