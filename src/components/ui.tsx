@@ -430,6 +430,25 @@ export function Progress({
 
 // ---------- Empty state ----------
 
+function EmptyGlyph() {
+  return (
+    <svg
+      width={24}
+      height={24}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Z" />
+      <path d="M3 7.5 12 12l9-4.5M12 12v9" opacity={0.5} />
+    </svg>
+  );
+}
+
 export function EmptyState({
   title,
   description,
@@ -442,12 +461,16 @@ export function EmptyState({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-dashed border-line px-6 py-12 text-center">
-      {icon ? <div className="text-muted">{icon}</div> : null}
+    <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-dashed border-line bg-surface-2/20 px-6 py-12 text-center">
+      <div className="grid h-14 w-14 place-items-center rounded-2xl border border-line bg-surface-2/60 text-muted">
+        {icon ?? <EmptyGlyph />}
+      </div>
       <div>
-        <p className="font-medium text-fg">{title}</p>
+        <p className="font-display text-base font-semibold text-fg">{title}</p>
         {description ? (
-          <p className="mt-1 text-sm text-muted">{description}</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
+            {description}
+          </p>
         ) : null}
       </div>
       {action}
