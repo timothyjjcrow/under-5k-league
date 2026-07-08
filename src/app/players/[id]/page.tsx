@@ -26,6 +26,7 @@ import {
   HeroList,
   RankMedal,
   RoleBadges,
+  Sparkline,
   Stat,
 } from "@/components/ui";
 import type { FormResult } from "@/lib/team-matches";
@@ -119,6 +120,13 @@ export default async function PlayerProfilePage({
   const recentFormStrip: FormResult[] = lines
     .slice(0, 8)
     .map((l) => (wonGame(l) ? "W" : "L"));
+  // KDA per game, oldest→newest, for a performance trend sparkline.
+  const kdaByGame = [...lines]
+    .reverse()
+    .map(
+      (l) =>
+        Math.round(((l.kills + l.assists) / Math.max(1, l.deaths)) * 10) / 10,
+    );
 
   // Team + record for this season, if drafted.
   const team = membership?.team ?? null;
@@ -372,6 +380,19 @@ export default async function PlayerProfilePage({
               {avgGpm != null ? <Stat label="Avg GPM" value={avgGpm} /> : null}
               {avgLh != null ? <Stat label="Avg last hits" value={avgLh} /> : null}
             </div>
+            {kdaByGame.length >= 2 ? (
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted">
+                    KDA by game
+                  </div>
+                  <div className="text-xs text-muted">
+                    last {kdaByGame.length}
+                  </div>
+                </div>
+                <Sparkline values={kdaByGame} width={160} height={38} />
+              </div>
+            ) : null}
             {bestView ? (
               <Link
                 href={`/matches/${bestView.matchId}`}

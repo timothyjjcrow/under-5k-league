@@ -438,6 +438,58 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cn("skeleton rounded-md", className)} />;
 }
 
+// ---------- Sparkline ----------
+
+/** A tiny trend line (SVG) with a soft area fill and an end dot. */
+export function Sparkline({
+  values,
+  width = 140,
+  height = 36,
+  className,
+}: {
+  values: number[];
+  width?: number;
+  height?: number;
+  className?: string;
+}) {
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const pad = 3;
+  const n = values.length;
+  const pts = values.map((v, i) => {
+    const x = pad + (i / (n - 1)) * (width - pad * 2);
+    const y = height - pad - ((v - min) / range) * (height - pad * 2);
+    return [x, y] as const;
+  });
+  const line = pts
+    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ");
+  const area = `${line} L${pts[n - 1][0].toFixed(1)},${height} L${pts[0][0].toFixed(1)},${height} Z`;
+  const [ex, ey] = pts[n - 1];
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className={className}
+      aria-hidden
+    >
+      <path d={area} fill="var(--color-accent)" opacity={0.12} />
+      <path
+        d={line}
+        fill="none"
+        stroke="var(--color-accent)"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle cx={ex} cy={ey} r={2.5} fill="var(--color-accent)" />
+    </svg>
+  );
+}
+
 // ---------- Empty state ----------
 
 function EmptyGlyph() {
