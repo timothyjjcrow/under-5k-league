@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { DiscordButton } from "@/components/ui";
+import { Badge, DiscordButton } from "@/components/ui";
 
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups open",
@@ -7,6 +7,17 @@ const PHASE_LABEL: Record<string, string> = {
   REGULAR_SEASON: "Regular season",
   PLAYOFFS: "Playoffs",
   COMPLETE: "Season complete",
+};
+
+const PHASE_TONE: Record<
+  string,
+  "brand" | "accent" | "success" | "info" | "neutral"
+> = {
+  SIGNUPS: "info",
+  DRAFT: "accent",
+  REGULAR_SEASON: "success",
+  PLAYOFFS: "accent",
+  COMPLETE: "brand",
 };
 
 export function SiteFooter({
@@ -20,6 +31,7 @@ export function SiteFooter({
   const links: { href: string; label: string }[] = [
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },
+    { href: "/inhouse", label: "Inhouse" },
   ];
   if (phase === "DRAFT") links.push({ href: "/draft", label: "Draft" });
   if (
@@ -36,10 +48,10 @@ export function SiteFooter({
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-sm">
             <div className="flex items-center gap-2">
-              <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand text-sm font-bold text-brand-fg">
+              <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand/60 text-sm font-bold text-brand-fg ring-1 ring-white/15">
                 5K
               </span>
-              <span className="font-semibold tracking-tight">
+              <span className="font-display text-base font-semibold uppercase tracking-wide">
                 Under 5k League
               </span>
             </div>
@@ -66,9 +78,13 @@ export function SiteFooter({
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-4 text-xs text-muted">
           <span>© {year} Under 5k League</span>
           {seasonName ? (
-            <span>
-              {seasonName}
-              {phase ? ` · ${PHASE_LABEL[phase] ?? phase}` : ""}
+            <span className="flex items-center gap-2">
+              <span>{seasonName}</span>
+              {phase ? (
+                <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+                  {PHASE_LABEL[phase] ?? phase}
+                </Badge>
+              ) : null}
             </span>
           ) : null}
         </div>
