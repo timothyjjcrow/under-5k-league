@@ -19,6 +19,7 @@ import {
   PlayerLink,
   TeamCrest,
   buttonClasses,
+  teamHue,
 } from "@/components/ui";
 
 export async function generateMetadata({
@@ -95,6 +96,21 @@ export default async function MatchDetailPage({
         <div
           aria-hidden
           className="hero-grid pointer-events-none absolute inset-0 opacity-40"
+        />
+        {/* Each side glows with its team's own color identity (home left, away right). */}
+        <div
+          aria-hidden
+          className="animate-hero-glow pointer-events-none absolute -left-10 top-0 h-40 w-40 -translate-y-1/3 rounded-full blur-3xl"
+          style={{
+            backgroundColor: `hsl(${teamHue(match.homeTeamId)} 70% 50% / 0.24)`,
+          }}
+        />
+        <div
+          aria-hidden
+          className="animate-hero-glow-alt pointer-events-none absolute -right-10 bottom-0 h-40 w-40 translate-y-1/3 rounded-full blur-3xl"
+          style={{
+            backgroundColor: `hsl(${teamHue(match.awayTeamId)} 70% 50% / 0.24)`,
+          }}
         />
         <CardBody className="relative flex items-center gap-3 py-7 sm:gap-6">
           <TeamSide
