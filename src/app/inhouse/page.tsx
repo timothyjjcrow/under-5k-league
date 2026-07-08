@@ -16,7 +16,7 @@ import {
   PageTitle,
   PlayerLink,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { cn, formatNetWorth } from "@/lib/utils";
 
 // One per-player line of a stored inhouse box score (see inhouse-service).
 type BoxPlayer = {
@@ -232,6 +232,9 @@ function GameResultCard({
   const dire = players.filter((p) => !p.isRadiant);
   const dur = lobby.durationSecs ?? 0;
   const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
+  const maxNet = Math.max(1, ...players.map((p) => p.netWorth ?? 0));
+  const radiantNet = radiant.reduce((s, p) => s + (p.netWorth ?? 0), 0);
+  const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
 
   return (
     <Card>
@@ -266,11 +269,68 @@ function GameResultCard({
           ) : null}
         </div>
       </div>
-      <CardBody className="grid gap-4 md:grid-cols-2">
-        <SideBox label="Radiant" win={radiantWin} players={radiant} avatarMap={avatarMap} />
-        <SideBox label="Dire" win={!radiantWin} players={dire} avatarMap={avatarMap} />
+      <CardBody className="grid gap-x-4 gap-y-4 md:grid-cols-2">
+        <InhouseNetWorthBar radiantNet={radiantNet} direNet={direNet} />
+        <SideBox
+          label="Radiant"
+          win={radiantWin}
+          players={radiant}
+          avatarMap={avatarMap}
+          maxNet={maxNet}
+        />
+        <SideBox
+          label="Dire"
+          win={!radiantWin}
+          players={dire}
+          avatarMap={avatarMap}
+          maxNet={maxNet}
+        />
       </CardBody>
     </Card>
+  );
+}
+
+// Radiant (green) vs Dire (red) net-worth split — the "who's ahead" summary.
+function InhouseNetWorthBar({
+  radiantNet,
+  direNet,
+}: {
+  radiantNet: number;
+  direNet: number;
+}) {
+  const total = radiantNet + direNet;
+  if (total <= 0) return null;
+  const radPct = Math.round((radiantNet / total) * 100);
+  const lead = radiantNet - direNet;
+  return (
+    <div className="md:col-span-2">
+      <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+        <span className="flex items-center gap-1.5 font-medium text-success">
+          <span className="h-2 w-2 rounded-full bg-success" />
+          Radiant
+          <span className="font-mono text-muted">
+            {formatNetWorth(radiantNet)}
+          </span>
+        </span>
+        <span className="shrink-0 text-muted">
+          {lead === 0
+            ? "Even net worth"
+            : `${lead > 0 ? "Radiant" : "Dire"} +${formatNetWorth(Math.abs(lead))}`}
+        </span>
+        <span className="flex items-center gap-1.5 font-medium text-danger">
+          <span className="font-mono text-muted">{formatNetWorth(direNet)}</span>
+          Dire
+          <span className="h-2 w-2 rounded-full bg-danger" />
+        </span>
+      </div>
+      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-surface-2">
+        <div
+          className="bg-success/70 transition-all"
+          style={{ width: `${radPct}%` }}
+        />
+        <div className="flex-1 bg-danger/70" />
+      </div>
+    </div>
   );
 }
 
@@ -279,13 +339,21 @@ function SideBox({
   win,
   players,
   avatarMap,
+  maxNet,
 }: {
   label: string;
   win: boolean;
   players: BoxPlayer[];
   avatarMap: Map<string, string | null>;
+  maxNet: number;
 }) {
   const isRadiant = label === "Radiant";
+  const hasNet = players.some((p) => p.netWorth != null);
+  const hasGpm = players.some((p) => p.gpm != null);
+  // Sort by farm so the gold bars descend, like Dota's post-game screen.
+  const ordered = [...players].sort(
+    (a, b) => (b.netWorth ?? 0) - (a.netWorth ?? 0) || b.kills - a.kills,
+  );
   return (
     <div
       className={cn(
@@ -304,31 +372,73 @@ function SideBox({
         </span>
         <Badge tone={win ? "success" : "neutral"}>{win ? "Win" : "Loss"}</Badge>
       </div>
-      <ul className="space-y-1">
-        {players.map((p, i) => {
+      <ul className="space-y-0.5">
+        {ordered.map((p, i) => {
           const hero = heroById(p.heroId);
+          const nwPct =
+            p.netWorth != null ? Math.round((p.netWorth / maxNet) * 100) : 0;
           return (
-            <li key={i} className="flex items-center gap-2 text-sm">
-              {hero ? (
-                <HeroIcon hero={hero} size={26} />
-              ) : (
-                <span className="h-[26px] w-[26px] shrink-0 rounded-md border border-line/70 bg-surface-2" />
-              )}
-              {p.userId ? (
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <Avatar name={p.name ?? "?"} src={avatarMap.get(p.userId) ?? null} size={18} />
-                  <PlayerLink userId={p.userId} className="truncate">
-                    {p.name ?? "Unknown"}
-                  </PlayerLink>
-                </span>
-              ) : (
-                <span className="truncate text-muted">{p.name ?? "Unknown"}</span>
-              )}
-              <span className="ml-auto shrink-0 font-mono text-xs tabular-nums">
-                <span className="text-fg">{p.kills}</span>
-                <span className="text-muted">/{p.deaths}/</span>
-                <span className="text-muted">{p.assists}</span>
-              </span>
+            <li
+              key={i}
+              className="rounded-md px-1.5 py-1.5 transition-colors hover:bg-surface-2/50"
+            >
+              <div className="flex items-center gap-2.5">
+                {hero ? (
+                  <HeroIcon hero={hero} size={30} />
+                ) : (
+                  <span className="h-[30px] w-[30px] shrink-0 rounded-md border border-line/70 bg-surface-2" />
+                )}
+                <div className="min-w-0 flex-1">
+                  {p.userId ? (
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <Avatar
+                        name={p.name ?? "?"}
+                        src={avatarMap.get(p.userId) ?? null}
+                        size={18}
+                      />
+                      <PlayerLink userId={p.userId} className="truncate text-sm">
+                        {p.name ?? "Unknown"}
+                      </PlayerLink>
+                    </span>
+                  ) : (
+                    <span className="truncate text-sm text-muted">
+                      {p.name ?? "Unknown"}
+                    </span>
+                  )}
+                  {hero ? (
+                    <div className="truncate text-[11px] text-muted">
+                      {hero.name}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-mono text-xs tabular-nums">
+                    <span className="text-success">{p.kills}</span>
+                    <span className="text-muted">/</span>
+                    <span className="text-danger">{p.deaths}</span>
+                    <span className="text-muted">/</span>
+                    <span className="text-info">{p.assists}</span>
+                  </div>
+                  {hasGpm ? (
+                    <div className="text-[11px] tabular-nums text-muted">
+                      {p.gpm ?? "—"} gpm
+                    </div>
+                  ) : null}
+                </div>
+                {hasNet ? (
+                  <div className="w-14 shrink-0 text-right">
+                    <div className="font-mono text-xs tabular-nums text-accent">
+                      {formatNetWorth(p.netWorth)}
+                    </div>
+                    <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-2">
+                      <div
+                        className="h-full rounded-full bg-accent/80"
+                        style={{ width: `${nwPct}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </li>
           );
         })}
