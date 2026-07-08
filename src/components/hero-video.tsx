@@ -6,11 +6,13 @@ const FADE_SECONDS = 0.5; // fade in over the first / out over the last half-sec
 const PEAK_OPACITY = 0.45; // matches the previous static hero-video opacity
 
 /**
- * Background hero loop that fades in and out over the first and last half-second
- * of every cycle, so the (non-seamless) loop point is hidden behind opacity ~0
- * rather than showing a hard jump. Opacity is driven off the video's real
- * currentTime — not a CSS timer — so it can never drift out of sync with the
- * seam. Under prefers-reduced-motion the CSS hides the element entirely.
+ * Background hero loop. To avoid wasting data, the video is only downloaded and
+ * played when it will actually be enjoyed — it's skipped for
+ * prefers-reduced-motion, small/mobile screens, Data Saver, and slow (2g)
+ * connections. In those cases nothing is fetched and the static gradient hero
+ * shows instead. On the rest, opacity ramps 0 -> 0.45 over the first half-second
+ * and 0.45 -> 0 over the last, driven off the video's real currentTime, so the
+ * (non-seamless) loop point is hidden behind opacity ~0 rather than a hard jump.
  */
 export function HeroVideo({ src = "/hero-loop.mp4" }: { src?: string }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -18,7 +20,22 @@ export function HeroVideo({ src = "/hero-loop.mp4" }: { src?: string }) {
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+
+    const mm = window.matchMedia;
+    const reduce = mm?.("(prefers-reduced-motion: reduce)").matches;
+    const smallScreen = mm?.("(max-width: 640px)").matches;
+    const conn = (
+      navigator as Navigator & {
+        connection?: { saveData?: boolean; effectiveType?: string };
+      }
+    ).connection;
+    const saveData = !!conn?.saveData;
+    const slow = !!conn && /(^|-)2g$/.test(conn.effectiveType ?? "");
+    // Don't fetch a single byte of the video when it won't (or shouldn't) show.
+    if (reduce || smallScreen || saveData || slow) return;
+
+    v.src = src;
+    v.play().catch(() => {});
 
     let raf = 0;
     const update = () => {
@@ -35,7 +52,7 @@ export function HeroVideo({ src = "/hero-loop.mp4" }: { src?: string }) {
     };
     raf = requestAnimationFrame(update);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [src]);
 
   return (
     <video
@@ -43,13 +60,10 @@ export function HeroVideo({ src = "/hero-loop.mp4" }: { src?: string }) {
       aria-hidden
       className="hero-video pointer-events-none absolute inset-0 h-full w-full object-cover"
       style={{ opacity: 0 }}
-      autoPlay
       muted
       loop
       playsInline
-      preload="auto"
-    >
-      <source src={src} type="video/mp4" />
-    </video>
+      preload="none"
+    />
   );
 }
