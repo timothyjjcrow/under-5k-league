@@ -2,16 +2,17 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
+import { cn } from "@/lib/utils";
 import {
   Avatar,
   Badge,
   Card,
   CardBody,
-  CardHeader,
   EmptyState,
   PageTitle,
   PlayerLink,
   RankBadge,
+  TeamCrest,
 } from "@/components/ui";
 
 export const metadata = { title: "Teams" };
@@ -84,30 +85,37 @@ export default async function TeamsPage() {
           const row = rowOf.get(t.id);
           const isChampion = season.championTeamId === t.id;
           return (
-            <Card key={t.id} className={isChampion ? "ring-1 ring-accent/40" : undefined}>
-              <CardHeader
-                title={
-                  <Link
-                    href={`/teams/${t.id}`}
-                    className="flex items-center gap-2 hover:text-info"
-                  >
-                    {played && rank > 0 ? (
-                      <span className="text-muted">#{rank}</span>
-                    ) : null}
-                    {t.name}
-                    {isChampion ? <span title="Champion">🏆</span> : null}
-                  </Link>
-                }
-                subtitle={
-                  <span>
-                    Captain:{" "}
-                    <PlayerLink userId={t.captainId} className="text-muted">
-                      {t.captain.name}
-                    </PlayerLink>
-                  </span>
-                }
-                action={
-                  isDraft ? (
+            <Card
+              key={t.id}
+              className={cn(
+                "transition-colors hover:border-muted/50",
+                isChampion ? "ring-1 ring-accent/40" : undefined,
+              )}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <TeamCrest name={t.name} seed={t.id} size={44} />
+                  <div className="min-w-0">
+                    <Link
+                      href={`/teams/${t.id}`}
+                      className="flex items-center gap-1.5 font-display text-lg font-semibold hover:text-info"
+                    >
+                      {played && rank > 0 ? (
+                        <span className="text-muted">#{rank}</span>
+                      ) : null}
+                      <span className="truncate">{t.name}</span>
+                      {isChampion ? <span title="Champion">🏆</span> : null}
+                    </Link>
+                    <p className="mt-0.5 truncate text-sm text-muted">
+                      Captain:{" "}
+                      <PlayerLink userId={t.captainId} className="text-muted">
+                        {t.captain.name}
+                      </PlayerLink>
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0">
+                  {isDraft ? (
                     <Badge tone="accent">${t.budget}</Badge>
                   ) : played && row ? (
                     <div className="text-right">
@@ -121,9 +129,9 @@ export default async function TeamsPage() {
                     <Badge>
                       {t.members.length}/{season.teamSize}
                     </Badge>
-                  )
-                }
-              />
+                  )}
+                </div>
+              </div>
               <CardBody className="space-y-2">
                 <div className="flex flex-wrap gap-1.5">
                   {t.members.map((m) => (

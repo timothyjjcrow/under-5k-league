@@ -358,6 +358,54 @@ export function Avatar({
   );
 }
 
+// ---------- Team crest ----------
+
+/**
+ * Deterministic hue (0–359) from a stable seed, so each team gets a consistent
+ * color identity. Seed on the team id (not the name) so editing the name keeps
+ * the color.
+ */
+export function teamHue(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
+  return h;
+}
+
+/**
+ * A generated monogram "crest" for a team (teams have no uploaded logos): the
+ * team's initials on a gradient tinted with its own color identity.
+ */
+export function TeamCrest({
+  name,
+  seed,
+  size = 40,
+  className,
+}: {
+  name: string;
+  seed: string;
+  size?: number;
+  className?: string;
+}) {
+  const hue = teamHue(seed);
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "grid shrink-0 place-items-center rounded-xl font-display font-bold uppercase text-white shadow ring-1 ring-white/15",
+        className,
+      )}
+      style={{
+        width: size,
+        height: size,
+        fontSize: Math.round(size * 0.4),
+        backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
+      }}
+    >
+      {initials(name)}
+    </span>
+  );
+}
+
 // ---------- Progress ----------
 
 export function Progress({

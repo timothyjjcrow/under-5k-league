@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { roleCoverage } from "@/lib/pool-stats";
-import { cn, initials } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import {
   Avatar,
   Badge,
@@ -16,17 +16,11 @@ import {
   PlayerLink,
   RankBadge,
   Stat,
+  TeamCrest,
+  teamHue,
 } from "@/components/ui";
 
 export const metadata = { title: "Team · Under 5k League" };
-
-// Deterministic hue (0–359) from a string, so each team gets a stable, distinct
-// color identity for its crest + banner glow (teams have no uploaded logos).
-function hueFromString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
-  return h;
-}
 
 function fmtDate(d: Date | null): string | null {
   if (!d) return null;
@@ -89,7 +83,7 @@ export default async function TeamPage({
   const spent = team.members.reduce((sum, m) => sum + m.price, 0);
   const coverage = roleCoverage(rosterRegs);
   const hasRoleData = coverage.some((r) => r.count > 0);
-  const hue = hueFromString(team.id);
+  const hue = teamHue(team.id);
 
   return (
     <div className="space-y-6">
@@ -118,14 +112,12 @@ export default async function TeamPage({
             className="animate-hero-glow-alt pointer-events-none absolute -right-8 bottom-0 h-40 w-40 translate-y-1/3 rounded-full bg-accent/15 blur-3xl"
           />
           <div className="relative flex flex-wrap items-center gap-5 p-6">
-            <div
-              className="grid h-20 w-20 shrink-0 place-items-center rounded-2xl font-display text-2xl font-bold uppercase text-white shadow-lg ring-1 ring-white/15"
-              style={{
-                backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
-              }}
-            >
-              {initials(team.name)}
-            </div>
+            <TeamCrest
+              name={team.name}
+              seed={team.id}
+              size={80}
+              className="rounded-2xl shadow-lg"
+            />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
