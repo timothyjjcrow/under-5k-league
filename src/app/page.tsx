@@ -20,6 +20,7 @@ import {
   RankBadge,
   RoleBadges,
   Stat,
+  TeamCrest,
   buttonClasses,
 } from "@/components/ui";
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
@@ -867,9 +868,17 @@ export function StandingsTable({
             <td className="px-2 py-2.5 font-medium">
               <Link
                 href={`/teams/${row.teamId}`}
-                className="hover:text-info"
+                className="flex items-center gap-2 hover:text-info"
               >
-                {teamName.get(row.teamId) ?? "—"}
+                <TeamCrest
+                  name={teamName.get(row.teamId) ?? "?"}
+                  seed={row.teamId}
+                  size={22}
+                  className="rounded-md"
+                />
+                <span className="truncate">
+                  {teamName.get(row.teamId) ?? "—"}
+                </span>
               </Link>
             </td>
             <td className="px-2 py-2.5 text-center">{row.wins}</td>
