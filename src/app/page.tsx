@@ -111,6 +111,12 @@ export default async function Home() {
         Join the season →
       </Link>
     ) : null;
+  } else if (season.status === "DRAFT") {
+    heroAction = (
+      <Link href="/draft" className={buttonClasses("accent", "lg")}>
+        Enter the draft room →
+      </Link>
+    );
   }
 
   return (
@@ -484,11 +490,6 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
   const { teams, season } = snapshot;
   return (
     <div className="space-y-6">
-      <div className="text-center">
-        <Link href="/draft" className={buttonClasses("accent", "lg")}>
-          Enter the draft room →
-        </Link>
-      </div>
       <div className="grid gap-4 sm:grid-cols-2">
         {teams.map((t) => (
           <Card key={t.id}>
