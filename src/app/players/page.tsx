@@ -15,6 +15,7 @@ import {
   RankBadge,
   RoleBadges,
   SectionTitle,
+  TeamCrest,
 } from "@/components/ui";
 
 export const metadata = { title: "Players" };
@@ -83,10 +84,19 @@ export default async function PlayersPage() {
           <SectionTitle>Teams</SectionTitle>
           <div className="grid gap-4 sm:grid-cols-2">
             {teams.map((t) => (
-              <Card key={t.id}>
+              <Card key={t.id} interactive>
                 <CardHeader
                   title={
-                    <Link href={`/teams/${t.id}`} className="hover:text-info">
+                    <Link
+                      href={`/teams/${t.id}`}
+                      className="flex items-center gap-2 hover:text-info"
+                    >
+                      <TeamCrest
+                        name={t.name}
+                        seed={t.id}
+                        size={24}
+                        className="rounded-md"
+                      />
                       {t.name}
                     </Link>
                   }
