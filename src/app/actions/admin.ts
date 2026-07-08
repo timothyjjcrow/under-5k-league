@@ -92,6 +92,20 @@ export async function setSeasonPhase(formData: FormData) {
   refresh();
 }
 
+/** Rename the active season — its name is the hero title on the home page. */
+export async function renameSeason(formData: FormData) {
+  await requireAdmin();
+  const season = await getActiveSeason();
+  if (!season) return;
+  const name = str(formData, "name").trim().slice(0, 60);
+  if (!name) return;
+  await prisma.season.update({
+    where: { id: season.id },
+    data: { name },
+  });
+  refresh();
+}
+
 /** Designate a registered player as a team captain (creates their team). */
 export async function addCaptain(formData: FormData) {
   await requireAdmin();

@@ -37,8 +37,8 @@ const BUCKETS: { label: string; min: number; max: number }[] = [
   { label: "1–2k", min: 1000, max: 1999 },
   { label: "2–3k", min: 2000, max: 2999 },
   { label: "3–4k", min: 3000, max: 3999 },
-  { label: "4–5k", min: 4000, max: 4999 },
-  { label: "5k+", min: 5000, max: Number.POSITIVE_INFINITY },
+  { label: "4–4.5k", min: 4000, max: 4499 },
+  { label: "4.5k+", min: 4500, max: Number.POSITIVE_INFINITY },
 ];
 
 /** Count players into fixed 1k-wide MMR buckets. */

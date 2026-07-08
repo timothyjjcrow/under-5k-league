@@ -34,8 +34,8 @@ describe("mmrDistribution", () => {
     const byLabel = Object.fromEntries(dist.map((b) => [b.label, b.count]));
     expect(byLabel["0–1k"]).toBe(1);
     expect(byLabel["2–3k"]).toBe(2);
-    expect(byLabel["4–5k"]).toBe(1);
-    expect(byLabel["5k+"]).toBe(1);
+    expect(byLabel["4–4.5k"]).toBe(1);
+    expect(byLabel["4.5k+"]).toBe(1);
   });
   it("returns six buckets covering all ranges", () => {
     expect(mmrDistribution([]).map((b) => b.label)).toEqual([
@@ -43,8 +43,8 @@ describe("mmrDistribution", () => {
       "1–2k",
       "2–3k",
       "3–4k",
-      "4–5k",
-      "5k+",
+      "4–4.5k",
+      "4.5k+",
     ]);
   });
 });

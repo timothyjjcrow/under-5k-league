@@ -22,6 +22,7 @@ import {
   syncSteamProfiles,
   setMaxMmr,
   setMatchSchedule,
+  renameSeason,
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
@@ -260,6 +261,28 @@ function SeasonControls({
           <b>Start draft</b> below. After the draft, generate the schedule and
           enter results each week.
         </p>
+        <form
+          action={renameSeason}
+          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+        >
+          <label htmlFor="seasonName" className="text-muted">
+            Season name
+          </label>
+          <input
+            id="seasonName"
+            name="name"
+            type="text"
+            maxLength={60}
+            defaultValue={season.name}
+            className="h-9 w-64 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+          />
+          <SubmitButton variant="secondary" size="sm">
+            Save name
+          </SubmitButton>
+          <span className="text-xs text-muted">
+            the big title on the home page
+          </span>
+        </form>
         <form
           action={setMaxMmr}
           className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
