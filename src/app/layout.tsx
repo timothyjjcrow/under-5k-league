@@ -20,25 +20,25 @@ import { resolveSiteUrl } from "@/lib/site-url";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
-  "A sub-5000 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.";
+  "A sub-4500 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Under 5k League",
-    template: "%s · Under 5k League",
+    default: "Under 4.5K League",
+    template: "%s · Under 4.5K League",
   },
   description: DESCRIPTION,
-  applicationName: "Under 5k League",
+  applicationName: "Under 4.5K League",
   openGraph: {
-    title: "Under 5k League",
+    title: "Under 4.5K League",
     description: DESCRIPTION,
-    siteName: "Under 5k League",
+    siteName: "Under 4.5K League",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Under 5k League",
+    title: "Under 4.5K League",
     description: DESCRIPTION,
   },
 };

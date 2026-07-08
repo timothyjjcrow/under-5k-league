@@ -24,7 +24,7 @@ import {
 
 export const metadata = shareMetadata(
   "Season Recap",
-  "Awards, superlatives, and the story of the season in the Under 5k League.",
+  "Awards, superlatives, and the story of the season in the Under 4.5K League.",
 );
 
 function safeParse(json: string): PlayerStat[] {

@@ -47,7 +47,7 @@ export async function generateMetadata({
   if (!user) return { title: "Player" };
   return shareMetadata(
     `${user.name} · Player`,
-    `${user.name}'s player profile — record, heroes, and match history in the Under 5k League.`,
+    `${user.name}'s player profile — record, heroes, and match history in the Under 4.5K League.`,
   );
 }
 

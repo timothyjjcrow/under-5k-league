@@ -1,4 +1,4 @@
-# Under 5k League
+# Under 4.5K League
 
 A cleaner, simpler, fully-functional amateur Dota 2 league site. Players sign in
 with Steam, join the current season, get drafted onto teams via a live auction,
@@ -18,7 +18,7 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
   logins pull the player's **Steam name + avatar** via the Steam Web API; admins
   can bulk "Sync avatars" and players can refresh from their profile.
 - **Signups** with live progress toward the minimum needed to start, and an
-  optional **MMR cap** (e.g. an under-5k league) that blocks over-cap players.
+  optional **MMR cap** (e.g. an under-4.5K league) that blocks over-cap players.
 - **Standins** — sign up to fill in for teams without committing full-time.
 - **Live auction draft** — captains take turns nominating players and bidding,
   with a shared countdown clock, budget/roster constraints, and auto-resolution.
@@ -178,7 +178,7 @@ serverless.
    the tables in Neon via `DIRECT_URL`), and builds the app.
 6. **First login = admin.** Open your site → **Sign in through Steam**. The first
    user is auto-granted admin; then go to **/admin**, create your season, and set
-   the **MMR cap** (5000). Steam pulls everyone's name + avatar automatically.
+   the **MMR cap** (4500). Steam pulls everyone's name + avatar automatically.
 
 Update `APP_URL` if you add a custom domain, so Steam login redirects back
 correctly.

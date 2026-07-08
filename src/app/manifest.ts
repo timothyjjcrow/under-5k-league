@@ -4,10 +4,10 @@ import type { MetadataRoute } from "next";
 // matters for the mobile-majority audience. Icons reuse the existing app icons.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Under 5k League",
-    short_name: "Under 5k",
+    name: "Under 4.5K League",
+    short_name: "Under 4.5K",
     description:
-      "A sub-5000 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.",
+      "A sub-4500 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.",
     start_url: "/",
     display: "standalone",
     background_color: "#0b0f17",

@@ -85,7 +85,7 @@ async function main() {
       teamSize: 5,
       minTeams: 4,
       draftBudget: 100,
-      maxMmr: 5000,
+      maxMmr: 4500,
       isActive: true,
     },
   });

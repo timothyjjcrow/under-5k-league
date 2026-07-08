@@ -155,7 +155,7 @@ export default async function AdminPage() {
                 id="maxMmr"
                 name="maxMmr"
                 type="number"
-                defaultValue={5000}
+                defaultValue={4500}
                 min={0}
                 max={20000}
                 className={inputCls}

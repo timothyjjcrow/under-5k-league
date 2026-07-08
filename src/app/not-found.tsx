@@ -14,8 +14,8 @@ export default function NotFound() {
           className="animate-hero-glow pointer-events-none absolute left-1/2 top-0 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/25 blur-3xl"
         />
         <div className="relative flex flex-col items-center gap-4 px-6 py-12 text-center">
-          <div className="animate-hero-float grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-brand to-brand/60 text-2xl font-black text-brand-fg shadow-lg shadow-brand/40 ring-1 ring-white/15">
-            5K
+          <div className="animate-hero-float grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-brand to-brand/60 text-xl font-black tracking-tight text-brand-fg shadow-lg shadow-brand/40 ring-1 ring-white/15">
+            4.5K
           </div>
           <div>
             <div className="font-display text-6xl font-bold tracking-tight">

@@ -43,7 +43,7 @@ export async function generateMetadata({
   if (!team) return { title: "Team" };
   return shareMetadata(
     team.name,
-    `${team.name} — roster, results, and stats in the Under 5k League.`,
+    `${team.name} — roster, results, and stats in the Under 4.5K League.`,
   );
 }
 

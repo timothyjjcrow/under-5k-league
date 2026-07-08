@@ -48,15 +48,15 @@ export function SiteFooter({
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-sm">
             <div className="flex items-center gap-2">
-              <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand/60 text-sm font-bold text-brand-fg ring-1 ring-white/15">
-                5K
+              <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand/60 text-[10px] font-bold tracking-tight text-brand-fg ring-1 ring-white/15">
+                4.5K
               </span>
               <span className="font-display text-base font-semibold uppercase tracking-wide">
-                Under 5k League
+                Under 4.5K League
               </span>
             </div>
             <p className="mt-2 text-sm text-muted">
-              A drafted, team-based Dota 2 league for players under 5000 MMR.
+              A drafted, team-based Dota 2 league for players under 4500 MMR.
             </p>
             <DiscordButton size="sm" className="mt-4" />
           </div>
@@ -76,7 +76,7 @@ export function SiteFooter({
           </nav>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-4 text-xs text-muted">
-          <span>© {year} Under 5k League</span>
+          <span>© {year} Under 4.5K League</span>
           {seasonName ? (
             <span className="flex items-center gap-2">
               <span>{seasonName}</span>
