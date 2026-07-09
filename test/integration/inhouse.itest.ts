@@ -1,0 +1,542 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "@/lib/prisma";
+import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
+import { summarizeInhouse } from "@/lib/inhouse-stats";
+import { steamIdToAccountId } from "@/lib/dota";
+import type { SessionUser } from "@/lib/auth";
+import {
+  cancelLobby,
+  castVote,
+  getInhouseState,
+  joinQueue,
+  leaveQueue,
+  makePick,
+  maybeAutoDetectResult,
+  recordMatch,
+  autoDetectResult,
+  startGame,
+} from "@/lib/inhouse-service";
+import { makeUser, sessionFor } from "./factories";
+
+// The inhouse result path only ever touches OpenDota — never a Valve league
+// ticket. We stub the two network calls it makes (recent-match lists + a full
+// match fetch) and keep everything else (steamIdToAccountId, classifyGame) real.
+vi.mock("@/lib/dota", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/dota")>();
+  return {
+    ...actual,
+    fetchRecentMatchIds: vi.fn(async () => [] as number[]),
+    fetchOpenDotaMatch: vi.fn(async () => null),
+  };
+});
+import { fetchOpenDotaMatch, fetchRecentMatchIds } from "@/lib/dota";
+
+const mockRecent = vi.mocked(fetchRecentMatchIds);
+const mockMatch = vi.mocked(fetchOpenDotaMatch);
+
+afterEach(() => {
+  mockRecent.mockReset();
+  mockMatch.mockReset();
+  mockRecent.mockResolvedValue([]);
+  mockMatch.mockResolvedValue(null);
+});
+beforeEach(() => {
+  mockRecent.mockResolvedValue([]);
+  mockMatch.mockResolvedValue(null);
+});
+
+// ---- helpers ---------------------------------------------------------------
+
+type QueuedUser = { user: Awaited<ReturnType<typeof makeUser>>; session: SessionUser };
+
+/** Register N users and push them through joinQueue; the 10th forms a lobby. */
+async function enqueue(count: number, mmrFor: (i: number) => number): Promise<QueuedUser[]> {
+  const out: QueuedUser[] = [];
+  for (let i = 0; i < count; i++) {
+    const user = await makeUser(`IH${i}`);
+    const session = sessionFor(user);
+    await joinQueue(session, mmrFor(i));
+    out.push({ user, session });
+  }
+  return out;
+}
+
+async function lobbyByStatus(status: string) {
+  return prisma.inhouseLobby.findFirstOrThrow({
+    where: { status },
+    include: { players: { include: { user: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+/** The account ids on each drafted team, mirroring buildResult's own mapping. */
+async function teamAccounts(lobbyId: string) {
+  const players = await prisma.inhouseLobbyPlayer.findMany({
+    where: { lobbyId },
+    include: { user: true },
+  });
+  const acc = (u: { dotaAccountId: number | null; steamId: string }) =>
+    u.dotaAccountId ?? steamIdToAccountId(u.steamId)!;
+  return {
+    team1: players.filter((p) => p.team === 1).map((p) => acc(p.user)),
+    team2: players.filter((p) => p.team === 2).map((p) => acc(p.user)),
+  };
+}
+
+/** Build an OpenDota match with team1 on Radiant, team2 on Dire (no leagueid). */
+function fakeMatch(opts: {
+  matchId: number;
+  team1: number[];
+  team2: number[];
+  radiantWin: boolean;
+  startTime: number;
+  leagueid?: number;
+}) {
+  const line = (accountId: number, slot: number, isRadiant: boolean, i: number) => ({
+    account_id: accountId,
+    player_slot: slot,
+    hero_id: i + 1,
+    isRadiant,
+    kills: isRadiant ? 10 : 3,
+    deaths: isRadiant ? 3 : 10,
+    assists: 8,
+    personaname: `p${accountId}`,
+    net_worth: 20000 - i * 500,
+    gold_per_min: 500,
+    last_hits: 200,
+  });
+  return {
+    match_id: opts.matchId,
+    radiant_win: opts.radiantWin,
+    duration: 2400,
+    start_time: opts.startTime,
+    radiant_score: 30,
+    dire_score: 20,
+    ...(opts.leagueid !== undefined ? { leagueid: opts.leagueid } : {}),
+    players: [
+      ...opts.team1.map((a, i) => line(a, i, true, i)),
+      ...opts.team2.map((a, i) => line(a, 128 + i, false, i)),
+    ],
+  };
+}
+
+/** Everyone casts the same captain-selection method (last vote resolves it). */
+async function voteAll(players: QueuedUser[], method: string, nomineeId?: string) {
+  for (const p of players) await castVote(p.session, method, nomineeId);
+}
+
+/** Admin-drive the draft to READY by always picking the top-MMR pool player. */
+async function driveDraftToReady(admin: SessionUser) {
+  for (let guard = 0; guard < 30; guard++) {
+    const lobby = await prisma.inhouseLobby.findFirst({
+      where: { status: INHOUSE_STATUS.DRAFTING },
+      include: { players: true },
+    });
+    if (!lobby) break;
+    const pool = lobby.players
+      .filter((p) => p.team === null)
+      .sort((a, b) => b.mmr - a.mmr);
+    if (pool.length === 0) break;
+    const r = await makePick(admin, pool[0].userId);
+    if (!r.ok) throw new Error(`pick failed: ${r.error}`);
+  }
+}
+
+/** Full run: queue → MMR captains → draft → start. Returns the IN_PROGRESS lobby. */
+async function runToInProgress(admin: SessionUser) {
+  const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+  await voteAll(players, "MMR");
+  await driveDraftToReady(admin);
+  await startGame(players[0].session);
+  const lobby = await lobbyByStatus(INHOUSE_STATUS.IN_PROGRESS);
+  return { players, lobby };
+}
+
+// ---------------------------------------------------------------------------
+
+describe("inhouse — lobby formation", () => {
+  it("does nothing until the queue reaches LOBBY_SIZE, then forms one lobby", async () => {
+    await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+    expect(await prisma.inhouseLobby.count()).toBe(0);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE - 1);
+
+    await enqueue(1, () => 3000); // the 10th player trips maybeFormLobby
+    const lobby = await prisma.inhouseLobby.findFirstOrThrow({
+      include: { players: true },
+    });
+    expect(lobby.status).toBe(INHOUSE_STATUS.CAPTAIN_VOTE);
+    expect(lobby.players).toHaveLength(INHOUSE.LOBBY_SIZE);
+    expect(lobby.voteEndsAt).not.toBeNull();
+    expect(lobby.radiantTeam).toBe(1);
+    // Everyone drained from the queue into the lobby.
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    // Nobody has a team yet — the vote decides captains first.
+    expect(lobby.players.every((p) => p.team === null && !p.isCaptain)).toBe(true);
+  });
+
+  it("keeps a second batch of 10 in the queue while one lobby is active", async () => {
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // forms lobby #1 (CAPTAIN_VOTE)
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // second batch must wait
+    expect(await prisma.inhouseLobby.count()).toBe(1);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
+  });
+});
+
+describe("inhouse — captain vote", () => {
+  it("MMR: installs the two highest-MMR players as captains and opens the draft", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    const captains = lobby.players.filter((p) => p.isCaptain);
+    expect(captains).toHaveLength(2);
+    const cap1 = lobby.players.find((p) => p.team === 1 && p.isCaptain)!;
+    const cap2 = lobby.players.find((p) => p.team === 2 && p.isCaptain)!;
+    expect(cap1.userId).toBe(players[0].user.id); // 5000 MMR → team 1
+    expect(cap2.userId).toBe(players[1].user.id); // 4900 MMR → team 2
+    // Lower seed (team 2) is on the clock first, with a running pick timer.
+    expect(lobby.pickTeam).toBe(INHOUSE.FIRST_PICK_TEAM);
+    expect(lobby.pickEndsAt).not.toBeNull();
+    expect(lobby.voteEndsAt).toBeNull();
+  });
+
+  it("VOTE: the two most-nominated players become captains", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 3000 + i); // low, distinct MMR
+    // Everyone elects players[7] and players[8] (not the top-MMR pair).
+    for (const p of players.slice(0, 5)) await castVote(p.session, "VOTE", players[7].user.id);
+    for (const p of players.slice(5)) await castVote(p.session, "VOTE", players[8].user.id);
+
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    const capIds = lobby.players.filter((p) => p.isCaptain).map((p) => p.userId);
+    expect(capIds).toContain(players[7].user.id);
+    expect(capIds).toContain(players[8].user.id);
+  });
+
+  it("resolves on timeout with no votes cast, defaulting to MMR", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
+    // Force the vote clock into the past, then poll (getInhouseState resolves it).
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { voteEndsAt: new Date(Date.now() - 1000) },
+    });
+    await getInhouseState(players[0].session);
+
+    const drafting = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    const cap1 = drafting.players.find((p) => p.team === 1 && p.isCaptain)!;
+    expect(cap1.userId).toBe(players[0].user.id); // highest MMR by default
+  });
+
+  it("rejects votes from outsiders and invalid methods", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const outsider = sessionFor(await makeUser("Nosy"));
+    expect((await castVote(outsider, "MMR")).ok).toBe(false);
+    expect((await castVote(players[0].session, "BOGUS")).ok).toBe(false);
+    expect((await castVote(players[0].session, "VOTE")).ok).toBe(false); // no nominee
+  });
+});
+
+describe("inhouse — drafting", () => {
+  it("enforces turn order, ownership, and rejects re-picking a taken player", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+    const cap1 = players[0]; // team 1
+    const cap2 = players[1]; // team 2, picks first (FIRST_PICK_TEAM = 2)
+    const pool = players.slice(2);
+
+    // Team 1's captain can't pick out of turn.
+    expect((await makePick(cap1.session, pool[0].user.id)).ok).toBe(false);
+    // A non-captain can't pick at all.
+    expect((await makePick(pool[0].session, pool[1].user.id)).ok).toBe(false);
+    // The on-clock captain (team 2) can.
+    expect((await makePick(cap2.session, pool[0].user.id)).ok).toBe(true);
+    // That player is now taken — nobody can pick them again.
+    expect((await makePick(cap1.session, pool[0].user.id)).ok).toBe(false);
+    // And you can't draft a captain.
+    expect((await makePick(cap1.session, cap2.user.id)).ok).toBe(false);
+    // The clock has flipped to team 1.
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    expect(lobby.pickTeam).toBe(1);
+  });
+
+  it("fills both rosters 5v5 and lands in READY", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+    await driveDraftToReady(admin);
+
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY);
+    expect(lobby.pickTeam).toBeNull();
+    expect(lobby.pickEndsAt).toBeNull();
+    expect(lobby.players.filter((p) => p.team === 1)).toHaveLength(INHOUSE.TEAM_SIZE);
+    expect(lobby.players.filter((p) => p.team === 2)).toHaveLength(INHOUSE.TEAM_SIZE);
+    expect(lobby.players.filter((p) => p.team === null)).toHaveLength(0);
+    // Draft order was recorded for each non-captain pick.
+    const picks = lobby.players.filter((p) => !p.isCaptain);
+    expect(picks.every((p) => p.pickIndex !== null)).toBe(true);
+  });
+
+  it("auto-picks the top pool player when a captain lets the clock run out", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    const topPool = players[2]; // 4800 MMR, highest remaining in the pool
+
+    // Stall: shove the pick clock into the past, then poll.
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { pickEndsAt: new Date(Date.now() - 1000) },
+    });
+    await getInhouseState(players[0].session);
+
+    const drafted = await prisma.inhouseLobbyPlayer.findFirstOrThrow({
+      where: { lobbyId: lobby.id, userId: topPool.user.id },
+    });
+    expect(drafted.team).not.toBeNull(); // was auto-drafted onto the stalled team
+  });
+});
+
+describe("inhouse — starting the game", () => {
+  it("only a lobby member (or admin) can start, flipping READY → IN_PROGRESS", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+    await driveDraftToReady(admin);
+
+    const outsider = sessionFor(await makeUser("Rando"));
+    expect((await startGame(outsider)).ok).toBe(false);
+    expect((await startGame(players[3].session)).ok).toBe(true);
+
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.IN_PROGRESS);
+    expect(lobby.startedById).toBe(players[3].user.id);
+    expect(lobby.startedAt).not.toBeNull();
+  });
+});
+
+describe("inhouse — finding + recording the game (NO league ticket)", () => {
+  it("auto-detects a plain public-lobby match from players' recent games and scores it", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const MATCH_ID = 7000000001;
+    const startTime = Math.floor(lobby.createdAt.getTime() / 1000) + 120;
+
+    // Every player's recent-match list contains the shared game...
+    mockRecent.mockResolvedValue([MATCH_ID]);
+    // ...and the match itself is an ordinary lobby game — NO leagueid at all.
+    mockMatch.mockResolvedValue(
+      fakeMatch({ matchId: MATCH_ID, team1, team2, radiantWin: true, startTime }),
+    );
+
+    const res = await autoDetectResult(players[0].session);
+    expect(res.ok).toBe(true);
+
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.winnerTeam).toBe(1); // team 1 was Radiant and Radiant won
+    expect(done.radiantTeam).toBe(1);
+    expect(done.dotaMatchId).toBe(String(MATCH_ID));
+    expect(done.durationSecs).toBe(2400);
+
+    // The full per-player box score was captured for scoring.
+    const box = JSON.parse(done.boxScore) as { userId: string | null; team: number | null }[];
+    expect(box).toHaveLength(10);
+    expect(box.filter((b) => b.team === 1)).toHaveLength(5);
+    expect(box.filter((b) => b.team === 2)).toHaveLength(5);
+    expect(box.every((b) => b.userId !== null)).toBe(true); // all 10 mapped to users
+  });
+
+  it("records the game from a pasted match id, with no league ticket involved", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const MATCH_ID = 7000000002;
+
+    // leagueid: 0 is exactly what a normal (non-ticketed) public lobby reports.
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: MATCH_ID,
+        team1,
+        team2,
+        radiantWin: false, // Dire (team 2) wins this time
+        startTime: Math.floor(Date.now() / 1000),
+        leagueid: 0,
+      }),
+    );
+
+    const res = await recordMatch(players[2].session, `https://www.opendota.com/matches/${MATCH_ID}`);
+    expect(res.ok).toBe(true);
+
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.winnerTeam).toBe(2);
+  });
+
+  it("auto-detects on poll once the game has run long enough (maybeAutoDetectResult)", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const MATCH_ID = 7000000003;
+
+    mockRecent.mockResolvedValue([MATCH_ID]);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: MATCH_ID,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 60,
+      }),
+    );
+
+    // Too early: a game that "just started" isn't scanned yet.
+    expect(await maybeAutoDetectResult()).toBe(false);
+
+    // Backdate the start past the detect floor, then poll again.
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { startedAt: new Date(Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000) },
+    });
+    // getInhouseState runs maybeAutoDetectResult as part of a normal poll.
+    await getInhouseState(players[0].session);
+
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.winnerTeam).toBe(1);
+  });
+
+  it("rejects a match that isn't between these two teams", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const MATCH_ID = 7000000004;
+
+    // Ten unrelated accounts — none of our players are in it.
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: MATCH_ID,
+        team1: [900001, 900002, 900003, 900004, 900005],
+        team2: [900006, 900007, 900008, 900009, 900010],
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    const res = await recordMatch(players[0].session, String(MATCH_ID));
+    expect(res.ok).toBe(false);
+
+    const still = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    expect(still.status).toBe(INHOUSE_STATUS.IN_PROGRESS); // untouched
+  });
+
+  it("reports a friendly error when the game can't be found yet", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players } = await runToInProgress(admin);
+    mockRecent.mockResolvedValue([]); // nobody has public data / game not indexed
+    const res = await autoDetectResult(players[0].session);
+    expect(res.ok).toBe(false);
+  });
+
+  it("won't let a non-participant record the result", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000005,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    const outsider = sessionFor(await makeUser("Rando"));
+    expect((await recordMatch(outsider, "7000000005")).ok).toBe(false);
+  });
+});
+
+describe("inhouse — scoring feeds ranking across games", () => {
+  it("a completed game's winners rank first by record in the next lobby's vote", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+
+    // ---- GAME 1: run it end to end and record team 1 as the winner ----
+    const g1 = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(g1.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100000001,
+        team1,
+        team2,
+        radiantWin: true, // team 1 wins
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    expect((await recordMatch(g1.players[0].session, "7100000001")).ok).toBe(true);
+
+    const winners = new Set(
+      (await prisma.inhouseLobbyPlayer.findMany({
+        where: { lobbyId: g1.lobby.id, team: 1 },
+      })).map((p) => p.userId),
+    );
+    expect(winners.size).toBe(INHOUSE.TEAM_SIZE);
+
+    // The pure leaderboard agrees: each winner shows a 1-0 record.
+    const completed = await prisma.inhouseLobby.findMany({
+      where: { status: INHOUSE_STATUS.COMPLETED },
+      include: { players: { include: { user: true } } },
+    });
+    const board = summarizeInhouse(
+      completed.map((l) => ({
+        id: l.id,
+        winnerTeam: l.winnerTeam,
+        createdAt: l.createdAt,
+        players: l.players.map((p) => ({
+          userId: p.userId,
+          name: p.user.name,
+          avatar: p.user.avatar,
+          team: p.team,
+        })),
+      })),
+    );
+    for (const w of winners) {
+      expect(board.find((r) => r.userId === w)).toMatchObject({ wins: 1, losses: 0 });
+    }
+
+    // ---- GAME 2: same 10 requeue and vote RECORD → captains come from the winners ----
+    const g1Users = g1.players.map((p) => p.user);
+    for (const u of g1Users) await joinQueue(sessionFor(u), 3000);
+    const lobby2 = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
+    const sessById = new Map(g1Users.map((u) => [u.id, sessionFor(u)]));
+    for (const p of lobby2.players) await castVote(sessById.get(p.userId)!, "RECORD");
+
+    const drafting2 = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    const newCaps = drafting2.players.filter((p) => p.isCaptain).map((p) => p.userId);
+    expect(newCaps).toHaveLength(2);
+    // Best inhouse record (1-0) belongs to game-1's winners → both captains are winners.
+    for (const c of newCaps) expect(winners.has(c)).toBe(true);
+  });
+});
+
+describe("inhouse — misc guards", () => {
+  it("blocks joining the queue while already in a live lobby, and admin can cancel", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+
+    // A player already in the active (CAPTAIN_VOTE) lobby can't re-queue.
+    expect((await joinQueue(players[0].session, 3000)).ok).toBe(false);
+
+    // A non-admin can't cancel; the admin can, freeing the slot.
+    expect((await cancelLobby(players[0].session)).ok).toBe(false);
+    expect((await cancelLobby(admin)).ok).toBe(true);
+    const lobby = await prisma.inhouseLobby.findFirstOrThrow();
+    expect(lobby.status).toBe(INHOUSE_STATUS.CANCELLED);
+
+    // With the slot free, queuing works again and forms a fresh lobby.
+    for (const p of players) await joinQueue(p.session, 3000);
+    expect(await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CAPTAIN_VOTE } })).toBe(1);
+  });
+
+  it("leaveQueue removes a waiting player", async () => {
+    const players = await enqueue(3, () => 3000);
+    expect((await leaveQueue(players[0].session)).ok).toBe(true);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(2);
+  });
+});

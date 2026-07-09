@@ -17,6 +17,9 @@ import type { SessionUser } from "@/lib/auth";
 
 /** Wipe every table (children first) so each test starts from empty. */
 export async function resetDb() {
+  await prisma.inhouseLobbyPlayer.deleteMany();
+  await prisma.inhouseLobby.deleteMany();
+  await prisma.inhouseQueueEntry.deleteMany();
   await prisma.game.deleteMany();
   await prisma.standinAssignment.deleteMany();
   await prisma.bid.deleteMany();

@@ -3,18 +3,23 @@ import { prisma } from "@/lib/prisma";
 import { steamIdToAccountId } from "@/lib/dota";
 import { MATCH_PHASE } from "@/lib/constants";
 import {
+  autoDetectGamesForMatch,
   gatherTeamAccounts,
   importGameForMatch,
   recomputeSeries,
 } from "@/lib/match-import";
 import { makeSeason, makeTeam, makeUser } from "./factories";
 
-// Keep the real module (steamIdToAccountId etc.) but stub the network fetch.
+// Keep the real module (steamIdToAccountId etc.) but stub the network fetches.
 vi.mock("@/lib/dota", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/dota")>();
-  return { ...actual, fetchOpenDotaMatch: vi.fn() };
+  return {
+    ...actual,
+    fetchOpenDotaMatch: vi.fn(),
+    fetchRecentMatchIds: vi.fn(async () => [] as number[]),
+  };
 });
-import { fetchOpenDotaMatch } from "@/lib/dota";
+import { fetchOpenDotaMatch, fetchRecentMatchIds } from "@/lib/dota";
 
 async function regularMatch(seasonId: string, homeId: string, awayId: string) {
   return prisma.match.create({
@@ -259,5 +264,231 @@ describe("importGameForMatch", () => {
     const r = await importGameForMatch(match.id, "777");
     expect(r.ok).toBe(false);
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+  });
+});
+
+describe("autoDetectGamesForMatch", () => {
+  afterEach(() => {
+    vi.mocked(fetchOpenDotaMatch).mockReset();
+    vi.mocked(fetchRecentMatchIds).mockReset();
+  });
+
+  // An OpenDota match with the given accounts on each side.
+  function gameOf(
+    matchId: number,
+    radiant: number[],
+    dire: number[],
+    radiantWin: boolean,
+    startTime = 1_700_000_000,
+  ) {
+    return {
+      match_id: matchId,
+      radiant_win: radiantWin,
+      duration: 2100,
+      start_time: startTime,
+      radiant_score: 25,
+      dire_score: 18,
+      players: [
+        ...radiant.map((a, i) => ({
+          account_id: a,
+          player_slot: i,
+          hero_id: i + 1,
+          isRadiant: true,
+          kills: 5,
+          deaths: 2,
+          assists: 7,
+        })),
+        ...dire.map((a, i) => ({
+          account_id: a,
+          player_slot: 128 + i,
+          hero_id: i + 20,
+          isRadiant: false,
+          kills: 2,
+          deaths: 5,
+          assists: 4,
+        })),
+      ],
+    };
+  }
+
+  async function roster(seasonId: string, teamId: string, prefix: string, n: number) {
+    const accts: number[] = [];
+    for (let i = 0; i < n; i++) accts.push(await addMember(seasonId, teamId, `${prefix}${i}`));
+    return accts;
+  }
+
+  it("finds the real match from the players who played and skips an unrelated pub", async () => {
+    const season = await makeSeason({ teamSize: 5 });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeAccts = await roster(season.id, home.id, "H", 5);
+    const awayAccts = await roster(season.id, away.id, "A", 5);
+    const match = await regularMatch(season.id, home.id, away.id);
+
+    const REAL = 8001;
+    const PUB = 9999; // a 4-stack pub some home players queued — must be ignored
+    const recent = new Map<number, number[]>();
+    homeAccts.forEach((a, i) => recent.set(a, i < 4 ? [REAL, PUB] : [REAL]));
+    awayAccts.forEach((a) => recent.set(a, [REAL]));
+    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) => {
+      if (id === String(REAL)) return gameOf(REAL, homeAccts, awayAccts, true);
+      if (id === String(PUB))
+        // Home 4-stack + 6 strangers: classifyGame can't find the away team.
+        return gameOf(PUB, homeAccts.slice(0, 4), [70001, 70002, 70003, 70004, 70005, 70006], true);
+      return null;
+    });
+
+    const res = await autoDetectGamesForMatch(match.id);
+    expect(res.imported).toBe(1); // only the real match, not the pub
+
+    const games = await prisma.game.findMany({ where: { matchId: match.id } });
+    expect(games).toHaveLength(1);
+    expect(games[0].dotaMatchId).toBe(String(REAL));
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.winnerTeamId).toBe(home.id); // home = Radiant, Radiant won
+    expect(m.status).toBe("COMPLETED");
+  });
+
+  it("attributes a standin's game to the team they filled in for", async () => {
+    const season = await makeSeason({ teamSize: 5 });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    // Home fields 4 regulars + a benched 5th who a standin replaces this week.
+    const homeRegulars = await roster(season.id, home.id, "H", 4);
+    const benched = await makeUser("Benched");
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: home.id, userId: benched.id, isCaptain: false, price: 0 },
+    });
+    const awayAccts = await roster(season.id, away.id, "A", 5);
+    const match = await regularMatch(season.id, home.id, away.id);
+
+    const standin = await makeUser("Standin");
+    const standinAcc = steamIdToAccountId(standin.steamId)!;
+    await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: home.id,
+        standinUserId: standin.id,
+        replacingUserId: benched.id,
+      },
+    });
+
+    // The lineup that actually played: 4 regulars + the standin (benched sat out).
+    const homeOnField = [...homeRegulars, standinAcc];
+    const REAL = 8100;
+    const recent = new Map<number, number[]>();
+    [...homeOnField, ...awayAccts].forEach((a) => recent.set(a, [REAL]));
+    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) =>
+      id === String(REAL) ? gameOf(REAL, homeOnField, awayAccts, false) : null,
+    );
+
+    const res = await autoDetectGamesForMatch(match.id);
+    expect(res.imported).toBe(1);
+
+    const game = await prisma.game.findFirstOrThrow({ where: { matchId: match.id } });
+    const players = JSON.parse(game.players) as { userId: string | null; teamId: string | null }[];
+    const standinRow = players.find((p) => p.userId === standin.id);
+    expect(standinRow?.teamId).toBe(home.id); // counted for the team they covered
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.winnerTeamId).toBe(away.id); // home was Radiant, Radiant lost
+  });
+
+  it("imports every game of a best-of-3 and rolls the series up", async () => {
+    const season = await makeSeason({ teamSize: 5 });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeAccts = await roster(season.id, home.id, "H", 5);
+    const awayAccts = await roster(season.id, away.id, "A", 5);
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+        bestOf: 3,
+      },
+    });
+
+    const G1 = 8201;
+    const G2 = 8202;
+    const recent = new Map<number, number[]>();
+    [...homeAccts, ...awayAccts].forEach((a) => recent.set(a, [G1, G2]));
+    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) => {
+      if (id === String(G1)) return gameOf(G1, homeAccts, awayAccts, true); // home wins
+      if (id === String(G2)) return gameOf(G2, homeAccts, awayAccts, true); // home wins
+      return null;
+    });
+
+    const res = await autoDetectGamesForMatch(match.id);
+    expect(res.imported).toBe(2);
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.homeScore).toBe(2);
+    expect(m.awayScore).toBe(0);
+    expect(m.winnerTeamId).toBe(home.id);
+    expect(m.status).toBe("COMPLETED");
+  });
+
+  it("never mistakes an older game with the same players for the one just played", async () => {
+    const season = await makeSeason({ teamSize: 5 });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeAccts = await roster(season.id, home.id, "H", 5);
+    const awayAccts = await roster(season.id, away.id, "A", 5);
+    const match = await regularMatch(season.id, home.id, away.id); // bestOf 1
+
+    // The exact same 10 players appear in TWO games in everyone's recent list:
+    // an old meeting (last month) and the one they just played.
+    const OLD = 8400;
+    const NEW = 8401;
+    const recent = new Map<number, number[]>();
+    [...homeAccts, ...awayAccts].forEach((a) => recent.set(a, [NEW, OLD]));
+    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) => {
+      if (id === String(OLD)) return gameOf(OLD, awayAccts, homeAccts, true, 1_600_000_000); // away won the old one
+      if (id === String(NEW)) return gameOf(NEW, homeAccts, awayAccts, true, 1_700_000_000); // home won today
+      return null;
+    });
+
+    const res = await autoDetectGamesForMatch(match.id);
+    expect(res.imported).toBe(1); // bestOf 1 → only the most recent valid game
+
+    const games = await prisma.game.findMany({ where: { matchId: match.id } });
+    expect(games).toHaveLength(1);
+    expect(games[0].dotaMatchId).toBe(String(NEW)); // the game just played, not the old one
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.winnerTeamId).toBe(home.id); // today's result, not last month's
+  });
+
+  it("won't re-attribute a game already recorded for another match", async () => {
+    const season = await makeSeason({ teamSize: 5 });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeAccts = await roster(season.id, home.id, "H", 5);
+    const awayAccts = await roster(season.id, away.id, "A", 5);
+    // Same two teams meet twice (e.g. regular season + a playoff rematch).
+    const week1 = await regularMatch(season.id, home.id, away.id);
+    const rematch = await regularMatch(season.id, home.id, away.id);
+
+    const REAL = 8300;
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) =>
+      id === String(REAL) ? gameOf(REAL, homeAccts, awayAccts, true) : null,
+    );
+    // The week-1 game is recorded against week 1.
+    expect((await importGameForMatch(week1.id, String(REAL))).ok).toBe(true);
+
+    // Auto-detecting the rematch must NOT steal week 1's game.
+    const recent = new Map<number, number[]>();
+    [...homeAccts, ...awayAccts].forEach((a) => recent.set(a, [REAL]));
+    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+
+    const res = await autoDetectGamesForMatch(rematch.id);
+    expect(res.imported).toBe(0);
+    expect(await prisma.game.count({ where: { matchId: rematch.id } })).toBe(0);
+    expect(await prisma.game.count({ where: { matchId: week1.id } })).toBe(1);
   });
 });

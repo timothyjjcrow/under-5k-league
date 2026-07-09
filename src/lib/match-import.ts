@@ -254,7 +254,7 @@ export async function autoDetectGamesForMatch(
   const match = await prisma.match.findUnique({ where: { id: matchId } });
   if (!match) return { imported: 0, scanned: 0, error: "Unknown league match" };
 
-  const { homeSet, awaySet } = await gatherTeamAccounts(match);
+  const { homeSet, awaySet, teamSize } = await gatherTeamAccounts(match);
   const accounts = [...homeSet, ...awaySet].slice(0, 12);
 
   // Count how many of our players share each recent match id.
@@ -264,16 +264,41 @@ export async function autoDetectGamesForMatch(
     for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
 
-  // Games shared by several of our players are strong candidates; classifyGame
-  // does the real validation during import.
-  const candidates = [...counts.entries()]
+  // Games shared by several of our players are candidates; validate each against
+  // the two rosters before committing.
+  const candidateIds = [...counts.entries()]
     .filter(([, c]) => c >= 4)
     .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
     .map(([id]) => id);
 
+  const minPerSide = Math.min(3, teamSize);
+  const valid: { id: number; startTime: number }[] = [];
+  for (const id of candidateIds) {
+    const od = await fetchOpenDotaMatch(String(id));
+    if (!od) continue;
+    const cls = classifyGame(
+      od,
+      { teamId: match.homeTeamId, accountIds: homeSet },
+      { teamId: match.awayTeamId, accountIds: awaySet },
+      minPerSide,
+    );
+    if (cls.ok) valid.push({ id, startTime: od.start_time ?? 0 });
+  }
+
+  // Keep only the most recent `bestOf` games that check out, then import them in
+  // play order. A series can't have more games than its length, so this caps the
+  // import — and crucially means an *older* game with the same players (a scrim,
+  // a prior meeting) is always superseded by the game this match was just played,
+  // never mistaken for it.
+  const chosen = valid
+    .sort((a, b) => b.startTime - a.startTime)
+    .slice(0, Math.max(1, match.bestOf))
+    .sort((a, b) => a.startTime - b.startTime);
+
   let imported = 0;
-  for (const id of candidates) {
-    const r = await importGameForMatch(matchId, String(id));
+  for (const c of chosen) {
+    const r = await importGameForMatch(matchId, String(c.id));
     if (r.ok) imported++;
   }
   return { imported, scanned: accounts.length };
