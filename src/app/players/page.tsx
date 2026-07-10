@@ -82,7 +82,7 @@ export default async function PlayersPage() {
       {teams.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Teams</SectionTitle>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {teams.map((t) => (
               <Card key={t.id} interactive>
                 <CardHeader

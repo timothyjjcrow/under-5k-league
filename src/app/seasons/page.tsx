@@ -38,7 +38,7 @@ export default async function SeasonsPage() {
       {seasons.length === 0 ? (
         <EmptyState title="No seasons yet" />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {seasons.map((s) => {
             const champion = s.championTeamId
               ? s.teams.find((t) => t.id === s.championTeamId)

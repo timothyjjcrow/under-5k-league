@@ -24,7 +24,9 @@ export function CheckinBanner({
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-info/40 bg-info/10 px-5 py-3.5 text-sm">
       <span className="text-lg leading-none">🗓️</span>
-      <div className="min-w-0 flex-1">
+      {/* min-w keeps the copy readable — when space runs out the buttons wrap
+          to their own row instead of crushing the text. */}
+      <div className="min-w-[14rem] flex-1">
         <div className="font-medium">
           {heading}
           {when ? <span className="text-muted"> · {when}</span> : null}

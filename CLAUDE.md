@@ -273,6 +273,20 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   captains ($0) excluded. Rendered as a "Draft night" card on `/teams`
   whenever any purchases exist (live during DRAFT, historical after).
 
+## Mobile layout rules (done — keep following these)
+
+- Card grids must use `grid-cols-1` explicitly (`grid grid-cols-1 gap-4
+  sm:grid-cols-2`) — without it the implicit track is `auto` and a long team
+  name widens the whole page. Same trap: grid *items* need `min-w-0` (see the
+  dashboard's two column divs).
+- `StandingsTable` is `table-fixed` with explicit numeric column widths so the
+  Team column truncates instead of stretching; keep new columns narrow+fixed.
+- `CardHeader` clamps its title/subtitle (`min-w-0` + overflow-wrap) — free-
+  text names are safe there. In custom flex headers, every level between the
+  container and a `truncate` span needs `min-w-0`.
+- `CheckinBanner` text has `min-w-[14rem]` so the RSVP buttons wrap below the
+  copy on phones instead of crushing it.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).

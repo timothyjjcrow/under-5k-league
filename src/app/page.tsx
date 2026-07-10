@@ -619,7 +619,7 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
   const { teams, season } = snapshot;
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {teams.map((t) => (
           <Card key={t.id} interactive>
             <CardHeader
@@ -753,8 +753,10 @@ async function SeasonView({
 
   return (
     <div className="space-y-6">
+      {/* min-w-0: grid items otherwise refuse to shrink below their content,
+          letting a long team name widen the page on mobile. */}
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+        <div className="min-w-0 space-y-6 lg:col-span-2">
           <Card>
             <CardHeader
               title="Standings"
@@ -781,7 +783,7 @@ async function SeasonView({
             </CardBody>
           </Card>
         </div>
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {myTeam ? (
             <Card>
               <CardHeader title="Your team" subtitle={myTeam.name} />
@@ -1007,21 +1009,33 @@ export function StandingsTable({
     playoffCut != null && playoffCut > 0 && playoffCut < standings.length;
   const cols = formByTeam ? 8 : 7;
   return (
-    <table className="w-full text-sm">
+    // table-fixed + explicit numeric column widths: the Team column absorbs
+    // whatever is left and truncates, so long names can't widen the page.
+    <table className="w-full table-fixed text-sm">
       <thead>
         <tr className="border-b border-line text-left text-xs uppercase text-muted">
-          <th className="px-5 py-2.5 font-medium">#</th>
+          <th className="w-10 px-3 py-2.5 font-medium sm:w-12 sm:px-5">#</th>
           <th className="px-2 py-2.5 font-medium">Team</th>
-          <th className="px-2 py-2.5 text-center font-medium">W</th>
-          <th className="px-2 py-2.5 text-center font-medium">D</th>
-          <th className="px-2 py-2.5 text-center font-medium">L</th>
-          <th className="px-2 py-2.5 text-center font-medium">Diff</th>
+          <th className="w-8 px-1 py-2.5 text-center font-medium sm:w-10 sm:px-2">
+            W
+          </th>
+          <th className="w-8 px-1 py-2.5 text-center font-medium sm:w-10 sm:px-2">
+            D
+          </th>
+          <th className="w-8 px-1 py-2.5 text-center font-medium sm:w-10 sm:px-2">
+            L
+          </th>
+          <th className="w-11 px-1 py-2.5 text-center font-medium sm:px-2">
+            Diff
+          </th>
           {formByTeam ? (
-            <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+            <th className="hidden w-28 px-2 py-2.5 text-center font-medium sm:table-cell">
               Form
             </th>
           ) : null}
-          <th className="px-5 py-2.5 text-right font-medium">Pts</th>
+          <th className="w-12 px-3 py-2.5 text-right font-medium sm:w-16 sm:px-5">
+            Pts
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -1037,7 +1051,7 @@ export function StandingsTable({
               >
                 <td
                   className={cn(
-                    "px-5 py-2.5",
+                    "px-3 py-2.5 sm:px-5",
                     inCut ? "font-medium text-success/80" : "text-muted",
                   )}
                 >
@@ -1046,25 +1060,25 @@ export function StandingsTable({
                 <td className="px-2 py-2.5 font-medium">
                   <Link
                     href={`/teams/${row.teamId}`}
-                    className="flex items-center gap-2 hover:text-info"
+                    className="flex min-w-0 items-center gap-2 hover:text-info"
                   >
                     <TeamCrest
                       name={teamName.get(row.teamId) ?? "?"}
                       seed={row.teamId}
                       size={22}
-                      className="rounded-md"
+                      className="rounded-md shrink-0"
                     />
                     <span className="truncate">
                       {teamName.get(row.teamId) ?? "—"}
                     </span>
                   </Link>
                 </td>
-                <td className="px-2 py-2.5 text-center">{row.wins}</td>
-                <td className="px-2 py-2.5 text-center text-muted">
+                <td className="px-1 py-2.5 text-center sm:px-2">{row.wins}</td>
+                <td className="px-1 py-2.5 text-center text-muted sm:px-2">
                   {row.draws}
                 </td>
-                <td className="px-2 py-2.5 text-center">{row.losses}</td>
-                <td className="px-2 py-2.5 text-center text-muted">
+                <td className="px-1 py-2.5 text-center sm:px-2">{row.losses}</td>
+                <td className="px-1 py-2.5 text-center text-muted sm:px-2">
                   {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
                 </td>
                 {formByTeam ? (
@@ -1077,7 +1091,7 @@ export function StandingsTable({
                     </span>
                   </td>
                 ) : null}
-                <td className="px-5 py-2.5 text-right font-semibold">
+                <td className="px-3 py-2.5 text-right font-semibold sm:px-5">
                   {row.points}
                 </td>
               </tr>

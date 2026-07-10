@@ -164,7 +164,7 @@ export default async function TeamsPage() {
         </Card>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {ordered.map((t) => {
           const rank = rankOf.get(t.id) ?? 0;
           const row = rowOf.get(t.id);
@@ -181,7 +181,7 @@ export default async function TeamsPage() {
                   <div className="min-w-0">
                     <Link
                       href={`/teams/${t.id}`}
-                      className="flex items-center gap-1.5 font-display text-lg font-semibold hover:text-info"
+                      className="flex min-w-0 items-center gap-1.5 font-display text-lg font-semibold hover:text-info"
                     >
                       {played && rank > 0 ? (
                         <span className="text-muted">#{rank}</span>

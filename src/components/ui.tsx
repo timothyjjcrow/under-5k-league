@@ -94,10 +94,14 @@ export function CardHeader({
         className,
       )}
     >
-      <div>
-        <h3 className="font-display text-lg font-semibold text-fg">{title}</h3>
+      <div className="min-w-0">
+        <h3 className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
+          {title}
+        </h3>
         {subtitle ? (
-          <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
+          <p className="mt-0.5 text-sm text-muted [overflow-wrap:anywhere]">
+            {subtitle}
+          </p>
         ) : null}
       </div>
       {action}

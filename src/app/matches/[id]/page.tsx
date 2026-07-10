@@ -315,7 +315,7 @@ async function MatchPreview({
               : "First meeting this season"
           }
         />
-        <CardBody className="grid gap-4 sm:grid-cols-2">
+        <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {sides.map((s) => (
             <div key={s.teamId} className="rounded-lg border border-line p-3">
               <div className="mb-2.5 flex items-center justify-between gap-2">

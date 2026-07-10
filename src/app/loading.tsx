@@ -9,7 +9,7 @@ export default function Loading() {
         <Skeleton className="h-9 w-56" />
         <Skeleton className="h-4 w-40" />
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {Array.from({ length: 4 }).map((_, i) => (
           <Card key={i}>
             <CardBody className="space-y-3">
