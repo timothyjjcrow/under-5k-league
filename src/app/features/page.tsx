@@ -49,31 +49,31 @@ const SECTIONS: Section[] = [
     id: "always-on",
     kicker: "Always on",
     title: "Things you can do right now",
-    blurb: "These don't wait for a season. Nobody's stopping you.",
+    blurb: "These don't wait for a season.",
     phases: [],
     features: [
       {
         icon: "⚔️",
         title: "Inhouse pick-up games",
-        desc: "Ten people queue up, the lobby votes on how captains get picked (so it isn't the same two every time), teams get drafted, and you play a real game. The site finds the match on OpenDota and posts the box score before anyone's typed \"gg\".",
+        desc: "Ten people queue, the lobby votes how captains get picked, teams draft, you play. The box score posts itself before anyone's typed \"gg\".",
         href: "/inhouse",
       },
       {
         icon: "🏛️",
         title: "Hall of Fame",
-        desc: "The stuff that outlives any one season — titles, series wins, career fantasy points, and who actually calls their shots. Get your name in here and it stays.",
+        desc: "Titles, series wins, career fantasy points, and who calls their shots. Get your name in here and it stays.",
         href: "/hall-of-fame",
       },
       {
         icon: "🪪",
         title: "Player profiles",
-        desc: "Click any name, anywhere. See what they play, how their career's gone, what badges they've earned, and every team they've ever been on. Great for scouting. Also great for gloating.",
+        desc: "Click any name, anywhere — what they play, how their career's gone, every team they've been on. Great for scouting. Also for gloating.",
         href: "/players",
       },
       {
         icon: "📣",
         title: "Discord announcements",
-        desc: "You don't have to refresh the site to keep up. Signups, draft-night sales, match results, playoff drama — it all lands in the league Discord as it happens.",
+        desc: "Signups, draft sales, results, playoff drama — it all lands in the Discord as it happens.",
       },
     ],
   },
@@ -87,22 +87,22 @@ const SECTIONS: Section[] = [
       {
         icon: "🎮",
         title: "Sign in with Steam",
-        desc: "One click and you're you — your Steam name, your avatar, and your actual ranked medal showing next to your name everywhere.",
+        desc: "One click and you're you — Steam name, avatar, and your real ranked medal everywhere.",
       },
       {
         icon: "📝",
         title: "Tell captains who you are",
-        desc: "The positions you'll actually play, the heroes you love, what you want out of the season, and a note to captains. It's all on screen in the draft room when you're on the block.",
+        desc: "Your positions, favorite heroes, and a note to captains — on screen in the draft room when you're on the block.",
       },
       {
         icon: "🔁",
         title: "Welcome back",
-        desc: "Played before? Your signup form shows up already filled out from last season. Fix what changed, hit submit, done.",
+        desc: "Played before? Your form arrives pre-filled from last season.",
       },
       {
         icon: "🧢",
         title: "The cap is the point",
-        desc: "Under 4.5K means under 4.5K — a season can set a hard MMR ceiling, so the league stays winnable for the people it's actually for.",
+        desc: "Under 4.5K means under 4.5K — seasons can set a hard MMR ceiling.",
       },
     ],
   },
@@ -111,25 +111,25 @@ const SECTIONS: Section[] = [
     kicker: "Step 2 — Draft night",
     title: "A live auction, not a spreadsheet",
     blurb:
-      "You get nominated, captains fight over you, and somebody pays real (fake) money for your services.",
+      "Captains fight over you and pay real (fake) money for your services.",
     phases: ["DRAFT"],
     features: [
       {
         icon: "🔨",
         title: "Live bidding, real clock",
-        desc: "Nominations and bids happen live against a ticking timer. Captains can search and filter the player pool mid-auction — and if someone falls asleep on their turn, the draft moves on without them.",
+        desc: "Nominate, bid, win — against a ticking clock. If a captain falls asleep on their turn, the draft moves on without them.",
         href: "/draft",
         livePhases: ["DRAFT"],
       },
       {
         icon: "⚖️",
         title: "Underdogs get bigger wallets",
-        desc: "The lower a captain's MMR, the more budget they start with. It keeps draft night from producing the same two stacked teams every season.",
+        desc: "Lower-MMR captains start with more budget, so it's not the same two stacked teams every season.",
       },
       {
         icon: "🧾",
         title: "The receipts are public",
-        desc: "Who overpaid, who got the steal of the night, and which captain went home with an empty wallet — the draft recap keeps score so you don't have to.",
+        desc: "Who overpaid, who got the steal, who went home broke — the recap keeps score.",
         href: "/teams",
         livePhases: POST_DRAFT,
       },
@@ -140,62 +140,62 @@ const SECTIONS: Section[] = [
     kicker: "Step 3 — Regular season",
     title: "You play. The site keeps score.",
     blurb:
-      "Show up and play Dota — your matches get pulled from OpenDota and turned into box scores, standings, and arguments.",
+      "Show up and play Dota — the site turns your matches into box scores, standings, and arguments.",
     phases: ["REGULAR_SEASON"],
     features: [
       {
         icon: "📊",
         title: "Real box scores",
-        desc: "Every match gets the full stat line — heroes, KDA, net worth, player by player — straight from the actual game. Most nights the site finds the match on its own before anyone pastes an ID.",
+        desc: "Heroes, KDA, net worth for every match, pulled straight from the game — usually found before anyone pastes an ID.",
         href: "/schedule",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "📈",
         title: "Power rankings with receipts",
-        desc: "An Elo rating that moves with every game, with weekly up-and-down arrows. \"We're better than our record\" is now a claim you can check.",
+        desc: "A rating that moves every game, with weekly arrows. \"We're better than our record\" is now checkable.",
         href: "/teams",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🥇",
         title: "Leaders & weekly honors",
-        desc: "Leaderboards for everything, plus a Player and Team of the Week crowned automatically the moment the week's last result lands. Yes, there will be discourse.",
+        desc: "Leaderboards for everything, plus an automatic Player and Team of the Week. There will be discourse.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🏅",
         title: "MVPs & badges",
-        desc: "Every game crowns an MVP, and careers collect achievements — go deathless, hit a 15-kill spree, rack up 100 career kills. Pure flex material, on your profile forever.",
+        desc: "Every game crowns an MVP; careers collect badges — deathless games, 15-kill sprees, 100 career kills.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🧙",
         title: "Fantasy league",
-        desc: "Pick a fantasy five from the league's rosters under a salary cap, then sweat everyone else's games all season. You will care about a position-5's assist count more than you thought possible.",
+        desc: "Draft a fantasy five under a salary cap, then sweat everyone else's games all season.",
         href: "/fantasy",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🔮",
         title: "Pick'em",
-        desc: "Call every match before it starts, see which way the community is leaning, and climb the oracle board. Fair warning: being wrong is public.",
+        desc: "Call every match, watch the community split, climb the oracle board. Being wrong is public.",
         href: "/pickem",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "✅",
         title: "One-tap check-in",
-        desc: "Say you're in for match night with one tap. Captains see who's confirmed, and admins can line up a standin before it turns into a 9-pm scramble.",
+        desc: "One tap to confirm match night. Captains see who's in; admins line up standins early.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
       {
         icon: "📅",
         title: "Matches in your calendar",
-        desc: "Subscribe once and your games just show up in your own calendar — the whole season or just your team. \"I forgot\" officially retires as an excuse.",
+        desc: "Subscribe once and your games appear in your own calendar. \"I forgot\" retires as an excuse.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
@@ -211,21 +211,21 @@ const SECTIONS: Section[] = [
       {
         icon: "🏆",
         title: "The bracket",
-        desc: "Finish high enough in the table and you're seeded into a live playoff bracket that fills itself in as results land — all the way to a champion.",
+        desc: "Finish high in the table and you're seeded into a live bracket that fills itself in, all the way to a champion.",
         href: "/schedule",
         livePhases: ["PLAYOFFS", "COMPLETE"],
       },
       {
         icon: "🎬",
         title: "The season gets a yearbook",
-        desc: "When it's all over, the site writes it up — the champion's run, the awards, the superlatives, and the numbers behind them.",
+        desc: "When the season wraps, the site writes it up — the champion's run, the awards, the numbers behind them.",
         href: "/recap",
         livePhases: ["COMPLETE"],
       },
       {
         icon: "📜",
         title: "Nothing gets forgotten",
-        desc: "Every past season stays browsable in full — standings, brackets, rosters, results. \"Remember season 2?\" Yes. Exactly. Here's proof.",
+        desc: "Every season stays browsable forever — standings, brackets, rosters, results. \"Remember season 2?\" Here's proof.",
         href: "/seasons",
       },
     ],
@@ -262,10 +262,9 @@ export default async function FeaturesPage() {
           You&apos;re only seeing half of it
         </h1>
         <p className="mx-auto mt-3 max-w-2xl text-muted sm:text-lg">
-          The site only shows what&apos;s happening in the season right now and
-          tucks the rest away — so most people never find out about draft
-          night, the fantasy league, or the record book. Here&apos;s the whole
-          thing.
+          The site only shows what&apos;s happening right now — so most people
+          never find draft night, fantasy, or the record book. Here&apos;s the
+          whole thing.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           {!user ? (
@@ -346,7 +345,7 @@ export default async function FeaturesPage() {
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
           {phase === "SIGNUPS"
             ? "Signups are open right now — grab a spot before draft night."
-            : "Hop in the Discord — that's where you'll hear it first when the next season opens."}
+            : "Hop in the Discord — you'll hear it first when the next season opens."}
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-3">
           {phase === "SIGNUPS" ? (
