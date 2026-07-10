@@ -227,6 +227,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - Admin standin card flags players who declared OUT and aren't covered by an
   assignment yet, right above the assign form.
 
+## Returning-player prefill (done)
+
+- `/me`: when a player has no registration for the active season but does
+  have one from a past season, the signup form defaults (MMR, roles, heroes,
+  statement, captain note, type, wants-captain) come from the most recent
+  prior registration, with a "Welcome back — prefilled from Season N" hint.
+  Registration state (`isRegistered`, badges) still keys off the active
+  season only.
+
 ## Player career history (done)
 
 - `/players/[id]` has a "Seasons" card: every rostered season (newest first)

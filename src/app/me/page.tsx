@@ -37,10 +37,22 @@ export default async function MePage() {
       })
     : null;
 
+  // Returning player: no signup for this season yet, but one from a past
+  // season — carry those answers into the fresh form so they don't retype.
+  const previous =
+    season && !reg
+      ? await prisma.registration.findFirst({
+          where: { userId: user.id, NOT: { seasonId: season.id } },
+          orderBy: { createdAt: "desc" },
+          include: { season: { select: { name: true } } },
+        })
+      : null;
+  const form = reg ?? previous;
+
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
   const isRegistered = reg?.status === "ACTIVE";
   const signupsOpen = season?.status === "SIGNUPS";
-  const myRoles = parseRoles(reg?.roles);
+  const myRoles = parseRoles(form?.roles);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -109,6 +121,16 @@ export default async function MePage() {
           />
           <CardBody className="space-y-5">
             <ScheduleCallout label={season.matchSchedule} />
+            {!reg && previous ? (
+              <div className="flex items-start gap-2 rounded-lg border border-info/40 bg-info/10 px-3 py-2 text-xs">
+                <span aria-hidden>↩️</span>
+                <span>
+                  Welcome back! We prefilled this from your{" "}
+                  <b>{previous.season.name}</b> signup — update anything that
+                  changed, then submit to join.
+                </span>
+              </div>
+            ) : null}
             <ActionForm action={saveRegistration} className="space-y-5">
               <div>
                 <label className="mb-1.5 block text-sm font-medium">
@@ -118,7 +140,7 @@ export default async function MePage() {
                   <RadioTile
                     name="type"
                     value="PLAYER"
-                    defaultChecked={reg?.type !== "STANDIN"}
+                    defaultChecked={form?.type !== "STANDIN"}
                     title="Full player"
                     desc="Get drafted onto a team and play every week."
                     disabled={!signupsOpen && !isRegistered}
@@ -126,7 +148,7 @@ export default async function MePage() {
                   <RadioTile
                     name="type"
                     value="STANDIN"
-                    defaultChecked={reg?.type === "STANDIN"}
+                    defaultChecked={form?.type === "STANDIN"}
                     title="Standin"
                     desc="Fill in for teams when someone can't play."
                   />
@@ -152,7 +174,7 @@ export default async function MePage() {
                   type="number"
                   min={0}
                   max={season.maxMmr > 0 ? season.maxMmr : 12000}
-                  defaultValue={reg?.mmr ?? ""}
+                  defaultValue={form?.mmr ?? ""}
                   placeholder="e.g. 3200"
                   className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
                 />
@@ -194,7 +216,7 @@ export default async function MePage() {
                 </label>
                 <HeroPicker
                   name="favoriteHeroes"
-                  defaultValue={reg?.favoriteHeroes}
+                  defaultValue={form?.favoriteHeroes}
                 />
                 <p className="mt-1 text-xs text-muted">
                   Pick the heroes you&apos;re known for — captains see these
@@ -214,7 +236,7 @@ export default async function MePage() {
                   name="statement"
                   rows={3}
                   maxLength={1000}
-                  defaultValue={reg?.statement ?? ""}
+                  defaultValue={form?.statement ?? ""}
                   placeholder="Why you're here, your goals, availability…"
                   className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
                 />
@@ -232,7 +254,7 @@ export default async function MePage() {
                   name="captainNote"
                   rows={3}
                   maxLength={1000}
-                  defaultValue={reg?.captainNote ?? ""}
+                  defaultValue={form?.captainNote ?? ""}
                   placeholder="What should captains know about you as a player?"
                   className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
                 />
@@ -245,7 +267,7 @@ export default async function MePage() {
                 <input
                   type="checkbox"
                   name="wantsCaptain"
-                  defaultChecked={reg?.wantsCaptain ?? false}
+                  defaultChecked={form?.wantsCaptain ?? false}
                   className="h-4 w-4 accent-[var(--color-brand)]"
                 />
                 <span className="text-sm">
