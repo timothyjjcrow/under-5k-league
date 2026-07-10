@@ -46,6 +46,11 @@ function navItems(
     phase === "REGULAR_SEASON" ||
     phase === "PLAYOFFS" ||
     phase === "COMPLETE";
+  // The feature tour matters most before the season unlocks everything —
+  // once mid-season links crowd in, it lives in the footer instead.
+  if (!teamsExist || phase === "DRAFT") {
+    items.push({ href: "/features", label: "Features" });
+  }
   if (teamsExist) items.push({ href: "/teams", label: "Teams" });
   if (myTeamId) items.push({ href: `/teams/${myTeamId}`, label: "My Team" });
   if (phase === "DRAFT") items.push({ href: "/draft", label: "Draft" });

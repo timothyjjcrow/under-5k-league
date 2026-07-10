@@ -90,6 +90,9 @@ export default async function Home() {
           <Link href="/inhouse" className={buttonClasses("accent")}>
             Play an inhouse →
           </Link>
+          <Link href="/features" className={buttonClasses("secondary")}>
+            See what the league offers
+          </Link>
           <DiscordButton />
           {user?.role === "ADMIN" ? (
             <Link href="/admin" className={buttonClasses("secondary")}>
@@ -107,15 +110,30 @@ export default async function Home() {
   const isActiveReg = snapshot.myReg?.status === "ACTIVE";
   let heroAction: ReactNode = null;
   if (season.status === "SIGNUPS") {
+    // The feature tour rides along during signups — new visitors can't see
+    // most of the league (draft, fantasy, pick'em…) until later phases.
+    const tourLink = (
+      <Link href="/features" className={buttonClasses("secondary", "lg")}>
+        See what you&apos;re joining
+      </Link>
+    );
     heroAction = !user ? (
-      <Link href="/login" className={buttonClasses("primary", "lg")}>
-        Sign in with Steam to join →
-      </Link>
+      <>
+        <Link href="/login" className={buttonClasses("primary", "lg")}>
+          Sign in with Steam to join →
+        </Link>
+        {tourLink}
+      </>
     ) : !isActiveReg ? (
-      <Link href="/me" className={buttonClasses("primary", "lg")}>
-        Join the season →
-      </Link>
-    ) : null;
+      <>
+        <Link href="/me" className={buttonClasses("primary", "lg")}>
+          Join the season →
+        </Link>
+        {tourLink}
+      </>
+    ) : (
+      tourLink
+    );
   } else if (season.status === "DRAFT") {
     heroAction = (
       <Link href="/draft" className={buttonClasses("accent", "lg")}>
