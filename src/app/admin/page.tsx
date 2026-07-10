@@ -212,7 +212,11 @@ async function loadSeasonAdminData(seasonId: string) {
         include: { standin: true, replaced: true },
       }),
     ]);
-  return { players, standins, teams, matches, draft, assignments };
+  const outRsvps = await prisma.matchAvailability.findMany({
+    where: { match: { seasonId }, status: "OUT" },
+    include: { user: true },
+  });
+  return { players, standins, teams, matches, draft, assignments, outRsvps };
 }
 
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
@@ -783,6 +787,20 @@ function StandinControls({ data }: { data: AdminData }) {
                 <div className="text-sm font-medium">
                   Wk {m.week}: {home?.name ?? "?"} vs {away?.name ?? "?"}
                 </div>
+                {(() => {
+                  const out = data.outRsvps.filter((r) => r.matchId === m.id);
+                  const covered = new Set(
+                    asg.map((a) => a.replacingUserId).filter(Boolean),
+                  );
+                  const needing = out.filter((r) => !covered.has(r.userId));
+                  return needing.length > 0 ? (
+                    <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
+                      ✗ Can&apos;t make it:{" "}
+                      <b>{needing.map((r) => r.user.name).join(", ")}</b> —
+                      assign a standin below.
+                    </div>
+                  ) : null;
+                })()}
                 {asg.length > 0 ? (
                   <ul className="space-y-1">
                     {asg.map((a) => (

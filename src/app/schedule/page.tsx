@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
+import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { groupPlayoffRounds, pickBracketSize, roundName } from "@/lib/schedule";
@@ -8,6 +9,9 @@ import {
   regularSeasonStatus,
   pendingResultsMessage,
 } from "@/lib/schedule-status";
+import { teamAvailability, type TeamAvailability } from "@/lib/availability";
+import { setAvailability } from "@/app/actions/availability";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { StandingsTable } from "@/app/page";
 import {
   Badge,
@@ -48,7 +52,8 @@ export default async function SchedulePage() {
     );
   }
 
-  const [teams, matches, assignments] = await Promise.all([
+  const viewer = await getSessionUser();
+  const [teams, matches, assignments, members, rsvps] = await Promise.all([
     prisma.team.findMany({ where: { seasonId: season.id } }),
     prisma.match.findMany({
       where: { seasonId: season.id },
@@ -58,9 +63,61 @@ export default async function SchedulePage() {
       where: { match: { seasonId: season.id } },
       include: { standin: true, replaced: true },
     }),
+    prisma.teamMember.findMany({
+      where: { seasonId: season.id },
+      select: { teamId: true, userId: true },
+    }),
+    prisma.matchAvailability.findMany({
+      where: { match: { seasonId: season.id } },
+      select: { matchId: true, userId: true, status: true },
+    }),
   ]);
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+
+  // Match-night RSVPs: roster per team + rows per match → per-side summaries.
+  const rosterByTeam = new Map<string, string[]>();
+  for (const m of members) {
+    const arr = rosterByTeam.get(m.teamId) ?? [];
+    arr.push(m.userId);
+    rosterByTeam.set(m.teamId, arr);
+  }
+  const rsvpsByMatch = new Map<string, { userId: string; status: string }[]>();
+  for (const r of rsvps) {
+    const arr = rsvpsByMatch.get(r.matchId) ?? [];
+    arr.push(r);
+    rsvpsByMatch.set(r.matchId, arr);
+  }
+  const rsvpFor = (m: Match) =>
+    m.status === "COMPLETED"
+      ? undefined
+      : {
+          home: teamAvailability(
+            rosterByTeam.get(m.homeTeamId) ?? [],
+            rsvpsByMatch.get(m.id) ?? [],
+          ),
+          away: teamAvailability(
+            rosterByTeam.get(m.awayTeamId) ?? [],
+            rsvpsByMatch.get(m.id) ?? [],
+          ),
+        };
+
+  // The viewer's next unplayed match (rostered players only) for the check-in card.
+  const myTeamIds = new Set(
+    members.filter((m) => viewer && m.userId === viewer.id).map((m) => m.teamId),
+  );
+  const myNextMatch = viewer
+    ? matches.find(
+        (m) =>
+          m.status !== "COMPLETED" &&
+          (myTeamIds.has(m.homeTeamId) || myTeamIds.has(m.awayTeamId)),
+      )
+    : undefined;
+  const myRsvp = myNextMatch
+    ? (rsvpsByMatch.get(myNextMatch.id) ?? []).find(
+        (r) => r.userId === viewer!.id,
+      )?.status ?? null
+    : null;
   const standinsByMatch = new Map<string, MatchStandin[]>();
   for (const a of assignments) {
     const arr = standinsByMatch.get(a.matchId) ?? [];
@@ -96,6 +153,50 @@ export default async function SchedulePage() {
       <PageTitle title="Schedule & Standings" subtitle={season.name} />
 
       <ScheduleCallout label={season.matchSchedule} />
+
+      {myNextMatch ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-info/40 bg-info/10 px-5 py-3.5 text-sm">
+          <span className="text-lg leading-none">🗓️</span>
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">
+              Your next match — Week {myNextMatch.week}:{" "}
+              {teamName.get(myNextMatch.homeTeamId)} vs{" "}
+              {teamName.get(myNextMatch.awayTeamId)}
+            </div>
+            <div className="text-muted">
+              {myRsvp === "IN"
+                ? "You're confirmed ✓ — change it below if plans shift."
+                : myRsvp === "OUT"
+                  ? "You're marked unavailable — a standin can be lined up."
+                  : "Can you make it? Let your captain know."}
+            </div>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <ActionForm
+              action={setAvailability}
+              hidden={{ matchId: myNextMatch.id, status: "IN" }}
+            >
+              <SubmitButton
+                variant={myRsvp === "IN" ? "primary" : "secondary"}
+                size="sm"
+              >
+                ✓ I&apos;m in
+              </SubmitButton>
+            </ActionForm>
+            <ActionForm
+              action={setAvailability}
+              hidden={{ matchId: myNextMatch.id, status: "OUT" }}
+            >
+              <SubmitButton
+                variant={myRsvp === "OUT" ? "primary" : "secondary"}
+                size="sm"
+              >
+                ✗ Can&apos;t make it
+              </SubmitButton>
+            </ActionForm>
+          </div>
+        </div>
+      ) : null}
 
       {pendingMsg && season.status === "REGULAR_SEASON" ? (
         <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
@@ -170,6 +271,7 @@ export default async function SchedulePage() {
                         match={m}
                         teamName={teamName}
                         standins={standinsByMatch.get(m.id)}
+                        rsvp={rsvpFor(m)}
                       />
                     </CardBody>
                   </Card>
@@ -212,6 +314,7 @@ export default async function SchedulePage() {
                           match={m}
                           teamName={teamName}
                           standins={standinsByMatch.get(m.id)}
+                          rsvp={rsvpFor(m)}
                         />
                       ))}
                   </CardBody>
@@ -226,14 +329,26 @@ export default async function SchedulePage() {
   );
 }
 
+function RsvpBadge({ side }: { side: TeamAvailability }) {
+  if (side.confirmed === 0 && side.out === 0) return null;
+  return (
+    <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted">
+      <span className="text-success">✓{side.confirmed}</span>
+      {side.out > 0 ? <span className="text-danger"> ✗{side.out}</span> : null}
+    </span>
+  );
+}
+
 function MatchRow({
   match: m,
   teamName,
   standins,
+  rsvp,
 }: {
   match: Match;
   teamName: Map<string, string>;
   standins?: MatchStandin[];
+  rsvp?: { home: TeamAvailability; away: TeamAvailability };
 }) {
   const homeName = teamName.get(m.homeTeamId) ?? "?";
   const awayName = teamName.get(m.awayTeamId) ?? "?";
@@ -244,6 +359,7 @@ function MatchRow({
     <div className="transition-colors hover:bg-surface-2/30">
       <div className="flex items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-5">
         <div className="flex min-w-0 flex-1 items-center justify-end gap-2 text-sm">
+          {rsvp ? <RsvpBadge side={rsvp.home} /> : null}
           <Link
             href={`/teams/${m.homeTeamId}`}
             className={cn(
@@ -295,6 +411,7 @@ function MatchRow({
           >
             {awayName}
           </Link>
+          {rsvp ? <RsvpBadge side={rsvp.away} /> : null}
         </div>
         {m.phase === "FINAL" ? (
           <Badge tone="accent" className="shrink-0">
