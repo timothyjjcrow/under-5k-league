@@ -11,6 +11,8 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { DOTA_ROLES } from "@/lib/roles";
+import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 
 // A single line in the live feed, derived purely from state transitions.
@@ -354,47 +356,137 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
         </div>
         <div className="space-y-6">
           <BidFeed events={events} />
-          <div className="rounded-[var(--radius)] border border-line bg-surface/80">
-            <div className="border-b border-line px-5 py-3 text-sm font-semibold">
-              Available · {state.available.length}
+          <AvailableList
+            state={state}
+            canNominate={me.canNominate}
+            selected={selected}
+            onPick={(userId) => {
+              setSelected(userId);
+              setNomAmount(state.minBid);
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The auction's shopping list. Draft night runs on a clock, so captains get
+// search, position filters, and sorting instead of one long MMR-sorted list.
+function AvailableList({
+  state,
+  canNominate,
+  selected,
+  onPick,
+}: {
+  state: DraftState;
+  canNominate: boolean;
+  selected: string | null;
+  onPick: (userId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [role, setRole] = useState<string | null>(null);
+  const [sort, setSort] = useState<PoolSort>("mmr");
+  const shown = filterAndSortPlayers(state.available, { query, role, sort });
+
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/80">
+      <div className="border-b border-line px-5 py-3 text-sm font-semibold">
+        Available · {state.available.length}
+      </div>
+      {state.available.length > 0 ? (
+        <div className="space-y-2 border-b border-line/60 p-3">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search players…"
+            aria-label="Search available players"
+            className="h-8 w-full rounded-md border border-line bg-surface-2/50 px-2.5 text-sm outline-none focus:border-accent/60"
+          />
+          <div className="flex flex-wrap items-center gap-1">
+            <div
+              role="group"
+              aria-label="Filter by role"
+              className="flex items-center gap-1"
+            >
+              <button
+                onClick={() => setRole(null)}
+                className={cn(
+                  "rounded-md px-2 py-0.5 text-xs",
+                  role === null
+                    ? "bg-accent/20 text-fg ring-1 ring-accent/40"
+                    : "text-muted hover:bg-surface-2",
+                )}
+              >
+                All
+              </button>
+              {DOTA_ROLES.map((r) => (
+                <button
+                  key={r.key}
+                  title={r.label}
+                  onClick={() => setRole(role === r.key ? null : r.key)}
+                  className={cn(
+                    "rounded-md px-2 py-0.5 text-xs tabular-nums",
+                    role === r.key
+                      ? "bg-accent/20 text-fg ring-1 ring-accent/40"
+                      : "text-muted hover:bg-surface-2",
+                  )}
+                >
+                  {r.key}
+                </button>
+              ))}
             </div>
-            <div className="max-h-[30rem] space-y-1 overflow-y-auto p-3">
-              {state.available.map((p) => {
-                const pickable = me.canNominate;
-                return (
-                  <button
-                    key={p.userId}
-                    disabled={!pickable}
-                    onClick={() => {
-                      setSelected(p.userId);
-                      setNomAmount(state.minBid);
-                    }}
-                    className={cn(
-                      "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm",
-                      pickable
-                        ? "hover:bg-surface-2"
-                        : "cursor-default opacity-90",
-                      selected === p.userId ? "bg-accent/15 ring-1 ring-accent/40" : "",
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Avatar name={p.name} src={p.avatar} size={20} />
-                      {p.name}
-                    </span>
-                    <span className="flex items-center gap-2 text-xs text-muted">
-                      <RoleBadges roles={p.roles} />
-                      <RankBadge rankTier={p.rankTier} />
-                      {p.mmr}
-                    </span>
-                  </button>
-                );
-              })}
-              {state.available.length === 0 ? (
-                <p className="p-2 text-sm text-muted">All players drafted.</p>
-              ) : null}
-            </div>
+            <span className="mx-1 h-4 w-px bg-line" aria-hidden />
+            {(["mmr", "rank", "name"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSort(s)}
+                className={cn(
+                  "rounded-md px-2 py-0.5 text-xs capitalize",
+                  sort === s
+                    ? "bg-accent/20 text-fg ring-1 ring-accent/40"
+                    : "text-muted hover:bg-surface-2",
+                )}
+              >
+                {s}
+              </button>
+            ))}
           </div>
         </div>
+      ) : null}
+      <div className="max-h-[30rem] space-y-1 overflow-y-auto p-3">
+        {shown.map((p) => {
+          return (
+            <button
+              key={p.userId}
+              disabled={!canNominate}
+              onClick={() => onPick(p.userId)}
+              className={cn(
+                "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm",
+                canNominate ? "hover:bg-surface-2" : "cursor-default opacity-90",
+                selected === p.userId ? "bg-accent/15 ring-1 ring-accent/40" : "",
+              )}
+            >
+              <span className="flex items-center gap-2">
+                <Avatar name={p.name} src={p.avatar} size={20} />
+                {p.name}
+              </span>
+              <span className="flex items-center gap-2 text-xs text-muted">
+                <RoleBadges roles={p.roles} />
+                <RankBadge rankTier={p.rankTier} />
+                {p.mmr}
+              </span>
+            </button>
+          );
+        })}
+        {state.available.length === 0 ? (
+          <p className="p-2 text-sm text-muted">All players drafted.</p>
+        ) : shown.length === 0 ? (
+          <p className="p-2 text-sm text-muted">
+            No one matches — clear the search or role filter.
+          </p>
+        ) : null}
       </div>
     </div>
   );

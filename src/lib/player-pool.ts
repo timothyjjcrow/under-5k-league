@@ -27,11 +27,21 @@ export type PoolFilter = {
   captainOnly?: boolean;
 };
 
+/** The fields filtering/sorting actually reads — callers can pass any superset
+ * (the full signup pool, the draft room's live "available" list, …). */
+export type FilterablePlayer = {
+  name: string;
+  mmr: number;
+  rankTier: number | null;
+  roles: string;
+  wantsCaptain?: boolean;
+};
+
 /** Filter + sort a player list. Never mutates the input. */
-export function filterAndSortPlayers(
-  players: PoolPlayer[],
+export function filterAndSortPlayers<T extends FilterablePlayer>(
+  players: T[],
   { query = "", role = null, sort = "mmr", captainOnly = false }: PoolFilter,
-): PoolPlayer[] {
+): T[] {
   const q = query.trim().toLowerCase();
   const filtered = players.filter((p) => {
     if (q && !p.name.toLowerCase().includes(q)) return false;

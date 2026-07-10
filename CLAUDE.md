@@ -225,6 +225,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   the same check-in banner as `/schedule` for participants. Completed matches
   without imports keep the "no games recorded" empty state.
 
+## Draft room QoL (done)
+
+- The auction's "Available" list has search, position-filter chips, and
+  MMR/rank/name sorting (`AvailableList` in `draft-room.tsx`).
+  `filterAndSortPlayers` (`player-pool.ts`) is generic over
+  `FilterablePlayer` so the signup pool page and the live draft share the
+  same tested filter logic.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).
