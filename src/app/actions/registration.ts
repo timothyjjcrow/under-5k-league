@@ -15,6 +15,7 @@ import {
 import { rankMedalName } from "@/lib/rank";
 import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
+import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -85,6 +86,17 @@ export async function saveRegistration(
       status: "ACTIVE",
     },
   });
+
+  // Announce brand-new full-player signups (not updates or standins) with a
+  // countdown to the draft threshold.
+  if (!existing && type === REGISTRATION_TYPE.PLAYER) {
+    const playerCount = await prisma.registration.count({
+      where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
+    });
+    await sendDiscordMessage(
+      signupMessage(user.name, playerCount, season.minTeams * season.teamSize),
+    );
+  }
 
   refresh();
   return {

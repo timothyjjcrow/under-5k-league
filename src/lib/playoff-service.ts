@@ -6,6 +6,7 @@ import {
   nextRoundPairings,
 } from "./schedule";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
+import { championMessage, sendDiscordMessage } from "./discord";
 
 // Bracket slots are encoded as `R{round}M{match}` e.g. "R0M1".
 function parseSlot(slot: string | null): { round: number; match: number } {
@@ -103,6 +104,12 @@ export async function advancePlayoffBracket(seasonId: string) {
         status: SEASON_STATUS.COMPLETE,
       },
     });
+    const champion = await prisma.team.findUnique({
+      where: { id: current[0].winnerTeamId as string },
+    });
+    if (champion) {
+      await sendDiscordMessage(championMessage(season.name, champion.name));
+    }
     return;
   }
 

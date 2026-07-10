@@ -36,6 +36,14 @@ import {
 } from "@/lib/dota";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { clampInt, str } from "@/lib/form";
+import {
+  draftStartedMessage,
+  matchResultMessage,
+  playoffsStartedMessage,
+  sendDiscordMessage,
+  testMessage,
+} from "@/lib/discord";
+import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -262,6 +270,7 @@ export async function startDraft(
       },
     });
   });
+  await sendDiscordMessage(draftStartedMessage(season.name));
   refresh();
   return {
     message:
@@ -340,6 +349,26 @@ export async function startPlayoffs(
   } catch (e) {
     return { error: (e as Error).message };
   }
+
+  // Announce the fresh first-round pairings.
+  const [bracket, teams] = await Promise.all([
+    prisma.match.findMany({
+      where: { seasonId: season.id, phase: { not: MATCH_PHASE.REGULAR } },
+      orderBy: { bracketSlot: "asc" },
+    }),
+    prisma.team.findMany({ where: { seasonId: season.id } }),
+  ]);
+  const name = new Map(teams.map((t) => [t.id, t.name]));
+  await sendDiscordMessage(
+    playoffsStartedMessage(
+      season.name,
+      bracket.map((m) => ({
+        home: name.get(m.homeTeamId) ?? "?",
+        away: name.get(m.awayTeamId) ?? "?",
+      })),
+    ),
+  );
+
   refresh();
   return { message: "Playoff bracket created" };
 }
@@ -380,6 +409,23 @@ export async function recordResult(
       status: MATCH_STATUS.COMPLETED,
     },
   });
+
+  const [home, away] = await Promise.all([
+    prisma.team.findUnique({ where: { id: match.homeTeamId } }),
+    prisma.team.findUnique({ where: { id: match.awayTeamId } }),
+  ]);
+  if (home && away) {
+    await sendDiscordMessage(
+      matchResultMessage({
+        homeName: home.name,
+        awayName: away.name,
+        homeScore,
+        awayScore,
+        week: match.week,
+        isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+      }),
+    );
+  }
 
   // Playoff results auto-advance the bracket (and crown the champion at the end).
   if (match.phase !== MATCH_PHASE.REGULAR) {
@@ -580,6 +626,50 @@ export async function setMatchSchedule(formData: FormData) {
     data: { matchSchedule: value || null },
   });
   refresh();
+}
+
+/** Save (or clear) the Discord webhook used for league announcements. */
+export async function setDiscordWebhook(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const value = str(formData, "discordWebhookUrl").trim();
+  if (value && !/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+    return {
+      error:
+        "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
+    };
+  }
+  await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, value);
+  refresh();
+  return {
+    message: value ? "Webhook saved — announcements are on" : "Webhook cleared",
+  };
+}
+
+/** Post a test message so the admin can confirm the webhook works. */
+export async function testDiscordWebhook(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const configured =
+    (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ||
+    process.env.DISCORD_WEBHOOK_URL;
+  if (!configured) return { error: "Set a webhook URL first" };
+  const ok = await sendDiscordMessage(testMessage());
+  return ok
+    ? { message: "Test message sent — check your Discord" }
+    : { error: "Discord rejected the message — double-check the URL" };
 }
 
 /** Import all games from the season's Dota league id (OpenDota). */

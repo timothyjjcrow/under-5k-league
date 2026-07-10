@@ -8,6 +8,7 @@ import {
   type DraftTeam,
 } from "./draft";
 import type { SessionUser } from "./auth";
+import { draftCompleteMessage, sendDiscordMessage } from "./discord";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -18,7 +19,10 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
  * call on every poll (it no-ops unless a nomination has actually expired).
  */
 export async function resolveExpiredNomination(seasonId: string): Promise<boolean> {
-  return prisma.$transaction(async (tx) => {
+  // Set inside the transaction when this call is the one that finishes the
+  // draft; the Discord ping goes out only after the commit.
+  let completedSeasonName: string | null = null;
+  const resolved = await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (
       !draft ||
@@ -91,6 +95,7 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         where: { seasonId },
         data: { ...cleared, nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
       });
+      completedSeasonName = season.name;
     } else {
       await tx.draft.update({
         where: { seasonId },
@@ -106,6 +111,10 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     }
     return true;
   });
+  if (completedSeasonName) {
+    await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
+  }
+  return resolved;
 }
 
 /**
@@ -116,7 +125,8 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
 export async function resolveStalledNomination(
   seasonId: string,
 ): Promise<boolean> {
-  return prisma.$transaction(async (tx) => {
+  let completedSeasonName: string | null = null;
+  const resolved = await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (
       !draft ||
@@ -162,6 +172,7 @@ export async function resolveStalledNomination(
           status: DRAFT_STATUS.COMPLETE,
         },
       });
+      completedSeasonName = season.name;
       return true;
     }
 
@@ -187,6 +198,10 @@ export async function resolveStalledNomination(
     });
     return true;
   });
+  if (completedSeasonName) {
+    await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
+  }
+  return resolved;
 }
 
 async function loadTeamsWithCounts(seasonId: string) {

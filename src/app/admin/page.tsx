@@ -26,7 +26,10 @@ import {
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
+  setDiscordWebhook,
+  testDiscordWebhook,
 } from "@/app/actions/admin";
+import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { pickBracketSize } from "@/lib/schedule";
 import { MATCH_SCHEDULE } from "@/lib/constants";
 import {
@@ -74,6 +77,8 @@ export default async function AdminPage() {
   const data = season
     ? await loadSeasonAdminData(season.id)
     : null;
+  const discordWebhookUrl =
+    (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
 
   return (
     <div className="space-y-8">
@@ -90,6 +95,7 @@ export default async function AdminPage() {
           <PlayoffControls season={season} data={data} />
           <StandinControls data={data} />
           <LeagueControls season={season} />
+          <DiscordControls webhookUrl={discordWebhookUrl} />
         </>
       ) : (
         <Card>
@@ -929,6 +935,55 @@ function LeagueControls({ season }: { season: Season }) {
             </li>
           </ol>
         </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function DiscordControls({ webhookUrl }: { webhookUrl: string }) {
+  return (
+    <Card>
+      <CardHeader
+        title="Discord notifications"
+        subtitle="Announce signups, the draft, results, playoffs, and the champion in your Discord."
+        action={
+          <ActionForm action={testDiscordWebhook}>
+            <SubmitButton variant="secondary" size="sm" disabled={!webhookUrl}>
+              Send test message
+            </SubmitButton>
+          </ActionForm>
+        }
+      />
+      <CardBody className="space-y-3">
+        <ActionForm
+          action={setDiscordWebhook}
+          className="flex flex-wrap items-end gap-2"
+        >
+          <div className="min-w-0 flex-1">
+            <label
+              htmlFor="discordWebhookUrl"
+              className="mb-1 block text-xs text-muted"
+            >
+              Webhook URL
+            </label>
+            <input
+              id="discordWebhookUrl"
+              name="discordWebhookUrl"
+              type="url"
+              defaultValue={webhookUrl}
+              placeholder="https://discord.com/api/webhooks/…"
+              className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+            />
+          </div>
+          <SubmitButton variant="secondary" size="sm">
+            Save webhook
+          </SubmitButton>
+        </ActionForm>
+        <p className="text-xs text-muted">
+          In Discord: <b>Server Settings → Integrations → Webhooks → New
+          Webhook</b>, pick the announcements channel, copy the URL and paste it
+          here. Clear the field to turn announcements off.
+        </p>
       </CardBody>
     </Card>
   );

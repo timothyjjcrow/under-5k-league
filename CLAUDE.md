@@ -184,6 +184,18 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - Cancelling an inhouse lobby re-queues its 10 players (fresh captain vote on
   the next poll).
 
+## Discord notifications (done)
+
+- `src/lib/discord.ts` — pure message formatters (unit-tested) +
+  `sendDiscordMessage` (best-effort POST to an incoming webhook, 5s timeout,
+  never throws). Webhook URL: `Setting` table key `discordWebhookUrl`
+  (`src/lib/settings.ts`, admin panel card with save/validate/test) with
+  `DISCORD_WEBHOOK_URL` env as fallback.
+- Announces: new player signups (with countdown to the draft threshold), draft
+  started (`startDraft`), draft complete (both draft-service resolvers, flagged
+  inside the tx and sent after commit), match results (`recordResult`), playoff
+  bracket (`startPlayoffs`), and the champion (`advancePlayoffBracket`).
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).
