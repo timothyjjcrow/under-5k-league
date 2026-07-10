@@ -41,6 +41,7 @@ import {
   draftStartedMessage,
   freeAgentSignedMessage,
   matchResultMessage,
+  playerReleasedMessage,
   playoffsStartedMessage,
   sendDiscordMessage,
   testMessage,
@@ -566,6 +567,46 @@ export async function signFreeAgent(
   );
   refresh();
   return { message: `${registration.user.name} signed to ${team.name}` };
+}
+
+/**
+ * Release a non-captain from their roster — they go back to the free-agent
+ * pool (their registration stays ACTIVE) and can be signed elsewhere.
+ */
+export async function releasePlayer(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  if (season.status === SEASON_STATUS.SIGNUPS) {
+    return { error: "There are no rosters before the draft" };
+  }
+  if (season.status === SEASON_STATUS.COMPLETE) {
+    return { error: "The season is over" };
+  }
+
+  const memberId = str(formData, "memberId");
+  const member = await prisma.teamMember.findFirst({
+    where: { id: memberId, seasonId: season.id },
+    include: { user: true, team: true },
+  });
+  if (!member) return { error: "Unknown roster spot" };
+  if (member.isCaptain) {
+    return { error: "Captains can't be released — the team is theirs" };
+  }
+
+  await prisma.teamMember.delete({ where: { id: member.id } });
+  await sendDiscordMessage(
+    playerReleasedMessage(member.user.name, member.team.name),
+  );
+  refresh();
+  return { message: `${member.user.name} released from ${member.team.name}` };
 }
 
 /** Assign a standin to fill in for a rostered player in a specific match. */

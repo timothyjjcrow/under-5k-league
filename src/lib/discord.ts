@@ -83,6 +83,13 @@ export function freeAgentSignedMessage(
   return `🖊️ **${playerName}** signs with **${teamName}** as a free agent — roster updated: ${resolveSiteUrl()}/teams`;
 }
 
+export function playerReleasedMessage(
+  playerName: string,
+  teamName: string,
+): string {
+  return `📤 **${playerName}** released from **${teamName}** — they're a free agent again.`;
+}
+
 export function testMessage(): string {
   return `👋 Webhook test from **${process.env.NEXT_PUBLIC_APP_NAME || "the league site"}** — notifications are wired up.`;
 }

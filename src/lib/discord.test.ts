@@ -5,6 +5,7 @@ import {
   draftCompleteMessage,
   freeAgentSignedMessage,
   matchResultMessage,
+  playerReleasedMessage,
   playerSoldMessage,
   playoffsStartedMessage,
   championMessage,
@@ -92,6 +93,12 @@ describe("discord message formatters", () => {
     expect(msg).toContain("**Late Joiner**");
     expect(msg).toContain("**Short Squad**");
     expect(msg).toContain("/teams");
+  });
+
+  it("announces a release", () => {
+    const msg = playerReleasedMessage("Ghoster", "Short Squad");
+    expect(msg).toContain("**Ghoster**");
+    expect(msg).toContain("released from **Short Squad**");
   });
 
   it("flavors min-bid steals and big spends", () => {

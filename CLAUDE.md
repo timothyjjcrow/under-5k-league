@@ -53,14 +53,18 @@ renders per-phase so unused features stay hidden.
 - Run `npx tsc --noEmit` for a fast type check; `npm test` for unit;
   `npm run test:e2e` for Playwright (reseeds the DB first).
 
-## Free-agent signings (done)
+## Roster moves (done)
 
-- `signFreeAgent` (admin action): permanently adds a registered, unrostered
-  player to a team with an open seat at $0 — how short rosters (pool-dry
-  drafts, late signups) get topped up. Guards: post-draft phases only, team
-  in season, ACTIVE registration, not already rostered, seat available.
-  Announced via `freeAgentSignedMessage`. Admin "Roster moves" card renders
-  only when a short team AND a free agent both exist.
+- `signFreeAgent`: permanently adds a registered, unrostered player to a team
+  with an open seat at $0 — how short rosters (pool-dry drafts, late signups)
+  get topped up. Guards: post-draft phases only, team in season, ACTIVE
+  registration, not already rostered, seat available.
+- `releasePlayer`: removes a non-captain from their roster (registration stays
+  ACTIVE → back in the free-agent pool; release + sign = replace/trade).
+  Captains can't be released.
+- Both announced in Discord; the admin "Roster moves" card shows whichever
+  forms currently apply (sign needs a short team + free agent; release needs
+  any non-captain rostered).
 
 ## Playoffs & standins (done)
 

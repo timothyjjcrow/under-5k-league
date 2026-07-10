@@ -29,6 +29,7 @@ import {
   setDiscordWebhook,
   testDiscordWebhook,
   signFreeAgent,
+  releasePlayer,
 } from "@/app/actions/admin";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { pickBracketSize } from "@/lib/schedule";
@@ -1018,8 +1019,8 @@ function LeagueControls({ season }: { season: Season }) {
   );
 }
 
-// Top up short rosters after the draft: sign an undrafted or late-registered
-// player straight onto a team with an open seat.
+// Post-draft roster management: sign free agents onto short teams, release
+// players who've left the league (they return to the free-agent pool).
 function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   if (season.status === "SIGNUPS" || season.status === "COMPLETE") return null;
 
@@ -1030,47 +1031,86 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   const shortTeams = data.teams.filter(
     (t) => t.members.length < season.teamSize,
   );
-  if (freeAgents.length === 0 || shortTeams.length === 0) return null;
+  const canSign = freeAgents.length > 0 && shortTeams.length > 0;
+  const releasable = data.teams.flatMap((t) =>
+    t.members
+      .filter((m) => !m.isCaptain)
+      .map((m) => ({ id: m.id, name: m.user.name, teamName: t.name })),
+  );
+  if (!canSign && releasable.length === 0) return null;
 
   return (
     <Card>
       <CardHeader
         title="Roster moves"
-        subtitle="Sign a registered free agent onto a team with an open seat."
+        subtitle="Sign free agents onto short teams; release players who've left."
       />
       <CardBody className="space-y-3">
-        <ActionForm
-          action={signFreeAgent}
-          className="flex flex-wrap items-center gap-2"
-        >
-          <select name="userId" required defaultValue="" className={selectCls}>
-            <option value="" disabled>
-              Free agent…
-            </option>
-            {freeAgents.map((p) => (
-              <option key={p.userId} value={p.userId}>
-                {p.user.name} ({p.mmr} MMR)
+        {canSign ? (
+          <ActionForm
+            action={signFreeAgent}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <select name="userId" required defaultValue="" className={selectCls}>
+              <option value="" disabled>
+                Free agent…
               </option>
-            ))}
-          </select>
-          <span className="text-xs text-muted">joins</span>
-          <select name="teamId" required defaultValue="" className={selectCls}>
-            <option value="" disabled>
-              Team…
-            </option>
-            {shortTeams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.members.length}/{season.teamSize})
+              {freeAgents.map((p) => (
+                <option key={p.userId} value={p.userId}>
+                  {p.user.name} ({p.mmr} MMR)
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-muted">joins</span>
+            <select name="teamId" required defaultValue="" className={selectCls}>
+              <option value="" disabled>
+                Team…
               </option>
-            ))}
-          </select>
-          <SubmitButton variant="secondary" size="sm">
-            Sign player
-          </SubmitButton>
-        </ActionForm>
+              {shortTeams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.members.length}/{season.teamSize})
+                </option>
+              ))}
+            </select>
+            <SubmitButton variant="secondary" size="sm">
+              Sign player
+            </SubmitButton>
+          </ActionForm>
+        ) : null}
+        {releasable.length > 0 ? (
+          <ActionForm
+            action={releasePlayer}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <select
+              name="memberId"
+              required
+              defaultValue=""
+              className={selectCls}
+            >
+              <option value="" disabled>
+                Rostered player…
+              </option>
+              {releasable.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.teamName})
+                </option>
+              ))}
+            </select>
+            <SubmitButton
+              variant="secondary"
+              size="sm"
+              className="text-danger"
+              confirm="Release this player from their roster? They go back to the free-agent pool."
+            >
+              Release player
+            </SubmitButton>
+          </ActionForm>
+        ) : null}
         <p className="text-xs text-muted">
-          Signings are permanent for the season (unlike standins, which cover a
-          single match) and are announced in Discord.
+          Signings and releases are permanent for the season (unlike standins,
+          which cover a single match) and are announced in Discord. Captains
+          can&apos;t be released.
         </p>
       </CardBody>
     </Card>
