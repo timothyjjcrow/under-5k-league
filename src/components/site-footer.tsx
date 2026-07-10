@@ -23,9 +23,11 @@ const PHASE_TONE: Record<
 export function SiteFooter({
   seasonName,
   phase,
+  hasHistory = false,
 }: {
   seasonName: string | null;
   phase: string | null;
+  hasHistory?: boolean;
 }) {
   const year = new Date().getFullYear();
   const links: { href: string; label: string }[] = [
@@ -41,6 +43,7 @@ export function SiteFooter({
   ) {
     links.push({ href: "/schedule", label: "Schedule" });
   }
+  if (hasHistory) links.push({ href: "/seasons", label: "Past seasons" });
 
   return (
     <footer className="border-t border-line/70">

@@ -207,6 +207,16 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - Admin standin card flags players who declared OUT and aren't covered by an
   assignment yet, right above the assign form.
 
+## Season history (done)
+
+- `/seasons` — every season newest-first (phase badge / Current, champion,
+  team/signup/match counts). `/seasons/[id]` — champion banner, final
+  standings, playoff rounds, weekly results, full rosters. Reuses
+  `computeStandings`, `groupPlayoffRounds`, and `StandingsTable`; archived
+  `/teams/[id]` pages already work since they query by id, not active season.
+- Nav "History" + footer "Past seasons" links appear only once an archived
+  (`isActive: false`) season exists — layout passes `hasHistory` down.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).

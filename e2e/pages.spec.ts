@@ -11,6 +11,17 @@ test("players page renders the pool scouting tools", async ({ page }) => {
   await expect(page.getByRole("group", { name: "Filter by role" })).toBeVisible();
 });
 
+test("season history lists every season with the current one badged", async ({
+  page,
+}) => {
+  await page.goto("/seasons");
+  await expect(
+    page.getByRole("heading", { name: "Season history" }),
+  ).toBeVisible();
+  await expect(page.locator("#main").getByText("Season 1")).toBeVisible();
+  await expect(page.getByText("Current", { exact: true })).toBeVisible();
+});
+
 test("home renders the season timeline, pool composition, and footer", async ({
   page,
 }) => {

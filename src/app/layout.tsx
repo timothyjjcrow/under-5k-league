@@ -50,7 +50,11 @@ export const viewport: Viewport = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [user, season] = await Promise.all([getSessionUser(), getActiveSeason()]);
+  const [user, season, archivedCount] = await Promise.all([
+    getSessionUser(),
+    getActiveSeason(),
+    prisma.season.count({ where: { isActive: false } }),
+  ]);
   const myTeam =
     user && season
       ? await prisma.teamMember.findFirst({
@@ -70,6 +74,7 @@ export default async function RootLayout({
           phase={season?.status ?? null}
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}
+          hasHistory={archivedCount > 0}
         />
         <main
           id="main"
@@ -80,6 +85,7 @@ export default async function RootLayout({
         <SiteFooter
           seasonName={season?.name ?? null}
           phase={season?.status ?? null}
+          hasHistory={archivedCount > 0}
         />
         <Toaster />
       </body>

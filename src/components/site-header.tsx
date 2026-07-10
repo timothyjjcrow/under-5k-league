@@ -30,7 +30,11 @@ type HeaderUser = {
 
 // Which nav links are visible depends on the season phase — this is the core of
 // "hide what isn't relevant right now".
-function navItems(phase: string | null, myTeamId: string | null) {
+function navItems(
+  phase: string | null,
+  myTeamId: string | null,
+  hasHistory: boolean,
+) {
   const items: { href: string; label: string }[] = [
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },
@@ -52,6 +56,8 @@ function navItems(phase: string | null, myTeamId: string | null) {
   // The recap is the season's headline once it wraps; in-season it's reachable
   // from the Leaders page ("awards so far") to keep the nav from crowding.
   if (phase === "COMPLETE") items.push({ href: "/recap", label: "Recap" });
+  // Past seasons only exist once one has been archived.
+  if (hasHistory) items.push({ href: "/seasons", label: "History" });
   return items;
 }
 
@@ -80,14 +86,16 @@ export function SiteHeader({
   phase,
   seasonName,
   myTeamId,
+  hasHistory = false,
 }: {
   user: HeaderUser;
   phase: string | null;
   seasonName: string | null;
   myTeamId: string | null;
+  hasHistory?: boolean;
 }) {
   const pathname = usePathname();
-  const items = navItems(phase, myTeamId);
+  const items = navItems(phase, myTeamId, hasHistory);
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
   const [open, setOpen] = useState(false);
 
