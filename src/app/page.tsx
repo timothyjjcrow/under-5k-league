@@ -987,6 +987,31 @@ async function SeasonView({
         />
       </div>
 
+      {/* During playoffs the bracket IS the story — it leads, and the
+          regular-season standings drop below as context. */}
+      {showBracket ? (
+        <Card>
+          <CardHeader
+            title="Playoff bracket"
+            action={
+              <Link
+                href="/schedule"
+                className="text-sm text-info hover:underline"
+              >
+                Full bracket →
+              </Link>
+            }
+          />
+          <CardBody>
+            <MiniBracket
+              rounds={playoffRounds}
+              totalRounds={totalRounds}
+              teamName={teamName}
+            />
+          </CardBody>
+        </Card>
+      ) : null}
+
       {/* min-w-0: grid items otherwise refuse to shrink below their content,
           letting a long team name widen the page on mobile. */}
       <div className="grid gap-6 lg:grid-cols-3">
@@ -1059,7 +1084,11 @@ async function SeasonView({
                         className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
                       >
                         <div className="text-xs uppercase text-muted">
-                          Week {m.week}
+                          {m.phase === "FINAL"
+                            ? "Grand final"
+                            : m.phase === "PLAYOFF"
+                              ? "Playoffs"
+                              : `Week ${m.week}`}
                           {m.scheduledAt
                             ? ` · ${fmtWhen(m.scheduledAt)}`
                             : ""}
@@ -1136,28 +1165,6 @@ async function SeasonView({
         </div>
       </div>
 
-      {showBracket ? (
-        <Card>
-          <CardHeader
-            title="Playoff bracket"
-            action={
-              <Link
-                href="/schedule"
-                className="text-sm text-info hover:underline"
-              >
-                Full bracket →
-              </Link>
-            }
-          />
-          <CardBody>
-            <MiniBracket
-              rounds={playoffRounds}
-              totalRounds={totalRounds}
-              teamName={teamName}
-            />
-          </CardBody>
-        </Card>
-      ) : null}
     </div>
   );
 }
@@ -1199,6 +1206,8 @@ type BracketMatch = {
   awayScore: number;
   winnerTeamId: string | null;
   status: string;
+  scheduledAt: Date | null;
+  bestOf: number;
 };
 
 function MiniBracket({
@@ -1238,6 +1247,19 @@ function MiniBracket({
                   win={m.winnerTeamId === m.awayTeamId}
                   done={done}
                 />
+                <Link
+                  href={`/matches/${m.id}`}
+                  className="flex items-center justify-between gap-2 pt-0.5 text-xs text-muted hover:text-info"
+                >
+                  <span className="truncate">
+                    {done
+                      ? "Box score"
+                      : m.scheduledAt
+                        ? fmtWhen(m.scheduledAt)
+                        : "Details"}
+                  </span>
+                  <span className="shrink-0">Bo{m.bestOf} →</span>
+                </Link>
               </div>
             );
           })}
@@ -1429,6 +1451,29 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
     ? standings.find((s) => s.teamId === champion.id)
     : undefined;
 
+  // The final's scoreline turns "champion: X" into a story.
+  const finalMatch = champion
+    ? matches.find(
+        (m) =>
+          m.phase === "FINAL" &&
+          m.status === "COMPLETED" &&
+          m.winnerTeamId === champion.id,
+      )
+    : undefined;
+  const finalLine = finalMatch
+    ? {
+        score:
+          finalMatch.winnerTeamId === finalMatch.homeTeamId
+            ? `${finalMatch.homeScore}–${finalMatch.awayScore}`
+            : `${finalMatch.awayScore}–${finalMatch.homeScore}`,
+        loser: teamName.get(
+          finalMatch.winnerTeamId === finalMatch.homeTeamId
+            ? finalMatch.awayTeamId
+            : finalMatch.homeTeamId,
+        ),
+      }
+    : undefined;
+
   return (
     <div className="space-y-6">
       <Card className="relative overflow-hidden">
@@ -1467,6 +1512,13 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
               "To be crowned"
             )}
           </div>
+          {finalLine ? (
+            <div className="text-sm text-muted">
+              Won the grand final{" "}
+              <span className="font-medium text-fg">{finalLine.score}</span>
+              {finalLine.loser ? ` over ${finalLine.loser}` : ""}
+            </div>
+          ) : null}
           {championRow ? (
             <div className="text-sm text-muted">
               <span className="font-medium text-fg">
