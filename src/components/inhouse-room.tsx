@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Avatar, Badge, PlayerLink, RankBadge, buttonClasses } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
+import { mmrBalance } from "@/lib/inhouse";
 import type { InhouseState } from "@/lib/inhouse-service";
 
 type LobbyTeam = NonNullable<InhouseState["lobby"]>["teams"][number];
@@ -653,6 +654,20 @@ function DraftView({
   const onClockTeam = lobby.teams.find((t) => t.team === lobby.pickTeam);
   const onClockSide = onClockTeam ? sideMeta(onClockTeam.isRadiant) : null;
 
+  // Live balance-of-power line: how the two sides' average MMR compares as
+  // picks come in.
+  const sideMmrs = (t: LobbyTeam) =>
+    (t.captain ? [t.captain, ...t.players] : t.players).map((p) => p.mmr);
+  const balance = mmrBalance(sideMmrs(lobby.teams[0]), sideMmrs(lobby.teams[1]));
+  const leader =
+    balance.diff > 0 ? lobby.teams[0] : balance.diff < 0 ? lobby.teams[1] : null;
+  const balanceLabel =
+    balance.avg1 > 0 && balance.avg2 > 0
+      ? leader
+        ? `${sideMeta(leader.isRadiant).name} ahead by ${Math.abs(balance.diff)} avg MMR`
+        : "Teams dead even on MMR"
+      : null;
+
   return (
     <div className="space-y-5">
       {/* On the clock banner */}
@@ -674,6 +689,11 @@ function DraftView({
           ) : null}
         </div>
         <div className="flex items-center gap-3">
+          {balanceLabel ? (
+            <span className="hidden text-xs text-muted sm:inline">
+              ⚖️ {balanceLabel}
+            </span>
+          ) : null}
           {me.isOnClock ? (
             <Badge tone="accent">Your pick</Badge>
           ) : (
@@ -776,6 +796,10 @@ function TeamColumn({
     ...team.players,
   ];
   while (roster.length < teamSize) roster.push(null);
+  const known = roster.filter((p): p is Player => !!p && p.mmr > 0);
+  const avgMmr = known.length
+    ? Math.round(known.reduce((s, p) => s + p.mmr, 0) / known.length)
+    : 0;
 
   return (
     <div
@@ -793,7 +817,14 @@ function TeamColumn({
           <span className={cn("h-2.5 w-2.5 rounded-full", meta.dot)} />
           <span className="font-semibold">{meta.name}</span>
         </div>
-        {onClock ? <Badge tone="accent">picking</Badge> : null}
+        <span className="flex items-center gap-2">
+          {avgMmr > 0 ? (
+            <span className="text-xs text-muted tabular-nums">
+              avg {avgMmr}
+            </span>
+          ) : null}
+          {onClock ? <Badge tone="accent">picking</Badge> : null}
+        </span>
       </div>
       <div className="space-y-1.5 p-3">
         {roster.map((p, i) => (

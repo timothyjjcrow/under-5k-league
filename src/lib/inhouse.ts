@@ -127,3 +127,26 @@ export function playersNeeded(
 ): number {
   return Math.max(0, lobbySize - queueSize);
 }
+
+export type MmrBalance = {
+  avg1: number;
+  avg2: number;
+  /** avg1 − avg2 (positive = team 1 is stronger on paper). */
+  diff: number;
+};
+
+/**
+ * Average-MMR comparison between the two drafting teams. MMR 0 means
+ * "unknown" (a player who never entered one) and is excluded from averages.
+ */
+export function mmrBalance(team1: number[], team2: number[]): MmrBalance {
+  const avg = (xs: number[]) => {
+    const known = xs.filter((x) => x > 0);
+    return known.length
+      ? Math.round(known.reduce((s, x) => s + x, 0) / known.length)
+      : 0;
+  };
+  const avg1 = avg(team1);
+  const avg2 = avg(team2);
+  return { avg1, avg2, diff: avg1 - avg2 };
+}

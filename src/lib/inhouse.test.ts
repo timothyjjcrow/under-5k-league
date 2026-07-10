@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isDraftComplete,
+  mmrBalance,
   nextPickTeam,
   orderCaptains,
   playersNeeded,
@@ -137,5 +138,24 @@ describe("playersNeeded", () => {
     expect(playersNeeded(7)).toBe(3);
     expect(playersNeeded(10)).toBe(0);
     expect(playersNeeded(12)).toBe(0);
+  });
+});
+
+describe("mmrBalance", () => {
+  it("averages each side and reports the gap", () => {
+    const b = mmrBalance([4000, 3000], [2000, 2000]);
+    expect(b.avg1).toBe(3500);
+    expect(b.avg2).toBe(2000);
+    expect(b.diff).toBe(1500);
+  });
+
+  it("excludes unknown (0) MMRs from averages", () => {
+    const b = mmrBalance([4000, 0], [3000]);
+    expect(b.avg1).toBe(4000);
+    expect(b.avg2).toBe(3000);
+  });
+
+  it("handles empty or all-unknown sides", () => {
+    expect(mmrBalance([], [0, 0])).toEqual({ avg1: 0, avg2: 0, diff: 0 });
   });
 });

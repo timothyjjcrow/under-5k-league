@@ -180,6 +180,9 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   Nav link is always visible (season-independent).
 - **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
   players so `/inhouse` isn't empty on a fresh DB.
+- **Balance meter**: pure `mmrBalance` (`inhouse.ts`, tested — MMR 0 =
+  unknown, excluded) drives per-team "avg N" chips on the drafting columns
+  and a "⚖️ X ahead by N avg MMR" line in the on-the-clock banner (sm+).
 
 ## Draft edge cases (done)
 
