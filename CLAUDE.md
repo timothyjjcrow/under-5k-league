@@ -348,6 +348,16 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `picks`), standings with per-pick breakdowns, locked-roster chips. Nav from
   REGULAR_SEASON on.
 
+## Power rankings (done, branch: bigger-features)
+
+- Pure Elo in `src/lib/power-rankings.ts` (tested): K=32, start 1000,
+  per-GAME (each series expands into its game results, week order; home wins
+  applied first inside a series). `powerRankings` returns rating + rank +
+  prevRank (before the latest completed week) + weekly delta. Regular-season
+  matches only feed it.
+- `/teams` shows the card with ▲/▼ movement arrows and rating deltas whenever
+  a completed match exists.
+
 ## Weekly honors (done, branch: bigger-features)
 
 - Pure `weeklyHonors` (`src/lib/honors.ts`, tested): Player of the Week =

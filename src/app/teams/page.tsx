@@ -3,6 +3,7 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { draftRecap } from "@/lib/draft-recap";
+import { powerRankings } from "@/lib/power-rankings";
 import { cn } from "@/lib/utils";
 import {
   Avatar,
@@ -95,12 +96,85 @@ export default async function TeamsPage() {
       )
     : teams;
 
+  // Elo power rankings — only regular-season series feed the rating.
+  const power = powerRankings(
+    matches.filter((m) => m.phase === "REGULAR"),
+    teams.map((t) => t.id),
+  );
+  const powerName = new Map(teams.map((t) => [t.id, t.name]));
+
   return (
     <div className="space-y-6">
       <PageTitle
         title="Teams"
         subtitle={`${season.name} · ${teams.length} teams`}
       />
+
+      {power.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="Power rankings"
+            subtitle="Elo per game — beating strong teams counts extra · movement vs. last week"
+          />
+          <CardBody className="divide-y divide-line/60 p-0">
+            {power.map((row) => {
+              const moved = row.prevRank > 0 ? row.prevRank - row.rank : 0;
+              return (
+                <div
+                  key={row.teamId}
+                  className="flex items-center gap-3 px-5 py-2.5 text-sm"
+                >
+                  <span className="w-6 text-center font-mono text-muted">
+                    {row.rank}
+                  </span>
+                  <span
+                    className={cn(
+                      "w-9 shrink-0 text-center font-mono text-xs tabular-nums",
+                      moved > 0 && "text-success",
+                      moved < 0 && "text-danger",
+                      moved === 0 && "text-muted",
+                    )}
+                    title={
+                      moved !== 0
+                        ? `Was #${row.prevRank} last week`
+                        : "No movement"
+                    }
+                  >
+                    {moved > 0 ? `▲${moved}` : moved < 0 ? `▼${-moved}` : "–"}
+                  </span>
+                  <TeamCrest
+                    name={powerName.get(row.teamId) ?? "?"}
+                    seed={row.teamId}
+                    size={24}
+                    className="shrink-0 rounded-md"
+                  />
+                  <Link
+                    href={`/teams/${row.teamId}`}
+                    className="min-w-0 flex-1 truncate font-medium hover:text-info"
+                  >
+                    {powerName.get(row.teamId) ?? "?"}
+                  </Link>
+                  <span
+                    className={cn(
+                      "font-mono text-xs tabular-nums",
+                      row.delta > 0
+                        ? "text-success"
+                        : row.delta < 0
+                          ? "text-danger"
+                          : "text-muted",
+                    )}
+                  >
+                    {row.delta > 0 ? `+${row.delta}` : row.delta}
+                  </span>
+                  <span className="shrink-0 font-mono text-base font-semibold tabular-nums">
+                    {row.rating}
+                  </span>
+                </div>
+              );
+            })}
+          </CardBody>
+        </Card>
+      ) : null}
 
       {recap.totalSpent > 0 ? (
         <Card>
