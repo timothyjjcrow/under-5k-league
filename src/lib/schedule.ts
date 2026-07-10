@@ -3,6 +3,11 @@
 
 export type Pairing = { home: string; away: string };
 
+/** Week N's match night: week 1 = the first night, each later week +7 days. */
+export function matchNightForWeek(firstNight: Date, week: number): Date {
+  return new Date(firstNight.getTime() + (week - 1) * 7 * 24 * 60 * 60 * 1000);
+}
+
 /**
  * Generate a round-robin: every team plays every other once (or twice if
  * `doubleRound`). Returns an array of rounds (weeks); each round is a list of

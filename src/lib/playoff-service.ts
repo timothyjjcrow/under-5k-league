@@ -4,6 +4,7 @@ import {
   pickBracketSize,
   playoffFirstRound,
   nextRoundPairings,
+  matchNightForWeek,
 } from "./schedule";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { championMessage, sendDiscordMessage } from "./discord";
@@ -59,6 +60,9 @@ export async function createPlayoffBracket(seasonId: string) {
         awayTeamId: p.away,
         bracketSlot: `R0M${i}`,
         bestOf,
+        scheduledAt: season.firstMatchNight
+          ? matchNightForWeek(season.firstMatchNight, lastRegularWeek + 1)
+          : null,
       })),
     }),
     prisma.season.update({
@@ -130,6 +134,9 @@ export async function advancePlayoffBracket(seasonId: string) {
       awayTeamId: p.away,
       bracketSlot: `R${nextRound}M${i}`,
       bestOf,
+      scheduledAt: season.firstMatchNight
+        ? matchNightForWeek(season.firstMatchNight, week)
+        : null,
     })),
   });
 }

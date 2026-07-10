@@ -581,7 +581,24 @@ function ScheduleControls({
         title="Schedule & results"
         subtitle="Generate the round-robin and enter weekly scores."
         action={
-          <ActionForm action={generateSchedule}>
+          <ActionForm
+            action={generateSchedule}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <label
+              htmlFor="firstNight"
+              className="text-xs text-muted"
+              title="Week 1 plays at this time; each later week (and playoff round) is +7 days. Leave empty for no times."
+            >
+              First match night
+            </label>
+            <input
+              id="firstNight"
+              type="datetime-local"
+              name="firstNight"
+              defaultValue={fmtDateTimeLocal(season.firstMatchNight)}
+              className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+            />
             <SubmitButton
               variant="secondary"
               size="sm"

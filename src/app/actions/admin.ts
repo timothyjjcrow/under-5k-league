@@ -13,7 +13,7 @@ import {
   DEFAULTS,
   type SeasonStatus,
 } from "@/lib/constants";
-import { roundRobin } from "@/lib/schedule";
+import { roundRobin, matchNightForWeek } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
 import { mmrWeightedBudgets } from "@/lib/draft";
 import {
@@ -301,7 +301,7 @@ export async function startDraft(
 /** Generate a round-robin regular-season schedule from the drafted teams. */
 export async function generateSchedule(
   _prev: ActionResult,
-  _fd: FormData,
+  formData: FormData,
 ): Promise<ActionResult> {
   try {
     await requireAdmin();
@@ -316,6 +316,13 @@ export async function generateSchedule(
   });
   if (teams.length < 2) return { error: "Need at least 2 teams" };
 
+  // Optional first-match-night: week 1 plays then, each later week +7 days.
+  const firstNightRaw = str(formData, "firstNight").trim();
+  const firstNight = firstNightRaw ? new Date(firstNightRaw) : null;
+  if (firstNight && Number.isNaN(firstNight.getTime())) {
+    return { error: "Invalid first match night" };
+  }
+
   const rounds = roundRobin(teams.map((t) => t.id));
   const rows = rounds.flatMap((round, i) =>
     round.map((p) => ({
@@ -325,6 +332,7 @@ export async function generateSchedule(
       homeTeamId: p.home,
       awayTeamId: p.away,
       bestOf: season.regularBestOf,
+      scheduledAt: firstNight ? matchNightForWeek(firstNight, i + 1) : null,
     })),
   );
 
@@ -333,9 +341,17 @@ export async function generateSchedule(
       where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
     }),
     prisma.match.createMany({ data: rows }),
+    prisma.season.update({
+      where: { id: season.id },
+      data: { firstMatchNight: firstNight },
+    }),
   ]);
   refresh();
-  return { message: `Schedule generated · ${rows.length} matches` };
+  return {
+    message: `Schedule generated · ${rows.length} matches${
+      firstNight ? " · match nights set weekly" : ""
+    }`,
+  };
 }
 
 /** Seed and start the single-elimination playoff bracket from the standings. */

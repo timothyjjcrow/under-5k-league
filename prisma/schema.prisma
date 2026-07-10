@@ -54,6 +54,7 @@ model Season {
   championTeamId String?
   dotaLeagueId   String? // optional Valve league id, if the league is ticketed
   matchSchedule  String? // weekly match slot shown before signup (null = app default)
+  firstMatchNight DateTime? // week 1's match time; later weeks (incl. playoffs) are +7d each
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

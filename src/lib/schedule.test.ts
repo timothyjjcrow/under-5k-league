@@ -9,7 +9,21 @@ import {
   nextRoundPairings,
   slotRound,
   groupPlayoffRounds,
+  matchNightForWeek,
 } from "./schedule";
+
+describe("matchNightForWeek", () => {
+  const first = new Date("2026-07-12T18:00:00-07:00");
+
+  it("returns the first night for week 1", () => {
+    expect(matchNightForWeek(first, 1).getTime()).toBe(first.getTime());
+  });
+
+  it("adds exactly 7 days per week", () => {
+    const w3 = matchNightForWeek(first, 3);
+    expect(w3.getTime() - first.getTime()).toBe(14 * 24 * 3600 * 1000);
+  });
+});
 
 describe("roundRobin", () => {
   it("has every team play every other exactly once (4 teams)", () => {

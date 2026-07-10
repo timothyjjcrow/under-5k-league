@@ -250,6 +250,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `FilterablePlayer` so the signup pool page and the live draft share the
   same tested filter logic.
 
+## Auto match times (done)
+
+- `Season.firstMatchNight` + pure `matchNightForWeek` (`schedule.ts`, tested):
+  the admin picks week 1's datetime in the Generate-schedule form; every
+  regular week and each playoff round (both `createPlayoffBracket` and
+  `advancePlayoffBracket`) gets `scheduledAt = first + (week−1)×7d`.
+  Empty input = no times (old behavior); per-match "Set time" still overrides.
+
 ## Calendar feed (done)
 
 - `src/lib/ics.ts` — pure RFC 5545 builder (escaping, UTC dates, CRLF;
