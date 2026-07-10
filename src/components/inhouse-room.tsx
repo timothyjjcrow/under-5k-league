@@ -465,6 +465,8 @@ function VoteView({
           </div>
         </div>
         <div
+          role="timer"
+          aria-label={`${seconds} seconds left to vote`}
           className={cn(
             "font-mono text-xl font-bold tabular-nums",
             seconds <= 5 ? "text-danger" : "text-accent",
@@ -700,6 +702,8 @@ function DraftView({
             <span className="text-xs text-muted">Drafting…</span>
           )}
           <div
+            role="timer"
+            aria-label={`${seconds} seconds left on the pick clock`}
             className={cn(
               "font-mono text-xl font-bold tabular-nums",
               seconds <= 10 ? "text-danger" : "text-accent",

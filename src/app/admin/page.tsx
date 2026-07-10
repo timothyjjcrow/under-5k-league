@@ -895,6 +895,7 @@ function StandinControls({ data }: { data: AdminData }) {
                     name="standinUserId"
                     required
                     defaultValue=""
+                    aria-label="Standin"
                     className={selectCls}
                   >
                     <option value="" disabled>
@@ -911,6 +912,7 @@ function StandinControls({ data }: { data: AdminData }) {
                     name="replacingUserId"
                     required
                     defaultValue=""
+                    aria-label="Player being replaced"
                     className={selectCls}
                   >
                     <option value="" disabled>
@@ -1051,7 +1053,7 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
             action={signFreeAgent}
             className="flex flex-wrap items-center gap-2"
           >
-            <select name="userId" required defaultValue="" className={selectCls}>
+            <select name="userId" required defaultValue="" aria-label="Free agent to sign" className={selectCls}>
               <option value="" disabled>
                 Free agent…
               </option>
@@ -1062,7 +1064,7 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               ))}
             </select>
             <span className="text-xs text-muted">joins</span>
-            <select name="teamId" required defaultValue="" className={selectCls}>
+            <select name="teamId" required defaultValue="" aria-label="Team with an open seat" className={selectCls}>
               <option value="" disabled>
                 Team…
               </option>
@@ -1086,6 +1088,7 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               name="memberId"
               required
               defaultValue=""
+              aria-label="Rostered player to release"
               className={selectCls}
             >
               <option value="" disabled>

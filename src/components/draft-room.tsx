@@ -211,6 +211,8 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
           </div>
           {state.nominatedPlayer ? (
             <div
+              role="timer"
+              aria-label={`${seconds} seconds left on the bid clock`}
               className={cn(
                 "flex items-center gap-2 font-mono text-2xl font-bold tabular-nums",
                 seconds <= 5 ? "text-danger" : "text-accent",
@@ -412,6 +414,7 @@ function AvailableList({
             >
               <button
                 onClick={() => setRole(null)}
+                aria-pressed={role === null}
                 className={cn(
                   "rounded-md px-2 py-0.5 text-xs",
                   role === null
@@ -425,6 +428,8 @@ function AvailableList({
                 <button
                   key={r.key}
                   title={r.label}
+                  aria-label={r.label}
+                  aria-pressed={role === r.key}
                   onClick={() => setRole(role === r.key ? null : r.key)}
                   className={cn(
                     "rounded-md px-2 py-0.5 text-xs tabular-nums",
@@ -441,6 +446,8 @@ function AvailableList({
             {(["mmr", "rank", "name"] as const).map((s) => (
               <button
                 key={s}
+                aria-label={`Sort by ${s}`}
+                aria-pressed={sort === s}
                 onClick={() => setSort(s)}
                 className={cn(
                   "rounded-md px-2 py-0.5 text-xs capitalize",

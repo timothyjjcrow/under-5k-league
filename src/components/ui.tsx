@@ -309,11 +309,19 @@ export function FormStrip({
   className?: string;
 }) {
   if (form.length === 0) return null;
+  const spoken = form
+    .map((r) => ({ W: "win", L: "loss", D: "draw" })[r])
+    .join(", ");
   return (
-    <span className={cn("inline-flex items-center gap-1", className)}>
+    <span
+      role="img"
+      aria-label={`Recent form, newest first: ${spoken}`}
+      className={cn("inline-flex items-center gap-1", className)}
+    >
       {form.map((r, i) => (
         <span
           key={i}
+          aria-hidden
           style={{ width: `${size * 4}px`, height: `${size * 4}px` }}
           className={cn(
             "grid place-items-center rounded border text-[11px] font-semibold",

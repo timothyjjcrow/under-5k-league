@@ -309,6 +309,18 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   captains ($0) excluded. Rendered as a "Draft night" card on `/teams`
   whenever any purchases exist (live during DRAFT, historical after).
 
+## Accessibility conventions (done — keep following these)
+
+- Buttons get focus rings from `baseBtn` (`focus-visible:ring-2`) — use
+  `buttonClasses`/`Button` for anything clickable.
+- Purely visual indicators carry an accessible name: `FormStrip` and the
+  schedule `RsvpBadge` are `role="img"` + `aria-label` with inner glyphs
+  `aria-hidden`; `RankMedal` has `aria-label`; `TeamCrest` is decorative
+  (`aria-hidden`, name always adjacent as text).
+- Toggle chips (draft-room role filter/sort) use `aria-pressed`; selects
+  without visible labels need `aria-label`; countdown clocks are
+  `role="timer"` with a spoken label.
+
 ## Mobile layout rules (done — keep following these)
 
 - Card grids must use `grid-cols-1` explicitly (`grid grid-cols-1 gap-4

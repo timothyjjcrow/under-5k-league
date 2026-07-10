@@ -308,10 +308,23 @@ export default async function SchedulePage() {
 
 function RsvpBadge({ side }: { side: TeamAvailability }) {
   if (side.confirmed === 0 && side.out === 0) return null;
+  const spoken = `${side.confirmed} confirmed${side.out > 0 ? `, ${side.out} unavailable` : ""}`;
   return (
-    <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted">
-      <span className="text-success">✓{side.confirmed}</span>
-      {side.out > 0 ? <span className="text-danger"> ✗{side.out}</span> : null}
+    <span
+      role="img"
+      aria-label={spoken}
+      title={spoken}
+      className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted"
+    >
+      <span aria-hidden className="text-success">
+        ✓{side.confirmed}
+      </span>
+      {side.out > 0 ? (
+        <span aria-hidden className="text-danger">
+          {" "}
+          ✗{side.out}
+        </span>
+      ) : null}
     </span>
   );
 }
