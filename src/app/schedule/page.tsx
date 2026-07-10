@@ -32,6 +32,18 @@ type MatchStandin = StandinAssignment & { standin: User; replaced: User | null }
 
 function fmtWhen(d: Date | null): string | null {
   if (!d) return null;
+  // Weekday included — "Sat" is what players actually plan around.
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+// Phone-width variant: the weekday doesn't fit between two team names.
+function fmtWhenShort(d: Date): string {
   return d.toLocaleString(undefined, {
     month: "short",
     day: "numeric",
@@ -138,6 +150,12 @@ export default async function SchedulePage() {
   const status = regularSeasonStatus(matches);
   const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
   const pendingMsg = pendingResultsMessage(status);
+  // The first week still missing results is "this week" — the one visitors
+  // scroll past completed weeks to find.
+  const currentWeek =
+    season.status === "REGULAR_SEASON"
+      ? weeks.find((w) => (weekStatus.get(w)?.pending ?? 0) > 0)
+      : undefined;
 
   const champion =
     season.championTeamId && teamName.get(season.championTeamId)
@@ -181,8 +199,7 @@ export default async function SchedulePage() {
           <div>
             <div className="font-medium">Results outstanding</div>
             <div className="text-muted">
-              {pendingMsg} Standings &amp; playoff seeding update once they&apos;re
-              entered.
+              {`${pendingMsg} Standings & playoff seeding update once they're entered.`}
             </div>
           </div>
         </div>
@@ -271,17 +288,21 @@ export default async function SchedulePage() {
             {weeks.map((week) => {
               const ws = weekStatus.get(week);
               const incomplete = !!ws && ws.pending > 0;
+              const isCurrent = week === currentWeek;
               return (
               <div key={week}>
                 <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-muted">
-                  <span>Week {week}</span>
+                  <span className={isCurrent ? "text-fg" : undefined}>
+                    Week {week}
+                  </span>
+                  {isCurrent ? <Badge tone="accent">This week</Badge> : null}
                   {ws ? (
                     <span className={incomplete ? "text-accent" : "text-success"}>
                       {ws.completed}/{ws.total} results in
                     </span>
                   ) : null}
                 </h3>
-                <Card>
+                <Card className={isCurrent ? "border-accent/40" : undefined}>
                   <CardBody className="divide-y divide-line/60 p-0">
                     {regular
                       .filter((m) => m.week === week)
@@ -314,7 +335,9 @@ function RsvpBadge({ side }: { side: TeamAvailability }) {
       role="img"
       aria-label={spoken}
       title={spoken}
-      className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted"
+      // Hidden on phones — the row needs the width for team names; the
+      // same RSVP detail lives one tap away on the match page.
+      className="hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-muted sm:inline"
     >
       <span aria-hidden className="text-success">
         ✓{side.confirmed}
@@ -379,7 +402,8 @@ function MatchRow({
             </span>
           ) : m.scheduledAt ? (
             <span className="whitespace-nowrap text-xs text-muted">
-              {fmtWhen(m.scheduledAt)}
+              <span className="hidden sm:inline">{fmtWhen(m.scheduledAt)}</span>
+              <span className="sm:hidden">{fmtWhenShort(m.scheduledAt)}</span>
             </span>
           ) : (
             <span className="text-xs text-muted">vs</span>
