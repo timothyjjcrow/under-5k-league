@@ -225,6 +225,19 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   the same check-in banner as `/schedule` for participants. Completed matches
   without imports keep the "no games recorded" empty state.
 
+## MMR-weighted draft budgets (done)
+
+- `mmrWeightedBudgets` (`src/lib/draft.ts`, tested): linear min–max
+  interpolation across the captain pool — lowest-MMR captain gets
+  `base × (1+w)`, highest gets `base × (1−w)`, `Season.budgetMmrWeight`
+  (percent, default 20, 0 = flat) is the knob, floored at
+  `(teamSize−1) × MIN_BID` so every team can fill. Unknown MMR → base.
+- Applied in `startDraft` (replaces the uniform `season.draftBudget`);
+  create-season form has the weighting field; the admin captains card shows
+  projected (pre-start) / actual (post-start) budgets per captain.
+- Gotcha: after `prisma db push` regenerates the client, restart the dev
+  server or new Season fields read as `undefined` in the running process.
+
 ## Draft room QoL (done)
 
 - The auction's "Available" list has search, position-filter chips, and

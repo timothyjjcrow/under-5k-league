@@ -55,6 +55,44 @@ export function isDraftComplete(
 }
 
 /**
+ * MMR-weighted starting budgets: a high-MMR captain is already a strong pick
+ * on their own roster, so they get less to spend than a low-MMR captain.
+ *
+ * Linear interpolation across the actual captain pool: the lowest-MMR captain
+ * gets `base × (1 + weightPct/100)`, the highest gets `base × (1 − weightPct/100)`,
+ * everyone else proportionally by MMR distance. Self-calibrating — clustered
+ * captain MMRs produce nearly flat budgets, identical MMRs (or weightPct 0)
+ * produce exactly `base`. Captains with unknown MMR get `base`.
+ */
+export function mmrWeightedBudgets(
+  base: number,
+  weightPct: number,
+  captains: { teamId: string; mmr: number | null }[],
+  floor = 1,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const known = captains.filter((c) => c.mmr != null) as {
+    teamId: string;
+    mmr: number;
+  }[];
+  const min = Math.min(...known.map((c) => c.mmr));
+  const max = Math.max(...known.map((c) => c.mmr));
+  const w = Number.isFinite(weightPct) ? Math.max(0, weightPct) / 100 : 0;
+
+  for (const c of captains) {
+    if (c.mmr == null || max === min || w === 0) {
+      out.set(c.teamId, Math.max(floor, base));
+      continue;
+    }
+    // 0 at the lowest MMR → 1 at the highest.
+    const t = (c.mmr - min) / (max - min);
+    const budget = Math.round(base * (1 + w - 2 * w * t));
+    out.set(c.teamId, Math.max(floor, budget));
+  }
+  return out;
+}
+
+/**
  * Snake-free simple rotation: from the team that last nominated, find the next
  * team in draft order that still needs players. Returns its index, or -1 if
  * every team is full.

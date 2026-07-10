@@ -15,6 +15,7 @@ import {
 } from "@/lib/constants";
 import { roundRobin } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
+import { mmrWeightedBudgets } from "@/lib/draft";
 import {
   createPlayoffBracket,
   advancePlayoffBracket,
@@ -64,6 +65,7 @@ export async function createSeason(
   const teamSize = clampInt(formData, "teamSize", 5, 2, 10);
   const minTeams = clampInt(formData, "minTeams", 4, 2, 32);
   const draftBudget = clampInt(formData, "draftBudget", 100, 10, 100000);
+  const budgetMmrWeight = clampInt(formData, "budgetMmrWeight", 20, 0, 50);
   const maxMmr = clampInt(formData, "maxMmr", 0, 0, 20000);
 
   await prisma.$transaction([
@@ -77,6 +79,7 @@ export async function createSeason(
         teamSize,
         minTeams,
         draftBudget,
+        budgetMmrWeight,
         maxMmr,
         status: SEASON_STATUS.SIGNUPS,
         isActive: true,
@@ -218,7 +221,7 @@ export async function startDraft(
   const [regs, existingMembers] = await Promise.all([
     prisma.registration.findMany({
       where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
-      select: { userId: true },
+      select: { userId: true, mmr: true },
     }),
     prisma.teamMember.findMany({
       where: { seasonId: season.id },
@@ -233,12 +236,22 @@ export async function startDraft(
   }
   const shortfall = openSeats - poolCount;
 
+  // MMR-weighted budgets: low-MMR captains get more to spend than high-MMR
+  // ones (a strong captain is already a strong pick). Weight 0 = flat budgets.
+  const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
+  const budgets = mmrWeightedBudgets(
+    season.draftBudget,
+    season.budgetMmrWeight,
+    teams.map((t) => ({ teamId: t.id, mmr: mmrByUser.get(t.captainId) ?? null })),
+    (season.teamSize - 1) * DEFAULTS.MIN_BID,
+  );
+
   await prisma.$transaction(async (tx) => {
     await Promise.all(
       teams.map((t) =>
         tx.team.update({
           where: { id: t.id },
-          data: { budget: season.draftBudget },
+          data: { budget: budgets.get(t.id) ?? season.draftBudget },
         }),
       ),
     );
@@ -272,11 +285,16 @@ export async function startDraft(
   });
   await sendDiscordMessage(draftStartedMessage(season.name));
   refresh();
+  const budgetVals = [...budgets.values()];
+  const budgetNote =
+    Math.max(...budgetVals) !== Math.min(...budgetVals)
+      ? ` · MMR-weighted budgets $${Math.min(...budgetVals)}–$${Math.max(...budgetVals)}`
+      : "";
   return {
     message:
       shortfall > 0
-        ? `Draft started — heads up: ${poolCount} players for ${openSeats} seats, so ${shortfall} seat(s) will go unfilled`
-        : "Draft started — the auction is live",
+        ? `Draft started — heads up: ${poolCount} players for ${openSeats} seats, so ${shortfall} seat(s) will go unfilled${budgetNote}`
+        : `Draft started — the auction is live${budgetNote}`,
   };
 }
 

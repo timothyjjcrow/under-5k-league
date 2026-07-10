@@ -31,6 +31,7 @@ import {
 } from "@/app/actions/admin";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { pickBracketSize } from "@/lib/schedule";
+import { mmrWeightedBudgets } from "@/lib/draft";
 import { MATCH_SCHEDULE } from "@/lib/constants";
 import {
   regularSeasonStatus,
@@ -165,6 +166,20 @@ export default async function AdminPage() {
                 defaultValue={4500}
                 min={0}
                 max={20000}
+                className={inputCls}
+              />
+            </Field>
+            <Field
+              label="Budget MMR weighting % (0 = flat)"
+              htmlFor="budgetMmrWeight"
+            >
+              <input
+                id="budgetMmrWeight"
+                name="budgetMmrWeight"
+                type="number"
+                defaultValue={20}
+                min={0}
+                max={50}
                 className={inputCls}
               />
             </Field>
@@ -443,37 +458,63 @@ function CaptainControls({
             {data.teams.length === 0 ? (
               <p className="text-sm text-muted">No captains yet.</p>
             ) : (
-              data.teams.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-center justify-between rounded-lg border border-line px-3 py-2"
-                >
-                  <span className="flex items-center gap-2 text-sm">
-                    <span className="w-5 text-center text-xs text-muted">
-                      {t.draftOrder + 1}
+              (() => {
+                // Preview the MMR-weighted budgets captains will start with.
+                const mmrByUser = new Map(
+                  data.players.map((p) => [p.userId, p.mmr]),
+                );
+                const projected = mmrWeightedBudgets(
+                  season.draftBudget,
+                  season.budgetMmrWeight,
+                  data.teams.map((t) => ({
+                    teamId: t.id,
+                    mmr: mmrByUser.get(t.captainId) ?? null,
+                  })),
+                  (season.teamSize - 1),
+                );
+                return data.teams.map((t) => (
+                  <div
+                    key={t.id}
+                    className="flex items-center justify-between rounded-lg border border-line px-3 py-2"
+                  >
+                    <span className="flex items-center gap-2 text-sm">
+                      <span className="w-5 text-center text-xs text-muted">
+                        {t.draftOrder + 1}
+                      </span>
+                      <Avatar
+                        name={t.captain.name}
+                        src={t.captain.avatar}
+                        size={24}
+                      />
+                      {t.name}
+                      <Badge tone="accent">
+                        ${draftStarted ? t.budget : projected.get(t.id)}
+                      </Badge>
                     </span>
-                    <Avatar
-                      name={t.captain.name}
-                      src={t.captain.avatar}
-                      size={24}
-                    />
-                    {t.name}
-                  </span>
-                  {!draftStarted ? (
-                    <form action={removeCaptain}>
-                      <input type="hidden" name="teamId" value={t.id} />
-                      <button
-                        type="submit"
-                        className="text-xs text-danger hover:underline"
-                      >
-                        remove
-                      </button>
-                    </form>
-                  ) : null}
-                </div>
-              ))
+                    {!draftStarted ? (
+                      <form action={removeCaptain}>
+                        <input type="hidden" name="teamId" value={t.id} />
+                        <button
+                          type="submit"
+                          className="text-xs text-danger hover:underline"
+                        >
+                          remove
+                        </button>
+                      </form>
+                    ) : null}
+                  </div>
+                ));
+              })()
             )}
           </div>
+          {!draftStarted &&
+          data.teams.length >= 2 &&
+          season.budgetMmrWeight > 0 ? (
+            <p className="mt-2 text-xs text-muted">
+              Budgets are MMR-weighted (±{season.budgetMmrWeight}%): lower-MMR
+              captains get more to spend.
+            </p>
+          ) : null}
           {draftStarted ? (
             <Link
               href="/draft"

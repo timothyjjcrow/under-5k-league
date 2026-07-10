@@ -44,6 +44,7 @@ model Season {
   minTeams       Int      @default(4)
   teamSize       Int      @default(5)
   draftBudget    Int      @default(100)
+  budgetMmrWeight Int     @default(20) // % budget swing by captain MMR (low-MMR captains get more; 0 = flat budgets)
   maxMmr         Int      @default(0) // signup MMR cap; players above it can't join (0 = no cap)
   regularBestOf  Int      @default(2) // series length for regular-season matches
   playoffBestOf  Int      @default(3) // series length for playoff (non-final) matches

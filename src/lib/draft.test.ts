@@ -5,6 +5,7 @@ import {
   canBid,
   isDraftComplete,
   nextNominatorIndex,
+  mmrWeightedBudgets,
   type DraftTeam,
 } from "./draft";
 
@@ -83,5 +84,61 @@ describe("nextNominatorIndex", () => {
   });
   it("returns -1 when all teams are full", () => {
     expect(nextNominatorIndex([team(5)], 5, 0)).toBe(-1);
+  });
+});
+
+describe("mmrWeightedBudgets", () => {
+  const cap = (teamId: string, mmr: number | null) => ({ teamId, mmr });
+
+  it("gives the extremes ±weight% and interpolates between", () => {
+    const b = mmrWeightedBudgets(100, 20, [
+      cap("low", 2000),
+      cap("mid", 3000),
+      cap("high", 4000),
+    ]);
+    expect(b.get("low")).toBe(120);
+    expect(b.get("mid")).toBe(100);
+    expect(b.get("high")).toBe(80);
+  });
+
+  it("interpolates by MMR distance, not rank order", () => {
+    const b = mmrWeightedBudgets(100, 20, [
+      cap("low", 2000),
+      cap("nearHigh", 3900), // 95% of the way up → close to the high budget
+      cap("high", 4000),
+    ]);
+    expect(b.get("nearHigh")).toBe(82);
+    expect(b.get("high")).toBe(80);
+  });
+
+  it("gives everyone base when MMRs are identical or weight is 0", () => {
+    const same = mmrWeightedBudgets(100, 20, [cap("a", 3000), cap("b", 3000)]);
+    expect(same.get("a")).toBe(100);
+    expect(same.get("b")).toBe(100);
+    const flat = mmrWeightedBudgets(100, 0, [cap("a", 1000), cap("b", 4000)]);
+    expect(flat.get("a")).toBe(100);
+    expect(flat.get("b")).toBe(100);
+  });
+
+  it("gives base to captains with unknown MMR", () => {
+    const b = mmrWeightedBudgets(100, 20, [
+      cap("a", 2000),
+      cap("b", 4000),
+      cap("unknown", null),
+    ]);
+    expect(b.get("unknown")).toBe(100);
+    expect(b.get("a")).toBe(120);
+    expect(b.get("b")).toBe(80);
+  });
+
+  it("never drops below the floor", () => {
+    const b = mmrWeightedBudgets(5, 90, [cap("a", 1000), cap("b", 4000)], 4);
+    expect(b.get("b")!).toBeGreaterThanOrEqual(4);
+  });
+
+  it("treats a non-finite weight as flat budgets (never NaN)", () => {
+    const b = mmrWeightedBudgets(100, NaN, [cap("a", 1000), cap("b", 4000)]);
+    expect(b.get("a")).toBe(100);
+    expect(b.get("b")).toBe(100);
   });
 });
