@@ -237,6 +237,10 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   standings, playoff rounds, weekly results, full rosters. Reuses
   `computeStandings`, `groupPlayoffRounds`, and `StandingsTable`; archived
   `/teams/[id]` pages already work since they query by id, not active season.
+- Admins can **permanently delete an archived season** (test runs/misfires)
+  via a confirm-guarded button on `/seasons` → `deleteSeason` (never the
+  active season; deletes matches first since Match→Team is RESTRICT, then
+  the season — everything else cascades).
 - Nav "History" + footer "Past seasons" links appear only once an archived
   (`isActive: false`) season exists — layout passes `hasHistory` down.
 

@@ -91,6 +91,40 @@ export async function createSeason(
   return { message: `Created ${name}` };
 }
 
+/**
+ * Permanently delete an archived season and everything under it (teams,
+ * matches, registrations, draft history) — for test runs and misfires.
+ * The active season can never be deleted.
+ */
+export async function deleteSeason(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const seasonId = str(formData, "seasonId");
+  const season = await prisma.season.findUnique({ where: { id: seasonId } });
+  if (!season) return { error: "Unknown season" };
+  if (season.isActive) {
+    return {
+      error:
+        "That's the active season — create a new season first (which archives it), then delete it.",
+    };
+  }
+
+  // Matches must go before teams (Match→Team is RESTRICT); the season delete
+  // cascades to everything else.
+  await prisma.$transaction([
+    prisma.match.deleteMany({ where: { seasonId } }),
+    prisma.season.delete({ where: { id: seasonId } }),
+  ]);
+  refresh();
+  return { message: `Deleted ${season.name} and all of its history` };
+}
+
 /** Directly set the active season's phase (admin override). */
 export async function setSeasonPhase(formData: FormData) {
   await requireAdmin();

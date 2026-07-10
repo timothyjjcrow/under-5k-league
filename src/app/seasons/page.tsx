@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
+import { deleteSeason } from "@/app/actions/admin";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   Badge,
   Card,
@@ -20,13 +23,17 @@ const PHASE_LABEL: Record<string, string> = {
 };
 
 export default async function SeasonsPage() {
-  const seasons = await prisma.season.findMany({
-    orderBy: { createdAt: "desc" },
-    include: {
-      teams: { select: { id: true, name: true } },
-      _count: { select: { registrations: true, matches: true } },
-    },
-  });
+  const [seasons, viewer] = await Promise.all([
+    prisma.season.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        teams: { select: { id: true, name: true } },
+        _count: { select: { registrations: true, matches: true } },
+      },
+    }),
+    getSessionUser(),
+  ]);
+  const isAdmin = viewer?.role === "ADMIN";
 
   return (
     <div className="space-y-8">
@@ -44,11 +51,11 @@ export default async function SeasonsPage() {
               ? s.teams.find((t) => t.id === s.championTeamId)
               : null;
             return (
-              <Link
-                key={s.id}
-                href={`/seasons/${s.id}`}
-                className="group block hover:no-underline"
-              >
+              <div key={s.id} className="flex h-full flex-col gap-1.5">
+                <Link
+                  href={`/seasons/${s.id}`}
+                  className="group block flex-1 hover:no-underline"
+                >
                 <Card interactive className="h-full">
                   <CardBody className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
@@ -90,7 +97,20 @@ export default async function SeasonsPage() {
                     </div>
                   </CardBody>
                 </Card>
-              </Link>
+                </Link>
+                {isAdmin && !s.isActive ? (
+                  <ActionForm action={deleteSeason} hidden={{ seasonId: s.id }}>
+                    <SubmitButton
+                      variant="secondary"
+                      size="sm"
+                      className="text-danger"
+                      confirm={`Permanently delete ${s.name}? Its teams, matches, and draft history are erased. This cannot be undone.`}
+                    >
+                      🗑 Remove from history
+                    </SubmitButton>
+                  </ActionForm>
+                ) : null}
+              </div>
             );
           })}
         </div>
