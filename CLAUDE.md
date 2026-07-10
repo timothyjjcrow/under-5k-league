@@ -53,6 +53,15 @@ renders per-phase so unused features stay hidden.
 - Run `npx tsc --noEmit` for a fast type check; `npm test` for unit;
   `npm run test:e2e` for Playwright (reseeds the DB first).
 
+## Free-agent signings (done)
+
+- `signFreeAgent` (admin action): permanently adds a registered, unrostered
+  player to a team with an open seat at $0 — how short rosters (pool-dry
+  drafts, late signups) get topped up. Guards: post-draft phases only, team
+  in season, ACTIVE registration, not already rostered, seat available.
+  Announced via `freeAgentSignedMessage`. Admin "Roster moves" card renders
+  only when a short team AND a free agent both exist.
+
 ## Playoffs & standins (done)
 
 - **Playoffs**: `src/lib/playoff-service.ts` — `createPlayoffBracket` seeds the

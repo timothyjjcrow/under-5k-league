@@ -76,6 +76,13 @@ export function championMessage(
   return `👑 **${teamName}** are the **${seasonName}** champions! GG everyone — recap at ${resolveSiteUrl()}/recap`;
 }
 
+export function freeAgentSignedMessage(
+  playerName: string,
+  teamName: string,
+): string {
+  return `🖊️ **${playerName}** signs with **${teamName}** as a free agent — roster updated: ${resolveSiteUrl()}/teams`;
+}
+
 export function testMessage(): string {
   return `👋 Webhook test from **${process.env.NEXT_PUBLIC_APP_NAME || "the league site"}** — notifications are wired up.`;
 }

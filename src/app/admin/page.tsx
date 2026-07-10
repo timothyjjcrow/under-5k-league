@@ -28,6 +28,7 @@ import {
   syncLeagueAction,
   setDiscordWebhook,
   testDiscordWebhook,
+  signFreeAgent,
 } from "@/app/actions/admin";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { pickBracketSize } from "@/lib/schedule";
@@ -94,6 +95,7 @@ export default async function AdminPage() {
           <CaptainControls season={season} data={data} />
           <ScheduleControls season={season} data={data} />
           <PlayoffControls season={season} data={data} />
+          <RosterMoves season={season} data={data} />
           <StandinControls data={data} />
           <LeagueControls season={season} />
           <DiscordControls webhookUrl={discordWebhookUrl} />
@@ -1011,6 +1013,65 @@ function LeagueControls({ season }: { season: Season }) {
             </li>
           </ol>
         </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// Top up short rosters after the draft: sign an undrafted or late-registered
+// player straight onto a team with an open seat.
+function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
+  if (season.status === "SIGNUPS" || season.status === "COMPLETE") return null;
+
+  const rosteredIds = new Set(
+    data.teams.flatMap((t) => t.members.map((m) => m.userId)),
+  );
+  const freeAgents = data.players.filter((p) => !rosteredIds.has(p.userId));
+  const shortTeams = data.teams.filter(
+    (t) => t.members.length < season.teamSize,
+  );
+  if (freeAgents.length === 0 || shortTeams.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader
+        title="Roster moves"
+        subtitle="Sign a registered free agent onto a team with an open seat."
+      />
+      <CardBody className="space-y-3">
+        <ActionForm
+          action={signFreeAgent}
+          className="flex flex-wrap items-center gap-2"
+        >
+          <select name="userId" required defaultValue="" className={selectCls}>
+            <option value="" disabled>
+              Free agent…
+            </option>
+            {freeAgents.map((p) => (
+              <option key={p.userId} value={p.userId}>
+                {p.user.name} ({p.mmr} MMR)
+              </option>
+            ))}
+          </select>
+          <span className="text-xs text-muted">joins</span>
+          <select name="teamId" required defaultValue="" className={selectCls}>
+            <option value="" disabled>
+              Team…
+            </option>
+            {shortTeams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name} ({t.members.length}/{season.teamSize})
+              </option>
+            ))}
+          </select>
+          <SubmitButton variant="secondary" size="sm">
+            Sign player
+          </SubmitButton>
+        </ActionForm>
+        <p className="text-xs text-muted">
+          Signings are permanent for the season (unlike standins, which cover a
+          single match) and are announced in Discord.
+        </p>
       </CardBody>
     </Card>
   );

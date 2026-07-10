@@ -3,6 +3,7 @@ import {
   signupMessage,
   draftStartedMessage,
   draftCompleteMessage,
+  freeAgentSignedMessage,
   matchResultMessage,
   playerSoldMessage,
   playoffsStartedMessage,
@@ -84,6 +85,13 @@ describe("discord message formatters", () => {
     expect(msg).toContain("**Fly**");
     expect(msg).toContain("**Fear's Team**");
     expect(msg).toContain("$23");
+  });
+
+  it("announces a free-agent signing", () => {
+    const msg = freeAgentSignedMessage("Late Joiner", "Short Squad");
+    expect(msg).toContain("**Late Joiner**");
+    expect(msg).toContain("**Short Squad**");
+    expect(msg).toContain("/teams");
   });
 
   it("flavors min-bid steals and big spends", () => {

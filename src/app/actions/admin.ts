@@ -39,6 +39,7 @@ import { fetchSteamProfiles } from "@/lib/steam";
 import { clampInt, str } from "@/lib/form";
 import {
   draftStartedMessage,
+  freeAgentSignedMessage,
   matchResultMessage,
   playoffsStartedMessage,
   sendDiscordMessage,
@@ -467,6 +468,70 @@ export async function recordResult(
   }
   refresh();
   return { message: `Result saved · ${homeScore}–${awayScore}` };
+}
+
+/**
+ * Permanently add an undrafted (or late-registered) player to a team with an
+ * open roster seat — how short teams get topped up after the draft.
+ */
+export async function signFreeAgent(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  if (season.status === SEASON_STATUS.SIGNUPS) {
+    return { error: "Run the draft first — signings are for after it" };
+  }
+  if (season.status === SEASON_STATUS.COMPLETE) {
+    return { error: "The season is over" };
+  }
+
+  const teamId = str(formData, "teamId");
+  const userId = str(formData, "userId");
+
+  const [team, registration, existingSeat, memberCount] = await Promise.all([
+    prisma.team.findFirst({
+      where: { id: teamId, seasonId: season.id },
+      include: { captain: true },
+    }),
+    prisma.registration.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId } },
+      include: { user: true },
+    }),
+    prisma.teamMember.findFirst({
+      where: { seasonId: season.id, userId },
+    }),
+    prisma.teamMember.count({ where: { teamId } }),
+  ]);
+  if (!team) return { error: "Unknown team" };
+  if (!registration || registration.status !== "ACTIVE") {
+    return { error: "That player isn't registered for this season" };
+  }
+  if (existingSeat) return { error: "That player is already on a team" };
+  if (memberCount >= season.teamSize) {
+    return { error: `${team.name} has no open roster seats` };
+  }
+
+  await prisma.teamMember.create({
+    data: {
+      seasonId: season.id,
+      teamId,
+      userId,
+      price: 0,
+      isCaptain: false,
+    },
+  });
+  await sendDiscordMessage(
+    freeAgentSignedMessage(registration.user.name, team.name),
+  );
+  refresh();
+  return { message: `${registration.user.name} signed to ${team.name}` };
 }
 
 /** Assign a standin to fill in for a rostered player in a specific match. */
