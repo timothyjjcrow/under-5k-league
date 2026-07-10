@@ -31,6 +31,7 @@ import {
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
 } from "@/lib/constants";
+import { predictionOpen } from "@/lib/pickem";
 import { HeroVideo } from "@/components/hero-video";
 import { CountUp } from "@/components/count-up";
 import { CheckinBanner } from "@/components/checkin-banner";
@@ -473,7 +474,7 @@ async function InhouseStrip() {
 
 // ---------- SIGNUPS ----------
 
-function SignupsView({
+async function SignupsView({
   snapshot,
   loggedIn,
 }: {
@@ -485,6 +486,17 @@ function SignupsView({
     myReg?.status === "ACTIVE" && myReg.type === "PLAYER";
   const isStandin = myReg?.status === "ACTIVE" && myReg.type === "STANDIN";
 
+  // Teams need captains as much as they need players — surface how many
+  // have volunteered so the "can we actually draft?" picture is complete.
+  const captainVolunteers = await prisma.registration.count({
+    where: {
+      seasonId: season.id,
+      status: "ACTIVE",
+      type: "PLAYER",
+      wantsCaptain: true,
+    },
+  });
+
   return (
     <div className="space-y-6">
       <ScheduleCallout label={season.matchSchedule} />
@@ -493,6 +505,10 @@ function SignupsView({
           <div className="flex items-center justify-between text-sm">
             <span className="font-medium">
               {playerCount} / {capacity.minPlayers} players to start
+              <span className="font-normal text-muted">
+                {" "}
+                · teams of {season.teamSize}
+              </span>
             </span>
             <span className="text-muted">
               {capacity.canDraft
@@ -509,7 +525,11 @@ function SignupsView({
               value={capacity.teamsFormable}
               hint={`of ${season.minTeams} needed`}
             />
-            <Stat label="Team size" value={season.teamSize} />
+            <Stat
+              label="Captain volunteers"
+              value={captainVolunteers}
+              hint={`need ${season.minTeams}`}
+            />
           </div>
 
           <div className="flex flex-wrap items-center gap-3 pt-1">
@@ -929,8 +949,44 @@ async function SeasonView({
     )
     .slice(0, 5);
 
+  // Visible to everyone — spectators and unrostered players had no way to
+  // see what's coming up without leaving the dashboard.
+  const upcoming = matches
+    .filter((m) => m.status !== "COMPLETED")
+    .slice(0, 4);
+  const pickemOpen = matches.filter((m) => predictionOpen(m)).length;
+  const fantasyLocked =
+    (await prisma.game.count({ where: { match: { seasonId: season.id } } })) >
+    0;
+
   return (
     <div className="space-y-6">
+      {/* Side games — one tap from the dashboard into the engagement loop. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <SideGameLink
+          href="/pickem"
+          icon="🔮"
+          title="Pick'em"
+          hint={
+            pickemOpen > 0
+              ? `${pickemOpen} ${pickemOpen === 1 ? "match" : "matches"} open — call it`
+              : "See the oracle board"
+          }
+        />
+        <SideGameLink
+          href="/fantasy"
+          icon="🧙"
+          title="Fantasy"
+          hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
+        />
+        <SideGameLink
+          href="/leaders"
+          icon="🥇"
+          title="Leaders"
+          hint="Stat boards & weekly honors"
+        />
+      </div>
+
       {/* min-w-0: grid items otherwise refuse to shrink below their content,
           letting a long team name widen the page on mobile. */}
       <div className="grid gap-6 lg:grid-cols-3">
@@ -987,6 +1043,36 @@ async function SeasonView({
                 ) : (
                   <p className="text-sm text-muted">No upcoming matches.</p>
                 )}
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {upcoming.length > 0 ? (
+            <Card>
+              <CardHeader title="Upcoming" />
+              <CardBody className="p-0">
+                <ul className="divide-y divide-line/60">
+                  {upcoming.map((m) => (
+                    <li key={m.id}>
+                      <Link
+                        href={`/matches/${m.id}`}
+                        className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
+                      >
+                        <div className="text-xs uppercase text-muted">
+                          Week {m.week}
+                          {m.scheduledAt
+                            ? ` · ${fmtWhen(m.scheduledAt)}`
+                            : ""}
+                        </div>
+                        <div className="mt-0.5 truncate font-medium">
+                          {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                          <span className="font-normal text-muted">vs</span>{" "}
+                          {teamName.get(m.awayTeamId) ?? "?"}
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               </CardBody>
             </Card>
           ) : null}
@@ -1073,6 +1159,35 @@ async function SeasonView({
         </Card>
       ) : null}
     </div>
+  );
+}
+
+function SideGameLink({
+  href,
+  icon,
+  title,
+  hint,
+}: {
+  href: string;
+  icon: string;
+  title: string;
+  hint: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group flex min-w-0 items-center gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 transition-colors hover:border-muted/60"
+    >
+      <span aria-hidden className="text-xl">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-medium group-hover:text-info">
+          {title}
+        </span>
+        <span className="block truncate text-xs text-muted">{hint}</span>
+      </span>
+    </Link>
   );
 }
 
