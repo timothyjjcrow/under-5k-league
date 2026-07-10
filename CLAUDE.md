@@ -348,6 +348,17 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `picks`), standings with per-pick breakdowns, locked-roster chips. Nav from
   REGULAR_SEASON on.
 
+## Pick'em (done, branch: bigger-features)
+
+- `Prediction` model (matchId+userId unique). Pure `src/lib/pickem.ts`
+  (tested): `predictionOpen` (locks at `scheduledAt` or completion),
+  `pickemStandings` (correct desc, accuracy tiebreak; draws void picks),
+  `pickSplit` (community percentages).
+- `savePrediction` action re-validates the lock + that the pick is one of the
+  two teams. `/pickem`: oracle-board leaderboard, open matches as two
+  team-buttons with live pick splits, "your graded picks" review. Nav from
+  REGULAR_SEASON on.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).

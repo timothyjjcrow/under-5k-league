@@ -53,6 +53,7 @@ function navItems(
     items.push({ href: "/schedule", label: "Schedule" });
     items.push({ href: "/leaders", label: "Leaders" });
     items.push({ href: "/fantasy", label: "Fantasy" });
+    items.push({ href: "/pickem", label: "Pick'em" });
   }
   // The recap is the season's headline once it wraps; in-season it's reachable
   // from the Leaders page ("awards so far") to keep the nav from crowding.
