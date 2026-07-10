@@ -26,6 +26,11 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
+import {
+  DRAFT_STATUS,
+  INHOUSE,
+  INHOUSE_ACTIVE_STATUSES,
+} from "@/lib/constants";
 import { HeroVideo } from "@/components/hero-video";
 import { CountUp } from "@/components/count-up";
 import { CheckinBanner } from "@/components/checkin-banner";
@@ -194,6 +199,7 @@ export default async function Home() {
         meta={heroMeta}
       />
       <SeasonTimeline phase={season.status} />
+      <InhouseStrip />
       {season.status === "SIGNUPS" && (
         <SignupsView snapshot={snapshot} loggedIn={!!user} />
       )}
@@ -424,6 +430,47 @@ function SeasonTimeline({ phase }: { phase: string }) {
   );
 }
 
+// The inhouse scene runs year-round but was invisible from the dashboard.
+// A slim strip keeps it one click away in every phase. Read-only queries —
+// lobby formation/resolution stays lazy on the /inhouse poll.
+async function InhouseStrip() {
+  const [queued, liveLobby] = await Promise.all([
+    prisma.inhouseQueueEntry.count(),
+    prisma.inhouseLobby.findFirst({
+      where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      select: { id: true },
+    }),
+  ]);
+
+  const label = liveLobby
+    ? "An inhouse is being played right now"
+    : queued > 0
+      ? `${queued} / ${INHOUSE.LOBBY_SIZE} queued for the next inhouse`
+      : "The inhouse queue is open";
+  const cta = liveLobby ? "Watch" : queued > 0 ? "Jump in" : "Start the queue";
+
+  return (
+    <Link
+      href="/inhouse"
+      className="group flex items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm transition-colors hover:border-muted/60"
+    >
+      <span className="flex min-w-0 items-center gap-2.5">
+        <span aria-hidden>⚔️</span>
+        {liveLobby ? (
+          <span
+            aria-hidden
+            className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-success"
+          />
+        ) : null}
+        <span className="truncate text-muted">{label}</span>
+      </span>
+      <span className="shrink-0 font-medium text-accent group-hover:underline">
+        {cta} →
+      </span>
+    </Link>
+  );
+}
+
 // ---------- SIGNUPS ----------
 
 function SignupsView({
@@ -633,46 +680,159 @@ function StatBar({
 
 // ---------- DRAFT ----------
 
+// A read-only glance at the live auction so the dashboard tells the story
+// without opening the draft room: who's on the block, what's left in the
+// pool, and the latest sales. Never resolves clocks — that stays in /draft.
+async function DraftPulse({ seasonId }: { seasonId: string }) {
+  const draft = await prisma.draft.findUnique({ where: { seasonId } });
+  if (!draft || draft.status === DRAFT_STATUS.NOT_STARTED) return null;
+
+  const rostered = await prisma.teamMember.findMany({
+    where: { seasonId },
+    select: { userId: true },
+  });
+  const [poolLeft, sales, nominated, leadingTeam] = await Promise.all([
+    prisma.registration.count({
+      where: {
+        seasonId,
+        status: "ACTIVE",
+        type: "PLAYER",
+        userId: { notIn: rostered.map((m) => m.userId) },
+      },
+    }),
+    prisma.teamMember.findMany({
+      where: { seasonId, isCaptain: false },
+      orderBy: { createdAt: "desc" },
+      take: 3,
+      include: { user: true, team: true },
+    }),
+    draft.nominatedUserId
+      ? prisma.user.findUnique({ where: { id: draft.nominatedUserId } })
+      : null,
+    draft.currentBidTeamId
+      ? prisma.team.findUnique({ where: { id: draft.currentBidTeamId } })
+      : null,
+  ]);
+
+  return (
+    <Card>
+      <CardHeader
+        title="Live from the draft room"
+        action={
+          <Link href="/draft" className={buttonClasses("accent", "sm")}>
+            Watch live →
+          </Link>
+        }
+      />
+      <CardBody className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+        <div className="min-w-0">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted">
+            On the block
+          </div>
+          {nominated ? (
+            <div className="mt-2 flex items-center gap-2.5">
+              <Avatar name={nominated.name} src={nominated.avatar} size={34} />
+              <div className="min-w-0">
+                <PlayerLink
+                  userId={nominated.id}
+                  className="block truncate font-medium"
+                >
+                  {nominated.name}
+                </PlayerLink>
+                <div className="truncate text-xs text-muted">
+                  ${draft.currentBid}
+                  {leadingTeam ? ` — ${leadingTeam.name} leads` : " opening bid"}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-muted">
+              {draft.status === DRAFT_STATUS.COMPLETE
+                ? "The draft is complete."
+                : "Waiting on the next nomination…"}
+            </p>
+          )}
+        </div>
+        <Stat label="Players left in pool" value={poolLeft} />
+        <div className="min-w-0">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted">
+            Latest sales
+          </div>
+          {sales.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-sm">
+              {sales.map((s) => (
+                <li key={s.id} className="flex items-center justify-between gap-2">
+                  <PlayerLink userId={s.userId} className="min-w-0 truncate">
+                    {s.user.name}
+                  </PlayerLink>
+                  <span className="shrink-0 text-xs text-muted">
+                    ${s.price} · {s.team.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-muted">No sales yet.</p>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
 function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
   const { teams, season } = snapshot;
   return (
     <div className="space-y-6">
+      <DraftPulse seasonId={season.id} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {teams.map((t) => (
-          <Card key={t.id} interactive>
-            <CardHeader
-              title={
-                <Link
-                  href={`/teams/${t.id}`}
-                  className="flex items-center gap-2 hover:text-info"
-                >
-                  <TeamCrest
-                    name={t.name}
-                    seed={t.id}
-                    size={24}
-                    className="rounded-md"
-                  />
-                  {t.name}
-                </Link>
-              }
-              subtitle={
-                <span>
-                  Captain:{" "}
-                  <PlayerLink userId={t.captainId} className="text-muted">
-                    {t.captain.name}
-                  </PlayerLink>
-                </span>
-              }
-              action={<Badge tone="accent">${t.budget} left</Badge>}
-            />
-            <CardBody>
-              <RosterList
-                members={t.members}
-                teamSize={season.teamSize}
+        {teams.map((t) => {
+          const spent = t.members.reduce((sum, m) => sum + m.price, 0);
+          const startingBudget = t.budget + spent;
+          return (
+            <Card key={t.id} interactive>
+              <CardHeader
+                title={
+                  <Link
+                    href={`/teams/${t.id}`}
+                    className="flex items-center gap-2 hover:text-info"
+                  >
+                    <TeamCrest
+                      name={t.name}
+                      seed={t.id}
+                      size={24}
+                      className="rounded-md"
+                    />
+                    {t.name}
+                  </Link>
+                }
+                subtitle={
+                  <span>
+                    Captain:{" "}
+                    <PlayerLink userId={t.captainId} className="text-muted">
+                      {t.captain.name}
+                    </PlayerLink>
+                  </span>
+                }
+                action={<Badge tone="accent">${t.budget} left</Badge>}
               />
-            </CardBody>
-          </Card>
-        ))}
+              <CardBody className="space-y-4">
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between text-xs text-muted">
+                    <span>
+                      Spent ${spent} of ${startingBudget}
+                    </span>
+                    <span>
+                      {t.members.length}/{season.teamSize} roster
+                    </span>
+                  </div>
+                  <Progress value={spent} max={startingBudget} />
+                </div>
+                <RosterList members={t.members} teamSize={season.teamSize} />
+              </CardBody>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
