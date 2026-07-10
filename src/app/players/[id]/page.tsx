@@ -34,6 +34,7 @@ import {
   TeamCrest,
 } from "@/components/ui";
 import { resultFor, type FormResult } from "@/lib/team-matches";
+import { achievementsFor, gameMvp } from "@/lib/achievements";
 
 export async function generateMetadata({
   params,
@@ -157,6 +158,28 @@ export default async function PlayerProfilePage({
     heroId: stat.heroId,
   }));
   const summary = summarizePlayerGames(lines);
+  // Trophy case: career-wide (every season's games), and badge checks need
+  // the whole game per line so the MVP can be identified.
+  const allGames = await prisma.game.findMany({
+    select: { players: true, radiantWin: true },
+  });
+  const achievementLines = allGames
+    .map((g) => {
+      const parsed = safeParse(g.players);
+      const stat = parsed.find((p) => p.userId === id);
+      if (!stat) return null;
+      return {
+        kills: stat.kills,
+        deaths: stat.deaths,
+        assists: stat.assists,
+        gpm: stat.gpm,
+        lastHits: stat.lastHits,
+        won: stat.isRadiant === g.radiantWin,
+        mvp: gameMvp(parsed, g.radiantWin) === id,
+      };
+    })
+    .filter((l): l is NonNullable<typeof l> => l !== null);
+  const badges = achievementsFor(achievementLines);
   const streak = currentStreak(lines); // `lines` is newest-first (games desc)
   const streakLabel =
     streak.count > 1 ? `${streak.type}${streak.count} streak` : undefined;
@@ -514,6 +537,32 @@ export default async function PlayerProfilePage({
           <CardHeader title="Most played heroes" />
           <CardBody>
             <HeroPool heroes={summary.topHeroes} heroNames={heroNames} />
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {badges.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="Achievements"
+            subtitle="Earned across every season's imported games"
+          />
+          <CardBody className="flex flex-wrap gap-2">
+            {badges.map((b) => (
+              <span
+                key={b.key}
+                title={b.desc}
+                className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 px-3 py-1 text-sm"
+              >
+                <span aria-hidden>{b.emoji}</span>
+                {b.label}
+                {b.count > 1 ? (
+                  <span className="font-mono text-xs tabular-nums text-muted">
+                    ×{b.count}
+                  </span>
+                ) : null}
+              </span>
+            ))}
           </CardBody>
         </Card>
       ) : null}

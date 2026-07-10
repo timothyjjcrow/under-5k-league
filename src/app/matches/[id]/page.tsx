@@ -7,6 +7,7 @@ import { getHeroNames } from "@/lib/dota";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
 import { recentForm, headToHead } from "@/lib/team-matches";
+import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
 import type { PlayerStat } from "@/lib/match-import";
 import {
@@ -158,6 +159,7 @@ export default async function MatchDetailPage({
             ? (teamName.get(g.direTeamId) ?? "Dire")
             : "Dire";
           const maxNet = Math.max(1, ...g.parsed.map((p) => p.netWorth ?? 0));
+          const mvpId = gameMvp(g.parsed, g.radiantWin);
           const radiantNet = radiant.reduce((s, p) => s + (p.netWorth ?? 0), 0);
           const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
           return (
@@ -189,6 +191,7 @@ export default async function MatchDetailPage({
                 <SidePlayers
                   label={radiantName}
                   win={g.radiantWin}
+                  mvpId={mvpId}
                   players={radiant}
                   heroes={heroes}
                   userName={userName}
@@ -198,6 +201,7 @@ export default async function MatchDetailPage({
                 <SidePlayers
                   label={direName}
                   win={!g.radiantWin}
+                  mvpId={mvpId}
                   players={dire}
                   heroes={heroes}
                   userName={userName}
@@ -496,6 +500,7 @@ function SidePlayers({
   userName,
   userAvatar,
   maxNet,
+  mvpId,
 }: {
   label: string;
   win: boolean;
@@ -504,6 +509,7 @@ function SidePlayers({
   userName: Map<string, string>;
   userAvatar: Map<string, string | null>;
   maxNet: number;
+  mvpId?: string | null;
 }) {
   const totalNet = players.reduce((s, p) => s + (p.netWorth ?? 0), 0);
   const hasNet = players.some((p) => p.netWorth != null);
@@ -570,6 +576,11 @@ function SidePlayers({
                     ) : (
                       <span className="truncate text-sm">{displayName}</span>
                     )}
+                    {p.userId && p.userId === mvpId ? (
+                      <Badge tone="accent" title="Best line of the game">
+                        MVP
+                      </Badge>
+                    ) : null}
                   </div>
                   <div className="truncate text-[11px] text-muted">
                     {heroName}

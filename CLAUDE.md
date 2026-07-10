@@ -348,6 +348,16 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `picks`), standings with per-pick breakdowns, locked-roster chips. Nav from
   REGULAR_SEASON on.
 
+## MVPs & achievements (done, branch: bigger-features)
+
+- Pure `src/lib/achievements.ts` (tested): `gameMvp(players, radiantWin)` =
+  best fantasy line among mapped players (win bonus favors winners; kills →
+  fewer deaths → id tiebreaks); `achievementsFor(lines)` = badge catalog
+  (Match MVP ×N, Deathless, Killing spree 15+, Playmaker 20+ assists,
+  Tycoon 600+ GPM, Veteran 10 games, Centurion 100 kills).
+- Match box scores show an MVP chip on the crowned line; player profiles get
+  an "Achievements" trophy case computed career-wide (all seasons' games).
+
 ## Hall of Fame (done, branch: bigger-features)
 
 - `/hall-of-fame`: cross-season career boards — 🏆 titles and ⚔️ series wins
