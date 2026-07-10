@@ -7,6 +7,7 @@ import {
   type OpenDotaMatch,
 } from "./dota";
 import { advancePlayoffBracket } from "./playoff-service";
+import { maybeAnnounceWeekHonors } from "./honors-service";
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
@@ -180,6 +181,10 @@ export async function recomputeSeries(matchId: string) {
   // Advance the playoff bracket only once the series has a decided winner.
   if (match.phase !== MATCH_PHASE.REGULAR && decided && winnerTeamId) {
     await advancePlayoffBracket(match.seasonId);
+  }
+  // Once a regular week's last series wraps, its honors go out (idempotent).
+  if (match.phase === MATCH_PHASE.REGULAR && decided) {
+    await maybeAnnounceWeekHonors(match.seasonId, match.week);
   }
 }
 

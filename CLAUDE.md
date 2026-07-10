@@ -348,6 +348,18 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `picks`), standings with per-pick breakdowns, locked-roster chips. Nav from
   REGULAR_SEASON on.
 
+## Weekly honors (done, branch: bigger-features)
+
+- Pure `weeklyHonors` (`src/lib/honors.ts`, tested): Player of the Week =
+  best fantasy points that week (same `fantasyPoints` identity as the
+  fantasy league); Team of the Week = most game wins, points tiebreak.
+- `honors-service.ts`: `maybeAnnounceWeekHonors(seasonId, week)` fires once
+  a regular week's matches are all COMPLETED — idempotent via a
+  `honorsAnnounced:<season>:<week>` Setting marker (claimed before sending).
+  Hooked in `recomputeSeries` (all import paths) and manual `recordResult`.
+- `/leaders` shows a "Weekly honors" card (newest week first, hero name via
+  `getHeroNames`).
+
 ## Pick'em (done, branch: bigger-features)
 
 - `Prediction` model (matchId+userId unique). Pure `src/lib/pickem.ts`

@@ -47,6 +47,7 @@ import {
   testMessage,
 } from "@/lib/discord";
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
+import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -500,6 +501,9 @@ export async function recordResult(
   // Playoff results auto-advance the bracket (and crown the champion at the end).
   if (match.phase !== MATCH_PHASE.REGULAR) {
     await advancePlayoffBracket(match.seasonId);
+  } else {
+    // Manual results can also close out a week — send its honors (idempotent).
+    await maybeAnnounceWeekHonors(match.seasonId, match.week);
   }
   refresh();
   return { message: `Result saved · ${homeScore}–${awayScore}` };

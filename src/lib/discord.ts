@@ -90,6 +90,29 @@ export function playerReleasedMessage(
   return `📤 **${playerName}** released from **${teamName}** — they're a free agent again.`;
 }
 
+export function weeklyHonorsMessage(honors: {
+  week: number;
+  playerName: string | null;
+  playerPoints: number;
+  heroName: string | null;
+  teamName: string | null;
+  teamGameWins: number;
+}): string {
+  const lines = [`🏅 **Week ${honors.week} honors are in!**`];
+  if (honors.playerName) {
+    lines.push(
+      `⭐ Player of the Week: **${honors.playerName}** — ${honors.playerPoints} fantasy pts${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+    );
+  }
+  if (honors.teamName) {
+    lines.push(
+      `🛡️ Team of the Week: **${honors.teamName}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
+    );
+  }
+  lines.push(`Full leaderboards: ${resolveSiteUrl()}/leaders`);
+  return lines.join("\n");
+}
+
 export function testMessage(): string {
   return `👋 Webhook test from **${process.env.NEXT_PUBLIC_APP_NAME || "the league site"}** — notifications are wired up.`;
 }
