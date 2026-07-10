@@ -8,7 +8,11 @@ import {
   type DraftTeam,
 } from "./draft";
 import type { SessionUser } from "./auth";
-import { draftCompleteMessage, sendDiscordMessage } from "./discord";
+import {
+  draftCompleteMessage,
+  playerSoldMessage,
+  sendDiscordMessage,
+} from "./discord";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -20,8 +24,9 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
  */
 export async function resolveExpiredNomination(seasonId: string): Promise<boolean> {
   // Set inside the transaction when this call is the one that finishes the
-  // draft; the Discord ping goes out only after the commit.
+  // draft / lands the sale; Discord pings go out only after the commit.
   let completedSeasonName: string | null = null;
+  let sale: { player: string; team: string; price: number } | null = null;
   const resolved = await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (
@@ -52,6 +57,13 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
       where: { id: draft.currentBidTeamId },
       data: { budget: { decrement: draft.currentBid } },
     });
+    const [soldUser, soldTeam] = await Promise.all([
+      tx.user.findUnique({ where: { id: draft.nominatedUserId } }),
+      tx.team.findUnique({ where: { id: draft.currentBidTeamId } }),
+    ]);
+    if (soldUser && soldTeam) {
+      sale = { player: soldUser.name, team: soldTeam.name, price: draft.currentBid };
+    }
 
     // Recompute needs and pick the next nominator.
     const teams = await tx.team.findMany({
@@ -111,6 +123,10 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     }
     return true;
   });
+  if (sale) {
+    const s = sale as { player: string; team: string; price: number };
+    await sendDiscordMessage(playerSoldMessage(s.player, s.team, s.price));
+  }
   if (completedSeasonName) {
     await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
   }

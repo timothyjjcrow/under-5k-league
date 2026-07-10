@@ -4,6 +4,7 @@ import {
   draftStartedMessage,
   draftCompleteMessage,
   matchResultMessage,
+  playerSoldMessage,
   playoffsStartedMessage,
   championMessage,
 } from "./discord";
@@ -76,5 +77,18 @@ describe("discord message formatters", () => {
     const msg = championMessage("Season 1", "Zai's Team");
     expect(msg).toContain("**Zai's Team**");
     expect(msg).toContain("champions");
+  });
+
+  it("announces a sale with the price", () => {
+    const msg = playerSoldMessage("Fly", "Fear's Team", 23);
+    expect(msg).toContain("**Fly**");
+    expect(msg).toContain("**Fear's Team**");
+    expect(msg).toContain("$23");
+  });
+
+  it("flavors min-bid steals and big spends", () => {
+    expect(playerSoldMessage("A", "T", 1)).toContain("steal");
+    expect(playerSoldMessage("A", "T", 75)).toContain("big spender");
+    expect(playerSoldMessage("A", "T", 20)).not.toMatch(/steal|big spender/);
   });
 });

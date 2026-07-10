@@ -192,9 +192,11 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   (`src/lib/settings.ts`, admin panel card with save/validate/test) with
   `DISCORD_WEBHOOK_URL` env as fallback.
 - Announces: new player signups (with countdown to the draft threshold), draft
-  started (`startDraft`), draft complete (both draft-service resolvers, flagged
-  inside the tx and sent after commit), match results (`recordResult`), playoff
-  bracket (`startPlayoffs`), and the champion (`advancePlayoffBracket`).
+  started (`startDraft`), every auction sale (`resolveExpiredNomination`,
+  captured in-tx and sent post-commit — one message per sale, idempotent),
+  draft complete (both draft-service resolvers), match results
+  (`recordResult`), playoff bracket (`startPlayoffs`), and the champion
+  (`advancePlayoffBracket`).
 
 ## Match-night check-in (done)
 

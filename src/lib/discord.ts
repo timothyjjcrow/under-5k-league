@@ -32,6 +32,16 @@ export function draftCompleteMessage(seasonName: string): string {
   return `✅ **The ${seasonName} draft is complete!** Rosters are locked — see the teams at ${resolveSiteUrl()}/teams`;
 }
 
+export function playerSoldMessage(
+  playerName: string,
+  teamName: string,
+  price: number,
+): string {
+  const tag =
+    price >= 50 ? " 💸 big spender!" : price <= 1 ? " — a steal!" : "";
+  return `💰 **${playerName}** → **${teamName}** for **$${price}**${tag}`;
+}
+
 export function matchResultMessage(m: {
   homeName: string;
   awayName: string;
