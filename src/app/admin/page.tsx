@@ -414,6 +414,17 @@ function CaptainControls({
         }
       />
       <CardBody className="grid gap-6 md:grid-cols-2">
+        {season.status === "SIGNUPS" && data.teams.length >= 2 ? (
+          <p className="text-xs text-muted md:col-span-2">
+            {(() => {
+              const seats = data.teams.length * (season.teamSize - 1);
+              const pool = nonCaptains.length;
+              return pool >= seats
+                ? `${pool} undrafted players for ${seats} roster seats — the pool covers every team.`
+                : `⚠️ Only ${pool} undrafted players for ${seats} roster seats — ${seats - pool} seat(s) will go unfilled (standins can cover match nights).`;
+            })()}
+          </p>
+        ) : null}
         <div>
           <h4 className="mb-2 text-sm font-medium text-muted">
             Captains ({data.teams.length})
@@ -564,11 +575,11 @@ function ScheduleControls({
                   key={m.id}
                   className="space-y-2 rounded-lg border border-line p-3"
                 >
-                  <form
+                  <ActionForm
                     action={recordResult}
                     className="flex flex-wrap items-center gap-2 text-sm"
+                    hidden={{ matchId: m.id }}
                   >
-                    <input type="hidden" name="matchId" value={m.id} />
                     <span className="w-14 text-xs text-muted">Wk {m.week}</span>
                     <span className="flex-1 text-right">{home?.name ?? "?"}</span>
                     <input
@@ -592,10 +603,10 @@ function ScheduleControls({
                     {m.status === "COMPLETED" ? (
                       <Badge tone="success">final</Badge>
                     ) : null}
-                    <Button type="submit" variant="secondary" size="sm">
+                    <SubmitButton variant="secondary" size="sm">
                       Save
-                    </Button>
-                  </form>
+                    </SubmitButton>
+                  </ActionForm>
 
                   <form
                     action={setMatchTime}

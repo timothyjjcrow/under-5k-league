@@ -529,8 +529,10 @@ describe("inhouse — misc guards", () => {
     const lobby = await prisma.inhouseLobby.findFirstOrThrow();
     expect(lobby.status).toBe(INHOUSE_STATUS.CANCELLED);
 
-    // With the slot free, queuing works again and forms a fresh lobby.
-    for (const p of players) await joinQueue(p.session, 3000);
+    // Cancelling puts everyone back in the queue…
+    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
+    // …so the next poll forms a fresh lobby with a new captain vote.
+    await getInhouseState(admin);
     expect(await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CAPTAIN_VOTE } })).toBe(1);
   });
 

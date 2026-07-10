@@ -666,10 +666,35 @@ export async function cancelLobby(viewer: SessionUser): Promise<ActionResult> {
     where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
   });
   if (!lobby) return { ok: false, error: "No active lobby" };
-  await prisma.inhouseLobby.update({
-    where: { id: lobby.id },
-    data: { status: INHOUSE_STATUS.CANCELLED, pickTeam: null, pickEndsAt: null },
+  const players = await prisma.inhouseLobbyPlayer.findMany({
+    where: { lobbyId: lobby.id },
+    select: { userId: true, mmr: true },
   });
+  await prisma.$transaction([
+    prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        status: INHOUSE_STATUS.CANCELLED,
+        pickTeam: null,
+        pickEndsAt: null,
+      },
+    }),
+    // Put everyone back in the queue so a cancelled lobby (wrong captains,
+    // someone AFK, …) re-forms with a fresh vote instead of stranding 10
+    // players. Anyone who's done for the night just leaves the queue.
+    ...players.map((p, i) =>
+      prisma.inhouseQueueEntry.upsert({
+        where: { userId: p.userId },
+        create: {
+          userId: p.userId,
+          mmr: p.mmr,
+          // Stagger joins so queue order stays deterministic.
+          joinedAt: new Date(Date.now() + i),
+        },
+        update: {},
+      }),
+    ),
+  ]);
   return { ok: true };
 }
 

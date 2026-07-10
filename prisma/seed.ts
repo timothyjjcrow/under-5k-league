@@ -115,7 +115,8 @@ async function main() {
         rankTier: randomRank(),
       },
     });
-    const mmr = 1500 + Math.floor(Math.random() * 3400);
+    // Stay under the season's 4500 MMR cap (signups above it are rejected).
+    const mmr = 1200 + Math.floor(Math.random() * 3301);
     await prisma.registration.create({
       data: {
         seasonId: season.id,
@@ -158,7 +159,7 @@ async function main() {
         seasonId: season.id,
         userId: user.id,
         type: "STANDIN",
-        mmr: 1500 + Math.floor(Math.random() * 3400),
+        mmr: 1200 + Math.floor(Math.random() * 3301),
       },
     });
     idx++;

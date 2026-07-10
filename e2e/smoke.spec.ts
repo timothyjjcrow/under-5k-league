@@ -3,7 +3,10 @@ import { test, expect } from "@playwright/test";
 test("home shows the signups phase for the seeded season", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Season 1" })).toBeVisible();
-  await expect(page.getByText("Signups open", { exact: true })).toBeVisible();
+  // The phase badge appears in the hero and the footer — scope to main.
+  await expect(
+    page.locator("#main").getByText("Signups open", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/players to start/)).toBeVisible();
 });
 

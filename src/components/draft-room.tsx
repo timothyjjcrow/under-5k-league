@@ -504,7 +504,8 @@ function TeamsGrid({ state }: { state: DraftState }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       {state.teams.map((t) => {
-        const onClock = t.id === state.nominatorTeamId;
+        const onClock =
+          state.status === "IN_PROGRESS" && t.id === state.nominatorTeamId;
         const highBid = t.id === state.currentBidTeamId;
         return (
           <div

@@ -67,13 +67,26 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
       lastIndex < 0 ? 0 : lastIndex,
     );
 
+    // If the signup pool is exhausted, the draft is over even when some teams
+    // are short — otherwise it would wait forever on a nomination that can
+    // never happen (short teams play with standins).
+    const [regs, members] = await Promise.all([
+      tx.registration.findMany({
+        where: { seasonId, status: "ACTIVE", type: "PLAYER" },
+        select: { userId: true },
+      }),
+      tx.teamMember.findMany({ where: { seasonId }, select: { userId: true } }),
+    ]);
+    const draftedIds = new Set(members.map((m) => m.userId));
+    const poolDry = !regs.some((r) => !draftedIds.has(r.userId));
+
     const cleared = {
       nominatedUserId: null,
       currentBid: 0,
       currentBidTeamId: null,
       bidEndsAt: null,
     };
-    if (nextIdx === -1) {
+    if (nextIdx === -1 || poolDry) {
       await tx.draft.update({
         where: { seasonId },
         data: { ...cleared, nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
@@ -135,7 +148,22 @@ export async function resolveStalledNomination(
     ]);
     const drafted = new Set(members.map((m) => m.userId));
     const pick = regs.find((r) => !drafted.has(r.userId));
-    if (!pick) return false;
+    if (!pick) {
+      // Pool is dry — nothing left to nominate, so the draft is over even
+      // though this team is short (they'll play with standins).
+      await tx.draft.update({
+        where: { seasonId },
+        data: {
+          nominatedUserId: null,
+          currentBid: 0,
+          currentBidTeamId: null,
+          bidEndsAt: null,
+          nominationEndsAt: null,
+          status: DRAFT_STATUS.COMPLETE,
+        },
+      });
+      return true;
+    }
 
     const amount = DEFAULTS.MIN_BID;
     await tx.draft.update({

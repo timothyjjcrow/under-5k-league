@@ -172,10 +172,20 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
   players so `/inhouse` isn't empty on a fresh DB.
 
+## Draft edge cases (done)
+
+- Nomination auto-skip: `resolveStalledNomination` nominates the top available
+  player at min bid when the nominator's clock runs out.
+- Pool-dry completion: if signups run out mid-draft, both resolvers mark the
+  draft COMPLETE (short teams play with standins) instead of stalling forever.
+  `startDraft` warns in its success toast when seats outnumber the pool.
+- `recordResult` validates scores against the match's `bestOf` via pure
+  `seriesScoreError` (`standings.ts`); partial results/forfeits are allowed.
+- Cancelling an inhouse lobby re-queues its 10 players (fresh captain vote on
+  the next poll).
+
 ## Good next steps
 
-- Nomination timer/auto-skip in the draft if a captain stalls (right now the
-  nominator must act to advance).
 - Production deploy config (swap SQLite → Postgres, real Steam key).
 - Optional: sync from a Valve `leagueid` (field exists on `Season`) if the
   league ever gets ticketed — `/leagues/{id}/matches` + `classifyGame`.

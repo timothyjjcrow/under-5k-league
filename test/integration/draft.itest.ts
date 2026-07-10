@@ -9,6 +9,7 @@ import {
 import { DRAFT_STATUS } from "@/lib/constants";
 import {
   expireClock,
+  expireNominationClock,
   makeCaptain,
   makePlayer,
   makeSeason,
@@ -122,5 +123,39 @@ describe("draft auction — full lifecycle", () => {
 
     const dup = await nominatePlayer(season.id, sessionFor(capB.user), star.id, 5);
     expect(dup.ok).toBe(false);
+  });
+
+  it("completes (not deadlocks) when the pool runs dry with seats still open", async () => {
+    // 2 teams × (3-1) = 4 open seats but only 2 signed-up players.
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const p1 = await makePlayer(season.id, "Player 1", 3000);
+    const p2 = await makePlayer(season.id, "Player 2", 2900);
+    await startDraftState(season.id);
+
+    // Sell both players.
+    await nominatePlayer(season.id, sessionFor(capA.user), p1.id, 1);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+    await nominatePlayer(season.id, sessionFor(capB.user), p2.id, 1);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+
+    // Pool is dry, teams are still short — the draft must be COMPLETE.
+    const state = await getDraftState(season.id, null);
+    expect(state?.status).toBe(DRAFT_STATUS.COMPLETE);
+  });
+
+  it("completes via the stall resolver when the nominator has nobody to pick", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    // No pool at all — the first nomination clock expires with nobody to nominate.
+    await startDraftState(season.id);
+    await expireNominationClock(season.id);
+
+    const state = await getDraftState(season.id, null);
+    expect(state?.status).toBe(DRAFT_STATUS.COMPLETE);
   });
 });

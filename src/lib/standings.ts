@@ -24,6 +24,30 @@ export type TeamStanding = {
   gameDiff: number;
 };
 
+/**
+ * Sanity-check a recorded series score against its best-of. Partial results
+ * (forfeits, abandoned series) are fine — only impossible scores are rejected.
+ * Returns an error message, or null when the score is plausible.
+ */
+export function seriesScoreError(
+  bestOf: number,
+  homeScore: number,
+  awayScore: number,
+): string | null {
+  if (homeScore + awayScore > bestOf) {
+    return `A best-of-${bestOf} has at most ${bestOf} games — ${homeScore}–${awayScore} is too many.`;
+  }
+  // Odd series stop at the clinching win; even ones (Bo2) play every game,
+  // so for those the total-games cap above is the only constraint.
+  if (bestOf % 2 === 1) {
+    const needed = Math.ceil(bestOf / 2);
+    if (homeScore > needed || awayScore > needed) {
+      return `A best-of-${bestOf} is first to ${needed} — a team can't win ${Math.max(homeScore, awayScore)} games.`;
+    }
+  }
+  return null;
+}
+
 export function computeStandings(
   teamIds: string[],
   matches: MatchLike[],

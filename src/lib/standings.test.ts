@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { computeStandings, type MatchLike } from "./standings";
+import {
+  computeStandings,
+  seriesScoreError,
+  type MatchLike,
+} from "./standings";
 
 function match(
   home: string,
@@ -69,5 +73,35 @@ describe("computeStandings", () => {
     const s = computeStandings(["a"], []);
     expect(s).toHaveLength(1);
     expect(s[0].played).toBe(0);
+  });
+});
+
+describe("seriesScoreError", () => {
+  it("accepts a decided Bo1 / Bo3 / Bo5", () => {
+    expect(seriesScoreError(1, 1, 0)).toBeNull();
+    expect(seriesScoreError(3, 2, 1)).toBeNull();
+    expect(seriesScoreError(5, 3, 0)).toBeNull();
+  });
+
+  it("accepts partial results (forfeits) and draws", () => {
+    expect(seriesScoreError(3, 1, 0)).toBeNull(); // forfeit / partial
+    expect(seriesScoreError(2, 1, 1)).toBeNull(); // Bo2 draw
+    expect(seriesScoreError(1, 0, 0)).toBeNull(); // double forfeit
+  });
+
+  it("accepts a Bo2 sweep (even series play every game)", () => {
+    expect(seriesScoreError(2, 2, 0)).toBeNull();
+    expect(seriesScoreError(2, 0, 2)).toBeNull();
+  });
+
+  it("rejects a score above an odd series' needed wins", () => {
+    expect(seriesScoreError(1, 2, 1)).toMatch(/at most 1 game/);
+    expect(seriesScoreError(3, 3, 0)).toMatch(/best-of-3/);
+    expect(seriesScoreError(5, 0, 4)).toMatch(/best-of-5/);
+  });
+
+  it("rejects more total games than the series holds", () => {
+    expect(seriesScoreError(3, 2, 2)).toMatch(/at most 3 games/);
+    expect(seriesScoreError(2, 2, 1)).toMatch(/at most 2 games/);
   });
 });

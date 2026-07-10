@@ -257,9 +257,13 @@ export function InhouseRoom({
           <button
             disabled={pending}
             onClick={() => {
-              if (window.confirm("Scrap the current inhouse lobby?")) {
+              if (
+                window.confirm(
+                  "Scrap the current inhouse lobby? Everyone goes back into the queue.",
+                )
+              ) {
                 act({ action: "cancel" });
-                pushToast("success", "Lobby cancelled");
+                pushToast("success", "Lobby cancelled — players re-queued");
               }
             }}
             className="text-xs text-danger hover:underline"

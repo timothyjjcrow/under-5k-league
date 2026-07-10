@@ -18,7 +18,7 @@ test("home renders the season timeline, pool composition, and footer", async ({
   await expect(page.getByText("Pool composition")).toBeVisible();
   await expect(
     page.getByText(
-      "A drafted, team-based Dota 2 league for players under 5000 MMR.",
+      "A drafted, team-based Dota 2 league for players under 4500 MMR.",
     ),
   ).toBeVisible();
 });

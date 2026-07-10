@@ -14,6 +14,7 @@ import {
   type SeasonStatus,
 } from "@/lib/constants";
 import { roundRobin } from "@/lib/schedule";
+import { seriesScoreError } from "@/lib/standings";
 import {
   createPlayoffBracket,
   advancePlayoffBracket,
@@ -204,6 +205,26 @@ export async function startDraft(
   });
   if (teams.length < 2) return { error: "Need at least 2 captains to draft" };
 
+  // Capacity check: captains are already on their teams, so the pool has to
+  // cover the remaining seats. Short is allowed (standins fill in), empty isn't.
+  const [regs, existingMembers] = await Promise.all([
+    prisma.registration.findMany({
+      where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
+      select: { userId: true },
+    }),
+    prisma.teamMember.findMany({
+      where: { seasonId: season.id },
+      select: { userId: true },
+    }),
+  ]);
+  const draftedIds = new Set(existingMembers.map((m) => m.userId));
+  const poolCount = regs.filter((r) => !draftedIds.has(r.userId)).length;
+  const openSeats = teams.length * (season.teamSize - 1);
+  if (poolCount === 0) {
+    return { error: "No signed-up players left to draft" };
+  }
+  const shortfall = openSeats - poolCount;
+
   await prisma.$transaction(async (tx) => {
     await Promise.all(
       teams.map((t) =>
@@ -242,7 +263,12 @@ export async function startDraft(
     });
   });
   refresh();
-  return { message: "Draft started — the auction is live" };
+  return {
+    message:
+      shortfall > 0
+        ? `Draft started — heads up: ${poolCount} players for ${openSeats} seats, so ${shortfall} seat(s) will go unfilled`
+        : "Draft started — the auction is live",
+  };
 }
 
 /** Generate a round-robin regular-season schedule from the drafted teams. */
@@ -319,14 +345,24 @@ export async function startPlayoffs(
 }
 
 /** Record a match result (series score). Sets winner + completed status. */
-export async function recordResult(formData: FormData) {
-  await requireAdmin();
+export async function recordResult(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const matchId = str(formData, "matchId");
   const homeScore = clampInt(formData, "homeScore", 0, 0, 99);
   const awayScore = clampInt(formData, "awayScore", 0, 0, 99);
 
   const match = await prisma.match.findUnique({ where: { id: matchId } });
-  if (!match) throw new Error("Unknown match");
+  if (!match) return { error: "Unknown match" };
+
+  const scoreError = seriesScoreError(match.bestOf, homeScore, awayScore);
+  if (scoreError) return { error: scoreError };
 
   const winnerTeamId =
     homeScore > awayScore
@@ -350,6 +386,7 @@ export async function recordResult(formData: FormData) {
     await advancePlayoffBracket(match.seasonId);
   }
   refresh();
+  return { message: `Result saved · ${homeScore}–${awayScore}` };
 }
 
 /** Assign a standin to fill in for a rostered player in a specific match. */

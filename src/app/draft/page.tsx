@@ -37,7 +37,11 @@ export default async function DraftPage() {
         subtitle={`${season.name} · live auction draft`}
         action={
           <Badge tone={draft?.status === "IN_PROGRESS" ? "accent" : "neutral"}>
-            {draft?.status === "IN_PROGRESS" ? "Live" : "Not started"}
+            {draft?.status === "IN_PROGRESS"
+              ? "Live"
+              : draft?.status === "COMPLETE"
+                ? "Complete"
+                : "Not started"}
           </Badge>
         }
       />
