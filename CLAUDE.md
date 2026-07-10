@@ -211,6 +211,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - Admin standin card flags players who declared OUT and aren't covered by an
   assignment yet, right above the assign form.
 
+## Player career history (done)
+
+- `/players/[id]` has a "Seasons" card: every rostered season (newest first)
+  with team, captain badge / draft price, team W–L(–D) via `resultFor`, 🏆 on
+  championship seasons, and a titles count in the subtitle. Links to
+  `/seasons/[id]` and `/teams/[id]`.
+
 ## Season history (done)
 
 - `/seasons` — every season newest-first (phase badge / Current, champion,

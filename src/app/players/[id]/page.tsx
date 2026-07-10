@@ -31,8 +31,9 @@ import {
   RoleBadges,
   Sparkline,
   Stat,
+  TeamCrest,
 } from "@/components/ui";
-import type { FormResult } from "@/lib/team-matches";
+import { resultFor, type FormResult } from "@/lib/team-matches";
 
 export async function generateMetadata({
   params,
@@ -101,6 +102,42 @@ export default async function PlayerProfilePage({
 
   const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
   const heroNames = await getHeroNames();
+
+  // Career: every season this player was rostered in, with their team's record.
+  const careerMemberships = await prisma.teamMember.findMany({
+    where: { userId: id },
+    include: { team: { include: { season: true } } },
+  });
+  const careerSeasonIds = [
+    ...new Set(careerMemberships.map((m) => m.team.seasonId)),
+  ];
+  const careerMatches = careerSeasonIds.length
+    ? await prisma.match.findMany({
+        where: { seasonId: { in: careerSeasonIds }, status: "COMPLETED" },
+      })
+    : [];
+  const careerRows = careerMemberships
+    .map((m) => {
+      const tally = { W: 0, L: 0, D: 0 };
+      for (const match of careerMatches) {
+        if (match.seasonId !== m.team.seasonId) continue;
+        if (match.homeTeamId !== m.teamId && match.awayTeamId !== m.teamId) {
+          continue;
+        }
+        tally[resultFor(m.teamId, match)]++;
+      }
+      return {
+        membership: m,
+        tally,
+        champion: m.team.season.championTeamId === m.teamId,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.membership.team.season.createdAt.getTime() -
+        a.membership.team.season.createdAt.getTime(),
+    );
+  const titles = careerRows.filter((r) => r.champion).length;
 
   // Pull this player's line out of each imported game.
   const gameRows = games
@@ -477,6 +514,54 @@ export default async function PlayerProfilePage({
           <CardHeader title="Most played heroes" />
           <CardBody>
             <HeroPool heroes={summary.topHeroes} heroNames={heroNames} />
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {careerRows.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="Seasons"
+            subtitle={`${careerRows.length} season${careerRows.length === 1 ? "" : "s"} played${titles > 0 ? ` · ${titles} title${titles === 1 ? "" : "s"} 🏆` : ""}`}
+          />
+          <CardBody className="divide-y divide-line/60 p-0">
+            {careerRows.map(({ membership: m, tally, champion }) => (
+              <div
+                key={m.id}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
+              >
+                <Link
+                  href={`/seasons/${m.team.seasonId}`}
+                  className="w-24 shrink-0 text-muted hover:text-info"
+                >
+                  {m.team.season.name}
+                </Link>
+                <Link
+                  href={`/teams/${m.teamId}`}
+                  className="flex min-w-0 flex-1 items-center gap-2 hover:text-info"
+                >
+                  <TeamCrest
+                    name={m.team.name}
+                    seed={m.teamId}
+                    size={22}
+                    className="shrink-0 rounded-md"
+                  />
+                  <span className="truncate font-medium">{m.team.name}</span>
+                  {champion ? <span title="Champion">🏆</span> : null}
+                </Link>
+                <span className="shrink-0 text-xs text-muted">
+                  {m.isCaptain ? (
+                    <Badge tone="accent">Captain</Badge>
+                  ) : (
+                    `$${m.price}`
+                  )}
+                </span>
+                <span className="shrink-0 font-mono text-xs tabular-nums">
+                  {tally.W}–{tally.L}
+                  {tally.D > 0 ? `–${tally.D}` : ""}
+                </span>
+              </div>
+            ))}
           </CardBody>
         </Card>
       ) : null}
