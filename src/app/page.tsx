@@ -28,6 +28,7 @@ import {
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
 import { HeroVideo } from "@/components/hero-video";
 import { CountUp } from "@/components/count-up";
+import { CheckinBanner } from "@/components/checkin-banner";
 import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -180,10 +181,56 @@ export default async function Home() {
       )}
       {season.status === "DRAFT" && <DraftPhaseView snapshot={snapshot} />}
       {(season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS") && (
-        <SeasonView snapshot={snapshot} userId={user?.id} />
+        <>
+          {user ? <MyNextMatch seasonId={season.id} userId={user.id} /> : null}
+          <SeasonView snapshot={snapshot} userId={user?.id} />
+        </>
       )}
       {season.status === "COMPLETE" && <CompleteView snapshot={snapshot} />}
     </div>
+  );
+}
+
+// The signed-in player's next unplayed match with one-click check-in — the
+// thing a rostered player most wants from the home page mid-season.
+async function MyNextMatch({
+  seasonId,
+  userId,
+}: {
+  seasonId: string;
+  userId: string;
+}) {
+  const myTeams = await prisma.teamMember.findMany({
+    where: { seasonId, userId },
+    select: { teamId: true },
+  });
+  if (myTeams.length === 0) return null;
+  const teamIds = myTeams.map((t) => t.teamId);
+
+  const next = await prisma.match.findFirst({
+    where: {
+      seasonId,
+      status: { not: "COMPLETED" },
+      OR: [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }],
+    },
+    orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+    include: { homeTeam: true, awayTeam: true },
+  });
+  if (!next) return null;
+
+  const myRsvp = await prisma.matchAvailability.findUnique({
+    where: { matchId_userId: { matchId: next.id, userId } },
+    select: { status: true },
+  });
+
+  return (
+    <CheckinBanner
+      matchId={next.id}
+      heading={`Your next match — Week ${next.week}: ${next.homeTeam.name} vs ${next.awayTeam.name}`}
+      when={fmtWhen(next.scheduledAt)}
+      myRsvp={myRsvp?.status ?? null}
+      detailsHref={`/matches/${next.id}`}
+    />
   );
 }
 

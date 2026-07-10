@@ -7,8 +7,7 @@ import { getHeroNames } from "@/lib/dota";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
 import { recentForm, headToHead } from "@/lib/team-matches";
-import { setAvailability } from "@/app/actions/availability";
-import { ActionForm, SubmitButton } from "@/components/action-form";
+import { CheckinBanner } from "@/components/checkin-banner";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   Avatar,
@@ -294,43 +293,11 @@ async function MatchPreview({
   return (
     <div className="space-y-6">
       {isParticipant ? (
-        <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-info/40 bg-info/10 px-5 py-3.5 text-sm">
-          <span className="text-lg leading-none">🗓️</span>
-          <div className="min-w-0 flex-1">
-            <div className="font-medium">You&apos;re playing in this match</div>
-            <div className="text-muted">
-              {myRsvp === "IN"
-                ? "You're confirmed ✓"
-                : myRsvp === "OUT"
-                  ? "You're marked unavailable."
-                  : "Can you make it? Let your captain know."}
-            </div>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <ActionForm
-              action={setAvailability}
-              hidden={{ matchId: match.id, status: "IN" }}
-            >
-              <SubmitButton
-                variant={myRsvp === "IN" ? "primary" : "secondary"}
-                size="sm"
-              >
-                ✓ I&apos;m in
-              </SubmitButton>
-            </ActionForm>
-            <ActionForm
-              action={setAvailability}
-              hidden={{ matchId: match.id, status: "OUT" }}
-            >
-              <SubmitButton
-                variant={myRsvp === "OUT" ? "primary" : "secondary"}
-                size="sm"
-              >
-                ✗ Can&apos;t make it
-              </SubmitButton>
-            </ActionForm>
-          </div>
-        </div>
+        <CheckinBanner
+          matchId={match.id}
+          heading="You're playing in this match"
+          myRsvp={myRsvp}
+        />
       ) : null}
 
       <Card>

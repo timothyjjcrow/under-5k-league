@@ -200,10 +200,12 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 - `MatchAvailability` model (matchId+userId unique, status IN|OUT). Pure
   summary math in `src/lib/availability.ts` (`teamAvailability`, tested).
-- Players RSVP from a "Your next match" banner on `/schedule`
-  (`setAvailability` action in `src/app/actions/availability.ts` — rostered
-  players and assigned standins only, no completed matches). Match rows show
-  per-team ✓/✗ counts while a match is unplayed.
+- Players RSVP via the shared `<CheckinBanner>`
+  (`src/components/checkin-banner.tsx`) rendered on the dashboard
+  (`MyNextMatch` in `page.tsx`), `/schedule`, and unplayed `/matches/[id]`
+  pages (`setAvailability` action — rostered players and assigned standins
+  only, no completed matches). Schedule match rows show per-team ✓/✗ counts
+  while a match is unplayed.
 - Admin standin card flags players who declared OUT and aren't covered by an
   assignment yet, right above the assign form.
 

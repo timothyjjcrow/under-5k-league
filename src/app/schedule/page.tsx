@@ -10,8 +10,7 @@ import {
   pendingResultsMessage,
 } from "@/lib/schedule-status";
 import { teamAvailability, type TeamAvailability } from "@/lib/availability";
-import { setAvailability } from "@/app/actions/availability";
-import { ActionForm, SubmitButton } from "@/components/action-form";
+import { CheckinBanner } from "@/components/checkin-banner";
 import { StandingsTable } from "@/app/page";
 import {
   Badge,
@@ -155,47 +154,13 @@ export default async function SchedulePage() {
       <ScheduleCallout label={season.matchSchedule} />
 
       {myNextMatch ? (
-        <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-info/40 bg-info/10 px-5 py-3.5 text-sm">
-          <span className="text-lg leading-none">🗓️</span>
-          <div className="min-w-0 flex-1">
-            <div className="font-medium">
-              Your next match — Week {myNextMatch.week}:{" "}
-              {teamName.get(myNextMatch.homeTeamId)} vs{" "}
-              {teamName.get(myNextMatch.awayTeamId)}
-            </div>
-            <div className="text-muted">
-              {myRsvp === "IN"
-                ? "You're confirmed ✓ — change it below if plans shift."
-                : myRsvp === "OUT"
-                  ? "You're marked unavailable — a standin can be lined up."
-                  : "Can you make it? Let your captain know."}
-            </div>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <ActionForm
-              action={setAvailability}
-              hidden={{ matchId: myNextMatch.id, status: "IN" }}
-            >
-              <SubmitButton
-                variant={myRsvp === "IN" ? "primary" : "secondary"}
-                size="sm"
-              >
-                ✓ I&apos;m in
-              </SubmitButton>
-            </ActionForm>
-            <ActionForm
-              action={setAvailability}
-              hidden={{ matchId: myNextMatch.id, status: "OUT" }}
-            >
-              <SubmitButton
-                variant={myRsvp === "OUT" ? "primary" : "secondary"}
-                size="sm"
-              >
-                ✗ Can&apos;t make it
-              </SubmitButton>
-            </ActionForm>
-          </div>
-        </div>
+        <CheckinBanner
+          matchId={myNextMatch.id}
+          heading={`Your next match — Week ${myNextMatch.week}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
+          when={fmtWhen(myNextMatch.scheduledAt)}
+          myRsvp={myRsvp}
+          detailsHref={`/matches/${myNextMatch.id}`}
+        />
       ) : null}
 
       {pendingMsg && season.status === "REGULAR_SEASON" ? (
