@@ -172,9 +172,22 @@ export default async function TeamPage({
           <Link href="/teams" className="text-sm text-info hover:underline">
             ← All teams
           </Link>
-          <Link href="/schedule" className="text-sm text-info hover:underline">
-            Standings →
-          </Link>
+          <span className="flex items-center gap-4">
+            {team.season.isActive &&
+            (team.season.status === "REGULAR_SEASON" ||
+              team.season.status === "PLAYOFFS") ? (
+              <a
+                href={`/api/calendar?team=${team.id}`}
+                className="text-xs text-muted hover:text-info"
+                title="This team's scheduled matches as an .ics calendar"
+              >
+                📅 Calendar
+              </a>
+            ) : null}
+            <Link href="/schedule" className="text-sm text-info hover:underline">
+              Standings →
+            </Link>
+          </span>
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
           {/* The roster's signature hero, very faint on the right. */}

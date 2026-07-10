@@ -149,7 +149,19 @@ export default async function SchedulePage() {
 
   return (
     <div className="space-y-8">
-      <PageTitle title="Schedule & Standings" subtitle={season.name} />
+      <PageTitle
+        title="Schedule & Standings"
+        subtitle={season.name}
+        action={
+          <a
+            href="/api/calendar"
+            className="text-xs text-muted hover:text-info"
+            title="Subscribe to scheduled matches from your calendar app"
+          >
+            📅 Calendar (.ics)
+          </a>
+        }
+      />
 
       <ScheduleCallout label={season.matchSchedule} />
 

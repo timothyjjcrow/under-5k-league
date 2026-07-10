@@ -250,6 +250,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `FilterablePlayer` so the signup pool page and the live draft share the
   same tested filter logic.
 
+## Calendar feed (done)
+
+- `src/lib/ics.ts` — pure RFC 5545 builder (escaping, UTC dates, CRLF;
+  tested). `GET /api/calendar` serves the active season's scheduled,
+  unplayed matches (`?team=<id>` filters); duration is `bestOf × 60 + 30`
+  minutes. Linked from `/schedule` ("📅 Calendar (.ics)") and team pages
+  (during REGULAR_SEASON/PLAYOFFS).
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).
