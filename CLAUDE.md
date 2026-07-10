@@ -335,6 +335,19 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - `CheckinBanner` text has `min-w-[14rem]` so the RSVP buttons wrap below the
   copy on phones instead of crushing it.
 
+## Fantasy league (done, branch: bigger-features)
+
+- Anyone signed in picks a **fantasy five** from the drafted rosters under an
+  MMR salary cap (`fantasyCap` = league-avg rostered MMR × 5 × 1.05); points
+  score per imported game via `fantasyPoints` (kills/assists/deaths/economy/
+  win bonus — weights in `FANTASY` constants). All pure + tested in
+  `src/lib/fantasy.ts`.
+- Models `FantasyRoster`+`FantasyPick`; `saveFantasyRoster` action validates
+  picks server-side and **locks league-wide once the first game is imported**.
+- `/fantasy`: live-budget picker (client `FantasyPicker`, checkboxes named
+  `picks`), standings with per-pick breakdowns, locked-roster chips. Nav from
+  REGULAR_SEASON on.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).

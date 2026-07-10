@@ -69,6 +69,24 @@ export const DEFAULTS = {
   MIN_BID: 1,
 } as const;
 
+// ---------- Fantasy ----------
+
+export const FANTASY = {
+  /** Roster slots in a fantasy five. */
+  SLOTS: 5,
+  /** MMR salary cap = league-average rostered MMR × SLOTS × CAP_SLACK. */
+  CAP_SLACK: 1.05,
+  // Scoring weights, applied per imported game.
+  KILL: 3,
+  ASSIST: 1.5,
+  DEATH: -1,
+  WIN: 10,
+  /** Points per GPM (economy signal without dwarfing kills). */
+  GPM: 0.02,
+  /** Points per last hit. */
+  LAST_HIT: 0.02,
+} as const;
+
 // ---------- Inhouse (casual pick-up mode, separate from the league) ----------
 
 export const INHOUSE_STATUS = {

@@ -35,6 +35,8 @@ model User {
   inhouseLobbies      InhouseLobbyPlayer[]
   startedInhouses     InhouseLobby[]      @relation("InhouseStarter")
   matchAvailability   MatchAvailability[]
+  fantasyRosters      FantasyRoster[]
+  fantasyPickedBy     FantasyPick[]
 }
 
 model Season {
@@ -64,6 +66,7 @@ model Season {
   matches       Match[]
   teamMembers   TeamMember[]
   bids          Bid[]
+  fantasyRosters FantasyRoster[]
 }
 
 model Registration {
@@ -237,6 +240,36 @@ model Setting {
 // rolling queue: once INHOUSE.LOBBY_SIZE players are waiting a lobby forms, the
 // two highest-MMR players captain, and they draft the rest back-and-forth.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Fantasy — every league member picks a "fantasy five" from the drafted
+// rosters under an MMR salary cap; points score from imported game stats.
+// ---------------------------------------------------------------------------
+
+model FantasyRoster {
+  id        String   @id @default(cuid())
+  seasonId  String
+  userId    String // the fantasy manager (any signed-in user)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season        @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  picks  FantasyPick[]
+
+  @@unique([seasonId, userId])
+}
+
+model FantasyPick {
+  id       String @id @default(cuid())
+  rosterId String
+  userId   String // the drafted league player being picked
+
+  roster FantasyRoster @relation(fields: [rosterId], references: [id], onDelete: Cascade)
+  player User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([rosterId, userId])
+}
 
 // A single global queue of players waiting for the next inhouse. One row per
 // user (a user can only wait once); the earliest to join are pulled into a lobby.
