@@ -2,12 +2,14 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
+import { draftRecap } from "@/lib/draft-recap";
 import { cn } from "@/lib/utils";
 import {
   Avatar,
   Badge,
   Card,
   CardBody,
+  CardHeader,
   EmptyState,
   PageTitle,
   PlayerLink,
@@ -65,6 +67,27 @@ export default async function TeamsPage() {
   const played = matches.some((m) => m.status === "COMPLETED" && m.phase === "REGULAR");
   const isDraft = season.status === "DRAFT";
 
+  // Draft-night superlatives (biggest spend, best steal, …) — MMR from signups.
+  const memberIds = teams.flatMap((t) => t.members.map((m) => m.userId));
+  const regs = memberIds.length
+    ? await prisma.registration.findMany({
+        where: { seasonId: season.id, userId: { in: memberIds } },
+        select: { userId: true, mmr: true },
+      })
+    : [];
+  const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
+  const recap = draftRecap(
+    teams.flatMap((t) =>
+      t.members.map((m) => ({
+        name: m.user.name,
+        teamName: t.name,
+        price: m.price,
+        isCaptain: m.isCaptain,
+        mmr: mmrByUser.get(m.userId) ?? null,
+      })),
+    ),
+  );
+
   // After matches start, order by standings; before that, keep draft order.
   const ordered = played
     ? [...teams].sort(
@@ -78,6 +101,68 @@ export default async function TeamsPage() {
         title="Teams"
         subtitle={`${season.name} · ${teams.length} teams`}
       />
+
+      {recap.totalSpent > 0 ? (
+        <Card>
+          <CardHeader
+            title={isDraft ? "Draft night — so far" : "Draft night"}
+            subtitle={`$${recap.totalSpent} changed hands at the auction`}
+          />
+          <CardBody className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            {recap.biggestSpend ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  💸 Biggest spend
+                </div>
+                <div className="mt-1 font-medium">
+                  {recap.biggestSpend.name} · ${recap.biggestSpend.price}
+                </div>
+                <div className="text-xs text-muted">
+                  {recap.biggestSpend.teamName}
+                </div>
+              </div>
+            ) : null}
+            {recap.bestValue ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  🕵️ Best steal
+                </div>
+                <div className="mt-1 font-medium">
+                  {recap.bestValue.name} · ${recap.bestValue.price}
+                </div>
+                <div className="text-xs text-muted">
+                  {recap.bestValue.mmr} MMR for {recap.bestValue.teamName}
+                </div>
+              </div>
+            ) : null}
+            {recap.topSpender ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  🐳 Top spender
+                </div>
+                <div className="mt-1 font-medium">{recap.topSpender.teamName}</div>
+                <div className="text-xs text-muted">
+                  ${recap.topSpender.spent} total
+                </div>
+              </div>
+            ) : null}
+            {recap.bargainHunter &&
+            recap.bargainHunter.teamName !== recap.topSpender?.teamName ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  🧾 Bargain hunter
+                </div>
+                <div className="mt-1 font-medium">
+                  {recap.bargainHunter.teamName}
+                </div>
+                <div className="text-xs text-muted">
+                  ${recap.bargainHunter.spent} total
+                </div>
+              </div>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {ordered.map((t) => {

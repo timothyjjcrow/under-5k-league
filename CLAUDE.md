@@ -258,6 +258,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   minutes. Linked from `/schedule` ("📅 Calendar (.ics)") and team pages
   (during REGULAR_SEASON/PLAYOFFS).
 
+## Draft recap card (done)
+
+- `draftRecap` (`src/lib/draft-recap.ts`, tested): biggest single spend, best
+  MMR-per-dollar steal, top-spending and least-spending teams, total spent —
+  captains ($0) excluded. Rendered as a "Draft night" card on `/teams`
+  whenever any purchases exist (live during DRAFT, historical after).
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).
