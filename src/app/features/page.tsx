@@ -48,61 +48,61 @@ const SECTIONS: Section[] = [
   {
     id: "always-on",
     kicker: "Always on",
-    title: "Things you can do right now",
-    blurb: "These don't wait for a season.",
+    title: "What you can do today",
+    blurb: "You don't have to wait for the next season to get involved.",
     phases: [],
     features: [
       {
         icon: "⚔️",
         title: "Inhouse pick-up games",
-        desc: "Ten people queue, the lobby votes how captains get picked, teams draft, you play. The box score posts itself before anyone's typed \"gg\".",
+        desc: "Queue with nine other players, vote on the draft format, build teams, and jump into a real match. When it ends, the stats, MVP, and box score are already waiting.",
         href: "/inhouse",
       },
       {
         icon: "🏛️",
         title: "Hall of Fame",
-        desc: "Titles, series wins, career fantasy points, and who calls their shots. Get your name in here and it stays.",
+        desc: "Championships, career records, fantasy legends, and the players who backed up the trash talk. Every season adds to it.",
         href: "/hall-of-fame",
       },
       {
         icon: "🪪",
         title: "Player profiles",
-        desc: "Click any name, anywhere — what they play, how their career's gone, every team they've been on. Great for scouting. Also for gloating.",
+        desc: "Every player has a career — heroes, seasons, teams, awards, badges. Whether you're scouting a teammate or proving you're better than your friends, it's all there.",
         href: "/players",
       },
       {
         icon: "📣",
-        title: "Discord announcements",
-        desc: "Signups, draft sales, results, playoff drama — it all lands in the Discord as it happens.",
+        title: "Live Discord updates",
+        desc: "Signups, draft picks, match results, playoff drama — it all lands in the Discord as it happens, so nobody misses anything.",
       },
     ],
   },
   {
     id: "signups",
     kicker: "Step 1 — Signups",
-    title: "Getting in is the easy part",
+    title: "Getting in takes about a minute",
     blurb: "No account to create, no password to forget.",
     phases: ["SIGNUPS"],
     features: [
       {
         icon: "🎮",
         title: "Sign in with Steam",
-        desc: "One click and you're you — Steam name, avatar, and your real ranked medal everywhere.",
+        desc: "No new account, no password — your Steam profile, avatar, and ranked medal are imported automatically.",
       },
       {
         icon: "📝",
         title: "Tell captains who you are",
-        desc: "Your positions, favorite heroes, and a note to captains — on screen in the draft room when you're on the block.",
+        desc: "Pick your positions, list your favorite heroes, leave a note — it's all on screen while captains decide whether to spend their budget on you.",
       },
       {
         icon: "🔁",
-        title: "Welcome back",
-        desc: "Played before? Your form arrives pre-filled from last season.",
+        title: "Returning players",
+        desc: "Played before? Your form arrives pre-filled from last season. Update what changed and you're in.",
       },
       {
         icon: "🧢",
-        title: "The cap is the point",
-        desc: "Under 4.5K means under 4.5K — seasons can set a hard MMR ceiling.",
+        title: "Built for Under 4.5K",
+        desc: "Every season can set a hard MMR cap, so the league starts from a level playing field.",
       },
     ],
   },
@@ -111,13 +111,13 @@ const SECTIONS: Section[] = [
     kicker: "Step 2 — Draft night",
     title: "A live auction, not a spreadsheet",
     blurb:
-      "Captains fight over you and pay real (fake) money for your services.",
+      "Captains nominate, fight over bids, and try to build the best roster before the clock runs out.",
     phases: ["DRAFT"],
     features: [
       {
         icon: "🔨",
         title: "Live bidding, real clock",
-        desc: "Nominate, bid, win — against a ticking clock. If a captain falls asleep on their turn, the draft moves on without them.",
+        desc: "Every bid changes the room. Run out of money too early and you'll regret it; wait too long and your favorite player is gone.",
         href: "/draft",
         livePhases: ["DRAFT"],
       },
@@ -128,8 +128,8 @@ const SECTIONS: Section[] = [
       },
       {
         icon: "🧾",
-        title: "The receipts are public",
-        desc: "Who overpaid, who got the steal, who went home broke — the recap keeps score.",
+        title: "Every pick has receipts",
+        desc: "Biggest steal, worst overpay, fastest budget collapse — the draft recap remembers everything.",
         href: "/teams",
         livePhases: POST_DRAFT,
       },
@@ -138,64 +138,64 @@ const SECTIONS: Section[] = [
   {
     id: "season",
     kicker: "Step 3 — Regular season",
-    title: "You play. The site keeps score.",
+    title: "You play Dota. The site handles everything else.",
     blurb:
-      "Show up and play Dota — the site turns your matches into box scores, standings, and arguments.",
+      "Your matches are pulled straight from the game and turned into box scores, standings, and arguments.",
     phases: ["REGULAR_SEASON"],
     features: [
       {
         icon: "📊",
-        title: "Real box scores",
-        desc: "Heroes, KDA, net worth for every match, pulled straight from the game — usually found before anyone pastes an ID.",
+        title: "Automatic match stats",
+        desc: "As soon as your match finishes, the site pulls the data — heroes, KDA, net worth, gold. Everything you'd expect from a professional league.",
         href: "/schedule",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "📈",
-        title: "Power rankings with receipts",
-        desc: "A rating that moves every game, with weekly arrows. \"We're better than our record\" is now checkable.",
+        title: "Power rankings",
+        desc: "Standings only tell part of the story. Power rankings move every week and give everyone something to argue about.",
         href: "/teams",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🥇",
-        title: "Leaders & weekly honors",
-        desc: "Leaderboards for everything, plus an automatic Player and Team of the Week. There will be discourse.",
+        title: "Weekly awards",
+        desc: "Player of the Week, Team of the Week, league leaders — every week gives you something new to chase.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🏅",
-        title: "MVPs & badges",
-        desc: "Every game crowns an MVP; careers collect badges — deathless games, 15-kill sprees, 100 career kills.",
+        title: "Career badges",
+        desc: "Deathless wins, kill streaks, milestones, championships — every season adds to your legacy.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🧙",
         title: "Fantasy league",
-        desc: "Draft a fantasy five under a salary cap, then sweat everyone else's games all season.",
+        desc: "Build a roster under a salary cap and score points off real league matches. Suddenly you're cheering for players you'd normally want to beat.",
         href: "/fantasy",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🔮",
         title: "Pick'em",
-        desc: "Call every match, watch the community split, climb the oracle board. Being wrong is public.",
+        desc: "Predict every match and climb the oracle board — then watch everyone discover how hard predicting Dota really is.",
         href: "/pickem",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "✅",
-        title: "One-tap check-in",
-        desc: "One tap to confirm match night. Captains see who's in; admins line up standins early.",
+        title: "Match check-in",
+        desc: "One tap tells your captain you're available, so standins get arranged early instead of five minutes before game time.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
       {
         icon: "📅",
-        title: "Matches in your calendar",
-        desc: "Subscribe once and your games appear in your own calendar. \"I forgot\" retires as an excuse.",
+        title: "Calendar sync",
+        desc: "Subscribe once and every scheduled match appears in your own calendar. No screenshots, no forgotten game nights.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
@@ -204,28 +204,29 @@ const SECTIONS: Section[] = [
   {
     id: "playoffs",
     kicker: "Step 4 — Playoffs & legacy",
-    title: "Your wins follow you",
-    blurb: "Seasons end. The record book doesn't.",
+    title: "This is what the regular season was for",
+    blurb:
+      "One bad night and you're done. Win it all and your team becomes league history.",
     phases: ["PLAYOFFS", "COMPLETE"],
     features: [
       {
         icon: "🏆",
-        title: "The bracket",
-        desc: "Finish high in the table and you're seeded into a live bracket that fills itself in, all the way to a champion.",
+        title: "Live bracket",
+        desc: "Follow every playoff series from the first round to the grand final as results fill in automatically.",
         href: "/schedule",
         livePhases: ["PLAYOFFS", "COMPLETE"],
       },
       {
         icon: "🎬",
-        title: "The season gets a yearbook",
-        desc: "When the season wraps, the site writes it up — the champion's run, the awards, the numbers behind them.",
+        title: "Season recap",
+        desc: "When it's over, the site writes it up — the champion's run, the awards, the moments everyone will remember.",
         href: "/recap",
         livePhases: ["COMPLETE"],
       },
       {
         icon: "📜",
-        title: "Nothing gets forgotten",
-        desc: "Every season stays browsable forever — standings, brackets, rosters, results. \"Remember season 2?\" Here's proof.",
+        title: "The record book",
+        desc: "Every season stays online forever — standings, drafts, rosters, playoffs. Years later, you settle arguments with proof instead of memory.",
         href: "/seasons",
       },
     ],
@@ -259,12 +260,12 @@ export default async function FeaturesPage() {
           The tour
         </Badge>
         <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl">
-          You&apos;re only seeing half of it
+          You&apos;re only seeing half the league
         </h1>
         <p className="mx-auto mt-3 max-w-2xl text-muted sm:text-lg">
-          The site only shows what&apos;s happening right now — so most people
-          never find draft night, fantasy, or the record book. Here&apos;s the
-          whole thing.
+          Most people land here, see the inhouses, and think that&apos;s all
+          there is. It isn&apos;t — inhouses are just what happens between
+          seasons. The real league starts when signups open.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           {!user ? (
@@ -280,7 +281,7 @@ export default async function FeaturesPage() {
       </div>
 
       {/* Journey strip — where the current season is on the road map. */}
-      <ol className="mb-10 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-xs sm:text-sm">
+      <ol className="mb-4 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-xs sm:text-sm">
         {JOURNEY.map((step, i) => {
           const here = !!phase && step.phases.includes(phase);
           return (
@@ -305,6 +306,10 @@ export default async function FeaturesPage() {
           );
         })}
       </ol>
+      <p className="mb-10 text-center text-sm text-muted">
+        Every season writes its own story — rivalries, upsets, breakout
+        players, championship runs. None of it disappears.
+      </p>
 
       {/* Chapters */}
       <div className="space-y-12 pb-4">
