@@ -1,10 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
 import { getHeroNames } from "@/lib/dota";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
+import { recentForm, headToHead } from "@/lib/team-matches";
+import { setAvailability } from "@/app/actions/availability";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   Avatar,
@@ -13,10 +17,13 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  FormStrip,
   HeroIcon,
   KDA,
   PageTitle,
   PlayerLink,
+  RankBadge,
+  RoleBadges,
   TeamCrest,
   buttonClasses,
   teamHue,
@@ -55,6 +62,7 @@ export default async function MatchDetailPage({
       homeTeam: true,
       awayTeam: true,
       games: { orderBy: { startTime: "asc" } },
+      standins: { include: { standin: true, replaced: true } },
     },
   });
   if (!match) notFound();
@@ -132,7 +140,9 @@ export default async function MatchDetailPage({
         </CardBody>
       </Card>
 
-      {games.length === 0 ? (
+      {games.length === 0 && match.status !== "COMPLETED" ? (
+        <MatchPreview match={match} />
+      ) : games.length === 0 ? (
         <EmptyState
           title="No games recorded yet"
           description="Games are pulled from Dota (OpenDota) once the match has been played."
@@ -200,6 +210,222 @@ export default async function MatchDetailPage({
           );
         })
       )}
+    </div>
+  );
+}
+
+// Pre-match scouting: rosters, recent form, prior meetings, and who's
+// confirmed for match night — shown until the first game is recorded.
+async function MatchPreview({
+  match,
+}: {
+  match: {
+    id: string;
+    seasonId: string;
+    week: number;
+    status: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeam: { name: string };
+    awayTeam: { name: string };
+    standins: {
+      id: string;
+      teamId: string;
+      standin: { id: string; name: string };
+      replaced: { id: string; name: string } | null;
+    }[];
+  };
+}) {
+  const viewer = await getSessionUser();
+  const [members, seasonMatches, rsvps] = await Promise.all([
+    prisma.teamMember.findMany({
+      where: {
+        seasonId: match.seasonId,
+        teamId: { in: [match.homeTeamId, match.awayTeamId] },
+      },
+      include: { user: true },
+      orderBy: { price: "desc" },
+    }),
+    prisma.match.findMany({
+      where: { seasonId: match.seasonId },
+      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+    }),
+    prisma.matchAvailability.findMany({ where: { matchId: match.id } }),
+  ]);
+  const regs = await prisma.registration.findMany({
+    where: {
+      seasonId: match.seasonId,
+      userId: { in: members.map((m) => m.userId) },
+    },
+    select: { userId: true, roles: true, mmr: true },
+  });
+  const regByUser = new Map(regs.map((r) => [r.userId, r]));
+  const rsvpByUser = new Map(rsvps.map((r) => [r.userId, r.status]));
+
+  const isParticipant =
+    !!viewer &&
+    (members.some((m) => m.userId === viewer.id) ||
+      match.standins.some((s) => s.standin.id === viewer.id));
+  const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
+
+  const h2hRow = headToHead(match.homeTeamId, seasonMatches).find(
+    (h) => h.opponentId === match.awayTeamId,
+  );
+
+  const side = (teamId: string, name: string) => {
+    const roster = members.filter((m) => m.teamId === teamId);
+    const subs = match.standins.filter((s) => s.teamId === teamId);
+    const replacedIds = new Set(
+      subs.map((s) => s.replaced?.id).filter(Boolean),
+    );
+    const form = recentForm(
+      teamId,
+      seasonMatches.filter(
+        (m) => m.homeTeamId === teamId || m.awayTeamId === teamId,
+      ),
+    );
+    return { teamId, name, roster, subs, replacedIds, form };
+  };
+  const sides = [
+    side(match.homeTeamId, match.homeTeam.name),
+    side(match.awayTeamId, match.awayTeam.name),
+  ];
+
+  return (
+    <div className="space-y-6">
+      {isParticipant ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-info/40 bg-info/10 px-5 py-3.5 text-sm">
+          <span className="text-lg leading-none">🗓️</span>
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">You&apos;re playing in this match</div>
+            <div className="text-muted">
+              {myRsvp === "IN"
+                ? "You're confirmed ✓"
+                : myRsvp === "OUT"
+                  ? "You're marked unavailable."
+                  : "Can you make it? Let your captain know."}
+            </div>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <ActionForm
+              action={setAvailability}
+              hidden={{ matchId: match.id, status: "IN" }}
+            >
+              <SubmitButton
+                variant={myRsvp === "IN" ? "primary" : "secondary"}
+                size="sm"
+              >
+                ✓ I&apos;m in
+              </SubmitButton>
+            </ActionForm>
+            <ActionForm
+              action={setAvailability}
+              hidden={{ matchId: match.id, status: "OUT" }}
+            >
+              <SubmitButton
+                variant={myRsvp === "OUT" ? "primary" : "secondary"}
+                size="sm"
+              >
+                ✗ Can&apos;t make it
+              </SubmitButton>
+            </ActionForm>
+          </div>
+        </div>
+      ) : null}
+
+      <Card>
+        <CardHeader
+          title="Matchup"
+          subtitle={
+            h2hRow && h2hRow.wins + h2hRow.losses + h2hRow.draws > 0
+              ? `Prior meetings: ${
+                  h2hRow.wins > h2hRow.losses
+                    ? `${match.homeTeam.name} lead ${h2hRow.wins}–${h2hRow.losses}`
+                    : h2hRow.losses > h2hRow.wins
+                      ? `${match.awayTeam.name} lead ${h2hRow.losses}–${h2hRow.wins}`
+                      : `tied ${h2hRow.wins}–${h2hRow.losses}`
+                }${h2hRow.draws ? ` (${h2hRow.draws} drawn)` : ""}`
+              : "First meeting this season"
+          }
+        />
+        <CardBody className="grid gap-4 sm:grid-cols-2">
+          {sides.map((s) => (
+            <div key={s.teamId} className="rounded-lg border border-line p-3">
+              <div className="mb-2.5 flex items-center justify-between gap-2">
+                <Link
+                  href={`/teams/${s.teamId}`}
+                  className="flex min-w-0 items-center gap-2 font-display text-base font-semibold hover:text-info"
+                >
+                  <TeamCrest
+                    name={s.name}
+                    seed={s.teamId}
+                    size={24}
+                    className="rounded-md"
+                  />
+                  <span className="truncate">{s.name}</span>
+                </Link>
+                {s.form.length > 0 ? <FormStrip form={s.form} /> : null}
+              </div>
+              <ul className="space-y-1">
+                {s.roster.map((m) => {
+                  const reg = regByUser.get(m.userId);
+                  const rsvp = rsvpByUser.get(m.userId);
+                  const replaced = s.replacedIds.has(m.userId);
+                  return (
+                    <li
+                      key={m.id}
+                      className={cn(
+                        "flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-sm",
+                        replaced && "opacity-50",
+                      )}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Avatar name={m.user.name} src={m.user.avatar} size={22} />
+                        <PlayerLink userId={m.userId} className="truncate">
+                          {m.user.name}
+                        </PlayerLink>
+                        {m.isCaptain ? <Badge tone="accent">C</Badge> : null}
+                        <RankBadge rankTier={m.user.rankTier} />
+                        <RoleBadges roles={reg?.roles ?? ""} />
+                      </span>
+                      <span className="shrink-0 text-xs">
+                        {replaced ? (
+                          <span className="text-muted">standin covers</span>
+                        ) : rsvp === "IN" ? (
+                          <span className="text-success">✓ in</span>
+                        ) : rsvp === "OUT" ? (
+                          <span className="text-danger">✗ out</span>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+                {s.subs.map((sub) => (
+                  <li
+                    key={sub.id}
+                    className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm"
+                  >
+                    <span className="text-xs">🔁</span>
+                    <PlayerLink userId={sub.standin.id} className="truncate">
+                      {sub.standin.name}
+                    </PlayerLink>
+                    <span className="truncate text-xs text-muted">
+                      in for {sub.replaced?.name ?? "?"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </CardBody>
+      </Card>
+
+      <p className="text-center text-xs text-muted">
+        The box score appears here once the match is played and imported from
+        Dota (OpenDota).
+      </p>
     </div>
   );
 }

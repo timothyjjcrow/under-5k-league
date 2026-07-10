@@ -217,6 +217,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - Nav "History" + footer "Past seasons" links appear only once an archived
   (`isActive: false`) season exists — layout passes `hasHistory` down.
 
+## Match previews (done)
+
+- `/matches/[id]` renders a `MatchPreview` while a match has no games and
+  isn't COMPLETED: side-by-side rosters (rank, roles, RSVP status, standins),
+  recent-form strips, prior-meetings line (leader-phrased head-to-head), and
+  the same check-in banner as `/schedule` for participants. Completed matches
+  without imports keep the "no games recorded" empty state.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).
