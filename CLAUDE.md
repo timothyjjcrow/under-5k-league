@@ -348,6 +348,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `picks`), standings with per-pick breakdowns, locked-roster chips. Nav from
   REGULAR_SEASON on.
 
+## Hall of Fame (done, branch: bigger-features)
+
+- `/hall-of-fame`: cross-season career boards — 🏆 titles and ⚔️ series wins
+  via pure `careerCounts` (`src/lib/hall-of-fame.ts`, tested; team cuids are
+  globally unique so cross-season membership just works), 🎯 career fantasy
+  points (`pointsByPlayer` over all games ever), 🔮 all-time oracle record
+  (`pickemStandings` over all predictions, min 3 graded). Linked from
+  `/seasons` and the footer.
+
 ## Power rankings (done, branch: bigger-features)
 
 - Pure Elo in `src/lib/power-rankings.ts` (tested): K=32, start 1000,

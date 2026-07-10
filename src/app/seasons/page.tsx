@@ -40,6 +40,14 @@ export default async function SeasonsPage() {
       <PageTitle
         title="Season history"
         subtitle="Every season the league has run — champions, standings, and rosters."
+        action={
+          <Link
+            href="/hall-of-fame"
+            className="text-sm text-info hover:underline"
+          >
+            Hall of Fame →
+          </Link>
+        }
       />
 
       {seasons.length === 0 ? (

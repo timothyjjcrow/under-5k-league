@@ -44,6 +44,7 @@ export function SiteFooter({
     links.push({ href: "/schedule", label: "Schedule" });
   }
   if (hasHistory) links.push({ href: "/seasons", label: "Past seasons" });
+  links.push({ href: "/hall-of-fame", label: "Hall of Fame" });
 
   return (
     <footer className="border-t border-line/70">
