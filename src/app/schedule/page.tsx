@@ -104,6 +104,16 @@ export default async function SchedulePage() {
       select: { matchId: true, userId: true, status: true },
     }),
   ]);
+  const pendingReschedules = await prisma.rescheduleRequest.findMany({
+    where: { match: { seasonId: season.id }, status: "PENDING" },
+    include: { proposedBy: { select: { name: true } } },
+  });
+  const rescheduleByMatch = new Map(
+    pendingReschedules.map((r) => [
+      r.matchId,
+      `${r.proposedBy.name} proposes ${fmtWhen(r.proposedTime) ?? "?"}`,
+    ]),
+  );
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
 
@@ -217,6 +227,7 @@ export default async function SchedulePage() {
             home: pickRsvp(rsvpFor(m)!.home),
             away: pickRsvp(rsvpFor(m)!.away),
           },
+          reschedulePending: rescheduleByMatch.get(m.id) ?? null,
         };
       });
     return {

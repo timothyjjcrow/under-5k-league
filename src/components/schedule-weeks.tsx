@@ -32,6 +32,8 @@ export type MatchView = {
   isFinalPhase: boolean;
   standins: string[];
   rsvp?: { home: RsvpSide; away: RsvpSide };
+  /** "Proposer → proposed time" when a reschedule is awaiting the other captain. */
+  reschedulePending: string | null;
 };
 
 export type WeekView = {
@@ -324,6 +326,16 @@ function MatchRow({ match: m }: { match: MatchView }) {
           </Link>
           {m.rsvp ? <RsvpBadge side={m.rsvp.away} /> : null}
         </div>
+        {m.reschedulePending ? (
+          <span
+            role="img"
+            aria-label={`Time change proposed — ${m.reschedulePending}`}
+            title={`Time change proposed — ${m.reschedulePending}`}
+            className="shrink-0 text-xs text-accent"
+          >
+            <span aria-hidden>⏳</span>
+          </span>
+        ) : null}
         {m.isFinalPhase ? (
           <Badge tone="accent" className="shrink-0">
             Final

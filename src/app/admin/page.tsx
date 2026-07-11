@@ -32,6 +32,7 @@ import {
   signFreeAgent,
   releasePlayer,
 } from "@/app/actions/admin";
+import { cancelReschedule } from "@/app/actions/reschedule";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { pickBracketSize } from "@/lib/schedule";
 import { mmrWeightedBudgets } from "@/lib/draft";
@@ -639,6 +640,7 @@ function ScheduleControls({
               Auto-fetch needs players to have &ldquo;Expose Public Match
               Data&rdquo; enabled.
             </p>
+            <PendingReschedules seasonId={season.id} teams={data.teams} />
             {(() => {
               const openWeeks = [
                 ...new Set(
@@ -1268,6 +1270,59 @@ function Field({
         {label}
       </label>
       {children}
+    </div>
+  );
+}
+
+// Open captain reschedule proposals — admins see the whole queue and can
+// clear a stuck one (cancelReschedule allows admins as well as proposers).
+async function PendingReschedules({
+  seasonId,
+  teams,
+}: {
+  seasonId: string;
+  teams: { id: string; name: string }[];
+}) {
+  const pending = await prisma.rescheduleRequest.findMany({
+    where: { match: { seasonId }, status: "PENDING" },
+    include: {
+      proposedBy: { select: { name: true } },
+      match: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  if (pending.length === 0) return null;
+  const name = (id: string) => teams.find((t) => t.id === id)?.name ?? "?";
+  return (
+    <div className="space-y-1.5 rounded-lg border border-accent/40 bg-accent/10 p-3 text-xs">
+      <div className="font-medium">
+        ⏳ {pending.length} reschedule proposal
+        {pending.length === 1 ? "" : "s"} awaiting a captain
+      </div>
+      {pending.map((r) => (
+        <div key={r.id} className="flex flex-wrap items-center gap-2">
+          <span className="min-w-0 flex-1">
+            Wk {r.match.week}: {name(r.match.homeTeamId)} vs{" "}
+            {name(r.match.awayTeamId)} — <strong>{r.proposedBy.name}</strong>{" "}
+            proposes{" "}
+            {r.proposedTime.toLocaleString(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })}
+          </span>
+          <ActionForm
+            action={cancelReschedule}
+            hidden={{ requestId: r.id }}
+          >
+            <SubmitButton variant="secondary" size="sm">
+              Clear
+            </SubmitButton>
+          </ActionForm>
+        </div>
+      ))}
     </div>
   );
 }
