@@ -420,6 +420,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `createPlayoffBracket` used). Rendered on `/schedule`, the dashboard, and
   `/seasons/[id]`.
 
+## Hero meta page (done)
+
+- `/meta`: league-wide hero report from imported box scores — pick/win rates,
+  most-contested table, best-win-rate board (adaptive `metaMinPicks` floor),
+  signature player per hero, untouched-pool card. Pure `heroMeta`/
+  `bestWinRates` in `src/lib/hero-meta.ts` (tested); unknown hero ids render a
+  "Hero #N" fallback. Nav "Meta" + footer link from REGULAR_SEASON on.
+
 ## Standings & schedule UX (done)
 
 - **StandingsTable** is now a thin server adapter (`page.tsx`) over the

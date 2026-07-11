@@ -57,6 +57,7 @@ function navItems(
   if (phase === "REGULAR_SEASON" || phase === "PLAYOFFS" || phase === "COMPLETE") {
     items.push({ href: "/schedule", label: "Schedule" });
     items.push({ href: "/leaders", label: "Leaders" });
+    items.push({ href: "/meta", label: "Meta" });
     items.push({ href: "/fantasy", label: "Fantasy" });
     items.push({ href: "/pickem", label: "Pick'em" });
   }

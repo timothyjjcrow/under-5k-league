@@ -42,6 +42,7 @@ export function SiteFooter({
     phase === "COMPLETE"
   ) {
     links.push({ href: "/schedule", label: "Schedule" });
+    links.push({ href: "/meta", label: "Hero meta" });
   }
   if (hasHistory) links.push({ href: "/seasons", label: "Past seasons" });
   links.push({ href: "/hall-of-fame", label: "Hall of Fame" });
