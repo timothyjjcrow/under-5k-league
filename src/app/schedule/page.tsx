@@ -13,9 +13,14 @@ import {
 } from "@/lib/schedule-status";
 import { teamAvailability, type TeamAvailability } from "@/lib/availability";
 import { CheckinBanner } from "@/components/checkin-banner";
+import {
+  ScheduleWeeks,
+  type MatchView,
+  type RsvpSide,
+  type WeekView,
+} from "@/components/schedule-weeks";
 import { StandingsTable } from "@/app/page";
 import {
-  Badge,
   Card,
   CardBody,
   CardHeader,
@@ -25,7 +30,6 @@ import {
   SectionTitle,
   TeamCrest,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
 export const metadata = { title: "Schedule" };
@@ -52,6 +56,11 @@ function fmtWhenShort(d: Date): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+// Strip the RSVP summary to the two numbers the row badge shows.
+function pickRsvp(side: TeamAvailability): RsvpSide {
+  return { confirmed: side.confirmed, out: side.out };
 }
 
 export default async function SchedulePage() {
@@ -163,6 +172,46 @@ export default async function SchedulePage() {
     season.championTeamId && teamName.get(season.championTeamId)
       ? teamName.get(season.championTeamId)
       : null;
+
+  // Serialize weeks for the client-side ScheduleWeeks (filter chips +
+  // collapsible weeks). Dates preformatted server-side.
+  const weekViews: WeekView[] = weeks.map((week) => {
+    const ws = weekStatus.get(week);
+    const weekMatches = regular
+      .filter((m) => m.week === week)
+      .map((m): MatchView => {
+        return {
+          id: m.id,
+          homeTeamId: m.homeTeamId,
+          awayTeamId: m.awayTeamId,
+          homeName: teamName.get(m.homeTeamId) ?? "?",
+          awayName: teamName.get(m.awayTeamId) ?? "?",
+          homeScore: m.homeScore,
+          awayScore: m.awayScore,
+          done: m.status === "COMPLETED",
+          homeWin: m.winnerTeamId === m.homeTeamId,
+          awayWin: m.winnerTeamId === m.awayTeamId,
+          whenFull: fmtWhen(m.scheduledAt),
+          whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
+          isFinalPhase: m.phase === "FINAL",
+          standins: (standinsByMatch.get(m.id) ?? []).map(
+            (a) =>
+              `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
+          ),
+          rsvp: rsvpFor(m) && {
+            home: pickRsvp(rsvpFor(m)!.home),
+            away: pickRsvp(rsvpFor(m)!.away),
+          },
+        };
+      });
+    return {
+      week,
+      completed: ws?.completed ?? 0,
+      total: ws?.total ?? weekMatches.length,
+      isCurrent: week === currentWeek,
+      matches: weekMatches,
+    };
+  });
 
   // Full bracket tree (TBD slots included) for the interactive bracket.
   const bracketRoundsView = buildBracketRounds(
@@ -292,171 +341,14 @@ export default async function SchedulePage() {
             description="The schedule is generated once teams are drafted."
           />
         ) : (
-          <div className="space-y-5">
-            {weeks.map((week) => {
-              const ws = weekStatus.get(week);
-              const incomplete = !!ws && ws.pending > 0;
-              const isCurrent = week === currentWeek;
-              return (
-              <div key={week}>
-                <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-muted">
-                  <span className={isCurrent ? "text-fg" : undefined}>
-                    Week {week}
-                  </span>
-                  {isCurrent ? <Badge tone="accent">This week</Badge> : null}
-                  {ws ? (
-                    <span className={incomplete ? "text-accent" : "text-success"}>
-                      {ws.completed}/{ws.total} results in
-                    </span>
-                  ) : null}
-                </h3>
-                <Card className={isCurrent ? "border-accent/40" : undefined}>
-                  <CardBody className="divide-y divide-line/60 p-0">
-                    {regular
-                      .filter((m) => m.week === week)
-                      .map((m) => (
-                        <MatchRow
-                          key={m.id}
-                          match={m}
-                          teamName={teamName}
-                          standins={standinsByMatch.get(m.id)}
-                          rsvp={rsvpFor(m)}
-                        />
-                      ))}
-                  </CardBody>
-                </Card>
-              </div>
-              );
-            })}
-          </div>
+          <ScheduleWeeks
+            weeks={weekViews}
+            teams={[...teams]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((t) => ({ id: t.id, name: t.name }))}
+          />
         )}
       </section>
-    </div>
-  );
-}
-
-function RsvpBadge({ side }: { side: TeamAvailability }) {
-  if (side.confirmed === 0 && side.out === 0) return null;
-  const spoken = `${side.confirmed} confirmed${side.out > 0 ? `, ${side.out} unavailable` : ""}`;
-  return (
-    <span
-      role="img"
-      aria-label={spoken}
-      title={spoken}
-      // Hidden on phones — the row needs the width for team names; the
-      // same RSVP detail lives one tap away on the match page.
-      className="hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-muted sm:inline"
-    >
-      <span aria-hidden className="text-success">
-        ✓{side.confirmed}
-      </span>
-      {side.out > 0 ? (
-        <span aria-hidden className="text-danger">
-          {" "}
-          ✗{side.out}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function MatchRow({
-  match: m,
-  teamName,
-  standins,
-  rsvp,
-}: {
-  match: Match;
-  teamName: Map<string, string>;
-  standins?: MatchStandin[];
-  rsvp?: { home: TeamAvailability; away: TeamAvailability };
-}) {
-  const homeName = teamName.get(m.homeTeamId) ?? "?";
-  const awayName = teamName.get(m.awayTeamId) ?? "?";
-  const done = m.status === "COMPLETED";
-  const homeWin = m.winnerTeamId === m.homeTeamId;
-  const awayWin = m.winnerTeamId === m.awayTeamId;
-  return (
-    <div className="transition-colors hover:bg-surface-2/30">
-      <div className="flex items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-5">
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-2 text-sm">
-          {rsvp ? <RsvpBadge side={rsvp.home} /> : null}
-          <Link
-            href={`/teams/${m.homeTeamId}`}
-            className={cn(
-              "truncate hover:text-info",
-              done && (homeWin ? "font-semibold text-fg" : "text-muted"),
-            )}
-          >
-            {homeName}
-          </Link>
-          <TeamCrest
-            name={homeName}
-            seed={m.homeTeamId}
-            size={24}
-            className="rounded-lg"
-          />
-        </div>
-        <div className="shrink-0 text-center">
-          {done ? (
-            <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm tabular-nums">
-              <span className={homeWin ? "font-semibold text-fg" : "text-muted"}>
-                {m.homeScore}
-              </span>
-              <span className="px-1 text-muted">–</span>
-              <span className={awayWin ? "font-semibold text-fg" : "text-muted"}>
-                {m.awayScore}
-              </span>
-            </span>
-          ) : m.scheduledAt ? (
-            <span className="whitespace-nowrap text-xs text-muted">
-              <span className="hidden sm:inline">{fmtWhen(m.scheduledAt)}</span>
-              <span className="sm:hidden">{fmtWhenShort(m.scheduledAt)}</span>
-            </span>
-          ) : (
-            <span className="text-xs text-muted">vs</span>
-          )}
-        </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
-          <TeamCrest
-            name={awayName}
-            seed={m.awayTeamId}
-            size={24}
-            className="rounded-lg"
-          />
-          <Link
-            href={`/teams/${m.awayTeamId}`}
-            className={cn(
-              "truncate hover:text-info",
-              done && (awayWin ? "font-semibold text-fg" : "text-muted"),
-            )}
-          >
-            {awayName}
-          </Link>
-          {rsvp ? <RsvpBadge side={rsvp.away} /> : null}
-        </div>
-        {m.phase === "FINAL" ? (
-          <Badge tone="accent" className="shrink-0">
-            Final
-          </Badge>
-        ) : null}
-        <Link
-          href={`/matches/${m.id}`}
-          className="shrink-0 text-xs text-muted hover:text-info"
-        >
-          details →
-        </Link>
-      </div>
-      {standins && standins.length > 0 ? (
-        <div className="space-y-0.5 border-t border-line/40 px-5 py-2">
-          {standins.map((a) => (
-            <div key={a.id} className="text-xs text-muted">
-              🔁 {a.standin.name} in for {a.replaced?.name ?? "?"} ·{" "}
-              {teamName.get(a.teamId)}
-            </div>
-          ))}
-        </div>
-      ) : null}
     </div>
   );
 }
