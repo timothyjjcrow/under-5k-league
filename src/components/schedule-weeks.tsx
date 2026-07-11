@@ -40,6 +40,8 @@ export type WeekView = {
   total: number;
   isCurrent: boolean;
   matches: MatchView[];
+  /** Teams sitting out this week (odd team counts rotate a bye). */
+  byes: { id: string; name: string }[];
 };
 
 export function ScheduleWeeks({
@@ -71,7 +73,11 @@ export function ScheduleWeeks({
           (m) => m.homeTeamId === filterTeam || m.awayTeamId === filterTeam,
         ),
       }))
-      .filter((w) => w.matches.length > 0);
+      // A bye week is part of the team's season — keep it visible.
+      .filter(
+        (w) =>
+          w.matches.length > 0 || w.byes.some((b) => b.id === filterTeam),
+      );
   }, [weeks, filterTeam]);
 
   return (
@@ -165,6 +171,22 @@ export function ScheduleWeeks({
                     {w.matches.map((m) => (
                       <MatchRow key={m.id} match={m} />
                     ))}
+                    {w.byes.length > 0 &&
+                    (!filterTeam ||
+                      w.byes.some((b) => b.id === filterTeam)) ? (
+                      <div className="flex items-center gap-2 px-4 py-2 text-xs text-muted sm:px-5">
+                        <span aria-hidden>😴</span>
+                        <span>
+                          On bye:{" "}
+                          {(filterTeam
+                            ? w.byes.filter((b) => b.id === filterTeam)
+                            : w.byes
+                          )
+                            .map((b) => b.name)
+                            .join(", ")}
+                        </span>
+                      </div>
+                    ) : null}
                   </CardBody>
                 </Card>
               )}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   roundRobin,
+  byeTeamsByWeek,
   seedOrder,
   playoffFirstRound,
   pickBracketSize,
@@ -213,5 +214,40 @@ describe("bracketSkeleton", () => {
 
   it("returns empty when there are no playoff matches", () => {
     expect(bracketSkeleton([])).toEqual({ totalRounds: 0, rounds: [] });
+  });
+});
+
+describe("byeTeamsByWeek", () => {
+  const m = (week: number, home: string, away: string, phase = "REGULAR") => ({
+    week,
+    homeTeamId: home,
+    awayTeamId: away,
+    phase,
+  });
+
+  it("rotates the bye through a 5-team round robin", () => {
+    const teams = ["a", "b", "c", "d", "e"];
+    const rounds = roundRobin(teams);
+    const matches = rounds.flatMap((round, i) =>
+      round.map((p) => m(i + 1, p.home, p.away)),
+    );
+    const byes = byeTeamsByWeek(matches, teams);
+    expect(byes.size).toBe(5); // 5 weeks
+    const all = [...byes.values()].flat();
+    expect(all).toHaveLength(5); // exactly one bye per week
+    expect([...new Set(all)].sort()).toEqual(teams); // everyone rests once
+  });
+
+  it("reports no byes with an even team count", () => {
+    const byes = byeTeamsByWeek(
+      [m(1, "a", "b"), m(1, "c", "d")],
+      ["a", "b", "c", "d"],
+    );
+    expect(byes.get(1)).toEqual([]);
+  });
+
+  it("ignores playoff matches", () => {
+    const byes = byeTeamsByWeek([m(9, "a", "b", "PLAYOFF")], ["a", "b", "c"]);
+    expect(byes.size).toBe(0);
   });
 });

@@ -145,6 +145,32 @@ export function slotRound(slot: string | null | undefined): number {
   return m ? Number(m[1]) : 0;
 }
 
+/**
+ * Which teams sit out each regular-season week (odd team counts give the
+ * round-robin a rotating bye). Only weeks that have at least one match are
+ * reported — a week number is defined by its fixtures.
+ */
+export function byeTeamsByWeek<
+  T extends { week: number; homeTeamId: string; awayTeamId: string; phase: string },
+>(matches: T[], teamIds: string[]): Map<number, string[]> {
+  const byWeek = new Map<number, Set<string>>();
+  for (const m of matches) {
+    if (m.phase !== "REGULAR") continue;
+    const playing = byWeek.get(m.week) ?? new Set<string>();
+    playing.add(m.homeTeamId);
+    playing.add(m.awayTeamId);
+    byWeek.set(m.week, playing);
+  }
+  const byes = new Map<number, string[]>();
+  for (const [week, playing] of byWeek) {
+    byes.set(
+      week,
+      teamIds.filter((id) => !playing.has(id)),
+    );
+  }
+  return byes;
+}
+
 /** Match index encoded in a bracket slot like "R2M1" (null when absent). */
 export function slotIndex(slot: string | null | undefined): number | null {
   const m = slot?.match(/M(\d+)$/);

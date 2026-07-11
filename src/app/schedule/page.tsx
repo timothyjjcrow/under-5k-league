@@ -7,7 +7,11 @@ import {
   computeStandings,
   standingsMovement,
 } from "@/lib/standings";
-import { pickBracketSize, playoffFirstRound } from "@/lib/schedule";
+import {
+  byeTeamsByWeek,
+  pickBracketSize,
+  playoffFirstRound,
+} from "@/lib/schedule";
 import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
@@ -180,6 +184,10 @@ export default async function SchedulePage() {
 
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
   // collapsible weeks). Dates preformatted server-side.
+  const byesByWeek = byeTeamsByWeek(
+    regular,
+    teams.map((t) => t.id),
+  );
   const weekViews: WeekView[] = weeks.map((week) => {
     const ws = weekStatus.get(week);
     const weekMatches = regular
@@ -216,6 +224,10 @@ export default async function SchedulePage() {
       total: ws?.total ?? weekMatches.length,
       isCurrent: week === currentWeek,
       matches: weekMatches,
+      byes: (byesByWeek.get(week) ?? []).map((id) => ({
+        id,
+        name: teamName.get(id) ?? "?",
+      })),
     };
   });
 
