@@ -428,6 +428,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `bestWinRates` in `src/lib/hero-meta.ts` (tested); unknown hero ids render a
   "Hero #N" fallback. Nav "Meta" + footer link from REGULAR_SEASON on.
 
+## Record book (done)
+
+- `/records`: all-time single-game records across every season — player
+  records (kills, assists, net worth, GPM, last hits, deaths) and game
+  records (longest/fastest by `durationSecs`, bloodiest/biggest stomp by kill
+  score; 0–0 or 0-duration games never qualify — unreported ≠ record). Pure
+  `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps a
+  tie, so feed games chronologically. Linked from the footer + Hall of Fame.
+
 ## Standings & schedule UX (done)
 
 - **StandingsTable** is now a thin server adapter (`page.tsx`) over the

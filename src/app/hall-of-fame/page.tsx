@@ -135,9 +135,14 @@ export default async function HallOfFamePage() {
         title="Hall of Fame"
         subtitle={`Careers across ${seasons.length} season${seasons.length === 1 ? "" : "s"} — titles, wins, production, prophecy`}
         action={
-          <Link href="/seasons" className="text-sm text-info hover:underline">
-            Season history →
-          </Link>
+          <span className="flex items-center gap-3">
+            <Link href="/records" className="text-sm text-info hover:underline">
+              Record book →
+            </Link>
+            <Link href="/seasons" className="text-sm text-info hover:underline">
+              Season history →
+            </Link>
+          </span>
         }
       />
 
