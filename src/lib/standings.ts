@@ -51,6 +51,44 @@ export function seriesScoreError(
 export type ClinchStatus = "CLINCHED" | "ELIMINATED" | null;
 
 /**
+ * How many places each team moved vs. the table before the latest completed
+ * regular week's results (positive = climbed). Zero for everyone until a
+ * second data point exists.
+ */
+export function standingsMovement(
+  teamIds: string[],
+  matches: (MatchLike & { week: number })[],
+): Map<string, number> {
+  const completedRegular = matches.filter(
+    (m) => m.phase === "REGULAR" && m.status === "COMPLETED",
+  );
+  const movement = new Map(teamIds.map((id) => [id, 0]));
+  if (completedRegular.length === 0) return movement;
+  const lastWeek = Math.max(...completedRegular.map((m) => m.week));
+
+  const rankOf = (rows: TeamStanding[]) =>
+    new Map(rows.map((r, i) => [r.teamId, i]));
+  const now = rankOf(computeStandings(teamIds, matches));
+  const before = rankOf(
+    computeStandings(
+      teamIds,
+      matches.filter(
+        (m) =>
+          !(
+            m.phase === "REGULAR" &&
+            m.status === "COMPLETED" &&
+            m.week === lastWeek
+          ),
+      ),
+    ),
+  );
+  for (const id of teamIds) {
+    movement.set(id, (before.get(id) ?? 0) - (now.get(id) ?? 0));
+  }
+  return movement;
+}
+
+/**
  * Which teams have already locked up (or lost) a playoff spot, given the
  * remaining regular-season schedule. Deliberately conservative on both sides —
  * tiebreakers and shared remaining games are ignored, so a team is only marked

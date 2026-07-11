@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   clinchStatuses,
   computeStandings,
+  standingsMovement,
   seriesScoreError,
   type MatchLike,
 } from "./standings";
@@ -177,5 +178,56 @@ describe("clinchStatuses", () => {
     // d max 3 pts; only a (6 banked) is certainly ahead — b could lose out
     // and finish level on 3, so d is mathematically alive.
     expect(c.get("d")).toBeNull();
+  });
+});
+
+describe("standingsMovement", () => {
+  const wk = (
+    home: string,
+    away: string,
+    hs: number,
+    as: number,
+    week: number,
+    status = "COMPLETED",
+  ) => ({ ...match(home, away, hs, as, { status }), week });
+
+  it("is all zeros before any completed week", () => {
+    const m = [wk("a", "b", 0, 0, 1, "SCHEDULED")];
+    const move = standingsMovement(["a", "b"], m);
+    expect(move.get("a")).toBe(0);
+    expect(move.get("b")).toBe(0);
+  });
+
+  it("reports climbs and falls vs the previous week's table", () => {
+    // Week 1: a and c win → table a, c, b, d (a on diff).
+    // Week 2: d beats a, b beats c → b and d climb past their week-1 spots.
+    const m = [
+      wk("a", "b", 2, 0, 1),
+      wk("c", "d", 1, 0, 1),
+      wk("d", "a", 2, 0, 2),
+      wk("b", "c", 2, 0, 2),
+    ];
+    const move = standingsMovement(["a", "b", "c", "d"], m);
+    // Before week 2: [a, c, b, d]; after: [b(+diff? verify by points/diff)…]
+    const now = computeStandings(["a", "b", "c", "d"], m).map((s) => s.teamId);
+    const before = computeStandings(
+      ["a", "b", "c", "d"],
+      m.filter((x) => x.week === 1),
+    ).map((s) => s.teamId);
+    for (const id of ["a", "b", "c", "d"]) {
+      expect(move.get(id)).toBe(before.indexOf(id) - now.indexOf(id));
+    }
+    // Sanity: someone actually moved.
+    expect([...move.values()].some((v) => v !== 0)).toBe(true);
+  });
+
+  it("ignores playoff results", () => {
+    const m = [
+      wk("a", "b", 2, 0, 1),
+      { ...match("b", "a", 2, 0, { phase: "PLAYOFF" }), week: 2 },
+    ];
+    const move = standingsMovement(["a", "b"], m);
+    expect(move.get("a")).toBe(0);
+    expect(move.get("b")).toBe(0);
   });
 });

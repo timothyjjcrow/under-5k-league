@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import {
   clinchStatuses,
   computeStandings,
+  standingsMovement,
   type ClinchStatus,
 } from "@/lib/standings";
 import { pickBracketSize } from "@/lib/schedule";
@@ -1065,6 +1066,10 @@ async function SeasonView({
                     : undefined
                 }
                 viewerTeamId={myTeam?.id}
+                movement={standingsMovement(
+                  teams.map((t) => t.id),
+                  matches,
+                )}
               />
             </CardBody>
           </Card>
@@ -1248,6 +1253,7 @@ export function StandingsTable({
   playoffCut,
   clinch,
   viewerTeamId,
+  movement,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -1258,6 +1264,8 @@ export function StandingsTable({
   clinch?: Map<string, ClinchStatus>;
   /** The signed-in viewer's team \u2014 its row gets a subtle highlight. */
   viewerTeamId?: string | null;
+  /** Weekly rank movement (see standingsMovement). */
+  movement?: Map<string, number>;
 }) {
   const cutIsReal =
     playoffCut != null && playoffCut > 0 && playoffCut < standings.length;
@@ -1272,6 +1280,7 @@ export function StandingsTable({
     points: s.points,
     form: formByTeam ? formByTeam.get(s.teamId) ?? [] : null,
     clinch: cutIsReal ? clinch?.get(s.teamId) ?? null : null,
+    move: movement?.get(s.teamId) ?? 0,
   }));
   return (
     <StandingsTableClient

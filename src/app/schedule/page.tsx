@@ -2,7 +2,11 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { clinchStatuses, computeStandings } from "@/lib/standings";
+import {
+  clinchStatuses,
+  computeStandings,
+  standingsMovement,
+} from "@/lib/standings";
 import { pickBracketSize, playoffFirstRound } from "@/lib/schedule";
 import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -319,6 +323,10 @@ export default async function SchedulePage() {
                 : undefined
             }
             viewerTeamId={[...myTeamIds][0]}
+            movement={standingsMovement(
+              teams.map((t) => t.id),
+              matches,
+            )}
           />
         </CardBody>
       </Card>

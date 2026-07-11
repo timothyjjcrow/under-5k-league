@@ -25,6 +25,8 @@ export type StandingsRowView = {
   points: number;
   form: FormResult[] | null;
   clinch: ClinchStatus;
+  /** Places moved vs. before the latest completed week (positive = up). */
+  move: number;
 };
 
 type SortKey = "rank" | "wins" | "draws" | "losses" | "gameDiff" | "points";
@@ -159,7 +161,26 @@ export function StandingsTableClient({
                     inCut ? "font-medium text-success/80" : "text-muted",
                   )}
                 >
-                  {row.rank}
+                  <span className="whitespace-nowrap">
+                    {row.rank}
+                    {/* Weekly movement reads against league order only. */}
+                    {leagueOrder && row.move !== 0 ? (
+                      <span
+                        role="img"
+                        aria-label={`${row.move > 0 ? "up" : "down"} ${Math.abs(row.move)} from last week`}
+                        title={`${row.move > 0 ? "Up" : "Down"} ${Math.abs(row.move)} from last week`}
+                        className={cn(
+                          "ml-0.5 align-middle text-[9px] font-semibold",
+                          row.move > 0 ? "text-success" : "text-danger/80",
+                        )}
+                      >
+                        <span aria-hidden>
+                          {row.move > 0 ? "▲" : "▼"}
+                          {Math.abs(row.move)}
+                        </span>
+                      </span>
+                    ) : null}
+                  </span>
                 </td>
                 <td className="px-2 py-2.5 font-medium">
                   <Link
