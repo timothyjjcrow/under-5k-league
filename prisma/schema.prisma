@@ -39,6 +39,19 @@ model User {
   fantasyRosters      FantasyRoster[]
   fantasyPickedBy     FantasyPick[]
   predictions         Prediction[]
+  newsPosts           NewsPost[]
+}
+
+// Admin-authored league announcements, shown on the dashboard + /news.
+model NewsPost {
+  id        String   @id @default(cuid())
+  title     String
+  body      String
+  pinned    Boolean  @default(false)
+  authorId  String?
+  createdAt DateTime @default(now())
+
+  author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
 }
 
 model Season {

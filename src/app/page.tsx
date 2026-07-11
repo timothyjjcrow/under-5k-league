@@ -46,6 +46,8 @@ import {
   type StandingsRowView,
 } from "@/components/standings-table";
 import { LocalTime } from "@/components/local-time";
+import { formatMatchTime } from "@/lib/match-time";
+import { sortNews } from "@/lib/news";
 import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -211,6 +213,7 @@ export default async function Home() {
         meta={heroMeta}
       />
       <SeasonTimeline phase={season.status} />
+      <LeagueNews />
       <InhouseStrip />
       {season.status === "SIGNUPS" && (
         <SignupsView snapshot={snapshot} loggedIn={!!user} />
@@ -224,6 +227,50 @@ export default async function Home() {
       )}
       {season.status === "COMPLETE" && <CompleteView snapshot={snapshot} />}
     </div>
+  );
+}
+
+// Latest admin announcements — pinned first, capped at three with a link to
+// the full /news archive. Renders nothing when the league has no news.
+async function LeagueNews() {
+  // News volume is tiny — fetch all so an old pinned post still surfaces.
+  const posts = sortNews(await prisma.newsPost.findMany()).slice(0, 3);
+  if (posts.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader
+        title="League news"
+        subtitle="The latest from the admins"
+        action={
+          <Link href="/news" className="text-sm text-info hover:underline">
+            All news →
+          </Link>
+        }
+      />
+      <CardBody className="space-y-4">
+        {posts.map((p) => (
+          <div key={p.id} className="min-w-0">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <h3 className="min-w-0 truncate text-sm font-semibold">
+                {p.pinned ? "📌 " : ""}
+                {p.title}
+              </h3>
+              <span className="text-xs text-muted">
+                <LocalTime
+                  ts={p.createdAt.getTime()}
+                  variant="short"
+                  initial={formatMatchTime(p.createdAt, "short")}
+                />
+              </span>
+            </div>
+            <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-muted">
+              {p.body}
+            </p>
+          </div>
+        ))}
+      </CardBody>
+    </Card>
   );
 }
 

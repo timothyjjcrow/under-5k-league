@@ -128,13 +128,15 @@ export function SiteHeader({
           </span>
         </Link>
 
-        {/* Inline nav — only when there's room (lg+). Below that it collapses
-            into the menu button so links never get cut off. */}
+        {/* Inline nav — only when there's room (xl+). Below that it collapses
+            into the menu button so links never get cut off. "Home" is omitted
+            inline (the logo is the home link) and the list scrolls rather than
+            overlapping the account cluster if space still runs out. */}
         <nav
           aria-label="Primary"
-          className="hidden min-w-0 flex-1 items-center gap-1 lg:flex"
+          className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:flex"
         >
-          {items.map((item) => {
+          {items.filter((item) => item.href !== "/").map((item) => {
             const active = isActive(pathname, item.href, myTeamHref);
             return (
               <Link
@@ -155,7 +157,7 @@ export function SiteHeader({
         </nav>
 
         {/* Pushes the account cluster to the right when the inline nav is hidden. */}
-        <div className="flex-1 lg:hidden" />
+        <div className="flex-1 xl:hidden" />
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {/* Season phase/name lives on the home hero + footer, not here — it
@@ -166,7 +168,7 @@ export function SiteHeader({
                 <Link
                   href="/admin"
                   className={cn(
-                    "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors lg:block",
+                    "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors xl:block",
                     adminActive
                       ? "bg-surface-2 text-accent"
                       : "text-accent/80 hover:text-accent",
@@ -186,7 +188,7 @@ export function SiteHeader({
               </Link>
               <a
                 href="/api/auth/logout"
-                className="hidden text-sm text-muted hover:text-fg lg:inline"
+                className="hidden text-sm text-muted hover:text-fg xl:inline"
                 title="Log out"
               >
                 Logout
@@ -208,7 +210,7 @@ export function SiteHeader({
             aria-label={open ? "Close menu" : "Open menu"}
             aria-expanded={open}
             aria-controls="mobile-nav"
-            className="grid h-9 w-9 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg lg:hidden"
+            className="grid h-9 w-9 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg xl:hidden"
           >
             {open ? <CloseIcon /> : <MenuIcon />}
           </button>
@@ -221,7 +223,7 @@ export function SiteHeader({
         <nav
           id="mobile-nav"
           aria-label="Primary"
-          className="absolute inset-x-0 top-full border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur lg:hidden"
+          className="absolute inset-x-0 top-full border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur xl:hidden"
         >
           <div className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
             {items.map((item) => {

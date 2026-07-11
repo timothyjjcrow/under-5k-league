@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  newsMessage,
   rescheduleMessage,
   signupMessage,
   draftStartedMessage,
@@ -133,5 +134,21 @@ describe("rescheduleMessage", () => {
         when: "x",
       }),
     ).toContain("Playoffs");
+  });
+});
+
+describe("newsMessage", () => {
+  it("announces the title with a body snippet and /news link", () => {
+    const msg = newsMessage("Week 3 moved", "Matches now play Thursday.");
+    expect(msg).toContain("**Week 3 moved**");
+    expect(msg).toContain("Matches now play Thursday.");
+    expect(msg).toContain("/news");
+  });
+
+  it("flattens whitespace and truncates long bodies", () => {
+    const msg = newsMessage("T", `line one\n\nline two ${"x".repeat(300)}`);
+    expect(msg).toContain("line one line two");
+    expect(msg).toContain("…");
+    expect(msg.length).toBeLessThan(300);
   });
 });

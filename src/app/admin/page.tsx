@@ -33,6 +33,14 @@ import {
   releasePlayer,
 } from "@/app/actions/admin";
 import { cancelReschedule } from "@/app/actions/reschedule";
+import {
+  createNewsPost,
+  deleteNewsPost,
+  toggleNewsPin,
+} from "@/app/actions/news";
+import { sortNews, NEWS_LIMITS } from "@/lib/news";
+import { formatMatchTime } from "@/lib/match-time";
+import { LocalTime } from "@/components/local-time";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { pickBracketSize } from "@/lib/schedule";
 import { mmrWeightedBudgets } from "@/lib/draft";
@@ -84,6 +92,11 @@ export default async function AdminPage() {
     : null;
   const discordWebhookUrl =
     (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
+  const newsPosts = sortNews(
+    await prisma.newsPost.findMany({
+      include: { author: { select: { name: true } } },
+    }),
+  );
 
   return (
     <div className="space-y-8">
@@ -110,6 +123,8 @@ export default async function AdminPage() {
           </CardBody>
         </Card>
       )}
+
+      <NewsControls posts={newsPosts} />
 
       <Card>
         <CardHeader
@@ -1215,6 +1230,94 @@ function DiscordControls({ webhookUrl }: { webhookUrl: string }) {
           Webhook</b>, pick the announcements channel, copy the URL and paste it
           here. Clear the field to turn announcements off.
         </p>
+      </CardBody>
+    </Card>
+  );
+}
+
+type NewsPostRow = {
+  id: string;
+  title: string;
+  body: string;
+  pinned: boolean;
+  createdAt: Date;
+  author: { name: string } | null;
+};
+
+function NewsControls({ posts }: { posts: NewsPostRow[] }) {
+  return (
+    <Card>
+      <CardHeader
+        title="League news"
+        subtitle="Announcements shown on the dashboard and /news — also posted to Discord."
+      />
+      <CardBody className="space-y-4">
+        <ActionForm action={createNewsPost} className="space-y-3">
+          <Field label="Title" htmlFor="newsTitle">
+            <input
+              id="newsTitle"
+              name="title"
+              required
+              maxLength={NEWS_LIMITS.TITLE_MAX}
+              placeholder="Week 3 moved to Thursday"
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Post" htmlFor="newsBody">
+            <textarea
+              id="newsBody"
+              name="body"
+              required
+              rows={4}
+              maxLength={NEWS_LIMITS.BODY_MAX}
+              placeholder="What the league needs to know…"
+              className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
+            />
+          </Field>
+          <SubmitButton variant="accent">Post announcement</SubmitButton>
+        </ActionForm>
+
+        {posts.length > 0 && (
+          <ul className="divide-y divide-line/50 border-t border-line/70">
+            {posts.map((p) => (
+              <li
+                key={p.id}
+                className="flex flex-wrap items-center gap-2 py-2.5"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">
+                    {p.pinned ? "📌 " : ""}
+                    {p.title}
+                  </span>
+                  <span className="block text-xs text-muted">
+                    <LocalTime
+                      ts={p.createdAt.getTime()}
+                      variant="short"
+                      initial={formatMatchTime(p.createdAt, "short")}
+                    />
+                    {p.author ? ` · ${p.author.name}` : ""}
+                  </span>
+                </span>
+                <ActionForm action={toggleNewsPin} className="inline">
+                  <input type="hidden" name="postId" value={p.id} />
+                  <SubmitButton variant="secondary" size="sm">
+                    {p.pinned ? "Unpin" : "Pin"}
+                  </SubmitButton>
+                </ActionForm>
+                <ActionForm action={deleteNewsPost} className="inline">
+                  <input type="hidden" name="postId" value={p.id} />
+                  <SubmitButton
+                    variant="secondary"
+                    size="sm"
+                    confirm={`Delete "${p.title}"? This can't be undone.`}
+                  >
+                    Delete
+                  </SubmitButton>
+                </ActionForm>
+              </li>
+            ))}
+          </ul>
+        )}
       </CardBody>
     </Card>
   );

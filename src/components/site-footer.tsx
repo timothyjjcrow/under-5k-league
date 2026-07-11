@@ -44,6 +44,7 @@ export function SiteFooter({
     links.push({ href: "/schedule", label: "Schedule" });
     links.push({ href: "/meta", label: "Hero meta" });
   }
+  links.push({ href: "/news", label: "News" });
   if (hasHistory) links.push({ href: "/seasons", label: "Past seasons" });
   links.push({ href: "/hall-of-fame", label: "Hall of Fame" });
   links.push({ href: "/records", label: "Record book" });

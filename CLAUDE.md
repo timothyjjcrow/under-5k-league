@@ -442,6 +442,20 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps a
   tie, so feed games chronologically. Linked from the footer + Hall of Fame.
 
+## League news (done)
+
+- `NewsPost` model (title/body/pinned/author). Pure `sortNews` (pinned first,
+  newest first) + `newsPostError` validation in `src/lib/news.ts` (tested).
+- Admin "League news" card (create/pin/delete, always rendered — news is
+  season-independent) → `src/app/actions/news.ts`; new posts announce to
+  Discord via `newsMessage` (tested formatter, best-effort send).
+- Surfaced on the dashboard (`LeagueNews` card, top 3, pinned first) and the
+  full `/news` archive (footer link). Post dates render via `<LocalTime>`.
+- Header nav collapses to the menu below **xl** (was lg), omits "Home" inline
+  (the logo is the home link), and the link strip scrolls (hidden scrollbar)
+  instead of overlapping the account cluster — with Admin + name + Logout the
+  inline nav couldn't fit inside `max-w-6xl` at lg.
+
 ## Standings & schedule UX (done)
 
 - **StandingsTable** is now a thin server adapter (`page.tsx`) over the
