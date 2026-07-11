@@ -262,6 +262,7 @@ async function MyNextMatch({
       matchId={next.id}
       heading={`Your next match — Week ${next.week}: ${next.homeTeam.name} vs ${next.awayTeam.name}`}
       when={fmtWhen(next.scheduledAt)}
+      whenTs={next.scheduledAt?.getTime()}
       myRsvp={myRsvp?.status ?? null}
       detailsHref={`/matches/${next.id}`}
     />
@@ -1062,6 +1063,7 @@ async function SeasonView({
                       )
                     : undefined
                 }
+                viewerTeamId={myTeam?.id}
               />
             </CardBody>
           </Card>
@@ -1233,6 +1235,7 @@ export function StandingsTable({
   formByTeam,
   playoffCut,
   clinch,
+  viewerTeamId,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -1241,6 +1244,8 @@ export function StandingsTable({
   playoffCut?: number;
   /** Per-team clinched/eliminated verdicts (see clinchStatuses). */
   clinch?: Map<string, ClinchStatus>;
+  /** The signed-in viewer's team \u2014 its row gets a subtle highlight. */
+  viewerTeamId?: string | null;
 }) {
   const cutIsReal =
     playoffCut != null && playoffCut > 0 && playoffCut < standings.length;
@@ -1256,7 +1261,13 @@ export function StandingsTable({
     form: formByTeam ? formByTeam.get(s.teamId) ?? [] : null,
     clinch: cutIsReal ? clinch?.get(s.teamId) ?? null : null,
   }));
-  return <StandingsTableClient rows={rows} playoffCut={playoffCut} />;
+  return (
+    <StandingsTableClient
+      rows={rows}
+      playoffCut={playoffCut}
+      viewerTeamId={viewerTeamId}
+    />
+  );
 }
 
 // ---------- COMPLETE ----------

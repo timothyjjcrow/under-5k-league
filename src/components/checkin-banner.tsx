@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { setAvailability } from "@/app/actions/availability";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { Countdown } from "@/components/countdown";
 
 /**
  * The match-night RSVP banner ("Your next match — … ✓ I'm in / ✗ Can't make
@@ -11,6 +12,7 @@ export function CheckinBanner({
   matchId,
   heading,
   when,
+  whenTs,
   myRsvp,
   detailsHref,
 }: {
@@ -18,6 +20,8 @@ export function CheckinBanner({
   heading: string;
   /** Formatted scheduled time, when known. */
   when?: string | null;
+  /** Epoch ms of the scheduled time — drives the live countdown chip. */
+  whenTs?: number | null;
   myRsvp: string | null;
   detailsHref?: string;
 }) {
@@ -30,6 +34,7 @@ export function CheckinBanner({
         <div className="font-medium">
           {heading}
           {when ? <span className="text-muted"> · {when}</span> : null}
+          {whenTs ? <Countdown targetMs={whenTs} /> : null}
           {detailsHref ? (
             <>
               {" "}

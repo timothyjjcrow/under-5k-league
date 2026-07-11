@@ -227,6 +227,7 @@ async function MatchPreview({
     seasonId: string;
     week: number;
     status: string;
+    scheduledAt: Date | null;
     homeTeamId: string;
     awayTeamId: string;
     homeTeam: { name: string };
@@ -300,6 +301,7 @@ async function MatchPreview({
         <CheckinBanner
           matchId={match.id}
           heading="You're playing in this match"
+          whenTs={match.scheduledAt?.getTime()}
           myRsvp={myRsvp}
         />
       ) : null}

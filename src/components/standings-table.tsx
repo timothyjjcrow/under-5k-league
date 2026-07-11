@@ -43,10 +43,13 @@ const SORTS: Record<
 export function StandingsTableClient({
   rows,
   playoffCut,
+  viewerTeamId,
 }: {
   rows: StandingsRowView[];
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
   playoffCut?: number;
+  /** The signed-in viewer's team — its row gets a subtle highlight. */
+  viewerTeamId?: string | null;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [desc, setDesc] = useState(false);
@@ -147,6 +150,7 @@ export function StandingsTableClient({
                 className={cn(
                   "border-b border-line/50 transition-colors last:border-0 hover:bg-surface-2/40",
                   inCut && "bg-success/[0.04]",
+                  row.teamId === viewerTeamId && "bg-info/[0.07]",
                 )}
               >
                 <td
@@ -169,6 +173,11 @@ export function StandingsTableClient({
                       className="rounded-md shrink-0"
                     />
                     <span className="truncate">{row.name}</span>
+                    {row.teamId === viewerTeamId ? (
+                      <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info">
+                        You
+                      </span>
+                    ) : null}
                     {/* Marks only mean something when a team can miss the
                         bracket — with everyone qualifying they'd all be ✓. */}
                     <ClinchMark status={row.clinch} />

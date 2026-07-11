@@ -250,6 +250,7 @@ export default async function SchedulePage() {
           matchId={myNextMatch.id}
           heading={`Your next match — Week ${myNextMatch.week}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
           when={fmtWhen(myNextMatch.scheduledAt)}
+          whenTs={myNextMatch.scheduledAt?.getTime()}
           myRsvp={myRsvp}
           detailsHref={`/matches/${myNextMatch.id}`}
         />
@@ -316,6 +317,7 @@ export default async function SchedulePage() {
                   )
                 : undefined
             }
+            viewerTeamId={[...myTeamIds][0]}
           />
         </CardBody>
       </Card>
