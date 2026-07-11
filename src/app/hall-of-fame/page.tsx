@@ -124,6 +124,10 @@ export default async function HallOfFamePage() {
   const oracleAcc = new Map(
     oracle.map((s) => [s.userId, Math.round(s.accuracy * 100)]),
   );
+  // "8/11" reads better than a bare correct-count — same format as /pickem.
+  const oracleLine = new Map(
+    oracle.map((s) => [s.userId, `${s.correct}/${s.graded}`]),
+  );
 
   return (
     <div className="space-y-8">
@@ -170,7 +174,9 @@ export default async function HallOfFamePage() {
                         </span>
                       ) : null}
                       <span className="shrink-0 font-mono text-base font-semibold tabular-nums">
-                        {b.format(r.value)}
+                        {b.title.startsWith("🔮")
+                          ? (oracleLine.get(r.userId) ?? b.format(r.value))
+                          : b.format(r.value)}
                       </span>
                     </div>
                   );
