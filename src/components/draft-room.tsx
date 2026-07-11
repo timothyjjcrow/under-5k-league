@@ -36,6 +36,10 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   const prevRef = useRef<DraftState | null>(null);
   const eventIdRef = useRef(0);
   const [events, setEvents] = useState<FeedEvent[]>([]);
+  // The clock banner scrolls away while captains browse the pool — track its
+  // visibility so a compact sticky bar can take over.
+  const bannerRef = useRef<HTMLDivElement | null>(null);
+  const [bannerOffscreen, setBannerOffscreen] = useState(false);
   const [soldFlash, setSoldFlash] = useState<{
     name: string;
     team: string;
@@ -146,6 +150,21 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     return () => clearTimeout(id);
   }, [soldFlash]);
 
+  const draftLive = !!state && state.status !== "COMPLETE";
+  useEffect(() => {
+    const el = bannerRef.current;
+    if (!el || !draftLive || typeof IntersectionObserver === "undefined")
+      return;
+    const obs = new IntersectionObserver(
+      ([entry]) => setBannerOffscreen(!entry.isIntersecting),
+      // The sticky site header is 64px tall — treat the banner as gone once
+      // it slides underneath it.
+      { rootMargin: "-64px 0px 0px 0px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [draftLive]);
+
   async function act(url: string, body: Record<string, unknown>) {
     setPending(true);
     setError(null);
@@ -232,8 +251,65 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
         </div>
       ) : null}
 
+      {/* Compact clock bar — pins under the site header while the captain is
+          deep in the player pool, so the auction never disappears. */}
+      {bannerOffscreen && (state.nominatedPlayer || state.nominationEndsAt) ? (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to the auction clock"
+          className="fixed inset-x-0 top-16 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
+        >
+          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
+            {state.nominatedPlayer ? (
+              <>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span aria-hidden>🔨</span>
+                  <span className="truncate font-medium">
+                    {state.nominatedPlayer.name}
+                  </span>
+                  <span className="shrink-0 font-mono font-semibold text-accent">
+                    ${state.currentBid}
+                  </span>
+                  {highBidderName ? (
+                    <span className="hidden truncate text-muted sm:inline">
+                      · {highBidderName}
+                    </span>
+                  ) : null}
+                </span>
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-lg font-bold tabular-nums",
+                    seconds <= 5 ? "text-danger" : "text-accent",
+                  )}
+                >
+                  {seconds}s
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="min-w-0 truncate text-muted">
+                  {nominatorName} to nominate…
+                </span>
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-lg font-bold tabular-nums",
+                    nomSeconds <= 10 ? "text-danger" : "text-muted",
+                  )}
+                >
+                  {nomSeconds}s
+                </span>
+              </>
+            )}
+          </div>
+        </button>
+      ) : null}
+
       {/* On the block */}
-      <div className="rounded-[var(--radius)] border border-line bg-surface/80">
+      <div
+        ref={bannerRef}
+        className="rounded-[var(--radius)] border border-line bg-surface/80"
+      >
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
           <div className="text-sm text-muted">
             On the clock: <span className="text-fg">{nominatorName}</span>
