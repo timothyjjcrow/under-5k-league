@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { summarizeInhouse, type FinishedLobby } from "./inhouse-stats";
+import {
+  INHOUSE_ELO,
+  summarizeInhouse,
+  type FinishedLobby,
+} from "./inhouse-stats";
 
 function lobby(
   id: string,
@@ -54,13 +58,58 @@ describe("summarizeInhouse", () => {
     expect(recs[0].streak).toBe(-1); // last game was a loss
   });
 
-  it("ranks by wins, then win rate, then games", () => {
+  it("ranks by rating", () => {
     const recs = summarizeInhouse([
       lobby("g1", 1, 1, [["a", 1], ["b", 2]]),
       lobby("g2", 2, 1, [["a", 1], ["b", 2]]),
       lobby("g3", 3, 1, [["c", 1], ["b", 2]]),
     ]);
-    // a: 2 wins, c: 1 win, b: 0 wins → a, c, b
+    // a climbed twice, c once (vs an already-sunk b), b only lost.
     expect(recs.map((r) => r.userId)).toEqual(["a", "c", "b"]);
+    expect(recs[0].rating).toBeGreaterThan(recs[1].rating);
+    expect(recs[2].rating).toBeLessThan(INHOUSE_ELO.START);
+  });
+
+  it("moves evenly-rated sides by K/2 per game, same for every member", () => {
+    const recs = summarizeInhouse([
+      lobby("g1", 1, 1, [
+        ["a", 1],
+        ["b", 1],
+        ["c", 2],
+        ["d", 2],
+      ]),
+    ]);
+    const rating = (id: string) => recs.find((r) => r.userId === id)!.rating;
+    expect(rating("a")).toBe(INHOUSE_ELO.START + INHOUSE_ELO.K / 2);
+    expect(rating("b")).toBe(INHOUSE_ELO.START + INHOUSE_ELO.K / 2);
+    expect(rating("c")).toBe(INHOUSE_ELO.START - INHOUSE_ELO.K / 2);
+    expect(rating("d")).toBe(INHOUSE_ELO.START - INHOUSE_ELO.K / 2);
+  });
+
+  it("pays an underdog win more than a favorite win", () => {
+    // a beats b twice, then b finally wins one.
+    const recs = summarizeInhouse([
+      lobby("g1", 1, 1, [["a", 1], ["b", 2]]),
+      lobby("g2", 2, 1, [["a", 1], ["b", 2]]),
+      lobby("g3", 3, 2, [["a", 1], ["b", 2]]),
+    ]);
+    const b = recs.find((r) => r.userId === "b")!;
+    // b's comeback must earn more than the even-match K/2.
+    const comebackGain = b.rating - (INHOUSE_ELO.START - INHOUSE_ELO.K); // vs after 2 losses
+    expect(comebackGain).toBeGreaterThan(INHOUSE_ELO.K / 2);
+  });
+
+  it("tracks peak rating and never rates a one-sided lobby", () => {
+    const recs = summarizeInhouse([
+      lobby("g1", 1, 1, [["a", 1], ["b", 2]]), // a → 1016
+      lobby("g2", 2, 2, [["a", 1], ["b", 2]]), // a falls back
+      lobby("g3", 3, 1, [["c", 1]]), // no opposing side — unrated
+    ]);
+    const a = recs.find((r) => r.userId === "a")!;
+    expect(a.peak).toBe(INHOUSE_ELO.START + INHOUSE_ELO.K / 2);
+    expect(a.rating).toBeLessThan(a.peak);
+    const c = recs.find((r) => r.userId === "c")!;
+    expect(c.games).toBe(1);
+    expect(c.rating).toBe(INHOUSE_ELO.START);
   });
 });

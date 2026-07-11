@@ -2,7 +2,11 @@ import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { INHOUSE_STATUS } from "@/lib/constants";
-import { summarizeInhouse, type FinishedLobby } from "@/lib/inhouse-stats";
+import {
+  PROVISIONAL_GAMES,
+  summarizeInhouse,
+  type FinishedLobby,
+} from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { HeroVideo } from "@/components/hero-video";
@@ -59,14 +63,34 @@ export default async function InhousePage() {
       })
     : null;
 
-  const completed = await prisma.inhouseLobby.findMany({
-    where: { status: INHOUSE_STATUS.COMPLETED },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-    include: { players: { include: { user: true } } },
-  });
+  // Two reads: the ladder needs EVERY completed lobby (Elo accumulates over
+  // full history — a window would drift), the result cards only a few recent
+  // ones with their heavy boxScore payloads.
+  const [ladderLobbies, completed] = await Promise.all([
+    prisma.inhouseLobby.findMany({
+      where: { status: INHOUSE_STATUS.COMPLETED },
+      select: {
+        id: true,
+        winnerTeam: true,
+        createdAt: true,
+        players: {
+          select: {
+            userId: true,
+            team: true,
+            user: { select: { name: true, avatar: true } },
+          },
+        },
+      },
+    }),
+    prisma.inhouseLobby.findMany({
+      where: { status: INHOUSE_STATUS.COMPLETED },
+      orderBy: { createdAt: "desc" },
+      take: 12,
+      include: { players: { include: { user: true } } },
+    }),
+  ]);
 
-  const finished: FinishedLobby[] = completed.map((l) => ({
+  const finished: FinishedLobby[] = ladderLobbies.map((l) => ({
     id: l.id,
     winnerTeam: l.winnerTeam,
     createdAt: l.createdAt,
@@ -143,8 +167,8 @@ export default async function InhousePage() {
 
       <Card>
         <CardHeader
-          title="Inhouse leaderboard"
-          subtitle="All-time records across completed inhouse games"
+          title="Inhouse ladder"
+          subtitle="Personal Elo across completed inhouse games — everyone starts at 1000, wins against stronger lobbies pay more"
         />
         <CardBody className="p-0">
           <Leaderboard rows={leaderboard} meId={user?.id ?? null} />
@@ -496,11 +520,18 @@ function Leaderboard({
         <tr className="border-b border-line text-left text-xs uppercase text-muted">
           <th className="px-5 py-2.5 font-medium">#</th>
           <th className="px-2 py-2.5 font-medium">Player</th>
+          <th className="px-2 py-2.5 text-center font-medium">Elo</th>
           <th className="px-2 py-2.5 text-center font-medium">W</th>
           <th className="px-2 py-2.5 text-center font-medium">L</th>
-          <th className="px-2 py-2.5 text-center font-medium">Win%</th>
-          <th className="px-2 py-2.5 text-center font-medium">Streak</th>
-          <th className="px-5 py-2.5 text-right font-medium">GP</th>
+          <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+            Win%
+          </th>
+          <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+            Streak
+          </th>
+          <th className="hidden px-5 py-2.5 text-right font-medium sm:table-cell">
+            GP
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -521,12 +552,27 @@ function Leaderboard({
                 </PlayerLink>
               </span>
             </td>
+            <td className="px-2 py-2.5 text-center">
+              <span
+                className={cn(
+                  "font-semibold tabular-nums",
+                  r.games < PROVISIONAL_GAMES ? "text-muted" : "",
+                )}
+                title={
+                  r.games < PROVISIONAL_GAMES
+                    ? `Provisional — under ${PROVISIONAL_GAMES} games (peak ${r.peak})`
+                    : `Peak ${r.peak}`
+                }
+              >
+                {r.rating}
+              </span>
+            </td>
             <td className="px-2 py-2.5 text-center text-success">{r.wins}</td>
             <td className="px-2 py-2.5 text-center text-muted">{r.losses}</td>
-            <td className="px-2 py-2.5 text-center tabular-nums">
+            <td className="hidden px-2 py-2.5 text-center tabular-nums sm:table-cell">
               {Math.round(r.winRate * 100)}%
             </td>
-            <td className="px-2 py-2.5 text-center">
+            <td className="hidden px-2 py-2.5 text-center sm:table-cell">
               {r.streak !== 0 ? (
                 <span
                   className={cn(
@@ -540,7 +586,9 @@ function Leaderboard({
                 <span className="text-muted">—</span>
               )}
             </td>
-            <td className="px-5 py-2.5 text-right tabular-nums">{r.games}</td>
+            <td className="hidden px-5 py-2.5 text-right tabular-nums sm:table-cell">
+              {r.games}
+            </td>
           </tr>
         ))}
       </tbody>

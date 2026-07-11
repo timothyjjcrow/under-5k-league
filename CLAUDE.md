@@ -151,8 +151,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   captains per method, always MMR/join fallback), `nextPickTeam` (strict
   back-and-forth; team 2 — the lower seed — picks first via
   `INHOUSE.FIRST_PICK_TEAM`), `isDraftComplete`, `playersNeeded`.
-  `src/lib/inhouse-stats.ts` — `summarizeInhouse` leaderboard
-  (wins/losses/win%/streak; also feeds the RECORD method). Tunables in
+  `src/lib/inhouse-stats.ts` — `summarizeInhouse` ladder
+  (wins/losses/win%/streak + personal team-Elo `rating`/`peak`: start 1000,
+  K=32, delta from side-average ratings, ranked by rating; `<5` games =
+  provisional, dimmed in the UI; also feeds the RECORD method — `orderCaptains`
+  re-sorts by wins itself, so ladder order doesn't drive captaincy). The
+  ladder query must fetch ALL completed lobbies (no `take` window — Elo
+  accumulates over full history). Tunables in
   `constants.ts` (`INHOUSE`: LOBBY_SIZE 10, TEAM_SIZE 5, VOTE_SECONDS 25,
   PICK_SECONDS 60; `CAPTAIN_METHOD` labels).
 - **Service (DB, transactional)**: `src/lib/inhouse-service.ts` —
