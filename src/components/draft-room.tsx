@@ -155,6 +155,12 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     ? state.bidEndsAt - (Date.now() + offsetRef.current)
     : 0;
   const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  // The nomination window has its own (server-authoritative) deadline —
+  // surface it too, or the auto-skip fires with zero warning.
+  const nomRemainingMs = state.nominationEndsAt
+    ? state.nominationEndsAt - (Date.now() + offsetRef.current)
+    : 0;
+  const nomSeconds = Math.max(0, Math.ceil(nomRemainingMs / 1000));
   const nominatorName =
     state.teams.find((t) => t.id === state.nominatorTeamId)?.name ?? "—";
   const highBidderName = state.teams.find(
@@ -226,6 +232,21 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
               ) : null}
               <span className={seconds <= 5 ? "animate-countdown-urgent" : ""}>
                 {seconds}s
+              </span>
+            </div>
+          ) : state.nominationEndsAt ? (
+            <div
+              role="timer"
+              aria-label={`${nomSeconds} seconds left to nominate`}
+              className={cn(
+                "flex items-center gap-2 font-mono text-2xl font-bold tabular-nums",
+                nomSeconds <= 10 ? "text-danger" : "text-muted",
+              )}
+            >
+              <span
+                className={nomSeconds <= 10 ? "animate-countdown-urgent" : ""}
+              >
+                {nomSeconds}s
               </span>
             </div>
           ) : null}
