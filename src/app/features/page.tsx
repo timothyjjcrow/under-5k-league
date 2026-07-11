@@ -13,7 +13,7 @@ import type { SeasonStatus } from "@/lib/constants";
 export const metadata = {
   title: "Features",
   description:
-    "Everything waiting inside the league — auction draft night, real box scores, fantasy, pick'em, power rankings, inhouses, and a record book that never forgets.",
+    "Everything waiting inside the league — auction draft night, automatic match stats, fantasy, pick'em, power rankings, inhouses, and a record book that never forgets.",
 };
 
 // The whole tour is static content. Phases where a feature's page is actually
@@ -47,89 +47,90 @@ const POST_DRAFT: SeasonStatus[] = [
 const SECTIONS: Section[] = [
   {
     id: "always-on",
-    kicker: "Always on",
-    title: "What you can do today",
-    blurb: "You don't have to wait for the next season to get involved.",
+    kicker: "Between seasons",
+    title: "The league never goes offline",
+    blurb:
+      "Even when a season isn't running, there's always something happening.",
     phases: [],
     features: [
       {
         icon: "⚔️",
-        title: "Inhouse pick-up games",
-        desc: "Queue with nine other players, vote on the draft format, build teams, and jump into a real match. When it ends, the stats, MVP, and box score are already waiting.",
+        title: "Inhouses",
+        desc: "Queue with nine players, draft teams, and play a real match. When the Ancient falls, the stats, MVP, and match page are already waiting.",
         href: "/inhouse",
-      },
-      {
-        icon: "🏛️",
-        title: "Hall of Fame",
-        desc: "Championships, career records, fantasy legends, and the players who backed up the trash talk. Every season adds to it.",
-        href: "/hall-of-fame",
       },
       {
         icon: "🪪",
         title: "Player profiles",
-        desc: "Every player has a career — heroes, seasons, teams, awards, badges. Whether you're scouting a teammate or proving you're better than your friends, it's all there.",
+        desc: "Every season, team, award, hero, and badge stays attached to your profile. Your career grows every time you play.",
         href: "/players",
       },
       {
+        icon: "🏛️",
+        title: "Hall of Fame",
+        desc: "Champions. Career leaders. Historic seasons. Every league leaves its mark.",
+        href: "/hall-of-fame",
+      },
+      {
         icon: "📣",
-        title: "Live Discord updates",
-        desc: "Signups, draft picks, match results, playoff drama — it all lands in the Discord as it happens, so nobody misses anything.",
+        title: "Discord integration",
+        desc: "Drafts, match results, signups, playoffs, and announcements appear automatically. No one misses what's happening.",
       },
     ],
   },
   {
     id: "signups",
-    kicker: "Step 1 — Signups",
+    kicker: "1 — Signups",
     title: "Getting in takes about a minute",
-    blurb: "No account to create, no password to forget.",
+    blurb: "No new account. No password. Just sign in with Steam.",
     phases: ["SIGNUPS"],
     features: [
       {
         icon: "🎮",
-        title: "Sign in with Steam",
-        desc: "No new account, no password — your Steam profile, avatar, and ranked medal are imported automatically.",
+        title: "Steam login",
+        desc: "Your profile, avatar, and ranked medal import automatically.",
       },
       {
         icon: "📝",
-        title: "Tell captains who you are",
-        desc: "Pick your positions, list your favorite heroes, leave a note — it's all on screen while captains decide whether to spend their budget on you.",
+        title: "Tell captains about yourself",
+        desc: "Preferred roles. Favorite heroes. Anything you want captains to know before draft night.",
       },
       {
         icon: "🔁",
         title: "Returning players",
-        desc: "Played before? Your form arrives pre-filled from last season. Update what changed and you're in.",
+        desc: "Your previous info is already there. Update what changed. Done.",
       },
       {
         icon: "🧢",
         title: "Built for Under 4.5K",
-        desc: "Every season can set a hard MMR cap, so the league starts from a level playing field.",
+        desc: "Every season can enforce an MMR cap so everyone starts on even footing.",
       },
     ],
   },
   {
     id: "draft",
-    kicker: "Step 2 — Draft night",
-    title: "A live auction, not a spreadsheet",
+    kicker: "2 — Draft night",
+    title: "Every player is up for auction",
     blurb:
-      "Captains nominate, fight over bids, and try to build the best roster before the clock runs out.",
+      "Captains build teams with a limited budget. Spend too much early — or wait too long — and someone steals the player you wanted.",
     phases: ["DRAFT"],
     features: [
       {
         icon: "🔨",
-        title: "Live bidding, real clock",
-        desc: "Every bid changes the room. Run out of money too early and you'll regret it; wait too long and your favorite player is gone.",
+        title: "Live bidding",
+        desc: "Every nomination matters. Every bid changes the room.",
         href: "/draft",
         livePhases: ["DRAFT"],
       },
       {
         icon: "⚖️",
-        title: "Underdogs get bigger wallets",
-        desc: "Lower-MMR captains start with more budget, so it's not the same two stacked teams every season.",
+        title: "Balanced budgets",
+        desc: "Lower-MMR captains receive larger budgets to keep teams competitive.",
       },
       {
         icon: "🧾",
-        title: "Every pick has receipts",
-        desc: "Biggest steal, worst overpay, fastest budget collapse — the draft recap remembers everything.",
+        title: "Draft recap",
+        desc: "Steals. Overpays. Budget disasters. The draft remembers everything.",
         href: "/teams",
         livePhases: POST_DRAFT,
       },
@@ -137,65 +138,65 @@ const SECTIONS: Section[] = [
   },
   {
     id: "season",
-    kicker: "Step 3 — Regular season",
-    title: "You play Dota. The site handles everything else.",
+    kicker: "3 — Regular season",
+    title: "You play Dota. We'll handle the league.",
     blurb:
-      "Your matches are pulled straight from the game and turned into box scores, standings, and arguments.",
+      "As soon as a match ends, everything updates automatically — standings, player stats, awards, history.",
     phases: ["REGULAR_SEASON"],
     features: [
       {
         icon: "📊",
-        title: "Automatic match stats",
-        desc: "As soon as your match finishes, the site pulls the data — heroes, KDA, net worth, gold. Everything you'd expect from a professional league.",
+        title: "Automatic match pages",
+        desc: "Heroes. KDA. Net worth. Everything from every match, pulled straight from the game.",
         href: "/schedule",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "📈",
         title: "Power rankings",
-        desc: "Standings only tell part of the story. Power rankings move every week and give everyone something to argue about.",
+        desc: "Standings tell you who won. Power rankings tell everyone who looks dangerous.",
         href: "/teams",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🥇",
         title: "Weekly awards",
-        desc: "Player of the Week, Team of the Week, league leaders — every week gives you something new to chase.",
+        desc: "Player of the Week. Team of the Week. League leaders. Something new every week.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🏅",
         title: "Career badges",
-        desc: "Deathless wins, kill streaks, milestones, championships — every season adds to your legacy.",
+        desc: "Milestones. Championships. Perfect games. Every season adds to your legacy.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🧙",
-        title: "Fantasy league",
-        desc: "Build a roster under a salary cap and score points off real league matches. Suddenly you're cheering for players you'd normally want to beat.",
+        title: "Fantasy",
+        desc: "Draft players under a salary cap. Score points from real league matches.",
         href: "/fantasy",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🔮",
         title: "Pick'em",
-        desc: "Predict every match and climb the oracle board — then watch everyone discover how hard predicting Dota really is.",
+        desc: "Predict every result. Climb the leaderboard. Talk trash.",
         href: "/pickem",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "✅",
-        title: "Match check-in",
-        desc: "One tap tells your captain you're available, so standins get arranged early instead of five minutes before game time.",
+        title: "Availability check-in",
+        desc: "One click tells your captain you're available. No last-minute scrambling.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
       {
         icon: "📅",
         title: "Calendar sync",
-        desc: "Subscribe once and every scheduled match appears in your own calendar. No screenshots, no forgotten game nights.",
+        desc: "Subscribe once. Every league match appears in your calendar automatically.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
@@ -203,30 +204,29 @@ const SECTIONS: Section[] = [
   },
   {
     id: "playoffs",
-    kicker: "Step 4 — Playoffs & legacy",
-    title: "This is what the regular season was for",
-    blurb:
-      "One bad night and you're done. Win it all and your team becomes league history.",
+    kicker: "4 — Playoffs",
+    title: "Win — or your season is over",
+    blurb: "Single elimination. No second chances.",
     phases: ["PLAYOFFS", "COMPLETE"],
     features: [
       {
         icon: "🏆",
         title: "Live bracket",
-        desc: "Follow every playoff series from the first round to the grand final as results fill in automatically.",
+        desc: "Every series updates automatically, from the first round to the grand final.",
         href: "/schedule",
         livePhases: ["PLAYOFFS", "COMPLETE"],
       },
       {
         icon: "🎬",
         title: "Season recap",
-        desc: "When it's over, the site writes it up — the champion's run, the awards, the moments everyone will remember.",
+        desc: "Awards. Storylines. The championship run. One page that remembers the season.",
         href: "/recap",
         livePhases: ["COMPLETE"],
       },
       {
         icon: "📜",
-        title: "The record book",
-        desc: "Every season stays online forever — standings, drafts, rosters, playoffs. Years later, you settle arguments with proof instead of memory.",
+        title: "Permanent record book",
+        desc: "Nothing disappears. Years from now you can still look up the draft, the standings, the bracket, and the championship team.",
         href: "/seasons",
       },
     ],
@@ -239,7 +239,7 @@ const JOURNEY: { label: string; phases: SeasonStatus[] }[] = [
   { label: "Get drafted", phases: ["DRAFT"] },
   { label: "Play weekly", phases: ["REGULAR_SEASON"] },
   { label: "Make playoffs", phases: ["PLAYOFFS"] },
-  { label: "Enter the record book", phases: ["COMPLETE"] },
+  { label: "Become league history", phases: ["COMPLETE"] },
 ];
 
 export default async function FeaturesPage() {
@@ -281,7 +281,10 @@ export default async function FeaturesPage() {
       </div>
 
       {/* Journey strip — where the current season is on the road map. */}
-      <ol className="mb-4 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-xs sm:text-sm">
+      <p className="mb-3 text-center text-sm text-muted">
+        Every season follows the same journey.
+      </p>
+      <ol className="mb-10 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-xs sm:text-sm">
         {JOURNEY.map((step, i) => {
           const here = !!phase && step.phases.includes(phase);
           return (
@@ -306,38 +309,49 @@ export default async function FeaturesPage() {
           );
         })}
       </ol>
-      <p className="mb-10 text-center text-sm text-muted">
-        Every season writes its own story — rivalries, upsets, breakout
-        players, championship runs. None of it disappears.
-      </p>
 
       {/* Chapters */}
       <div className="space-y-12 pb-4">
         {SECTIONS.map((section) => {
           const current = !!phase && section.phases.includes(phase);
           return (
-            <section key={section.id} aria-labelledby={`features-${section.id}`}>
-              <div className="mb-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium uppercase tracking-wide text-accent">
-                    {section.kicker}
-                  </span>
-                  {current ? <Badge tone="success">Happening now</Badge> : null}
+            <div key={section.id} className="space-y-12">
+              {/* The season chapters get their own act break. */}
+              {section.id === "signups" ? (
+                <div className="pt-2 text-center">
+                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-muted">
+                    The season
+                  </div>
+                  <div className="mt-1 font-display text-2xl font-semibold">
+                    Four phases. One champion.
+                  </div>
                 </div>
-                <h2
-                  id={`features-${section.id}`}
-                  className="mt-1 font-display text-2xl font-semibold"
-                >
-                  {section.title}
-                </h2>
-                <p className="mt-1 text-sm text-muted">{section.blurb}</p>
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {section.features.map((f) => (
-                  <FeatureCard key={f.title} feature={f} live={isLive(f)} />
-                ))}
-              </div>
-            </section>
+              ) : null}
+              <section aria-labelledby={`features-${section.id}`}>
+                <div className="mb-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-medium uppercase tracking-wide text-accent">
+                      {section.kicker}
+                    </span>
+                    {current ? (
+                      <Badge tone="success">Happening now</Badge>
+                    ) : null}
+                  </div>
+                  <h2
+                    id={`features-${section.id}`}
+                    className="mt-1 font-display text-2xl font-semibold"
+                  >
+                    {section.title}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted">{section.blurb}</p>
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {section.features.map((f) => (
+                    <FeatureCard key={f.title} feature={f} live={isLive(f)} />
+                  ))}
+                </div>
+              </section>
+            </div>
           );
         })}
       </div>
@@ -345,17 +359,20 @@ export default async function FeaturesPage() {
       {/* Closing CTA */}
       <div className="mb-4 rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-10 text-center">
         <h2 className="font-display text-2xl font-semibold">
-          Sound like your kind of league?
+          Ready for next season?
         </h2>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
           {phase === "SIGNUPS"
-            ? "Signups are open right now — grab a spot before draft night."
-            : "Hop in the Discord — you'll hear it first when the next season opens."}
+            ? "Signups take less than a minute — grab a spot before draft night."
+            : "Hop in the Discord — you'll hear it first when signups open."}
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-3">
           {phase === "SIGNUPS" ? (
-            <Link href={user ? "/me" : "/login"} className={buttonClasses("primary")}>
-              Join the season →
+            <Link
+              href={user ? "/me" : "/login"}
+              className={buttonClasses("primary")}
+            >
+              {user ? "Join the season →" : "Sign up with Steam →"}
             </Link>
           ) : null}
           <DiscordButton />
