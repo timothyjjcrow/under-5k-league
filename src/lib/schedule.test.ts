@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   roundRobin,
   byeTeamsByWeek,
+  remainingSchedule,
   seedOrder,
   playoffFirstRound,
   pickBracketSize,
@@ -249,5 +250,45 @@ describe("byeTeamsByWeek", () => {
   it("ignores playoff matches", () => {
     const byes = byeTeamsByWeek([m(9, "a", "b", "PLAYOFF")], ["a", "b", "c"]);
     expect(byes.size).toBe(0);
+  });
+});
+
+describe("remainingSchedule", () => {
+  const m = (
+    week: number,
+    home: string,
+    away: string,
+    status = "SCHEDULED",
+    phase = "REGULAR",
+  ) => ({ week, homeTeamId: home, awayTeamId: away, status, phase });
+
+  it("lists unplayed opponents in week order for both sides", () => {
+    const rem = remainingSchedule(
+      ["a", "b", "c", "d"],
+      [
+        m(1, "a", "b", "COMPLETED"),
+        m(3, "c", "a"),
+        m(2, "a", "d"),
+        m(2, "b", "c"),
+      ],
+    );
+    expect(rem.get("a")).toEqual([
+      { week: 2, opponentId: "d" },
+      { week: 3, opponentId: "c" },
+    ]);
+    expect(rem.get("c")).toEqual([
+      { week: 2, opponentId: "b" },
+      { week: 3, opponentId: "a" },
+    ]);
+    expect(rem.get("d")).toEqual([{ week: 2, opponentId: "a" }]);
+  });
+
+  it("ignores completed and playoff matches", () => {
+    const rem = remainingSchedule(
+      ["a", "b"],
+      [m(1, "a", "b", "COMPLETED"), m(9, "a", "b", "SCHEDULED", "PLAYOFF")],
+    );
+    expect(rem.get("a")).toEqual([]);
+    expect(rem.get("b")).toEqual([]);
   });
 });

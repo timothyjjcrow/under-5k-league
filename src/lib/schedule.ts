@@ -171,6 +171,32 @@ export function byeTeamsByWeek<
   return byes;
 }
 
+/**
+ * Each team's unplayed regular-season opponents, in week order — the
+ * "run-in" a playoff race is decided by.
+ */
+export function remainingSchedule<
+  T extends {
+    week: number;
+    homeTeamId: string;
+    awayTeamId: string;
+    phase: string;
+    status: string;
+  },
+>(teamIds: string[], matches: T[]): Map<string, { week: number; opponentId: string }[]> {
+  const out = new Map<string, { week: number; opponentId: string }[]>(
+    teamIds.map((id) => [id, []]),
+  );
+  const open = matches
+    .filter((m) => m.phase === "REGULAR" && m.status !== "COMPLETED")
+    .sort((a, b) => a.week - b.week);
+  for (const m of open) {
+    out.get(m.homeTeamId)?.push({ week: m.week, opponentId: m.awayTeamId });
+    out.get(m.awayTeamId)?.push({ week: m.week, opponentId: m.homeTeamId });
+  }
+  return out;
+}
+
 /** Match index encoded in a bracket slot like "R2M1" (null when absent). */
 export function slotIndex(slot: string | null | undefined): number | null {
   const m = slot?.match(/M(\d+)$/);

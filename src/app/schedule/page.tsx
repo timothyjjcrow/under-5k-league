@@ -11,6 +11,7 @@ import {
   byeTeamsByWeek,
   pickBracketSize,
   playoffFirstRound,
+  remainingSchedule,
 } from "@/lib/schedule";
 import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -346,7 +347,18 @@ export default async function SchedulePage() {
       {season.status === "REGULAR_SEASON" &&
       teams.length > 2 &&
       standings.some((s) => s.played > 0) ? (
-        <PlayoffPicture standings={standings} teamName={teamName} />
+        <>
+          <PlayoffPicture standings={standings} teamName={teamName} />
+          <RunIn
+            standings={standings}
+            teamName={teamName}
+            remaining={remainingSchedule(
+              teams.map((t) => t.id),
+              matches,
+            )}
+            playoffCut={pickBracketSize(teams.length)}
+          />
+        </>
       ) : null}
 
       {playoff.length > 0 ? (
@@ -444,5 +456,81 @@ function ProjectedSide({
       <TeamCrest name={name} seed={teamId} size={20} className="shrink-0 rounded" />
       <span className="truncate">{name}</span>
     </Link>
+  );
+}
+
+// Each team's remaining opponents in week order — the run-in a playoff race
+// is decided by. Opponent chips carry their current rank; playoff-bound
+// opponents (inside the cut) read as the tough dates.
+function RunIn({
+  standings,
+  teamName,
+  remaining,
+  playoffCut,
+}: {
+  standings: ReturnType<typeof computeStandings>;
+  teamName: Map<string, string>;
+  remaining: Map<string, { week: number; opponentId: string }[]>;
+  playoffCut: number;
+}) {
+  const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
+  const rows = standings.filter(
+    (s) => (remaining.get(s.teamId) ?? []).length > 0,
+  );
+  if (rows.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader
+        title="Run-in"
+        subtitle="Remaining opponents in week order — #rank shows current form"
+      />
+      <CardBody className="divide-y divide-line/60 p-0">
+        {rows.map((s) => (
+          <div
+            key={s.teamId}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-2.5 text-sm"
+          >
+            <Link
+              href={`/teams/${s.teamId}`}
+              className="flex w-44 min-w-0 shrink-0 items-center gap-2 hover:text-info"
+            >
+              <TeamCrest
+                name={teamName.get(s.teamId) ?? "?"}
+                seed={s.teamId}
+                size={20}
+                className="shrink-0 rounded"
+              />
+              <span className="truncate">{teamName.get(s.teamId) ?? "?"}</span>
+            </Link>
+            <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+              {(remaining.get(s.teamId) ?? []).map((r) => {
+                const oppRank = rankOf.get(r.opponentId);
+                const tough = oppRank != null && oppRank <= playoffCut;
+                return (
+                  <Link
+                    key={`${r.week}-${r.opponentId}`}
+                    href={`/teams/${r.opponentId}`}
+                    title={`Week ${r.week} vs ${teamName.get(r.opponentId) ?? "?"} (currently #${oppRank})`}
+                    className={cn(
+                      "flex max-w-[11rem] items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-muted/70",
+                      tough
+                        ? "border-accent/40 text-fg"
+                        : "border-line text-muted",
+                    )}
+                  >
+                    <span className="font-mono text-[10px] tabular-nums">
+                      #{oppRank}
+                    </span>
+                    <span className="truncate">
+                      {teamName.get(r.opponentId) ?? "?"}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </CardBody>
+    </Card>
   );
 }
