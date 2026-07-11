@@ -2,6 +2,7 @@ import Link from "next/link";
 import { setAvailability } from "@/app/actions/availability";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Countdown } from "@/components/countdown";
+import { LocalTime } from "@/components/local-time";
 
 /**
  * The match-night RSVP banner ("Your next match — … ✓ I'm in / ✗ Can't make
@@ -33,7 +34,16 @@ export function CheckinBanner({
       <div className="min-w-[14rem] flex-1">
         <div className="font-medium">
           {heading}
-          {when ? <span className="text-muted"> · {when}</span> : null}
+          {when ? (
+            <span className="text-muted">
+              {" · "}
+              {whenTs ? (
+                <LocalTime ts={whenTs} variant="full" initial={when} />
+              ) : (
+                when
+              )}
+            </span>
+          ) : null}
           {whenTs ? <Countdown targetMs={whenTs} /> : null}
           {detailsHref ? (
             <>

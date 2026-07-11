@@ -194,6 +194,7 @@ export default async function SchedulePage() {
           awayWin: m.winnerTeamId === m.awayTeamId,
           whenFull: fmtWhen(m.scheduledAt),
           whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
+          whenTs: m.scheduledAt?.getTime() ?? null,
           isFinalPhase: m.phase === "FINAL",
           standins: (standinsByMatch.get(m.id) ?? []).map(
             (a) =>

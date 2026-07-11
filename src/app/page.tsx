@@ -44,6 +44,7 @@ import {
   StandingsTableClient,
   type StandingsRowView,
 } from "@/components/standings-table";
+import { LocalTime } from "@/components/local-time";
 import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -1037,7 +1038,7 @@ async function SeasonView({
               title="Standings"
               action={
                 <Link
-                  href="/schedule"
+                  href="/schedule#this-week"
                   className="text-sm text-info hover:underline"
                 >
                   Full schedule →
@@ -1087,7 +1088,11 @@ async function SeasonView({
                     </div>
                     {myNextMatch.scheduledAt ? (
                       <div className="mt-1 text-xs text-muted">
-                        {fmtWhen(myNextMatch.scheduledAt)}
+                        <LocalTime
+                          ts={myNextMatch.scheduledAt.getTime()}
+                          variant="full"
+                          initial={fmtWhen(myNextMatch.scheduledAt) ?? ""}
+                        />
                       </div>
                     ) : null}
                   </Link>
@@ -1115,9 +1120,16 @@ async function SeasonView({
                             : m.phase === "PLAYOFF"
                               ? "Playoffs"
                               : `Week ${m.week}`}
-                          {m.scheduledAt
-                            ? ` · ${fmtWhen(m.scheduledAt)}`
-                            : ""}
+                          {m.scheduledAt ? (
+                            <>
+                              {" · "}
+                              <LocalTime
+                                ts={m.scheduledAt.getTime()}
+                                variant="full"
+                                initial={fmtWhen(m.scheduledAt) ?? ""}
+                              />
+                            </>
+                          ) : null}
                         </div>
                         <div className="mt-0.5 truncate font-medium">
                           {teamName.get(m.homeTeamId) ?? "?"}{" "}
@@ -1393,7 +1405,7 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
               title="Final standings"
               action={
                 <Link
-                  href="/schedule"
+                  href="/schedule#this-week"
                   className="text-sm text-info hover:underline"
                 >
                   Full schedule →

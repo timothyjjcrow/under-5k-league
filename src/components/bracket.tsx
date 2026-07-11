@@ -8,6 +8,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { TeamCrest } from "@/components/ui";
+import { LocalTime } from "@/components/local-time";
 import { cn } from "@/lib/utils";
 import type {
   BracketMatchView,
@@ -152,7 +153,13 @@ function MatchCard({
         className="flex items-center justify-between gap-2 px-1 pt-1 text-xs text-muted hover:text-info"
       >
         <span className="truncate">
-          {m.completed ? "Box score" : m.when ?? "Details"}
+          {m.completed ? (
+            "Box score"
+          ) : m.when && m.whenTs != null ? (
+            <LocalTime ts={m.whenTs} variant="short" initial={m.when} />
+          ) : (
+            m.when ?? "Details"
+          )}
         </span>
         <span className="shrink-0">Bo{m.bestOf} →</span>
       </Link>

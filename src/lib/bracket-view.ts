@@ -20,6 +20,8 @@ export type BracketMatchView = {
   winnerTeamId: string | null;
   /** Pre-formatted on the server. */
   when: string | null;
+  /** Epoch ms — lets the client re-render times in the viewer's timezone. */
+  whenTs: number | null;
   bestOf: number;
 };
 
@@ -67,6 +69,7 @@ export function buildBracketRounds(
             completed: m.status === "COMPLETED",
             winnerTeamId: m.winnerTeamId,
             when: m.scheduledAt ? formatWhen(m.scheduledAt) : null,
+            whenTs: m.scheduledAt?.getTime() ?? null,
             bestOf: m.bestOf,
           }
         : null,

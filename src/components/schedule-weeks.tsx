@@ -8,6 +8,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Badge, Card, CardBody, TeamCrest } from "@/components/ui";
+import { LocalTime } from "@/components/local-time";
 import { cn } from "@/lib/utils";
 
 export type RsvpSide = { confirmed: number; out: number };
@@ -26,6 +27,8 @@ export type MatchView = {
   /** Pre-formatted on the server; null when unscheduled. */
   whenFull: string | null;
   whenShort: string | null;
+  /** Epoch ms — lets the client re-render times in the viewer's timezone. */
+  whenTs: number | null;
   isFinalPhase: boolean;
   standins: string[];
   rsvp?: { home: RsvpSide; away: RsvpSide };
@@ -113,7 +116,13 @@ export function ScheduleWeeks({
             : collapsedOverride[w.week] ?? defaultCollapsed(w);
           const canToggle = !filterTeam;
           return (
-            <div key={w.week}>
+            <div
+              key={w.week}
+              // Deep-link target ("/schedule#this-week"); scroll-mt clears
+              // the sticky site header.
+              id={w.isCurrent ? "this-week" : undefined}
+              className={w.isCurrent ? "scroll-mt-20" : undefined}
+            >
               <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-muted">
                 {canToggle ? (
                   <button
@@ -256,10 +265,20 @@ function MatchRow({ match: m }: { match: MatchView }) {
                 {m.awayScore}
               </span>
             </span>
-          ) : m.whenFull ? (
+          ) : m.whenFull && m.whenTs != null ? (
             <span className="whitespace-nowrap text-xs text-muted">
-              <span className="hidden sm:inline">{m.whenFull}</span>
-              <span className="sm:hidden">{m.whenShort}</span>
+              <LocalTime
+                ts={m.whenTs}
+                variant="full"
+                initial={m.whenFull}
+                className="hidden sm:inline"
+              />
+              <LocalTime
+                ts={m.whenTs}
+                variant="short"
+                initial={m.whenShort ?? m.whenFull}
+                className="sm:hidden"
+              />
             </span>
           ) : (
             <span className="text-xs text-muted">vs</span>
