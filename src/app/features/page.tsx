@@ -260,12 +260,11 @@ export default async function FeaturesPage() {
           The tour
         </Badge>
         <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl">
-          You&apos;re only seeing half the league
+          Everything the league offers
         </h1>
         <p className="mx-auto mt-3 max-w-2xl text-muted sm:text-lg">
-          Most people land here, see the inhouses, and think that&apos;s all
-          there is. It isn&apos;t — inhouses are just what happens between
-          seasons. The real league starts when signups open.
+          Inhouses. Draft night. Weekly matches. Playoffs. A record book that
+          never forgets. Here&apos;s the full tour.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           {!user ? (
