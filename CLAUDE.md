@@ -405,6 +405,75 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   team-buttons with live pick splits, "your graded picks" review. Nav from
   REGULAR_SEASON on.
 
+## Interactive bracket (done)
+
+- `src/components/bracket.tsx` (`"use client"`) draws the full single-elim
+  tree: connector lines (pure CSS, flex-1 wrappers so pair midpoints land on
+  the next round's card centers), seed numbers, dashed TBD slots for rounds
+  that don't exist yet, tap/hover traces a team's run, 🏆 on the final's
+  winner. Pure `bracketSkeleton`/`slotIndex` (`schedule.ts`, tested) build the
+  round structure; `src/lib/bracket-view.ts` serializes matches + `seedMap`
+  (seeding recomputed from standings — identical to what
+  `createPlayoffBracket` used). Rendered on `/schedule`, the dashboard, and
+  `/seasons/[id]`.
+
+## Standings & schedule UX (done)
+
+- **StandingsTable** is now a thin server adapter (`page.tsx`) over the
+  sortable client `src/components/standings-table.tsx`: clickable
+  W/D/L/Diff/Pts headers (`aria-sort`), real league rank kept in the # column,
+  viewer's team row highlighted with a You chip, weekly ▲/▼ movement
+  (`standingsMovement`), ✓/✗ clinch marks (`clinchStatuses` — conservative
+  points-only math, suppressed when everyone makes the bracket). Cut line +
+  shading + arrows only render in league order.
+- **/schedule** during REGULAR_SEASON: "Playoff picture" (projected first
+  round via `playoffFirstRound` over live standings) and "Run-in"
+  (`remainingSchedule` — rank-tagged remaining-opponent chips, in-cut
+  opponents accented).
+- **ScheduleWeeks** (`src/components/schedule-weeks.tsx`, client): team filter
+  chips, fully-played past weeks collapsed to a header line, current week
+  gets `id="this-week"` (dashboard deep-links `/schedule#this-week`), byes
+  shown per week (`byeTeamsByWeek`) and kept visible under a team filter.
+- **Leaders**: `src/components/leader-board.tsx` — full ranked rows, top-5 +
+  show-all toggle, viewer's row highlighted and pinned with real rank when
+  outside the top 5.
+- **Times are viewer-local**: `<LocalTime>` (`useSyncExternalStore`; server
+  string as the hydration snapshot, browser TZ after) + shared
+  `formatMatchTime` (`src/lib/match-time.ts`). Server-side `toLocaleString`
+  alone is WRONG in prod (UTC host) — always pair a preformatted `initial`
+  with the epoch `ts`. `<Countdown>` (`countdownLabel`, tested) ticks
+  "in 2d 4h" → "happening now" on the check-in banner.
+
+## Rescheduling (done)
+
+- **Admin week mover**: `setWeekNight` action — retimes a week's unplayed
+  matches from one input; optional cascade shifts later scheduled weeks by
+  the same delta. Form lives in the admin Schedule & results card.
+- **Captain flow**: `RescheduleRequest` model (PENDING/ACCEPTED/DECLINED/
+  CANCELLED, one open per match — newer proposals supersede). Guards live in
+  `src/lib/reschedule-service.ts` (draft-service pattern, integration-tested
+  in `test/integration/reschedule.itest.ts`); `src/app/actions/reschedule.ts`
+  is a thin wrapper that adds auth, toasts, and the best-effort Discord
+  `rescheduleMessage` on acceptance. Match page shows the Reschedule card to
+  the two captains only; `/schedule` rows show a ⏳ chip (links to the match
+  page) while a proposal is open; the admin card lists open proposals with a
+  Clear button.
+
+## Verifying UI against a fixture (workflow note)
+
+- `scripts/seed-fixture.ts` seeds a throwaway DB into a demo state:
+  `FIXTURE_MODE=regular` (last week open — clinch marks, run-in, byes with
+  `FIXTURE_TEAMS=5`), `complete` (champion crowned), default (mid-playoffs
+  bracket with a TBD final). It REFUSES any `DATABASE_URL` without "fixture"
+  in it — always pass one explicitly; the generated Prisma client's baked
+  .env can silently point at dev.db.
+- The dev server locks its project dir (Next 16) and dev.db may belong to
+  another session — never reseed it. To run a second server: copy the repo
+  elsewhere (`rsync` minus node_modules/.next/dev.db, then
+  `cp -Rc node_modules` — APFS clonefile; a symlink breaks Turbopack), point
+  its `.env` at an absolute fixture `DATABASE_URL`, and `next dev -p 3111`
+  from the copy.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).
