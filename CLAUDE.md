@@ -332,8 +332,11 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   sm:grid-cols-2`) — without it the implicit track is `auto` and a long team
   name widens the whole page. Same trap: grid *items* need `min-w-0` (see the
   dashboard's two column divs).
-- `StandingsTable` is `table-fixed` with explicit numeric column widths so the
-  Team column truncates instead of stretching; keep new columns narrow+fixed.
+- `StandingsTable` is `table-fixed` with column widths on a responsive
+  `<colgroup>` so the Team column truncates instead of stretching. Widths must
+  live on `<col>`, NOT on `hidden sm:table-cell` th/td — fixed layout still
+  hands display:none columns an equal share of the leftover width, starving
+  Team on phones. Responsive-hidden columns get `w-0 sm:w-*` cols.
 - `CardHeader` clamps its title/subtitle (`min-w-0` + overflow-wrap) — free-
   text names are safe there. In custom flex headers, every level between the
   container and a `truncate` span needs `min-w-0`.
