@@ -92,6 +92,13 @@ export function FantasyPicker({
                         checked={isPicked}
                         disabled={!isPicked && full}
                         onChange={() => toggle(c.userId)}
+                        // React auto-resets the form after a server action,
+                        // clearing the DOM checkbox behind the controlled
+                        // prop (which doesn't re-write an "unchanged" value).
+                        // Re-sync on every render so state stays visible.
+                        ref={(el) => {
+                          if (el) el.checked = isPicked;
+                        }}
                         className="h-4 w-4 accent-[var(--color-accent)]"
                       />
                       <Avatar name={c.name} src={c.avatar} size={22} />
