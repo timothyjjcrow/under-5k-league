@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
-import { groupPlayoffRounds, roundName } from "@/lib/schedule";
+import { pickBracketSize } from "@/lib/schedule";
+import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
+import { Bracket } from "@/components/bracket";
 import { StandingsTable } from "@/app/page";
 import {
   Avatar,
@@ -99,7 +101,23 @@ export default async function SeasonArchivePage({
   const regular = season.matches.filter((m) => m.phase === "REGULAR");
   const playoff = season.matches.filter((m) => m.phase !== "REGULAR");
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
-  const { totalRounds, rounds } = groupPlayoffRounds(playoff);
+  // Same interactive bracket the live schedule uses — seeds recomputed from
+  // the archived regular-season table (identical to what seeding used).
+  const bracketRoundsView = buildBracketRounds(
+    playoff,
+    teamName,
+    seedMap(
+      standings.map((s) => s.teamId),
+      pickBracketSize(season.teams.length),
+    ),
+    (d) =>
+      d.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }),
+  );
   const champion = season.championTeamId
     ? season.teams.find((t) => t.id === season.championTeamId)
     : null;
@@ -163,22 +181,14 @@ export default async function SeasonArchivePage({
       {playoff.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Playoffs</SectionTitle>
-          <div className="flex gap-4 overflow-x-auto pb-2">
-            {rounds.map(({ round, matches: roundMatches }) => (
-              <div key={round} className="min-w-[16rem] flex-1 space-y-3">
-                <h3 className="text-sm font-medium uppercase tracking-wide text-muted">
-                  {roundName(round, totalRounds)}
-                </h3>
-                {roundMatches.map((m) => (
-                  <Card key={m.id}>
-                    <CardBody className="p-0">
-                      <ResultRow match={m} teamName={teamName} />
-                    </CardBody>
-                  </Card>
-                ))}
-              </div>
-            ))}
-          </div>
+          <Card>
+            <CardBody className="p-0 pt-4">
+              <Bracket
+                rounds={bracketRoundsView}
+                championTeamId={season.championTeamId}
+              />
+            </CardBody>
+          </Card>
         </section>
       ) : null}
 
