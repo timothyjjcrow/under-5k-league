@@ -57,7 +57,7 @@ describe("computeSeasonAwards", () => {
     ];
     const sig = computeSeasonAwards(games).find((a) => a.key === "signatureHero");
     expect(sig?.heroId).toBe(7); // hero 7 played 3x, hero 9 once
-    expect(sig?.value).toBe("3 games");
+    expect(sig?.value).toBe("3 picks");
   });
 
   it("picks the most lopsided game as Biggest Stomp", () => {

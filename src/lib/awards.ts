@@ -128,6 +128,10 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
 
   const qualified = aggs.filter((a) => a.games >= minGames);
 
+  // "1 win", "2 wins" — award strings read like prose, so pluralize.
+  const n = (count: number, word: string) =>
+    `${count} ${word}${count === 1 ? "" : "s"}`;
+
   pick(
     aggs,
     (a) => a.wins * 1000 + kdaOf(a),
@@ -136,8 +140,8 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       title: "MVP",
       emoji: "🏆",
       blurb: "Most wins across the season",
-      value: `${a.wins} wins`,
-      detail: `${kdaOf(a).toFixed(1)} KDA · ${a.games} games`,
+      value: n(a.wins, "win"),
+      detail: `${kdaOf(a).toFixed(1)} KDA · ${n(a.games, "game")}`,
     }),
   );
   pick(
@@ -148,7 +152,7 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       title: "Kill Leader",
       emoji: "⚔️",
       blurb: "Most total kills",
-      value: `${a.kills} kills`,
+      value: n(a.kills, "kill"),
       detail: `${(a.kills / a.games).toFixed(1)} per game`,
     }),
   );
@@ -160,7 +164,7 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       title: "Playmaker",
       emoji: "🤝",
       blurb: "Most total assists",
-      value: `${a.assists} assists`,
+      value: n(a.assists, "assist"),
       detail: `${(a.assists / a.games).toFixed(1)} per game`,
     }),
   );
@@ -171,9 +175,9 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       key: "farmKing",
       title: "Farm King",
       emoji: "💰",
-      blurb: `Highest avg GPM (min ${minGames} games)`,
+      blurb: `Highest avg GPM (min ${n(minGames, "game")})`,
       value: `${Math.round(avgGpmOf(a))} GPM`,
-      detail: `${a.games} games`,
+      detail: n(a.games, "game"),
     }),
   );
   pick(
@@ -183,9 +187,9 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       key: "bestKda",
       title: "Best KDA",
       emoji: "🎯",
-      blurb: `Highest KDA ratio (min ${minGames} games)`,
+      blurb: `Highest KDA ratio (min ${n(minGames, "game")})`,
       value: `${kdaOf(a).toFixed(1)} KDA`,
-      detail: `${a.games} games`,
+      detail: n(a.games, "game"),
     }),
   );
   pick(
@@ -196,7 +200,7 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       title: "Workhorse",
       emoji: "🐎",
       blurb: "Most games played",
-      value: `${a.games} games`,
+      value: n(a.games, "game"),
       detail: `${a.wins}–${a.games - a.wins}`,
     }),
   );
@@ -218,7 +222,7 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       title: "Signature Hero",
       emoji: "🔥",
       blurb: "The league's most-picked hero",
-      value: `${topHero.count} games`,
+      value: n(topHero.count, "pick"),
       heroId: topHero.heroId,
     });
   }
