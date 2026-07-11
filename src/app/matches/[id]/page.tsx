@@ -9,6 +9,13 @@ import { heroById } from "@/lib/heroes";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
+import { LocalTime } from "@/components/local-time";
+import { ActionForm, SubmitButton } from "@/components/action-form";
+import {
+  cancelReschedule,
+  proposeReschedule,
+  respondReschedule,
+} from "@/app/actions/reschedule";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   Avatar,
@@ -230,8 +237,8 @@ async function MatchPreview({
     scheduledAt: Date | null;
     homeTeamId: string;
     awayTeamId: string;
-    homeTeam: { name: string };
-    awayTeam: { name: string };
+    homeTeam: { name: string; captainId: string };
+    awayTeam: { name: string; captainId: string };
     standins: {
       id: string;
       teamId: string;
@@ -304,6 +311,12 @@ async function MatchPreview({
           whenTs={match.scheduledAt?.getTime()}
           myRsvp={myRsvp}
         />
+      ) : null}
+
+      {viewer &&
+      (match.homeTeam.captainId === viewer.id ||
+        match.awayTeam.captainId === viewer.id) ? (
+        <RescheduleCard match={match} viewerId={viewer.id} />
       ) : null}
 
       <Card>
@@ -635,4 +648,112 @@ function safeParse(json: string): PlayerStat[] {
   } catch {
     return [];
   }
+}
+
+// Captain-to-captain rescheduling: propose a time, the other captain accepts
+// (retimes the match) or declines. Only the two captains ever see this card.
+async function RescheduleCard({
+  match,
+  viewerId,
+}: {
+  match: {
+    id: string;
+    status: string;
+    scheduledAt: Date | null;
+    homeTeam: { name: string; captainId: string };
+    awayTeam: { name: string; captainId: string };
+  };
+  viewerId: string;
+}) {
+  if (match.status === "COMPLETED") return null;
+  const pending = await prisma.rescheduleRequest.findFirst({
+    where: { matchId: match.id, status: "PENDING" },
+    include: { proposedBy: { select: { name: true } } },
+  });
+  const fmt = (d: Date) =>
+    d.toLocaleString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  const mine = pending?.proposedById === viewerId;
+
+  return (
+    <Card>
+      <CardHeader
+        title="Reschedule"
+        subtitle={
+          match.scheduledAt
+            ? "Agree a new time with the other captain — accepting retimes the match for everyone."
+            : "No time set yet — propose one to the other captain."
+        }
+      />
+      <CardBody className="space-y-3 text-sm">
+        {pending ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="min-w-[14rem] flex-1">
+              {mine ? "You" : <strong>{pending.proposedBy.name}</strong>}{" "}
+              proposed{" "}
+              <strong>
+                <LocalTime
+                  ts={pending.proposedTime.getTime()}
+                  variant="full"
+                  initial={fmt(pending.proposedTime)}
+                />
+              </strong>
+              {mine ? " — waiting on the other captain." : "."}
+            </span>
+            {mine ? (
+              <ActionForm
+                action={cancelReschedule}
+                hidden={{ requestId: pending.id }}
+              >
+                <SubmitButton variant="secondary" size="sm">
+                  Withdraw
+                </SubmitButton>
+              </ActionForm>
+            ) : (
+              <div className="flex shrink-0 gap-2">
+                <ActionForm
+                  action={respondReschedule}
+                  hidden={{ requestId: pending.id, response: "accept" }}
+                >
+                  <SubmitButton variant="primary" size="sm">
+                    ✓ Accept time
+                  </SubmitButton>
+                </ActionForm>
+                <ActionForm
+                  action={respondReschedule}
+                  hidden={{ requestId: pending.id, response: "decline" }}
+                >
+                  <SubmitButton variant="secondary" size="sm">
+                    ✗ Decline
+                  </SubmitButton>
+                </ActionForm>
+              </div>
+            )}
+          </div>
+        ) : (
+          <ActionForm
+            action={proposeReschedule}
+            hidden={{ matchId: match.id }}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <input
+              type="datetime-local"
+              name="proposedTime"
+              required
+              aria-label="Proposed new time"
+              className="h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm text-fg"
+            />
+            <SubmitButton variant="secondary" size="sm">
+              Propose new time
+            </SubmitButton>
+          </ActionForm>
+        )}
+      </CardBody>
+    </Card>
+  );
 }

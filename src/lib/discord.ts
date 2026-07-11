@@ -113,6 +113,18 @@ export function weeklyHonorsMessage(honors: {
   return lines.join("\n");
 }
 
+/** A captain-agreed reschedule — the new time is pre-formatted by the caller. */
+export function rescheduleMessage(m: {
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  when: string;
+}): string {
+  const label = m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
+  return `🗓️ **Rescheduled** — ${label}: **${m.homeName}** vs **${m.awayName}** now plays **${m.when}** (both captains agreed).`;
+}
+
 export function testMessage(): string {
   return `👋 Webhook test from **${process.env.NEXT_PUBLIC_APP_NAME || "the league site"}** — notifications are wired up.`;
 }

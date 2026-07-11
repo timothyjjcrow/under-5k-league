@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  rescheduleMessage,
   signupMessage,
   draftStartedMessage,
   draftCompleteMessage,
@@ -105,5 +106,32 @@ describe("discord message formatters", () => {
     expect(playerSoldMessage("A", "T", 1)).toContain("steal");
     expect(playerSoldMessage("A", "T", 75)).toContain("big spender");
     expect(playerSoldMessage("A", "T", 20)).not.toMatch(/steal|big spender/);
+  });
+});
+
+describe("rescheduleMessage", () => {
+  it("announces the agreed new time", () => {
+    const msg = rescheduleMessage({
+      homeName: "A",
+      awayName: "B",
+      week: 3,
+      isPlayoff: false,
+      when: "Sat, Jul 18, 7:30 PM",
+    });
+    expect(msg).toContain("Week 3");
+    expect(msg).toContain("**A** vs **B**");
+    expect(msg).toContain("Sat, Jul 18, 7:30 PM");
+  });
+
+  it("labels playoff matches", () => {
+    expect(
+      rescheduleMessage({
+        homeName: "A",
+        awayName: "B",
+        week: 9,
+        isPlayoff: true,
+        when: "x",
+      }),
+    ).toContain("Playoffs");
   });
 });

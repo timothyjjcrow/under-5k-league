@@ -35,6 +35,7 @@ model User {
   inhouseLobbies      InhouseLobbyPlayer[]
   startedInhouses     InhouseLobby[]      @relation("InhouseStarter")
   matchAvailability   MatchAvailability[]
+  rescheduleProposals RescheduleRequest[]
   fantasyRosters      FantasyRoster[]
   fantasyPickedBy     FantasyPick[]
   predictions         Prediction[]
@@ -182,6 +183,24 @@ model Match {
   games        Game[]
   availability MatchAvailability[]
   predictions  Prediction[]
+  reschedules  RescheduleRequest[]
+}
+
+// A captain's proposal to move a match to a different time. The opposing
+// captain accepts (retimes the match) or declines; one open proposal per
+// match at a time.
+model RescheduleRequest {
+  id           String   @id @default(cuid())
+  matchId      String
+  proposedById String
+  proposedTime DateTime
+  status       String   @default("PENDING") // PENDING | ACCEPTED | DECLINED | CANCELLED
+  createdAt    DateTime @default(now())
+
+  match      Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  proposedBy User  @relation(fields: [proposedById], references: [id], onDelete: Cascade)
+
+  @@index([matchId, status])
 }
 
 // A rostered player's match-night RSVP for a scheduled match. Captains and the
