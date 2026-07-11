@@ -49,32 +49,31 @@ const SECTIONS: Section[] = [
     id: "always-on",
     kicker: "Between seasons",
     title: "The league never goes offline",
-    blurb:
-      "Even when a season isn't running, there's always something happening.",
+    blurb: "There's always something happening.",
     phases: [],
     features: [
       {
         icon: "⚔️",
         title: "Inhouses",
-        desc: "Queue with nine players, draft teams, and play a real match. When the Ancient falls, the stats, MVP, and match page are already waiting.",
+        desc: "Queue with nine players, draft teams, play. When the Ancient falls, the stats and MVP are already posted.",
         href: "/inhouse",
       },
       {
         icon: "🪪",
         title: "Player profiles",
-        desc: "Every season, team, award, hero, and badge stays attached to your profile. Your career grows every time you play.",
+        desc: "Seasons, teams, awards, badges — all attached to your profile. Your career grows every time you play.",
         href: "/players",
       },
       {
         icon: "🏛️",
         title: "Hall of Fame",
-        desc: "Champions. Career leaders. Historic seasons. Every league leaves its mark.",
+        desc: "Champions. Career leaders. Historic seasons.",
         href: "/hall-of-fame",
       },
       {
         icon: "📣",
         title: "Discord integration",
-        desc: "Drafts, match results, signups, playoffs, and announcements appear automatically. No one misses what's happening.",
+        desc: "Signups, draft sales, results, playoffs — posted automatically. No one misses anything.",
       },
     ],
   },
@@ -103,7 +102,7 @@ const SECTIONS: Section[] = [
       {
         icon: "🧢",
         title: "Built for Under 4.5K",
-        desc: "Every season can enforce an MMR cap so everyone starts on even footing.",
+        desc: "A hard MMR cap every season. Even footing for everyone.",
       },
     ],
   },
@@ -112,7 +111,7 @@ const SECTIONS: Section[] = [
     kicker: "2 — Draft night",
     title: "Every player is up for auction",
     blurb:
-      "Captains build teams with a limited budget. Spend too much early — or wait too long — and someone steals the player you wanted.",
+      "Limited budgets. Live bids. Spend too early — or wait too long — and someone steals your player.",
     phases: ["DRAFT"],
     features: [
       {
@@ -125,7 +124,7 @@ const SECTIONS: Section[] = [
       {
         icon: "⚖️",
         title: "Balanced budgets",
-        desc: "Lower-MMR captains receive larger budgets to keep teams competitive.",
+        desc: "Lower-MMR captains get bigger budgets. Every team has a real shot.",
       },
       {
         icon: "🧾",
@@ -141,13 +140,13 @@ const SECTIONS: Section[] = [
     kicker: "3 — Regular season",
     title: "You play Dota. We'll handle the league.",
     blurb:
-      "As soon as a match ends, everything updates automatically — standings, player stats, awards, history.",
+      "A match ends. Standings, stats, awards, history — everything updates on its own.",
     phases: ["REGULAR_SEASON"],
     features: [
       {
         icon: "📊",
         title: "Automatic match pages",
-        desc: "Heroes. KDA. Net worth. Everything from every match, pulled straight from the game.",
+        desc: "Heroes. KDA. Net worth. Every match, straight from the game.",
         href: "/schedule",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
@@ -161,14 +160,14 @@ const SECTIONS: Section[] = [
       {
         icon: "🥇",
         title: "Weekly awards",
-        desc: "Player of the Week. Team of the Week. League leaders. Something new every week.",
+        desc: "Player of the Week. Team of the Week. League leaders. Crowned automatically.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
       {
         icon: "🏅",
         title: "Career badges",
-        desc: "Milestones. Championships. Perfect games. Every season adds to your legacy.",
+        desc: "Milestones. Championships. Perfect games. Your legacy adds up.",
         href: "/leaders",
         livePhases: MID_SEASON.concat("COMPLETE"),
       },
@@ -189,14 +188,14 @@ const SECTIONS: Section[] = [
       {
         icon: "✅",
         title: "Availability check-in",
-        desc: "One click tells your captain you're available. No last-minute scrambling.",
+        desc: "One click says you're in. No last-minute scrambling.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
       {
         icon: "📅",
         title: "Calendar sync",
-        desc: "Subscribe once. Every league match appears in your calendar automatically.",
+        desc: "Subscribe once. Every match lands in your calendar.",
         href: "/schedule",
         livePhases: MID_SEASON,
       },
@@ -212,7 +211,7 @@ const SECTIONS: Section[] = [
       {
         icon: "🏆",
         title: "Live bracket",
-        desc: "Every series updates automatically, from the first round to the grand final.",
+        desc: "First round to grand final, updating automatically.",
         href: "/schedule",
         livePhases: ["PLAYOFFS", "COMPLETE"],
       },
@@ -226,7 +225,7 @@ const SECTIONS: Section[] = [
       {
         icon: "📜",
         title: "Permanent record book",
-        desc: "Nothing disappears. Years from now you can still look up the draft, the standings, the bracket, and the championship team.",
+        desc: "Nothing disappears. The draft, the standings, the bracket, the champions — still there years from now.",
         href: "/seasons",
       },
     ],
@@ -362,8 +361,8 @@ export default async function FeaturesPage() {
         </h2>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
           {phase === "SIGNUPS"
-            ? "Signups take less than a minute — grab a spot before draft night."
-            : "Hop in the Discord — you'll hear it first when signups open."}
+            ? "Signups take a minute. Grab a spot before draft night."
+            : "You'll hear it first in the Discord."}
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-3">
           {phase === "SIGNUPS" ? (
