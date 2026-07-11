@@ -103,7 +103,7 @@ export default async function PlayersPage() {
                   subtitle={`${t.members.length}/${season.teamSize} players`}
                   action={
                     season.status === "DRAFT" ? (
-                      <Badge tone="accent">${t.budget}</Badge>
+                      <Badge tone="accent">${t.budget} left</Badge>
                     ) : null
                   }
                 />

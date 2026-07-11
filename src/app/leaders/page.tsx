@@ -167,7 +167,7 @@ export default async function LeadersPage() {
       key: "winRate",
       minGames: rateFloor,
       format: (r) => `${r.value}%`,
-      hint: (r) => `${r.summary.games} games`,
+      hint: (r) => `${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
     },
     {
       title: "Most kills",
@@ -193,7 +193,7 @@ export default async function LeadersPage() {
       key: "gpm",
       minGames: rateFloor,
       format: (r) => `${r.value}`,
-      hint: (r) => `${r.summary.games} games`,
+      hint: (r) => `${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
     },
     {
       title: "Richest (avg net worth)",
@@ -201,7 +201,7 @@ export default async function LeadersPage() {
       key: "netWorth",
       minGames: rateFloor,
       format: (r) => formatNetWorth(r.value),
-      hint: (r) => `${r.summary.games} games`,
+      hint: (r) => `${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
     },
   ];
 
