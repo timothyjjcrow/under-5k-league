@@ -145,6 +145,49 @@ export function slotRound(slot: string | null | undefined): number {
   return m ? Number(m[1]) : 0;
 }
 
+/** Match index encoded in a bracket slot like "R2M1" (null when absent). */
+export function slotIndex(slot: string | null | undefined): number | null {
+  const m = slot?.match(/M(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Full bracket structure including rounds that haven't been created yet:
+ * every round from the first to the final, each with its expected number of
+ * slots, holding either the real match or null (a TBD placeholder). This is
+ * what lets the bracket UI draw the whole tree — connectors and future
+ * rounds — from just the matches that exist so far.
+ */
+export function bracketSkeleton<T extends { bracketSlot: string | null }>(
+  matches: T[],
+): { totalRounds: number; rounds: { round: number; slots: (T | null)[] }[] } {
+  const firstRound = matches.filter((m) => slotRound(m.bracketSlot) === 0);
+  if (firstRound.length === 0) return { totalRounds: 0, rounds: [] };
+  const totalRounds = bracketRounds(firstRound.length * 2);
+
+  const rounds = Array.from({ length: totalRounds }, (_, round) => {
+    const count = firstRound.length >> round;
+    const slots: (T | null)[] = new Array(count).fill(null);
+    const inRound = matches
+      .filter((m) => slotRound(m.bracketSlot) === round)
+      .sort((a, b) => (a.bracketSlot ?? "").localeCompare(b.bracketSlot ?? ""));
+    // Place by the slot's M-index; legacy matches without a slot fill gaps
+    // in order.
+    const strays: T[] = [];
+    for (const m of inRound) {
+      const i = slotIndex(m.bracketSlot);
+      if (i != null && i < count && slots[i] === null) slots[i] = m;
+      else strays.push(m);
+    }
+    for (const m of strays) {
+      const gap = slots.indexOf(null);
+      if (gap !== -1) slots[gap] = m;
+    }
+    return { round, slots };
+  });
+  return { totalRounds, rounds };
+}
+
 /**
  * Group playoff matches into ordered rounds for a bracket view, and report how
  * many rounds the bracket has (derived from the first round's match count).

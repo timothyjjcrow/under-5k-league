@@ -3,7 +3,9 @@ import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
-import { groupPlayoffRounds, pickBracketSize, roundName } from "@/lib/schedule";
+import { pickBracketSize } from "@/lib/schedule";
+import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
+import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
 import {
   regularSeasonStatus,
@@ -162,8 +164,18 @@ export default async function SchedulePage() {
       ? teamName.get(season.championTeamId)
       : null;
 
-  // Group playoff matches into rounds for a simple bracket view.
-  const { totalRounds, rounds: playoffRounds } = groupPlayoffRounds(playoff);
+  // Full bracket tree (TBD slots included) for the interactive bracket.
+  const bracketRoundsView = buildBracketRounds(
+    playoff,
+    teamName,
+    // Same seeding rule createPlayoffBracket used, recomputed — regular-season
+    // results are frozen once playoffs start, so the order is identical.
+    seedMap(
+      standings.map((s) => s.teamId),
+      pickBracketSize(teams.length),
+    ),
+    (d) => fmtWhen(d) ?? "",
+  );
 
   return (
     <div className="space-y-8">
@@ -252,27 +264,14 @@ export default async function SchedulePage() {
       {playoff.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Playoff bracket</SectionTitle>
-          <div className="flex gap-4 overflow-x-auto pb-2">
-            {playoffRounds.map(({ round, matches: roundMatches }) => (
-              <div key={round} className="min-w-[16rem] flex-1 space-y-3">
-                <h3 className="text-sm font-medium uppercase tracking-wide text-muted">
-                  {roundName(round, totalRounds)}
-                </h3>
-                {roundMatches.map((m) => (
-                  <Card key={m.id}>
-                    <CardBody className="p-0">
-                      <MatchRow
-                        match={m}
-                        teamName={teamName}
-                        standins={standinsByMatch.get(m.id)}
-                        rsvp={rsvpFor(m)}
-                      />
-                    </CardBody>
-                  </Card>
-                ))}
-              </div>
-            ))}
-          </div>
+          <Card>
+            <CardBody className="p-0 pt-4">
+              <Bracket
+                rounds={bracketRoundsView}
+                championTeamId={season.championTeamId}
+              />
+            </CardBody>
+          </Card>
         </section>
       ) : null}
 

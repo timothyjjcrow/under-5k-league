@@ -4,7 +4,9 @@ import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
-import { groupPlayoffRounds, pickBracketSize, roundName } from "@/lib/schedule";
+import { pickBracketSize } from "@/lib/schedule";
+import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
+import { Bracket } from "@/components/bracket";
 import { formByTeam, type FormResult } from "@/lib/team-matches";
 import {
   Avatar,
@@ -936,10 +938,17 @@ async function SeasonView({
     : undefined;
 
   const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
-  const { totalRounds, rounds: playoffRounds } =
-    groupPlayoffRounds(playoffMatches);
+  const bracketRoundsView = buildBracketRounds(
+    playoffMatches,
+    teamName,
+    seedMap(
+      standings.map((s) => s.teamId),
+      pickBracketSize(teams.length),
+    ),
+    (d) => fmtWhen(d) ?? "",
+  );
   const showBracket =
-    season.status === "PLAYOFFS" && playoffRounds.length > 0;
+    season.status === "PLAYOFFS" && bracketRoundsView.length > 0;
 
   const recentResults = matches
     .filter((m) => m.status === "COMPLETED")
@@ -1002,11 +1011,10 @@ async function SeasonView({
               </Link>
             }
           />
-          <CardBody>
-            <MiniBracket
-              rounds={playoffRounds}
-              totalRounds={totalRounds}
-              teamName={teamName}
+          <CardBody className="p-0 pt-4">
+            <Bracket
+              rounds={bracketRoundsView}
+              championTeamId={season.championTeamId}
             />
           </CardBody>
         </Card>
@@ -1195,108 +1203,6 @@ function SideGameLink({
         <span className="block truncate text-xs text-muted">{hint}</span>
       </span>
     </Link>
-  );
-}
-
-type BracketMatch = {
-  id: string;
-  homeTeamId: string;
-  awayTeamId: string;
-  homeScore: number;
-  awayScore: number;
-  winnerTeamId: string | null;
-  status: string;
-  scheduledAt: Date | null;
-  bestOf: number;
-};
-
-function MiniBracket({
-  rounds,
-  totalRounds,
-  teamName,
-}: {
-  rounds: { round: number; matches: BracketMatch[] }[];
-  totalRounds: number;
-  teamName: Map<string, string>;
-}) {
-  return (
-    <div className="flex gap-4 overflow-x-auto pb-1">
-      {rounds.map(({ round, matches }) => (
-        <div key={round} className="min-w-[12rem] flex-1 space-y-2">
-          <h4 className="text-xs font-medium uppercase tracking-wide text-muted">
-            {roundName(round, totalRounds)}
-          </h4>
-          {matches.map((m) => {
-            const done = m.status === "COMPLETED";
-            return (
-              <div
-                key={m.id}
-                className="space-y-1 rounded-lg border border-line bg-surface-2/40 p-2 text-sm"
-              >
-                <BracketSide
-                  id={m.homeTeamId}
-                  name={teamName.get(m.homeTeamId)}
-                  score={m.homeScore}
-                  win={m.winnerTeamId === m.homeTeamId}
-                  done={done}
-                />
-                <BracketSide
-                  id={m.awayTeamId}
-                  name={teamName.get(m.awayTeamId)}
-                  score={m.awayScore}
-                  win={m.winnerTeamId === m.awayTeamId}
-                  done={done}
-                />
-                <Link
-                  href={`/matches/${m.id}`}
-                  className="flex items-center justify-between gap-2 pt-0.5 text-xs text-muted hover:text-info"
-                >
-                  <span className="truncate">
-                    {done
-                      ? "Box score"
-                      : m.scheduledAt
-                        ? fmtWhen(m.scheduledAt)
-                        : "Details"}
-                  </span>
-                  <span className="shrink-0">Bo{m.bestOf} →</span>
-                </Link>
-              </div>
-            );
-          })}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function BracketSide({
-  id,
-  name,
-  score,
-  win,
-  done,
-}: {
-  id: string;
-  name: string | undefined;
-  score: number;
-  win: boolean;
-  done: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <Link
-        href={`/teams/${id}`}
-        className={cn(
-          "truncate hover:text-info",
-          win ? "font-semibold" : done ? "text-muted" : "",
-        )}
-      >
-        {name ?? "TBD"}
-      </Link>
-      {done ? (
-        <span className="shrink-0 font-mono text-xs tabular-nums">{score}</span>
-      ) : null}
-    </div>
   );
 }
 

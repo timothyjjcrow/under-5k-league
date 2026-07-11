@@ -8,6 +8,8 @@ import {
   roundName,
   nextRoundPairings,
   slotRound,
+  slotIndex,
+  bracketSkeleton,
   groupPlayoffRounds,
   matchNightForWeek,
 } from "./schedule";
@@ -158,5 +160,58 @@ describe("groupPlayoffRounds", () => {
 
   it("returns empty when there are no playoff matches", () => {
     expect(groupPlayoffRounds([])).toEqual({ totalRounds: 0, rounds: [] });
+  });
+});
+
+describe("slotIndex", () => {
+  it("reads the match index from a bracket slot", () => {
+    expect(slotIndex("R0M1")).toBe(1);
+    expect(slotIndex("R2M12")).toBe(12);
+    expect(slotIndex(null)).toBeNull();
+    expect(slotIndex("weird")).toBeNull();
+  });
+});
+
+describe("bracketSkeleton", () => {
+  it("builds every round with TBD slots for matches that don't exist yet", () => {
+    // 8-team bracket, only the first round created so far.
+    const matches = [
+      { bracketSlot: "R0M2" },
+      { bracketSlot: "R0M0" },
+      { bracketSlot: "R0M1" },
+      { bracketSlot: "R0M3" },
+    ];
+    const { totalRounds, rounds } = bracketSkeleton(matches);
+    expect(totalRounds).toBe(3);
+    expect(rounds.map((r) => r.slots.length)).toEqual([4, 2, 1]);
+    expect(rounds[0].slots.map((m) => m?.bracketSlot)).toEqual([
+      "R0M0",
+      "R0M1",
+      "R0M2",
+      "R0M3",
+    ]);
+    expect(rounds[1].slots).toEqual([null, null]);
+    expect(rounds[2].slots).toEqual([null]);
+  });
+
+  it("places created later rounds into their slots", () => {
+    const matches = [
+      { bracketSlot: "R0M0" },
+      { bracketSlot: "R0M1" },
+      { bracketSlot: "R1M0" },
+    ];
+    const { totalRounds, rounds } = bracketSkeleton(matches);
+    expect(totalRounds).toBe(2);
+    expect(rounds[1].slots[0]?.bracketSlot).toBe("R1M0");
+  });
+
+  it("fills slotless legacy matches in order", () => {
+    const matches = [{ bracketSlot: null }, { bracketSlot: null }];
+    const { rounds } = bracketSkeleton(matches);
+    expect(rounds[0].slots).toEqual(matches);
+  });
+
+  it("returns empty when there are no playoff matches", () => {
+    expect(bracketSkeleton([])).toEqual({ totalRounds: 0, rounds: [] });
   });
 });
