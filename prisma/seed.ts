@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { approxRankTierFromMmr } from "../src/lib/rank";
 
 const prisma = new PrismaClient();
 
@@ -13,11 +14,9 @@ function steamId(i: number) {
   return "765611980000" + String(1000 + i);
 }
 
-// A plausible OpenDota rank_tier: Herald..Divine with 1-5 stars.
-function randomRank() {
-  const medal = 1 + Math.floor(Math.random() * 7);
-  const stars = 1 + Math.floor(Math.random() * 5);
-  return medal * 10 + stars;
+// Demo MMRs stay under the season's 4500 cap (signups above it are rejected).
+function randomMmr() {
+  return 1200 + Math.floor(Math.random() * 3301);
 }
 
 const HEROES = [
@@ -74,7 +73,7 @@ async function main() {
       name: "Admin",
       role: "ADMIN",
       profileUrl: "https://steamcommunity.com/id/admin",
-      rankTier: randomRank(),
+      rankTier: approxRankTierFromMmr(4200), // matches the signup MMR below
     },
   });
 
@@ -107,16 +106,16 @@ async function main() {
   const playerSeeds: { id: string; mmr: number }[] = [];
   let idx = 2;
   for (const name of players) {
+    // MMR first so the medal on the profile matches the signup number.
+    const mmr = randomMmr();
     const user = await prisma.user.create({
       data: {
         steamId: steamId(idx),
         name,
         profileUrl: `https://steamcommunity.com/profiles/${steamId(idx)}`,
-        rankTier: randomRank(),
+        rankTier: approxRankTierFromMmr(mmr),
       },
     });
-    // Stay under the season's 4500 MMR cap (signups above it are rejected).
-    const mmr = 1200 + Math.floor(Math.random() * 3301);
     await prisma.registration.create({
       data: {
         seasonId: season.id,
@@ -146,12 +145,13 @@ async function main() {
 
   console.log("Creating standins…");
   for (const name of HANDLES.slice(16, 19)) {
+    const mmr = randomMmr();
     const user = await prisma.user.create({
       data: {
         steamId: steamId(idx),
         name,
         profileUrl: `https://steamcommunity.com/profiles/${steamId(idx)}`,
-        rankTier: randomRank(),
+        rankTier: approxRankTierFromMmr(mmr),
       },
     });
     await prisma.registration.create({
@@ -159,7 +159,7 @@ async function main() {
         seasonId: season.id,
         userId: user.id,
         type: "STANDIN",
-        mmr: 1200 + Math.floor(Math.random() * 3301),
+        mmr,
       },
     });
     idx++;

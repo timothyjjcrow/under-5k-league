@@ -120,6 +120,26 @@ describe("mmrWeightedBudgets", () => {
     expect(flat.get("b")).toBe(100);
   });
 
+  it("shrinks the spread when captains are closely matched", () => {
+    // 175 MMR apart at 20% weight → 17.5% of the full effect (~±3.5%),
+    // not the full ±20% the extremes get at a 1000+ MMR gap.
+    const b = mmrWeightedBudgets(100, 20, [
+      cap("low", 4200),
+      cap("high", 4375),
+    ]);
+    expect(b.get("low")).toBe(103);
+    expect(b.get("high")).toBe(97);
+  });
+
+  it("applies the full weight once the captain gap reaches 1000 MMR", () => {
+    const b = mmrWeightedBudgets(100, 20, [
+      cap("low", 3000),
+      cap("high", 4000),
+    ]);
+    expect(b.get("low")).toBe(120);
+    expect(b.get("high")).toBe(80);
+  });
+
   it("gives base to captains with unknown MMR", () => {
     const b = mmrWeightedBudgets(100, 20, [
       cap("a", 2000),

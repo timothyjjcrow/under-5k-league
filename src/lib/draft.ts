@@ -55,14 +55,23 @@ export function isDraftComplete(
 }
 
 /**
+ * The captain MMR gap (lowest to highest) at which the budget weighting
+ * reaches full strength. Below it the effect scales down proportionally, so
+ * near-equal captains get near-equal budgets instead of the full spread.
+ */
+export const BUDGET_FULL_EFFECT_GAP = 1000;
+
+/**
  * MMR-weighted starting budgets: a high-MMR captain is already a strong pick
  * on their own roster, so they get less to spend than a low-MMR captain.
  *
- * Linear interpolation across the actual captain pool: the lowest-MMR captain
- * gets `base × (1 + weightPct/100)`, the highest gets `base × (1 − weightPct/100)`,
- * everyone else proportionally by MMR distance. Self-calibrating — clustered
- * captain MMRs produce nearly flat budgets, identical MMRs (or weightPct 0)
- * produce exactly `base`. Captains with unknown MMR get `base`.
+ * Linear interpolation across the actual captain pool, with the weight scaled
+ * by how lopsided that pool really is: at a gap of `BUDGET_FULL_EFFECT_GAP`+
+ * MMR between the lowest and highest captain, the lowest gets
+ * `base × (1 + weightPct/100)` and the highest `base × (1 − weightPct/100)`;
+ * smaller gaps shrink the spread proportionally (175 apart at 20% ⇒ ±3.5%).
+ * Identical MMRs (or weightPct 0) produce exactly `base`. Captains with
+ * unknown MMR get `base`.
  */
 export function mmrWeightedBudgets(
   base: number,
@@ -77,7 +86,10 @@ export function mmrWeightedBudgets(
   }[];
   const min = Math.min(...known.map((c) => c.mmr));
   const max = Math.max(...known.map((c) => c.mmr));
-  const w = Number.isFinite(weightPct) ? Math.max(0, weightPct) / 100 : 0;
+  const gap = known.length > 0 ? max - min : 0;
+  const gapScale = Math.min(1, Math.max(0, gap) / BUDGET_FULL_EFFECT_GAP);
+  const w =
+    (Number.isFinite(weightPct) ? Math.max(0, weightPct) / 100 : 0) * gapScale;
 
   for (const c of captains) {
     if (c.mmr == null || max === min || w === 0) {

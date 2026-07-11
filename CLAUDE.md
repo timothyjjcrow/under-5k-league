@@ -272,6 +272,11 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `base × (1+w)`, highest gets `base × (1−w)`, `Season.budgetMmrWeight`
   (percent, default 20, 0 = flat) is the knob, floored at
   `(teamSize−1) × MIN_BID` so every team can fill. Unknown MMR → base.
+  The weight scales with the captain gap (`BUDGET_FULL_EFFECT_GAP` =
+  1000 MMR): full spread only at a 1000+ MMR gap, proportionally less
+  below it, so near-equal captains get near-equal budgets.
+- Seed medals derive from signup MMR via `approxRankTierFromMmr`
+  (`src/lib/rank.ts`, tested) so demo profiles look consistent.
 - Applied in `startDraft` (replaces the uniform `season.draftBudget`);
   create-season form has the weighting field; the admin captains card shows
   projected (pre-start) / actual (post-start) budgets per captain.
