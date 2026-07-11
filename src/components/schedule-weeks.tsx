@@ -327,14 +327,14 @@ function MatchRow({ match: m }: { match: MatchView }) {
           {m.rsvp ? <RsvpBadge side={m.rsvp.away} /> : null}
         </div>
         {m.reschedulePending ? (
-          <span
-            role="img"
-            aria-label={`Time change proposed — ${m.reschedulePending}`}
+          <Link
+            href={`/matches/${m.id}`}
+            aria-label={`Time change proposed — ${m.reschedulePending}. Open the match page to respond.`}
             title={`Time change proposed — ${m.reschedulePending}`}
-            className="shrink-0 text-xs text-accent"
+            className="shrink-0 rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
           >
             <span aria-hidden>⏳</span>
-          </span>
+          </Link>
         ) : null}
         {m.isFinalPhase ? (
           <Badge tone="accent" className="shrink-0">
