@@ -285,9 +285,15 @@ export default async function PlayerProfilePage({
   return (
     <div className="space-y-6">
       <div>
-        <div className="mb-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <Link href="/players" className="text-sm text-info hover:underline">
             ← All players
+          </Link>
+          <Link
+            href={`/players/compare?a=${user.id}`}
+            className="text-sm text-info hover:underline"
+          >
+            Compare vs… →
           </Link>
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">

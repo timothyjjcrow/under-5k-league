@@ -77,6 +77,14 @@ export default async function PlayersPage() {
       <PageTitle
         title="Players"
         subtitle={`${season.name} · ${players.length} players, ${standins.length} standins`}
+        action={
+          <Link
+            href="/players/compare"
+            className="text-sm text-info hover:underline"
+          >
+            Compare players →
+          </Link>
+        }
       />
 
       {teams.length > 0 ? (

@@ -456,6 +456,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   instead of overlapping the account cluster — with Admin + name + Logout the
   inline nav couldn't fit inside `max-w-6xl` at lg.
 
+## Player comparison (done)
+
+- `/players/compare?a=&b=` — GET-form page (plain selects, no client JS):
+  head-to-head card (pure `meetings` in `src/lib/compare.ts`, tested — rivals
+  record + games-as-teammates), career table over ALL seasons' games (reuses
+  `summarizePlayerGames`; better side highlighted, deaths lower-is-better,
+  games count never judged), top-5 hero lists per player. Linked from
+  `/players` (action) and each profile ("Compare vs… →" prefills `?a=`).
+
 ## Standings & schedule UX (done)
 
 - **StandingsTable** is now a thin server adapter (`page.tsx`) over the
