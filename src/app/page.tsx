@@ -3,7 +3,11 @@ import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
-import { computeStandings } from "@/lib/standings";
+import {
+  clinchStatuses,
+  computeStandings,
+  type ClinchStatus,
+} from "@/lib/standings";
 import { pickBracketSize } from "@/lib/schedule";
 import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -1046,6 +1050,15 @@ async function SeasonView({
                     ? pickBracketSize(teams.length)
                     : undefined
                 }
+                clinch={
+                  season.status === "REGULAR_SEASON"
+                    ? clinchStatuses(
+                        standings,
+                        matches,
+                        pickBracketSize(teams.length),
+                      )
+                    : undefined
+                }
               />
             </CardBody>
           </Card>
@@ -1206,17 +1219,40 @@ function SideGameLink({
   );
 }
 
+/** ✓/✗ mark for a locked playoff fate — screen readers get the full phrase. */
+function ClinchMark({ status }: { status: ClinchStatus }) {
+  if (!status) return null;
+  const clinched = status === "CLINCHED";
+  const label = clinched ? "Clinched playoffs" : "Eliminated from playoffs";
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={cn(
+        "shrink-0 text-xs font-semibold",
+        clinched ? "text-success" : "text-danger/70",
+      )}
+    >
+      <span aria-hidden>{clinched ? "✓" : "✗"}</span>
+    </span>
+  );
+}
+
 export function StandingsTable({
   standings,
   teamName,
   formByTeam,
   playoffCut,
+  clinch,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
   formByTeam?: Map<string, FormResult[]>;
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
   playoffCut?: number;
+  /** Per-team clinched/eliminated verdicts (see clinchStatuses). */
+  clinch?: Map<string, ClinchStatus>;
 }) {
   if (standings.length === 0) {
     return (
@@ -1292,6 +1328,11 @@ export function StandingsTable({
                     <span className="truncate">
                       {teamName.get(row.teamId) ?? "—"}
                     </span>
+                    {/* Marks only mean something when a team can miss the
+                        bracket — with everyone qualifying they'd all be ✓. */}
+                    <ClinchMark
+                      status={hasCut ? clinch?.get(row.teamId) ?? null : null}
+                    />
                   </Link>
                 </td>
                 <td className="px-1 py-2.5 text-center sm:px-2">{row.wins}</td>

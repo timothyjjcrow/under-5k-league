@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { computeStandings } from "@/lib/standings";
+import { clinchStatuses, computeStandings } from "@/lib/standings";
 import { pickBracketSize } from "@/lib/schedule";
 import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -255,6 +255,15 @@ export default async function SchedulePage() {
             playoffCut={
               season.status === "REGULAR_SEASON"
                 ? pickBracketSize(teams.length)
+                : undefined
+            }
+            clinch={
+              season.status === "REGULAR_SEASON"
+                ? clinchStatuses(
+                    standings,
+                    matches,
+                    pickBracketSize(teams.length),
+                  )
                 : undefined
             }
           />

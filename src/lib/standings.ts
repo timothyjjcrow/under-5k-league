@@ -48,6 +48,56 @@ export function seriesScoreError(
   return null;
 }
 
+export type ClinchStatus = "CLINCHED" | "ELIMINATED" | null;
+
+/**
+ * Which teams have already locked up (or lost) a playoff spot, given the
+ * remaining regular-season schedule. Deliberately conservative on both sides —
+ * tiebreakers and shared remaining games are ignored, so a team is only marked
+ * when the raw points math is beyond doubt:
+ * - CLINCHED: even losing out, at most cut−1 other teams could catch them
+ *   (ties counted against them).
+ * - ELIMINATED: even winning out, at least `cut` teams already sit beyond
+ *   reach on banked points alone.
+ */
+export function clinchStatuses(
+  standings: TeamStanding[],
+  matches: MatchLike[],
+  playoffCut: number,
+): Map<string, ClinchStatus> {
+  const remaining = new Map<string, number>();
+  for (const m of matches) {
+    if (m.phase !== "REGULAR" || m.status === "COMPLETED") continue;
+    remaining.set(m.homeTeamId, (remaining.get(m.homeTeamId) ?? 0) + 1);
+    remaining.set(m.awayTeamId, (remaining.get(m.awayTeamId) ?? 0) + 1);
+  }
+  const maxPts = new Map(
+    standings.map((s) => [
+      s.teamId,
+      s.points + 3 * (remaining.get(s.teamId) ?? 0),
+    ]),
+  );
+
+  const result = new Map<string, ClinchStatus>();
+  for (const t of standings) {
+    const othersWhoCouldFinishAhead = standings.filter(
+      (o) => o.teamId !== t.teamId && maxPts.get(o.teamId)! >= t.points,
+    ).length;
+    const othersCertainlyAhead = standings.filter(
+      (o) => o.teamId !== t.teamId && o.points > maxPts.get(t.teamId)!,
+    ).length;
+    result.set(
+      t.teamId,
+      othersWhoCouldFinishAhead <= playoffCut - 1
+        ? "CLINCHED"
+        : othersCertainlyAhead >= playoffCut
+          ? "ELIMINATED"
+          : null,
+    );
+  }
+  return result;
+}
+
 export function computeStandings(
   teamIds: string[],
   matches: MatchLike[],
