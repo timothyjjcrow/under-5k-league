@@ -124,23 +124,41 @@ export function StandingsTableClient({
   );
 
   return (
-    // table-fixed + explicit numeric column widths: the Team column absorbs
-    // whatever is left and truncates, so long names can't widen the page.
+    // table-fixed + explicit column widths via <colgroup>: the Team column
+    // absorbs whatever is left and truncates, so long names can't widen the
+    // page. Widths MUST live on <col> — fixed layout still hands display:none
+    // th/td columns an equal share of the leftover, starving Team on phones.
     <table className="w-full table-fixed text-sm">
+      <colgroup>
+        <col className="w-10 sm:w-12" />
+        <col />
+        <col className="w-8 sm:w-10" />
+        <col className="w-8 sm:w-10" />
+        <col className="w-8 sm:w-10" />
+        <col className="w-0 sm:w-11" />
+        {hasForm ? <col className="w-0 sm:w-28" /> : null}
+        <col className="w-12 sm:w-16" />
+      </colgroup>
       <thead>
         <tr className="border-b border-line text-left text-xs uppercase text-muted">
-          {header("rank", "#", "w-10 px-3 py-2.5 sm:w-12 sm:px-5", "league rank")}
+          {header("rank", "#", "px-3 py-2.5 sm:px-5", "league rank")}
           <th className="px-2 py-2.5 font-medium">Team</th>
-          {header("wins", "W", "w-8 px-1 py-2.5 text-center sm:w-10 sm:px-2", "wins")}
-          {header("draws", "D", "w-8 px-1 py-2.5 text-center sm:w-10 sm:px-2", "draws")}
-          {header("losses", "L", "w-8 px-1 py-2.5 text-center sm:w-10 sm:px-2", "losses")}
-          {header("gameDiff", "Diff", "w-11 px-1 py-2.5 text-center sm:px-2", "game differential")}
+          {header("wins", "W", "px-1 py-2.5 text-center sm:px-2", "wins")}
+          {header("draws", "D", "px-1 py-2.5 text-center sm:px-2", "draws")}
+          {header("losses", "L", "px-1 py-2.5 text-center sm:px-2", "losses")}
+          {/* Diff hides on phones — the Team column needs the width more. */}
+          {header(
+            "gameDiff",
+            "Diff",
+            "hidden px-1 py-2.5 text-center sm:table-cell sm:px-2",
+            "game differential",
+          )}
           {hasForm ? (
-            <th className="hidden w-28 px-2 py-2.5 text-center font-medium sm:table-cell">
+            <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
               Form
             </th>
           ) : null}
-          {header("points", "Pts", "w-12 px-3 py-2.5 text-right sm:w-16 sm:px-5", "points")}
+          {header("points", "Pts", "px-3 py-2.5 text-right sm:px-5", "points")}
         </tr>
       </thead>
       <tbody>
@@ -209,7 +227,7 @@ export function StandingsTableClient({
                   {row.draws}
                 </td>
                 <td className="px-1 py-2.5 text-center sm:px-2">{row.losses}</td>
-                <td className="px-1 py-2.5 text-center text-muted sm:px-2">
+                <td className="hidden px-1 py-2.5 text-center text-muted sm:table-cell sm:px-2">
                   {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
                 </td>
                 {hasForm ? (
