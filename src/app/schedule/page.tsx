@@ -3,7 +3,7 @@ import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { clinchStatuses, computeStandings } from "@/lib/standings";
-import { pickBracketSize } from "@/lib/schedule";
+import { pickBracketSize, playoffFirstRound } from "@/lib/schedule";
 import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
@@ -30,6 +30,7 @@ import {
   SectionTitle,
   TeamCrest,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
 export const metadata = { title: "Schedule" };
@@ -319,6 +320,12 @@ export default async function SchedulePage() {
         </CardBody>
       </Card>
 
+      {season.status === "REGULAR_SEASON" &&
+      teams.length > 2 &&
+      standings.some((s) => s.played > 0) ? (
+        <PlayoffPicture standings={standings} teamName={teamName} />
+      ) : null}
+
       {playoff.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Playoff bracket</SectionTitle>
@@ -350,5 +357,69 @@ export default async function SchedulePage() {
         )}
       </section>
     </div>
+  );
+}
+
+// Projected first-round matchups if the season ended today — the same
+// seeding rule startPlayoffs will use, over the live table.
+function PlayoffPicture({
+  standings,
+  teamName,
+}: {
+  standings: ReturnType<typeof computeStandings>;
+  teamName: Map<string, string>;
+}) {
+  const order = standings.map((s) => s.teamId);
+  const size = pickBracketSize(order.length);
+  const seedOf = new Map(order.slice(0, size).map((id, i) => [id, i + 1]));
+  const pairings = playoffFirstRound(order, size);
+  return (
+    <Card>
+      <CardHeader
+        title="Playoff picture"
+        subtitle="First-round matchups if the season ended today"
+      />
+      <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {pairings.map((p) => (
+          <div
+            key={p.home}
+            className="flex items-center gap-2 rounded-lg border border-line/70 bg-surface-2/30 px-3 py-2 text-sm"
+          >
+            <ProjectedSide teamId={p.home} seed={seedOf.get(p.home)} teamName={teamName} align="right" />
+            <span className="shrink-0 text-xs text-muted">vs</span>
+            <ProjectedSide teamId={p.away} seed={seedOf.get(p.away)} teamName={teamName} align="left" />
+          </div>
+        ))}
+      </CardBody>
+    </Card>
+  );
+}
+
+function ProjectedSide({
+  teamId,
+  seed,
+  teamName,
+  align,
+}: {
+  teamId: string;
+  seed: number | undefined;
+  teamName: Map<string, string>;
+  align: "left" | "right";
+}) {
+  const name = teamName.get(teamId) ?? "?";
+  return (
+    <Link
+      href={`/teams/${teamId}`}
+      className={cn(
+        "flex min-w-0 flex-1 items-center gap-1.5 hover:text-info",
+        align === "right" && "flex-row-reverse text-right",
+      )}
+    >
+      <span className="w-4 shrink-0 text-center font-mono text-[10px] tabular-nums text-muted">
+        {seed}
+      </span>
+      <TeamCrest name={name} seed={teamId} size={20} className="shrink-0 rounded" />
+      <span className="truncate">{name}</span>
+    </Link>
   );
 }
