@@ -89,7 +89,7 @@ export default async function TeamPage({
       memberIds.length
         ? prisma.registration.findMany({
             where: { seasonId: team.seasonId, userId: { in: memberIds } },
-            select: { roles: true, favoriteHeroes: true },
+            select: { roles: true, favoriteHeroes: true, mmr: true },
           })
         : Promise.resolve([]),
       memberIds.length
@@ -144,6 +144,13 @@ export default async function TeamPage({
     (a, b) => b.wins - a.wins || a.losses - b.losses,
   );
   const spent = team.members.reduce((sum, m) => sum + m.price, 0);
+  // Before any result exists, record/points/rank are noise (and the "rank"
+  // is just draft order) — show draft-shaped tiles instead.
+  const played = allMatches.some((m) => m.status === "COMPLETED");
+  const knownMmrs = rosterRegs.map((r) => r.mmr).filter((v) => v > 0);
+  const avgMmr = knownMmrs.length
+    ? Math.round(knownMmrs.reduce((s, v) => s + v, 0) / knownMmrs.length)
+    : null;
   const coverage = roleCoverage(rosterRegs);
   const hasRoleData = coverage.some((r) => r.count > 0);
   const hue = teamHue(team.id);
@@ -184,9 +191,18 @@ export default async function TeamPage({
                 📅 Calendar
               </a>
             ) : null}
-            <Link href="/schedule" className="text-sm text-info hover:underline">
-              Standings →
-            </Link>
+            {team.season.isActive && team.season.status === "DRAFT" ? (
+              <Link href="/draft" className="text-sm text-info hover:underline">
+                Draft room →
+              </Link>
+            ) : (
+              <Link
+                href="/schedule"
+                className="text-sm text-info hover:underline"
+              >
+                Standings →
+              </Link>
+            )}
           </span>
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
@@ -230,7 +246,7 @@ export default async function TeamPage({
                 <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                   {team.name}
                 </h1>
-                {rank > 0 ? (
+                {played && rank > 0 ? (
                   <Badge tone="accent">
                     #{rank} of {allTeams.length}
                   </Badge>
@@ -266,23 +282,34 @@ export default async function TeamPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Record" value={`${row?.wins ?? 0}–${row?.losses ?? 0}`} />
-        <Stat label="Points" value={row?.points ?? 0} />
-        <Stat
-          label="Rank"
-          value={rank > 0 ? `#${rank}` : "—"}
-          hint={`of ${allTeams.length}`}
-        />
-        <Stat
-          label={team.season.status === "DRAFT" ? "Budget" : "Roster"}
-          value={
-            team.season.status === "DRAFT"
-              ? `$${team.budget}`
-              : `${team.members.length}/${team.season.teamSize}`
-          }
-        />
-      </div>
+      {played ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat
+            label="Record"
+            value={`${row?.wins ?? 0}–${row?.losses ?? 0}`}
+          />
+          <Stat label="Points" value={row?.points ?? 0} />
+          <Stat
+            label="Rank"
+            value={rank > 0 ? `#${rank}` : "—"}
+            hint={`of ${allTeams.length}`}
+          />
+          <Stat
+            label="Roster"
+            value={`${team.members.length}/${team.season.teamSize}`}
+          />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat label="Budget left" value={`$${team.budget}`} />
+          <Stat label="Spent" value={`$${spent}`} />
+          <Stat
+            label="Roster"
+            value={`${team.members.length}/${team.season.teamSize}`}
+          />
+          <Stat label="Avg MMR" value={avgMmr ?? "—"} />
+        </div>
+      )}
 
       {diffTrend.length >= 2 ? (
         <Card>

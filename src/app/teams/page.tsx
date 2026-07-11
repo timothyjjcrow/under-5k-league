@@ -108,6 +108,16 @@ export default async function TeamsPage() {
       <PageTitle
         title="Teams"
         subtitle={`${season.name} · ${teams.length} teams`}
+        action={
+          isDraft ? (
+            <Link
+              href="/draft"
+              className="text-sm text-info hover:underline"
+            >
+              Draft room →
+            </Link>
+          ) : undefined
+        }
       />
 
       {power.length > 0 ? (
@@ -273,7 +283,7 @@ export default async function TeamsPage() {
                 </div>
                 <div className="shrink-0">
                   {isDraft ? (
-                    <Badge tone="accent">${t.budget}</Badge>
+                    <Badge tone="accent">${t.budget} left</Badge>
                   ) : played && row ? (
                     <div className="text-right">
                       <div className="text-lg font-semibold tabular-nums">
