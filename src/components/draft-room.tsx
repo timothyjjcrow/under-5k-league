@@ -73,9 +73,32 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     if (!state) return;
     const prev = prevRef.current;
     prevRef.current = state;
-    if (!prev) return;
     const nameOf = (id: string | null) =>
       state.teams.find((t) => t.id === id)?.name ?? "—";
+    if (!prev) {
+      // First state after a page load: seed the feed with the reconstructed
+      // history (current nomination + past sales) so joining mid-draft
+      // doesn't mean an empty feed.
+      const seed: FeedEvent[] = [];
+      if (state.nominatedPlayer) {
+        seed.push({
+          id: eventIdRef.current++,
+          kind: "nominate",
+          text: `${nameOf(state.nominatorTeamId)} nominated ${state.nominatedPlayer.name}`,
+          amount: state.currentBid,
+        });
+      }
+      for (const s of state.recentSales) {
+        seed.push({
+          id: eventIdRef.current++,
+          kind: "sold",
+          text: `${s.name} → ${s.teamName}`,
+          amount: s.price,
+        });
+      }
+      if (seed.length) setEvents(seed.slice(0, 12));
+      return;
+    }
     const add: FeedEvent[] = [];
 
     // A sale = any new non-captain roster member appearing on a team.

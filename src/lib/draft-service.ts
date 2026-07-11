@@ -293,6 +293,23 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
     ? { id: myTeam.id, budget: myTeam.budget, rosterCount: myTeam.members.length }
     : undefined;
 
+  // Sale history reconstructed from rostered members (newest first) so a
+  // fresh page load can seed its live feed — the feed itself is client-side
+  // state diffing and would otherwise start empty mid-draft.
+  const recentSales = teams
+    .flatMap((t) =>
+      t.members
+        .filter((m) => !m.isCaptain)
+        .map((m) => ({
+          name: m.user.name,
+          teamName: t.name,
+          price: m.price,
+          at: m.createdAt.getTime(),
+        })),
+    )
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 8);
+
   const nominatedPlayer = draft?.nominatedUserId
     ? (playerRegs.find((r) => r.userId === draft.nominatedUserId) ?? null)
     : null;
@@ -309,6 +326,7 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
     nominatorTeamId: draft?.nominatorTeamId ?? null,
     currentBid: draft?.currentBid ?? 0,
     currentBidTeamId: draft?.currentBidTeamId ?? null,
+    recentSales,
     nominatedPlayer: nominatedPlayer
       ? {
           userId: nominatedPlayer.userId,
