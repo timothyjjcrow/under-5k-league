@@ -702,6 +702,79 @@ export async function removeGame(formData: FormData) {
   refresh();
 }
 
+/**
+ * Move a whole week's match night (holiday, venue clash…): every unplayed
+ * match in the week gets the new time; optionally later weeks' scheduled,
+ * unplayed matches shift by the same delta so the weekly rhythm survives.
+ */
+export async function setWeekNight(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const week = Number(str(formData, "week"));
+  const raw = str(formData, "night");
+  const cascade = str(formData, "cascade") === "on";
+  const night = raw ? new Date(raw) : null;
+  if (!Number.isInteger(week) || week < 1) return { error: "Pick a week" };
+  if (!night || Number.isNaN(night.getTime()))
+    return { error: "Pick a valid date & time" };
+
+  const open = await prisma.match.findMany({
+    where: { seasonId: season.id, week, status: { not: "COMPLETED" } },
+  });
+  if (open.length === 0)
+    return { error: `Week ${week} has no unplayed matches to move` };
+
+  // The delta later weeks shift by, from this week's previous night.
+  const current = open.find((m) => m.scheduledAt)?.scheduledAt ?? null;
+  await prisma.match.updateMany({
+    where: { seasonId: season.id, week, status: { not: "COMPLETED" } },
+    data: { scheduledAt: night },
+  });
+
+  let shifted = 0;
+  if (cascade && current) {
+    const delta = night.getTime() - current.getTime();
+    if (delta !== 0) {
+      const later = await prisma.match.findMany({
+        where: {
+          seasonId: season.id,
+          week: { gt: week },
+          status: { not: "COMPLETED" },
+          scheduledAt: { not: null },
+        },
+      });
+      for (const m of later) {
+        await prisma.match.update({
+          where: { id: m.id },
+          data: { scheduledAt: new Date(m.scheduledAt!.getTime() + delta) },
+        });
+      }
+      shifted = later.length;
+    }
+  }
+  refresh();
+  return {
+    ok: true,
+    message:
+      `Week ${week} moved (${open.length} match${open.length === 1 ? "" : "es"})` +
+      (cascade
+        ? shifted > 0
+          ? ` · ${shifted} later match${shifted === 1 ? "" : "es"} shifted with it`
+          : current
+            ? " · later weeks unchanged (no time change)"
+            : " · couldn't cascade (week had no previous time)"
+        : ""),
+  };
+}
+
 /** Set or clear a match's scheduled date/time (from a datetime-local input). */
 export async function setMatchTime(formData: FormData) {
   await requireAdmin();

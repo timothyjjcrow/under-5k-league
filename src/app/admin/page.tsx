@@ -18,6 +18,7 @@ import {
   removeStandin,
   removeGame,
   setMatchTime,
+  setWeekNight,
   syncPlayerRanks,
   syncSteamProfiles,
   setMaxMmr,
@@ -638,6 +639,54 @@ function ScheduleControls({
               Auto-fetch needs players to have &ldquo;Expose Public Match
               Data&rdquo; enabled.
             </p>
+            {(() => {
+              const openWeeks = [
+                ...new Set(
+                  data.matches
+                    .filter((m) => m.status !== "COMPLETED")
+                    .map((m) => m.week),
+                ),
+              ].sort((a, b) => a - b);
+              return openWeeks.length > 0 ? (
+                <ActionForm
+                  action={setWeekNight}
+                  className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/30 p-3 text-xs"
+                >
+                  <span className="font-medium text-fg">
+                    Move a match night
+                  </span>
+                  <select
+                    name="week"
+                    aria-label="Week to move"
+                    className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+                  >
+                    {openWeeks.map((w) => (
+                      <option key={w} value={w}>
+                        Week {w}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="datetime-local"
+                    name="night"
+                    aria-label="New match night"
+                    className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+                  />
+                  <label className="flex items-center gap-1.5 text-muted">
+                    <input type="checkbox" name="cascade" />
+                    shift later weeks too
+                  </label>
+                  <SubmitButton variant="secondary" size="sm">
+                    Move night
+                  </SubmitButton>
+                  <span className="w-full text-muted">
+                    Retimes every unplayed match in the week; the cascade keeps
+                    the weekly rhythm by moving later scheduled weeks by the
+                    same amount.
+                  </span>
+                </ActionForm>
+              ) : null;
+            })()}
             {data.matches.map((m) => {
               const home = data.teams.find((t) => t.id === m.homeTeamId);
               const away = data.teams.find((t) => t.id === m.awayTeamId);
