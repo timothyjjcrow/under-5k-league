@@ -576,16 +576,22 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
           text: "Lose the next series and the playoffs are gone, whatever else happens.",
         });
       }
-      if (s.magicNumber != null && s.magicNumber > 0) {
-        facts.push({
-          icon: "🔢",
-          text: `Magic number ${s.magicNumber}: that many more series wins guarantee a top-${cut} finish.`,
-        });
-      } else if (s.magicNumber == null) {
-        facts.push({
-          icon: "🤝",
-          text: "Winning out alone can't lock it — they'll need results elsewhere too.",
-        });
+      // The magic number comes from the conservative bounds layer, which
+      // can't see head-to-head — when the exact engine already proved
+      // win-next-and-in, a bounds "can't lock it alone" line would flatly
+      // contradict it. Same guard as the schedule page's race notes.
+      if (!s.winAndIn) {
+        if (s.magicNumber != null && s.magicNumber > 0) {
+          facts.push({
+            icon: "🔢",
+            text: `Magic number ${s.magicNumber}: that many more series wins guarantee a top-${cut} finish.`,
+          });
+        } else if (s.magicNumber == null) {
+          facts.push({
+            icon: "🤝",
+            text: "Winning out alone can't lock it — they'll need results elsewhere too.",
+          });
+        }
       }
       if (s.eliminationLosses != null && s.eliminationLosses > 0) {
         facts.push({
