@@ -436,6 +436,26 @@ export async function generateSchedule(
   });
   if (teams.length < 2) return { error: "Need at least 2 teams" };
 
+  // Regenerating drops and recreates every regular-season match — fine while
+  // the slate is untouched, catastrophic once results are in (games,
+  // check-ins, and predictions all cascade away with the matches).
+  const [playedCount, gameCount] = await Promise.all([
+    prisma.match.count({
+      where: {
+        seasonId: season.id,
+        phase: MATCH_PHASE.REGULAR,
+        status: MATCH_STATUS.COMPLETED,
+      },
+    }),
+    prisma.game.count({ where: { match: { seasonId: season.id } } }),
+  ]);
+  if (playedCount > 0 || gameCount > 0) {
+    return {
+      error:
+        "Results are already recorded — regenerating would erase them. Use the week mover or per-match times to reschedule.",
+    };
+  }
+
   // Optional first-match-night: week 1 plays then, each later week +7 days.
   const firstNightRaw = str(formData, "firstNight").trim();
   const firstNight = firstNightRaw ? new Date(firstNightRaw) : null;
