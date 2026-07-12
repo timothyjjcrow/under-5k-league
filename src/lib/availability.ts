@@ -17,6 +17,30 @@ export type TeamAvailability = {
   outUserIds: string[];
 };
 
+export type StandinLike = {
+  standinUserId: string;
+  replacingUserId: string | null;
+};
+
+/**
+ * A side's MATCH-NIGHT roster: the team roster, minus players covered by a
+ * standin (their old ✗ isn't a gap anymore), plus the assigned standins
+ * (whose own ✓/✗ is the answer that matters). Feed this — never the raw
+ * roster — to teamAvailability wherever standins can be assigned, or the
+ * standin's RSVP is silently dropped and surfaces disagree.
+ */
+export function matchNightRoster(
+  base: string[],
+  assignments: StandinLike[],
+): string[] {
+  if (assignments.length === 0) return base;
+  const covered = new Set(assignments.map((a) => a.replacingUserId));
+  return [
+    ...base.filter((id) => !covered.has(id)),
+    ...assignments.map((a) => a.standinUserId),
+  ];
+}
+
 /** Summarize one team's RSVPs. Rows from non-roster users are ignored. */
 export function teamAvailability(
   rosterUserIds: string[],

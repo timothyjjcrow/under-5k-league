@@ -9,10 +9,22 @@ import {
   type ClinchStatus,
 } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
-import { pickBracketSize } from "@/lib/schedule";
+import { matchStakes, stakesHeadline, type ScenarioReport } from "@/lib/scenarios";
+import {
+  bracketRounds,
+  pickBracketSize,
+  roundName,
+  slotRound,
+} from "@/lib/schedule";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam, type FormResult } from "@/lib/team-matches";
+import { matchNightRoster, teamAvailability } from "@/lib/availability";
+import { weeklyHonors } from "@/lib/honors";
+import { heroMeta } from "@/lib/hero-meta";
+import { heroById } from "@/lib/heroes";
+import type { PlayerStat } from "@/lib/match-import";
+import type { Match } from "@prisma/client";
 import {
   Avatar,
   Badge,
@@ -21,6 +33,8 @@ import {
   CardHeader,
   DiscordButton,
   EmptyState,
+  FormStrip,
+  HeroIcon,
   PlayerLink,
   Progress,
   RankBadge,
@@ -161,6 +175,22 @@ export default async function Home() {
     );
   }
 
+  // Past the draft, every view (and the hero itself) reads the season's
+  // matches — fetch once here and hand them down.
+  const showsMatches =
+    season.status === "REGULAR_SEASON" ||
+    season.status === "PLAYOFFS" ||
+    season.status === "COMPLETE";
+  const [matches, gamesOnRecord] = showsMatches
+    ? await Promise.all([
+        prisma.match.findMany({
+          where: { seasonId: season.id },
+          orderBy: [{ week: "asc" }],
+        }),
+        prisma.game.count({ where: { match: { seasonId: season.id } } }),
+      ])
+    : [[] as Match[], 0];
+
   // Live, animated figures surfaced right in the hero for a sense of momentum.
   let heroMeta: ReactNode = null;
   if (season.status === "SIGNUPS") {
@@ -189,17 +219,80 @@ export default async function Home() {
         label={snapshot.teams.length === 1 ? "team drafting" : "teams drafting"}
       />
     );
-  } else if (
-    season.status === "REGULAR_SEASON" ||
-    season.status === "PLAYOFFS"
-  ) {
+  } else if (season.status === "REGULAR_SEASON") {
+    const regular = matches.filter((m) => m.phase === "REGULAR");
+    const totalWeeks = regular.reduce((max, m) => Math.max(max, m.week), 0);
+    const openWeeks = regular
+      .filter((m) => m.status !== "COMPLETED")
+      .map((m) => m.week);
+    const currentWeek = openWeeks.length
+      ? Math.min(...openWeeks)
+      : totalWeeks;
     heroMeta = (
-      <HeroStat
-        value={snapshot.teams.length}
-        label={
-          snapshot.teams.length === 1 ? "team competing" : "teams competing"
-        }
-      />
+      <>
+        {totalWeeks > 0 ? (
+          <HeroStat
+            value={currentWeek}
+            label={`of ${totalWeeks} week${totalWeeks === 1 ? "" : "s"}`}
+            prefix="Week"
+          />
+        ) : null}
+        <HeroStat
+          value={snapshot.teams.length}
+          label={
+            snapshot.teams.length === 1 ? "team competing" : "teams competing"
+          }
+        />
+        {gamesOnRecord > 0 ? (
+          <HeroStat value={gamesOnRecord} label="games on record" />
+        ) : null}
+      </>
+    );
+  } else if (season.status === "PLAYOFFS") {
+    const playoff = matches.filter((m) => m.phase !== "REGULAR");
+    const inBracket = new Set(
+      playoff.flatMap((m) => [m.homeTeamId, m.awayTeamId]),
+    );
+    const losers = new Set(
+      playoff
+        .filter((m) => m.status === "COMPLETED" && m.winnerTeamId)
+        .map((m) =>
+          m.winnerTeamId === m.homeTeamId ? m.awayTeamId : m.homeTeamId,
+        ),
+    );
+    const alive = [...inBracket].filter((id) => !losers.has(id)).length;
+    heroMeta = (
+      <>
+        {alive > 0 ? (
+          <HeroStat value={alive} label="teams still alive" tone="accent" />
+        ) : null}
+        {currentRoundLabel(playoff) ? (
+          <Badge tone="accent">{currentRoundLabel(playoff)}</Badge>
+        ) : null}
+      </>
+    );
+  } else if (season.status === "COMPLETE") {
+    const champion = snapshot.teams.find(
+      (t) => t.id === season.championTeamId,
+    );
+    heroMeta = champion ? (
+      <span className="flex items-center gap-2">
+        <TeamCrest
+          name={champion.name}
+          seed={champion.id}
+          size={26}
+          className="rounded-md ring-2 ring-amber-400/50"
+        />
+        <span className="font-display text-lg font-semibold">
+          {champion.name}
+        </span>
+        <Badge tone="brand">🏆 Champions</Badge>
+      </span>
+    ) : null;
+    heroAction = (
+      <Link href="/recap" className={buttonClasses("accent", "lg")}>
+        Relive the season →
+      </Link>
     );
   }
 
@@ -222,12 +315,26 @@ export default async function Home() {
       {(season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS") && (
         <>
           {user ? <MyNextMatch seasonId={season.id} userId={user.id} /> : null}
-          <SeasonView snapshot={snapshot} userId={user?.id} />
+          <SeasonView snapshot={snapshot} userId={user?.id} matches={matches} />
         </>
       )}
-      {season.status === "COMPLETE" && <CompleteView snapshot={snapshot} />}
+      {season.status === "COMPLETE" && (
+        <CompleteView snapshot={snapshot} matches={matches} />
+      )}
     </div>
   );
+}
+
+/** "Semifinals underway" — the name of the earliest playoff round still open. */
+function currentRoundLabel(playoff: Match[]): string | null {
+  const slotted = playoff.filter((m) => m.bracketSlot);
+  const first = slotted.filter((m) => slotRound(m.bracketSlot) === 0);
+  if (first.length === 0) return null;
+  const total = bracketRounds(first.length * 2);
+  const open = slotted.filter((m) => m.status !== "COMPLETED");
+  if (open.length === 0) return null;
+  const round = Math.min(...open.map((m) => slotRound(m.bracketSlot)));
+  return `${roundName(round, total)} underway`;
 }
 
 // Latest admin announcements — pinned first, capped at three with a link to
@@ -353,18 +460,22 @@ function phaseSubtitle(status: string) {
 
 // ---------- Hero ----------
 
-// A single animated hero figure — big count-up number + a muted label.
+// A single animated hero figure — big count-up number + a muted label, with
+// an optional word before the number ("Week 3 of 7").
 function HeroStat({
   value,
   label,
   tone,
+  prefix,
 }: {
   value: number;
   label: string;
   tone?: "accent";
+  prefix?: string;
 }) {
   return (
     <span className="flex items-baseline gap-1.5">
+      {prefix ? <span className="text-sm text-muted">{prefix}</span> : null}
       <span
         className={cn(
           "font-display text-2xl font-bold tabular-nums sm:text-3xl",
@@ -980,15 +1091,13 @@ function RosterList({
 async function SeasonView({
   snapshot,
   userId,
+  matches,
 }: {
   snapshot: SeasonSnapshot;
   userId?: string;
+  matches: Match[];
 }) {
   const { season, teams } = snapshot;
-  const matches = await prisma.match.findMany({
-    where: { seasonId: season.id },
-    orderBy: [{ week: "asc" }],
-  });
   const standings = computeStandings(
     teams.map((t) => t.id),
     matches,
@@ -999,16 +1108,44 @@ async function SeasonView({
     matches,
   );
 
+  // One scenario report powers the standings clinch marks, the this-week
+  // stakes chips, and the your-team one-liner — computed once.
+  const report =
+    season.status === "REGULAR_SEASON"
+      ? seasonScenarioReport(standings, matches, teams.length)
+      : null;
+
   const myTeam = userId
     ? teams.find((t) => t.members.some((m) => m.userId === userId))
     : undefined;
-  const myNextMatch = myTeam
-    ? matches.find(
+  const myRow = myTeam
+    ? standings.find((s) => s.teamId === myTeam.id)
+    : undefined;
+  const myRank = myTeam
+    ? standings.findIndex((s) => s.teamId === myTeam.id) + 1
+    : 0;
+  const myScenario = myTeam ? (report?.teams.get(myTeam.id) ?? null) : null;
+  const myStakeLine = myScenario ? stakeOneLiner(myScenario) : null;
+  // "Next up" must be the SAME match the stake line's "next series" is about
+  // (the engine orders by kickoff when times exist) — falling back to
+  // chronological order, like the MyNextMatch banner above.
+  const myOpen = myTeam
+    ? matches.filter(
         (m) =>
           m.status !== "COMPLETED" &&
           (m.homeTeamId === myTeam.id || m.awayTeamId === myTeam.id),
       )
-    : undefined;
+    : [];
+  const myNextMatch =
+    (myScenario?.nextMatchId
+      ? myOpen.find((m) => m.id === myScenario.nextMatchId)
+      : undefined) ??
+    [...myOpen].sort(
+      (a, b) =>
+        (a.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY) -
+          (b.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY) ||
+        a.week - b.week,
+    )[0];
 
   const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
   const bracketRoundsView = buildBracketRounds(
@@ -1043,7 +1180,7 @@ async function SeasonView({
   return (
     <div className="space-y-6">
       {/* Side games — one tap from the dashboard into the engagement loop. */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <SideGameLink
           href="/pickem"
           icon="🔮"
@@ -1065,6 +1202,12 @@ async function SeasonView({
           icon="🥇"
           title="Leaders"
           hint="Stat boards & weekly honors"
+        />
+        <SideGameLink
+          href="/meta"
+          icon="🧪"
+          title="Hero meta"
+          hint="What the league picks & wins with"
         />
       </div>
 
@@ -1091,6 +1234,14 @@ async function SeasonView({
           </CardBody>
         </Card>
       ) : null}
+
+      <ThisWeek
+        season={season}
+        matches={matches}
+        teams={teams}
+        teamName={teamName}
+        report={report}
+      />
 
       {/* min-w-0: grid items otherwise refuse to shrink below their content,
           letting a long team name widen the page on mobile. */}
@@ -1119,15 +1270,7 @@ async function SeasonView({
                     ? pickBracketSize(teams.length)
                     : undefined
                 }
-                clinch={
-                  season.status === "REGULAR_SEASON"
-                    ? // Exact scenario engine — refines the conservative marks
-                      // by enumerating every remaining outcome when feasible.
-                      clinchFromReport(
-                        seasonScenarioReport(standings, matches, teams.length),
-                      )
-                    : undefined
-                }
+                clinch={clinchFromReport(report)}
                 viewerTeamId={myTeam?.id}
                 movement={standingsMovement(
                   teams.map((t) => t.id),
@@ -1140,8 +1283,38 @@ async function SeasonView({
         <div className="min-w-0 space-y-6">
           {myTeam ? (
             <Card>
-              <CardHeader title="Your team" subtitle={myTeam.name} />
+              <CardHeader
+                title="Your team"
+                subtitle={myTeam.name}
+                action={
+                  myRow && (teamForm.get(myTeam.id)?.length ?? 0) > 0 ? (
+                    <FormStrip form={teamForm.get(myTeam.id)!} />
+                  ) : undefined
+                }
+              />
               <CardBody className="space-y-3">
+                {myRow && myRow.played > 0 ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Rank" value={`#${myRank}`} hint={`of ${teams.length}`} />
+                    {/* W–L–D at Stat's default text-3xl wraps mid-number in
+                        this narrow column — render it a size down. */}
+                    <Stat
+                      label="Record"
+                      value={
+                        <span className="text-xl leading-9">
+                          {myRow.wins}–{myRow.losses}
+                          {myRow.draws > 0 ? `–${myRow.draws}` : ""}
+                        </span>
+                      }
+                    />
+                    <Stat label="Points" value={myRow.points} />
+                  </div>
+                ) : null}
+                {myStakeLine ? (
+                  <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
+                    {myStakeLine}
+                  </div>
+                ) : null}
                 {myNextMatch ? (
                   <Link
                     href={`/matches/${myNextMatch.id}`}
@@ -1167,6 +1340,12 @@ async function SeasonView({
                 ) : (
                   <p className="text-sm text-muted">No upcoming matches.</p>
                 )}
+                <Link
+                  href={`/teams/${myTeam.id}`}
+                  className="inline-block text-sm font-medium text-info hover:underline"
+                >
+                  Team page →
+                </Link>
               </CardBody>
             </Card>
           ) : null}
@@ -1223,6 +1402,22 @@ async function SeasonView({
                         href={`/matches/${m.id}`}
                         className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-surface-2/40"
                       >
+                        <span
+                          className="w-7 shrink-0 font-mono text-[10px] uppercase tabular-nums text-muted"
+                          title={
+                            m.phase === "FINAL"
+                              ? "Grand final"
+                              : m.phase === "PLAYOFF"
+                                ? "Playoffs"
+                                : `Week ${m.week}`
+                          }
+                        >
+                          {m.phase === "FINAL"
+                            ? "GF"
+                            : m.phase === "PLAYOFF"
+                              ? "PO"
+                              : `W${m.week}`}
+                        </span>
                         <span className="flex min-w-0 flex-1 items-center gap-1.5">
                           <TeamCrest
                             name={teamName.get(m.homeTeamId) ?? "?"}
@@ -1268,11 +1463,349 @@ async function SeasonView({
               </CardBody>
             </Card>
           ) : null}
+
+          <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
         </div>
       </div>
 
     </div>
   );
+}
+
+/** One line of drama for the your-team card, from the scenario engine. */
+function stakeOneLiner(s: {
+  status: ClinchStatus;
+  winAndIn: boolean;
+  loseAndOut: boolean;
+  magicNumber: number | null;
+  nextMatchId: string | null;
+}): string | null {
+  if (s.status === "CLINCHED") return "✓ Playoff spot locked — play for seeding.";
+  if (s.status === "ELIMINATED") return "Out of the race — play for pride.";
+  if (s.nextMatchId === null) return null; // done playing; the table decides
+  if (s.winAndIn && s.loseAndOut)
+    return "⚡ Everything on the line: win the next series and you're in — lose it and you're out.";
+  if (s.winAndIn) return "🎯 Win the next series and a playoff spot is locked.";
+  if (s.loseAndOut) return "⚠️ Lose the next series and the playoffs are gone.";
+  if (s.magicNumber != null && s.magicNumber > 0)
+    return `🔢 Magic number ${s.magicNumber} — that many wins locks a spot.`;
+  return null;
+}
+
+/**
+ * The matches everyone cares about right now — this week's slate during the
+ * regular season, the open round during playoffs — with per-team check-in
+ * counts and a stakes chip when the scenario engine says a game is dramatic.
+ */
+async function ThisWeek({
+  season,
+  matches,
+  teams,
+  teamName,
+  report,
+}: {
+  season: SeasonSnapshot["season"];
+  matches: Match[];
+  teams: SeasonSnapshot["teams"];
+  teamName: Map<string, string>;
+  report: ScenarioReport | null;
+}) {
+  const open = matches.filter((m) => m.status !== "COMPLETED");
+  let focus: Match[] = [];
+  let title = "This week";
+  if (season.status === "PLAYOFFS") {
+    focus = open.filter((m) => m.phase !== "REGULAR");
+    title = "The round in progress";
+  } else {
+    const openRegular = open.filter((m) => m.phase === "REGULAR");
+    if (openRegular.length > 0) {
+      const week = Math.min(...openRegular.map((m) => m.week));
+      focus = openRegular.filter((m) => m.week === week);
+      title = `This week · Week ${week}`;
+    }
+  }
+  if (focus.length === 0) return null;
+
+  const [avail, standinRows] = await Promise.all([
+    prisma.matchAvailability.findMany({
+      where: { matchId: { in: focus.map((m) => m.id) } },
+      select: { matchId: true, userId: true, status: true },
+    }),
+    prisma.standinAssignment.findMany({
+      where: { matchId: { in: focus.map((m) => m.id) } },
+      select: {
+        matchId: true,
+        teamId: true,
+        standinUserId: true,
+        replacingUserId: true,
+      },
+    }),
+  ]);
+  const rosterOf = new Map(
+    teams.map((t) => [t.id, t.members.map((m) => m.userId)]),
+  );
+  const checkins = (matchId: string, teamId: string) => {
+    // Standin-aware, same helper as /schedule — a covered player's absence
+    // isn't a gap, and the standin's own RSVP is the one that counts.
+    const roster = matchNightRoster(
+      rosterOf.get(teamId) ?? [],
+      standinRows.filter(
+        (a) => a.matchId === matchId && a.teamId === teamId,
+      ),
+    );
+    if (roster.length === 0) return null;
+    const a = teamAvailability(
+      roster,
+      avail.filter((r) => r.matchId === matchId),
+    );
+    return { confirmed: a.confirmed, size: roster.length };
+  };
+
+  return (
+    <Card>
+      <CardHeader
+        title={title}
+        subtitle="Check in, scout the enemy, call the winner"
+        action={
+          <Link
+            href="/schedule#this-week"
+            className="text-sm text-info hover:underline"
+          >
+            Full schedule →
+          </Link>
+        }
+      />
+      <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {focus.map((m) => {
+          const headline = report
+            ? stakesHeadline(
+                matchStakes(m.id, m.homeTeamId, m.awayTeamId, report),
+              )
+            : null;
+          // The full "Everything on the line…" label wraps into a mangled
+          // pill at phone widths — chip context gets the short form.
+          const stakes = headline?.startsWith("Everything on the line")
+            ? "Win and in, lose and out"
+            : headline;
+          return (
+            <Link
+              key={m.id}
+              href={`/matches/${m.id}`}
+              className="block min-w-0 rounded-lg border border-line bg-surface-2/30 p-3 text-sm transition-colors hover:border-muted/60"
+            >
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                <span className="uppercase">
+                  {m.phase === "FINAL"
+                    ? "Grand final"
+                    : m.phase === "PLAYOFF"
+                      ? "Playoffs"
+                      : `Week ${m.week}`}
+                </span>
+                {m.scheduledAt ? (
+                  <LocalTime
+                    ts={m.scheduledAt.getTime()}
+                    variant="full"
+                    initial={fmtWhen(m.scheduledAt) ?? ""}
+                  />
+                ) : null}
+                {stakes ? (
+                  <Badge tone="accent" className="ml-auto rounded-md text-left">
+                    {stakes}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="mt-2 space-y-1">
+                {[m.homeTeamId, m.awayTeamId].map((teamId) => {
+                  const c = checkins(m.id, teamId);
+                  return (
+                    <div
+                      key={teamId}
+                      className="flex min-w-0 items-center gap-2"
+                    >
+                      <TeamCrest
+                        name={teamName.get(teamId) ?? "?"}
+                        seed={teamId}
+                        size={18}
+                        className="shrink-0 rounded"
+                      />
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {teamName.get(teamId) ?? "?"}
+                      </span>
+                      {c ? (
+                        <span
+                          role="img"
+                          aria-label={`${c.confirmed} of ${c.size} checked in`}
+                          className={cn(
+                            "shrink-0 text-xs tabular-nums",
+                            c.confirmed === c.size
+                              ? "text-success"
+                              : "text-muted",
+                          )}
+                          title={`${c.confirmed} of ${c.size} checked in`}
+                        >
+                          <span aria-hidden>
+                            ✓ {c.confirmed}/{c.size}
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </Link>
+          );
+        })}
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
+ * A taste of the league's stat life: the latest weekly honors and the
+ * most-contested hero, teasing /leaders and /meta. Hidden until games exist.
+ */
+async function LeaguePulse({
+  seasonId,
+  teams,
+  teamName,
+}: {
+  seasonId: string;
+  teams: SeasonSnapshot["teams"];
+  teamName: Map<string, string>;
+}) {
+  const games = await prisma.game.findMany({
+    where: { match: { seasonId } },
+    select: {
+      players: true,
+      radiantWin: true,
+      match: { select: { week: true, phase: true } },
+    },
+  });
+  if (games.length === 0) return null;
+
+  const parsed = games.map((g) => ({
+    ...g,
+    lines: safeParseStats(g.players),
+  }));
+  const teamOf = new Map(
+    teams.flatMap((t) => t.members.map((m) => [m.userId, t.id] as const)),
+  );
+
+  // Latest regular week with games in — its honors are the freshest story.
+  const regular = parsed.filter((g) => g.match.phase === "REGULAR");
+  const latestWeek = regular.reduce((max, g) => Math.max(max, g.match.week), 0);
+  const honors =
+    latestWeek > 0
+      ? weeklyHonors(
+          regular
+            .filter((g) => g.match.week === latestWeek)
+            .map((g) => ({ radiantWin: g.radiantWin, players: g.lines })),
+          teamOf,
+        )
+      : { player: null, team: null };
+  const potw = honors.player
+    ? await prisma.user.findUnique({
+        where: { id: honors.player.userId },
+        select: { id: true, name: true, avatar: true },
+      })
+    : null;
+
+  // The league's most-contested hero so far.
+  const meta = heroMeta(
+    parsed.map((g) => ({
+      radiantWin: g.radiantWin,
+      lines: g.lines.map((p) => ({
+        userId: p.userId,
+        heroId: p.heroId,
+        isRadiant: p.isRadiant,
+        kills: p.kills,
+        deaths: p.deaths,
+        assists: p.assists,
+      })),
+    })),
+  );
+  const topPick = meta.rows[0];
+  const topHero = topPick ? heroById(topPick.heroId) : null;
+
+  return (
+    <Card>
+      <CardHeader
+        title="League pulse"
+        action={
+          <Link href="/leaders" className="text-sm text-info hover:underline">
+            Leaders →
+          </Link>
+        }
+      />
+      <CardBody className="space-y-3 text-sm">
+        {potw && honors.player ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <span aria-hidden className="shrink-0">
+              ⭐
+            </span>
+            <span className="min-w-0 flex-1 truncate">
+              <PlayerLink userId={potw.id} className="font-medium">
+                {potw.name}
+              </PlayerLink>{" "}
+              <span className="text-muted">
+                · Week {latestWeek} PotW · {honors.player.points} pts
+              </span>
+            </span>
+          </div>
+        ) : null}
+        {honors.team ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <span aria-hidden className="shrink-0">
+              🛡️
+            </span>
+            <span className="min-w-0 flex-1 truncate">
+              <Link
+                href={`/teams/${honors.team.teamId}`}
+                className="font-medium hover:text-info"
+              >
+                {teamName.get(honors.team.teamId) ?? "?"}
+              </Link>{" "}
+              <span className="text-muted">
+                · Week {latestWeek} team · {honors.team.gameWins} game win
+                {honors.team.gameWins === 1 ? "" : "s"}
+              </span>
+            </span>
+          </div>
+        ) : null}
+        {topPick ? (
+          <div className="flex min-w-0 items-center gap-2">
+            {/* Unknown hero ids still render — "Hero #N" fallback per /meta. */}
+            {topHero ? (
+              <HeroIcon hero={topHero} size={22} />
+            ) : (
+              <span
+                aria-hidden
+                className="h-[22px] w-[22px] shrink-0 rounded-md border border-line/70 bg-surface-2"
+              />
+            )}
+            <span className="min-w-0 flex-1 truncate">
+              <Link href="/meta" className="font-medium hover:text-info">
+                {topHero?.name ?? `Hero #${topPick.heroId}`}
+              </Link>{" "}
+              <span className="text-muted">
+                · most picked · {topPick.picks} pick
+                {topPick.picks === 1 ? "" : "s"}, {topPick.winRate}% wins
+              </span>
+            </span>
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+function safeParseStats(json: string): PlayerStat[] {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
 }
 
 function SideGameLink({
@@ -1363,13 +1896,15 @@ export function StandingsTable({
 
 // ---------- COMPLETE ----------
 
-async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
+async function CompleteView({
+  snapshot,
+  matches,
+}: {
+  snapshot: SeasonSnapshot;
+  matches: Match[];
+}) {
   const { teams, season } = snapshot;
   const champion = teams.find((t) => t.id === season.championTeamId);
-  const matches = await prisma.match.findMany({
-    where: { seasonId: season.id },
-    orderBy: [{ week: "asc" }],
-  });
   const standings = computeStandings(
     teams.map((t) => t.id),
     matches,
@@ -1477,8 +2012,14 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
         </CardBody>
       </Card>
 
+      <CompleteBracket
+        matches={matches}
+        teamName={teamName}
+        championTeamId={season.championTeamId}
+      />
+
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="min-w-0 lg:col-span-2">
           <Card>
             <CardHeader
               title="Final standings"
@@ -1500,13 +2041,13 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
             </CardBody>
           </Card>
         </div>
-        <div>
+        <div className="min-w-0">
           <Card>
-            <CardHeader title="Season stats" />
+            <CardHeader title="The season lives on" />
             <CardBody className="space-y-3 text-sm">
               <p className="text-muted">
-                Relive the season — awards, superlatives, and who topped the
-                league across every game.
+                Relive it — awards and superlatives, the stat boards, and the
+                records this season may have etched into league history.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Link href="/recap" className={buttonClasses("accent")}>
@@ -1515,11 +2056,46 @@ async function CompleteView({ snapshot }: { snapshot: SeasonSnapshot }) {
                 <Link href="/leaders" className={buttonClasses("secondary")}>
                   Leaderboards
                 </Link>
+                <Link href="/records" className={buttonClasses("secondary")}>
+                  Record book
+                </Link>
+                <Link href="/seasons" className={buttonClasses("secondary")}>
+                  Season archive
+                </Link>
               </div>
             </CardBody>
           </Card>
         </div>
       </div>
     </div>
+  );
+}
+
+// The championship run, in the classic bracket shape — the story of how the
+// trophy was won belongs on the season's front page.
+function CompleteBracket({
+  matches,
+  teamName,
+  championTeamId,
+}: {
+  matches: Match[];
+  teamName: Map<string, string>;
+  championTeamId: string | null;
+}) {
+  const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
+  const rounds = buildBracketRounds(
+    playoffMatches,
+    teamName,
+    seedsFromFirstRound(playoffMatches),
+    (d) => fmtWhen(d) ?? "",
+  );
+  if (rounds.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader title="How it was won" />
+      <CardBody className="p-0 pt-4">
+        <Bracket rounds={rounds} championTeamId={championTeamId} />
+      </CardBody>
+    </Card>
   );
 }

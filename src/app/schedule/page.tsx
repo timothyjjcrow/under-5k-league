@@ -19,7 +19,11 @@ import {
   regularSeasonStatus,
   pendingResultsMessage,
 } from "@/lib/schedule-status";
-import { teamAvailability, type TeamAvailability } from "@/lib/availability";
+import {
+  matchNightRoster,
+  teamAvailability,
+  type TeamAvailability,
+} from "@/lib/availability";
 import { CheckinBanner } from "@/components/checkin-banner";
 import {
   ScheduleWeeks,
@@ -139,21 +143,13 @@ export default async function SchedulePage() {
     arr.push(r);
     rsvpsByMatch.set(r.matchId, arr);
   }
-  // A side's match-night roster = team roster, minus players covered by a
-  // standin (their old ✗ isn't a gap anymore), plus the assigned standins
-  // (whose own ✓/✗ is the answer that matters).
-  const sideRoster = (m: Match, teamId: string): string[] => {
-    const base = rosterByTeam.get(teamId) ?? [];
-    const subs = assignments.filter(
-      (a) => a.matchId === m.id && a.teamId === teamId,
+  // Shared standin-aware roster math — the dashboard's ThisWeek strip uses
+  // the same helper, so the two surfaces can't drift.
+  const sideRoster = (m: Match, teamId: string): string[] =>
+    matchNightRoster(
+      rosterByTeam.get(teamId) ?? [],
+      assignments.filter((a) => a.matchId === m.id && a.teamId === teamId),
     );
-    if (subs.length === 0) return base;
-    const covered = new Set(subs.map((a) => a.replacingUserId));
-    return [
-      ...base.filter((id) => !covered.has(id)),
-      ...subs.map((a) => a.standinUserId),
-    ];
-  };
   const rsvpFor = (m: Match) =>
     m.status === "COMPLETED"
       ? undefined

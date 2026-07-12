@@ -536,6 +536,28 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   games count never judged), top-5 hero lists per player. Linked from
   `/players` (action) and each profile ("Compare vs… →" prefills `?a=`).
 
+## Dashboard (done)
+
+- `src/app/page.tsx` renders per phase. Matches are fetched ONCE in `Home()`
+  (mid-season+ phases) and passed down; the scenario report is computed once
+  in `SeasonView` and shared by the standings clinch marks, the This-week
+  stakes chips, and the your-team one-liner.
+- Hero meta per phase: signups progress, "Week X of Y + teams + games on
+  record" (regular), "N teams still alive + <round> underway" (playoffs),
+  champion crest + Relive CTA (complete).
+- **This week strip**: the current week's (or open playoff round's) matches
+  with kickoff times, standin-aware ✓ check-in counts (shared
+  `matchNightRoster` in `availability.ts` — /schedule uses the same helper),
+  and a stakes chip via `matchStakes`/`stakesHeadline` (the long
+  everything-on-the-line label gets a short chip form).
+- **Your team** card: rank/record/points tiles (Record rendered a size down —
+  W–L–D wraps at Stat's text-3xl in the narrow column), form strip, stake
+  one-liner, next-up tile aligned to the ENGINE's nextMatchId so the "next
+  series" guarantee and the tile never point at different matches.
+- **League pulse**: latest week's honors + most-picked hero (unknown hero ids
+  render the "Hero #N" fallback per /meta's convention).
+- COMPLETE: champion card + "How it was won" bracket + archive links.
+
 ## Standings & schedule UX (done)
 
 - **StandingsTable** is now a thin server adapter (`page.tsx`) over the
