@@ -476,13 +476,17 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 - Pure `src/lib/scenarios.ts` (tested, incl. a seeded property test that
   re-derives every leaf via `computeStandings`): `scenarioReport` enumerates
-  every remaining REGULAR outcome (draw branch only for even best-ofs) under
-  a 200k-leaf cap and refines the conservative `clinchStatuses` — ties always
-  counted against a clinch and for a survival, so exactness only turns null
-  into CLINCHED/ELIMINATED, never contradicts. Layer-1 bounds (always):
-  `magicNumber`, `eliminationLosses`, focal-match-conditioned `winAndIn` /
-  `loseAndOut`, rank ranges. Over the cap it degrades to `clinchStatuses` +
-  bounds. `matchStakes`/`stakesHeadline` produce the human labels.
+  every remaining REGULAR outcome under a 200k-leaf cap and refines the
+  conservative `clinchStatuses` — ties always counted against a clinch and
+  for a survival, so exactness only turns null into CLINCHED/ELIMINATED,
+  never contradicts. EVERY match branches win/loss/DRAW regardless of bestOf
+  parity — `recordResult` accepts drawn scores (1-1 Bo3, 0-0) for regular
+  matches, and "exact" must survive anything recordable. Layer-1 bounds
+  (always): `magicNumber`, `eliminationLosses`, focal-match-conditioned
+  `winAndIn`/`loseAndOut`, rank ranges. Over the cap it degrades to
+  `clinchStatuses` + bounds. `TeamScenario.nextMatchId` names the match the
+  winAndIn family is about; `matchStakes(matchId, …)` suppresses those labels
+  on any other match page. `stakesHeadline` picks the banner line.
 - `src/lib/stakes.ts` (tested) adapts prisma rows → engine inputs and the
   report → the standings `clinch` prop (cut from `pickBracketSize`, same as
   `createPlayoffBracket`; null when everyone makes the bracket).

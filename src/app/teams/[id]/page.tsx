@@ -549,7 +549,15 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
       : null;
 
   const facts: { icon: string; text: string }[] = [];
-  if (s.status === null) {
+  const nothingLeft = s.nextMatchId === null;
+  if (s.status === null && nothingLeft) {
+    // Season played out, fate still open ⇒ it comes down to tiebreakers the
+    // engine deliberately doesn't model. Don't dress that up as scenarios.
+    facts.push({
+      icon: "🎲",
+      text: "Their matches are done — the seeding tiebreakers (game diff, then series wins) decide it now.",
+    });
+  } else if (s.status === null) {
     if (s.winAndIn && s.loseAndOut) {
       facts.push({
         icon: "⚡",
@@ -583,10 +591,16 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
         text: `${s.eliminationLosses} more series ${s.eliminationLosses === 1 ? "loss" : "losses"} would guarantee missing the cut.`,
       });
     }
-    if (odds != null && s.leafCount) {
+    if (odds != null && odds > 0 && s.leafCount) {
       facts.push({
         icon: "📊",
         text: `Safely top-${cut} in ${odds}% of the ${s.leafCount.toLocaleString()} remaining scenarios (ties counted against them).`,
+      });
+    } else if (odds === 0) {
+      // 0% here means "never safe on points alone" — tiebreaks, not doom.
+      facts.push({
+        icon: "🎲",
+        text: "No remaining scenario locks it on points alone — tiebreakers will have a say.",
       });
     }
   }

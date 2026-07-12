@@ -39,7 +39,7 @@ import {
 } from "@/lib/scouting";
 import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
 import { computeStandings } from "@/lib/standings";
-import { seasonScenarioReport } from "@/lib/stakes";
+import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
 import { matchStakes, stakesHeadline } from "@/lib/scenarios";
 import {
   Avatar,
@@ -362,7 +362,7 @@ async function MatchPreview({
         />
       ) : null}
 
-      <StakesBanner match={match} />
+      <StakesBanner match={match} seasonMatches={seasonMatches} />
 
       <Card>
         <CardHeader
@@ -497,8 +497,10 @@ async function MatchPreview({
  */
 async function StakesBanner({
   match,
+  seasonMatches,
 }: {
   match: {
+    id: string;
     seasonId: string;
     phase: string;
     homeTeamId: string;
@@ -506,6 +508,12 @@ async function StakesBanner({
     homeTeam: { name: string };
     awayTeam: { name: string };
   };
+  // Passed down from MatchPreview, which already loaded the season's matches.
+  seasonMatches: (StakesMatchRow & {
+    homeScore: number;
+    awayScore: number;
+    winnerTeamId: string | null;
+  })[];
 }) {
   if (match.phase !== "REGULAR") return null;
   const season = await prisma.season.findUnique({
@@ -514,13 +522,10 @@ async function StakesBanner({
   });
   if (season?.status !== "REGULAR_SEASON") return null;
 
-  const [teams, seasonMatches] = await Promise.all([
-    prisma.team.findMany({
-      where: { seasonId: match.seasonId },
-      select: { id: true },
-    }),
-    prisma.match.findMany({ where: { seasonId: match.seasonId } }),
-  ]);
+  const teams = await prisma.team.findMany({
+    where: { seasonId: match.seasonId },
+    select: { id: true },
+  });
   const standings = computeStandings(
     teams.map((t) => t.id),
     seasonMatches,
@@ -528,7 +533,7 @@ async function StakesBanner({
   const report = seasonScenarioReport(standings, seasonMatches, teams.length);
   if (!report) return null;
 
-  const stakes = matchStakes(match.homeTeamId, match.awayTeamId, report);
+  const stakes = matchStakes(match.id, match.homeTeamId, match.awayTeamId, report);
   const headline = stakesHeadline(stakes);
   const decided = stakes.some(
     (s) => report.teams.get(s.teamId)?.status != null,
@@ -680,9 +685,12 @@ function ThreatList({
   board: ThreatBoard;
   heroNames: Record<number, string>;
 }) {
-  // A real sample earns "ban board" framing; a thin one is just "most picked".
-  const ranked = board.rows.length > 0;
-  const rows = (ranked ? board.rows : board.contested).slice(0, 5);
+  // Only heroes they actually WIN on earn "ban board" framing — a 0-2 hero is
+  // not a threat. Without any winning hero at the floor, fall back to plain
+  // most-picked framing.
+  const threats = board.rows.filter((r) => r.winRate >= 50);
+  const ranked = threats.length > 0;
+  const rows = (ranked ? threats : board.contested).slice(0, 5);
   if (rows.length === 0) return null;
   return (
     <div>

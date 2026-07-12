@@ -625,8 +625,46 @@ describe("enrichStoredGames", () => {
 
     // The stored JSON is untouched — no benchmarks marker was stamped.
     const count = await prisma.game.count({
-      where: { NOT: { players: { contains: '"benchmarks"' } } },
+      where: { NOT: { players: { contains: '"benchmarks":' } } },
     });
     expect(count).toBe(1);
+  });
+
+  it("rotates a failing game to the back so it can't starve the batch", async () => {
+    // The dead game is the OLDEST candidate — without rotation it would own
+    // the head slot of a limit-1 batch forever and 9005 would never enrich.
+    // Both fetchedAts sit firmly in the past so the requeue's "now" can't
+    // collide with them within a millisecond.
+    const dead = await legacyGame("9004");
+    await prisma.game.update({
+      where: { id: dead.id },
+      data: { fetchedAt: new Date(Date.now() - 60_000) },
+    });
+    const alive9005 = await legacyGame("9005");
+    await prisma.game.update({
+      where: { id: alive9005.id },
+      data: { fetchedAt: new Date(Date.now() - 30_000) },
+    });
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) =>
+      id === "9005"
+        ? {
+            match_id: 9005,
+            radiant_win: true,
+            duration: 1,
+            start_time: 1,
+            players: [],
+          }
+        : null,
+    );
+
+    const first = await enrichStoredGames(1);
+    expect(first).toMatchObject({ enriched: 0, failed: 1 });
+
+    const second = await enrichStoredGames(1);
+    expect(second).toMatchObject({ enriched: 1, failed: 0 });
+    const alive = await prisma.game.findUniqueOrThrow({
+      where: { dotaMatchId: "9005" },
+    });
+    expect(alive.players).toContain('"benchmarks":');
   });
 });

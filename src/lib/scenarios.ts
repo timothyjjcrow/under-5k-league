@@ -1,11 +1,14 @@
 // Exact playoff-scenario engine: "what do we need tonight?" Pure + testable.
 // Refines the conservative clinchStatuses bounds (standings.ts) by enumerating
 // every remaining-match outcome when the tree is small enough. Mirrors
-// standings scoring exactly (3 pts series win, 1 draw, 0 loss; draws only in
-// even best-ofs) and its tiebreaker-agnostic philosophy: a team is only "in"
-// if it's in even when every tie counts against it, and only "out" if it's out
-// even when every tie counts for it. Never contradicts a non-null
-// clinchStatuses result — enumeration can only turn null into certainty.
+// standings scoring exactly (3 pts series win, 1 draw, 0 loss) and its
+// tiebreaker-agnostic philosophy: a team is only "in" if it's in even when
+// every tie counts against it, and only "out" if it's out even when every tie
+// counts for it. EVERY match enumerates a draw branch regardless of bestOf
+// parity — recordResult accepts drawn/abandoned scores (1-1 Bo3, 0-0 Bo1) for
+// regular matches, so "exact" must cover them or a CLINCHED team could still
+// miss the cut. Never contradicts a non-null clinchStatuses result —
+// enumeration can only turn null into certainty.
 
 import {
   clinchStatuses,
@@ -18,7 +21,7 @@ export type ScenarioMatch = {
   id: string;
   homeTeamId: string;
   awayTeamId: string;
-  /** Even best-ofs can end drawn (1 pt each); odd ones always have a winner. */
+  /** Kept for context/labels; any series can end drawn (partial/forfeit). */
   bestOf: number;
 };
 
@@ -72,6 +75,12 @@ export type TeamScenario = {
   madeCount: number | null;
   /** Total enumerated leaves; null unless `exact`. */
   leafCount: number | null;
+  /**
+   * The match winAndIn/loseAndOut are about — the team's next remaining one.
+   * Null when they have nothing left to play. Surfaces MUST check this before
+   * pinning a "win and in" line on a specific match page.
+   */
+  nextMatchId: string | null;
 };
 
 export type ScenarioReport = {
@@ -193,10 +202,14 @@ export function scenarioReport(
   });
 
   // ---- Layer 2: exact enumeration when the outcome tree is small enough ----
+  // Three outcomes per match — home win / away win / draw. The draw branch is
+  // unconditional: recordResult lets a regular series of ANY length complete
+  // drawn (1-1 Bo3 forfeit, 0-0 abandonment), and "exact" claims must survive
+  // every recordable result.
   let leafBudget = 1;
   let withinCap = true;
-  for (const m of matches) {
-    leafBudget *= m.bestOf % 2 === 0 ? 3 : 2;
+  for (let i = 0; i < matches.length; i++) {
+    leafBudget *= 3;
     if (leafBudget > cap) {
       withinCap = false;
       break;
@@ -266,14 +279,12 @@ export function scenarioReport(
       delta[a] += 3;
       dfs(i + 1);
       delta[a] -= 3;
-      if (matches[i].bestOf % 2 === 0) {
-        outcome[i] = 2; // draw — only even best-ofs
-        delta[h] += 1;
-        delta[a] += 1;
-        dfs(i + 1);
-        delta[h] -= 1;
-        delta[a] -= 1;
-      }
+      outcome[i] = 2; // draw — recordable for any series length
+      delta[h] += 1;
+      delta[a] += 1;
+      dfs(i + 1);
+      delta[h] -= 1;
+      delta[a] -= 1;
       outcome[i] = -1;
     };
     dfs(0);
@@ -298,6 +309,7 @@ export function scenarioReport(
         exact: true,
         madeCount: made[t],
         leafCount: leaves,
+        nextMatchId: nextMatch[t] !== null ? matches[nextMatch[t]!].id : null,
       });
     });
     return { cut, exact: true, teams };
@@ -332,6 +344,7 @@ export function scenarioReport(
       exact: false,
       madeCount: null,
       leafCount: null,
+      nextMatchId: nextMatch[t] !== null ? matches[nextMatch[t]!].id : null,
     });
   });
   return { cut, exact: false, teams };
@@ -345,22 +358,29 @@ const LABEL_LOSE_OUT = "Lose and they're out";
 const LABEL_ONE_MORE = "One more win locks a playoff spot";
 const LABEL_HUNT = "In the hunt for a playoff spot";
 
-function labelFor(s: TeamScenario): string {
+function labelFor(s: TeamScenario, isNextMatch: boolean): string {
   if (s.status === "CLINCHED") return LABEL_LOCKED;
   if (s.status === "ELIMINATED") return LABEL_OUT;
-  if (s.winAndIn && s.loseAndOut) return LABEL_ALL_ON_LINE;
-  if (s.winAndIn) return LABEL_WIN_IN;
-  if (s.loseAndOut) return LABEL_LOSE_OUT;
+  // winAndIn/loseAndOut are guarantees about the team's NEXT match only —
+  // pinning them on any other match page would promise the wrong game.
+  if (isNextMatch) {
+    if (s.winAndIn && s.loseAndOut) return LABEL_ALL_ON_LINE;
+    if (s.winAndIn) return LABEL_WIN_IN;
+    if (s.loseAndOut) return LABEL_LOSE_OUT;
+  }
   if (s.magicNumber === 1) return LABEL_ONE_MORE;
   return LABEL_HUNT;
 }
 
 /**
- * What tonight's match means for each side, one line per team (first matching
- * rule wins: locked, out, everything-on-the-line, win-and-in, lose-and-out,
- * one-more-win, in-the-hunt). Teams missing from the report are skipped.
+ * What this specific match means for each side, one line per team (first
+ * matching rule wins: locked, out, everything-on-the-line, win-and-in,
+ * lose-and-out, one-more-win, in-the-hunt). The win-and-in family only ever
+ * describes a team's next remaining match, so it's suppressed when `matchId`
+ * isn't that match. Teams missing from the report are skipped.
  */
 export function matchStakes(
+  matchId: string,
   homeTeamId: string,
   awayTeamId: string,
   report: ScenarioReport,
@@ -368,7 +388,7 @@ export function matchStakes(
   const stakes: { teamId: string; label: string }[] = [];
   for (const teamId of [homeTeamId, awayTeamId]) {
     const s = report.teams.get(teamId);
-    if (s) stakes.push({ teamId, label: labelFor(s) });
+    if (s) stakes.push({ teamId, label: labelFor(s, s.nextMatchId === matchId) });
   }
   return stakes;
 }

@@ -14,22 +14,32 @@ export type StakesMatchRow = {
   phase: string;
   bestOf: number;
   week: number;
+  scheduledAt?: Date | null;
 };
 
 /**
- * The remaining regular-season schedule in play order (week, then insertion
- * order) — the engine reads "a team's next match" as its first entry here.
+ * The remaining regular-season schedule in play order — the engine reads "a
+ * team's next match" as a team's first entry here. When every remaining match
+ * has a scheduled time, actual kickoff order wins (a reschedule can push a
+ * week-5 match past week 6's night); with any time missing, week order is the
+ * only consistent signal.
  */
 export function remainingRegular(matches: StakesMatchRow[]): ScenarioMatch[] {
-  return matches
-    .filter((m) => m.phase === "REGULAR" && m.status !== "COMPLETED")
-    .sort((a, b) => a.week - b.week)
-    .map((m) => ({
-      id: m.id,
-      homeTeamId: m.homeTeamId,
-      awayTeamId: m.awayTeamId,
-      bestOf: m.bestOf,
-    }));
+  const open = matches.filter(
+    (m) => m.phase === "REGULAR" && m.status !== "COMPLETED",
+  );
+  const byTime = open.every((m) => m.scheduledAt != null);
+  open.sort((a, b) =>
+    byTime
+      ? a.scheduledAt!.getTime() - b.scheduledAt!.getTime() || a.week - b.week
+      : a.week - b.week,
+  );
+  return open.map((m) => ({
+    id: m.id,
+    homeTeamId: m.homeTeamId,
+    awayTeamId: m.awayTeamId,
+    bestOf: m.bestOf,
+  }));
 }
 
 /**

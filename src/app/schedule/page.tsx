@@ -464,15 +464,23 @@ function PlayoffPicture({
       const s = report?.teams.get(teamId);
       if (!s || s.status !== null) return null;
       const bits: string[] = [];
-      if (s.winAndIn && s.loseAndOut) bits.push("win next and in, lose and out");
-      else if (s.winAndIn) bits.push("win next and they're in");
-      else if (s.loseAndOut) bits.push("lose next and they're out");
-      if (s.magicNumber != null && s.magicNumber > 0 && !s.winAndIn)
-        bits.push(`magic number ${s.magicNumber}`);
-      if (s.exact && s.madeCount != null && s.leafCount) {
-        bits.push(
-          `in ${Math.round((s.madeCount / s.leafCount) * 100)}% of scenarios`,
-        );
+      if (s.nextMatchId === null) {
+        // Fate open with nothing left to play = tiebreakers decide.
+        bits.push("done playing — tiebreakers decide");
+      } else {
+        if (s.winAndIn && s.loseAndOut)
+          bits.push("win next and in, lose and out");
+        else if (s.winAndIn) bits.push("win next and they're in");
+        else if (s.loseAndOut) bits.push("lose next and they're out");
+        if (s.magicNumber != null && s.magicNumber > 0 && !s.winAndIn)
+          bits.push(`magic number ${s.magicNumber}`);
+        if (s.exact && s.madeCount != null && s.leafCount) {
+          const pct = Math.round((s.madeCount / s.leafCount) * 100);
+          // 0% means "never safe on points alone", not "doomed" — the
+          // ties-against convention would read as a death sentence here.
+          if (pct > 0) bits.push(`in ${pct}% of scenarios`);
+          else bits.push("needs tiebreaks to fall right");
+        }
       }
       if (bits.length === 0) return null;
       return { teamId, note: bits.join(" · ") };

@@ -164,29 +164,27 @@ export default async function PlayerProfilePage({
   const allGames = await prisma.game.findMany({
     select: { players: true, radiantWin: true },
   });
-  const achievementLines = allGames
+  // Parse each game's box score once — achievements and the report card both
+  // read from this player's line.
+  const myAllLines = allGames
     .map((g) => {
       const parsed = safeParse(g.players);
       const stat = parsed.find((p) => p.userId === id);
-      if (!stat) return null;
-      return {
-        kills: stat.kills,
-        deaths: stat.deaths,
-        assists: stat.assists,
-        gpm: stat.gpm,
-        lastHits: stat.lastHits,
-        won: stat.isRadiant === g.radiantWin,
-        mvp: gameMvp(parsed, g.radiantWin) === id,
-      };
+      return stat ? { parsed, stat, radiantWin: g.radiantWin } : null;
     })
     .filter((l): l is NonNullable<typeof l> => l !== null);
+  const achievementLines = myAllLines.map(({ parsed, stat, radiantWin }) => ({
+    kills: stat.kills,
+    deaths: stat.deaths,
+    assists: stat.assists,
+    gpm: stat.gpm,
+    lastHits: stat.lastHits,
+    won: stat.isRadiant === radiantWin,
+    mvp: gameMvp(parsed, radiantWin) === id,
+  }));
   const badges = achievementsFor(achievementLines);
   // Career report card: worldwide percentile benchmarks over every graded line.
-  const reportCard = careerReportCard(
-    allGames
-      .map((g) => safeParse(g.players).find((p) => p.userId === id))
-      .filter((l): l is PlayerStat => l != null),
-  );
+  const reportCard = careerReportCard(myAllLines.map((l) => l.stat));
   const streak = currentStreak(lines); // `lines` is newest-first (games desc)
   const streakLabel =
     streak.count > 1 ? `${streak.type}${streak.count} streak` : undefined;

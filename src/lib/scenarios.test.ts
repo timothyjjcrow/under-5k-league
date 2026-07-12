@@ -68,9 +68,9 @@ function scheduledShim(m: ScenarioMatch): MatchLike {
 }
 
 // The classic last-night scenario, fully hand-checkable. Cut 2.
-// A 9pts, B 6, C 6, D 0. Remaining: B–C (bo1), then A–D (bo1). Four leaves:
-//   B+A win: A12 B9 C6 D0 | B+D win: A9 B9 C6 D3
-//   C+A win: A12 B6 C9 D0 | C+D win: A9 B6 C9 D3
+// A 9pts, B 6, C 6, D 0. Remaining: B–C (bo1), then A–D (bo1). Every match
+// branches win/loss/draw (abandoned series draw for any length) → 9 leaves;
+// the decisive ones: B or C winning reaches 9, a B–C draw leaves both ≤7.
 function lastNight() {
   const standings = [row("A", 9), row("B", 6), row("C", 6), row("D", 0)];
   const remaining = [rem("B", "C"), rem("A", "D")];
@@ -117,7 +117,7 @@ describe("scenarioReport — hand-built 4-team league, cut 2", () => {
       // Bounds can't promise either fate without the head-to-head context:
       expect(s.magicNumber).toBeNull();
       expect(s.eliminationLosses).toBeNull();
-      expect(s.madeCount).toBe(2); // in exactly the two leaves where they win
+      expect(s.madeCount).toBe(3); // in exactly the leaves where they win (×3 A–D outcomes)
     }
   });
 
@@ -138,8 +138,8 @@ describe("scenarioReport — hand-built 4-team league, cut 2", () => {
     const report = scenarioReport(standings, remaining, cut);
     const a = report.teams.get("A")!;
     const b = report.teams.get("B")!;
-    expect(a.leafCount).toBe(4); // two bo1 matches → 2×2
-    expect(a.madeCount).toBe(4);
+    expect(a.leafCount).toBe(9); // two matches × (win/loss/draw)
+    expect(a.madeCount).toBe(9);
     expect(a.bestRank).toBe(1);
     expect(a.worstRank).toBe(2); // B or C can tie at 9; pessimistic ties
     expect(b.bestRank).toBe(1); // beat C while A loses → tied top, optimistic
@@ -180,23 +180,23 @@ describe("scenarioReport — hand-built 4-team league, cut 2", () => {
   });
 });
 
-describe("scenarioReport — Bo2 draw branches", () => {
-  // T 4 pts (done), A 3, B 3, one A–B match left, cut 2. Win/loss-only keeps
-  // T safe (winner 6, loser 3, T's tie budget untouched) — but a Bo2 draw
-  // puts ALL THREE on 4 pts, and pessimistic ties sink T to 3rd.
-  it("refuses to clinch a team a draw scenario could sink", () => {
+describe("scenarioReport — draw branches (any series length)", () => {
+  // T 4 pts (done), A 3, B 3, one A–B match left, cut 2. Win/loss-only would
+  // keep T safe (winner 6, loser 3) — but a drawn series (a 1-1 Bo2, an
+  // abandoned 1-1 Bo3, even a 0-0 forfeit) puts ALL THREE on 4 pts, and
+  // pessimistic ties sink T to 3rd. recordResult permits those results for
+  // every bestOf, so no series length may skip the draw branch.
+  it("refuses to clinch a team a draw scenario could sink — even a Bo1/Bo3", () => {
     const standings = [row("T", 4), row("A", 3), row("B", 3)];
-    const bo1 = scenarioReport(standings, [rem("A", "B", 1)], 2);
-    expect(bo1.teams.get("T")!.status).toBe("CLINCHED");
-    expect(bo1.teams.get("T")!.leafCount).toBe(2);
-
-    const bo2 = scenarioReport(standings, [rem("A", "B", 2)], 2);
-    const t = bo2.teams.get("T")!;
-    expect(t.status).toBeNull(); // the 4-4-4 draw leaf
-    expect(t.leafCount).toBe(3);
-    expect(t.madeCount).toBe(2);
-    expect(t.bestRank).toBe(1); // in the draw leaf nobody outpoints T
-    expect(t.worstRank).toBe(3);
+    for (const bestOf of [1, 2, 3]) {
+      const report = scenarioReport(standings, [rem("A", "B", bestOf)], 2);
+      const t = report.teams.get("T")!;
+      expect(t.status).toBeNull(); // the 4-4-4 draw leaf
+      expect(t.leafCount).toBe(3);
+      expect(t.madeCount).toBe(2);
+      expect(t.bestRank).toBe(1); // in the draw leaf nobody outpoints T
+      expect(t.worstRank).toBe(3);
+    }
   });
 
   it("treats a drawn focal series as neither the win nor the loss", () => {
@@ -355,7 +355,9 @@ function forEachLeaf(
   remaining: ScenarioMatch[],
   cb: (outcomes: number[]) => void,
 ) {
-  const radix = remaining.map((m) => (m.bestOf % 2 === 0 ? 3 : 2));
+  // Every match branches win/loss/draw — the engine enumerates a draw for any
+  // series length, since recordResult accepts drawn scores regardless of bestOf.
+  const radix = remaining.map(() => 3);
   const total = radix.reduce((acc, r) => acc * r, 1);
   for (let leaf = 0; leaf < total; leaf++) {
     let x = leaf;
@@ -467,7 +469,7 @@ describe("scenarioReport — property tests (seeded random leagues)", () => {
         if (s.winAndIn) seen.winAndIn++;
         if (s.loseAndOut) seen.loseAndOut++;
       }
-      if (remaining.some((m) => m.bestOf % 2 === 0)) seen.draws++;
+      if (remaining.length > 0) seen.draws++;
     }
     for (const count of Object.values(seen)) {
       expect(count).toBeGreaterThan(0);
@@ -511,6 +513,7 @@ function scen(teamId: string, over: Partial<TeamScenario>): TeamScenario {
     exact: true,
     madeCount: 0,
     leafCount: 1,
+    nextMatchId: "focal",
     ...over,
   };
 }
@@ -523,7 +526,7 @@ describe("matchStakes", () => {
   it("labels a real decider everything-on-the-line for both sides", () => {
     const { standings, remaining, cut } = lastNight();
     const report = scenarioReport(standings, remaining, cut);
-    expect(matchStakes("B", "C", report)).toEqual([
+    expect(matchStakes(remaining[0].id, "B", "C", report)).toEqual([
       { teamId: "B", label: "Everything on the line: win and in, lose and out" },
       { teamId: "C", label: "Everything on the line: win and in, lose and out" },
     ]);
@@ -532,7 +535,7 @@ describe("matchStakes", () => {
   it("labels the dead rubber locked vs playing-for-pride", () => {
     const { standings, remaining, cut } = lastNight();
     const report = scenarioReport(standings, remaining, cut);
-    expect(matchStakes("A", "D", report)).toEqual([
+    expect(matchStakes(remaining[1].id, "A", "D", report)).toEqual([
       { teamId: "A", label: "Playoff spot locked — playing for seeding" },
       { teamId: "D", label: "Out of the race — playing for pride" },
     ]);
@@ -543,7 +546,7 @@ describe("matchStakes", () => {
       scen("A", { status: "CLINCHED", winAndIn: true, loseAndOut: true }),
       scen("B", { status: "ELIMINATED", loseAndOut: true, magicNumber: 1 }),
     );
-    expect(matchStakes("A", "B", report).map((s) => s.label)).toEqual([
+    expect(matchStakes("focal", "A", "B", report).map((s) => s.label)).toEqual([
       "Playoff spot locked — playing for seeding",
       "Out of the race — playing for pride",
     ]);
@@ -556,19 +559,37 @@ describe("matchStakes", () => {
       scen("M", { magicNumber: 1 }),
       scen("H", { magicNumber: 2 }),
     );
-    expect(matchStakes("W", "L", report).map((s) => s.label)).toEqual([
+    expect(matchStakes("focal", "W", "L", report).map((s) => s.label)).toEqual([
       "Win and they're in",
       "Lose and they're out",
     ]);
-    expect(matchStakes("M", "H", report).map((s) => s.label)).toEqual([
+    expect(matchStakes("focal", "M", "H", report).map((s) => s.label)).toEqual([
       "One more win locks a playoff spot",
       "In the hunt for a playoff spot",
     ]);
   });
 
+  it("suppresses next-match guarantees on a match that is NOT the team's next", () => {
+    // A team's winAndIn belongs to its next match only: on a later match's
+    // page the label must fall through to the match-independent facts.
+    const report = reportOf(
+      scen("W", { winAndIn: true, loseAndOut: true, nextMatchId: "week5" }),
+      scen("M", { winAndIn: true, magicNumber: 1, nextMatchId: "week5" }),
+    );
+    expect(matchStakes("week7", "W", "M", report).map((s) => s.label)).toEqual([
+      "In the hunt for a playoff spot",
+      "One more win locks a playoff spot",
+    ]);
+    // …and on the actual next match, the guarantee shows.
+    expect(matchStakes("week5", "W", "M", report).map((s) => s.label)).toEqual([
+      "Everything on the line: win and in, lose and out",
+      "Win and they're in",
+    ]);
+  });
+
   it("skips teams missing from the report", () => {
     const report = reportOf(scen("A", { magicNumber: 3 }));
-    expect(matchStakes("A", "ghost", report)).toEqual([
+    expect(matchStakes("focal", "A", "ghost", report)).toEqual([
       { teamId: "A", label: "In the hunt for a playoff spot" },
     ]);
   });

@@ -30,6 +30,24 @@ describe("remainingRegular", () => {
     expect(remainingRegular(rows).map((m) => m.id)).toEqual(["w2live", "w3"]);
   });
 
+  it("orders by actual kickoff when every remaining match has a time", () => {
+    // A rescheduled week-2 match now plays AFTER week 3's night — kickoff
+    // order decides which match is a team's "next".
+    const rows = [
+      row({ id: "w2-late", week: 2, scheduledAt: new Date("2026-07-20") }),
+      row({ id: "w3", week: 3, scheduledAt: new Date("2026-07-15") }),
+    ];
+    expect(remainingRegular(rows).map((m) => m.id)).toEqual(["w3", "w2-late"]);
+  });
+
+  it("falls back to week order when any remaining match is untimed", () => {
+    const rows = [
+      row({ id: "w2", week: 2, scheduledAt: new Date("2026-07-20") }),
+      row({ id: "w1-untimed", week: 1, scheduledAt: null }),
+    ];
+    expect(remainingRegular(rows).map((m) => m.id)).toEqual(["w1-untimed", "w2"]);
+  });
+
   it("carries bestOf through for draw-aware enumeration", () => {
     expect(remainingRegular([row({ id: "x", bestOf: 2 })])[0].bestOf).toBe(2);
   });

@@ -433,8 +433,11 @@ export type EnrichResult = {
  * again to continue where it left off.
  */
 export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
+  // The `"benchmarks":` key only ever appears as a line's own field — a
+  // player whose persona name is literally `benchmarks` serializes with a
+  // comma after it, so the colon keeps the marker probe honest.
   const candidates = await prisma.game.findMany({
-    where: { NOT: { players: { contains: '"benchmarks"' } } },
+    where: { NOT: { players: { contains: '"benchmarks":' } } },
     orderBy: { fetchedAt: "asc" },
     select: { id: true, dotaMatchId: true, players: true },
   });
@@ -442,6 +445,11 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   let enriched = 0;
   let failed = 0;
   const batch = candidates.slice(0, limit);
+  // A failed game keeps its stored JSON but moves to the back of the
+  // fetchedAt-ordered queue — otherwise a dozen permanently-unfetchable games
+  // at the head would starve every later run of this bounded batch.
+  const requeue = (id: string) =>
+    prisma.game.update({ where: { id }, data: { fetchedAt: new Date() } });
   for (const game of batch) {
     let lines: PlayerStat[];
     try {
@@ -450,12 +458,14 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
       lines = parsed as PlayerStat[];
     } catch {
       failed++; // malformed JSON — leave it alone rather than guess
+      await requeue(game.id);
       continue;
     }
 
     const od = await fetchOpenDotaMatch(game.dotaMatchId);
     if (!od) {
       failed++;
+      await requeue(game.id);
       continue;
     }
 
