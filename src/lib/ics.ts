@@ -29,6 +29,33 @@ export function icsDate(d: Date): string {
     .replace(/\.\d{3}Z$/, "Z");
 }
 
+/**
+ * Fold a content line to RFC 5545 §3.1: no line longer than 75 OCTETS,
+ * continuations prefixed with a single space (which costs one of their 75).
+ * Splits are octet-counted but always land on character boundaries, so a
+ * multi-byte team name never gets torn mid-codepoint.
+ */
+export function foldIcsLine(line: string): string[] {
+  const LIMIT = 75;
+  const out: string[] = [];
+  let current = "";
+  let currentOctets = 0;
+  let budget = LIMIT;
+  for (const ch of line) {
+    const octets = Buffer.byteLength(ch, "utf8");
+    if (currentOctets + octets > budget) {
+      out.push(current);
+      current = " ";
+      currentOctets = 1;
+      budget = LIMIT;
+    }
+    current += ch;
+    currentOctets += octets;
+  }
+  out.push(current);
+  return out;
+}
+
 /** Build a complete VCALENDAR document (CRLF-joined). */
 export function buildCalendar(
   name: string,
@@ -57,5 +84,5 @@ export function buildCalendar(
     lines.push("END:VEVENT");
   }
   lines.push("END:VCALENDAR");
-  return lines.join("\r\n") + "\r\n";
+  return lines.flatMap(foldIcsLine).join("\r\n") + "\r\n";
 }

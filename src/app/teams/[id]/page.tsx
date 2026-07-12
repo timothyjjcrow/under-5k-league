@@ -43,7 +43,10 @@ export async function generateMetadata({
     where: { id },
     select: { name: true },
   });
-  if (!team) return { title: "Team" };
+  // Metadata resolves BEFORE the body streams — a notFound() here is the
+  // only way an unknown id yields a real 404 status (the root loading.tsx
+  // otherwise commits a 200 shell before the page's own notFound throws).
+  if (!team) notFound();
   return shareMetadata(
     team.name,
     `${team.name} — roster, results, and stats in the Under 4.5K League.`,

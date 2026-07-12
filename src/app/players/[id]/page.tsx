@@ -47,7 +47,8 @@ export async function generateMetadata({
     where: { id },
     select: { name: true },
   });
-  if (!user) return { title: "Player" };
+  // notFound() in metadata runs before the shell streams → real 404 status.
+  if (!user) notFound();
   return shareMetadata(
     `${user.name} · Player`,
     `${user.name}'s player profile — record, heroes, and match history in the Under 4.5K League.`,

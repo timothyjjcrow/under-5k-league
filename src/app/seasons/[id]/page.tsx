@@ -21,7 +21,20 @@ import {
 import { cn } from "@/lib/utils";
 import type { Match } from "@prisma/client";
 
-export const metadata = { title: "Season archive" };
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const season = await prisma.season.findUnique({
+    where: { id },
+    select: { name: true },
+  });
+  // notFound() in metadata runs before the shell streams → real 404 status.
+  if (!season) notFound();
+  return { title: `${season.name} · Season archive` };
+}
 
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups open",

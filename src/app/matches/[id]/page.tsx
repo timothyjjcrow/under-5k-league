@@ -73,7 +73,8 @@ export async function generateMetadata({
       awayTeam: { select: { name: true } },
     },
   });
-  if (!match) return { title: "Match" };
+  // notFound() in metadata runs before the shell streams → real 404 status.
+  if (!match) notFound();
   const title = `${match.homeTeam.name} vs ${match.awayTeam.name}`;
   return shareMetadata(
     title,

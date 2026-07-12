@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCalendar, escapeIcsText, icsDate } from "./ics";
+import { buildCalendar, escapeIcsText, foldIcsLine, icsDate } from "./ics";
 
 describe("escapeIcsText", () => {
   it("escapes backslash, semicolon, comma, and newlines", () => {
@@ -49,5 +49,53 @@ describe("buildCalendar", () => {
       { ...event, summary: "A; B, C" },
     ]);
     expect(cal).toContain("SUMMARY:A\\; B\\, C");
+  });
+});
+
+describe("foldIcsLine", () => {
+  it("leaves short lines alone", () => {
+    expect(foldIcsLine("SUMMARY:short")).toEqual(["SUMMARY:short"]);
+  });
+
+  it("folds at 75 octets with space-prefixed continuations", () => {
+    const line = "SUMMARY:" + "x".repeat(100);
+    const folded = foldIcsLine(line);
+    expect(folded).toHaveLength(2);
+    expect(folded[0]).toHaveLength(75);
+    expect(folded[1].startsWith(" ")).toBe(true);
+    // Unfolding (drop CRLF+space) reproduces the original exactly.
+    expect(folded[0] + folded[1].slice(1)).toBe(line);
+    for (const l of folded) {
+      expect(Buffer.byteLength(l, "utf8")).toBeLessThanOrEqual(75);
+    }
+  });
+
+  it("counts octets, not characters, and never splits a codepoint", () => {
+    const line = "SUMMARY:" + "é".repeat(60); // 2 octets each → 128 octets total
+    const folded = foldIcsLine(line);
+    expect(folded.length).toBeGreaterThan(1);
+    for (const l of folded) {
+      expect(Buffer.byteLength(l, "utf8")).toBeLessThanOrEqual(75);
+      // Every piece must re-encode/decode cleanly (no torn codepoints).
+      expect(Buffer.from(l, "utf8").toString("utf8")).toBe(l);
+    }
+    expect(folded[0] + folded.slice(1).map((l) => l.slice(1)).join("")).toBe(line);
+  });
+
+  it("keeps every emitted calendar line within 75 octets", () => {
+    const doc = buildCalendar("League", [
+      {
+        uid: "m1@ld2l",
+        start: new Date("2026-07-15T01:00:00Z"),
+        durationMinutes: 150,
+        summary:
+          "Week 5: Roshan's Revenge vs The Couriers of Catastrophe With Very Long Name",
+      },
+    ]);
+    for (const l of doc.split("\r\n")) {
+      expect(Buffer.byteLength(l, "utf8")).toBeLessThanOrEqual(75);
+    }
+    expect(doc).toContain("SUMMARY:Week 5: Roshan's Revenge vs The Couriers");
+    expect(doc).toContain("\r\n "); // a folded continuation exists
   });
 });

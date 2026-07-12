@@ -143,7 +143,13 @@ export default async function FantasyPage() {
     <div className="space-y-8">
       <PageTitle
         title="Fantasy"
-        subtitle={`${season.name} · pick five under ${cap.toLocaleString()} MMR — points from real games`}
+        // cap 0 = no roster MMRs are known — "under 0 MMR" would read as
+        // nonsense, so drop the cap phrasing until there's a real number.
+        subtitle={`${season.name} · ${
+          cap > 0
+            ? `pick five under ${cap.toLocaleString()} MMR`
+            : "pick your fantasy five"
+        } — points from real games`}
         action={
           locked ? (
             <Badge tone="accent">Rosters locked</Badge>

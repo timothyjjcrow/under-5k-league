@@ -619,6 +619,11 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   bracket with a TBD final). It REFUSES any `DATABASE_URL` without "fixture"
   in it — always pass one explicitly; the generated Prisma client's baked
   .env can silently point at dev.db.
+- Fixture box scores carry the full modern line shape (durations, kill
+  scores, benchmarks for report cards — the first two games ever stay
+  legacy-shaped to verify degradation), every match gets its league-night
+  `scheduledAt` (so `/api/calendar` has VEVENTs), and completed playoff
+  matches get games too.
 - The dev server locks its project dir (Next 16) and dev.db may belong to
   another session — never reseed it. To run a second server: copy the repo
   elsewhere (`rsync` minus node_modules/.next/dev.db, then
