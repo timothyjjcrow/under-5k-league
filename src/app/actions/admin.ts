@@ -128,18 +128,37 @@ export async function deleteSeason(
 }
 
 /** Directly set the active season's phase (admin override). */
-export async function setSeasonPhase(formData: FormData) {
-  await requireAdmin();
+export async function setSeasonPhase(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const target = str(formData, "phase") as SeasonStatus;
-  if (!SEASON_PHASE_ORDER.includes(target)) throw new Error("Invalid phase");
+  if (!SEASON_PHASE_ORDER.includes(target)) return { error: "Invalid phase" };
   const season = await getActiveSeason();
-  if (!season) throw new Error("No active season");
+  if (!season) return { error: "No active season" };
+  if (season.status === target) {
+    return { error: `The season is already in ${PHASE_LABELS[target]}` };
+  }
   await prisma.season.update({
     where: { id: season.id },
     data: { status: target },
   });
   refresh();
+  return { message: `Season moved to ${PHASE_LABELS[target]}` };
 }
+
+const PHASE_LABELS: Record<SeasonStatus, string> = {
+  SIGNUPS: "Signups",
+  DRAFT: "Draft",
+  REGULAR_SEASON: "Regular season",
+  PLAYOFFS: "Playoffs",
+  COMPLETE: "Complete",
+};
 
 /** Rename the active season — its name is the hero title on the home page. */
 export async function renameSeason(formData: FormData) {

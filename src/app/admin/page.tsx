@@ -286,19 +286,20 @@ function SeasonControls({
 
         <div className="flex flex-wrap items-center gap-2">
           {SEASON_PHASE_ORDER.map((phase) => (
-            <form key={phase} action={setSeasonPhase}>
+            <ActionForm key={phase} action={setSeasonPhase}>
               <input type="hidden" name="phase" value={phase} />
-              <button
-                type="submit"
-                className={
+              <SubmitButton
+                variant={season.status === phase ? "primary" : "secondary"}
+                size="sm"
+                confirm={
                   season.status === phase
-                    ? buttonClasses("primary", "sm")
-                    : buttonClasses("secondary", "sm")
+                    ? undefined
+                    : `Move the season to ${PHASE_LABEL[phase]}? Nav links and tools change immediately for everyone.`
                 }
               >
                 {PHASE_LABEL[phase]}
-              </button>
-            </form>
+              </SubmitButton>
+            </ActionForm>
           ))}
         </div>
         <p className="text-xs text-muted">
