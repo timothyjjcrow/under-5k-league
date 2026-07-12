@@ -11,6 +11,10 @@ export type HonorsGame = {
     userId?: string | null;
     isRadiant: boolean;
     heroId?: number;
+    /** Team the line was credited to AT IMPORT TIME — preferred over the
+     *  live roster map so a mid-season release+sign can't retroactively
+     *  move past weeks' points (and wins) to the player's new team. */
+    teamId?: string | null;
   })[];
 };
 
@@ -42,7 +46,7 @@ export function weeklyHonors(
         points: Math.round(((prev?.points ?? 0) + pts) * 10) / 10,
         heroId: p.heroId ?? prev?.heroId ?? null,
       });
-      const teamId = teamOf.get(p.userId);
+      const teamId = p.teamId ?? teamOf.get(p.userId);
       if (teamId) {
         teamPoints.set(
           teamId,

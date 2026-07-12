@@ -92,6 +92,28 @@ export default async function FantasyPage() {
   const cap = fantasyCap(candidates.map((c) => c.mmr));
   const locked = games.length > 0;
 
+  // A saved pick can reference a since-released player. Pre-lock, that pick
+  // must stay visible in the picker (and removable) or the manager is stuck:
+  // the phantom id keeps counting toward slots/cap with no checkbox to clear.
+  const viewerRoster = viewer
+    ? rosters.find((r) => r.userId === viewer.id)
+    : undefined;
+  if (!locked && viewerRoster) {
+    const candidateIds = new Set(candidates.map((c) => c.userId));
+    for (const p of viewerRoster.picks) {
+      if (candidateIds.has(p.userId)) continue;
+      candidates.push({
+        userId: p.userId,
+        name: `${p.player.name} (released)`,
+        avatar: p.player.avatar,
+        rankTier: p.player.rankTier,
+        mmr: mmrByUser.get(p.userId) ?? 0,
+        teamName: "released",
+        isCaptain: false,
+      });
+    }
+  }
+
   const playerPoints = pointsByPlayer(
     games.map((g) => ({ radiantWin: g.radiantWin, players: safeParse(g.players) })),
   );
@@ -104,7 +126,15 @@ export default async function FantasyPage() {
   );
   const managerName = new Map(rosters.map((r) => [r.userId, r.user.name]));
   const managerAvatar = new Map(rosters.map((r) => [r.userId, r.user.avatar]));
+  // Picks legally outlive roster membership (locked rosters + releases) —
+  // resolve names from the picks' own player relation too, or a released
+  // player's chip reads "?" for the rest of the season.
   const playerName = new Map(members.map((m) => [m.userId, m.user.name]));
+  for (const r of rosters) {
+    for (const p of r.picks) {
+      if (!playerName.has(p.userId)) playerName.set(p.userId, p.player.name);
+    }
+  }
 
   const myRoster = viewer ? rosters.find((r) => r.userId === viewer.id) : null;
   const myPicks = myRoster?.picks.map((p) => p.userId) ?? [];

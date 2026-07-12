@@ -69,3 +69,34 @@ describe("weeklyHonors", () => {
     expect(anon.player).toBeNull();
   });
 });
+
+describe("weeklyHonors — roster churn", () => {
+  it("credits the line's stored teamId over the live roster map", () => {
+    // a1 played this week's game FOR T1 (stored teamId), but was since
+    // released and signed to T2 (live map). The week's honors must not move.
+    const honors = weeklyHonors(
+      [
+        {
+          radiantWin: true,
+          players: [
+            {
+              userId: "a1",
+              isRadiant: true,
+              heroId: 8,
+              kills: 10,
+              deaths: 0,
+              assists: 0,
+              teamId: "T1",
+            },
+            { userId: "b1", isRadiant: false, heroId: 11, kills: 2, deaths: 3, assists: 0, teamId: "T2" },
+          ],
+        },
+      ],
+      new Map([
+        ["a1", "T2"], // live membership says T2 — must lose to the stored line
+        ["b1", "T2"],
+      ]),
+    );
+    expect(honors.team?.teamId).toBe("T1");
+  });
+});

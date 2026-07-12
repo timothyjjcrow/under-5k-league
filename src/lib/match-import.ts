@@ -81,7 +81,7 @@ type MatchRow = {
 
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
 export async function gatherTeamAccounts(match: MatchRow) {
-  const [season, members, standins] = await Promise.all([
+  const [season, members, standins, registrants] = await Promise.all([
     prisma.season.findUnique({ where: { id: match.seasonId } }),
     prisma.teamMember.findMany({
       where: {
@@ -94,9 +94,20 @@ export async function gatherTeamAccounts(match: MatchRow) {
       where: { matchId: match.id },
       include: { standin: true },
     }),
+    // Attribution fallback: a player released between playing and importing
+    // has no TeamMember row anymore, but their line should still carry their
+    // userId (career, fantasy, honors). They stay OUT of the team account
+    // sets, so classifyGame remains roster-strict.
+    prisma.registration.findMany({
+      where: { seasonId: match.seasonId },
+      include: { user: true },
+    }),
   ]);
 
-  const accountMap = new Map<number, { userId: string; name: string; teamId: string }>();
+  const accountMap = new Map<
+    number,
+    { userId: string; name: string; teamId: string | null }
+  >();
   const homeSet = new Set<number>();
   const awaySet = new Set<number>();
 
@@ -113,12 +124,23 @@ export async function gatherTeamAccounts(match: MatchRow) {
   for (const m of members) add(m.user, m.teamId);
   for (const s of standins) add(s.standin, s.teamId);
 
+  // Registered-but-unrostered users map for attribution only (teamId null) —
+  // never added to homeSet/awaySet, so classification is unaffected.
+  for (const r of registrants) {
+    const acc = r.user.dotaAccountId ?? steamIdToAccountId(r.user.steamId);
+    if (acc == null || accountMap.has(acc)) continue;
+    accountMap.set(acc, { userId: r.user.id, name: r.user.name, teamId: null });
+  }
+
   return { accountMap, homeSet, awaySet, teamSize: season?.teamSize ?? 5 };
 }
 
 function buildPlayers(
   match: OpenDotaMatch,
-  accountMap: Map<number, { userId: string; name: string; teamId: string }>,
+  accountMap: Map<
+    number,
+    { userId: string; name: string; teamId: string | null }
+  >,
 ) {
   return match.players.map((p) => {
     const isRadiant = p.isRadiant ?? p.player_slot < 128;

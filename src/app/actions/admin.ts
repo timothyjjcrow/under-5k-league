@@ -685,6 +685,17 @@ export async function signFreeAgent(
   if (season.status === SEASON_STATUS.COMPLETE) {
     return { error: "The season is over" };
   }
+  // While the auction is LIVE, roster writes belong to the draft engine
+  // alone — signing the nominated player wedges every draft poll on a
+  // unique-constraint throw. The pool-dry top-up window is Draft COMPLETE.
+  if (season.status === SEASON_STATUS.DRAFT) {
+    const draftRow = await prisma.draft.findUnique({
+      where: { seasonId: season.id },
+    });
+    if (draftRow && draftRow.status !== DRAFT_STATUS.COMPLETE) {
+      return { error: "The draft is still running — top up rosters after it" };
+    }
+  }
 
   const teamId = str(formData, "teamId");
   const userId = str(formData, "userId");
@@ -717,15 +728,31 @@ export async function signFreeAgent(
     return { error: `${team.name} has no open roster seats` };
   }
 
-  await prisma.teamMember.create({
-    data: {
-      seasonId: season.id,
-      teamId,
-      userId,
-      price: 0,
-      isCaptain: false,
-    },
-  });
+  // Transaction with a re-check: two concurrent signs into a team's last
+  // seat would both pass the count read above and overfill the roster.
+  try {
+    await prisma.$transaction(async (tx) => {
+      const seats = await tx.teamMember.count({ where: { teamId } });
+      if (seats >= season.teamSize) throw new Error("SEAT_TAKEN");
+      await tx.teamMember.create({
+        data: {
+          seasonId: season.id,
+          teamId,
+          userId,
+          price: 0,
+          isCaptain: false,
+        },
+      });
+    });
+  } catch (e) {
+    if ((e as Error).message === "SEAT_TAKEN") {
+      return { error: `${team.name} has no open roster seats` };
+    }
+    if ((e as { code?: string }).code === "P2002") {
+      return { error: "That player was just signed elsewhere" };
+    }
+    throw e;
+  }
   await sendDiscordMessage(
     freeAgentSignedMessage(registration.user.name, team.name),
   );
@@ -753,6 +780,17 @@ export async function releasePlayer(
   }
   if (season.status === SEASON_STATUS.COMPLETE) {
     return { error: "The season is over" };
+  }
+  // A LIVE auction owns the rosters: releasing a just-sold player deletes
+  // the seat without refunding the budget and re-lists them for a second
+  // auction. Releases wait for the draft to finish.
+  if (season.status === SEASON_STATUS.DRAFT) {
+    const draftRow = await prisma.draft.findUnique({
+      where: { seasonId: season.id },
+    });
+    if (draftRow && draftRow.status !== DRAFT_STATUS.COMPLETE) {
+      return { error: "The draft is still running — release players after it" };
+    }
   }
 
   const memberId = str(formData, "memberId");
