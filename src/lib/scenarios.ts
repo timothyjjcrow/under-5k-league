@@ -94,9 +94,9 @@ const DEFAULT_CAP = 200000;
 /**
  * Full scenario report for a league: layer 1 computes cheap points bounds for
  * every team (always); layer 2 enumerates every remaining outcome combination
- * (home win / away win / draw-if-even) when the leaf count fits in
- * `opts.cap` (default 200k) and refines status, win-and-in, lose-and-out,
- * and the rank range. Per-leaf work is O(teams²) — league sizes are tiny.
+ * (home win / away win / draw) when the leaf count fits in `opts.cap`
+ * (default 200k) and refines status, win-and-in, lose-and-out, and the rank
+ * range. Per-leaf work is O(teams²) — league sizes are tiny.
  */
 export function scenarioReport(
   standings: TeamStanding[],

@@ -465,8 +465,9 @@ function PlayoffPicture({
       if (!s || s.status !== null) return null;
       const bits: string[] = [];
       if (s.nextMatchId === null) {
-        // Fate open with nothing left to play = tiebreakers decide.
-        bits.push("done playing — tiebreakers decide");
+        // Fate open with nothing left to play — other results (and maybe
+        // tiebreakers) decide; the scenario bit below carries the odds.
+        bits.push("done playing — waiting on other results");
       } else {
         if (s.winAndIn && s.loseAndOut)
           bits.push("win next and in, lose and out");
@@ -474,12 +475,16 @@ function PlayoffPicture({
         else if (s.loseAndOut) bits.push("lose next and they're out");
         if (s.magicNumber != null && s.magicNumber > 0 && !s.winAndIn)
           bits.push(`magic number ${s.magicNumber}`);
-        if (s.exact && s.madeCount != null && s.leafCount) {
+      }
+      if (s.exact && s.madeCount != null && s.leafCount) {
+        if (s.madeCount > 0) {
+          // Guard on madeCount, not the rounded percent — a sub-0.5% path is
+          // still a real points-only path, not "no scenario".
           const pct = Math.round((s.madeCount / s.leafCount) * 100);
-          // 0% means "never safe on points alone", not "doomed" — the
-          // ties-against convention would read as a death sentence here.
-          if (pct > 0) bits.push(`in ${pct}% of scenarios`);
-          else bits.push("needs tiebreaks to fall right");
+          bits.push(`in ${pct > 0 ? `${pct}%` : "<1%"} of scenarios`);
+        } else {
+          // Never safe on points alone ≠ doomed — ties could still save them.
+          bits.push("needs tiebreaks to fall right");
         }
       }
       if (bits.length === 0) return null;

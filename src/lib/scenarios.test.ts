@@ -333,7 +333,11 @@ function randomConfig(rand: () => number, tag: string) {
     const bestOf = bestOfs[Math.floor(rand() * 3)];
     const r = rand();
     let winner: string | null = r < 0.45 ? home : r < 0.9 ? away : null;
-    if (winner === null && bestOf % 2 === 1) winner = home; // odd can't draw
+    // completedRow writes a drawn series as 1-1, which isn't a plausible
+    // SCORE for an odd bestOf fixture — force a winner to keep rows realistic
+    // (the engine itself must still survive drawn odd series; see the
+    // draw-branches describe).
+    if (winner === null && bestOf % 2 === 1) winner = home;
     completed.push(completedRow(home, away, bestOf, winner));
   }
   const remaining: ScenarioMatch[] = [];

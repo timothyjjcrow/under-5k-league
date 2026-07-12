@@ -550,58 +550,64 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
 
   const facts: { icon: string; text: string }[] = [];
   const nothingLeft = s.nextMatchId === null;
-  if (s.status === null && nothingLeft) {
-    // Season played out, fate still open ⇒ it comes down to tiebreakers the
-    // engine deliberately doesn't model. Don't dress that up as scenarios.
-    facts.push({
-      icon: "🎲",
-      text: "Their matches are done — the seeding tiebreakers (game diff, then series wins) decide it now.",
-    });
-  } else if (s.status === null) {
-    if (s.winAndIn && s.loseAndOut) {
+  if (s.status === null) {
+    if (nothingLeft) {
+      // Fate open with nothing left to play: the rest of the league (and
+      // possibly the tiebreakers) decides — the scenario line below still
+      // carries the real odds, so don't editorialize beyond that.
       facts.push({
-        icon: "⚡",
-        text: "Win the next series and they're in — lose it and they're out.",
+        icon: "⏳",
+        text: "Their matches are done — the rest of the league decides it from here.",
       });
-    } else if (s.winAndIn) {
-      facts.push({
-        icon: "🎯",
-        text: "Win the next series and a playoff spot is locked, whatever else happens.",
-      });
-    } else if (s.loseAndOut) {
-      facts.push({
-        icon: "⚠️",
-        text: "Lose the next series and the playoffs are gone, whatever else happens.",
-      });
+    } else {
+      if (s.winAndIn && s.loseAndOut) {
+        facts.push({
+          icon: "⚡",
+          text: "Win the next series and they're in — lose it and they're out.",
+        });
+      } else if (s.winAndIn) {
+        facts.push({
+          icon: "🎯",
+          text: "Win the next series and a playoff spot is locked, whatever else happens.",
+        });
+      } else if (s.loseAndOut) {
+        facts.push({
+          icon: "⚠️",
+          text: "Lose the next series and the playoffs are gone, whatever else happens.",
+        });
+      }
+      if (s.magicNumber != null && s.magicNumber > 0) {
+        facts.push({
+          icon: "🔢",
+          text: `Magic number ${s.magicNumber}: that many more series wins guarantee a top-${cut} finish.`,
+        });
+      } else if (s.magicNumber == null) {
+        facts.push({
+          icon: "🤝",
+          text: "Winning out alone can't lock it — they'll need results elsewhere too.",
+        });
+      }
+      if (s.eliminationLosses != null && s.eliminationLosses > 0) {
+        facts.push({
+          icon: "🧮",
+          text: `${s.eliminationLosses} more series ${s.eliminationLosses === 1 ? "loss" : "losses"} would guarantee missing the cut.`,
+        });
+      }
     }
-    if (s.magicNumber != null && s.magicNumber > 0) {
-      facts.push({
-        icon: "🔢",
-        text: `Magic number ${s.magicNumber}: that many more series wins guarantee a top-${cut} finish.`,
-      });
-    } else if (s.magicNumber == null) {
-      facts.push({
-        icon: "🤝",
-        text: "Winning out alone can't lock it — they'll need results elsewhere too.",
-      });
-    }
-    if (s.eliminationLosses != null && s.eliminationLosses > 0) {
-      facts.push({
-        icon: "🧮",
-        text: `${s.eliminationLosses} more series ${s.eliminationLosses === 1 ? "loss" : "losses"} would guarantee missing the cut.`,
-      });
-    }
-    if (odds != null && odds > 0 && s.leafCount) {
-      facts.push({
-        icon: "📊",
-        text: `Safely top-${cut} in ${odds}% of the ${s.leafCount.toLocaleString()} remaining scenarios (ties counted against them).`,
-      });
-    } else if (odds === 0) {
-      // 0% here means "never safe on points alone" — tiebreaks, not doom.
-      facts.push({
-        icon: "🎲",
-        text: "No remaining scenario locks it on points alone — tiebreakers will have a say.",
-      });
+    if (s.exact && s.madeCount != null && s.leafCount) {
+      if (s.madeCount > 0) {
+        // Guard on madeCount, not the rounded percent — 1 leaf in 243 is a
+        // real points-only path, not "no scenario".
+        facts.push({
+          icon: "📊",
+          text: `Safely top-${cut} in ${odds && odds > 0 ? `${odds}%` : "<1%"} of the ${s.leafCount.toLocaleString()} remaining scenarios (ties counted against them).`,
+        });
+      } else {
+        facts.push({
+          icon: "🎲",
+          text: "No remaining result locks it on points alone — they'd need tiebreakers to fall right.",
+        });
+      }
     }
   }
   facts.push({
