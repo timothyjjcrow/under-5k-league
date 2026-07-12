@@ -441,11 +441,11 @@ function CaptainControls({
                 Sync avatars
               </SubmitButton>
             </ActionForm>
-            <form action={randomizeDraftOrder}>
+            <ActionForm action={randomizeDraftOrder}>
               <SubmitButton variant="secondary" size="sm">
                 Randomize order
               </SubmitButton>
-            </form>
+            </ActionForm>
             <ActionForm action={startDraft}>
               <SubmitButton
                 variant="accent"
@@ -513,7 +513,7 @@ function CaptainControls({
                       </Badge>
                     </span>
                     {!draftStarted ? (
-                      <form action={removeCaptain}>
+                      <ActionForm action={removeCaptain}>
                         <input type="hidden" name="teamId" value={t.id} />
                         <button
                           type="submit"
@@ -521,7 +521,7 @@ function CaptainControls({
                         >
                           remove
                         </button>
-                      </form>
+                      </ActionForm>
                     ) : null}
                   </div>
                 ));
@@ -568,7 +568,7 @@ function CaptainControls({
                     ) : null}
                   </span>
                   {!draftStarted ? (
-                    <form action={addCaptain}>
+                    <ActionForm action={addCaptain}>
                       <input type="hidden" name="userId" value={p.userId} />
                       <button
                         type="submit"
@@ -576,7 +576,7 @@ function CaptainControls({
                       >
                         make captain
                       </button>
-                    </form>
+                    </ActionForm>
                   ) : null}
                 </div>
               ))

@@ -7,6 +7,7 @@ import { getActiveSeason } from "@/lib/season";
 import {
   SEASON_STATUS,
   SEASON_PHASE_ORDER,
+  REGISTRATION_TYPE,
   DRAFT_STATUS,
   MATCH_STATUS,
   MATCH_PHASE,
@@ -175,19 +176,47 @@ export async function renameSeason(formData: FormData) {
 }
 
 /** Designate a registered player as a team captain (creates their team). */
-export async function addCaptain(formData: FormData) {
-  await requireAdmin();
+export async function addCaptain(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const userId = str(formData, "userId");
   const season = await getActiveSeason();
-  if (!season) throw new Error("No active season");
+  if (!season) return { error: "No active season" };
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) throw new Error("Unknown user");
+  if (!user) return { error: "Unknown user" };
+
+  // Only signed-up full players can captain — the UI only offers those, but
+  // the form value is client-controlled.
+  const reg = await prisma.registration.findUnique({
+    where: { seasonId_userId: { seasonId: season.id, userId } },
+  });
+  if (
+    !reg ||
+    reg.status !== "ACTIVE" ||
+    reg.type !== REGISTRATION_TYPE.PLAYER
+  ) {
+    return { error: `${user.name} isn't an active player signup this season` };
+  }
+
+  // Teams lock once the auction begins.
+  const draftRow = await prisma.draft.findUnique({
+    where: { seasonId: season.id },
+  });
+  if (draftRow && draftRow.status !== DRAFT_STATUS.NOT_STARTED) {
+    return { error: "The draft has started — captains are locked" };
+  }
 
   const existing = await prisma.team.findUnique({
     where: { seasonId_captainId: { seasonId: season.id, captainId: userId } },
   });
-  if (existing) return;
+  if (existing) return { error: `${user.name} already captains a team` };
 
   const order = await prisma.team.count({ where: { seasonId: season.id } });
   await prisma.$transaction(async (tx) => {
@@ -211,22 +240,41 @@ export async function addCaptain(formData: FormData) {
     });
   });
   refresh();
+  return { message: `${user.name} is now a captain` };
 }
 
 /** Undo captain designation (only allowed before the draft starts). */
-export async function removeCaptain(formData: FormData) {
-  await requireAdmin();
+export async function removeCaptain(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const teamId = str(formData, "teamId");
   const season = await getActiveSeason();
-  if (!season) throw new Error("No active season");
+  if (!season) return { error: "No active season" };
   const draft = await prisma.draft.findUnique({
     where: { seasonId: season.id },
   });
-  if (draft && draft.status === DRAFT_STATUS.IN_PROGRESS) {
-    throw new Error("Cannot remove a captain during the draft");
+  // Once the auction has run (or is running), teams have rosters, spend
+  // history, and possibly matches — deleting one would tear the season apart.
+  if (draft && draft.status !== DRAFT_STATUS.NOT_STARTED) {
+    return { error: "The draft has started — captains are locked" };
+  }
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    include: { members: true, captain: true },
+  });
+  if (!team || team.seasonId !== season.id) return { error: "Unknown team" };
+  if (team.members.some((m) => !m.isCaptain)) {
+    return { error: `${team.name} already has players on its roster` };
   }
   await prisma.team.delete({ where: { id: teamId } });
   refresh();
+  return { message: `${team.captain.name} is no longer a captain` };
 }
 
 /** Rename a team. */
@@ -240,10 +288,25 @@ export async function renameTeam(formData: FormData) {
 }
 
 /** Randomize the nomination/draft order of teams. */
-export async function randomizeDraftOrder() {
-  await requireAdmin();
+export async function randomizeDraftOrder(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const season = await getActiveSeason();
-  if (!season) throw new Error("No active season");
+  if (!season) return { error: "No active season" };
+  // The nomination rotation is derived from draftOrder — reshuffling after
+  // the auction begins would corrupt whose turn it is.
+  const draft = await prisma.draft.findUnique({
+    where: { seasonId: season.id },
+  });
+  if (draft && draft.status !== DRAFT_STATUS.NOT_STARTED) {
+    return { error: "The draft has started — order is locked" };
+  }
   const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
   const shuffled = [...teams].sort(() => Math.random() - 0.5);
   await prisma.$transaction(
@@ -252,6 +315,7 @@ export async function randomizeDraftOrder() {
     ),
   );
   refresh();
+  return { message: "Draft order shuffled" };
 }
 
 /** Begin the live auction draft. Sets the season to DRAFT and seeds Draft state. */
