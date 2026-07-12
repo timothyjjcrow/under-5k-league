@@ -36,7 +36,9 @@ export function parseAccountId(input: string): number | null {
   const digits = match[1];
   if (digits.length >= 17) return steamIdToAccountId(digits);
   const n = Number(digits);
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
+  // Account ids are 32-bit — anything bigger is a mis-paste (e.g. a truncated
+  // SteamID64) that would silently link a nonexistent account.
+  return Number.isSafeInteger(n) && n > 0 && n <= 0xffffffff ? n : null;
 }
 
 function withKey(url: string): string {
@@ -77,6 +79,9 @@ export async function fetchOpenDotaMatch(
   try {
     const res = await fetch(withKey(`${BASE}/matches/${dotaMatchId}`), {
       cache: "no-store",
+      // A hung OpenDota call would otherwise block the server action (or the
+      // inhouse poll) indefinitely — the sibling fetchers all time out too.
+      signal: AbortSignal.timeout(12_000),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -95,7 +100,7 @@ export async function fetchRecentMatchIds(
   try {
     const res = await fetch(
       withKey(`${BASE}/players/${accountId}/recentMatches`),
-      { cache: "no-store" },
+      { cache: "no-store", signal: AbortSignal.timeout(8_000) },
     );
     if (!res.ok) return [];
     const data = await res.json();

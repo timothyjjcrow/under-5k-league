@@ -174,7 +174,20 @@ export default async function MatchDetailPage({
             <Card key={g.id}>
               <CardHeader
                 title={`Game ${i + 1}`}
-                subtitle={`${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s · ${g.radiantScore}-${g.direScore} kills`}
+                // 0s / 0-0 means the header stats never got reported — showing
+                // "0m 0s · 0-0 kills" reads as a real (absurd) game.
+                subtitle={
+                  [
+                    g.durationSecs > 0
+                      ? `${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s`
+                      : null,
+                    g.radiantScore + g.direScore > 0
+                      ? `${g.radiantScore}-${g.direScore} kills`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || undefined
+                }
                 action={
                   <div className="flex items-center gap-2">
                     {winnerName ? <Badge tone="success">{winnerName} won</Badge> : null}

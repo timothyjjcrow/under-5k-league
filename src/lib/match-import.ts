@@ -10,6 +10,8 @@ import { advancePlayoffBracket } from "./playoff-service";
 import { maybeAnnounceWeekHonors } from "./honors-service";
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
 export type GameClassification = {
@@ -195,8 +197,28 @@ export async function importGameForMatch(
   matchId: string,
   dotaMatchId: string,
 ): Promise<ImportResult> {
-  const match = await prisma.match.findUnique({ where: { id: matchId } });
+  const match = await prisma.match.findUnique({
+    where: { id: matchId },
+    include: { games: { select: { id: true } } },
+  });
   if (!match) return { ok: false, error: "Unknown league match" };
+
+  // A COMPLETED match with no imported games was recorded manually (score
+  // entry / forfeit) — recomputeSeries would silently overwrite that result.
+  if (match.status === "COMPLETED" && match.games.length === 0) {
+    return {
+      ok: false,
+      error:
+        "This match's result was recorded manually — importing a game would overwrite it",
+    };
+  }
+  // A series only holds bestOf games; a Bo1 with two games is a mis-attribution.
+  if (match.games.length >= match.bestOf) {
+    return {
+      ok: false,
+      error: `This best-of-${match.bestOf} already has all ${match.bestOf} of its games`,
+    };
+  }
 
   const existing = await prisma.game.findUnique({ where: { dotaMatchId } });
   if (existing) {
@@ -222,21 +244,30 @@ export async function importGameForMatch(
   );
   if (!cls.ok) return { ok: false, error: cls.reason ?? "Game does not match these teams" };
 
-  await prisma.game.create({
-    data: {
-      matchId,
-      dotaMatchId: String(od.match_id),
-      radiantWin: od.radiant_win,
-      durationSecs: od.duration,
-      startTime: od.start_time,
-      radiantScore: od.radiant_score ?? 0,
-      direScore: od.dire_score ?? 0,
-      radiantTeamId: cls.radiantTeamId,
-      direTeamId: cls.direTeamId,
-      winnerTeamId: cls.winnerTeamId,
-      players: JSON.stringify(buildPlayers(od, accountMap)),
-    },
-  });
+  try {
+    await prisma.game.create({
+      data: {
+        matchId,
+        dotaMatchId: String(od.match_id),
+        radiantWin: od.radiant_win,
+        durationSecs: od.duration,
+        startTime: od.start_time,
+        radiantScore: od.radiant_score ?? 0,
+        direScore: od.dire_score ?? 0,
+        radiantTeamId: cls.radiantTeamId,
+        direTeamId: cls.direTeamId,
+        winnerTeamId: cls.winnerTeamId,
+        players: JSON.stringify(buildPlayers(od, accountMap)),
+      },
+    });
+  } catch (e) {
+    // The dedupe check above races with concurrent imports (an OpenDota fetch
+    // sits between check and create) — the unique index is the real arbiter.
+    if ((e as { code?: string }).code === "P2002") {
+      return { ok: false, error: "That game was just recorded by someone else" };
+    }
+    throw e;
+  }
 
   await recomputeSeries(matchId);
   return { ok: true };
@@ -277,9 +308,22 @@ export async function autoDetectGamesForMatch(
     .slice(0, 12)
     .map(([id]) => id);
 
+  // Already-recorded games must not occupy candidate slots — otherwise a
+  // recorded rematch (e.g. the playoff meeting) starves the older unrecorded
+  // game out of the bestOf cap below.
+  const recorded = new Set(
+    (
+      await prisma.game.findMany({
+        where: { dotaMatchId: { in: candidateIds.map(String) } },
+        select: { dotaMatchId: true },
+      })
+    ).map((g) => g.dotaMatchId),
+  );
+
   const minPerSide = Math.min(3, teamSize);
   const valid: { id: number; startTime: number }[] = [];
   for (const id of candidateIds) {
+    if (recorded.has(String(id))) continue;
     const od = await fetchOpenDotaMatch(String(id));
     if (!od) continue;
     const cls = classifyGame(
@@ -291,12 +335,23 @@ export async function autoDetectGamesForMatch(
     if (cls.ok) valid.push({ id, startTime: od.start_time ?? 0 });
   }
 
+  // These teams may meet more than once a season (playoff rematches). When the
+  // match has a scheduled night, only games played around it belong to it —
+  // otherwise detecting a stale match would happily grab the *other* meeting.
+  const windowed = match.scheduledAt
+    ? valid.filter((v) => {
+        const t = v.startTime * 1000;
+        const night = match.scheduledAt!.getTime();
+        return t >= night - DAY_MS && t <= night + 6 * DAY_MS;
+      })
+    : valid;
+
   // Keep only the most recent `bestOf` games that check out, then import them in
   // play order. A series can't have more games than its length, so this caps the
   // import — and crucially means an *older* game with the same players (a scrim,
   // a prior meeting) is always superseded by the game this match was just played,
   // never mistaken for it.
-  const chosen = valid
+  const chosen = windowed
     .sort((a, b) => b.startTime - a.startTime)
     .slice(0, Math.max(1, match.bestOf))
     .sort((a, b) => a.startTime - b.startTime);
@@ -335,7 +390,10 @@ export async function syncLeagueGames(
   }
 
   const leagueMatchIds = await fetchLeagueMatchIds(season.dotaLeagueId);
-  const scheduled = await prisma.match.findMany({ where: { seasonId } });
+  const scheduled = await prisma.match.findMany({
+    where: { seasonId },
+    include: { games: { select: { id: true } } },
+  });
 
   // Precompute each scheduled match's team account sets once.
   const accountsByMatch = new Map<
@@ -354,20 +412,40 @@ export async function syncLeagueGames(
     const od = await fetchOpenDotaMatch(idStr);
     if (!od) continue;
 
-    for (const m of scheduled) {
+    // classifyGame is roster-based and time-blind, and a single round robin
+    // means every playoff pairing is a regular-season rematch — so collect
+    // EVERY match these rosters fit, then attribute by kickoff proximity.
+    // Full series and manually-recorded results never take a game.
+    const fits = scheduled.filter((m) => {
       const acc = accountsByMatch.get(m.id);
-      if (!acc) continue;
-      const cls = classifyGame(
+      if (!acc) return false;
+      if (m.games.length >= m.bestOf) return false;
+      if (m.status === "COMPLETED" && m.games.length === 0) return false;
+      return classifyGame(
         od,
         { teamId: m.homeTeamId, accountIds: acc.home },
         { teamId: m.awayTeamId, accountIds: acc.away },
         Math.min(3, acc.teamSize),
-      );
-      if (cls.ok) {
-        const r = await importGameForMatch(m.id, idStr);
-        if (r.ok) imported++;
-        break;
-      }
+      ).ok;
+    });
+    if (fits.length === 0) continue;
+
+    const gameMs = (od.start_time ?? 0) * 1000;
+    const best = fits.reduce((a, b) => {
+      const da = a.scheduledAt
+        ? Math.abs(gameMs - a.scheduledAt.getTime())
+        : Number.MAX_SAFE_INTEGER;
+      const db = b.scheduledAt
+        ? Math.abs(gameMs - b.scheduledAt.getTime())
+        : Number.MAX_SAFE_INTEGER;
+      return db < da ? b : a;
+    });
+
+    const r = await importGameForMatch(best.id, idStr);
+    if (r.ok) {
+      imported++;
+      // Keep the in-memory game counts honest for later league games.
+      best.games.push({ id: idStr });
     }
   }
   return { imported, scanned: leagueMatchIds.length };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { steamIdToAccountId, accountIdToSteamId64, parseMatchId } from "./dota";
+import { steamIdToAccountId, accountIdToSteamId64, parseAccountId, parseMatchId } from "./dota";
 
 describe("steamIdToAccountId", () => {
   it("converts a SteamID64 to a 32-bit Dota account id and back", () => {
@@ -25,5 +25,30 @@ describe("parseMatchId", () => {
   });
   it("returns null when there's no id", () => {
     expect(parseMatchId("garbage")).toBeNull();
+  });
+});
+
+describe("parseAccountId", () => {
+  it("accepts a raw 32-bit account id", () => {
+    expect(parseAccountId("86745912")).toBe(86745912);
+  });
+  it("converts a pasted SteamID64", () => {
+    expect(parseAccountId("76561198046011640")).toBe(85745912);
+  });
+  it("extracts the id from Dotabuff/OpenDota player URLs", () => {
+    expect(parseAccountId("https://www.dotabuff.com/players/86745912")).toBe(
+      86745912,
+    );
+    expect(parseAccountId("https://www.opendota.com/players/86745912")).toBe(
+      86745912,
+    );
+  });
+  it("rejects ids beyond 32 bits (mis-pasted / truncated SteamID64)", () => {
+    expect(parseAccountId("4294967296")).toBeNull(); // 2^32
+    expect(parseAccountId("9007199254740991")).toBeNull();
+  });
+  it("accepts the 32-bit boundary and rejects garbage", () => {
+    expect(parseAccountId("4294967295")).toBe(4294967295);
+    expect(parseAccountId("no digits here")).toBeNull();
   });
 });

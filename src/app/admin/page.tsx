@@ -784,15 +784,17 @@ function ScheduleControls({
                               {winner ? `${winner.name} won` : "tie"} ·{" "}
                               {Math.floor(g.durationSecs / 60)}m
                             </a>
-                            <form action={removeGame}>
+                            <ActionForm action={removeGame}>
                               <input type="hidden" name="gameId" value={g.id} />
-                              <button
-                                type="submit"
+                              <SubmitButton
+                                variant="ghost"
+                                size="sm"
                                 className="text-danger hover:underline"
+                                confirm="Remove this imported game and recompute the series?"
                               >
                                 remove
-                              </button>
-                            </form>
+                              </SubmitButton>
+                            </ActionForm>
                           </li>
                         );
                       })}

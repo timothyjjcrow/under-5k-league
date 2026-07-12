@@ -125,18 +125,28 @@ export async function advancePlayoffBracket(seasonId: string) {
     phase === MATCH_PHASE.FINAL ? season.finalBestOf : season.playoffBestOf;
   const week = Math.max(...playoff.map((m) => m.week)) + 1;
 
-  await prisma.match.createMany({
-    data: pairings.map((p, i) => ({
-      seasonId,
-      week,
-      phase,
-      homeTeamId: p.home,
-      awayTeamId: p.away,
-      bracketSlot: `R${nextRound}M${i}`,
-      bestOf,
-      scheduledAt: season.firstMatchNight
-        ? matchNightForWeek(season.firstMatchNight, week)
-        : null,
-    })),
+  // Two imports can decide the round's last two series near-simultaneously —
+  // both reach here with allDecided true. The transaction makes the "does the
+  // next round already exist?" check and the createMany atomic.
+  await prisma.$transaction(async (tx) => {
+    const exists = await tx.match.findFirst({
+      where: { seasonId, bracketSlot: { startsWith: `R${nextRound}M` } },
+      select: { id: true },
+    });
+    if (exists) return;
+    await tx.match.createMany({
+      data: pairings.map((p, i) => ({
+        seasonId,
+        week,
+        phase,
+        homeTeamId: p.home,
+        awayTeamId: p.away,
+        bracketSlot: `R${nextRound}M${i}`,
+        bestOf,
+        scheduledAt: season.firstMatchNight
+          ? matchNightForWeek(season.firstMatchNight, week)
+          : null,
+      })),
+    });
   });
 }

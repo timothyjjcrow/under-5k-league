@@ -14,7 +14,7 @@ import {
   DEFAULTS,
   type SeasonStatus,
 } from "@/lib/constants";
-import { roundRobin, matchNightForWeek } from "@/lib/schedule";
+import { roundRobin, matchNightForWeek, slotRound } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
 import { mmrWeightedBudgets } from "@/lib/draft";
 import {
@@ -748,6 +748,13 @@ export async function assignStandin(formData: FormData) {
     throw new Error("That player's team isn't in this match");
   }
 
+  // One standin covers one seat in one match — assigning the same person to
+  // both sides (or twice) would double-count their stats on import.
+  const already = await prisma.standinAssignment.findFirst({
+    where: { matchId, standinUserId },
+  });
+  if (already) throw new Error("That standin is already assigned to this match");
+
   await prisma.standinAssignment.create({
     data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
   });
@@ -802,13 +809,61 @@ export async function autoDetectAction(
 }
 
 /** Remove an imported game and recompute the series. */
-export async function removeGame(formData: FormData) {
-  await requireAdmin();
+export async function removeGame(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const gameId = str(formData, "gameId");
-  const game = await prisma.game.findUnique({ where: { id: gameId } });
-  await prisma.game.delete({ where: { id: gameId } });
-  if (game) await recomputeSeries(game.matchId);
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    include: { match: true },
+  });
+  if (!game) return { error: "That game is already gone" };
+
+  // Once a decided playoff series has advanced (a later round exists), the
+  // bracket can't reconcile a changed winner — removing the game would strand
+  // the wrong team downstream with no way to re-advance.
+  if (
+    game.match.phase !== MATCH_PHASE.REGULAR &&
+    game.match.status === MATCH_STATUS.COMPLETED
+  ) {
+    const playoffs = await prisma.match.findMany({
+      where: {
+        seasonId: game.match.seasonId,
+        phase: { not: MATCH_PHASE.REGULAR },
+      },
+      select: { bracketSlot: true },
+    });
+    const myRound = slotRound(game.match.bracketSlot);
+    if (playoffs.some((p) => slotRound(p.bracketSlot) > myRound)) {
+      return {
+        error:
+          "This playoff series already advanced the bracket — recreate the bracket to correct it",
+      };
+    }
+    // Same trap one round later: once the final crowned a champion the season
+    // is COMPLETE and advancePlayoffBracket will never re-crown.
+    const season = await prisma.season.findUnique({
+      where: { id: game.match.seasonId },
+      select: { status: true },
+    });
+    if (season?.status === SEASON_STATUS.COMPLETE) {
+      return {
+        error:
+          "The champion is already crowned — recreate the bracket to correct playoff results",
+      };
+    }
+  }
+
+  await prisma.game.deleteMany({ where: { id: gameId } });
+  await recomputeSeries(game.matchId);
   refresh();
+  return { message: "Game removed — series recomputed" };
 }
 
 /**
