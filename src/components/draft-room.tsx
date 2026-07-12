@@ -150,6 +150,22 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     return () => clearTimeout(id);
   }, [soldFlash]);
 
+  // A captain tabbed away can miss their nomination window entirely (the
+  // auto-skip then picks for them) — flag the turn in the tab title.
+  const myPick = !!state && state.status !== "COMPLETE" && state.me.canNominate;
+  useEffect(() => {
+    const PREFIX = "⏰ Your pick — ";
+    const base = document.title.startsWith(PREFIX)
+      ? document.title.slice(PREFIX.length)
+      : document.title;
+    document.title = myPick ? PREFIX + base : base;
+    return () => {
+      if (document.title.startsWith(PREFIX)) {
+        document.title = document.title.slice(PREFIX.length);
+      }
+    };
+  }, [myPick]);
+
   const draftLive = !!state && state.status !== "COMPLETE";
   useEffect(() => {
     const el = bannerRef.current;
