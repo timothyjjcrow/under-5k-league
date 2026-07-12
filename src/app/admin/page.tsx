@@ -947,7 +947,7 @@ function StandinControls({ data }: { data: AdminData }) {
                           {a.standin.name} in for {a.replaced?.name ?? "?"} ·{" "}
                           {teamName.get(a.teamId)}
                         </span>
-                        <form action={removeStandin}>
+                        <ActionForm action={removeStandin}>
                           <input type="hidden" name="assignmentId" value={a.id} />
                           <button
                             type="submit"
@@ -955,12 +955,12 @@ function StandinControls({ data }: { data: AdminData }) {
                           >
                             remove
                           </button>
-                        </form>
+                        </ActionForm>
                       </li>
                     ))}
                   </ul>
                 ) : null}
-                <form
+                <ActionForm
                   action={assignStandin}
                   className="flex flex-wrap items-center gap-2"
                 >
@@ -1010,7 +1010,7 @@ function StandinControls({ data }: { data: AdminData }) {
                   <Button type="submit" variant="secondary" size="sm">
                     Assign
                   </Button>
-                </form>
+                </ActionForm>
               </div>
             );
           })

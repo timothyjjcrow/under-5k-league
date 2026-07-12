@@ -65,6 +65,21 @@ export async function saveRegistration(
   });
   if (gateError) return { error: gateError };
 
+  // A rostered player can't flip themselves to STANDIN: their TeamMember row
+  // survives the switch, so they'd sit on a roster AND in the standin pool —
+  // assignable to cover the very teams they play against.
+  if (type === REGISTRATION_TYPE.STANDIN) {
+    const rostered = await prisma.teamMember.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+    });
+    if (rostered) {
+      return {
+        error:
+          "You're on a roster this season — ask an admin to release you before switching to standin",
+      };
+    }
+  }
+
   await prisma.registration.upsert({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
     create: {

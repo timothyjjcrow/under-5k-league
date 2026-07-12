@@ -661,6 +661,11 @@ export async function signFreeAgent(
   if (!registration || registration.status !== "ACTIVE") {
     return { error: "That player isn't registered for this season" };
   }
+  // Standins fill single matches, not roster seats — signing one would leave
+  // them straddling both worlds (in the standin pool AND on a roster).
+  if (registration.type !== REGISTRATION_TYPE.PLAYER) {
+    return { error: "That signup is a standin — only full players can be signed" };
+  }
   if (existingSeat) return { error: "That player is already on a team" };
   if (memberCount >= season.teamSize) {
     return { error: `${team.name} has no open roster seats` };
@@ -723,29 +728,59 @@ export async function releasePlayer(
 }
 
 /** Assign a standin to fill in for a rostered player in a specific match. */
-export async function assignStandin(formData: FormData) {
-  await requireAdmin();
+export async function assignStandin(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const matchId = str(formData, "matchId");
   const standinUserId = str(formData, "standinUserId");
   const replacingUserId = str(formData, "replacingUserId");
   if (!matchId || !standinUserId || !replacingUserId)
-    throw new Error("Missing fields");
+    return { error: "Pick a standin and the player they cover" };
+  if (standinUserId === replacingUserId)
+    return { error: "A player can't stand in for themselves" };
 
   const season = await getActiveSeason();
-  if (!season) throw new Error("No active season");
-  const match = await prisma.match.findUnique({ where: { id: matchId } });
-  if (!match) throw new Error("Unknown match");
+  if (!season) return { error: "No active season" };
+  const match = await prisma.match.findUnique({
+    where: { id: matchId },
+    include: { games: { select: { id: true } } },
+  });
+  if (!match) return { error: "Unknown match" };
+  if (match.status === MATCH_STATUS.COMPLETED)
+    return { error: "This match is already played" };
+
+  // The standin must be a real signup who ISN'T on a roster this season — a
+  // rostered player covering another team would land in BOTH account sets on
+  // import, mis-crediting their box-score lines (a "double agent").
+  const [standinReg, standinRoster] = await Promise.all([
+    prisma.registration.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
+    }),
+    prisma.teamMember.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
+    }),
+  ]);
+  if (!standinReg || standinReg.status !== "ACTIVE")
+    return { error: "That standin has no active signup this season" };
+  if (standinRoster)
+    return { error: "That player is on a roster — they can't stand in" };
 
   // The replaced player's roster tells us which team the standin fills for.
   const membership = await prisma.teamMember.findUnique({
     where: { seasonId_userId: { seasonId: season.id, userId: replacingUserId } },
   });
-  if (!membership) throw new Error("Replaced player is not on a team");
+  if (!membership) return { error: "Replaced player is not on a team" };
   if (
     membership.teamId !== match.homeTeamId &&
     membership.teamId !== match.awayTeamId
   ) {
-    throw new Error("That player's team isn't in this match");
+    return { error: "That player's team isn't in this match" };
   }
 
   // One standin covers one seat in one match — assigning the same person to
@@ -753,20 +788,51 @@ export async function assignStandin(formData: FormData) {
   const already = await prisma.standinAssignment.findFirst({
     where: { matchId, standinUserId },
   });
-  if (already) throw new Error("That standin is already assigned to this match");
+  if (already)
+    return { error: "That standin is already assigned to this match" };
 
   await prisma.standinAssignment.create({
     data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
   });
   refresh();
+  return {
+    message:
+      "Standin assigned" +
+      (match.games.length > 0
+        ? " — heads up: already-imported games keep their original attribution"
+        : ""),
+  };
 }
 
 /** Remove a standin assignment. */
-export async function removeStandin(formData: FormData) {
-  await requireAdmin();
+export async function removeStandin(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
   const id = str(formData, "assignmentId");
+  const assignment = await prisma.standinAssignment.findUnique({
+    where: { id },
+    include: { match: { include: { games: { select: { id: true } } } } },
+  });
+  if (!assignment) return { error: "That assignment is already gone" };
+  // Once games are in the books the assignment is part of the record: later
+  // imports would silently drop the standin's stats (or fail classification),
+  // and removing it from a played match erases the "in for" history.
+  if (assignment.match.status === MATCH_STATUS.COMPLETED)
+    return { error: "This match is already played — the assignment is history" };
+  if (assignment.match.games.length > 0)
+    return {
+      error:
+        "Games are already imported — removing the standin now would strip them from the rest of the series",
+    };
   await prisma.standinAssignment.delete({ where: { id } });
   refresh();
+  return { message: "Standin assignment removed" };
 }
 
 /** Import a specific Dota game (by id or URL) into a scheduled match. */

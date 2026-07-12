@@ -287,14 +287,23 @@ async function MyNextMatch({
     where: { seasonId, userId },
     select: { teamId: true },
   });
-  if (myTeams.length === 0) return null;
   const teamIds = myTeams.map((t) => t.teamId);
 
+  // Assigned standins are participants too — without this they'd get no
+  // check-in prompt anywhere but the match page itself.
   const next = await prisma.match.findFirst({
     where: {
       seasonId,
       status: { not: "COMPLETED" },
-      OR: [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }],
+      OR: [
+        ...(teamIds.length
+          ? [
+              { homeTeamId: { in: teamIds } },
+              { awayTeamId: { in: teamIds } },
+            ]
+          : []),
+        { standins: { some: { standinUserId: userId } } },
+      ],
     },
     // Chronological, not week order — an accepted reschedule can legally move
     // a match past the next week's night, and the banner should always point
