@@ -63,6 +63,6 @@ test("non-admin is redirected away from admin", async ({ page }) => {
   await page.goto(
     `/api/auth/dev?name=Regular&steamId=${steamId}&redirect=/admin`,
   );
-  // Redirected to home (no admin heading).
-  await expect(page).toHaveURL("http://localhost:3000/");
+  // Redirected to home (no admin heading). Relative → resolved via baseURL.
+  await expect(page).toHaveURL("/");
 });

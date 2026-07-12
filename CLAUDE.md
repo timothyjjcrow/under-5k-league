@@ -51,7 +51,10 @@ renders per-phase so unused features stay hidden.
   the global `<Toaster>`. Use `<SubmitButton confirm="…">` for destructive
   actions. Global `error.tsx` / `not-found.tsx` / `loading.tsx` exist.
 - Run `npx tsc --noEmit` for a fast type check; `npm test` for unit;
-  `npm run test:e2e` for Playwright (reseeds the DB first).
+  `npm run test:e2e` for Playwright — fully isolated: it schema-pushes and
+  reseeds a DEDICATED `prisma/e2e.db` and serves it on port 3210 (never
+  dev.db/:3000, safe to run any time). Caveat: Next 16's project-dir lock
+  means it can't start while another `next dev` runs from this repo.
 
 ## Roster moves (done)
 
