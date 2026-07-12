@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { shareMetadata } from "@/lib/share-metadata";
+import { LocalTime } from "@/components/local-time";
 import { computeStandings } from "@/lib/standings";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { roleCoverage } from "@/lib/pool-stats";
@@ -176,8 +177,13 @@ export default async function TeamPage({
     <div className="space-y-6">
       <div>
         <div className="mb-3 flex items-center justify-between">
-          <Link href="/teams" className="text-sm text-info hover:underline">
-            ← All teams
+          {/* An archived team belongs to its season's archive — /teams and
+              /schedule only know the ACTIVE season. */}
+          <Link
+            href={team.season.isActive ? "/teams" : `/seasons/${team.seasonId}`}
+            className="text-sm text-info hover:underline"
+          >
+            {team.season.isActive ? "← All teams" : "← Season archive"}
           </Link>
           <span className="flex items-center gap-4">
             {team.season.isActive &&
@@ -195,12 +201,19 @@ export default async function TeamPage({
               <Link href="/draft" className="text-sm text-info hover:underline">
                 Draft room →
               </Link>
-            ) : (
+            ) : team.season.isActive ? (
               <Link
                 href="/schedule"
                 className="text-sm text-info hover:underline"
               >
                 Standings →
+              </Link>
+            ) : (
+              <Link
+                href={`/seasons/${team.seasonId}`}
+                className="text-sm text-info hover:underline"
+              >
+                Final standings →
               </Link>
             )}
           </span>
@@ -475,10 +488,13 @@ export default async function TeamPage({
                           <span className="font-medium">
                             {teamName.get(oppId) ?? "?"}
                           </span>
-                          {when ? (
-                            <span className="ml-2 text-xs text-muted">
-                              {when}
-                            </span>
+                          {when && m.scheduledAt ? (
+                            <LocalTime
+                              ts={m.scheduledAt.getTime()}
+                              variant="full"
+                              initial={when}
+                              className="ml-2 text-xs text-muted"
+                            />
                           ) : null}
                         </span>
                       </span>

@@ -119,10 +119,14 @@ export async function deleteSeason(
   }
 
   // Matches must go before teams (Match→Team is RESTRICT); the season delete
-  // cascades to everything else.
+  // cascades to everything else. The weekly-honors idempotency markers live
+  // in the relationless Setting table, so they need explicit cleanup.
   await prisma.$transaction([
     prisma.match.deleteMany({ where: { seasonId } }),
     prisma.season.delete({ where: { id: seasonId } }),
+    prisma.setting.deleteMany({
+      where: { key: { startsWith: `honorsAnnounced:${seasonId}:` } },
+    }),
   ]);
   refresh();
   return { message: `Deleted ${season.name} and all of its history` };

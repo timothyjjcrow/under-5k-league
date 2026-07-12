@@ -3,7 +3,9 @@
 // the UI; this module only decides *who/what* wins each award.
 
 export type AwardGameLine = {
-  userId: string;
+  /** Mapped league user — null for unmapped accounts (they still count for
+   *  hero tallies, just never for player awards). */
+  userId: string | null;
   heroId: number;
   isRadiant: boolean;
   kills: number;
@@ -71,7 +73,10 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       };
     }
     for (const line of g.lines) {
+      // Hero tallies count EVERY line (matching /meta) — a ringer's Pudge is
+      // still a Pudge pick. Player awards need a mapped league user.
       heroCount.set(line.heroId, (heroCount.get(line.heroId) ?? 0) + 1);
+      if (!line.userId) continue;
       const a =
         byUser.get(line.userId) ??
         ({
@@ -169,7 +174,9 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
     }),
   );
   pick(
-    qualified,
+    // Qualify on the denominator the average actually uses — a player with
+    // gpm recorded in only 1 of 3 games shouldn't win a min-3-games rate.
+    aggs.filter((a) => a.gpmGames >= minGames),
     (a) => avgGpmOf(a),
     (a) => ({
       key: "farmKing",
@@ -177,7 +184,7 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       emoji: "💰",
       blurb: `Highest avg GPM (min ${n(minGames, "game")})`,
       value: `${Math.round(avgGpmOf(a))} GPM`,
-      detail: n(a.games, "game"),
+      detail: n(a.gpmGames, "game"),
     }),
   );
   pick(

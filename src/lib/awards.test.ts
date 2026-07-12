@@ -83,3 +83,41 @@ describe("computeSeasonAwards", () => {
     expect(farm?.userId).toBe("bob");
   });
 });
+
+describe("computeSeasonAwards — data-quality edges", () => {
+  it("Farm King qualifies on gpm-known games, not total games", () => {
+    // "spiky" has 3 games but gpm in only 1 (700); "steady" has 3 recorded
+    // 550s. The min-3-games rate must go to the player with 3 real samples.
+    const games: AwardGame[] = [1, 2, 3].map((i) =>
+      game(`m${i}`, true, 10, 5, [
+        line("spiky", i, true, 2, 2, 2, i === 1 ? 700 : null),
+        line("steady", i + 10, false, 2, 2, 2, 550),
+      ]),
+    );
+    const farm = computeSeasonAwards(games).find((a) => a.key === "farmKing");
+    expect(farm?.userId).toBe("steady");
+    expect(farm?.detail).toBe("3 games");
+  });
+
+  it("counts unmapped lines for the hero tally but never for player awards", () => {
+    const games: AwardGame[] = [
+      game("m1", true, 10, 5, [
+        line("a", 1, true, 30, 0, 0),
+        // A ringer double-picks hero 99 across games — most-picked hero.
+        { ...line("x", 99, false, 99, 0, 99), userId: null },
+      ]),
+      game("m2", true, 10, 5, [
+        line("a", 2, true, 1, 0, 1),
+        { ...line("x", 99, false, 99, 0, 99), userId: null },
+      ]),
+    ];
+    const awards = computeSeasonAwards(games);
+    const sig = awards.find((a) => a.key === "signatureHero");
+    expect(sig?.heroId).toBe(99); // the ringer's picks still count as picks
+    // ...but the ringer's 99-kill lines must never win a player award.
+    for (const a of awards) {
+      if (a.userId != null) expect(a.userId).toBe("a");
+    }
+    expect(awards.find((a) => a.key === "mvp")?.userId).toBe("a");
+  });
+});

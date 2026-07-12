@@ -73,29 +73,39 @@ export default async function RecapPage() {
 
   // Build the pure award input + a few headline totals.
   const awardGames: AwardGame[] = [];
-  let totalKills = 0;
+  // Header radiantScore/direScore and durationSecs can be legitimately
+  // unreported (0) — fall back to summing the player lines for kills, and
+  // average duration only over games that actually carry one.
+  let headerKills = 0;
+  let lineKills = 0;
   let totalDuration = 0;
+  let timedGames = 0;
   const players = new Set<string>();
   const heroes = new Set<number>();
   for (const g of games) {
-    totalKills += g.radiantScore + g.direScore;
-    totalDuration += g.durationSecs;
-    const lines = safeParse(g.players)
-      .filter((p) => p.userId)
-      .map((p) => {
-        players.add(p.userId!);
-        heroes.add(p.heroId);
-        return {
-          userId: p.userId!,
-          heroId: p.heroId,
-          isRadiant: p.isRadiant,
-          kills: p.kills,
-          deaths: p.deaths,
-          assists: p.assists,
-          netWorth: p.netWorth,
-          gpm: p.gpm,
-        };
-      });
+    headerKills += g.radiantScore + g.direScore;
+    if (g.durationSecs > 0) {
+      totalDuration += g.durationSecs;
+      timedGames++;
+    }
+    // ALL lines feed the awards input — hero tallies must match /meta (a
+    // ringer's pick is still a pick); computeSeasonAwards itself skips
+    // unmapped lines for player awards.
+    const lines = safeParse(g.players).map((p) => {
+      lineKills += p.kills;
+      if (p.userId) players.add(p.userId);
+      heroes.add(p.heroId);
+      return {
+        userId: p.userId,
+        heroId: p.heroId,
+        isRadiant: p.isRadiant,
+        kills: p.kills,
+        deaths: p.deaths,
+        assists: p.assists,
+        netWorth: p.netWorth,
+        gpm: p.gpm,
+      };
+    });
     awardGames.push({
       matchId: g.matchId,
       radiantWin: g.radiantWin,
@@ -129,7 +139,9 @@ export default async function RecapPage() {
   const userMap = new Map(users.map((u) => [u.id, u]));
 
   const isComplete = season.status === "COMPLETE";
-  const avgMins = Math.round(totalDuration / games.length / 60);
+  const totalKills = headerKills > 0 ? headerKills : lineKills;
+  const avgMins =
+    timedGames > 0 ? Math.round(totalDuration / timedGames / 60) : null;
 
   return (
     <div className="space-y-8">
@@ -195,7 +207,11 @@ export default async function RecapPage() {
         <Stat label="Games played" value={games.length} />
         <Stat label="Total kills" value={totalKills} />
         <Stat label="Players" value={players.size} />
-        <Stat label="Avg game" value={`${avgMins}m`} hint={`${heroes.size} heroes`} />
+        <Stat
+          label="Avg game"
+          value={avgMins != null ? `${avgMins}m` : "—"}
+          hint={`${heroes.size} heroes`}
+        />
       </div>
 
       <div className="space-y-4">
