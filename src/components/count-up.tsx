@@ -7,6 +7,11 @@ import { useEffect, useRef, useState } from "react";
  * scrolls into view (IntersectionObserver). Honors prefers-reduced-motion by
  * showing the final value immediately. The digit styling is inherited from the
  * parent (e.g. tabular-nums), so the width doesn't jitter while animating.
+ *
+ * The server (and any client whose JS hasn't run) renders the REAL value —
+ * initializing at 0 meant curl/no-JS/pre-hydration views showed "0 players
+ * signed up" for every stat. The run down to 0 happens only when the
+ * animation itself starts.
  */
 export function CountUp({
   value,
@@ -19,7 +24,7 @@ export function CountUp({
   decimals?: number;
   className?: string;
 }) {
-  const [display, setDisplay] = useState(0);
+  const [display, setDisplay] = useState(value);
   const ref = useRef<HTMLSpanElement>(null);
   const done = useRef(false);
 

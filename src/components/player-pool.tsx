@@ -83,6 +83,7 @@ export function PlayerPool({
         <button
           type="button"
           onClick={() => setCaptainOnly((v) => !v)}
+          aria-pressed={captainOnly}
           className={cn(
             "h-9 rounded-lg border px-3 text-sm font-medium transition-colors",
             captainOnly
@@ -211,6 +212,7 @@ function RoleChip({
       type="button"
       onClick={onClick}
       title={title}
+      aria-pressed={active}
       className={cn(
         "grid h-9 min-w-9 place-items-center rounded-lg border px-2.5 text-sm font-medium transition-colors",
         active
