@@ -292,3 +292,30 @@ describe("remainingSchedule", () => {
     expect(rem.get("b")).toEqual([]);
   });
 });
+
+describe("seedsFromFirstRound (bracket-view)", () => {
+  it("derives seeds from the frozen R0 pairings, not live standings", async () => {
+    const { seedsFromFirstRound } = await import("./bracket-view");
+    // 4-team bracket: R0M0 = 1v4, R0M1 = 2v3 (seedOrder(4) = [1,4,2,3]).
+    const seeds = seedsFromFirstRound([
+      { bracketSlot: "R0M0", homeTeamId: "one", awayTeamId: "four" },
+      { bracketSlot: "R0M1", homeTeamId: "two", awayTeamId: "three" },
+      // A later round must not affect seeding.
+      { bracketSlot: "R1M0", homeTeamId: "one", awayTeamId: "two" },
+    ]);
+    expect(seeds.get("one")).toBe(1);
+    expect(seeds.get("four")).toBe(4);
+    expect(seeds.get("two")).toBe(2);
+    expect(seeds.get("three")).toBe(3);
+  });
+
+  it("handles the 2-team final-only bracket and empty input", async () => {
+    const { seedsFromFirstRound } = await import("./bracket-view");
+    const seeds = seedsFromFirstRound([
+      { bracketSlot: "R0M0", homeTeamId: "a", awayTeamId: "b" },
+    ]);
+    expect(seeds.get("a")).toBe(1);
+    expect(seeds.get("b")).toBe(2);
+    expect(seedsFromFirstRound([]).size).toBe(0);
+  });
+});

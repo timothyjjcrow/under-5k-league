@@ -2,7 +2,13 @@
 // component renders: full skeleton (TBD slots included), team names, seeds,
 // and server-formatted dates (so hydration never disagrees on locale).
 
-import { bracketSkeleton, roundName } from "./schedule";
+import {
+  bracketSkeleton,
+  roundName,
+  seedOrder,
+  slotIndex,
+  slotRound,
+} from "./schedule";
 
 export type BracketSide = {
   teamId: string;
@@ -85,4 +91,33 @@ export function seedMap(
   return new Map(
     standingsOrder.slice(0, bracketSize).map((teamId, i) => [teamId, i + 1]),
   );
+}
+
+/**
+ * Seed numbers derived from the FIRST-ROUND pairings frozen in the DB.
+ * createPlayoffBracket pairs slots by `seedOrder` (R0M0 = 1 vs N, R0M1 =
+ * next pair…), so the pairings themselves encode every team's seed —
+ * recomputing from live standings instead would drift the labels whenever a
+ * regular-season result is corrected after the bracket was made (and drop a
+ * team's seed entirely if the correction moved them below the cut).
+ */
+export function seedsFromFirstRound(
+  matches: Pick<MatchForBracket, "bracketSlot" | "homeTeamId" | "awayTeamId">[],
+): Map<string, number> {
+  const slotted = matches.filter((m) => m.bracketSlot);
+  if (slotted.length === 0) return new Map();
+  const minRound = Math.min(...slotted.map((m) => slotRound(m.bracketSlot)));
+  const first = slotted
+    .filter((m) => slotRound(m.bracketSlot) === minRound)
+    .sort(
+      (a, b) =>
+        (slotIndex(a.bracketSlot) ?? 0) - (slotIndex(b.bracketSlot) ?? 0),
+    );
+  const order = seedOrder(first.length * 2);
+  const map = new Map<string, number>();
+  first.forEach((m, i) => {
+    map.set(m.homeTeamId, order[2 * i]);
+    map.set(m.awayTeamId, order[2 * i + 1]);
+  });
+  return map;
 }

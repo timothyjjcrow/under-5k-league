@@ -573,6 +573,48 @@ export async function recordResult(
   const scoreError = seriesScoreError(match.bestOf, homeScore, awayScore);
   if (scoreError) return { error: scoreError };
 
+  if (match.phase !== MATCH_PHASE.REGULAR) {
+    // A drawn playoff series would stall the bracket forever: advancement
+    // requires a winner, and nothing would ever tell the admin why.
+    if (homeScore === awayScore) {
+      return {
+        error:
+          "A playoff series can't end in a draw — record the forfeit/decider winner",
+      };
+    }
+    // Mirror removeGame's locks: once the bracket advanced past this series
+    // (or the champion is crowned) a changed winner can't reconcile — the
+    // wrong team would stay downstream with no repair path.
+    if (match.status === MATCH_STATUS.COMPLETED) {
+      const [playoffs, seasonRow] = await Promise.all([
+        prisma.match.findMany({
+          where: {
+            seasonId: match.seasonId,
+            phase: { not: MATCH_PHASE.REGULAR },
+          },
+          select: { bracketSlot: true },
+        }),
+        prisma.season.findUnique({
+          where: { id: match.seasonId },
+          select: { status: true },
+        }),
+      ]);
+      const myRound = slotRound(match.bracketSlot);
+      if (playoffs.some((p) => slotRound(p.bracketSlot) > myRound)) {
+        return {
+          error:
+            "This series already advanced the bracket — recreate the bracket to correct it",
+        };
+      }
+      if (seasonRow?.status === SEASON_STATUS.COMPLETE) {
+        return {
+          error:
+            "The champion is already crowned — recreate the bracket to correct playoff results",
+        };
+      }
+    }
+  }
+
   const winnerTeamId =
     homeScore > awayScore
       ? match.homeTeamId

@@ -13,7 +13,7 @@ import {
   playoffFirstRound,
   remainingSchedule,
 } from "@/lib/schedule";
-import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
+import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
 import {
@@ -285,12 +285,9 @@ export default async function SchedulePage() {
   const bracketRoundsView = buildBracketRounds(
     playoff,
     teamName,
-    // Same seeding rule createPlayoffBracket used, recomputed — regular-season
-    // results are frozen once playoffs start, so the order is identical.
-    seedMap(
-      standings.map((s) => s.teamId),
-      pickBracketSize(teams.length),
-    ),
+    // Seeds come from the frozen first-round pairings, not live standings —
+    // a corrected regular result must not relabel (or blank) bracket seeds.
+    seedsFromFirstRound(playoff),
     (d) => fmtWhen(d) ?? "",
   );
 

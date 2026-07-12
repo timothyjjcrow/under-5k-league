@@ -10,7 +10,7 @@ import {
   type ClinchStatus,
 } from "@/lib/standings";
 import { pickBracketSize } from "@/lib/schedule";
-import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
+import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam, type FormResult } from "@/lib/team-matches";
 import {
@@ -1014,10 +1014,9 @@ async function SeasonView({
   const bracketRoundsView = buildBracketRounds(
     playoffMatches,
     teamName,
-    seedMap(
-      standings.map((s) => s.teamId),
-      pickBracketSize(teams.length),
-    ),
+    // Seeds come from the frozen first-round pairings, not live standings —
+    // a corrected regular result must not relabel (or blank) bracket seeds.
+    seedsFromFirstRound(playoffMatches),
     (d) => fmtWhen(d) ?? "",
   );
   const showBracket =

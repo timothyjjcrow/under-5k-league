@@ -100,14 +100,17 @@ export async function advancePlayoffBracket(seasonId: string) {
   if (!allDecided) return;
 
   if (current.length === 1) {
-    // The final is decided — crown the champion.
-    await prisma.season.update({
-      where: { id: seasonId },
+    // The final is decided — crown the champion. Conditional write: a manual
+    // recordResult racing an auto-import both reach here, and only the call
+    // that actually flips PLAYOFFS→COMPLETE may announce (no double ping).
+    const crowned = await prisma.season.updateMany({
+      where: { id: seasonId, status: SEASON_STATUS.PLAYOFFS },
       data: {
         championTeamId: current[0].winnerTeamId,
         status: SEASON_STATUS.COMPLETE,
       },
     });
+    if (crowned.count === 0) return;
     const champion = await prisma.team.findUnique({
       where: { id: current[0].winnerTeamId as string },
     });

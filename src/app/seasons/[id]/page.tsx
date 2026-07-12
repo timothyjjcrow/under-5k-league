@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { pickBracketSize } from "@/lib/schedule";
-import { buildBracketRounds, seedMap } from "@/lib/bracket-view";
+import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { StandingsTable } from "@/app/page";
 import {
@@ -101,15 +101,12 @@ export default async function SeasonArchivePage({
   const regular = season.matches.filter((m) => m.phase === "REGULAR");
   const playoff = season.matches.filter((m) => m.phase !== "REGULAR");
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
-  // Same interactive bracket the live schedule uses — seeds recomputed from
-  // the archived regular-season table (identical to what seeding used).
+  // Same interactive bracket the live schedule uses — seeds derive from the
+  // archived first-round pairings themselves.
   const bracketRoundsView = buildBracketRounds(
     playoff,
     teamName,
-    seedMap(
-      standings.map((s) => s.teamId),
-      pickBracketSize(season.teams.length),
-    ),
+    seedsFromFirstRound(playoff),
     (d) =>
       d.toLocaleString(undefined, {
         month: "short",
