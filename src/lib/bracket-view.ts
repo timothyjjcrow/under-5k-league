@@ -83,6 +83,43 @@ export function buildBracketRounds(
   }));
 }
 
+export type MirrorLayout = {
+  /** Wing columns, outermost first — left[i] holds the first half of round i's slots. */
+  left: BracketRound[];
+  /** Same rounds' second halves; the component renders these mirrored. */
+  right: BracketRound[];
+  /** The grand final (null = still TBD) and its display name. */
+  final: BracketMatchView | null;
+  finalName: string;
+};
+
+/**
+ * Split a linear round list into the classic centered tournament shape: two
+ * wings converging on the grand final. Round i (2^(R-1-i) slots) contributes
+ * its first half to the left wing and second half to the right — the same
+ * halves the R{r}M{m} slot indexing feeds forward, so every wing pair still
+ * meets its real next-round slot. A 2-team bracket is just the final.
+ */
+export function mirrorLayout(rounds: BracketRound[]): MirrorLayout | null {
+  if (rounds.length === 0) return null;
+  const last = rounds.length - 1;
+  const finalRound = rounds[last];
+  const left: BracketRound[] = [];
+  const right: BracketRound[] = [];
+  for (let r = 0; r < last; r++) {
+    const { name, slots } = rounds[r];
+    const half = Math.floor(slots.length / 2);
+    left.push({ name, slots: slots.slice(0, half) });
+    right.push({ name, slots: slots.slice(half) });
+  }
+  return {
+    left,
+    right,
+    final: finalRound.slots[0] ?? null,
+    finalName: finalRound.name,
+  };
+}
+
 /** Seed number per playoff team: 1-indexed order of the seeded standings. */
 export function seedMap(
   standingsOrder: string[],

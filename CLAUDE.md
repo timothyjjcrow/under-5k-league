@@ -415,15 +415,30 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 ## Interactive bracket (done)
 
-- `src/components/bracket.tsx` (`"use client"`) draws the full single-elim
-  tree: connector lines (pure CSS, flex-1 wrappers so pair midpoints land on
-  the next round's card centers), seed numbers, dashed TBD slots for rounds
-  that don't exist yet, tap/hover traces a team's run, 🏆 on the final's
-  winner. Pure `bracketSkeleton`/`slotIndex` (`schedule.ts`, tested) build the
-  round structure; `src/lib/bracket-view.ts` serializes matches + `seedMap`
-  (seeding recomputed from standings — identical to what
-  `createPlayoffBracket` used). Rendered on `/schedule`, the dashboard, and
-  `/seasons/[id]`.
+- `src/components/bracket.tsx` (`"use client"`) draws the classic CENTERED
+  tournament shape: two wings converge on a grand final with the 🏆 floating
+  above it (greyed until a champion is crowned, then glowing). Pure
+  `mirrorLayout` (`bracket-view.ts`, tested) splits the linear rounds into
+  left/right wings + center — round i's first-half slots go left, second half
+  right, matching the R{r}M{m} feed-forward. Connector lines are pure CSS
+  (flex-1 wrappers so pair midpoints land on the next card's center); wing
+  direction flips the stub/vertical edges; the inner wing column is always a
+  single slot whose center meets the final's. Seed numbers, dashed TBD slots,
+  tap/hover run tracing, 🏆 on the final's winner all still apply. Pure
+  `bracketSkeleton`/`slotIndex` (`schedule.ts`, tested) build the round
+  structure; `src/lib/bracket-view.ts` serializes matches + `seedMap`.
+  Rendered on `/schedule`, the dashboard, and `/seasons/[id]` — wide by
+  design, always inside its own `overflow-x-auto`.
+
+## Season grid (done)
+
+- "Who's played who": `crossTable` (`src/lib/cross-table.ts`, tested) maps
+  teams × REGULAR matches into per-meeting cells from the row team's
+  perspective (W/L/D + score, `wk N` link when unplayed, list per pair for
+  double round robins). Rendered as `SeasonGrid` on `/schedule` (standings
+  order, crest+rank column headers, sticky row-header column, result-toned
+  chips linking to match pages) whenever regular matches exist. Scrolls
+  inside its own container on phones.
 
 ## Hero meta page (done)
 

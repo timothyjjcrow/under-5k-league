@@ -1,20 +1,29 @@
 "use client";
 
-// Interactive single-elimination bracket. Server pages build a serializable
-// BracketRound[] via bracketSkeleton() and pass it down; this component draws
-// the full tree (connector lines, TBD slots for rounds that don't exist yet)
-// and lets the viewer tap/hover a team to light up its path to the final.
+// Interactive single-elimination bracket in the classic tournament shape: two
+// wings converge on a center grand final crowned by the trophy. Server pages
+// build a serializable BracketRound[] via bracketSkeleton() and pass it down;
+// mirrorLayout() splits it into wings, this component draws the connectors
+// (TBD slots for rounds that don't exist yet) and lets the viewer tap/hover a
+// team to light up its path to the final.
 
 import { useState } from "react";
 import Link from "next/link";
 import { TeamCrest } from "@/components/ui";
 import { LocalTime } from "@/components/local-time";
 import { cn } from "@/lib/utils";
-import type {
-  BracketMatchView,
-  BracketRound,
-  BracketSide,
+import {
+  mirrorLayout,
+  type BracketMatchView,
+  type BracketRound,
+  type BracketSide,
 } from "@/lib/bracket-view";
+
+type TraceProps = {
+  championTeamId: string | null;
+  tracedTeam: string | null;
+  onTrace: (teamId: string | null) => void;
+};
 
 export function Bracket({
   rounds,
@@ -25,71 +34,177 @@ export function Bracket({
 }) {
   // Tap/hover a team anywhere to trace its run through the bracket.
   const [tracedTeam, setTracedTeam] = useState<string | null>(null);
-  if (rounds.length === 0) return null;
-  const last = rounds.length - 1;
+  const layout = mirrorLayout(rounds);
+  if (!layout) return null;
+  const { left, right, final, finalName } = layout;
+  const trace: TraceProps = { championTeamId, tracedTeam, onTrace: setTracedTeam };
 
   return (
     <div className="overflow-x-auto pb-2">
       <div className="flex min-w-max items-stretch">
-        {rounds.map((round, r) => (
+        {left.map((round, c) => (
+          <WingColumn
+            key={`L${c}`}
+            round={round}
+            wing="left"
+            inner={c === left.length - 1}
+            receives={c > 0}
+            trace={trace}
+          />
+        ))}
+        <FinalColumn
+          final={final}
+          finalName={finalName}
+          hasWings={left.length > 0}
+          trace={trace}
+        />
+        {[...right].reverse().map((round, idx) => {
+          const c = right.length - 1 - idx;
+          return (
+            <WingColumn
+              key={`R${c}`}
+              round={round}
+              wing="right"
+              inner={c === right.length - 1}
+              receives={c > 0}
+              trace={trace}
+            />
+          );
+        })}
+      </div>
+      <p className="mt-1 px-4 text-center text-xs text-muted">
+        Tap a team to trace its bracket run.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * One wing column. In the left wing feeders flow left→right; in the right
+ * wing they flow right→left, so every connector is drawn on the mirrored
+ * edge. `inner` columns hold a single slot that lines up with the final's
+ * center — a straight stub, no pair vertical.
+ */
+function WingColumn({
+  round,
+  wing,
+  inner,
+  receives,
+  trace,
+}: {
+  round: BracketRound;
+  wing: "left" | "right";
+  inner: boolean;
+  receives: boolean;
+  trace: TraceProps;
+}) {
+  // The edge feeders arrive on / the edge winners leave through.
+  const inEdge = wing === "left" ? "left-0" : "right-0";
+  const outEdge = wing === "left" ? "right-0" : "left-0";
+  const outBorder = wing === "left" ? "border-r" : "border-l";
+  return (
+    <div className={cn("flex w-48 flex-col sm:w-60", "-ml-px first:ml-0")}>
+      <h3
+        className={cn(
+          "mb-2 h-5 px-4 text-sm font-medium uppercase tracking-wide text-muted",
+          wing === "right" && "text-right",
+        )}
+      >
+        {round.name}
+      </h3>
+      <div className="flex flex-1 flex-col">
+        {round.slots.map((m, i) => (
           <div
-            key={r}
-            className={cn("flex w-56 flex-col sm:w-64", r > 0 && "-ml-px")}
+            key={m?.id ?? `tbd-${wing}-${i}`}
+            className="relative flex min-h-[7.5rem] flex-1 items-center px-4 py-2"
           >
-            <h3 className="mb-2 h-5 px-4 text-sm font-medium uppercase tracking-wide text-muted">
-              {round.name}
-            </h3>
-            <div className="flex flex-1 flex-col">
-              {round.slots.map((m, i) => (
-                <div
-                  key={m?.id ?? `tbd-${r}-${i}`}
-                  className="relative flex min-h-[7rem] flex-1 items-center px-4 py-2"
-                >
-                  {/* Connector in from the feeder pair (not the first round). */}
-                  {r > 0 ? (
-                    <span
-                      aria-hidden
-                      className="absolute left-0 top-1/2 w-4 border-t border-line"
-                    />
-                  ) : null}
-                  {m ? (
-                    <MatchCard
-                      match={m}
-                      isFinal={r === last}
-                      championTeamId={championTeamId}
-                      tracedTeam={tracedTeam}
-                      onTrace={setTracedTeam}
-                    />
-                  ) : (
-                    <TbdCard />
-                  )}
-                  {/* Connector out toward next round: stub + half-height
-                      vertical that meets the sibling's half at the pair
-                      midpoint — exactly the next match's center. */}
-                  {r < last ? (
-                    <>
-                      <span
-                        aria-hidden
-                        className="absolute right-0 top-1/2 w-4 border-t border-line"
-                      />
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "absolute right-0 border-r border-line",
-                          i % 2 === 0 ? "bottom-0 top-1/2" : "bottom-1/2 top-0",
-                        )}
-                      />
-                    </>
-                  ) : null}
-                </div>
-              ))}
-            </div>
+            {receives ? (
+              <span
+                aria-hidden
+                className={cn("absolute top-1/2 w-4 border-t border-line", inEdge)}
+              />
+            ) : null}
+            {m ? (
+              <MatchCard match={m} isFinal={false} trace={trace} />
+            ) : (
+              <TbdCard />
+            )}
+            <span
+              aria-hidden
+              className={cn("absolute top-1/2 w-4 border-t border-line", outEdge)}
+            />
+            {!inner ? (
+              // Half-height vertical that meets the sibling's half at the pair
+              // midpoint — exactly the next match's center.
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute border-line",
+                  outEdge,
+                  outBorder,
+                  i % 2 === 0 ? "bottom-0 top-1/2" : "bottom-1/2 top-0",
+                )}
+              />
+            ) : null}
           </div>
         ))}
       </div>
-      <p className="mt-1 px-4 text-xs text-muted">
-        Tap a team to trace its bracket run.
-      </p>
+    </div>
+  );
+}
+
+/** The center of the tournament: trophy over the grand final. */
+function FinalColumn({
+  final,
+  finalName,
+  hasWings,
+  trace,
+}: {
+  final: BracketMatchView | null;
+  finalName: string;
+  hasWings: boolean;
+  trace: TraceProps;
+}) {
+  const crowned = trace.championTeamId != null;
+  return (
+    <div className={cn("flex w-48 flex-col sm:w-60", hasWings && "-ml-px")}>
+      <h3 className="mb-2 h-5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted">
+        {finalName}
+      </h3>
+      <div className="flex flex-1 flex-col">
+        {/* Extra headroom so the trophy floats clear of the card even in a
+            4-team bracket where every column is only one slot tall. */}
+        <div className="relative flex min-h-[13rem] flex-1 items-center px-4 py-2">
+          {hasWings ? (
+            <>
+              <span
+                aria-hidden
+                className="absolute left-0 top-1/2 w-4 border-t border-line"
+              />
+              <span
+                aria-hidden
+                className="absolute right-0 top-1/2 w-4 border-t border-line"
+              />
+            </>
+          ) : null}
+          <span
+            role="img"
+            aria-label={crowned ? "Champion crowned" : "The trophy awaits"}
+            title={crowned ? "Champion crowned" : "The trophy awaits"}
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-[calc(50%+3.1rem)] text-center text-4xl transition-all",
+              crowned ? "drop-shadow-[0_0_14px_rgba(251,191,36,0.45)]" : "opacity-40 grayscale",
+            )}
+          >
+            🏆
+          </span>
+          {final ? (
+            <MatchCard match={final} isFinal trace={trace} />
+          ) : (
+            <TbdCard />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -109,19 +224,15 @@ function TbdCard() {
 function MatchCard({
   match: m,
   isFinal,
-  championTeamId,
-  tracedTeam,
-  onTrace,
+  trace,
 }: {
   match: BracketMatchView;
   isFinal: boolean;
-  championTeamId: string | null;
-  tracedTeam: string | null;
-  onTrace: (teamId: string | null) => void;
+  trace: TraceProps;
 }) {
   const traced =
-    tracedTeam != null &&
-    (m.home?.teamId === tracedTeam || m.away?.teamId === tracedTeam);
+    trace.tracedTeam != null &&
+    (m.home?.teamId === trace.tracedTeam || m.away?.teamId === trace.tracedTeam);
   return (
     <div
       className={cn(
@@ -135,18 +246,20 @@ function MatchCard({
         score={m.homeScore}
         completed={m.completed}
         won={m.home != null && m.winnerTeamId === m.home.teamId}
-        isChampion={m.home != null && m.home.teamId === championTeamId && isFinal}
-        tracedTeam={tracedTeam}
-        onTrace={onTrace}
+        isChampion={
+          m.home != null && m.home.teamId === trace.championTeamId && isFinal
+        }
+        trace={trace}
       />
       <TeamRow
         side={m.away}
         score={m.awayScore}
         completed={m.completed}
         won={m.away != null && m.winnerTeamId === m.away.teamId}
-        isChampion={m.away != null && m.away.teamId === championTeamId && isFinal}
-        tracedTeam={tracedTeam}
-        onTrace={onTrace}
+        isChampion={
+          m.away != null && m.away.teamId === trace.championTeamId && isFinal
+        }
+        trace={trace}
       />
       <Link
         href={`/matches/${m.id}`}
@@ -173,16 +286,14 @@ function TeamRow({
   completed,
   won,
   isChampion,
-  tracedTeam,
-  onTrace,
+  trace,
 }: {
   side: BracketSide | null;
   score: number;
   completed: boolean;
   won: boolean;
   isChampion: boolean;
-  tracedTeam: string | null;
-  onTrace: (teamId: string | null) => void;
+  trace: TraceProps;
 }) {
   if (!side) {
     return (
@@ -192,15 +303,15 @@ function TeamRow({
       </div>
     );
   }
-  const traced = tracedTeam === side.teamId;
+  const traced = trace.tracedTeam === side.teamId;
   return (
     <button
       type="button"
       aria-pressed={traced}
       title={`Trace ${side.name}'s bracket run`}
-      onClick={() => onTrace(traced ? null : side.teamId)}
-      onMouseEnter={() => onTrace(side.teamId)}
-      onMouseLeave={() => onTrace(null)}
+      onClick={() => trace.onTrace(traced ? null : side.teamId)}
+      onMouseEnter={() => trace.onTrace(side.teamId)}
+      onMouseLeave={() => trace.onTrace(null)}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-sm",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60",

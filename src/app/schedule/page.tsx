@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import type { ScenarioReport } from "@/lib/scenarios";
+import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
   byeTeamsByWeek,
   pickBracketSize,
@@ -429,15 +430,174 @@ export default async function SchedulePage() {
             description="The schedule is generated once teams are drafted."
           />
         ) : (
-          <ScheduleWeeks
-            weeks={weekViews}
-            teams={[...teams]
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((t) => ({ id: t.id, name: t.name }))}
-          />
+          <>
+            {teams.length > 1 ? (
+              <SeasonGrid
+                standings={standings}
+                teamName={teamName}
+                matches={matches}
+              />
+            ) : null}
+            <ScheduleWeeks
+              weeks={weekViews}
+              teams={[...teams]
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((t) => ({ id: t.id, name: t.name }))}
+            />
+          </>
         )}
       </section>
     </div>
+  );
+}
+
+// The season at a glance: a who's-played-who grid in standings order — every
+// cell is that meeting's result from the ROW team's side, linking to the
+// match. Wide by nature, so it scrolls inside its own container on phones.
+function SeasonGrid({
+  standings,
+  teamName,
+  matches,
+}: {
+  standings: ReturnType<typeof computeStandings>;
+  teamName: Map<string, string>;
+  matches: CrossMatch[];
+}) {
+  const order = standings.map((s) => s.teamId);
+  const table = crossTable(order, matches);
+  const rankOf = new Map(order.map((id, i) => [id, i + 1]));
+
+  const cellChip = (rowId: string, cell: CrossCell) => {
+    const rowName = teamName.get(rowId) ?? "?";
+    const label = cell.played
+      ? `${rowName} ${
+          cell.result === "W" ? "won" : cell.result === "L" ? "lost" : "drew"
+        } ${cell.score} in week ${cell.week}`
+      : cell.live
+        ? `Week ${cell.week} — series in progress`
+        : `Week ${cell.week} — not played yet`;
+    return (
+      <Link
+        key={cell.matchId}
+        href={`/matches/${cell.matchId}`}
+        aria-label={label}
+        title={label}
+        className={cn(
+          "block rounded px-1 py-0.5 font-mono text-[11px] tabular-nums transition-colors",
+          cell.result === "W" && "bg-success/15 text-success hover:bg-success/25",
+          cell.result === "L" && "bg-danger/10 text-danger/90 hover:bg-danger/20",
+          cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
+          !cell.played && "text-muted hover:text-info",
+        )}
+      >
+        {cell.played ? cell.score : `wk ${cell.week}`}
+      </Link>
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader
+        title="Season grid"
+        subtitle="Who's played who — each cell is the row team's result in that meeting"
+      />
+      <CardBody className="overflow-x-auto p-0">
+        <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr>
+              <th className="sticky left-0 z-10 border-b border-line bg-surface px-4 py-2" />
+              {order.map((colId) => (
+                <th
+                  key={colId}
+                  scope="col"
+                  className="border-b border-line px-1.5 py-2 text-center"
+                >
+                  <Link
+                    href={`/teams/${colId}`}
+                    title={teamName.get(colId) ?? "?"}
+                    className="inline-flex flex-col items-center gap-0.5"
+                  >
+                    <TeamCrest
+                      name={teamName.get(colId) ?? "?"}
+                      seed={colId}
+                      size={22}
+                      className="rounded"
+                    />
+                    <span className="sr-only">{teamName.get(colId)}</span>
+                    <span
+                      aria-hidden
+                      className="font-mono text-[10px] tabular-nums text-muted"
+                    >
+                      #{rankOf.get(colId)}
+                    </span>
+                  </Link>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {order.map((rowId) => (
+              <tr key={rowId}>
+                <th
+                  scope="row"
+                  className="sticky left-0 z-10 border-b border-line/60 bg-surface px-4 py-1.5 text-left font-normal"
+                >
+                  <Link
+                    href={`/teams/${rowId}`}
+                    className="flex min-w-0 max-w-[11rem] items-center gap-2 hover:text-info"
+                  >
+                    <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
+                      {rankOf.get(rowId)}
+                    </span>
+                    <TeamCrest
+                      name={teamName.get(rowId) ?? "?"}
+                      seed={rowId}
+                      size={20}
+                      className="shrink-0 rounded"
+                    />
+                    <span className="truncate">{teamName.get(rowId) ?? "?"}</span>
+                  </Link>
+                </th>
+                {order.map((colId) => {
+                  if (colId === rowId) {
+                    return (
+                      // Stays in the accessibility tree (empty, not
+                      // aria-hidden) so screen readers keep every row's
+                      // column mapping aligned with the header row.
+                      <td
+                        key={colId}
+                        className="border-b border-line/60 bg-surface-2/60 px-1.5 py-1.5"
+                      />
+                    );
+                  }
+                  const meetings = table.cells.get(rowId)!.get(colId)!;
+                  return (
+                    <td
+                      key={colId}
+                      className="border-b border-line/60 px-1.5 py-1.5 text-center align-middle"
+                    >
+                      {meetings.length === 0 ? (
+                        <span
+                          role="img"
+                          aria-label="No meeting scheduled"
+                          className="text-xs text-muted/50"
+                        >
+                          <span aria-hidden>—</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex flex-col gap-0.5">
+                          {meetings.map((cell) => cellChip(rowId, cell))}
+                        </span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardBody>
+    </Card>
   );
 }
 
