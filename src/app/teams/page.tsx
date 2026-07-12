@@ -315,6 +315,11 @@ export default async function TeamsPage() {
                         </Badge>
                       ) : null}
                       <RankBadge rankTier={m.user.rankTier} />
+                      {isDraft && !m.isCaptain ? (
+                        <span className="tabular-nums text-muted">
+                          ${m.price}
+                        </span>
+                      ) : null}
                     </PlayerLink>
                   ))}
                   {Array.from({
