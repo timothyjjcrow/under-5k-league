@@ -99,6 +99,51 @@ describe("summarizeInhouse", () => {
     expect(comebackGain).toBeGreaterThan(INHOUSE_ELO.K / 2);
   });
 
+  it("records form newest-first, capped at five results", () => {
+    // Chronologically for a: W W L W L W L — form keeps the last 5, newest first.
+    const outcomes: (1 | 2)[] = [1, 1, 2, 1, 2, 1, 2];
+    const recs = summarizeInhouse(
+      outcomes.map((winner, i) =>
+        lobby(`g${i}`, i + 1, winner, [["a", 1], ["b", 2]]),
+      ),
+    );
+    const a = recs.find((r) => r.userId === "a")!;
+    expect(a.form).toEqual(["L", "W", "L", "W", "L"]);
+    const b = recs.find((r) => r.userId === "b")!;
+    expect(b.form).toEqual(["W", "L", "W", "L", "W"]);
+  });
+
+  it("reports the most recent game's rating swing as lastChange", () => {
+    const recs = summarizeInhouse([
+      lobby("g1", 1, 1, [["a", 1], ["b", 2]]),
+    ]);
+    const a = recs.find((r) => r.userId === "a")!;
+    const b = recs.find((r) => r.userId === "b")!;
+    // First game between even sides moves both by K/2, in opposite directions.
+    expect(a.lastChange).toBe(INHOUSE_ELO.K / 2);
+    expect(b.lastChange).toBe(-INHOUSE_ELO.K / 2);
+
+    // After a second game the swing reflects only the latest result.
+    const recs2 = summarizeInhouse([
+      lobby("g1", 1, 1, [["a", 1], ["b", 2]]),
+      lobby("g2", 2, 2, [["a", 1], ["b", 2]]),
+    ]);
+    const a2 = recs2.find((r) => r.userId === "a")!;
+    expect(a2.lastChange).toBeGreaterThan(0 - INHOUSE_ELO.K); // sane bound
+    expect(a2.lastChange).toBeLessThan(0); // lost the latest game
+    expect(a2.lastChange).toBe(-recs2.find((r) => r.userId === "b")!.lastChange);
+  });
+
+  it("leaves form empty and lastChange 0 for unrated appearances", () => {
+    const recs = summarizeInhouse([lobby("g1", 1, null, [["a", 1], ["b", 2]])]);
+    expect(recs.length).toBe(0); // no winner → nobody accrues anything
+
+    const oneSided = summarizeInhouse([lobby("g2", 2, 1, [["c", 1]])]);
+    const c = oneSided.find((r) => r.userId === "c")!;
+    expect(c.form).toEqual(["W"]); // the win still counts for the record…
+    expect(c.lastChange).toBe(0); // …but there was no side to rate against
+  });
+
   it("tracks peak rating and never rates a one-sided lobby", () => {
     const recs = summarizeInhouse([
       lobby("g1", 1, 1, [["a", 1], ["b", 2]]), // a → 1016

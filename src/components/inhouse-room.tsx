@@ -250,7 +250,14 @@ export function InhouseRoom({
       ) : lobby.status === "READY" ? (
         <ReadyView lobby={lobby} me={me} pending={pending} act={act} />
       ) : (
-        <InProgressView lobby={lobby} me={me} pending={pending} act={act} />
+        <InProgressView
+          lobby={lobby}
+          me={me}
+          offset={offset}
+          detectMinMinutes={state.detectMinMinutes}
+          pending={pending}
+          act={act}
+        />
       )}
 
       {me.canCancel ? (
@@ -294,6 +301,12 @@ function QueueView({
 }) {
   const { queue, lobbySize, needed, me } = state;
   const pct = Math.min(100, Math.round((queue.length / lobbySize) * 100));
+  // Rough lobby strength while it fills (0 = unknown MMR, excluded).
+  const knownMmrs = queue.map((q) => q.mmr).filter((m) => m > 0);
+  const queueAvg =
+    knownMmrs.length >= 2
+      ? Math.round(knownMmrs.reduce((s, m) => s + m, 0) / knownMmrs.length)
+      : 0;
 
   return (
     <div className="space-y-6">
@@ -310,6 +323,9 @@ function QueueView({
             {needed > 0
               ? `${needed} more ${needed === 1 ? "player" : "players"} to fire up a draft`
               : "Lobby full — forming the draft…"}
+            {queueAvg > 0 ? (
+              <span className="tabular-nums"> · avg {queueAvg} MMR</span>
+            ) : null}
           </div>
 
           <div className="mx-auto mt-4 h-3 w-full max-w-md overflow-hidden rounded-full bg-surface-2">
@@ -655,6 +671,9 @@ function DraftView({
   const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
   const onClockTeam = lobby.teams.find((t) => t.team === lobby.pickTeam);
   const onClockSide = onClockTeam ? sideMeta(onClockTeam.isRadiant) : null;
+  // "Pick 4 of 8" — captains fill one slot each, the rest are drafted.
+  const totalPicks = 2 * (teamSize - 1);
+  const picksMade = lobby.teams.reduce((s, t) => s + t.players.length, 0);
 
   // Live balance-of-power line: how the two sides' average MMR compares as
   // picks come in.
@@ -689,6 +708,9 @@ function DraftView({
               {onClockSide.name}
             </Badge>
           ) : null}
+          <span className="ml-2 text-xs text-muted tabular-nums">
+            Pick {Math.min(picksMade + 1, totalPicks)} of {totalPicks}
+          </span>
         </div>
         <div className="flex items-center gap-3">
           {balanceLabel ? (
@@ -747,6 +769,14 @@ function DraftView({
                   <span className="min-w-0 flex-1 truncate font-medium">
                     {p.name}
                   </span>
+                  {p.record ? (
+                    <span
+                      title={`Inhouse record ${p.record.wins}-${p.record.losses}`}
+                      className="text-xs tabular-nums text-muted"
+                    >
+                      {p.record.wins}-{p.record.losses}
+                    </span>
+                  ) : null}
                   <RankBadge rankTier={p.rankTier} />
                   {p.mmr > 0 ? (
                     <span className="text-xs text-muted tabular-nums">{p.mmr}</span>
@@ -846,6 +876,14 @@ function TeamColumn({
                   {p.name}
                 </PlayerLink>
                 {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}
+                {i > 0 && p.pickIndex != null ? (
+                  <span
+                    title={`Draft pick ${p.pickIndex + 1}`}
+                    className="text-[10px] tabular-nums text-muted/70"
+                  >
+                    #{p.pickIndex + 1}
+                  </span>
+                ) : null}
                 <RankBadge rankTier={p.rankTier} />
               </>
             ) : (
@@ -902,18 +940,35 @@ function ReadyView({
 
 // ---------- In progress ----------
 
+/** "12:34" / "1:02:45" — how long the game has been running. */
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
 function InProgressView({
   lobby,
   me,
+  offset,
+  detectMinMinutes,
   pending,
   act,
 }: {
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
+  offset: number;
+  detectMinMinutes: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
 }) {
   const [matchId, setMatchId] = useState("");
+  const elapsedMs =
+    lobby.startedAt != null ? Date.now() + offset - lobby.startedAt : null;
+  const scanLive =
+    elapsedMs != null && elapsedMs >= detectMinMinutes * 60_000;
 
   return (
     <div className="space-y-5">
@@ -924,6 +979,15 @@ function InProgressView({
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-info" />
           </span>
           Game in progress
+          {elapsedMs != null ? (
+            <span
+              role="timer"
+              aria-label={`game running for ${fmtElapsed(elapsedMs)}`}
+              className="font-mono text-base font-bold tabular-nums text-info"
+            >
+              {fmtElapsed(elapsedMs)}
+            </span>
+          ) : null}
         </div>
         {lobby.startedByName ? (
           <p className="mt-1 text-sm text-muted">Hosted by {lobby.startedByName}</p>
@@ -939,9 +1003,10 @@ function InProgressView({
                 {pending ? "Fetching from OpenDota…" : "Auto-detect result"}
               </button>
               <p className="mx-auto mt-1.5 max-w-sm text-xs text-muted">
-                Finds your game on OpenDota and pulls the full box score. Also runs
-                automatically every few minutes once the game&apos;s finished (needs
-                players&apos; &ldquo;Expose Public Match Data&rdquo; on).
+                Finds your game on OpenDota and pulls the full box score.{" "}
+                {scanLive
+                  ? "Background auto-scan is live too — it re-checks every few minutes (needs players' “Expose Public Match Data” on)."
+                  : `Background auto-scan kicks in ${detectMinMinutes} minutes into the game.`}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2 border-t border-info/20 pt-3">
@@ -963,7 +1028,9 @@ function InProgressView({
           </div>
         ) : (
           <p className="mt-3 text-sm text-muted">
-            The result is pulled from OpenDota automatically once the game ends.
+            {scanLive
+              ? "The result is pulled from OpenDota automatically once the game ends."
+              : `The result is pulled from OpenDota automatically — auto-scan starts ${detectMinMinutes} minutes in.`}
           </p>
         )}
       </div>

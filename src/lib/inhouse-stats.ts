@@ -24,6 +24,10 @@ export type InhouseRecord = {
   streak: number; // +N win streak / -N loss streak (most recent games)
   rating: number; // personal Elo, rounded for display
   peak: number; // highest rating ever held after a game
+  /** Last ≤5 results, newest first (matches FormStrip's reading order). */
+  form: ("W" | "L")[];
+  /** Rounded Elo swing of the most recent rated game (0 before any). */
+  lastChange: number;
 };
 
 // Personal Elo: everyone starts at 1000; each finished lobby moves every
@@ -52,6 +56,7 @@ export function summarizeInhouse(lobbies: FinishedLobby[]): InhouseRecord[] {
   type Acc = Omit<InhouseRecord, "winRate" | "rating" | "peak"> & {
     rating: number; // unrounded while accumulating
     peak: number;
+    lastChange: number; // unrounded while accumulating
   };
   const byUser = new Map<string, Acc>();
 
@@ -68,6 +73,8 @@ export function summarizeInhouse(lobbies: FinishedLobby[]): InhouseRecord[] {
         streak: 0,
         rating: INHOUSE_ELO.START,
         peak: INHOUSE_ELO.START,
+        form: [],
+        lastChange: 0,
       } satisfies Acc);
     rec.name = pl.name; // keep the freshest display name/avatar
     rec.avatar = pl.avatar;
@@ -106,7 +113,10 @@ export function summarizeInhouse(lobbies: FinishedLobby[]): InhouseRecord[] {
           rec.losses += 1;
           rec.streak = rec.streak < 0 ? rec.streak - 1 : -1;
         }
+        const result: "W" | "L" = won ? "W" : "L";
+        rec.form = [result, ...rec.form].slice(0, 5);
         rec.rating += change;
+        rec.lastChange = change;
         if (rec.rating > rec.peak) rec.peak = rec.rating;
       }
     }
@@ -118,6 +128,7 @@ export function summarizeInhouse(lobbies: FinishedLobby[]): InhouseRecord[] {
       winRate: r.games > 0 ? r.wins / r.games : 0,
       rating: Math.round(r.rating),
       peak: Math.round(r.peak),
+      lastChange: Math.round(r.lastChange),
     }))
     .sort(
       (a, b) =>

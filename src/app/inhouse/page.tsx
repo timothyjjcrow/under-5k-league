@@ -8,8 +8,11 @@ import {
   type FinishedLobby,
 } from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
+import { gameMvp } from "@/lib/achievements";
+import { formatMatchTime } from "@/lib/match-time";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { HeroVideo } from "@/components/hero-video";
+import { LocalTime } from "@/components/local-time";
 import {
   Avatar,
   Badge,
@@ -17,6 +20,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  FormStrip,
   HeroIcon,
   KDA,
   PageTitle,
@@ -171,6 +175,7 @@ export default async function InhousePage() {
           subtitle="Personal Elo across completed inhouse games — everyone starts at 1000, wins against stronger lobbies pay more"
         />
         <CardBody className="p-0">
+          <YourStanding rows={leaderboard} meId={user?.id ?? null} />
           <Leaderboard rows={leaderboard} meId={user?.id ?? null} />
         </CardBody>
       </Card>
@@ -268,6 +273,7 @@ function GameResultCard({
     durationSecs: number | null;
     radiantScore: number | null;
     direScore: number | null;
+    createdAt: Date;
   };
   players: BoxPlayer[];
   avatarMap: Map<string, string | null>;
@@ -275,6 +281,8 @@ function GameResultCard({
   const radiantWin = lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
   const radiant = players.filter((p) => p.isRadiant);
   const dire = players.filter((p) => !p.isRadiant);
+  // Best line of the game — same tested MVP math the league box scores use.
+  const mvpId = gameMvp(players, radiantWin);
   const dur = lobby.durationSecs ?? 0;
   const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
   const maxNet = Math.max(1, ...players.map((p) => p.netWorth ?? 0));
@@ -301,6 +309,11 @@ function GameResultCard({
           <Badge tone={radiantWin ? "success" : "danger"}>
             {radiantWin ? "Radiant" : "Dire"} victory
           </Badge>
+          <LocalTime
+            ts={lobby.createdAt.getTime()}
+            variant="short"
+            initial={formatMatchTime(lobby.createdAt, "short")}
+          />
           <span className="tabular-nums">{durStr}</span>
           {lobby.dotaMatchId ? (
             <a
@@ -322,6 +335,7 @@ function GameResultCard({
           players={radiant}
           avatarMap={avatarMap}
           maxNet={maxNet}
+          mvpId={mvpId}
         />
         <SideBox
           label="Dire"
@@ -329,6 +343,7 @@ function GameResultCard({
           players={dire}
           avatarMap={avatarMap}
           maxNet={maxNet}
+          mvpId={mvpId}
         />
       </CardBody>
     </Card>
@@ -385,12 +400,14 @@ function SideBox({
   players,
   avatarMap,
   maxNet,
+  mvpId,
 }: {
   label: string;
   win: boolean;
   players: BoxPlayer[];
   avatarMap: Map<string, string | null>;
   maxNet: number;
+  mvpId: string | null;
 }) {
   const isRadiant = label === "Radiant";
   const hasNet = players.some((p) => p.netWorth != null);
@@ -445,6 +462,16 @@ function SideBox({
                       <PlayerLink userId={p.userId} className="truncate text-sm">
                         {p.name ?? "Unknown"}
                       </PlayerLink>
+                      {p.userId === mvpId ? (
+                        <span
+                          role="img"
+                          aria-label="Match MVP"
+                          title="Match MVP — best line of the game"
+                          className="shrink-0 text-xs"
+                        >
+                          🏅
+                        </span>
+                      ) : null}
                     </span>
                   ) : (
                     <span className="truncate text-sm text-muted">
@@ -497,6 +524,59 @@ function SideBox({
   );
 }
 
+// The signed-in player's ladder line at a glance, pinned above the table.
+function YourStanding({
+  rows,
+  meId,
+}: {
+  rows: ReturnType<typeof summarizeInhouse>;
+  meId: string | null;
+}) {
+  if (!meId) return null;
+  const idx = rows.findIndex((r) => r.userId === meId);
+  if (idx < 0) return null;
+  const me = rows[idx];
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-line bg-accent/5 px-5 py-3 text-sm">
+      <span className="font-semibold">Your standing</span>
+      <span className="text-muted tabular-nums">
+        #{idx + 1} of {rows.length}
+      </span>
+      <span className="tabular-nums">
+        <span className="font-semibold">{me.rating}</span>
+        <span className="text-muted"> Elo</span>
+        {me.lastChange !== 0 ? (
+          <span
+            className={cn(
+              "ml-1 text-xs font-medium",
+              me.lastChange > 0 ? "text-success" : "text-danger",
+            )}
+            title="Elo change from your last game"
+          >
+            {me.lastChange > 0 ? `+${me.lastChange}` : me.lastChange}
+          </span>
+        ) : null}
+        <span className="ml-1 text-xs text-muted">(peak {me.peak})</span>
+      </span>
+      <span className="tabular-nums">
+        <span className="text-success">{me.wins}W</span>
+        <span className="text-muted">–</span>
+        <span className="text-danger">{me.losses}L</span>
+        <span className="ml-1 text-xs text-muted">
+          {Math.round(me.winRate * 100)}%
+        </span>
+      </span>
+      <FormStrip form={me.form} size={4} />
+      {me.games < PROVISIONAL_GAMES ? (
+        <Badge tone="neutral">
+          provisional · {PROVISIONAL_GAMES - me.games} more{" "}
+          {PROVISIONAL_GAMES - me.games === 1 ? "game" : "games"} to rank
+        </Badge>
+      ) : null}
+    </div>
+  );
+}
+
 function Leaderboard({
   rows,
   meId,
@@ -526,6 +606,9 @@ function Leaderboard({
           <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
             Win%
           </th>
+          <th className="hidden px-2 py-2.5 text-center font-medium md:table-cell">
+            Form
+          </th>
           <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
             Streak
           </th>
@@ -543,7 +626,15 @@ function Leaderboard({
               r.userId === meId ? "bg-accent/5" : "",
             )}
           >
-            <td className="px-5 py-2.5 text-muted tabular-nums">{i + 1}</td>
+            <td className="px-5 py-2.5 text-muted tabular-nums">
+              {i < 3 ? (
+                <span role="img" aria-label={`Rank ${i + 1}`}>
+                  {["🥇", "🥈", "🥉"][i]}
+                </span>
+              ) : (
+                i + 1
+              )}
+            </td>
             <td className="px-2 py-2.5">
               <span className="flex items-center gap-2">
                 <Avatar name={r.name} src={r.avatar} size={24} />
@@ -566,11 +657,27 @@ function Leaderboard({
               >
                 {r.rating}
               </span>
+              {r.lastChange !== 0 ? (
+                <span
+                  className={cn(
+                    "ml-1 text-[10px] font-medium tabular-nums",
+                    r.lastChange > 0 ? "text-success" : "text-danger",
+                  )}
+                  title="Elo change from their last game"
+                >
+                  {r.lastChange > 0 ? `+${r.lastChange}` : r.lastChange}
+                </span>
+              ) : null}
             </td>
             <td className="px-2 py-2.5 text-center text-success">{r.wins}</td>
             <td className="px-2 py-2.5 text-center text-muted">{r.losses}</td>
             <td className="hidden px-2 py-2.5 text-center tabular-nums sm:table-cell">
               {Math.round(r.winRate * 100)}%
+            </td>
+            <td className="hidden px-2 py-2.5 md:table-cell">
+              <span className="flex justify-center">
+                <FormStrip form={r.form} size={4} />
+              </span>
             </td>
             <td className="hidden px-2 py-2.5 text-center sm:table-cell">
               {r.streak !== 0 ? (

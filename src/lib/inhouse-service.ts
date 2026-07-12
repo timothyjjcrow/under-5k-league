@@ -705,6 +705,8 @@ type PlayerView = {
   rankTier: number | null;
   mmr: number;
   pickIndex: number | null;
+  /** Inhouse W-L, so captains can draft on record (null = no games yet). */
+  record: { wins: number; losses: number; games: number } | null;
 };
 
 // The shape of a lobby-player row (with its joined user) that we read from.
@@ -751,21 +753,29 @@ export async function getInhouseState(viewer: SessionUser | null) {
     }),
   ]);
 
-  // Records are only needed to render (and rank) the captain vote.
+  // Records rank the captain vote AND inform captains drafting from the pool.
   const records =
-    lobbyRow?.status === INHOUSE_STATUS.CAPTAIN_VOTE
+    lobbyRow?.status === INHOUSE_STATUS.CAPTAIN_VOTE ||
+    lobbyRow?.status === INHOUSE_STATUS.DRAFTING
       ? await loadRecords(prisma, lobbyRow.players.map((p) => p.userId))
       : new Map<string, Record>();
 
   const now = Date.now();
-  const toView = (p: LobbyPlayerRow): PlayerView => ({
-    userId: p.userId,
-    name: p.user.name,
-    avatar: p.user.avatar,
-    rankTier: p.user.rankTier,
-    mmr: p.mmr,
-    pickIndex: p.pickIndex,
-  });
+  const toView = (p: LobbyPlayerRow): PlayerView => {
+    const r = records.get(p.userId);
+    return {
+      userId: p.userId,
+      name: p.user.name,
+      avatar: p.user.avatar,
+      rankTier: p.user.rankTier,
+      mmr: p.mmr,
+      pickIndex: p.pickIndex,
+      record:
+        r && r.games > 0
+          ? { wins: r.wins, losses: r.losses, games: r.games }
+          : null,
+    };
+  };
 
   let lobby: null | {
     id: string;
@@ -775,6 +785,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
     pickEndsAt: number | null;
     radiantTeam: number;
     winnerTeam: number | null;
+    startedAt: number | null;
     startedByName: string | null;
     onClockCaptain: { userId: string; name: string } | null;
     teams: {
@@ -851,6 +862,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
       pickEndsAt: lobbyRow.pickEndsAt ? lobbyRow.pickEndsAt.getTime() : null,
       radiantTeam: lobbyRow.radiantTeam,
       winnerTeam: lobbyRow.winnerTeam,
+      startedAt: lobbyRow.startedAt ? lobbyRow.startedAt.getTime() : null,
       startedByName: lobbyRow.startedBy?.name ?? null,
       onClockCaptain: onClock
         ? { userId: onClock.userId, name: onClock.user.name }
@@ -885,6 +897,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
     teamSize: INHOUSE.TEAM_SIZE,
     pickSeconds: INHOUSE.PICK_SECONDS,
     voteSeconds: INHOUSE.VOTE_SECONDS,
+    detectMinMinutes: INHOUSE.DETECT_MIN_MINUTES,
     needed: playersNeeded(queue.length),
     queue: queue.map((q) => ({
       userId: q.userId,
