@@ -39,14 +39,53 @@ describe("registrationGate — phase rules", () => {
       registrationGate({ season: regular, type: "PLAYER", mmr: 3000, hasExisting: false }),
     ).toMatch(/signups are closed/);
   });
-  it("lets an existing registrant update after SIGNUPS", () => {
+  it("lets an existing player update after SIGNUPS", () => {
     expect(
-      registrationGate({ season: regular, type: "PLAYER", mmr: 3000, hasExisting: true }),
+      registrationGate({
+        season: regular,
+        type: "PLAYER",
+        mmr: 3000,
+        hasExisting: true,
+        existingType: "PLAYER",
+      }),
     ).toBeNull();
   });
   it("lets a new standin sign up after SIGNUPS", () => {
     expect(
       registrationGate({ season: regular, type: "STANDIN", mmr: 3000, hasExisting: false }),
+    ).toBeNull();
+  });
+  it("blocks a standin upgrading to player after SIGNUPS", () => {
+    expect(
+      registrationGate({
+        season: regular,
+        type: "PLAYER",
+        mmr: 3000,
+        hasExisting: true,
+        existingType: "STANDIN",
+      }),
+    ).toMatch(/signups are closed/);
+  });
+  it("lets a standin upgrade to player during SIGNUPS", () => {
+    expect(
+      registrationGate({
+        season: signups,
+        type: "PLAYER",
+        mmr: 3000,
+        hasExisting: true,
+        existingType: "STANDIN",
+      }),
+    ).toBeNull();
+  });
+  it("lets a player downgrade to standin any time", () => {
+    expect(
+      registrationGate({
+        season: regular,
+        type: "STANDIN",
+        mmr: 3000,
+        hasExisting: true,
+        existingType: "PLAYER",
+      }),
     ).toBeNull();
   });
 });

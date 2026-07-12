@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
-import { REGISTRATION_TYPE } from "@/lib/constants";
+import {
+  REGISTRATION_TYPE,
+  type RegistrationType,
+} from "@/lib/constants";
 import { registrationGate } from "@/lib/registration";
 import { bool, clampInt, str } from "@/lib/form";
 import {
@@ -58,6 +61,7 @@ export async function saveRegistration(
     type,
     mmr,
     hasExisting: !!existing,
+    existingType: (existing?.type as RegistrationType | undefined) ?? null,
   });
   if (gateError) return { error: gateError };
 

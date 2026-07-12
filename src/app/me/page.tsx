@@ -52,6 +52,12 @@ export default async function MePage() {
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
   const isRegistered = reg?.status === "ACTIVE";
   const signupsOpen = season?.status === "SIGNUPS";
+  // Post-signups, PLAYER stays available only to those already registered as
+  // one (matches registrationGate — standins can't upgrade mid-season). The
+  // locked tile must also not stay default-checked: disabled radios don't
+  // submit, so the form would silently fall back to PLAYER and get rejected.
+  const playerLocked =
+    !signupsOpen && !(isRegistered && reg?.type === "PLAYER");
   const myRoles = parseRoles(form?.roles);
 
   return (
@@ -140,15 +146,15 @@ export default async function MePage() {
                   <RadioTile
                     name="type"
                     value="PLAYER"
-                    defaultChecked={form?.type !== "STANDIN"}
+                    defaultChecked={!playerLocked && form?.type !== "STANDIN"}
                     title="Full player"
                     desc="Get drafted onto a team and play every week."
-                    disabled={!signupsOpen && !isRegistered}
+                    disabled={playerLocked}
                   />
                   <RadioTile
                     name="type"
                     value="STANDIN"
-                    defaultChecked={form?.type === "STANDIN"}
+                    defaultChecked={playerLocked || form?.type === "STANDIN"}
                     title="Standin"
                     desc="Fill in for teams when someone can't play."
                   />
