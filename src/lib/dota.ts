@@ -47,6 +47,13 @@ function withKey(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}api_key=${key}`;
 }
 
+/**
+ * One per-metric benchmark from OpenDota: the player's raw value and their
+ * percentile (0..1) against everyone playing that hero worldwide. Present on
+ * plain /matches/{id} payloads — no replay parse required.
+ */
+export type OpenDotaBenchmark = { raw?: number | null; pct?: number | null };
+
 export type OpenDotaPlayer = {
   account_id: number | null;
   player_slot: number;
@@ -60,6 +67,12 @@ export type OpenDotaPlayer = {
   last_hits?: number;
   gold_per_min?: number;
   xp_per_min?: number;
+  denies?: number;
+  level?: number;
+  hero_damage?: number;
+  tower_damage?: number;
+  hero_healing?: number;
+  benchmarks?: Record<string, OpenDotaBenchmark> | null;
 };
 
 export type OpenDotaMatch = {

@@ -15,6 +15,7 @@ import {
   type PlayerGameLine,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
+import { careerReportCard, percentLabel } from "@/lib/benchmarks";
 import { weeklyHonors } from "@/lib/honors";
 import { getHeroNames } from "@/lib/dota";
 import { formatNetWorth } from "@/lib/utils";
@@ -64,8 +65,11 @@ export default async function LeadersPage() {
     },
   });
 
-  // Accumulate each mapped player's per-game lines across the whole season.
+  // Accumulate each mapped player's per-game lines across the whole season —
+  // and the raw stored lines too, which carry the benchmark percentiles the
+  // report-card board grades on.
   const linesByUser = new Map<string, PlayerGameLine[]>();
+  const rawByUser = new Map<string, PlayerStat[]>();
   for (const g of games) {
     for (const p of safeParse(g.players)) {
       if (!p.userId) continue;
@@ -81,6 +85,9 @@ export default async function LeadersPage() {
         gpm: p.gpm,
       });
       linesByUser.set(p.userId, arr);
+      const raw = rawByUser.get(p.userId) ?? [];
+      raw.push(p);
+      rawByUser.set(p.userId, raw);
     }
   }
 
@@ -211,6 +218,32 @@ export default async function LeadersPage() {
     },
   ];
 
+  // "Best report card": ranked by average benchmark percentile — the learn
+  // league's own honor roll. Only graded lines count; the shared rate floor
+  // keeps one lucky game off the top.
+  const reportRows: LeaderBoardRow[] = [...rawByUser.entries()]
+    .map(([id, lines]) => ({ id, report: careerReportCard(lines) }))
+    .filter((r) => r.report.avgPct != null && r.report.graded >= rateFloor)
+    .sort(
+      (a, b) =>
+        b.report.avgPct! - a.report.avgPct! ||
+        b.report.graded - a.report.graded ||
+        a.id.localeCompare(b.id),
+    )
+    .map(({ id, report }) => {
+      const u = userMap.get(id);
+      return {
+        id,
+        name: u?.name ?? "Unknown",
+        avatar: u?.avatar ?? null,
+        rankTier: u?.rankTier ?? null,
+        value: report.avgPct!,
+        valueLabel: percentLabel(report.avgPct!).replace(" percentile", ""),
+        hint: `${report.graded} graded game${report.graded === 1 ? "" : "s"}${report.best ? ` · best: ${report.best.label.toLowerCase()}` : ""}`,
+        isViewer: viewer?.id === id,
+      };
+    });
+
   return (
     <div className="space-y-6">
       <PageTitle
@@ -274,6 +307,13 @@ export default async function LeadersPage() {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {reportRows.length > 0 ? (
+          <LeaderBoard
+            title="Best report card"
+            subtitle={`avg percentile vs the world · min ${rateFloor} graded game${rateFloor > 1 ? "s" : ""}`}
+            rows={reportRows}
+          />
+        ) : null}
         {boards.map((b) => {
           // Full ranked list per board — the client card shows top 5 and
           // expands on demand; labels are precomputed here (fns don't

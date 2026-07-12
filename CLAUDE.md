@@ -442,6 +442,55 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps a
   tie, so feed games chronologically. Linked from the footer + Hall of Fame.
 
+## Hero report cards (done, branch: ambitious-features)
+
+- Import now stores the extended per-player OpenDota fields on each
+  `Game.players` line: `xpm/denies/level/heroDamage/towerDamage/heroHealing`
+  + `benchmarks` (per-metric `{raw, pct}` percentiles vs the world on that
+  hero — present on plain `/matches/{id}` payloads, no replay parse needed).
+  `sanitizeBenchmarks` (exported, tested) keeps only finite pcts, clamped
+  0..1, and stores `null` when none — the `"benchmarks"` JSON key doubles as
+  the "already enriched" marker. Legacy lines simply lack the fields.
+- Pure `src/lib/benchmarks.ts` (tested): 7-metric catalog, `gradeFor`
+  (S/A/B/C/D), `gameReportCard`, `careerReportCard` (per-metric averages +
+  focus/best callouts with an observation floor), `percentLabel` ordinals.
+- Surfaces: grade-chip strip under every box-score line (`/matches/[id]`),
+  "Report card" percentile bars + strength/work-on callouts on
+  `/players/[id]`, "Best report card" board on `/leaders`.
+- Admin backfill: `enrichStoredGames` (integration-tested) re-fetches games
+  missing the marker by `dotaMatchId` in bounded batches, merging new fields
+  WITHOUT touching userId/teamId attribution; button lives in the Dota
+  league integration card.
+
+## Opponent scouting report (done, branch: ambitious-features)
+
+- Pure `src/lib/scouting.ts` (tested): `playerHeroPool` (per-hero W-L/KDA),
+  `threatBoard` (team-wide ban list, adaptive `max(2, ceil(picks/25))`
+  floor; `contested` = most-picked fallback), `paceProfile` (win/loss avg
+  minutes; 0-duration games excluded — unreported ≠ data), `dossierEmpty`.
+  Role coverage reuses `pool-stats.roleCoverage`.
+- Rendered as a two-sided "Scouting report" card in the `/matches/[id]`
+  preview (both dossiers public), over ALL seasons' stored box scores.
+
+## Playoff scenario engine (done, branch: ambitious-features)
+
+- Pure `src/lib/scenarios.ts` (tested, incl. a seeded property test that
+  re-derives every leaf via `computeStandings`): `scenarioReport` enumerates
+  every remaining REGULAR outcome (draw branch only for even best-ofs) under
+  a 200k-leaf cap and refines the conservative `clinchStatuses` — ties always
+  counted against a clinch and for a survival, so exactness only turns null
+  into CLINCHED/ELIMINATED, never contradicts. Layer-1 bounds (always):
+  `magicNumber`, `eliminationLosses`, focal-match-conditioned `winAndIn` /
+  `loseAndOut`, rank ranges. Over the cap it degrades to `clinchStatuses` +
+  bounds. `matchStakes`/`stakesHeadline` produce the human labels.
+- `src/lib/stakes.ts` (tested) adapts prisma rows → engine inputs and the
+  report → the standings `clinch` prop (cut from `pickBracketSize`, same as
+  `createPlayoffBracket`; null when everyone makes the bracket).
+- Surfaces: refined ✓/✗ marks on the dashboard + `/schedule` standings,
+  "The race" notes in the Playoff picture card, "Tonight's stakes" banner on
+  regular-season match previews (silent until a night decides something),
+  "What we need" card on `/teams/[id]`.
+
 ## League news (done)
 
 - `NewsPost` model (title/body/pinned/author). Pure `sortNews` (pinned first,

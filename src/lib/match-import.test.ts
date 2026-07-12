@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { classifyGame } from "./match-import";
+import {
+  buildPlayers,
+  classifyGame,
+  sanitizeBenchmarks,
+} from "./match-import";
 import type { OpenDotaMatch, OpenDotaPlayer } from "./dota";
 
 function player(account_id: number, isRadiant: boolean): OpenDotaPlayer {
@@ -83,5 +87,75 @@ describe("classifyGame", () => {
       teamB,
     );
     expect(c.ok).toBe(false);
+  });
+});
+
+describe("sanitizeBenchmarks", () => {
+  it("keeps entries with a finite pct, clamped into 0..1", () => {
+    const out = sanitizeBenchmarks({
+      gold_per_min: { raw: 512, pct: 0.72 },
+      xp_per_min: { raw: 600, pct: 1.4 },
+      kills_per_min: { raw: 0.1, pct: -0.2 },
+    });
+    expect(out).toEqual({
+      gold_per_min: { raw: 512, pct: 0.72 },
+      xp_per_min: { raw: 600, pct: 1 },
+      kills_per_min: { raw: 0.1, pct: 0 },
+    });
+  });
+
+  it("drops entries with missing/null/NaN pct and nullifies bad raws", () => {
+    const out = sanitizeBenchmarks({
+      gold_per_min: { raw: 512 },
+      xp_per_min: { raw: 600, pct: null },
+      hero_damage_per_min: { raw: NaN, pct: 0.5 },
+      tower_damage: { pct: NaN },
+    });
+    expect(out).toEqual({ hero_damage_per_min: { raw: null, pct: 0.5 } });
+  });
+
+  it("returns null for absent, non-object, or fully unusable benchmarks", () => {
+    expect(sanitizeBenchmarks(undefined)).toBeNull();
+    expect(sanitizeBenchmarks(null)).toBeNull();
+    expect(sanitizeBenchmarks({ gold_per_min: { raw: 1 } })).toBeNull();
+  });
+});
+
+describe("buildPlayers report-card fields", () => {
+  it("passes the extended stats and benchmarks through onto stored lines", () => {
+    const match = makeMatch([1], [6], true);
+    match.players[0] = {
+      ...match.players[0],
+      xp_per_min: 610,
+      denies: 12,
+      level: 25,
+      hero_damage: 24000,
+      tower_damage: 5100,
+      hero_healing: 0,
+      benchmarks: { gold_per_min: { raw: 512, pct: 0.72 } },
+    };
+    const lines = buildPlayers(match, new Map());
+    expect(lines[0]).toMatchObject({
+      xpm: 610,
+      denies: 12,
+      level: 25,
+      heroDamage: 24000,
+      towerDamage: 5100,
+      heroHealing: 0,
+      benchmarks: { gold_per_min: { raw: 512, pct: 0.72 } },
+    });
+  });
+
+  it("tolerates absent fields (legacy-shaped payloads) as nulls", () => {
+    const lines = buildPlayers(makeMatch([1], [6], true), new Map());
+    expect(lines[0]).toMatchObject({
+      xpm: null,
+      denies: null,
+      level: null,
+      heroDamage: null,
+      towerDamage: null,
+      heroHealing: null,
+      benchmarks: null,
+    });
   });
 });

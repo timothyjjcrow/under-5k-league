@@ -2,11 +2,9 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import {
-  clinchStatuses,
-  computeStandings,
-  standingsMovement,
-} from "@/lib/standings";
+import { computeStandings, standingsMovement } from "@/lib/standings";
+import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
+import type { ScenarioReport } from "@/lib/scenarios";
 import {
   byeTeamsByWeek,
   pickBracketSize,
@@ -212,6 +210,12 @@ export default async function SchedulePage() {
     teams.map((t) => t.id),
     matches,
   );
+  // The scenario engine's report drives the refined clinch marks and the
+  // playoff-race notes — only a live regular season has a race to compute.
+  const stakesReport =
+    season.status === "REGULAR_SEASON"
+      ? seasonScenarioReport(standings, matches, teams.length)
+      : null;
 
   const regular = matches.filter((m) => m.phase === "REGULAR");
   const playoff = matches.filter((m) => m.phase !== "REGULAR");
@@ -372,15 +376,7 @@ export default async function SchedulePage() {
                 ? pickBracketSize(teams.length)
                 : undefined
             }
-            clinch={
-              season.status === "REGULAR_SEASON"
-                ? clinchStatuses(
-                    standings,
-                    matches,
-                    pickBracketSize(teams.length),
-                  )
-                : undefined
-            }
+            clinch={clinchFromReport(stakesReport)}
             viewerTeamId={[...myTeamIds][0]}
             movement={standingsMovement(
               teams.map((t) => t.id),
@@ -394,7 +390,11 @@ export default async function SchedulePage() {
       teams.length > 2 &&
       standings.some((s) => s.played > 0) ? (
         <>
-          <PlayoffPicture standings={standings} teamName={teamName} />
+          <PlayoffPicture
+            standings={standings}
+            teamName={teamName}
+            report={stakesReport}
+          />
           <RunIn
             standings={standings}
             teamName={teamName}
@@ -442,18 +442,43 @@ export default async function SchedulePage() {
 }
 
 // Projected first-round matchups if the season ended today — the same
-// seeding rule startPlayoffs will use, over the live table.
+// seeding rule startPlayoffs will use, over the live table — plus what each
+// team in the race still needs, from the exact scenario engine.
 function PlayoffPicture({
   standings,
   teamName,
+  report,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
+  report: ScenarioReport | null;
 }) {
   const order = standings.map((s) => s.teamId);
   const size = pickBracketSize(order.length);
   const seedOf = new Map(order.slice(0, size).map((id, i) => [id, i + 1]));
   const pairings = playoffFirstRound(order, size);
+
+  // One line per team whose fate is still open — what tonight/this week means.
+  const raceNotes = order
+    .map((teamId) => {
+      const s = report?.teams.get(teamId);
+      if (!s || s.status !== null) return null;
+      const bits: string[] = [];
+      if (s.winAndIn && s.loseAndOut) bits.push("win next and in, lose and out");
+      else if (s.winAndIn) bits.push("win next and they're in");
+      else if (s.loseAndOut) bits.push("lose next and they're out");
+      if (s.magicNumber != null && s.magicNumber > 0 && !s.winAndIn)
+        bits.push(`magic number ${s.magicNumber}`);
+      if (s.exact && s.madeCount != null && s.leafCount) {
+        bits.push(
+          `in ${Math.round((s.madeCount / s.leafCount) * 100)}% of scenarios`,
+        );
+      }
+      if (bits.length === 0) return null;
+      return { teamId, note: bits.join(" · ") };
+    })
+    .filter((n): n is NonNullable<typeof n> => n !== null);
+
   return (
     <Card>
       <CardHeader
@@ -471,6 +496,37 @@ function PlayoffPicture({
             <ProjectedSide teamId={p.away} seed={seedOf.get(p.away)} teamName={teamName} align="left" />
           </div>
         ))}
+        {raceNotes.length > 0 ? (
+          <div className="sm:col-span-2">
+            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
+              The race{report?.exact ? "" : " (points bounds)"}
+            </div>
+            <ul className="space-y-1">
+              {raceNotes.map((n) => (
+                <li
+                  key={n.teamId}
+                  className="flex min-w-0 items-center gap-2 text-sm"
+                >
+                  <TeamCrest
+                    name={teamName.get(n.teamId) ?? "?"}
+                    seed={n.teamId}
+                    size={18}
+                    className="shrink-0 rounded"
+                  />
+                  <Link
+                    href={`/teams/${n.teamId}`}
+                    className="max-w-[10rem] truncate hover:text-info"
+                  >
+                    {teamName.get(n.teamId) ?? "?"}
+                  </Link>
+                  <span className="min-w-0 flex-1 truncate text-xs text-muted">
+                    {n.note}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </CardBody>
     </Card>
   );

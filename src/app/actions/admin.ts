@@ -30,6 +30,7 @@ import {
   autoDetectGamesForMatch,
   recomputeSeries,
   syncLeagueGames,
+  enrichStoredGames,
 } from "@/lib/match-import";
 import {
   parseMatchId,
@@ -1314,6 +1315,28 @@ export async function syncLeagueAction(
   refresh();
   return {
     message: `League sync · imported ${res.imported} of ${res.scanned} league games`,
+  };
+}
+
+/** Backfill report-card stats (benchmarks, XPM…) onto older imported games. */
+export async function enrichGamesAction(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const res = await enrichStoredGames();
+  if (res.enriched === 0 && res.remaining === 0) {
+    return { message: "Every stored game already has report-card data" };
+  }
+  refresh();
+  return {
+    message: `Enriched ${res.enriched} game(s)${
+      res.failed ? ` · ${res.failed} not on OpenDota right now` : ""
+    }${res.remaining ? ` · ${res.remaining} to go — run again` : ""}`,
   };
 }
 

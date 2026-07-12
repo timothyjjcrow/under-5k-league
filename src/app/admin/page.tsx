@@ -27,6 +27,7 @@ import {
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
+  enrichGamesAction,
   setDiscordWebhook,
   testDiscordWebhook,
   signFreeAgent,
@@ -1089,6 +1090,19 @@ function LeagueControls({ season }: { season: Season }) {
               manual match ids or players&apos; public data needed.
             </li>
           </ol>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
+          <p className="min-w-[14rem] flex-1 text-xs text-muted">
+            <span className="font-medium text-fg">Report-card backfill:</span>{" "}
+            games imported before hero report cards existed are missing their
+            percentile benchmarks — re-fetch them from OpenDota in small
+            batches.
+          </p>
+          <ActionForm action={enrichGamesAction}>
+            <SubmitButton variant="secondary" size="sm">
+              Enrich stored games
+            </SubmitButton>
+          </ActionForm>
         </div>
       </CardBody>
     </Card>

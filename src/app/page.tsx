@@ -4,11 +4,11 @@ import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import {
-  clinchStatuses,
   computeStandings,
   standingsMovement,
   type ClinchStatus,
 } from "@/lib/standings";
+import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import { pickBracketSize } from "@/lib/schedule";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -1121,10 +1121,10 @@ async function SeasonView({
                 }
                 clinch={
                   season.status === "REGULAR_SEASON"
-                    ? clinchStatuses(
-                        standings,
-                        matches,
-                        pickBracketSize(teams.length),
+                    ? // Exact scenario engine — refines the conservative marks
+                      // by enumerating every remaining outcome when feasible.
+                      clinchFromReport(
+                        seasonScenarioReport(standings, matches, teams.length),
                       )
                     : undefined
                 }

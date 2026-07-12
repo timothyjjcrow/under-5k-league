@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { shareMetadata } from "@/lib/share-metadata";
 import { LocalTime } from "@/components/local-time";
 import { computeStandings } from "@/lib/standings";
+import { seasonScenarioReport } from "@/lib/stakes";
+import type { TeamScenario } from "@/lib/scenarios";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { roleCoverage } from "@/lib/pool-stats";
 import {
@@ -130,6 +132,12 @@ export default async function TeamPage({
   const rank = standings.findIndex((s) => s.teamId === id) + 1;
   const row = standings.find((s) => s.teamId === id);
   const teamName = new Map(allTeams.map((t) => [t.id, t.name]));
+  // "What we need": this team's playoff scenario, from the exact engine.
+  const stakesReport =
+    team.season.status === "REGULAR_SEASON"
+      ? seasonScenarioReport(standings, allMatches, allTeams.length)
+      : null;
+  const myScenario = stakesReport?.teams.get(id) ?? null;
 
   const form = recentForm(id, myMatches);
   // Game differential per completed match (chronological) → a form trend.
@@ -323,6 +331,10 @@ export default async function TeamPage({
           <Stat label="Avg MMR" value={avgMmr ?? "—"} />
         </div>
       )}
+
+      {myScenario && stakesReport && played ? (
+        <WhatWeNeed scenario={myScenario} cut={stakesReport.cut} />
+      ) : null}
 
       {diffTrend.length >= 2 ? (
         <Card>
@@ -521,6 +533,105 @@ export default async function TeamPage({
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+/**
+ * "What we need": the team's live playoff scenario from the exact engine —
+ * win-and-in / lose-and-out, magic number, scenario odds, and the possible
+ * finishing range. Regular season only; conservative on ties throughout.
+ */
+function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) {
+  const s = scenario;
+  const odds =
+    s.exact && s.madeCount != null && s.leafCount
+      ? Math.round((s.madeCount / s.leafCount) * 100)
+      : null;
+
+  const facts: { icon: string; text: string }[] = [];
+  if (s.status === null) {
+    if (s.winAndIn && s.loseAndOut) {
+      facts.push({
+        icon: "⚡",
+        text: "Win the next series and they're in — lose it and they're out.",
+      });
+    } else if (s.winAndIn) {
+      facts.push({
+        icon: "🎯",
+        text: "Win the next series and a playoff spot is locked, whatever else happens.",
+      });
+    } else if (s.loseAndOut) {
+      facts.push({
+        icon: "⚠️",
+        text: "Lose the next series and the playoffs are gone, whatever else happens.",
+      });
+    }
+    if (s.magicNumber != null && s.magicNumber > 0) {
+      facts.push({
+        icon: "🔢",
+        text: `Magic number ${s.magicNumber}: that many more series wins guarantee a top-${cut} finish.`,
+      });
+    } else if (s.magicNumber == null) {
+      facts.push({
+        icon: "🤝",
+        text: "Winning out alone can't lock it — they'll need results elsewhere too.",
+      });
+    }
+    if (s.eliminationLosses != null && s.eliminationLosses > 0) {
+      facts.push({
+        icon: "🧮",
+        text: `${s.eliminationLosses} more series ${s.eliminationLosses === 1 ? "loss" : "losses"} would guarantee missing the cut.`,
+      });
+    }
+    if (odds != null && s.leafCount) {
+      facts.push({
+        icon: "📊",
+        text: `Safely top-${cut} in ${odds}% of the ${s.leafCount.toLocaleString()} remaining scenarios (ties counted against them).`,
+      });
+    }
+  }
+  facts.push({
+    icon: "📈",
+    text:
+      s.bestRank === s.worstRank
+        ? `Locked into finishing #${s.bestRank}.`
+        : `Could still finish anywhere from #${s.bestRank} to #${s.worstRank}.`,
+  });
+
+  const title =
+    s.status === "CLINCHED"
+      ? "✓ Playoff spot locked"
+      : s.status === "ELIMINATED"
+        ? "Out of the playoff race"
+        : "What we need";
+  const subtitle =
+    s.status === "CLINCHED"
+      ? "Now it's about seeding"
+      : s.status === "ELIMINATED"
+        ? "Playing for pride — and next season"
+        : `The road to a top-${cut} finish${s.exact ? "" : " (points bounds — race too big to enumerate)"}`;
+
+  return (
+    <Card
+      className={cn(
+        s.status === "CLINCHED" && "border-success/30",
+        s.status === null && "border-accent/30",
+      )}
+    >
+      <CardHeader title={title} subtitle={subtitle} />
+      <CardBody>
+        <ul className="space-y-1.5 text-sm">
+          {facts.map((f) => (
+            <li key={f.text} className="flex items-start gap-2">
+              <span aria-hidden className="shrink-0">
+                {f.icon}
+              </span>
+              <span className="min-w-0">{f.text}</span>
+            </li>
+          ))}
+        </ul>
+      </CardBody>
+    </Card>
   );
 }
 

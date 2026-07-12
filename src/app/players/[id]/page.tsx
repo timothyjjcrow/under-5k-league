@@ -35,6 +35,7 @@ import {
 } from "@/components/ui";
 import { resultFor, type FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
+import { careerReportCard, gradeFor, gradeTone, percentLabel } from "@/lib/benchmarks";
 
 export async function generateMetadata({
   params,
@@ -180,6 +181,12 @@ export default async function PlayerProfilePage({
     })
     .filter((l): l is NonNullable<typeof l> => l !== null);
   const badges = achievementsFor(achievementLines);
+  // Career report card: worldwide percentile benchmarks over every graded line.
+  const reportCard = careerReportCard(
+    allGames
+      .map((g) => safeParse(g.players).find((p) => p.userId === id))
+      .filter((l): l is PlayerStat => l != null),
+  );
   const streak = currentStreak(lines); // `lines` is newest-first (games desc)
   const streakLabel =
     streak.count > 1 ? `${streak.type}${streak.count} streak` : undefined;
@@ -501,6 +508,84 @@ export default async function PlayerProfilePage({
                   {bestView.won ? "W" : "L"}
                 </Badge>
               </Link>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {reportCard.graded > 0 ? (
+        <Card>
+          <CardHeader
+            title="Report card"
+            subtitle={`How they stack up vs the world on their heroes — OpenDota percentiles over ${reportCard.graded} graded game${reportCard.graded === 1 ? "" : "s"}`}
+          />
+          <CardBody className="space-y-4">
+            <ul className="space-y-2">
+              {reportCard.metrics.map((m) => {
+                const grade = gradeFor(m.avgPct);
+                const tone = gradeTone(grade);
+                return (
+                  <li key={m.key} className="flex items-center gap-3 text-sm">
+                    <span className="w-28 shrink-0 truncate text-xs text-muted sm:w-32">
+                      {m.label}
+                    </span>
+                    <span
+                      role="img"
+                      aria-label={`${m.label}: ${percentLabel(m.avgPct)}, grade ${grade}`}
+                      className="min-w-0 flex-1"
+                    >
+                      <span className="block h-2 w-full overflow-hidden rounded-full bg-surface-2">
+                        <span
+                          className={cn(
+                            "block h-full rounded-full",
+                            tone === "success"
+                              ? "bg-success/80"
+                              : tone === "accent"
+                                ? "bg-accent/80"
+                                : tone === "muted"
+                                  ? "bg-line"
+                                  : "bg-fg/40",
+                          )}
+                          style={{ width: `${Math.round(m.avgPct * 100)}%` }}
+                        />
+                      </span>
+                    </span>
+                    <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">
+                      {percentLabel(m.avgPct).replace(" percentile", "")}
+                      <b
+                        className={cn(
+                          "ml-1.5 font-semibold",
+                          tone === "success"
+                            ? "text-success"
+                            : tone === "accent"
+                              ? "text-accent"
+                              : "text-fg/80",
+                        )}
+                      >
+                        {grade}
+                      </b>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            {reportCard.best || reportCard.focus ? (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {reportCard.best ? (
+                  <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-xs">
+                    <span aria-hidden>💪</span>{" "}
+                    <b>Strength:</b> {reportCard.best.label} —{" "}
+                    {percentLabel(reportCard.best.avgPct)}
+                  </div>
+                ) : null}
+                {reportCard.focus ? (
+                  <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
+                    <span aria-hidden>🎯</span>{" "}
+                    <b>Work on:</b> {reportCard.focus.label} —{" "}
+                    {percentLabel(reportCard.focus.avgPct)}
+                  </div>
+                ) : null}
+              </div>
             ) : null}
           </CardBody>
         </Card>

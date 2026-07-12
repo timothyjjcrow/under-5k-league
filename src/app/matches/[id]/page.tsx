@@ -20,6 +20,28 @@ import {
 } from "@/app/actions/reschedule";
 import type { PlayerStat } from "@/lib/match-import";
 import {
+  cardAverage,
+  gameReportCard,
+  gradeFor,
+  gradeTone,
+  percentLabel,
+  type Grade,
+} from "@/lib/benchmarks";
+import {
+  dossierEmpty,
+  paceProfile,
+  playerHeroPool,
+  threatBoard,
+  type HeroPoolRow,
+  type PaceProfile,
+  type ScoutGame,
+  type ThreatBoard,
+} from "@/lib/scouting";
+import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
+import { computeStandings } from "@/lib/standings";
+import { seasonScenarioReport } from "@/lib/stakes";
+import { matchStakes, stakesHeadline } from "@/lib/scenarios";
+import {
   Avatar,
   Badge,
   Card,
@@ -254,6 +276,7 @@ async function MatchPreview({
     id: string;
     seasonId: string;
     week: number;
+    phase: string;
     status: string;
     scheduledAt: Date | null;
     homeTeamId: string;
@@ -338,6 +361,8 @@ async function MatchPreview({
           myRsvp={myRsvp}
         />
       ) : null}
+
+      <StakesBanner match={match} />
 
       <Card>
         <CardHeader
@@ -444,10 +469,336 @@ async function MatchPreview({
         </CardBody>
       </Card>
 
+      <ScoutingReport
+        sides={sides.map((s) => ({
+          teamId: s.teamId,
+          name: s.name,
+          roster: s.roster.map((m) => ({
+            userId: m.userId,
+            name: m.user.name,
+            roles: regByUser.get(m.userId)?.roles ?? "",
+          })),
+        }))}
+      />
+
       <p className="text-center text-xs text-muted">
         The box score appears here once the match is played and imported from
         Dota (OpenDota).
       </p>
+    </div>
+  );
+}
+
+/**
+ * "Tonight's stakes": what this match means for the playoff race, from the
+ * exact scenario engine. Renders only when the night actually decides
+ * something (win-and-in / lose-and-out / magic number 1) or a side's fate is
+ * already sealed — early-season "everyone's in the hunt" stays silent.
+ */
+async function StakesBanner({
+  match,
+}: {
+  match: {
+    seasonId: string;
+    phase: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeam: { name: string };
+    awayTeam: { name: string };
+  };
+}) {
+  if (match.phase !== "REGULAR") return null;
+  const season = await prisma.season.findUnique({
+    where: { id: match.seasonId },
+    select: { status: true },
+  });
+  if (season?.status !== "REGULAR_SEASON") return null;
+
+  const [teams, seasonMatches] = await Promise.all([
+    prisma.team.findMany({
+      where: { seasonId: match.seasonId },
+      select: { id: true },
+    }),
+    prisma.match.findMany({ where: { seasonId: match.seasonId } }),
+  ]);
+  const standings = computeStandings(
+    teams.map((t) => t.id),
+    seasonMatches,
+  );
+  const report = seasonScenarioReport(standings, seasonMatches, teams.length);
+  if (!report) return null;
+
+  const stakes = matchStakes(match.homeTeamId, match.awayTeamId, report);
+  const headline = stakesHeadline(stakes);
+  const decided = stakes.some(
+    (s) => report.teams.get(s.teamId)?.status != null,
+  );
+  if (!headline && !decided) return null;
+
+  const nameOf = new Map([
+    [match.homeTeamId, match.homeTeam.name],
+    [match.awayTeamId, match.awayTeam.name],
+  ]);
+  return (
+    <Card className="border-accent/30">
+      <CardHeader
+        title="Tonight's stakes"
+        subtitle={headline ?? "The playoff picture is taking shape"}
+      />
+      <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {stakes.map((s) => {
+          const status = report.teams.get(s.teamId)?.status ?? null;
+          return (
+            <div
+              key={s.teamId}
+              className={cn(
+                "flex min-w-0 items-center gap-2.5 rounded-lg border px-3 py-2 text-sm",
+                status === "CLINCHED"
+                  ? "border-success/30 bg-success/5"
+                  : status === "ELIMINATED"
+                    ? "border-line bg-surface-2/40 text-muted"
+                    : "border-accent/30 bg-accent/5",
+              )}
+            >
+              <TeamCrest
+                name={nameOf.get(s.teamId) ?? "?"}
+                seed={s.teamId}
+                size={22}
+                className="shrink-0 rounded-md"
+              />
+              <span className="min-w-0">
+                <span className="block truncate font-medium">
+                  {nameOf.get(s.teamId) ?? "?"}
+                </span>
+                <span className="block text-xs text-muted">{s.label}</span>
+              </span>
+            </div>
+          );
+        })}
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
+ * The pre-match dossier: each roster's comfort heroes, the heroes to ban
+ * (best win rate at a meaningful sample), and how fast their games run —
+ * computed from every box score the league has ever stored, both teams
+ * visible to everyone (it's all public data).
+ */
+async function ScoutingReport({
+  sides,
+}: {
+  sides: {
+    teamId: string;
+    name: string;
+    roster: { userId: string; name: string; roles: string }[];
+  }[];
+}) {
+  const allGames = await prisma.game.findMany({
+    select: {
+      players: true,
+      radiantWin: true,
+      durationSecs: true,
+      startTime: true,
+    },
+  });
+  const scoutGames: ScoutGame[] = allGames.map((g) => ({
+    radiantWin: g.radiantWin,
+    durationSecs: g.durationSecs,
+    startTime: g.startTime,
+    lines: safeParse(g.players).map((p) => ({
+      userId: p.userId,
+      heroId: p.heroId,
+      isRadiant: p.isRadiant,
+      kills: p.kills,
+      deaths: p.deaths,
+      assists: p.assists,
+    })),
+  }));
+
+  const dossiers = sides.map((side) => {
+    const ids = side.roster.map((r) => r.userId);
+    const board = threatBoard(ids, scoutGames);
+    const pools = side.roster.map((r) => ({
+      ...r,
+      pool: playerHeroPool(r.userId, scoutGames),
+    }));
+    return {
+      ...side,
+      board,
+      pools,
+      pace: paceProfile(ids, scoutGames),
+      coverage: roleCoverage(side.roster),
+      empty: dossierEmpty(
+        pools.map((p) => p.pool),
+        board,
+      ),
+    };
+  });
+
+  if (dossiers.every((d) => d.empty)) return null;
+  const heroNames = await getHeroNames();
+
+  return (
+    <Card>
+      <CardHeader
+        title="Scouting report"
+        subtitle="Know your enemy — comfort heroes, ban targets, and pace from every game on record."
+      />
+      <CardBody className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {dossiers.map((d) => (
+          <div key={d.teamId} className="min-w-0 rounded-lg border border-line p-3">
+            <div className="mb-2.5 flex min-w-0 items-center gap-2">
+              <TeamCrest name={d.name} seed={d.teamId} size={22} className="rounded-md" />
+              <span className="truncate font-display text-base font-semibold">
+                {d.name}
+              </span>
+            </div>
+            {d.empty ? (
+              <p className="py-4 text-center text-sm text-muted">
+                No league history yet — they&apos;re a mystery.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                <ThreatList board={d.board} heroNames={heroNames} />
+                <ComfortPicks pools={d.pools} heroNames={heroNames} />
+                <PaceLine pace={d.pace} coverage={d.coverage} />
+              </div>
+            )}
+          </div>
+        ))}
+      </CardBody>
+    </Card>
+  );
+}
+
+function ThreatList({
+  board,
+  heroNames,
+}: {
+  board: ThreatBoard;
+  heroNames: Record<number, string>;
+}) {
+  // A real sample earns "ban board" framing; a thin one is just "most picked".
+  const ranked = board.rows.length > 0;
+  const rows = (ranked ? board.rows : board.contested).slice(0, 5);
+  if (rows.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted">
+        {ranked ? `Ban board (${board.minPicks}+ picks)` : "Most picked"}
+      </div>
+      <ul className="space-y-1">
+        {rows.map((r) => {
+          const hero = heroById(r.heroId);
+          return (
+            <li key={r.heroId} className="flex items-center gap-2 text-sm">
+              {hero ? (
+                <HeroIcon hero={hero} size={22} />
+              ) : (
+                <span className="h-[22px] w-[22px] shrink-0 rounded border border-line/70 bg-surface-2" />
+              )}
+              <span className="min-w-0 flex-1 truncate">
+                {heroNames[r.heroId] ?? hero?.name ?? `Hero ${r.heroId}`}
+              </span>
+              <span className="shrink-0 text-xs tabular-nums text-muted">
+                {r.wins}–{r.picks - r.wins}
+                <span
+                  className={cn(
+                    "ml-2 font-medium",
+                    r.winRate >= 60
+                      ? "text-success"
+                      : r.winRate < 40
+                        ? "text-danger"
+                        : "text-fg/80",
+                  )}
+                >
+                  {r.winRate}%
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function ComfortPicks({
+  pools,
+  heroNames,
+}: {
+  pools: { userId: string; name: string; pool: HeroPoolRow[] }[];
+  heroNames: Record<number, string>;
+}) {
+  const withPool = pools.filter((p) => p.pool.length > 0);
+  if (withPool.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted">
+        Comfort picks
+      </div>
+      <ul className="space-y-1">
+        {withPool.map((p) => (
+          <li key={p.userId} className="flex items-center gap-2 text-sm">
+            <PlayerLink userId={p.userId} className="w-28 shrink-0 truncate text-xs">
+              {p.name}
+            </PlayerLink>
+            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              {p.pool.slice(0, 3).map((h) => {
+                const hero = heroById(h.heroId);
+                const name = heroNames[h.heroId] ?? hero?.name ?? `Hero ${h.heroId}`;
+                return (
+                  <span
+                    key={h.heroId}
+                    role="img"
+                    aria-label={`${name}: ${h.games} games, ${h.winRate}% wins`}
+                    title={`${name} — ${h.wins}–${h.games - h.wins} (${h.winRate}%)`}
+                    className="inline-flex items-center gap-1 rounded border border-line bg-surface-2/50 px-1 py-px text-[11px]"
+                  >
+                    {hero ? <HeroIcon hero={hero} size={16} /> : null}
+                    <span aria-hidden className="tabular-nums text-muted">
+                      ×{h.games}
+                    </span>
+                  </span>
+                );
+              })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PaceLine({
+  pace,
+  coverage,
+}: {
+  pace: PaceProfile;
+  coverage: RoleCount[];
+}) {
+  const gaps = coverage.filter((c) => c.count === 0);
+  const bits: string[] = [];
+  if (pace.winAvgMins != null) bits.push(`wins avg ${pace.winAvgMins}m`);
+  if (pace.lossAvgMins != null) bits.push(`losses avg ${pace.lossAvgMins}m`);
+  if (bits.length === 0 && gaps.length === 0) return null;
+  return (
+    <div className="space-y-1 border-t border-line/70 pt-2 text-xs text-muted">
+      {bits.length > 0 ? (
+        <p>
+          Pace over {pace.games} game{pace.games === 1 ? "" : "s"}:{" "}
+          {bits.join(" · ")}
+        </p>
+      ) : null}
+      {gaps.length > 0 && gaps.length < 5 ? (
+        <p>
+          No declared{" "}
+          {gaps.map((g) => `${g.label.toLowerCase()} (${g.key})`).join(", ")} —
+          somebody&apos;s flexing.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -669,10 +1020,63 @@ function SidePlayers({
                   </div>
                 ) : null}
               </div>
+              <ReportCardStrip line={p} />
             </li>
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+const GRADE_CHIP: Record<ReturnType<typeof gradeTone>, string> = {
+  success: "border-success/40 text-success",
+  accent: "border-accent/40 text-accent",
+  default: "border-line text-fg/80",
+  muted: "border-line text-muted",
+};
+
+/**
+ * The hero report card: per-metric worldwide percentile grades (from
+ * OpenDota's benchmarks) as a compact chip strip under a player's line.
+ * Absent entirely for games imported before benchmarks were stored.
+ */
+function ReportCardStrip({ line }: { line: PlayerStat }) {
+  const rows = gameReportCard(line);
+  if (rows.length === 0) return null;
+  const avg = cardAverage(rows);
+  const overall: Grade | null = avg == null ? null : gradeFor(avg);
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-[42px]">
+      {overall ? (
+        <span
+          role="img"
+          aria-label={`Overall report-card grade ${overall} — ${percentLabel(avg!)} vs the world on this hero`}
+          title={`vs the world on this hero: ${percentLabel(avg!)}`}
+          className={cn(
+            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide",
+            GRADE_CHIP[gradeTone(overall)],
+          )}
+        >
+          <span aria-hidden>Report {overall}</span>
+        </span>
+      ) : null}
+      {rows.map((r) => (
+        <span
+          key={r.key}
+          role="img"
+          aria-label={`${r.label}: grade ${r.grade}, ${percentLabel(r.pct)}`}
+          title={`${r.label} — ${percentLabel(r.pct)}`}
+          className={cn(
+            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] tabular-nums",
+            GRADE_CHIP[gradeTone(r.grade)],
+          )}
+        >
+          <span aria-hidden>
+            {r.short} <b>{r.grade}</b>
+          </span>
+        </span>
+      ))}
     </div>
   );
 }

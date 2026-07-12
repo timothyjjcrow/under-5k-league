@@ -5,6 +5,7 @@ import {
   fetchRecentMatchIds,
   fetchLeagueMatchIds,
   type OpenDotaMatch,
+  type OpenDotaPlayer,
 } from "./dota";
 import { advancePlayoffBracket } from "./playoff-service";
 import { maybeAnnounceWeekHonors } from "./honors-service";
@@ -135,7 +136,29 @@ export async function gatherTeamAccounts(match: MatchRow) {
   return { accountMap, homeSet, awaySet, teamSize: season?.teamSize ?? 5 };
 }
 
-function buildPlayers(
+/**
+ * Keep only benchmark entries whose percentile is a real number — OpenDota
+ * occasionally sends nulls/objects with missing pct, and an empty map is
+ * stored as null so old and new lines degrade the same way. Exported for tests.
+ */
+export function sanitizeBenchmarks(
+  raw: OpenDotaPlayer["benchmarks"],
+): Record<string, { raw: number | null; pct: number }> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const out: Record<string, { raw: number | null; pct: number }> = {};
+  for (const [key, v] of Object.entries(raw)) {
+    if (!v || typeof v.pct !== "number" || !Number.isFinite(v.pct)) continue;
+    out[key] = {
+      raw: typeof v.raw === "number" && Number.isFinite(v.raw) ? v.raw : null,
+      // OpenDota pct is 0..1; clamp defensively so stored data is always sane.
+      pct: Math.min(1, Math.max(0, v.pct)),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Shape a fetched game's players into the stored box-score JSON lines. */
+export function buildPlayers(
   match: OpenDotaMatch,
   accountMap: Map<
     number,
@@ -156,6 +179,13 @@ function buildPlayers(
       netWorth: p.net_worth ?? null,
       gpm: p.gold_per_min ?? null,
       lastHits: p.last_hits ?? null,
+      xpm: p.xp_per_min ?? null,
+      denies: p.denies ?? null,
+      level: p.level ?? null,
+      heroDamage: p.hero_damage ?? null,
+      towerDamage: p.tower_damage ?? null,
+      heroHealing: p.hero_healing ?? null,
+      benchmarks: sanitizeBenchmarks(p.benchmarks),
       userId: mapped?.userId ?? null,
       teamId: mapped?.teamId ?? null,
     };
@@ -384,6 +414,85 @@ export async function autoDetectGamesForMatch(
     if (r.ok) imported++;
   }
   return { imported, scanned: accounts.length };
+}
+
+export type EnrichResult = {
+  enriched: number;
+  failed: number;
+  remaining: number;
+};
+
+/**
+ * Backfill report-card fields (benchmarks, XPM, damage numbers…) onto games
+ * imported before those fields were stored. Re-fetches each game from OpenDota
+ * by its unique dotaMatchId and merges the new per-player fields into the
+ * stored JSON — attribution (userId/teamId) and recorded results are never
+ * touched. Every processed line gains a `benchmarks` key (null when OpenDota
+ * has none), which is also the "already enriched" marker, so runs are
+ * idempotent. Bounded per run so one click can't burn the API budget; run
+ * again to continue where it left off.
+ */
+export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
+  const candidates = await prisma.game.findMany({
+    where: { NOT: { players: { contains: '"benchmarks"' } } },
+    orderBy: { fetchedAt: "asc" },
+    select: { id: true, dotaMatchId: true, players: true },
+  });
+
+  let enriched = 0;
+  let failed = 0;
+  const batch = candidates.slice(0, limit);
+  for (const game of batch) {
+    let lines: PlayerStat[];
+    try {
+      const parsed = JSON.parse(game.players);
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      lines = parsed as PlayerStat[];
+    } catch {
+      failed++; // malformed JSON — leave it alone rather than guess
+      continue;
+    }
+
+    const od = await fetchOpenDotaMatch(game.dotaMatchId);
+    if (!od) {
+      failed++;
+      continue;
+    }
+
+    // Match OpenDota players to stored lines: by account id when we have one,
+    // else by (side, hero) — unique within a game since heroes can't repeat.
+    const bySlot = (p: OpenDotaPlayer) => p.isRadiant ?? p.player_slot < 128;
+    const merged = lines.map((line) => {
+      const odPlayer =
+        line.accountId != null
+          ? od.players.find((p) => p.account_id === line.accountId)
+          : od.players.find(
+              (p) => bySlot(p) === line.isRadiant && p.hero_id === line.heroId,
+            );
+      return {
+        ...line,
+        xpm: line.xpm ?? odPlayer?.xp_per_min ?? null,
+        denies: line.denies ?? odPlayer?.denies ?? null,
+        level: line.level ?? odPlayer?.level ?? null,
+        heroDamage: line.heroDamage ?? odPlayer?.hero_damage ?? null,
+        towerDamage: line.towerDamage ?? odPlayer?.tower_damage ?? null,
+        heroHealing: line.heroHealing ?? odPlayer?.hero_healing ?? null,
+        benchmarks: sanitizeBenchmarks(odPlayer?.benchmarks),
+      };
+    });
+
+    await prisma.game.update({
+      where: { id: game.id },
+      data: { players: JSON.stringify(merged) },
+    });
+    enriched++;
+  }
+
+  return {
+    enriched,
+    failed,
+    remaining: candidates.length - batch.length + failed,
+  };
 }
 
 export type LeagueSyncResult = {

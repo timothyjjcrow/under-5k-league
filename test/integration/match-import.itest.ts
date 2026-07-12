@@ -7,6 +7,7 @@ import {
   gatherTeamAccounts,
   importGameForMatch,
   recomputeSeries,
+  enrichStoredGames,
 } from "@/lib/match-import";
 import { makeSeason, makeTeam, makeUser } from "./factories";
 
@@ -490,5 +491,142 @@ describe("autoDetectGamesForMatch", () => {
     expect(res.imported).toBe(0);
     expect(await prisma.game.count({ where: { matchId: rematch.id } })).toBe(0);
     expect(await prisma.game.count({ where: { matchId: week1.id } })).toBe(1);
+  });
+});
+
+describe("enrichStoredGames", () => {
+  afterEach(() => vi.mocked(fetchOpenDotaMatch).mockReset());
+
+  const LEGACY_LINE = {
+    accountId: 111,
+    heroId: 7,
+    isRadiant: true,
+    kills: 3,
+    deaths: 1,
+    assists: 9,
+    personaname: "old",
+    netWorth: 12000,
+    gpm: 480,
+    lastHits: 150,
+    userId: "user-legacy",
+    teamId: "team-legacy",
+  };
+
+  async function legacyGame(dotaMatchId: string, lines: unknown[] = [LEGACY_LINE]) {
+    const season = await makeSeason();
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const match = await regularMatch(season.id, home.id, away.id);
+    return prisma.game.create({
+      data: {
+        matchId: match.id,
+        dotaMatchId,
+        radiantWin: true,
+        winnerTeamId: home.id,
+        players: JSON.stringify(lines),
+      },
+    });
+  }
+
+  it("merges report-card fields into legacy lines without touching attribution", async () => {
+    const game = await legacyGame("9001");
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 9001,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        {
+          account_id: 111,
+          player_slot: 0,
+          hero_id: 7,
+          isRadiant: true,
+          kills: 3,
+          deaths: 1,
+          assists: 9,
+          xp_per_min: 610,
+          denies: 12,
+          hero_damage: 24000,
+          benchmarks: { gold_per_min: { raw: 480, pct: 0.66 } },
+        },
+      ],
+    });
+
+    const res = await enrichStoredGames();
+    expect(res.enriched).toBe(1);
+    expect(res.failed).toBe(0);
+    expect(res.remaining).toBe(0);
+
+    const stored = await prisma.game.findUniqueOrThrow({ where: { id: game.id } });
+    const lines = JSON.parse(stored.players);
+    expect(lines[0]).toMatchObject({
+      // attribution and original stats untouched
+      userId: "user-legacy",
+      teamId: "team-legacy",
+      kills: 3,
+      netWorth: 12000,
+      // new fields merged in
+      xpm: 610,
+      denies: 12,
+      heroDamage: 24000,
+      benchmarks: { gold_per_min: { raw: 480, pct: 0.66 } },
+    });
+
+    // Second run finds nothing left to enrich and never hits the network.
+    vi.mocked(fetchOpenDotaMatch).mockClear();
+    const again = await enrichStoredGames();
+    expect(again.enriched).toBe(0);
+    expect(again.remaining).toBe(0);
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+  });
+
+  it("matches an accountless line by side + hero and stamps benchmarks: null", async () => {
+    const game = await legacyGame("9002", [
+      { ...LEGACY_LINE, accountId: null, heroId: 42, isRadiant: false },
+    ]);
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 9002,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        {
+          account_id: null,
+          player_slot: 128,
+          hero_id: 42,
+          isRadiant: false,
+          kills: 0,
+          deaths: 0,
+          assists: 0,
+          xp_per_min: 333,
+          // no benchmarks from OpenDota for this one
+        },
+      ],
+    });
+
+    const res = await enrichStoredGames();
+    expect(res.enriched).toBe(1);
+    const stored = await prisma.game.findUniqueOrThrow({ where: { id: game.id } });
+    const lines = JSON.parse(stored.players);
+    expect(lines[0].xpm).toBe(333);
+    // the null marker still lands, so this game never rescans
+    expect(lines[0].benchmarks).toBeNull();
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, remaining: 0 });
+  });
+
+  it("counts a game OpenDota can't return as failed and leaves it for retry", async () => {
+    await legacyGame("9003");
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue(null);
+
+    const res = await enrichStoredGames();
+    expect(res.enriched).toBe(0);
+    expect(res.failed).toBe(1);
+    expect(res.remaining).toBe(1); // still waiting on OpenDota
+
+    // The stored JSON is untouched — no benchmarks marker was stamped.
+    const count = await prisma.game.count({
+      where: { NOT: { players: { contains: '"benchmarks"' } } },
+    });
+    expect(count).toBe(1);
   });
 });
