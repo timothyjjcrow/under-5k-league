@@ -76,6 +76,25 @@ describe("computeStandings", () => {
     expect(s).toHaveLength(1);
     expect(s[0].played).toBe(0);
   });
+
+  it("breaks points+diff ties by series wins, not team id", () => {
+    // z: one 2-0 win + one 0-2 loss → 3 pts, diff 0, 1 win.
+    // a: three 1-1 draws → 3 pts, diff 0, 0 wins.
+    // Ids chosen so the alphabetical fallback would give the OPPOSITE order —
+    // this is the only assertion that fails if the wins term is dropped.
+    const s = computeStandings(
+      ["a", "p", "q", "z"],
+      [
+        match("z", "p", 2, 0),
+        match("q", "z", 2, 0),
+        match("a", "p", 1, 1),
+        match("a", "q", 1, 1),
+        match("a", "p", 1, 1),
+      ],
+    );
+    const order = s.map((x) => x.teamId);
+    expect(order.indexOf("z")).toBeLessThan(order.indexOf("a"));
+  });
 });
 
 describe("seriesScoreError", () => {
@@ -179,6 +198,17 @@ describe("clinchStatuses", () => {
     // and finish level on 3, so d is mathematically alive.
     expect(c.get("d")).toBeNull();
   });
+
+  it("marks everyone CLINCHED when the cut covers the whole field — callers must suppress", () => {
+    // Degenerate but reachable (any power-of-two team count): with cut >= field
+    // size, nobody can miss the bracket, so every team "clinches" on day one.
+    // The UI relies on the adapters' cutIsReal/totalTeams guard to hide this —
+    // see StandingsTable in src/app/page.tsx.
+    const matches = [open("a", "b"), open("c", "d"), open("a", "c"), open("b", "d")];
+    const s = computeStandings(["a", "b", "c", "d"], matches);
+    const c = clinchStatuses(s, matches, 4);
+    for (const id of ["a", "b", "c", "d"]) expect(c.get(id)).toBe("CLINCHED");
+  });
 });
 
 describe("standingsMovement", () => {
@@ -196,6 +226,19 @@ describe("standingsMovement", () => {
     const move = standingsMovement(["a", "b"], m);
     expect(move.get("a")).toBe(0);
     expect(move.get("b")).toBe(0);
+  });
+
+  it("is all zeros after only one completed week — no baseline to move from", () => {
+    // The "before" table would be the all-zero preseason ordering (arbitrary
+    // teamId order); rendering arrows against it is alphabetical noise. Ids
+    // chosen so the winners would show bogus ▲ under the old behavior.
+    const m = [
+      wk("z", "a", 2, 0, 1),
+      wk("y", "b", 2, 0, 1),
+      wk("a", "y", 0, 0, 2, "SCHEDULED"),
+    ];
+    const move = standingsMovement(["a", "b", "y", "z"], m);
+    for (const id of ["a", "b", "y", "z"]) expect(move.get(id)).toBe(0);
   });
 
   it("reports climbs and falls vs the previous week's table", () => {

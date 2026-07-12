@@ -108,10 +108,16 @@ export default async function SchedulePage() {
     where: { match: { seasonId: season.id }, status: "PENDING" },
     include: { proposedBy: { select: { name: true } } },
   });
+  // Structured, not preformatted: the chip's tooltip must render the proposed
+  // time in the viewer's timezone (the client formats from the epoch).
   const rescheduleByMatch = new Map(
     pendingReschedules.map((r) => [
       r.matchId,
-      `${r.proposedBy.name} proposes ${fmtWhen(r.proposedTime) ?? "?"}`,
+      {
+        by: r.proposedBy.name,
+        ts: r.proposedTime ? r.proposedTime.getTime() : null,
+        initial: fmtWhen(r.proposedTime),
+      },
     ]),
   );
 

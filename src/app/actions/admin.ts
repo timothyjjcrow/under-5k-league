@@ -513,9 +513,15 @@ export async function startPlayoffs(
     where: { seasonId: season.id },
     select: { week: true, phase: true, status: true },
   });
-  const pending = pendingResultsMessage(regularSeasonStatus(matches));
+  const status = regularSeasonStatus(matches);
+  const pending = pendingResultsMessage(status);
   if (pending) {
     return { error: `${pending} Enter them before starting the playoffs.` };
+  }
+  // pending === 0 is also true for an EMPTY slate — seeding a bracket off a
+  // season that never generated a schedule would be an arbitrary coin flip.
+  if (!status.allComplete) {
+    return { error: "Generate and play the regular season first" };
   }
 
   try {

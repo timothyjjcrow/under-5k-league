@@ -46,12 +46,19 @@ export function StandingsTableClient({
   rows,
   playoffCut,
   viewerTeamId,
+  totalTeams,
 }: {
   rows: StandingsRowView[];
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
   playoffCut?: number;
   /** The signed-in viewer's team — its row gets a subtle highlight. */
   viewerTeamId?: string | null;
+  /**
+   * League size before any slicing — the dashboard shows only the top 8, so
+   * "does anyone miss the bracket?" must be judged against the full field,
+   * not the rows on screen.
+   */
+  totalTeams?: number;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [desc, setDesc] = useState(false);
@@ -83,7 +90,7 @@ export function StandingsTableClient({
     !desc &&
     playoffCut != null &&
     playoffCut > 0 &&
-    playoffCut < rows.length;
+    playoffCut < (totalTeams ?? rows.length);
   const cols = hasForm ? 8 : 7;
 
   const onSort = (key: SortKey) => {

@@ -1096,6 +1096,7 @@ async function SeasonView({
             <CardBody className="p-0">
               <StandingsTable
                 standings={standings.slice(0, 8)}
+                totalTeams={standings.length}
                 teamName={teamName}
                 formByTeam={teamForm}
                 playoffCut={
@@ -1301,6 +1302,7 @@ export function StandingsTable({
   clinch,
   viewerTeamId,
   movement,
+  totalTeams,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -1313,9 +1315,14 @@ export function StandingsTable({
   viewerTeamId?: string | null;
   /** Weekly rank movement (see standingsMovement). */
   movement?: Map<string, number>;
+  /** League size before any slicing (dashboard passes the top 8 only). */
+  totalTeams?: number;
 }) {
+  // "Everyone makes the bracket" must be judged against the whole league,
+  // not the (possibly sliced) rows this table happens to show.
+  const fieldSize = totalTeams ?? standings.length;
   const cutIsReal =
-    playoffCut != null && playoffCut > 0 && playoffCut < standings.length;
+    playoffCut != null && playoffCut > 0 && playoffCut < fieldSize;
   const rows: StandingsRowView[] = standings.map((s, i) => ({
     teamId: s.teamId,
     name: teamName.get(s.teamId) ?? "\u2014",
@@ -1334,6 +1341,7 @@ export function StandingsTable({
       rows={rows}
       playoffCut={playoffCut}
       viewerTeamId={viewerTeamId}
+      totalTeams={fieldSize}
     />
   );
 }

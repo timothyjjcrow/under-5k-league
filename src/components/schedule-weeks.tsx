@@ -8,7 +8,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Badge, Card, CardBody, TeamCrest } from "@/components/ui";
-import { LocalTime } from "@/components/local-time";
+import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
 
 export type RsvpSide = { confirmed: number; out: number };
@@ -32,8 +32,13 @@ export type MatchView = {
   isFinalPhase: boolean;
   standins: string[];
   rsvp?: { home: RsvpSide; away: RsvpSide };
-  /** "Proposer → proposed time" when a reschedule is awaiting the other captain. */
-  reschedulePending: string | null;
+  /** Pending reschedule: proposer + epoch so the tooltip renders viewer-local. */
+  reschedulePending: {
+    by: string;
+    ts: number | null;
+    /** Server-formatted fallback for the first paint. */
+    initial: string | null;
+  } | null;
 };
 
 export type WeekView = {
@@ -327,14 +332,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           {m.rsvp ? <RsvpBadge side={m.rsvp.away} /> : null}
         </div>
         {m.reschedulePending ? (
-          <Link
-            href={`/matches/${m.id}`}
-            aria-label={`Time change proposed — ${m.reschedulePending}. Open the match page to respond.`}
-            title={`Time change proposed — ${m.reschedulePending}`}
-            className="shrink-0 rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
-          >
-            <span aria-hidden>⏳</span>
-          </Link>
+          <RescheduleChip matchId={m.id} pending={m.reschedulePending} />
         ) : null}
         {m.isFinalPhase ? (
           <Badge tone="accent" className="shrink-0">
@@ -358,5 +356,35 @@ function MatchRow({ match: m }: { match: MatchView }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The ⏳ pending-reschedule chip. Its tooltip carries the proposed time, which
+ * must read in the viewer's timezone — the hook reformats the epoch client-side
+ * (attributes can't hold a <LocalTime> element).
+ */
+function RescheduleChip({
+  matchId,
+  pending,
+}: {
+  matchId: string;
+  pending: NonNullable<MatchView["reschedulePending"]>;
+}) {
+  const when = useLocalTimeText(
+    pending.ts ?? 0,
+    "full",
+    pending.initial ?? "?",
+  );
+  const label = `${pending.by} proposes ${pending.ts ? when : "a new time"}`;
+  return (
+    <Link
+      href={`/matches/${matchId}`}
+      aria-label={`Time change proposed — ${label}. Open the match page to respond.`}
+      title={`Time change proposed — ${label}`}
+      className="shrink-0 rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+    >
+      <span aria-hidden>⏳</span>
+    </Link>
   );
 }

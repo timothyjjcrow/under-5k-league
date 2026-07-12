@@ -1409,13 +1409,11 @@ async function PendingReschedules({
             Wk {r.match.week}: {name(r.match.homeTeamId)} vs{" "}
             {name(r.match.awayTeamId)} — <strong>{r.proposedBy.name}</strong>{" "}
             proposes{" "}
-            {r.proposedTime.toLocaleString(undefined, {
-              weekday: "short",
-              month: "short",
-              day: "numeric",
-              hour: "numeric",
-              minute: "2-digit",
-            })}
+            <LocalTime
+              ts={r.proposedTime.getTime()}
+              variant="full"
+              initial={formatMatchTime(r.proposedTime, "full")}
+            />
           </span>
           <ActionForm
             action={cancelReschedule}

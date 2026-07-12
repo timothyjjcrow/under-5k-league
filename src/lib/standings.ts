@@ -65,6 +65,10 @@ export function standingsMovement(
   const movement = new Map(teamIds.map((id) => [id, 0]));
   if (completedRegular.length === 0) return movement;
   const lastWeek = Math.max(...completedRegular.map((m) => m.week));
+  // One completed week is a single data point: the "before" table would be
+  // the all-zero preseason ordering (arbitrary teamId order), so any arrows
+  // would be alphabetical noise dressed up as movement.
+  if (!completedRegular.some((m) => m.week !== lastWeek)) return movement;
 
   const rankOf = (rows: TeamStanding[]) =>
     new Map(rows.map((r, i) => [r.teamId, i]));

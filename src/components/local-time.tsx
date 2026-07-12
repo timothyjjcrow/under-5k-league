@@ -10,6 +10,24 @@ import { formatMatchTime, type TimeVariant } from "@/lib/match-time";
 
 const emptySubscribe = () => () => {};
 
+/**
+ * The string form of the trick, for places that need viewer-local time inside
+ * attributes (title/aria-label) rather than as an element. Server snapshot =
+ * the server-formatted string; client snapshot = the same instant in the
+ * browser's timezone. Hydration-safe by construction.
+ */
+export function useLocalTimeText(
+  ts: number,
+  variant: TimeVariant,
+  initial: string,
+): string {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => formatMatchTime(new Date(ts), variant),
+    () => initial,
+  );
+}
+
 export function LocalTime({
   ts,
   variant,
@@ -22,13 +40,7 @@ export function LocalTime({
   initial: string;
   className?: string;
 }) {
-  // Server snapshot = the server-formatted string; client snapshot = the
-  // same instant in the browser's timezone. Hydration-safe by construction.
-  const text = useSyncExternalStore(
-    emptySubscribe,
-    () => formatMatchTime(new Date(ts), variant),
-    () => initial,
-  );
+  const text = useLocalTimeText(ts, variant, initial);
   return (
     <time dateTime={new Date(ts).toISOString()} className={className}>
       {text}
