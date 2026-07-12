@@ -34,6 +34,26 @@ test("home renders the season timeline, pool composition, and footer", async ({
   ).toBeVisible();
 });
 
+test("features tour renders the showcase and phase-aware chapters", async ({
+  page,
+}) => {
+  await page.goto("/features");
+  await expect(
+    page.getByRole("heading", { name: "Everything the league offers" }),
+  ).toBeVisible();
+  // Showcase mockups render (report card demo + mini bracket).
+  await expect(
+    page.getByRole("heading", { name: "Not your average league site" }),
+  ).toBeVisible();
+  await expect(page.getByText("Every game gets graded")).toBeVisible();
+  // Seeded DB sits in SIGNUPS — that chapter (and only a chapter, not the
+  // whole page) carries the live badge.
+  await expect(page.getByText("Happening now")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Pick your obsession" }),
+  ).toBeVisible();
+});
+
 test("profile page renders the searchable hero picker", async ({ page }) => {
   const steamId = "76561199" + String(Date.now()).slice(-9);
   await page.goto(
