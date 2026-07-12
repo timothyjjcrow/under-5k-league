@@ -80,3 +80,17 @@ describe("pickSplit", () => {
     expect(split).toEqual({ home: 2, away: 1 });
   });
 });
+
+describe("predictionOpen — live series", () => {
+  it("locks a LIVE match even when a reschedule moved its time into the future", () => {
+    // Game 1 imported (status LIVE), captains accept "finish Thursday":
+    // scheduledAt is future again, but the 1-0 scoreline is public.
+    const m = {
+      id: "m1",
+      status: "LIVE",
+      winnerTeamId: null,
+      scheduledAt: new Date(Date.now() + 86_400_000),
+    };
+    expect(predictionOpen(m)).toBe(false);
+  });
+});

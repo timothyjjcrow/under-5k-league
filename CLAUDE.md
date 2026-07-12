@@ -492,6 +492,17 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   with the epoch `ts`. `<Countdown>` (`countdownLabel`, tested) ticks
   "in 2d 4h" → "happening now" on the check-in banner.
 
+## Datetime inputs (rule)
+
+- NEVER parse a raw `datetime-local` string server-side (`new Date(raw)` uses
+  the SERVER's zone — UTC in prod). Use `<LocalDatetimeField>` (submits a
+  browser-computed epoch; prefill via `defaultTs`, never a server-formatted
+  string) + `localDate(fd, raw, ts)` in the action. Discord messages carry
+  times as `<t:epoch:F>` (reader-local), never formatted strings.
+- KNOWN LIMITATION: week math is fixed-ms (`matchNightForWeek`, cascade
+  deltas) — seasons spanning a DST transition drift the league night by an
+  hour after the switch; per-match Set time corrects it.
+
 ## Rescheduling (done)
 
 - **Admin week mover**: `setWeekNight` action — retimes a week's unplayed

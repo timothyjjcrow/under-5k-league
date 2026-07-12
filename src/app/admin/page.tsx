@@ -41,6 +41,7 @@ import {
 import { sortNews, NEWS_LIMITS } from "@/lib/news";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
+import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { pickBracketSize } from "@/lib/schedule";
 import { mmrWeightedBudgets } from "@/lib/draft";
@@ -62,13 +63,6 @@ import {
   Stat,
   buttonClasses,
 } from "@/components/ui";
-
-function fmtDateTimeLocal(d: Date | null): string {
-  if (!d) return "";
-  // to yyyy-MM-ddThh:mm in local time for <input type="datetime-local">
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 export const metadata = { title: "Admin" };
 
@@ -613,11 +607,11 @@ function ScheduleControls({
             >
               First match night
             </label>
-            <input
+            <LocalDatetimeField
               id="firstNight"
-              type="datetime-local"
               name="firstNight"
-              defaultValue={fmtDateTimeLocal(season.firstMatchNight)}
+              tsName="firstNightTs"
+              defaultTs={season.firstMatchNight?.getTime()}
               className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
             />
             <SubmitButton
@@ -684,12 +678,13 @@ function ScheduleControls({
                       </option>
                     ))}
                   </select>
-                  <input
-                    type="datetime-local"
-                    name="night"
-                    aria-label="New match night"
-                    className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-                  />
+                  <span aria-label="New match night" role="group">
+                    <LocalDatetimeField
+                      name="night"
+                      tsName="nightTs"
+                      className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+                    />
+                  </span>
                   <label className="flex items-center gap-1.5 text-muted">
                     <input type="checkbox" name="cascade" />
                     shift later weeks too
@@ -752,10 +747,10 @@ function ScheduleControls({
                   >
                     <input type="hidden" name="matchId" value={m.id} />
                     <span>Scheduled</span>
-                    <input
-                      type="datetime-local"
+                    <LocalDatetimeField
                       name="scheduledAt"
-                      defaultValue={fmtDateTimeLocal(m.scheduledAt)}
+                      tsName="scheduledAtTs"
+                      defaultTs={m.scheduledAt?.getTime()}
                       className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
                     />
                     <SubmitButton variant="secondary" size="sm">

@@ -82,13 +82,7 @@ export async function respondReschedule(
         awayName: accepted.awayName,
         week: accepted.week,
         isPlayoff: accepted.isPlayoff,
-        when: accepted.newTime.toLocaleString(undefined, {
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        }),
+        whenMs: accepted.newTime.getTime(),
       }),
     );
   }

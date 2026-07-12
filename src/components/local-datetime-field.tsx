@@ -19,6 +19,7 @@ export function LocalDatetimeField({
   required,
   className,
   defaultValue,
+  defaultTs,
 }: {
   /** Name for the raw datetime-local string (server-side fallback). */
   name: string;
@@ -27,7 +28,14 @@ export function LocalDatetimeField({
   id?: string;
   required?: boolean;
   className?: string;
+  /** Prefill as a raw datetime-local string — only safe when the string was
+   *  produced in the VIEWER's timezone. Prefer defaultTs. */
   defaultValue?: string;
+  /** Prefill from an epoch — formatted into the input client-side, in the
+   *  viewer's timezone. A server-formatted defaultValue string would be the
+   *  server's wall clock: resubmitting an untouched form on the UTC prod
+   *  host would silently shift the stored time by the viewer's UTC offset. */
+  defaultTs?: number | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const hiddenRef = useRef<HTMLInputElement>(null);
@@ -36,11 +44,17 @@ export function LocalDatetimeField({
     const input = inputRef.current;
     const hidden = hiddenRef.current;
     if (!input || !hidden) return;
+    if (defaultTs != null && !input.value) {
+      // Format the instant into the input in the BROWSER's timezone.
+      const d = new Date(defaultTs);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
     const sync = () => {
       const ms = new Date(input.value).getTime();
       hidden.value = Number.isNaN(ms) ? "" : String(ms);
     };
-    sync(); // pick up any defaultValue
+    sync(); // pick up any prefill
     input.addEventListener("input", sync);
     input.addEventListener("change", sync);
     const form = input.form;
@@ -50,7 +64,7 @@ export function LocalDatetimeField({
       input.removeEventListener("change", sync);
       form?.removeEventListener("submit", sync);
     };
-  }, []);
+  }, [defaultTs]);
 
   return (
     <>

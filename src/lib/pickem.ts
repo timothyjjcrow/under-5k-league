@@ -17,6 +17,10 @@ export type PickemMatchLike = {
 /** Whether a match still accepts (new or changed) predictions. */
 export function predictionOpen(m: PickemMatchLike, now = new Date()): boolean {
   if (m.status === "COMPLETED") return false;
+  // A LIVE series has games in the books — a mid-series reschedule can move
+  // scheduledAt back into the future, but picks with game 1's result public
+  // would corrupt the oracle board.
+  if (m.status === "LIVE") return false;
   if (m.scheduledAt && m.scheduledAt.getTime() <= now.getTime()) return false;
   return true;
 }

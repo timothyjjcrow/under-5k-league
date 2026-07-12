@@ -111,17 +111,17 @@ describe("discord message formatters", () => {
 });
 
 describe("rescheduleMessage", () => {
-  it("announces the agreed new time", () => {
+  it("announces the agreed time as a Discord timestamp (reader-local)", () => {
     const msg = rescheduleMessage({
       homeName: "A",
       awayName: "B",
       week: 3,
       isPlayoff: false,
-      when: "Sat, Jul 18, 7:30 PM",
+      whenMs: 1784167200500, // sub-second ms must floor, not round up
     });
     expect(msg).toContain("Week 3");
     expect(msg).toContain("**A** vs **B**");
-    expect(msg).toContain("Sat, Jul 18, 7:30 PM");
+    expect(msg).toContain("<t:1784167200:F>");
   });
 
   it("labels playoff matches", () => {
@@ -131,7 +131,7 @@ describe("rescheduleMessage", () => {
         awayName: "B",
         week: 9,
         isPlayoff: true,
-        when: "x",
+        whenMs: 1784167200000,
       }),
     ).toContain("Playoffs");
   });

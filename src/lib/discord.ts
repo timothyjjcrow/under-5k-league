@@ -119,10 +119,14 @@ export function rescheduleMessage(m: {
   awayName: string;
   week: number;
   isPlayoff: boolean;
-  when: string;
+  /** Epoch ms of the agreed time — rendered via Discord's native timestamp
+   *  markup so every reader sees it in their own timezone (a server-formatted
+   *  string would be UTC wall-time in prod, wrong hour and often wrong day). */
+  whenMs: number;
 }): string {
   const label = m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
-  return `🗓️ **Rescheduled** — ${label}: **${m.homeName}** vs **${m.awayName}** now plays **${m.when}** (both captains agreed).`;
+  const t = `<t:${Math.floor(m.whenMs / 1000)}:F>`;
+  return `🗓️ **Rescheduled** — ${label}: **${m.homeName}** vs **${m.awayName}** now plays ${t} (both captains agreed).`;
 }
 
 export function testMessage(): string {

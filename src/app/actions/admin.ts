@@ -37,7 +37,7 @@ import {
   fetchPlayerRankTier,
 } from "@/lib/dota";
 import { fetchSteamProfiles } from "@/lib/steam";
-import { clampInt, str } from "@/lib/form";
+import { clampInt, localDate, str } from "@/lib/form";
 import {
   draftStartedMessage,
   freeAgentSignedMessage,
@@ -458,8 +458,8 @@ export async function generateSchedule(
 
   // Optional first-match-night: week 1 plays then, each later week +7 days.
   const firstNightRaw = str(formData, "firstNight").trim();
-  const firstNight = firstNightRaw ? new Date(firstNightRaw) : null;
-  if (firstNight && Number.isNaN(firstNight.getTime())) {
+  const firstNight = localDate(formData, "firstNight", "firstNightTs");
+  if (firstNightRaw && !firstNight) {
     return { error: "Invalid first match night" };
   }
 
@@ -883,12 +883,10 @@ export async function setWeekNight(
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   const week = Number(str(formData, "week"));
-  const raw = str(formData, "night");
   const cascade = str(formData, "cascade") === "on";
-  const night = raw ? new Date(raw) : null;
+  const night = localDate(formData, "night", "nightTs");
   if (!Number.isInteger(week) || week < 1) return { error: "Pick a week" };
-  if (!night || Number.isNaN(night.getTime()))
-    return { error: "Pick a valid date & time" };
+  if (!night) return { error: "Pick a valid date & time" };
 
   const open = await prisma.match.findMany({
     where: { seasonId: season.id, week, status: { not: "COMPLETED" } },
@@ -896,34 +894,77 @@ export async function setWeekNight(
   if (open.length === 0)
     return { error: `Week ${week} has no unplayed matches to move` };
 
-  // The delta later weeks shift by, from this week's previous night.
-  const current = open.find((m) => m.scheduledAt)?.scheduledAt ?? null;
-  await prisma.match.updateMany({
-    where: { seasonId: season.id, week, status: { not: "COMPLETED" } },
-    data: { scheduledAt: night },
-  });
-
-  let shifted = 0;
-  if (cascade && current) {
-    const delta = night.getTime() - current.getTime();
-    if (delta !== 0) {
-      const later = await prisma.match.findMany({
-        where: {
-          seasonId: season.id,
-          week: { gt: week },
-          status: { not: "COMPLETED" },
-          scheduledAt: { not: null },
-        },
-      });
-      for (const m of later) {
-        await prisma.match.update({
-          where: { id: m.id },
-          data: { scheduledAt: new Date(m.scheduledAt!.getTime() + delta) },
-        });
-      }
-      shifted = later.length;
-    }
+  // The delta later weeks shift by, measured from the week's CANONICAL night —
+  // the most common scheduledAt (earliest on a tie). A single captain-
+  // rescheduled outlier must not become the baseline, or the cascade shifts
+  // every later week by days in the wrong direction.
+  const timeCounts = new Map<number, number>();
+  for (const m of open) {
+    if (!m.scheduledAt) continue;
+    const t = m.scheduledAt.getTime();
+    timeCounts.set(t, (timeCounts.get(t) ?? 0) + 1);
   }
+  const current = [...timeCounts.entries()].sort(
+    (a, b) => b[1] - a[1] || a[0] - b[0],
+  )[0]?.[0];
+
+  const later =
+    cascade && current != null
+      ? await prisma.match.findMany({
+          where: {
+            seasonId: season.id,
+            week: { gt: week },
+            status: { not: "COMPLETED" },
+            scheduledAt: { not: null },
+          },
+        })
+      : [];
+  const delta = current != null ? night.getTime() - current : 0;
+
+  // One transaction: the move + cascade land together or not at all (a
+  // half-shifted schedule can't be re-run — the delta would compute as 0),
+  // and every retimed match sheds its now-stale RSVPs and open proposals
+  // (an old PENDING proposal accepted later would silently revert this move).
+  const retimedIds = [
+    ...open.map((m) => m.id),
+    ...(delta !== 0 ? later.map((m) => m.id) : []),
+  ];
+  await prisma.$transaction([
+    prisma.match.updateMany({
+      where: { seasonId: season.id, week, status: { not: "COMPLETED" } },
+      data: { scheduledAt: night },
+    }),
+    ...(delta !== 0
+      ? later.map((m) =>
+          prisma.match.update({
+            where: { id: m.id },
+            data: { scheduledAt: new Date(m.scheduledAt!.getTime() + delta) },
+          }),
+        )
+      : []),
+    // Keep future playoff rounds on the shifted rhythm too — they're timed
+    // from firstMatchNight when created.
+    ...(delta !== 0 && season.firstMatchNight
+      ? [
+          prisma.season.update({
+            where: { id: season.id },
+            data: {
+              firstMatchNight: new Date(
+                season.firstMatchNight.getTime() + delta,
+              ),
+            },
+          }),
+        ]
+      : []),
+    prisma.matchAvailability.deleteMany({
+      where: { matchId: { in: retimedIds } },
+    }),
+    prisma.rescheduleRequest.updateMany({
+      where: { matchId: { in: retimedIds }, status: "PENDING" },
+      data: { status: "CANCELLED" },
+    }),
+  ]);
+  const shifted = delta !== 0 ? later.length : 0;
   refresh();
   return {
     ok: true,
@@ -932,10 +973,11 @@ export async function setWeekNight(
       (cascade
         ? shifted > 0
           ? ` · ${shifted} later match${shifted === 1 ? "" : "es"} shifted with it`
-          : current
+          : current != null
             ? " · later weeks unchanged (no time change)"
             : " · couldn't cascade (week had no previous time)"
-        : ""),
+        : "") +
+      " · RSVPs and open proposals on retimed matches were reset",
   };
 }
 
@@ -943,10 +985,28 @@ export async function setWeekNight(
 export async function setMatchTime(formData: FormData) {
   await requireAdmin();
   const matchId = str(formData, "matchId");
-  const raw = str(formData, "scheduledAt");
-  const scheduledAt = raw ? new Date(raw) : null;
-  if (scheduledAt && Number.isNaN(scheduledAt.getTime())) return;
-  await prisma.match.update({ where: { id: matchId }, data: { scheduledAt } });
+  const raw = str(formData, "scheduledAt").trim();
+  const scheduledAt = localDate(formData, "scheduledAt", "scheduledAtTs");
+  if (raw && !scheduledAt) return; // invalid input — leave the time alone
+  const before = await prisma.match.findUnique({
+    where: { id: matchId },
+    select: { scheduledAt: true },
+  });
+  const changed = before?.scheduledAt?.getTime() !== scheduledAt?.getTime();
+  await prisma.$transaction([
+    prisma.match.update({ where: { id: matchId }, data: { scheduledAt } }),
+    // A retime invalidates night-specific state: RSVPs answered the OLD
+    // night, and an open proposal accepted later would revert this change.
+    ...(changed
+      ? [
+          prisma.matchAvailability.deleteMany({ where: { matchId } }),
+          prisma.rescheduleRequest.updateMany({
+            where: { matchId, status: "PENDING" },
+            data: { status: "CANCELLED" },
+          }),
+        ]
+      : []),
+  ]);
   refresh();
 }
 
