@@ -296,7 +296,14 @@ async function MyNextMatch({
       status: { not: "COMPLETED" },
       OR: [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }],
     },
-    orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+    // Chronological, not week order — an accepted reschedule can legally move
+    // a match past the next week's night, and the banner should always point
+    // at whatever plays first. Unscheduled matches sort last.
+    orderBy: [
+      { scheduledAt: { sort: "asc", nulls: "last" } },
+      { week: "asc" },
+      { createdAt: "asc" },
+    ],
     include: { homeTeam: true, awayTeam: true },
   });
   if (!next) return null;

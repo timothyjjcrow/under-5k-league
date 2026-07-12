@@ -10,6 +10,7 @@ import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { LocalTime } from "@/components/local-time";
+import { formatMatchTime } from "@/lib/match-time";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   cancelReschedule,
@@ -308,6 +309,11 @@ async function MatchPreview({
         <CheckinBanner
           matchId={match.id}
           heading="You're playing in this match"
+          when={
+            match.scheduledAt
+              ? formatMatchTime(match.scheduledAt, "full")
+              : undefined
+          }
           whenTs={match.scheduledAt?.getTime()}
           myRsvp={myRsvp}
         />
@@ -388,20 +394,36 @@ async function MatchPreview({
                     </li>
                   );
                 })}
-                {s.subs.map((sub) => (
-                  <li
-                    key={sub.id}
-                    className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm"
-                  >
-                    <span className="text-xs">🔁</span>
-                    <PlayerLink userId={sub.standin.id} className="truncate">
-                      {sub.standin.name}
-                    </PlayerLink>
-                    <span className="truncate text-xs text-muted">
-                      in for {sub.replaced?.name ?? "?"}
-                    </span>
-                  </li>
-                ))}
+                {s.subs.map((sub) => {
+                  // Standins RSVP like everyone else — captains need to see
+                  // whether the cover actually confirmed for match night.
+                  const subRsvp = rsvpByUser.get(sub.standin.id);
+                  return (
+                    <li
+                      key={sub.id}
+                      className="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-sm"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="text-xs">🔁</span>
+                        <PlayerLink userId={sub.standin.id} className="truncate">
+                          {sub.standin.name}
+                        </PlayerLink>
+                        <span className="truncate text-xs text-muted">
+                          in for {sub.replaced?.name ?? "?"}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs">
+                        {subRsvp === "IN" ? (
+                          <span className="text-success">✓ in</span>
+                        ) : subRsvp === "OUT" ? (
+                          <span className="text-danger">✗ out</span>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}

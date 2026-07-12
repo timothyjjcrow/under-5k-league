@@ -916,7 +916,17 @@ function StandinControls({ data }: { data: AdminData }) {
                   Wk {m.week}: {home?.name ?? "?"} vs {away?.name ?? "?"}
                 </div>
                 {(() => {
-                  const out = data.outRsvps.filter((r) => r.matchId === m.id);
+                  // Only current roster members can need cover — a released
+                  // player's (or unassigned standin's) stale OUT row would
+                  // otherwise raise an alert no assignment can ever clear.
+                  const rosterIds = new Set(
+                    [home, away].flatMap(
+                      (t) => t?.members.map((mm) => mm.userId) ?? [],
+                    ),
+                  );
+                  const out = data.outRsvps.filter(
+                    (r) => r.matchId === m.id && rosterIds.has(r.userId),
+                  );
                   const covered = new Set(
                     asg.map((a) => a.replacingUserId).filter(Boolean),
                   );

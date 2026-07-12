@@ -154,12 +154,20 @@ export default async function SchedulePage() {
   const myTeamIds = new Set(
     members.filter((m) => viewer && m.userId === viewer.id).map((m) => m.teamId),
   );
+  // Chronological (unscheduled last), not week order — reschedules can move a
+  // match past the next week's night; point at whatever plays first.
   const myNextMatch = viewer
-    ? matches.find(
-        (m) =>
-          m.status !== "COMPLETED" &&
-          (myTeamIds.has(m.homeTeamId) || myTeamIds.has(m.awayTeamId)),
-      )
+    ? [...matches]
+        .sort(
+          (a, b) =>
+            (a.scheduledAt?.getTime() ?? Infinity) -
+              (b.scheduledAt?.getTime() ?? Infinity) || a.week - b.week,
+        )
+        .find(
+          (m) =>
+            m.status !== "COMPLETED" &&
+            (myTeamIds.has(m.homeTeamId) || myTeamIds.has(m.awayTeamId)),
+        )
     : undefined;
   const myRsvp = myNextMatch
     ? (rsvpsByMatch.get(myNextMatch.id) ?? []).find(

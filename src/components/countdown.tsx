@@ -19,6 +19,8 @@ export function Countdown({ targetMs }: { targetMs: number }) {
   const live = label === "happening now";
   return (
     <span
+      role="timer"
+      aria-label={live ? "Match is happening now" : `Match starts ${label}`}
       className={
         live
           ? "ml-1.5 inline-block whitespace-nowrap rounded-full border border-success/40 bg-success/15 px-2 py-0.5 align-middle text-xs font-medium text-success"
