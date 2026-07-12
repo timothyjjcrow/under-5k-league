@@ -29,8 +29,14 @@ export async function proposeReschedule(
   } catch {
     return { error: "Sign in required" };
   }
+  // Prefer the epoch the browser computed (LocalDatetimeField) — the raw
+  // datetime-local string is timezone-less and would be parsed in the
+  // SERVER's zone (UTC in prod), shifting the proposal by the captain's
+  // whole UTC offset.
+  const ts = Number(str(formData, "proposedTs"));
   const raw = str(formData, "proposedTime");
-  const proposedTime = raw ? new Date(raw) : null;
+  const proposedTime =
+    Number.isFinite(ts) && ts > 0 ? new Date(ts) : raw ? new Date(raw) : null;
   if (!proposedTime || Number.isNaN(proposedTime.getTime()))
     return { error: "Pick a valid date & time" };
 

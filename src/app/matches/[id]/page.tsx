@@ -11,6 +11,7 @@ import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
+import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   cancelReschedule,
@@ -75,7 +76,9 @@ export default async function MatchDetailPage({
   });
   if (!match) notFound();
 
-  const heroes = await getHeroNames();
+  // Hero names are only rendered by the box-score branch — don't make the
+  // preview/empty-state paths wait on an OpenDota round trip they never use.
+  const heroes = match.games.length > 0 ? await getHeroNames() : {};
   const games = match.games.map((g) => ({
     ...g,
     parsed: safeParse(g.players),
@@ -147,6 +150,10 @@ export default async function MatchDetailPage({
           />
         </CardBody>
       </Card>
+
+      {/* Rescheduling stays available while the series is live — a proposal
+          made before game 1 must remain answerable after it's imported. */}
+      {match.status !== "COMPLETED" ? <RescheduleSection match={match} /> : null}
 
       {games.length === 0 && match.status !== "COMPLETED" ? (
         <MatchPreview match={match} />
@@ -330,12 +337,6 @@ async function MatchPreview({
           whenTs={match.scheduledAt?.getTime()}
           myRsvp={myRsvp}
         />
-      ) : null}
-
-      {viewer &&
-      (match.homeTeam.captainId === viewer.id ||
-        match.awayTeam.captainId === viewer.id) ? (
-        <RescheduleCard match={match} viewerId={viewer.id} />
       ) : null}
 
       <Card>
@@ -687,6 +688,33 @@ function safeParse(json: string): PlayerStat[] {
 
 // Captain-to-captain rescheduling: propose a time, the other captain accepts
 // (retimes the match) or declines. Only the two captains ever see this card.
+/**
+ * Captain-only wrapper so the reschedule card renders on every unplayed OR
+ * live match — not just the pre-import preview (a proposal made before game 1
+ * must stay answerable after the game is imported).
+ */
+async function RescheduleSection({
+  match,
+}: {
+  match: {
+    id: string;
+    status: string;
+    scheduledAt: Date | null;
+    homeTeam: { name: string; captainId: string };
+    awayTeam: { name: string; captainId: string };
+  };
+}) {
+  const viewer = await getSessionUser();
+  if (
+    !viewer ||
+    (match.homeTeam.captainId !== viewer.id &&
+      match.awayTeam.captainId !== viewer.id)
+  ) {
+    return null;
+  }
+  return <RescheduleCard match={match} viewerId={viewer.id} />;
+}
+
 async function RescheduleCard({
   match,
   viewerId,
@@ -776,13 +804,14 @@ async function RescheduleCard({
             hidden={{ matchId: match.id }}
             className="flex flex-wrap items-center gap-2"
           >
-            <input
-              type="datetime-local"
-              name="proposedTime"
-              required
-              aria-label="Proposed new time"
-              className="h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm text-fg"
-            />
+            <span aria-label="Proposed new time" role="group">
+              <LocalDatetimeField
+                name="proposedTime"
+                tsName="proposedTs"
+                required
+                className="h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm text-fg"
+              />
+            </span>
             <SubmitButton variant="secondary" size="sm">
               Propose new time
             </SubmitButton>

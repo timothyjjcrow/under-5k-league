@@ -105,7 +105,11 @@ export default async function SchedulePage() {
     }),
   ]);
   const pendingReschedules = await prisma.rescheduleRequest.findMany({
-    where: { match: { seasonId: season.id }, status: "PENDING" },
+    where: {
+      // A proposal on a finished match can't be answered — no chip for it.
+      match: { seasonId: season.id, status: { not: "COMPLETED" } },
+      status: "PENDING",
+    },
     include: { proposedBy: { select: { name: true } } },
   });
   // Structured, not preformatted: the chip's tooltip must render the proposed
