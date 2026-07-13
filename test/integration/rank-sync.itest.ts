@@ -10,7 +10,7 @@ vi.mock("@/lib/dota", async (importOriginal) => ({
   fetchRankTier: vi.fn(),
 }));
 
-import { syncPlayerRanks } from "@/app/actions/admin";
+import { syncPlayerRanks, syncAllRanks } from "@/app/actions/admin";
 import { ensureRankTier } from "@/lib/users";
 import { fetchRankTier } from "@/lib/dota";
 import { prisma } from "@/lib/prisma";
@@ -144,5 +144,52 @@ describe("ensureRankTier — medals for accounts that never signed up", () => {
     });
 
     expect(await medalOf(user.id)).toBeNull();
+  });
+});
+
+describe("syncAllRanks — backfill every account, registered or not", () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  it("fills medals for accounts with none — including non-registrants", async () => {
+    // A plain account that never signed up (no registration).
+    const outsider = await makeUser("Never Signed Up");
+    await prisma.user.update({
+      where: { id: outsider.id },
+      data: { rankTier: null, dotaAccountId: 900 },
+    });
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 54 });
+
+    const res = await syncAllRanks({}, new FormData());
+
+    expect(await medalOf(outsider.id)).toBe(54);
+    expect(res?.message).toMatch(/1 now ranked/);
+  });
+
+  it("skips accounts that already have a medal (no wasted fetch)", async () => {
+    const has = await makeUser("Already Ranked");
+    await prisma.user.update({
+      where: { id: has.id },
+      data: { rankTier: 71, dotaAccountId: 901 },
+    });
+
+    const res = await syncAllRanks({}, new FormData());
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(await medalOf(has.id)).toBe(71);
+    expect(res?.message).toMatch(/already has a medal/);
+  });
+
+  it("preserves nothing to overwrite and reports unreachable on failure", async () => {
+    const user = await makeUser("Cant Reach");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: null, dotaAccountId: 902 },
+    });
+    mockFetch.mockResolvedValue({ ok: false, rankTier: null });
+
+    const res = await syncAllRanks({}, new FormData());
+
+    expect(await medalOf(user.id)).toBeNull();
+    expect(res?.message).toMatch(/couldn't be reached/);
   });
 });

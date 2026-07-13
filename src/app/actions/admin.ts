@@ -1258,6 +1258,51 @@ export async function setMatchTime(formData: FormData) {
 }
 
 /** Fetch every active player's ranked medal from OpenDota (a draft resource). */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Fetch + store ranked medals for a set of users. Non-destructive: retries once
+ * on a failed/rate-limited call, and only ever writes a real medal — never
+ * overwrites a stored one with a null (whether the null is "couldn't reach
+ * OpenDota" or "OpenDota returned no rank"), so a rate-limited run can't wipe
+ * everyone's rank. Shared by the registrant sync and the all-accounts backfill.
+ */
+async function syncRanksFor(
+  users: { id: string; dotaAccountId: number | null; steamId: string }[],
+): Promise<{ ranked: number; unreachable: number }> {
+  let ranked = 0;
+  let unreachable = 0;
+  for (const u of users) {
+    const acc = u.dotaAccountId ?? steamIdToAccountId(u.steamId);
+    if (!acc) continue;
+    // A bulk sync easily trips OpenDota's free rate limit (HTTP 429) or an 8s
+    // timeout — a brief back-off + one retry usually clears it.
+    let result = await fetchRankTier(acc);
+    if (!result.ok) {
+      await sleep(700);
+      result = await fetchRankTier(acc);
+    }
+    if (!result.ok) {
+      unreachable++;
+      continue;
+    }
+    if (result.rankTier == null) continue;
+    await prisma.user.update({
+      where: { id: u.id },
+      data: { rankTier: result.rankTier },
+    });
+    ranked++;
+  }
+  return { ranked, unreachable };
+}
+
+/** "N couldn't be reached" suffix with a re-run / API-key hint, or "". */
+function unreachableTail(unreachable: number): string {
+  return unreachable
+    ? ` · ${unreachable} couldn't be reached (rate limit? run it again${process.env.OPENDOTA_API_KEY ? "" : " — an OPENDOTA_API_KEY raises the limit"})`
+    : "";
+}
+
 export async function syncPlayerRanks(
   _prev: ActionResult,
   _fd: FormData,
@@ -1274,38 +1319,37 @@ export async function syncPlayerRanks(
     where: { seasonId: season.id, status: "ACTIVE" },
     include: { user: true },
   });
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  let ranked = 0;
-  let unreachable = 0;
-  for (const r of regs) {
-    const acc = r.user.dotaAccountId ?? steamIdToAccountId(r.user.steamId);
-    if (!acc) continue;
-    // Retry once on failure: a bulk sync easily trips OpenDota's free rate
-    // limit (HTTP 429) or an 8s timeout, and a brief back-off usually clears it.
-    let result = await fetchRankTier(acc);
-    if (!result.ok) {
-      await sleep(700);
-      result = await fetchRankTier(acc);
-    }
-    // Only write a real medal. Never overwrite a stored medal with null —
-    // whether the null is "couldn't reach OpenDota" (unreachable) or "OpenDota
-    // returned no rank" — so a rate-limited run can't wipe everyone's rank.
-    if (!result.ok) {
-      unreachable++;
-      continue;
-    }
-    if (result.rankTier == null) continue;
-    await prisma.user.update({
-      where: { id: r.userId },
-      data: { rankTier: result.rankTier },
-    });
-    ranked++;
-  }
+  const { ranked, unreachable } = await syncRanksFor(regs.map((r) => r.user));
   refresh();
-  const tail = unreachable
-    ? ` · ${unreachable} couldn't be reached (rate limit? run it again${process.env.OPENDOTA_API_KEY ? "" : " — an OPENDOTA_API_KEY raises the limit"})`
-    : "";
-  return { message: `Synced ${regs.length} players · ${ranked} ranked${tail}` };
+  return {
+    message: `Synced ${regs.length} players · ${ranked} ranked${unreachableTail(unreachable)}`,
+  };
+}
+
+/**
+ * Backfill medals for EVERY account that doesn't have one yet — including people
+ * who logged in but never signed up (the registrant sync above skips them).
+ * Only targets null-medal accounts, so it makes no wasted API calls and never
+ * touches a medal that's already set; login fills in new accounts going forward.
+ */
+export async function syncAllRanks(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const users = await prisma.user.findMany({ where: { rankTier: null } });
+  if (users.length === 0) {
+    return { message: "Every account already has a medal" };
+  }
+  const { ranked, unreachable } = await syncRanksFor(users);
+  refresh();
+  return {
+    message: `Checked ${users.length} account(s) without a medal · ${ranked} now ranked${unreachableTail(unreachable)}`,
+  };
 }
 
 /** Set the active season's soft MMR limit / review threshold (0 = none). */

@@ -20,6 +20,7 @@ import {
   setMatchTime,
   setWeekNight,
   syncPlayerRanks,
+  syncAllRanks,
   syncSteamProfiles,
   setMaxMmr,
   setMatchSchedule,
@@ -1395,6 +1396,19 @@ function LeagueControls({ season }: { season: Season }) {
           <ActionForm action={enrichGamesAction}>
             <SubmitButton variant="secondary" size="sm">
               Enrich stored games
+            </SubmitButton>
+          </ActionForm>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
+          <p className="min-w-[14rem] flex-1 text-xs text-muted">
+            <span className="font-medium text-fg">Medal backfill:</span>{" "}
+            fetch ranked medals for every account that doesn&apos;t have one yet
+            — including people who signed in but never joined a season. Skips
+            accounts that already have a medal; safe to run again.
+          </p>
+          <ActionForm action={syncAllRanks}>
+            <SubmitButton variant="secondary" size="sm">
+              Sync all medals
             </SubmitButton>
           </ActionForm>
         </div>
