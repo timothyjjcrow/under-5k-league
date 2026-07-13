@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Avatar,
   Badge,
   HeroList,
+  PlayerLink,
   RankBadge,
   RoleBadges,
   TeamCrest,
@@ -12,6 +14,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { DOTA_ROLES } from "@/lib/roles";
+import { maxBid } from "@/lib/draft";
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 
@@ -224,6 +227,13 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   const highBidderName = state.teams.find(
     (t) => t.id === state.currentBidTeamId,
   )?.name;
+  // The viewer's own team (if a captain) — drives the "why can't I bid" copy.
+  const myTeam = me.myTeamId
+    ? state.teams.find((t) => t.id === me.myTeamId)
+    : undefined;
+  const rosterFull = !!me.myTeamId && myTeam?.need === 0;
+  const pricedOut =
+    !!me.myTeamId && !rosterFull && me.myMaxBid <= state.currentBid;
 
   const quickBid = (delta: number) => {
     const amount = state.currentBid + delta;
@@ -384,6 +394,25 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
                     {state.nominatedPlayer.mmr} MMR
                     <RankBadge rankTier={state.nominatedPlayer.rankTier} />
                     <RoleBadges roles={state.nominatedPlayer.roles} />
+                    {/* Scouting links — open in a new tab so a captain can't
+                        navigate away mid-auction. */}
+                    <Link
+                      href={`/players/${state.nominatedPlayer.userId}`}
+                      target="_blank"
+                      className="text-info hover:underline"
+                    >
+                      Profile ↗
+                    </Link>
+                    {state.nominatedPlayer.accountId ? (
+                      <a
+                        href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-info hover:underline"
+                      >
+                        Dotabuff ↗
+                      </a>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -455,6 +484,15 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
                 <div className="w-full border-t border-line pt-3 text-sm text-success">
                   You hold the high bid.
                 </div>
+              ) : rosterFull ? (
+                <div className="w-full border-t border-line pt-3 text-sm text-muted">
+                  Your roster is full — you&apos;re done bidding.
+                </div>
+              ) : pricedOut ? (
+                <div className="w-full border-t border-line pt-3 text-sm text-muted">
+                  Priced out — your max bid is ${me.myMaxBid} (reserving $
+                  {state.minBid} per remaining slot).
+                </div>
               ) : null}
             </div>
           ) : me.canNominate ? (
@@ -488,11 +526,11 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="min-w-0 lg:col-span-2">
           <TeamsGrid state={state} />
         </div>
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <BidFeed events={events} />
           <AvailableList
             state={state}
@@ -601,26 +639,47 @@ function AvailableList({
       <div className="max-h-[30rem] space-y-1 overflow-y-auto p-3">
         {shown.map((p) => {
           return (
-            <button
+            // The row body is the nominate button; the profile link is a
+            // sibling anchor (never nested inside the button).
+            <div
               key={p.userId}
-              disabled={!canNominate}
-              onClick={() => onPick(p.userId)}
               className={cn(
-                "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm",
-                canNominate ? "hover:bg-surface-2" : "cursor-default opacity-90",
+                "flex items-center rounded-md",
                 selected === p.userId ? "bg-accent/15 ring-1 ring-accent/40" : "",
               )}
             >
-              <span className="flex items-center gap-2">
-                <Avatar name={p.name} src={p.avatar} size={20} />
-                {p.name}
-              </span>
-              <span className="flex items-center gap-2 text-xs text-muted">
-                <RoleBadges roles={p.roles} />
-                <RankBadge rankTier={p.rankTier} />
-                {p.mmr}
-              </span>
-            </button>
+              <button
+                disabled={!canNominate}
+                onClick={() => onPick(p.userId)}
+                aria-pressed={selected === p.userId}
+                className={cn(
+                  "flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  canNominate
+                    ? "hover:bg-surface-2"
+                    : "cursor-default opacity-90",
+                )}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <Avatar name={p.name} src={p.avatar} size={20} />
+                  <span className="truncate">{p.name}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <RoleBadges roles={p.roles} />
+                  <RankBadge rankTier={p.rankTier} />
+                  {p.mmr}
+                </span>
+              </button>
+              <Link
+                href={`/players/${p.userId}`}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`${p.name} profile`}
+                title="Open profile in a new tab"
+                className="shrink-0 px-2 py-1.5 text-muted hover:text-info"
+              >
+                ↗
+              </Link>
+            </div>
           );
         })}
         {state.available.length === 0 ? (
@@ -736,12 +795,21 @@ function NominateBar({
 }
 
 function TeamsGrid({ state }: { state: DraftState }) {
+  // A player is up for auction → the "max bid" lines can flag who's priced out.
+  const nominationLive = !!state.nominatedPlayer;
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       {state.teams.map((t) => {
         const onClock =
           state.status === "IN_PROGRESS" && t.id === state.nominatorTeamId;
         const highBid = t.id === state.currentBidTeamId;
+        // The most this team can still bid on the current player while
+        // reserving the minimum for its remaining empty slots.
+        const cap = maxBid(
+          { id: t.id, budget: t.budget, rosterCount: t.members.length },
+          state.teamSize,
+          state.minBid,
+        );
         return (
           <div
             key={t.id}
@@ -754,24 +822,53 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   : "border-line",
             )}
           >
-            <div className="flex items-center justify-between border-b border-line px-4 py-3">
-              <div>
-                <div className="flex items-center gap-2 font-display text-base font-semibold">
+            <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2 font-display text-base font-semibold">
                   <TeamCrest
                     name={t.name}
                     seed={t.id}
                     size={22}
-                    className="rounded-md"
+                    className="shrink-0 rounded-md"
                   />
-                  {t.name}
-                  {onClock ? <Badge tone="accent">on clock</Badge> : null}
-                  {highBid ? <Badge tone="success">high bid</Badge> : null}
+                  <Link
+                    href={`/teams/${t.id}`}
+                    className="truncate hover:text-info hover:underline"
+                  >
+                    {t.name}
+                  </Link>
+                  {onClock ? (
+                    <span className="shrink-0">
+                      <Badge tone="accent">on clock</Badge>
+                    </span>
+                  ) : null}
+                  {highBid ? (
+                    <span className="shrink-0">
+                      <Badge tone="success">high bid</Badge>
+                    </span>
+                  ) : null}
                 </div>
                 <div className="text-xs text-muted">
                   {t.members.length}/{state.teamSize} · needs {t.need}
                 </div>
               </div>
-              <Badge tone="accent">${t.budget}</Badge>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <Badge tone="accent">${t.budget}</Badge>
+                {t.need === 0 ? (
+                  <span className="text-[10px] text-muted/70">full</span>
+                ) : (
+                  <span
+                    className={cn(
+                      "text-[10px] tabular-nums",
+                      nominationLive && cap <= state.currentBid
+                        ? "text-danger/80"
+                        : "text-muted/70",
+                    )}
+                  >
+                    max ${cap}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="space-y-1 p-3">
               {Array.from({ length: state.teamSize }).map((_, i) => {
@@ -779,15 +876,21 @@ function TeamsGrid({ state }: { state: DraftState }) {
                 return m ? (
                   <div
                     key={m.userId}
-                    className="flex items-center justify-between text-sm"
+                    className="flex items-center justify-between gap-2 text-sm"
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
                       <Avatar name={m.name} src={m.avatar} size={20} />
-                      {m.name}
-                      {m.isCaptain ? <Badge tone="accent">C</Badge> : null}
+                      <PlayerLink userId={m.userId} className="min-w-0 truncate">
+                        {m.name}
+                      </PlayerLink>
+                      {m.isCaptain ? (
+                        <span className="shrink-0">
+                          <Badge tone="accent">C</Badge>
+                        </span>
+                      ) : null}
                       <RankBadge rankTier={m.rankTier} />
                     </span>
-                    <span className="text-muted">
+                    <span className="shrink-0 text-muted">
                       {m.isCaptain ? "—" : `$${m.price}`}
                     </span>
                   </div>

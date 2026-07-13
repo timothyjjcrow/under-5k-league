@@ -43,12 +43,18 @@ export type MatchView = {
 
 export type WeekView = {
   week: number;
+  /** Rendered in place of "Week N" (playoff rounds: "Semifinals", "Final"). */
+  label?: string;
   completed: number;
   total: number;
   isCurrent: boolean;
   matches: MatchView[];
   /** Teams sitting out this week (odd team counts rotate a bye). */
   byes: { id: string; name: string }[];
+  /** Earliest kickoff of the week (epoch ms) — null when nothing scheduled. */
+  nightTs?: number | null;
+  /** Server-formatted date-only fallback for the first paint. */
+  nightInitial?: string | null;
 };
 
 export function ScheduleWeeks({
@@ -159,14 +165,22 @@ export function ScheduleWeeks({
                       ▶
                     </span>
                     <span className={w.isCurrent ? "text-fg" : undefined}>
-                      Week {w.week}
+                      {w.label ?? `Week ${w.week}`}
                     </span>
                   </button>
                 ) : (
                   <span className={w.isCurrent ? "text-fg" : undefined}>
-                    Week {w.week}
+                    {w.label ?? `Week ${w.week}`}
                   </span>
                 )}
+                {w.nightTs != null && w.nightInitial ? (
+                  <LocalTime
+                    ts={w.nightTs}
+                    variant="date"
+                    initial={w.nightInitial}
+                    className="normal-case tracking-normal text-muted"
+                  />
+                ) : null}
                 {w.isCurrent ? <Badge tone="accent">This week</Badge> : null}
                 <span className={incomplete ? "text-accent" : "text-success"}>
                   {w.completed}/{w.total} results in

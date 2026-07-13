@@ -12,6 +12,9 @@ import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import { matchStakes, stakesHeadline, type ScenarioReport } from "@/lib/scenarios";
 import {
   bracketRounds,
+  byKickoff,
+  matchPhaseAbbrev,
+  matchPhaseLabel,
   pickBracketSize,
   roundName,
   slotRound,
@@ -35,6 +38,7 @@ import {
   EmptyState,
   FormStrip,
   HeroIcon,
+  LinkifiedText,
   PlayerLink,
   Progress,
   RankBadge,
@@ -290,7 +294,10 @@ export default async function Home() {
       </span>
     ) : null;
     heroAction = (
-      <Link href="/recap" className={buttonClasses("accent", "lg")}>
+      <Link
+        href={`/recap?season=${season.id}`}
+        className={buttonClasses("accent", "lg")}
+      >
         Relive the season →
       </Link>
     );
@@ -360,8 +367,10 @@ async function LeagueNews() {
           <div key={p.id} className="min-w-0">
             <div className="flex flex-wrap items-baseline gap-x-2">
               <h3 className="min-w-0 truncate text-sm font-semibold">
-                {p.pinned ? "📌 " : ""}
-                {p.title}
+                <Link href={`/news#${p.id}`} className="hover:text-info">
+                  {p.pinned ? "📌 " : ""}
+                  {p.title}
+                </Link>
               </h3>
               <span className="text-xs text-muted">
                 <LocalTime
@@ -372,7 +381,7 @@ async function LeagueNews() {
               </span>
             </div>
             <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-muted">
-              {p.body}
+              <LinkifiedText text={p.body} />
             </p>
           </div>
         ))}
@@ -432,7 +441,7 @@ async function MyNextMatch({
   return (
     <CheckinBanner
       matchId={next.id}
-      heading={`Your next match — Week ${next.week}: ${next.homeTeam.name} vs ${next.awayTeam.name}`}
+      heading={`Your next match — ${matchPhaseLabel(next.phase, next.week)}: ${next.homeTeam.name} vs ${next.awayTeam.name}`}
       when={fmtWhen(next.scheduledAt)}
       whenTs={next.scheduledAt?.getTime()}
       myRsvp={myRsvp?.status ?? null}
@@ -556,18 +565,25 @@ function Hero({
   );
 }
 
-// A slim stepper showing where the season is in its lifecycle.
+// A slim stepper showing where the season is in its lifecycle. Real list
+// semantics: a screen reader hears "Season progress, list, 5 items" and the
+// active phase is announced via aria-current — the ticks/digits/connectors
+// are purely visual (aria-hidden) with sr-only state text on each label.
 function SeasonTimeline({ phase }: { phase: string }) {
   const current = PHASE_ORDER.findIndex((p) => p === phase);
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/60 px-3 py-4 sm:px-6">
-      <div className="flex items-start">
+      <ol aria-label="Season progress" className="flex items-start">
         {PHASE_ORDER.map((p, i) => {
           const done = current >= 0 && i < current;
           const isCurrent = i === current;
           return (
-            <div key={p} className="flex flex-1 flex-col items-center gap-1.5">
-              <div className="flex w-full items-center">
+            <li
+              key={p}
+              aria-current={isCurrent ? "step" : undefined}
+              className="flex flex-1 flex-col items-center gap-1.5"
+            >
+              <div aria-hidden className="flex w-full items-center">
                 <div
                   className={cn(
                     "h-0.5 flex-1 rounded",
@@ -608,11 +624,16 @@ function SeasonTimeline({ phase }: { phase: string }) {
                 )}
               >
                 {PHASE_STEP[p]}
+                {done ? (
+                  <span className="sr-only"> (done)</span>
+                ) : isCurrent ? (
+                  <span className="sr-only"> (current)</span>
+                ) : null}
               </span>
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
     </div>
   );
 }
@@ -694,6 +715,7 @@ async function SignupsView({
               <span className="font-normal text-muted">
                 {" "}
                 · teams of {season.teamSize}
+                {season.maxMmr > 0 ? ` · capped at ${season.maxMmr} MMR` : ""}
               </span>
             </span>
             <span className="text-muted">
@@ -897,28 +919,35 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
     where: { seasonId },
     select: { userId: true },
   });
-  const [poolLeft, sales, nominated, leadingTeam] = await Promise.all([
-    prisma.registration.count({
-      where: {
-        seasonId,
-        status: "ACTIVE",
-        type: "PLAYER",
-        userId: { notIn: rostered.map((m) => m.userId) },
-      },
-    }),
-    prisma.teamMember.findMany({
-      where: { seasonId, isCaptain: false },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-      include: { user: true, team: true },
-    }),
-    draft.nominatedUserId
-      ? prisma.user.findUnique({ where: { id: draft.nominatedUserId } })
-      : null,
-    draft.currentBidTeamId
-      ? prisma.team.findUnique({ where: { id: draft.currentBidTeamId } })
-      : null,
-  ]);
+  const [poolLeft, sales, nominated, leadingTeam, nominatorTeam] =
+    await Promise.all([
+      prisma.registration.count({
+        where: {
+          seasonId,
+          status: "ACTIVE",
+          type: "PLAYER",
+          userId: { notIn: rostered.map((m) => m.userId) },
+        },
+      }),
+      prisma.teamMember.findMany({
+        where: { seasonId, isCaptain: false },
+        orderBy: { createdAt: "desc" },
+        take: 3,
+        include: { user: true, team: true },
+      }),
+      draft.nominatedUserId
+        ? prisma.user.findUnique({ where: { id: draft.nominatedUserId } })
+        : null,
+      draft.currentBidTeamId
+        ? prisma.team.findUnique({ where: { id: draft.currentBidTeamId } })
+        : null,
+      draft.nominatorTeamId
+        ? prisma.team.findUnique({
+            where: { id: draft.nominatorTeamId },
+            select: { name: true },
+          })
+        : null,
+    ]);
 
   return (
     <Card>
@@ -955,7 +984,11 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
             <p className="mt-2 text-sm text-muted">
               {draft.status === DRAFT_STATUS.COMPLETE
                 ? "The draft is complete."
-                : "Waiting on the next nomination…"}
+                : draft.status === DRAFT_STATUS.PAUSED
+                  ? "The draft is paused."
+                  : nominatorTeam
+                    ? `${nominatorTeam.name} is on the clock to nominate.`
+                    : "Waiting on the next nomination…"}
             </p>
           )}
         </div>
@@ -971,8 +1004,14 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
                   <PlayerLink userId={s.userId} className="min-w-0 truncate">
                     {s.user.name}
                   </PlayerLink>
-                  <span className="shrink-0 text-xs text-muted">
-                    ${s.price} · {s.team.name}
+                  {/* Price always shows; only the free-text team name gives
+                      way — a shrink-0 span here crushed the player link and
+                      bled past the card on phones. */}
+                  <span className="flex min-w-0 items-center gap-1 text-xs text-muted">
+                    <span className="shrink-0">${s.price} ·</span>
+                    <span className="min-w-0 max-w-[10rem] truncate">
+                      {s.team.name}
+                    </span>
                   </span>
                 </li>
               ))}
@@ -1139,13 +1178,7 @@ async function SeasonView({
   const myNextMatch =
     (myScenario?.nextMatchId
       ? myOpen.find((m) => m.id === myScenario.nextMatchId)
-      : undefined) ??
-    [...myOpen].sort(
-      (a, b) =>
-        (a.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY) -
-          (b.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY) ||
-        a.week - b.week,
-    )[0];
+      : undefined) ?? [...myOpen].sort(byKickoff)[0];
 
   const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
   const bracketRoundsView = buildBracketRounds(
@@ -1168,14 +1201,26 @@ async function SeasonView({
     .slice(0, 5);
 
   // Visible to everyone — spectators and unrostered players had no way to
-  // see what's coming up without leaving the dashboard.
+  // see what's coming up without leaving the dashboard. Chronological, not
+  // week order — a reschedule can move a match past its week-mates.
   const upcoming = matches
     .filter((m) => m.status !== "COMPLETED")
+    .sort(byKickoff)
     .slice(0, 4);
-  const pickemOpen = matches.filter((m) => predictionOpen(m)).length;
-  const fantasyLocked =
-    (await prisma.game.count({ where: { match: { seasonId: season.id } } })) >
-    0;
+  const openPickemIds = matches
+    .filter((m) => predictionOpen(m))
+    .map((m) => m.id);
+  const pickemOpen = openPickemIds.length;
+  const [seasonGames, picksMade] = await Promise.all([
+    prisma.game.count({ where: { match: { seasonId: season.id } } }),
+    userId && pickemOpen > 0
+      ? prisma.prediction.count({
+          where: { userId, matchId: { in: openPickemIds } },
+        })
+      : 0,
+  ]);
+  const fantasyLocked = seasonGames > 0;
+  const picksMissing = pickemOpen - picksMade;
 
   return (
     <div className="space-y-6">
@@ -1187,7 +1232,11 @@ async function SeasonView({
           title="Pick'em"
           hint={
             pickemOpen > 0
-              ? `${pickemOpen} ${pickemOpen === 1 ? "match" : "matches"} open — call it`
+              ? userId
+                ? picksMissing > 0
+                  ? `${picksMissing} pick${picksMissing === 1 ? "" : "s"} to make — call it`
+                  : "All picks in — oracle board"
+                : `${pickemOpen} ${pickemOpen === 1 ? "match" : "matches"} open — call it`
               : "See the oracle board"
           }
         />
@@ -1321,7 +1370,8 @@ async function SeasonView({
                     className="block rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
                   >
                     <div className="text-xs uppercase text-muted">
-                      Week {myNextMatch.week} · next up
+                      {matchPhaseLabel(myNextMatch.phase, myNextMatch.week)} ·
+                      next up
                     </div>
                     <div className="mt-1 font-medium">
                       {teamName.get(myNextMatch.homeTeamId)} vs{" "}
@@ -1362,11 +1412,7 @@ async function SeasonView({
                         className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
                       >
                         <div className="text-xs uppercase text-muted">
-                          {m.phase === "FINAL"
-                            ? "Grand final"
-                            : m.phase === "PLAYOFF"
-                              ? "Playoffs"
-                              : `Week ${m.week}`}
+                          {matchPhaseLabel(m.phase, m.week)}
                           {m.scheduledAt ? (
                             <>
                               {" · "}
@@ -1404,19 +1450,9 @@ async function SeasonView({
                       >
                         <span
                           className="w-7 shrink-0 font-mono text-[10px] uppercase tabular-nums text-muted"
-                          title={
-                            m.phase === "FINAL"
-                              ? "Grand final"
-                              : m.phase === "PLAYOFF"
-                                ? "Playoffs"
-                                : `Week ${m.week}`
-                          }
+                          title={matchPhaseLabel(m.phase, m.week)}
                         >
-                          {m.phase === "FINAL"
-                            ? "GF"
-                            : m.phase === "PLAYOFF"
-                              ? "PO"
-                              : `W${m.week}`}
+                          {matchPhaseAbbrev(m.phase, m.week)}
                         </span>
                         <span className="flex min-w-0 flex-1 items-center gap-1.5">
                           <TeamCrest
@@ -1595,11 +1631,7 @@ async function ThisWeek({
             >
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
                 <span className="uppercase">
-                  {m.phase === "FINAL"
-                    ? "Grand final"
-                    : m.phase === "PLAYOFF"
-                      ? "Playoffs"
-                      : `Week ${m.week}`}
+                  {matchPhaseLabel(m.phase, m.week)}
                 </span>
                 {m.scheduledAt ? (
                   <LocalTime
@@ -2050,7 +2082,10 @@ async function CompleteView({
                 records this season may have etched into league history.
               </p>
               <div className="flex flex-wrap gap-2">
-                <Link href="/recap" className={buttonClasses("accent")}>
+                <Link
+                  href={`/recap?season=${season.id}`}
+                  className={buttonClasses("accent")}
+                >
                   🏆 Season recap →
                 </Link>
                 <Link href="/leaders" className={buttonClasses("secondary")}>

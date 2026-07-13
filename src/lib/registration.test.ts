@@ -89,3 +89,25 @@ describe("registrationGate — phase rules", () => {
     ).toBeNull();
   });
 });
+
+describe("withdrawGateError", () => {
+  it("allows withdrawing a plain active signup", async () => {
+    const { withdrawGateError } = await import("./registration");
+    expect(
+      withdrawGateError({ status: "ACTIVE", isCaptain: false, isRostered: false }),
+    ).toBeNull();
+  });
+
+  it("blocks captains, rostered players, and non-active signups", async () => {
+    const { withdrawGateError } = await import("./registration");
+    expect(
+      withdrawGateError({ status: "ACTIVE", isCaptain: true, isRostered: true }),
+    ).toMatch(/captain/i);
+    expect(
+      withdrawGateError({ status: "ACTIVE", isCaptain: false, isRostered: true }),
+    ).toMatch(/roster/i);
+    expect(
+      withdrawGateError({ status: "WITHDRAWN", isCaptain: false, isRostered: false }),
+    ).toMatch(/isn't active/i);
+  });
+});

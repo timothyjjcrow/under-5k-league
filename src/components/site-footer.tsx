@@ -30,25 +30,45 @@ export function SiteFooter({
   hasHistory?: boolean;
 }) {
   const year = new Date().getFullYear();
-  const links: { href: string; label: string }[] = [
+  const teamsExist =
+    phase === "DRAFT" ||
+    phase === "REGULAR_SEASON" ||
+    phase === "PLAYOFFS" ||
+    phase === "COMPLETE";
+  const midSeason =
+    phase === "REGULAR_SEASON" ||
+    phase === "PLAYOFFS" ||
+    phase === "COMPLETE";
+
+  // "League" — the surfaces tied to the current season, phase-gated exactly the
+  // way site-header.tsx gates the same links so the two never disagree.
+  const leagueLinks: { href: string; label: string }[] = [
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },
     { href: "/inhouse", label: "Inhouse" },
   ];
-  if (phase === "DRAFT") links.push({ href: "/draft", label: "Draft" });
-  if (
-    phase === "REGULAR_SEASON" ||
-    phase === "PLAYOFFS" ||
-    phase === "COMPLETE"
-  ) {
-    links.push({ href: "/schedule", label: "Schedule" });
-    links.push({ href: "/meta", label: "Hero meta" });
+  if (teamsExist) leagueLinks.push({ href: "/teams", label: "Teams" });
+  if (phase === "DRAFT") leagueLinks.push({ href: "/draft", label: "Draft" });
+  if (midSeason) {
+    leagueLinks.push({ href: "/schedule", label: "Schedule" });
+    leagueLinks.push({ href: "/leaders", label: "Leaders" });
+    leagueLinks.push({ href: "/meta", label: "Hero meta" });
+    leagueLinks.push({ href: "/fantasy", label: "Fantasy" });
+    leagueLinks.push({ href: "/pickem", label: "Pick'em" });
   }
-  links.push({ href: "/news", label: "News" });
-  if (hasHistory) links.push({ href: "/seasons", label: "Past seasons" });
-  links.push({ href: "/hall-of-fame", label: "Hall of Fame" });
-  links.push({ href: "/records", label: "Record book" });
-  links.push({ href: "/features", label: "Features" });
+  if (phase === "COMPLETE")
+    leagueLinks.push({ href: "/recap", label: "Season recap" });
+  // The .ics feed is a file download, so it renders as a plain <a> below.
+  const showCalendar = phase === "REGULAR_SEASON" || phase === "PLAYOFFS";
+
+  // "Club" — evergreen, season-independent surfaces.
+  const clubLinks: { href: string; label: string }[] = [
+    { href: "/news", label: "News" },
+  ];
+  if (hasHistory) clubLinks.push({ href: "/seasons", label: "Past seasons" });
+  clubLinks.push({ href: "/hall-of-fame", label: "Hall of Fame" });
+  clubLinks.push({ href: "/records", label: "Record book" });
+  clubLinks.push({ href: "/features", label: "Features" });
 
   return (
     <footer className="border-t border-line/70">
@@ -68,19 +88,46 @@ export function SiteFooter({
             </p>
             <DiscordButton size="sm" className="mt-4" />
           </div>
-          <nav className="flex flex-col gap-2 text-sm">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted">
-              Explore
-            </span>
-            {links.map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className="text-muted transition-colors hover:text-fg"
-              >
-                {l.label}
-              </Link>
-            ))}
+          <nav
+            aria-label="Footer"
+            className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm"
+          >
+            <div className="flex min-w-0 flex-col gap-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted">
+                League
+              </span>
+              {leagueLinks.map((l) => (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className="text-muted transition-colors hover:text-fg"
+                >
+                  {l.label}
+                </Link>
+              ))}
+              {showCalendar ? (
+                <a
+                  href="/api/calendar"
+                  className="text-muted transition-colors hover:text-fg"
+                >
+                  <span aria-hidden="true">📅</span> Calendar (.ics)
+                </a>
+              ) : null}
+            </div>
+            <div className="flex min-w-0 flex-col gap-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted">
+                Club
+              </span>
+              {clubLinks.map((l) => (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className="text-muted transition-colors hover:text-fg"
+                >
+                  {l.label}
+                </Link>
+              ))}
+            </div>
           </nav>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-4 text-xs text-muted">

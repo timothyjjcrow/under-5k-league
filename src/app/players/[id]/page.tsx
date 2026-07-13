@@ -7,6 +7,8 @@ import { steamIdToAccountId, getHeroNames } from "@/lib/dota";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
+import { matchPhaseLabel } from "@/lib/schedule";
+import { getSessionUser } from "@/lib/auth";
 import {
   currentStreak,
   summarizePlayerGames,
@@ -73,44 +75,61 @@ export default async function PlayerProfilePage({
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) notFound();
 
-  const season = await getActiveSeason();
+  const [season, viewer] = await Promise.all([
+    getActiveSeason(),
+    getSessionUser(),
+  ]);
+  const isSelf = viewer?.id === id;
 
-  const [registration, membership, seasonTeams, seasonMatches, games] =
-    await Promise.all([
-      season
-        ? prisma.registration.findUnique({
-            where: { seasonId_userId: { seasonId: season.id, userId: id } },
-          })
-        : null,
-      season
-        ? prisma.teamMember.findFirst({
-            where: { seasonId: season.id, userId: id },
-            include: { team: { include: { captain: true } } },
-          })
-        : null,
-      season
-        ? prisma.team.findMany({ where: { seasonId: season.id } })
-        : [],
-      season
-        ? prisma.match.findMany({ where: { seasonId: season.id } })
-        : [],
-      season
-        ? prisma.game.findMany({
-            where: { match: { seasonId: season.id } },
-            include: { match: { include: { homeTeam: true, awayTeam: true } } },
-            orderBy: { startTime: "desc" },
-          })
-        : [],
-    ]);
+  const [
+    registration,
+    membership,
+    seasonTeams,
+    seasonMatches,
+    careerMemberships,
+    gamesLite,
+  ] = await Promise.all([
+    season
+      ? prisma.registration.findUnique({
+          where: { seasonId_userId: { seasonId: season.id, userId: id } },
+        })
+      : null,
+    season
+      ? prisma.teamMember.findFirst({
+          where: { seasonId: season.id, userId: id },
+          include: { team: { include: { captain: true } } },
+        })
+      : null,
+    season ? prisma.team.findMany({ where: { seasonId: season.id } }) : [],
+    season ? prisma.match.findMany({ where: { seasonId: season.id } }) : [],
+    prisma.teamMember.findMany({
+      where: { userId: id },
+      include: { team: { include: { season: true } } },
+    }),
+    // A player's userId lives inside each game's stored box-score JSON, not a
+    // column, so pass 1 is a lightweight scan (no joins) to find their game ids.
+    prisma.game.findMany({ select: { id: true, players: true } }),
+  ]);
+
+  // Pass 2: only THIS player's games carry the heavy match/team/season joins
+  // that feed the match history, stat tiles, achievements, and report card.
+  const myGameIds = gamesLite
+    .filter((g) => safeParse(g.players).some((p) => p.userId === id))
+    .map((g) => g.id);
+  const games = myGameIds.length
+    ? await prisma.game.findMany({
+        where: { id: { in: myGameIds } },
+        include: {
+          match: { include: { homeTeam: true, awayTeam: true, season: true } },
+        },
+        orderBy: { startTime: "desc" },
+      })
+    : [];
 
   const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
   const heroNames = await getHeroNames();
 
   // Career: every season this player was rostered in, with their team's record.
-  const careerMemberships = await prisma.teamMember.findMany({
-    where: { userId: id },
-    include: { team: { include: { season: true } } },
-  });
   const careerSeasonIds = [
     ...new Set(careerMemberships.map((m) => m.team.seasonId)),
   ];
@@ -142,64 +161,88 @@ export default async function PlayerProfilePage({
     );
   const titles = careerRows.filter((r) => r.champion).length;
 
-  // Pull this player's line out of each imported game.
+  // Pull this player's line out of each imported game — every season's games.
+  // The parsed box score is kept so achievements can identify each game's MVP.
   const gameRows = games
     .map((g) => {
-      const stat = safeParse(g.players).find((p) => p.userId === id);
+      const parsed = safeParse(g.players);
+      const stat = parsed.find((p) => p.userId === id);
       if (!stat) return null;
-      return { game: g, stat };
+      return { game: g, stat, parsed };
     })
     .filter((r): r is NonNullable<typeof r> => r !== null);
 
-  const lines: PlayerGameLine[] = gameRows.map(({ game, stat }) => ({
+  const toLine = ({
+    game,
+    stat,
+  }: (typeof gameRows)[number]): PlayerGameLine => ({
     isRadiant: stat.isRadiant,
     radiantWin: game.radiantWin,
     kills: stat.kills,
     deaths: stat.deaths,
     assists: stat.assists,
     heroId: stat.heroId,
-  }));
-  const summary = summarizePlayerGames(lines);
-  // Trophy case: career-wide (every season's games), and badge checks need
-  // the whole game per line so the MVP can be identified.
-  const allGames = await prisma.game.findMany({
-    select: { players: true, radiantWin: true },
   });
-  // Parse each game's box score once — achievements and the report card both
-  // read from this player's line.
-  const myAllLines = allGames
-    .map((g) => {
-      const parsed = safeParse(g.players);
-      const stat = parsed.find((p) => p.userId === id);
-      return stat ? { parsed, stat, radiantWin: g.radiantWin } : null;
-    })
-    .filter((l): l is NonNullable<typeof l> => l !== null);
-  const achievementLines = myAllLines.map(({ parsed, stat, radiantWin }) => ({
+  const careerLines = gameRows.map(toLine);
+  const seasonLines = season
+    ? gameRows.filter((r) => r.game.match.seasonId === season.id).map(toLine)
+    : [];
+  const careerSummary = summarizePlayerGames(careerLines);
+  const seasonSummary = summarizePlayerGames(seasonLines);
+  // Stat tiles show the active season once it has games, career otherwise —
+  // so veterans keep a record during SIGNUPS/DRAFT of a new season.
+  const hasSeasonGames = seasonSummary.games > 0;
+  const tiles = hasSeasonGames ? seasonSummary : careerSummary;
+  // Trophy case + report card: career-wide, same rows as the match history.
+  const achievementLines = gameRows.map(({ parsed, stat, game }) => ({
     kills: stat.kills,
     deaths: stat.deaths,
     assists: stat.assists,
     gpm: stat.gpm,
     lastHits: stat.lastHits,
-    won: stat.isRadiant === radiantWin,
-    mvp: gameMvp(parsed, radiantWin) === id,
+    won: stat.isRadiant === game.radiantWin,
+    mvp: gameMvp(parsed, game.radiantWin) === id,
   }));
   const badges = achievementsFor(achievementLines);
   // Career report card: worldwide percentile benchmarks over every graded line.
-  const reportCard = careerReportCard(myAllLines.map((l) => l.stat));
-  const streak = currentStreak(lines); // `lines` is newest-first (games desc)
+  const reportCard = careerReportCard(gameRows.map((r) => r.stat));
+  const streak = currentStreak(careerLines); // newest-first (games desc)
   const streakLabel =
     streak.count > 1 ? `${streak.type}${streak.count} streak` : undefined;
   // Recent W/L form (newest first), reusing the team form strip.
-  const recentFormStrip: FormResult[] = lines
+  const recentFormStrip: FormResult[] = careerLines
     .slice(0, 8)
     .map((l) => (wonGame(l) ? "W" : "L"));
   // KDA per game, oldest→newest, for a performance trend sparkline.
-  const kdaByGame = [...lines]
+  const kdaByGame = [...careerLines]
     .reverse()
     .map(
       (l) =>
         Math.round(((l.kills + l.assists) / Math.max(1, l.deaths)) * 10) / 10,
     );
+
+  // Group the career match history by season. gameRows is newest-first, so a
+  // Map keyed by seasonId yields seasons newest-first by first appearance —
+  // and a season stays one group even if a game with no start time (startTime
+  // defaults to 0) sorts out of order. A per-season header shows only when the
+  // player has games across more than one season.
+  const bySeason = new Map<
+    string,
+    { seasonId: string; seasonName: string; rows: typeof gameRows }
+  >();
+  for (const row of gameRows) {
+    const sId = row.game.match.seasonId;
+    const group = bySeason.get(sId);
+    if (group) group.rows.push(row);
+    else
+      bySeason.set(sId, {
+        seasonId: sId,
+        seasonName: row.game.match.season.name,
+        rows: [row],
+      });
+  }
+  const historyGroups = [...bySeason.values()];
+  const multiSeasonHistory = historyGroups.length > 1;
 
   // Team + record for this season, if drafted.
   const team = membership?.team ?? null;
@@ -230,7 +273,9 @@ export default async function PlayerProfilePage({
   // A signature hero for the banner backdrop: most-played if we have games,
   // otherwise the player's first listed favorite.
   const signatureHero =
-    (summary.topHeroes[0] ? heroById(summary.topHeroes[0].heroId) : null) ??
+    (careerSummary.topHeroes[0]
+      ? heroById(careerSummary.topHeroes[0].heroId)
+      : null) ??
     parseHeroList(registration?.favoriteHeroes).matched[0] ??
     null;
 
@@ -350,7 +395,17 @@ export default async function PlayerProfilePage({
                 <RankMedal rankTier={user.rankTier} size={34} showLabel />
               </div>
               {subtitle ? (
-                <div className="mt-1 text-sm text-muted">{subtitle}</div>
+                <div className="mt-1 text-sm text-muted">
+                  {subtitle}
+                  {isSelf ? (
+                    <>
+                      {" · "}
+                      <Link href="/me" className="text-info hover:underline">
+                        Edit your signup →
+                      </Link>
+                    </>
+                  ) : null}
+                </div>
               ) : null}
               <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted">
                 {registration ? (
@@ -418,18 +473,22 @@ export default async function PlayerProfilePage({
         </div>
       </div>
 
-      {summary.games > 0 ? (
+      {tiles.games > 0 ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat
-            label="Record"
-            value={`${summary.wins}–${summary.losses}`}
-            hint={`${summary.winRate}% win rate`}
+            label={hasSeasonGames ? "Record" : "Career record"}
+            value={`${tiles.wins}–${tiles.losses}`}
+            hint={
+              hasSeasonGames && careerSummary.games > seasonSummary.games
+                ? `${tiles.winRate}% · career ${careerSummary.wins}–${careerSummary.losses}`
+                : `${tiles.winRate}% win rate`
+            }
           />
-          <Stat label="Games" value={summary.games} hint={streakLabel} />
+          <Stat label="Games" value={tiles.games} hint={streakLabel} />
           <Stat
             label="Avg KDA"
-            value={`${summary.avgKills}/${summary.avgDeaths}/${summary.avgAssists}`}
-            hint={`${summary.kda} ratio`}
+            value={`${tiles.avgKills}/${tiles.avgDeaths}/${tiles.avgAssists}`}
+            hint={`${tiles.kda} ratio`}
           />
           {team ? (
             <Stat
@@ -440,7 +499,11 @@ export default async function PlayerProfilePage({
               }
             />
           ) : (
-            <Stat label="Hero pool" value={summary.topHeroes.length} hint="heroes played" />
+            <Stat
+              label="Hero pool"
+              value={careerSummary.topHeroes.length}
+              hint="heroes played"
+            />
           )}
         </div>
       ) : null}
@@ -449,7 +512,7 @@ export default async function PlayerProfilePage({
         <Card>
           <CardHeader
             title="Performance"
-            subtitle="Averages across imported games"
+            subtitle="Averages across every season's imported games"
           />
           <CardBody className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
@@ -622,11 +685,11 @@ export default async function PlayerProfilePage({
         </Card>
       ) : null}
 
-      {summary.topHeroes.length > 0 ? (
+      {careerSummary.topHeroes.length > 0 ? (
         <Card>
-          <CardHeader title="Most played heroes" />
+          <CardHeader title="Most played heroes" subtitle="All seasons" />
           <CardBody>
-            <HeroPool heroes={summary.topHeroes} heroNames={heroNames} />
+            <HeroPool heroes={careerSummary.topHeroes} heroNames={heroNames} />
           </CardBody>
         </Card>
       ) : null}
@@ -708,7 +771,13 @@ export default async function PlayerProfilePage({
       <Card>
         <CardHeader
           title="Match history"
-          subtitle={season?.name}
+          subtitle={
+            gameRows.length > 0
+              ? multiSeasonHistory
+                ? "All seasons"
+                : historyGroups[0]?.seasonName
+              : (season?.name ?? undefined)
+          }
           action={
             recentFormStrip.length > 0 ? (
               <FormStrip form={recentFormStrip} size={5} />
@@ -720,61 +789,72 @@ export default async function PlayerProfilePage({
             <div className="p-5">
               <EmptyState
                 title="No games recorded yet"
-                description={
-                  season
-                    ? "Games appear here once this player's matches are imported."
-                    : "There's no active season."
-                }
+                description="Games appear here once this player's matches are imported."
               />
             </div>
           ) : (
             <ul className="divide-y divide-line/60">
-              {gameRows.map(({ game, stat }) => {
-                const won = wonGame({
-                  isRadiant: stat.isRadiant,
-                  radiantWin: game.radiantWin,
-                  kills: 0,
-                  deaths: 0,
-                  assists: 0,
-                  heroId: 0,
-                });
-                const hero = heroById(stat.heroId);
-                const opponentName =
-                  stat.teamId === game.match.homeTeamId
-                    ? game.match.awayTeam.name
-                    : stat.teamId === game.match.awayTeamId
-                      ? game.match.homeTeam.name
-                      : `${game.match.homeTeam.name} / ${game.match.awayTeam.name}`;
-                return (
-                  <li key={game.id}>
+              {historyGroups.map((group) => (
+                <li key={group.seasonId}>
+                  {multiSeasonHistory ? (
                     <Link
-                      href={`/matches/${game.matchId}`}
-                      className="flex items-center gap-3 px-5 py-3 text-sm hover:bg-surface-2/40"
+                      href={`/seasons/${group.seasonId}`}
+                      className="flex items-center justify-between bg-surface-2/40 px-5 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
                     >
-                      <Badge tone={won ? "success" : "danger"}>
-                        {won ? "W" : "L"}
-                      </Badge>
-                      {hero ? <HeroIcon hero={hero} size={26} /> : null}
-                      <span className="min-w-0 flex-1 truncate">
-                        <span className="text-muted">vs </span>
-                        <span className="font-medium">{opponentName}</span>
-                        <span className="ml-2 text-xs uppercase text-muted">
-                          Wk {game.match.week}
-                          {game.match.phase !== "REGULAR"
-                            ? ` · ${game.match.phase}`
-                            : ""}
-                        </span>
+                      <span className="truncate">{group.seasonName}</span>
+                      <span className="shrink-0 tabular-nums">
+                        {group.rows.length} game
+                        {group.rows.length === 1 ? "" : "s"}
                       </span>
-                      <KDA
-                        kills={stat.kills}
-                        deaths={stat.deaths}
-                        assists={stat.assists}
-                        className="shrink-0 text-xs"
-                      />
                     </Link>
-                  </li>
-                );
-              })}
+                  ) : null}
+                  <ul className="divide-y divide-line/60">
+                    {group.rows.map(({ game, stat }) => {
+                      const won = wonGame({
+                        isRadiant: stat.isRadiant,
+                        radiantWin: game.radiantWin,
+                        kills: 0,
+                        deaths: 0,
+                        assists: 0,
+                        heroId: 0,
+                      });
+                      const hero = heroById(stat.heroId);
+                      const opponentName =
+                        stat.teamId === game.match.homeTeamId
+                          ? game.match.awayTeam.name
+                          : stat.teamId === game.match.awayTeamId
+                            ? game.match.homeTeam.name
+                            : `${game.match.homeTeam.name} / ${game.match.awayTeam.name}`;
+                      return (
+                        <li key={game.id}>
+                          <Link
+                            href={`/matches/${game.matchId}`}
+                            className="flex items-center gap-3 px-5 py-3 text-sm hover:bg-surface-2/40"
+                          >
+                            <Badge tone={won ? "success" : "danger"}>
+                              {won ? "W" : "L"}
+                            </Badge>
+                            {hero ? <HeroIcon hero={hero} size={26} /> : null}
+                            <span className="min-w-0 flex-1 truncate">
+                              <span className="text-muted">vs </span>
+                              <span className="font-medium">{opponentName}</span>
+                              <span className="ml-2 text-xs uppercase text-muted">
+                                {matchPhaseLabel(game.match.phase, game.match.week)}
+                              </span>
+                            </span>
+                            <KDA
+                              kills={stat.kills}
+                              deaths={stat.deaths}
+                              assists={stat.assists}
+                              className="shrink-0 text-xs"
+                            />
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </li>
+              ))}
             </ul>
           )}
         </CardBody>

@@ -82,9 +82,25 @@ export default async function RecordsPage() {
       radiantScore: true,
       direScore: true,
       players: true,
-      match: { select: { seasonId: true } },
+      match: {
+        select: {
+          seasonId: true,
+          homeTeam: { select: { name: true } },
+          awayTeam: { select: { name: true } },
+        },
+      },
     },
   });
+
+  // Game records name the matchup. Home/away come off the match — radiant/dire
+  // sides can swap between games of a series, so the kill score stays
+  // side-agnostic ("final score") rather than claiming an orientation.
+  const matchupOf = new Map(
+    games.map((g) => [
+      g.matchId,
+      `${g.match.homeTeam.name} vs ${g.match.awayTeam.name}`,
+    ]),
+  );
 
   const recordGames: RecordGame[] = games.map((g) => ({
     matchId: g.matchId,
@@ -200,6 +216,11 @@ export default async function RecordsPage() {
                 <div className="mt-0.5 text-xs text-muted">
                   {GAME_BLURB[r.key]}
                 </div>
+                {matchupOf.has(r.matchId) && (
+                  <div className="mt-3 text-sm font-medium">
+                    {matchupOf.get(r.matchId)}
+                  </div>
+                )}
                 <div className="mt-2 text-xs text-muted">
                   {seasonName.get(r.seasonId) ?? "—"} ·{" "}
                   <Link

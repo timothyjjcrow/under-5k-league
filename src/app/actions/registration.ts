@@ -8,7 +8,7 @@ import {
   REGISTRATION_TYPE,
   type RegistrationType,
 } from "@/lib/constants";
-import { registrationGate } from "@/lib/registration";
+import { registrationGate, withdrawGateError } from "@/lib/registration";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -127,16 +127,52 @@ export async function saveRegistration(
   };
 }
 
-/** Withdraw from the active season. */
-export async function leaveLeague() {
-  const user = await requireUser();
+/**
+ * Withdraw from the active season. Rostered players and captains must be
+ * released/replaced by an admin first — withdrawing them leaves their
+ * TeamMember row in place and orphans the roster (mirrors the standin guard
+ * in saveRegistration). Guard shared with the admin flow via withdrawGateError.
+ */
+export async function leaveLeague(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
   const season = await getActiveSeason();
-  if (!season) return;
+  if (!season) return { error: "No active season" };
+
+  const reg = await prisma.registration.findUnique({
+    where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+  });
+  if (!reg) return { error: "You're not signed up for this season." };
+
+  const [member, captainTeam] = await Promise.all([
+    prisma.teamMember.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+    }),
+    prisma.team.findFirst({
+      where: { seasonId: season.id, captainId: user.id },
+    }),
+  ]);
+
+  const gateError = withdrawGateError({
+    status: reg.status,
+    isCaptain: !!captainTeam,
+    isRostered: !!member,
+  });
+  if (gateError) return { error: gateError };
+
   await prisma.registration.updateMany({
     where: { seasonId: season.id, userId: user.id },
     data: { status: "WITHDRAWN" },
   });
   refresh();
+  return { message: "Withdrawn from this season" };
 }
 
 /** Link the current user's Dota/Dotabuff account and fetch their ranked medal. */

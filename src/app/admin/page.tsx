@@ -24,6 +24,9 @@ import {
   setMaxMmr,
   setMatchSchedule,
   renameSeason,
+  renameTeam,
+  withdrawSignup,
+  setRegistrationMmr,
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
@@ -44,7 +47,12 @@ import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
-import { pickBracketSize } from "@/lib/schedule";
+import {
+  pickBracketSize,
+  roundName,
+  slotRound,
+  groupPlayoffRounds,
+} from "@/lib/schedule";
 import { mmrWeightedBudgets } from "@/lib/draft";
 import { MATCH_SCHEDULE } from "@/lib/constants";
 import {
@@ -61,6 +69,7 @@ import {
   CardBody,
   CardHeader,
   PageTitle,
+  PlayerLink,
   Stat,
   buttonClasses,
 } from "@/components/ui";
@@ -491,33 +500,64 @@ function CaptainControls({
                 return data.teams.map((t) => (
                   <div
                     key={t.id}
-                    className="flex items-center justify-between rounded-lg border border-line px-3 py-2"
+                    className="rounded-lg border border-line px-3 py-2 text-sm"
                   >
-                    <span className="flex items-center gap-2 text-sm">
-                      <span className="w-5 text-center text-xs text-muted">
-                        {t.draftOrder + 1}
-                      </span>
-                      <Avatar
-                        name={t.captain.name}
-                        src={t.captain.avatar}
-                        size={24}
-                      />
-                      {t.name}
-                      <Badge tone="accent">
-                        ${draftStarted ? t.budget : projected.get(t.id)}
-                      </Badge>
-                    </span>
-                    {!draftStarted ? (
-                      <ActionForm action={removeCaptain}>
-                        <input type="hidden" name="teamId" value={t.id} />
-                        <button
-                          type="submit"
-                          className="text-xs text-danger hover:underline"
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="w-5 shrink-0 text-center text-xs text-muted">
+                          {t.draftOrder + 1}
+                        </span>
+                        <PlayerLink userId={t.captainId} className="shrink-0">
+                          <Avatar
+                            name={t.captain.name}
+                            src={t.captain.avatar}
+                            size={24}
+                          />
+                        </PlayerLink>
+                        <Link
+                          href={`/teams/${t.id}`}
+                          className="min-w-0 truncate hover:text-info hover:underline"
                         >
-                          remove
-                        </button>
+                          {t.name}
+                        </Link>
+                        <Badge tone="accent" className="shrink-0">
+                          ${draftStarted ? t.budget : projected.get(t.id)}
+                        </Badge>
+                      </span>
+                      {!draftStarted ? (
+                        <ActionForm action={removeCaptain}>
+                          <input type="hidden" name="teamId" value={t.id} />
+                          <button
+                            type="submit"
+                            className="shrink-0 text-xs text-danger hover:underline"
+                          >
+                            remove
+                          </button>
+                        </ActionForm>
+                      ) : null}
+                    </div>
+                    <details className="mt-1.5">
+                      <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                        ✎ Rename team
+                      </summary>
+                      <ActionForm
+                        action={renameTeam}
+                        className="mt-1.5 flex flex-wrap items-center gap-2"
+                        hidden={{ teamId: t.id }}
+                      >
+                        <input
+                          name="name"
+                          type="text"
+                          maxLength={60}
+                          defaultValue={t.name}
+                          aria-label={`New name for ${t.name}`}
+                          className="h-8 w-52 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                        />
+                        <SubmitButton variant="secondary" size="sm">
+                          Save name
+                        </SubmitButton>
                       </ActionForm>
-                    ) : null}
+                    </details>
                   </div>
                 ));
               })()
@@ -552,26 +592,79 @@ function CaptainControls({
               nonCaptains.map((p) => (
                 <div
                   key={p.id}
-                  className="flex items-center justify-between rounded-lg border border-line px-3 py-1.5"
+                  className="rounded-lg border border-line px-3 py-1.5 text-sm"
                 >
-                  <span className="flex items-center gap-2 text-sm">
-                    <Avatar name={p.user.name} src={p.user.avatar} size={22} />
-                    {p.user.name}
-                    <span className="text-xs text-muted">{p.mmr}</span>
-                    {p.wantsCaptain ? (
-                      <Badge tone="brand">wants C</Badge>
-                    ) : null}
-                  </span>
-                  {!draftStarted ? (
-                    <ActionForm action={addCaptain}>
-                      <input type="hidden" name="userId" value={p.userId} />
-                      <button
-                        type="submit"
-                        className="text-xs text-accent hover:underline"
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Avatar name={p.user.name} src={p.user.avatar} size={22} />
+                      <PlayerLink
+                        userId={p.userId}
+                        className="min-w-0 truncate"
                       >
-                        make captain
-                      </button>
-                    </ActionForm>
+                        {p.user.name}
+                      </PlayerLink>
+                      <span className="shrink-0 text-xs text-muted">
+                        {p.mmr}
+                      </span>
+                      {p.wantsCaptain ? (
+                        <Badge tone="brand" className="shrink-0">
+                          wants C
+                        </Badge>
+                      ) : null}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-3">
+                      {!draftStarted ? (
+                        <ActionForm action={addCaptain}>
+                          <input type="hidden" name="userId" value={p.userId} />
+                          <button
+                            type="submit"
+                            className="text-xs text-accent hover:underline"
+                          >
+                            make captain
+                          </button>
+                        </ActionForm>
+                      ) : null}
+                      {season.status === "SIGNUPS" ? (
+                        <ActionForm
+                          action={withdrawSignup}
+                          hidden={{ registrationId: p.id }}
+                        >
+                          <SubmitButton
+                            variant="ghost"
+                            size="sm"
+                            className="text-danger hover:underline"
+                            confirm={`Withdraw ${p.user.name}'s signup? They leave the player pool.`}
+                          >
+                            withdraw
+                          </SubmitButton>
+                        </ActionForm>
+                      ) : null}
+                    </span>
+                  </div>
+                  {season.status === "SIGNUPS" ? (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                        ✎ Edit MMR
+                      </summary>
+                      <ActionForm
+                        action={setRegistrationMmr}
+                        className="mt-1 flex items-center gap-2"
+                        hidden={{ registrationId: p.id }}
+                      >
+                        <input
+                          name="mmr"
+                          type="number"
+                          min={0}
+                          max={12000}
+                          defaultValue={p.mmr}
+                          aria-label={`MMR for ${p.user.name}`}
+                          className="h-8 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                        />
+                        <SubmitButton variant="secondary" size="sm">
+                          Save MMR
+                        </SubmitButton>
+                      </ActionForm>
+                    </details>
                   ) : null}
                 </div>
               ))
@@ -701,110 +794,199 @@ function ScheduleControls({
                 </ActionForm>
               ) : null;
             })()}
-            {data.matches.map((m) => {
-              const home = data.teams.find((t) => t.id === m.homeTeamId);
-              const away = data.teams.find((t) => t.id === m.awayTeamId);
+            {/* Regular season, grouped by week — completed weeks collapse so
+                the enter-scores workflow starts at the week that needs it. */}
+            {status.weeks.map((w) => {
+              const weekMatches = data.matches.filter(
+                (m) => m.phase === "REGULAR" && m.week === w.week,
+              );
               return (
-                <div
-                  key={m.id}
-                  className="space-y-2 rounded-lg border border-line p-3"
+                <details
+                  key={`w${w.week}`}
+                  open={w.pending > 0}
+                  className="rounded-lg border border-line"
                 >
-                  <ActionForm
-                    action={recordResult}
-                    className="flex flex-wrap items-center gap-2 text-sm"
-                    hidden={{ matchId: m.id }}
-                  >
-                    <span className="w-14 text-xs text-muted">Wk {m.week}</span>
-                    <span className="flex-1 text-right">{home?.name ?? "?"}</span>
-                    <input
-                      name="homeScore"
-                      type="number"
-                      min={0}
-                      max={99}
-                      defaultValue={m.homeScore}
-                      className="h-8 w-14 rounded-md border border-line bg-surface-2/50 px-2 text-center"
-                    />
-                    <span className="text-muted">–</span>
-                    <input
-                      name="awayScore"
-                      type="number"
-                      min={0}
-                      max={99}
-                      defaultValue={m.awayScore}
-                      className="h-8 w-14 rounded-md border border-line bg-surface-2/50 px-2 text-center"
-                    />
-                    <span className="flex-1">{away?.name ?? "?"}</span>
-                    {m.status === "COMPLETED" ? (
-                      <Badge tone="success">final</Badge>
+                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                    Week {w.week}
+                    <span className="ml-2 text-xs font-normal text-muted">
+                      {w.completed}/{w.total} entered
+                    </span>
+                    {w.pending === 0 ? (
+                      <Badge tone="success" className="ml-2">
+                        done
+                      </Badge>
                     ) : null}
-                    <SubmitButton variant="secondary" size="sm">
-                      Save
-                    </SubmitButton>
-                  </ActionForm>
-
-                  <form
-                    action={setMatchTime}
-                    className="flex flex-wrap items-center gap-2 text-xs text-muted"
-                  >
-                    <input type="hidden" name="matchId" value={m.id} />
-                    <span>Scheduled</span>
-                    <LocalDatetimeField
-                      name="scheduledAt"
-                      tsName="scheduledAtTs"
-                      defaultTs={m.scheduledAt?.getTime()}
-                      className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-                    />
-                    <SubmitButton variant="secondary" size="sm">
-                      Set time
-                    </SubmitButton>
-                  </form>
-
-                  {m.games.length > 0 ? (
-                    <ul className="space-y-1 border-t border-line/60 pt-2 text-xs">
-                      {m.games.map((g) => {
-                        const winner = data.teams.find(
-                          (t) => t.id === g.winnerTeamId,
-                        );
-                        return (
-                          <li
-                            key={g.id}
-                            className="flex items-center justify-between"
+                  </summary>
+                  <div className="space-y-2 px-3 pb-3">
+                    {weekMatches.map((m) => (
+                      <MatchResultRow
+                        key={m.id}
+                        m={m}
+                        teams={data.teams}
+                        label={
+                          <Link
+                            href={`/matches/${m.id}`}
+                            className="w-14 shrink-0 text-xs text-info hover:underline"
                           >
-                            <a
-                              href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-info hover:underline"
-                            >
-                              Game {g.dotaMatchId} ·{" "}
-                              {winner ? `${winner.name} won` : "tie"} ·{" "}
-                              {Math.floor(g.durationSecs / 60)}m
-                            </a>
-                            <ActionForm action={removeGame}>
-                              <input type="hidden" name="gameId" value={g.id} />
-                              <SubmitButton
-                                variant="ghost"
-                                size="sm"
-                                className="text-danger hover:underline"
-                                confirm="Remove this imported game and recompute the series?"
-                              >
-                                remove
-                              </SubmitButton>
-                            </ActionForm>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : null}
-
-                  <MatchImportControls matchId={m.id} />
-                </div>
+                            Wk {m.week}
+                          </Link>
+                        }
+                      />
+                    ))}
+                  </div>
+                </details>
               );
             })}
+            {/* Playoffs in their own section, labeled by round so the admin
+                entering a bracket-advancing result can tell the final from a
+                semifinal. */}
+            {(() => {
+              const playoff = data.matches.filter(
+                (m) => m.phase !== "REGULAR",
+              );
+              if (playoff.length === 0) return null;
+              const { totalRounds } = groupPlayoffRounds(playoff);
+              const pending = playoff.filter(
+                (m) => m.status !== "COMPLETED",
+              ).length;
+              return (
+                <details
+                  open={pending > 0}
+                  className="rounded-lg border border-accent/40"
+                >
+                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                    Playoffs
+                    <span className="ml-2 text-xs font-normal text-muted">
+                      {playoff.length - pending}/{playoff.length} entered
+                    </span>
+                  </summary>
+                  <div className="space-y-2 px-3 pb-3">
+                    {playoff.map((m) => (
+                      <MatchResultRow
+                        key={m.id}
+                        m={m}
+                        teams={data.teams}
+                        label={
+                          <Link
+                            href={`/matches/${m.id}`}
+                            className="shrink-0 text-xs text-info hover:underline"
+                          >
+                            {roundName(slotRound(m.bracketSlot), totalRounds)}
+                          </Link>
+                        }
+                      />
+                    ))}
+                  </div>
+                </details>
+              );
+            })()}
           </div>
         )}
       </CardBody>
     </Card>
+  );
+}
+
+// One match's result + scheduling + imported-games controls. Used by the
+// week-grouped and playoff sections of ScheduleControls.
+function MatchResultRow({
+  m,
+  teams,
+  label,
+}: {
+  m: AdminData["matches"][number];
+  teams: AdminData["teams"];
+  label: React.ReactNode;
+}) {
+  const home = teams.find((t) => t.id === m.homeTeamId);
+  const away = teams.find((t) => t.id === m.awayTeamId);
+  return (
+    <div className="space-y-2 rounded-lg border border-line p-3">
+      <ActionForm
+        action={recordResult}
+        className="flex flex-wrap items-center gap-2 text-sm"
+        hidden={{ matchId: m.id }}
+      >
+        {label}
+        <span className="flex-1 text-right">{home?.name ?? "?"}</span>
+        <input
+          name="homeScore"
+          type="number"
+          min={0}
+          max={99}
+          defaultValue={m.homeScore}
+          className="h-8 w-14 rounded-md border border-line bg-surface-2/50 px-2 text-center"
+        />
+        <span className="text-muted">–</span>
+        <input
+          name="awayScore"
+          type="number"
+          min={0}
+          max={99}
+          defaultValue={m.awayScore}
+          className="h-8 w-14 rounded-md border border-line bg-surface-2/50 px-2 text-center"
+        />
+        <span className="flex-1">{away?.name ?? "?"}</span>
+        {m.status === "COMPLETED" ? (
+          <Badge tone="success">final</Badge>
+        ) : null}
+        <SubmitButton variant="secondary" size="sm">
+          Save
+        </SubmitButton>
+      </ActionForm>
+
+      <form
+        action={setMatchTime}
+        className="flex flex-wrap items-center gap-2 text-xs text-muted"
+      >
+        <input type="hidden" name="matchId" value={m.id} />
+        <span>Scheduled</span>
+        <LocalDatetimeField
+          name="scheduledAt"
+          tsName="scheduledAtTs"
+          defaultTs={m.scheduledAt?.getTime()}
+          className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+        />
+        <SubmitButton variant="secondary" size="sm">
+          Set time
+        </SubmitButton>
+      </form>
+
+      {m.games.length > 0 ? (
+        <ul className="space-y-1 border-t border-line/60 pt-2 text-xs">
+          {m.games.map((g) => {
+            const winner = teams.find((t) => t.id === g.winnerTeamId);
+            return (
+              <li key={g.id} className="flex items-center justify-between">
+                <a
+                  href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-info hover:underline"
+                >
+                  Game {g.dotaMatchId} ·{" "}
+                  {winner ? `${winner.name} won` : "tie"} ·{" "}
+                  {Math.floor(g.durationSecs / 60)}m
+                </a>
+                <ActionForm action={removeGame}>
+                  <input type="hidden" name="gameId" value={g.id} />
+                  <SubmitButton
+                    variant="ghost"
+                    size="sm"
+                    className="text-danger hover:underline"
+                    confirm="Remove this imported game and recompute the series?"
+                  >
+                    remove
+                  </SubmitButton>
+                </ActionForm>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      <MatchImportControls matchId={m.id} />
+    </div>
   );
 }
 
@@ -888,6 +1070,19 @@ function StandinControls({ data }: { data: AdminData }) {
     arr.push(a);
     byMatch.set(a.matchId, arr);
   }
+  // Standins are assigned for the imminent night — group by week and only
+  // expand the earliest open one so the current night isn't a scroll away.
+  const regularUpcoming = upcoming.filter((m) => m.phase === "REGULAR");
+  const playoffUpcoming = upcoming.filter((m) => m.phase !== "REGULAR");
+  const weeks = [...new Set(regularUpcoming.map((m) => m.week))].sort(
+    (a, b) => a - b,
+  );
+  // Round names need the full bracket depth — deriving it from only the
+  // upcoming (not-yet-played) rounds would drop the first-round count and
+  // mislabel a lone remaining semifinal/final.
+  const { totalRounds } = groupPlayoffRounds(
+    data.matches.filter((m) => m.phase !== "REGULAR"),
+  );
 
   return (
     <Card>
@@ -901,123 +1096,207 @@ function StandinControls({ data }: { data: AdminData }) {
         ) : upcoming.length === 0 ? (
           <p className="text-sm text-muted">No upcoming matches to fill.</p>
         ) : (
-          upcoming.map((m) => {
-            const home = data.teams.find((t) => t.id === m.homeTeamId);
-            const away = data.teams.find((t) => t.id === m.awayTeamId);
-            const asg = byMatch.get(m.id) ?? [];
-            return (
-              <div
-                key={m.id}
-                className="space-y-2 rounded-lg border border-line p-3"
-              >
-                <div className="text-sm font-medium">
-                  Wk {m.week}: {home?.name ?? "?"} vs {away?.name ?? "?"}
-                </div>
-                {(() => {
-                  // Only current roster members can need cover — a released
-                  // player's (or unassigned standin's) stale OUT row would
-                  // otherwise raise an alert no assignment can ever clear.
-                  const rosterIds = new Set(
-                    [home, away].flatMap(
-                      (t) => t?.members.map((mm) => mm.userId) ?? [],
-                    ),
-                  );
-                  const out = data.outRsvps.filter(
-                    (r) => r.matchId === m.id && rosterIds.has(r.userId),
-                  );
-                  const covered = new Set(
-                    asg.map((a) => a.replacingUserId).filter(Boolean),
-                  );
-                  const needing = out.filter((r) => !covered.has(r.userId));
-                  return needing.length > 0 ? (
-                    <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
-                      ✗ Can&apos;t make it:{" "}
-                      <b>{needing.map((r) => r.user.name).join(", ")}</b> —
-                      assign a standin below.
-                    </div>
-                  ) : null;
-                })()}
-                {asg.length > 0 ? (
-                  <ul className="space-y-1">
-                    {asg.map((a) => (
-                      <li
-                        key={a.id}
-                        className="flex items-center justify-between text-xs text-muted"
-                      >
-                        <span>
-                          {a.standin.name} in for {a.replaced?.name ?? "?"} ·{" "}
-                          {teamName.get(a.teamId)}
-                        </span>
-                        <ActionForm action={removeStandin}>
-                          <input type="hidden" name="assignmentId" value={a.id} />
-                          <button
-                            type="submit"
-                            className="text-danger hover:underline"
-                          >
-                            remove
-                          </button>
-                        </ActionForm>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                <ActionForm
-                  action={assignStandin}
-                  className="flex flex-wrap items-center gap-2"
+          <>
+            {weeks.map((wk) => {
+              const wkMatches = regularUpcoming.filter((m) => m.week === wk);
+              return (
+                <details
+                  key={`w${wk}`}
+                  open={wk === weeks[0]}
+                  className="rounded-lg border border-line"
                 >
-                  <input type="hidden" name="matchId" value={m.id} />
-                  <select
-                    name="standinUserId"
-                    required
-                    defaultValue=""
-                    aria-label="Standin"
-                    className={selectCls}
-                  >
-                    <option value="" disabled>
-                      Standin…
-                    </option>
-                    {data.standins.map((s) => (
-                      <option key={s.userId} value={s.userId}>
-                        {s.user.name}
-                      </option>
+                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                    Week {wk}
+                    <span className="ml-2 text-xs font-normal text-muted">
+                      {wkMatches.length} match
+                      {wkMatches.length === 1 ? "" : "es"}
+                    </span>
+                  </summary>
+                  <div className="space-y-3 px-3 pb-3">
+                    {wkMatches.map((m) => (
+                      <StandinMatchBlock
+                        key={m.id}
+                        m={m}
+                        data={data}
+                        assignments={byMatch.get(m.id) ?? []}
+                        teamName={teamName}
+                        label={
+                          <Link
+                            href={`/matches/${m.id}`}
+                            className="text-info hover:underline"
+                          >
+                            Week {m.week}
+                          </Link>
+                        }
+                      />
                     ))}
-                  </select>
-                  <span className="text-xs text-muted">replaces</span>
-                  <select
-                    name="replacingUserId"
-                    required
-                    defaultValue=""
-                    aria-label="Player being replaced"
-                    className={selectCls}
-                  >
-                    <option value="" disabled>
-                      Player…
-                    </option>
-                    <optgroup label={home?.name ?? "Home"}>
-                      {home?.members.map((mm) => (
-                        <option key={mm.userId} value={mm.userId}>
-                          {mm.user.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label={away?.name ?? "Away"}>
-                      {away?.members.map((mm) => (
-                        <option key={mm.userId} value={mm.userId}>
-                          {mm.user.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  </select>
-                  <Button type="submit" variant="secondary" size="sm">
-                    Assign
-                  </Button>
-                </ActionForm>
-              </div>
-            );
-          })
+                  </div>
+                </details>
+              );
+            })}
+            {playoffUpcoming.length > 0 ? (
+              <details
+                open={weeks.length === 0}
+                className="rounded-lg border border-accent/40"
+              >
+                <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                  Playoffs
+                  <span className="ml-2 text-xs font-normal text-muted">
+                    {playoffUpcoming.length} match
+                    {playoffUpcoming.length === 1 ? "" : "es"}
+                  </span>
+                </summary>
+                <div className="space-y-3 px-3 pb-3">
+                  {playoffUpcoming.map((m) => (
+                    <StandinMatchBlock
+                      key={m.id}
+                      m={m}
+                      data={data}
+                      assignments={byMatch.get(m.id) ?? []}
+                      teamName={teamName}
+                      label={
+                        <Link
+                          href={`/matches/${m.id}`}
+                          className="text-info hover:underline"
+                        >
+                          {roundName(slotRound(m.bracketSlot), totalRounds)}
+                        </Link>
+                      }
+                    />
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </>
         )}
       </CardBody>
     </Card>
+  );
+}
+
+// One match's standin controls: an OUT-players alert, current assignments,
+// and the assign form. Shared by the week-grouped and playoff sections above.
+function StandinMatchBlock({
+  m,
+  data,
+  assignments,
+  teamName,
+  label,
+}: {
+  m: AdminData["matches"][number];
+  data: AdminData;
+  assignments: AdminData["assignments"];
+  teamName: Map<string, string>;
+  label: React.ReactNode;
+}) {
+  const home = data.teams.find((t) => t.id === m.homeTeamId);
+  const away = data.teams.find((t) => t.id === m.awayTeamId);
+  const asg = assignments;
+  return (
+    <div className="space-y-2 rounded-lg border border-line p-3">
+      <div className="text-sm font-medium">
+        {label}: {home?.name ?? "?"} vs {away?.name ?? "?"}
+      </div>
+      {(() => {
+        // Only current roster members can need cover — a released
+        // player's (or unassigned standin's) stale OUT row would
+        // otherwise raise an alert no assignment can ever clear.
+        const rosterIds = new Set(
+          [home, away].flatMap(
+            (t) => t?.members.map((mm) => mm.userId) ?? [],
+          ),
+        );
+        const out = data.outRsvps.filter(
+          (r) => r.matchId === m.id && rosterIds.has(r.userId),
+        );
+        const covered = new Set(
+          asg.map((a) => a.replacingUserId).filter(Boolean),
+        );
+        const needing = out.filter((r) => !covered.has(r.userId));
+        return needing.length > 0 ? (
+          <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
+            ✗ Can&apos;t make it:{" "}
+            <b>{needing.map((r) => r.user.name).join(", ")}</b> — assign a
+            standin below.
+          </div>
+        ) : null;
+      })()}
+      {asg.length > 0 ? (
+        <ul className="space-y-1">
+          {asg.map((a) => (
+            <li
+              key={a.id}
+              className="flex items-center justify-between text-xs text-muted"
+            >
+              <span>
+                {a.standin.name} in for {a.replaced?.name ?? "?"} ·{" "}
+                {teamName.get(a.teamId)}
+              </span>
+              <ActionForm action={removeStandin}>
+                <input type="hidden" name="assignmentId" value={a.id} />
+                <button
+                  type="submit"
+                  className="text-danger hover:underline"
+                >
+                  remove
+                </button>
+              </ActionForm>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <ActionForm
+        action={assignStandin}
+        className="flex flex-wrap items-center gap-2"
+      >
+        <input type="hidden" name="matchId" value={m.id} />
+        <select
+          name="standinUserId"
+          required
+          defaultValue=""
+          aria-label="Standin"
+          className={selectCls}
+        >
+          <option value="" disabled>
+            Standin…
+          </option>
+          {data.standins.map((s) => (
+            <option key={s.userId} value={s.userId}>
+              {s.user.name}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-muted">replaces</span>
+        <select
+          name="replacingUserId"
+          required
+          defaultValue=""
+          aria-label="Player being replaced"
+          className={selectCls}
+        >
+          <option value="" disabled>
+            Player…
+          </option>
+          <optgroup label={home?.name ?? "Home"}>
+            {home?.members.map((mm) => (
+              <option key={mm.userId} value={mm.userId}>
+                {mm.user.name}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label={away?.name ?? "Away"}>
+            {away?.members.map((mm) => (
+              <option key={mm.userId} value={mm.userId}>
+                {mm.user.name}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+        <Button type="submit" variant="secondary" size="sm">
+          Assign
+        </Button>
+      </ActionForm>
+    </div>
   );
 }
 
@@ -1427,9 +1706,14 @@ async function PendingReschedules({
       {pending.map((r) => (
         <div key={r.id} className="flex flex-wrap items-center gap-2">
           <span className="min-w-0 flex-1">
-            Wk {r.match.week}: {name(r.match.homeTeamId)} vs{" "}
-            {name(r.match.awayTeamId)} — <strong>{r.proposedBy.name}</strong>{" "}
-            proposes{" "}
+            <Link
+              href={`/matches/${r.matchId}`}
+              className="text-info hover:underline"
+            >
+              Wk {r.match.week}
+            </Link>
+            : {name(r.match.homeTeamId)} vs {name(r.match.awayTeamId)} —{" "}
+            <strong>{r.proposedBy.name}</strong> proposes{" "}
             <LocalTime
               ts={r.proposedTime.getTime()}
               variant="full"

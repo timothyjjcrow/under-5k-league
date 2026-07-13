@@ -65,10 +65,10 @@ export function FantasyPicker({
         </span>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {teams.map((teamName) => (
-          <div key={teamName} className="rounded-lg border border-line p-3">
-            <div className="mb-2 text-sm font-semibold">{teamName}</div>
+          <div key={teamName} className="min-w-0 rounded-lg border border-line p-3">
+            <div className="mb-2 truncate text-sm font-semibold">{teamName}</div>
             <div className="space-y-1">
               {candidates
                 .filter((c) => c.teamName === teamName)

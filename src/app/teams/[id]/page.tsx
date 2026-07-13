@@ -7,6 +7,7 @@ import { computeStandings } from "@/lib/standings";
 import { seasonScenarioReport } from "@/lib/stakes";
 import type { TeamScenario } from "@/lib/scenarios";
 import { headToHead, recentForm } from "@/lib/team-matches";
+import { matchPhaseLabel } from "@/lib/schedule";
 import { roleCoverage } from "@/lib/pool-stats";
 import {
   summarizePlayerGames,
@@ -27,6 +28,7 @@ import {
   HeroPool,
   PlayerLink,
   RankBadge,
+  RoleBadges,
   Sparkline,
   Stat,
   TeamCrest,
@@ -95,7 +97,7 @@ export default async function TeamPage({
       memberIds.length
         ? prisma.registration.findMany({
             where: { seasonId: team.seasonId, userId: { in: memberIds } },
-            select: { roles: true, favoriteHeroes: true, mmr: true },
+            select: { userId: true, roles: true, favoriteHeroes: true, mmr: true },
           })
         : Promise.resolve([]),
       memberIds.length
@@ -165,6 +167,8 @@ export default async function TeamPage({
     : null;
   const coverage = roleCoverage(rosterRegs);
   const hasRoleData = coverage.some((r) => r.count > 0);
+  // Which player prefers which roles → per-row badges in the roster card.
+  const rolesByUser = new Map(rosterRegs.map((r) => [r.userId, r.roles]));
   const hue = teamHue(team.id);
   // The roster's most-commonly listed hero → a faint banner backdrop. Kept
   // subtle so the team's color identity (crest + glow) stays dominant.
@@ -310,7 +314,9 @@ export default async function TeamPage({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat
             label="Record"
-            value={`${row?.wins ?? 0}–${row?.losses ?? 0}`}
+            value={`${row?.wins ?? 0}–${row?.losses ?? 0}${
+              (row?.draws ?? 0) > 0 ? `–${row?.draws}` : ""
+            }`}
           />
           <Stat label="Points" value={row?.points ?? 0} />
           <Stat
@@ -373,11 +379,15 @@ export default async function TeamPage({
                 key={m.id}
                 className="flex items-center justify-between rounded-md border border-line/60 px-3 py-2 text-sm"
               >
-                <span className="flex items-center gap-2">
+                <span className="flex min-w-0 items-center gap-2">
                   <Avatar name={m.user.name} src={m.user.avatar} size={26} />
                   <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
                   {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
                   <RankBadge rankTier={m.user.rankTier} />
+                  <RoleBadges
+                    roles={rolesByUser.get(m.userId)}
+                    className="hidden sm:inline-flex"
+                  />
                 </span>
                 <span className="text-muted">
                   {m.isCaptain ? "—" : `$${m.price}`}
@@ -450,15 +460,23 @@ export default async function TeamPage({
                 return (
                   <li
                     key={r.opponentId}
-                    className="flex items-center justify-between px-5 py-2.5 text-sm transition-colors hover:bg-surface-2/40"
+                    className="flex items-center justify-between gap-3 px-5 py-2.5 text-sm transition-colors hover:bg-surface-2/40"
                   >
                     <Link
                       href={`/teams/${r.opponentId}`}
-                      className="font-medium hover:text-info"
+                      className="flex min-w-0 flex-1 items-center gap-2 font-medium hover:text-info"
                     >
-                      {teamName.get(r.opponentId) ?? "?"}
+                      <TeamCrest
+                        name={teamName.get(r.opponentId) ?? "?"}
+                        seed={r.opponentId}
+                        size={20}
+                        className="shrink-0 rounded"
+                      />
+                      <span className="truncate">
+                        {teamName.get(r.opponentId) ?? "?"}
+                      </span>
                     </Link>
-                    <span className="flex items-center gap-3">
+                    <span className="flex shrink-0 items-center gap-3">
                       <span className="text-xs text-muted">
                         {r.gamesFor}–{r.gamesAgainst} games
                       </span>
@@ -492,14 +510,26 @@ export default async function TeamPage({
                   <li key={m.id}>
                     <Link
                       href={`/matches/${m.id}`}
-                      className="flex items-center justify-between px-5 py-3 text-sm hover:bg-surface-2/40"
+                      className="flex items-center justify-between gap-3 px-5 py-3 text-sm hover:bg-surface-2/40"
                     >
-                      <span className="flex items-center gap-3">
-                        <span className="w-12 text-xs text-muted">
-                          Wk {m.week}
-                        </span>
-                        <span>
-                          vs{" "}
+                      <span className="flex min-w-0 flex-1 items-center gap-3">
+                        {m.phase !== "REGULAR" ? (
+                          <Badge tone="accent" className="shrink-0">
+                            {matchPhaseLabel(m.phase, m.week)}
+                          </Badge>
+                        ) : (
+                          <span className="w-12 shrink-0 text-xs text-muted">
+                            Wk {m.week}
+                          </span>
+                        )}
+                        <TeamCrest
+                          name={teamName.get(oppId) ?? "?"}
+                          seed={oppId}
+                          size={20}
+                          className="shrink-0 rounded"
+                        />
+                        <span className="min-w-0 truncate">
+                          <span className="text-muted">vs </span>
                           <span className="font-medium">
                             {teamName.get(oppId) ?? "?"}
                           </span>
@@ -513,7 +543,7 @@ export default async function TeamPage({
                           ) : null}
                         </span>
                       </span>
-                      <span className="flex items-center gap-2">
+                      <span className="flex shrink-0 items-center gap-2">
                         {m.status === "COMPLETED" ? (
                           <>
                             <Badge tone={won ? "success" : "danger"}>

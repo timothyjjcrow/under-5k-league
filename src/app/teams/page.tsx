@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { draftRecap } from "@/lib/draft-recap";
 import { powerRankings } from "@/lib/power-rankings";
+import { formByTeam } from "@/lib/team-matches";
 import { cn } from "@/lib/utils";
 import {
   Avatar,
@@ -12,6 +13,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  FormStrip,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -40,7 +42,10 @@ export default async function TeamsPage() {
         members: { include: { user: true }, orderBy: { price: "desc" } },
       },
     }),
-    prisma.match.findMany({ where: { seasonId: season.id } }),
+    prisma.match.findMany({
+      where: { seasonId: season.id },
+      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+    }),
   ]);
 
   if (teams.length === 0) {
@@ -67,6 +72,11 @@ export default async function TeamsPage() {
   const rowOf = new Map(standings.map((s) => [s.teamId, s]));
   const played = matches.some((m) => m.status === "COMPLETED" && m.phase === "REGULAR");
   const isDraft = season.status === "DRAFT";
+  // Recent W/L/D per team (matches are already ordered chronologically above).
+  const forms = formByTeam(
+    teams.map((t) => t.id),
+    matches,
+  );
 
   // Draft-night superlatives (biggest spend, best steal, …) — MMR from signups.
   const memberIds = teams.flatMap((t) => t.members.map((m) => m.userId));
@@ -116,7 +126,14 @@ export default async function TeamsPage() {
             >
               Draft room →
             </Link>
-          ) : undefined
+          ) : (
+            <Link
+              href="/schedule"
+              className="text-sm text-info hover:underline"
+            >
+              Standings →
+            </Link>
+          )
         }
       />
 
@@ -192,39 +209,41 @@ export default async function TeamsPage() {
             title={isDraft ? "Draft night — so far" : "Draft night"}
             subtitle={`$${recap.totalSpent} changed hands at the auction`}
           />
-          <CardBody className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <CardBody className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
             {recap.biggestSpend ? (
-              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   💸 Biggest spend
                 </div>
-                <div className="mt-1 font-medium">
+                <div className="mt-1 truncate font-medium">
                   {recap.biggestSpend.name} · ${recap.biggestSpend.price}
                 </div>
-                <div className="text-xs text-muted">
+                <div className="truncate text-xs text-muted">
                   {recap.biggestSpend.teamName}
                 </div>
               </div>
             ) : null}
             {recap.bestValue ? (
-              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   🕵️ Best steal
                 </div>
-                <div className="mt-1 font-medium">
+                <div className="mt-1 truncate font-medium">
                   {recap.bestValue.name} · ${recap.bestValue.price}
                 </div>
-                <div className="text-xs text-muted">
+                <div className="truncate text-xs text-muted">
                   {recap.bestValue.mmr} MMR for {recap.bestValue.teamName}
                 </div>
               </div>
             ) : null}
             {recap.topSpender ? (
-              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   🐳 Top spender
                 </div>
-                <div className="mt-1 font-medium">{recap.topSpender.teamName}</div>
+                <div className="mt-1 truncate font-medium">
+                  {recap.topSpender.teamName}
+                </div>
                 <div className="text-xs text-muted">
                   ${recap.topSpender.spent} total
                 </div>
@@ -232,11 +251,11 @@ export default async function TeamsPage() {
             ) : null}
             {recap.bargainHunter &&
             recap.bargainHunter.teamName !== recap.topSpender?.teamName ? (
-              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
+              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   🧾 Bargain hunter
                 </div>
-                <div className="mt-1 font-medium">
+                <div className="mt-1 truncate font-medium">
                   {recap.bargainHunter.teamName}
                 </div>
                 <div className="text-xs text-muted">
@@ -343,6 +362,11 @@ export default async function TeamsPage() {
                       Diff{" "}
                       {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
                     </span>
+                    <FormStrip
+                      form={forms.get(t.id) ?? []}
+                      size={5}
+                      className="ml-auto"
+                    />
                   </div>
                 ) : null}
               </CardBody>

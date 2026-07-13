@@ -8,10 +8,13 @@ import type { ScenarioReport } from "@/lib/scenarios";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
   byeTeamsByWeek,
+  groupPlayoffRounds,
   pickBracketSize,
   playoffFirstRound,
   remainingSchedule,
+  roundName,
 } from "@/lib/schedule";
+import { formatMatchTime } from "@/lib/match-time";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
@@ -233,52 +236,80 @@ export default async function SchedulePage() {
       : null;
 
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
-  // collapsible weeks). Dates preformatted server-side.
+  // collapsible weeks). Dates preformatted server-side. Shared with the
+  // playoff round list below so RSVP/standin/reschedule chips work everywhere.
+  const toMatchView = (m: Match): MatchView => ({
+    id: m.id,
+    homeTeamId: m.homeTeamId,
+    awayTeamId: m.awayTeamId,
+    homeName: teamName.get(m.homeTeamId) ?? "?",
+    awayName: teamName.get(m.awayTeamId) ?? "?",
+    homeScore: m.homeScore,
+    awayScore: m.awayScore,
+    done: m.status === "COMPLETED",
+    homeWin: m.winnerTeamId === m.homeTeamId,
+    awayWin: m.winnerTeamId === m.awayTeamId,
+    whenFull: fmtWhen(m.scheduledAt),
+    whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
+    whenTs: m.scheduledAt?.getTime() ?? null,
+    isFinalPhase: m.phase === "FINAL",
+    standins: (standinsByMatch.get(m.id) ?? []).map(
+      (a) =>
+        `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
+    ),
+    rsvp: rsvpFor(m) && {
+      home: pickRsvp(rsvpFor(m)!.home),
+      away: pickRsvp(rsvpFor(m)!.away),
+    },
+    reschedulePending: rescheduleByMatch.get(m.id) ?? null,
+  });
+  // The week's league night = its earliest kickoff (headers stay scannable
+  // even when the weeks are collapsed).
+  const earliestScheduled = (ms: Match[]): Date | null =>
+    ms.reduce<Date | null>(
+      (min, m) =>
+        m.scheduledAt && (!min || m.scheduledAt < min) ? m.scheduledAt : min,
+      null,
+    );
   const byesByWeek = byeTeamsByWeek(
     regular,
     teams.map((t) => t.id),
   );
   const weekViews: WeekView[] = weeks.map((week) => {
     const ws = weekStatus.get(week);
-    const weekMatches = regular
-      .filter((m) => m.week === week)
-      .map((m): MatchView => {
-        return {
-          id: m.id,
-          homeTeamId: m.homeTeamId,
-          awayTeamId: m.awayTeamId,
-          homeName: teamName.get(m.homeTeamId) ?? "?",
-          awayName: teamName.get(m.awayTeamId) ?? "?",
-          homeScore: m.homeScore,
-          awayScore: m.awayScore,
-          done: m.status === "COMPLETED",
-          homeWin: m.winnerTeamId === m.homeTeamId,
-          awayWin: m.winnerTeamId === m.awayTeamId,
-          whenFull: fmtWhen(m.scheduledAt),
-          whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
-          whenTs: m.scheduledAt?.getTime() ?? null,
-          isFinalPhase: m.phase === "FINAL",
-          standins: (standinsByMatch.get(m.id) ?? []).map(
-            (a) =>
-              `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
-          ),
-          rsvp: rsvpFor(m) && {
-            home: pickRsvp(rsvpFor(m)!.home),
-            away: pickRsvp(rsvpFor(m)!.away),
-          },
-          reschedulePending: rescheduleByMatch.get(m.id) ?? null,
-        };
-      });
+    const raw = regular.filter((m) => m.week === week);
+    const night = earliestScheduled(raw);
     return {
       week,
       completed: ws?.completed ?? 0,
-      total: ws?.total ?? weekMatches.length,
+      total: ws?.total ?? raw.length,
       isCurrent: week === currentWeek,
-      matches: weekMatches,
+      matches: raw.map(toMatchView),
       byes: (byesByWeek.get(week) ?? []).map((id) => ({
         id,
         name: teamName.get(id) ?? "?",
       })),
+      nightTs: night?.getTime() ?? null,
+      nightInitial: night ? formatMatchTime(night, "date") : null,
+    };
+  });
+
+  // Playoff rounds as schedule rows too — the bracket alone carries no RSVP
+  // counts, standin lines, or reschedule chips. groupPlayoffRounds only holds
+  // real matches, so TBD slots never render a row.
+  const playoffGrouping = groupPlayoffRounds(playoff);
+  const playoffRoundViews: WeekView[] = playoffGrouping.rounds.map((r) => {
+    const night = earliestScheduled(r.matches);
+    return {
+      week: r.matches[0]?.week ?? r.round + 1,
+      label: roundName(r.round, playoffGrouping.totalRounds),
+      completed: r.matches.filter((m) => m.status === "COMPLETED").length,
+      total: r.matches.length,
+      isCurrent: false,
+      matches: r.matches.map(toMatchView),
+      byes: [],
+      nightTs: night?.getTime() ?? null,
+      nightInitial: night ? formatMatchTime(night, "date") : null,
     };
   });
 
@@ -298,13 +329,20 @@ export default async function SchedulePage() {
         title="Schedule & Standings"
         subtitle={season.name}
         action={
-          <a
-            href="/api/calendar"
-            className="text-xs text-muted hover:text-info"
-            title="Subscribe to scheduled matches from your calendar app"
-          >
-            📅 Calendar (.ics)
-          </a>
+          <div className="flex items-center gap-3">
+            {currentWeek != null ? (
+              <a href="#this-week" className="text-xs text-muted hover:text-info">
+                This week ↓
+              </a>
+            ) : null}
+            <a
+              href="/api/calendar"
+              className="text-xs text-muted hover:text-info"
+              title="Subscribe to scheduled matches from your calendar app"
+            >
+              📅 Calendar (.ics)
+            </a>
+          </div>
         }
       />
 
@@ -415,6 +453,11 @@ export default async function SchedulePage() {
               />
             </CardBody>
           </Card>
+          {playoffRoundViews.length > 0 ? (
+            // teams={[]} suppresses the filter chips — a bracket is too small
+            // to need filtering, but the rows keep RSVP/standin/⏳ chips.
+            <ScheduleWeeks weeks={playoffRoundViews} teams={[]} />
+          ) : null}
         </section>
       ) : null}
 

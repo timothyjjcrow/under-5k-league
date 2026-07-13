@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth";
 import {
   fantasyCap,
   fantasyStandings,
+  ownershipByPlayer,
   pointsByPlayer,
   type FantasyGame,
 } from "@/lib/fantasy";
@@ -12,6 +13,7 @@ import { FANTASY } from "@/lib/constants";
 import { saveFantasyRoster } from "@/app/actions/fantasy";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { FantasyPicker } from "@/components/fantasy-picker";
+import { LeaderBoard, type LeaderBoardRow } from "@/components/leader-board";
 import {
   Avatar,
   Badge,
@@ -23,6 +25,7 @@ import {
   PlayerLink,
   SectionTitle,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Fantasy" };
 
@@ -139,6 +142,28 @@ export default async function FantasyPage() {
   const myRoster = viewer ? rosters.find((r) => r.userId === viewer.id) : null;
   const myPicks = myRoster?.picks.map((p) => p.userId) ?? [];
 
+  // Which players are actually producing, and how contested each one was.
+  const ownership = ownershipByPlayer(
+    rosters.map((r) => ({ pickUserIds: r.picks.map((p) => p.userId) })),
+  );
+  const memberByUser = new Map(members.map((m) => [m.userId, m]));
+  const topScorers: LeaderBoardRow[] = [...playerPoints.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([userId, points]) => {
+      const m = memberByUser.get(userId);
+      const pct = Math.round((ownership.get(userId) ?? 0) * 100);
+      return {
+        id: userId,
+        name: m?.user.name ?? playerName.get(userId) ?? "?",
+        avatar: m?.user.avatar ?? null,
+        rankTier: m?.user.rankTier ?? null,
+        value: points,
+        valueLabel: `${points} pts`,
+        hint: m ? `picked by ${pct}% · ${m.team.name}` : `picked by ${pct}%`,
+        isViewer: viewer?.id === userId,
+      };
+    });
+
   return (
     <div className="space-y-8">
       <PageTitle
@@ -169,7 +194,10 @@ export default async function FantasyPage() {
             {standings.map((s, i) => (
               <div
                 key={s.managerId}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
+                className={cn(
+                  "flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm",
+                  viewer?.id === s.managerId && "bg-info/[0.07]",
+                )}
               >
                 <span className="w-6 text-center text-muted">{i + 1}</span>
                 <Avatar
@@ -177,19 +205,28 @@ export default async function FantasyPage() {
                   src={managerAvatar.get(s.managerId) ?? null}
                   size={24}
                 />
-                <PlayerLink
-                  userId={s.managerId}
-                  className="min-w-0 flex-1 truncate font-medium"
-                >
-                  {managerName.get(s.managerId) ?? "?"}
-                </PlayerLink>
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <PlayerLink
+                    userId={s.managerId}
+                    className="min-w-0 truncate font-medium"
+                  >
+                    {managerName.get(s.managerId) ?? "?"}
+                  </PlayerLink>
+                  {viewer?.id === s.managerId ? (
+                    <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info">
+                      You
+                    </span>
+                  ) : null}
+                </span>
                 <span className="hidden flex-wrap gap-1 text-xs text-muted sm:flex">
                   {s.breakdown.slice(0, 5).map((b) => (
                     <span
                       key={b.userId}
                       className="rounded bg-surface-2 px-1.5 py-0.5"
                     >
-                      {playerName.get(b.userId) ?? "?"}{" "}
+                      <PlayerLink userId={b.userId}>
+                        {playerName.get(b.userId) ?? "?"}
+                      </PlayerLink>{" "}
                       <span className="font-mono tabular-nums">{b.points}</span>
                     </span>
                   ))}
@@ -201,6 +238,14 @@ export default async function FantasyPage() {
             ))}
           </CardBody>
         </Card>
+      ) : null}
+
+      {locked && topScorers.length > 0 ? (
+        <LeaderBoard
+          title="Top scorers"
+          subtitle={`fantasy points from every imported game · ownership across ${rosters.length} roster${rosters.length === 1 ? "" : "s"}`}
+          rows={topScorers}
+        />
       ) : null}
 
       <section className="space-y-4">
@@ -234,7 +279,7 @@ export default async function FantasyPage() {
                     className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 text-sm"
                   >
                     <Avatar name={p.player.name} src={p.player.avatar} size={24} />
-                    {p.player.name}
+                    <PlayerLink userId={p.userId}>{p.player.name}</PlayerLink>
                     <span className="font-mono text-xs tabular-nums text-muted">
                       {playerPoints.get(p.userId) ?? 0} pts
                     </span>

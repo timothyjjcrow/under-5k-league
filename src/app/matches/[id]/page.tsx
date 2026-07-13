@@ -154,23 +154,44 @@ export default async function MatchDetailPage({
             backgroundColor: `hsl(${teamHue(match.awayTeamId)} 70% 50% / 0.24)`,
           }}
         />
-        <CardBody className="relative flex items-center gap-3 py-7 sm:gap-6">
-          <TeamSide
-            name={match.homeTeam.name}
-            teamId={match.homeTeamId}
-            score={match.homeScore}
-            win={match.winnerTeamId === match.homeTeamId}
-          />
-          <span className="shrink-0 text-[10px] font-medium uppercase tracking-widest text-muted">
-            series
-          </span>
-          <TeamSide
-            name={match.awayTeam.name}
-            teamId={match.awayTeamId}
-            score={match.awayScore}
-            win={match.winnerTeamId === match.awayTeamId}
-            right
-          />
+        <CardBody className="relative space-y-3 py-7">
+          <div className="flex items-center gap-3 sm:gap-6">
+            <TeamSide
+              name={match.homeTeam.name}
+              teamId={match.homeTeamId}
+              score={match.homeScore}
+              win={match.winnerTeamId === match.homeTeamId}
+            />
+            <span className="shrink-0 text-[10px] font-medium uppercase tracking-widest text-muted">
+              series
+            </span>
+            <TeamSide
+              name={match.awayTeam.name}
+              teamId={match.awayTeamId}
+              score={match.awayScore}
+              win={match.winnerTeamId === match.awayTeamId}
+              right
+            />
+          </div>
+          {/* The basics for everyone — CheckinBanner's time renders only for
+              participants, so spectators need kickoff/format/status here. */}
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-muted">
+            {match.scheduledAt ? (
+              <LocalTime
+                ts={match.scheduledAt.getTime()}
+                variant="full"
+                initial={formatMatchTime(match.scheduledAt, "full")}
+              />
+            ) : (
+              <span>time TBD</span>
+            )}
+            <Badge>Bo{match.bestOf}</Badge>
+            {match.status === "COMPLETED" ? (
+              <Badge>Final</Badge>
+            ) : match.status === "LIVE" || games.length > 0 ? (
+              <Badge tone="accent">LIVE</Badge>
+            ) : null}
+          </div>
         </CardBody>
       </Card>
 
@@ -232,7 +253,7 @@ export default async function MatchDetailPage({
                   </div>
                 }
               />
-              <CardBody className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+              <CardBody className="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2">
                 <NetWorthAdvantage
                   radiantName={radiantName}
                   direName={direName}
@@ -938,12 +959,20 @@ function SidePlayers({
       )}
     >
       <div className="mb-2.5 flex items-center justify-between gap-2">
-        <span className="flex items-center gap-2">
-          <span className="font-display text-base font-semibold">{label}</span>
-          {win ? <Badge tone="success">Win</Badge> : <Badge>Loss</Badge>}
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-display text-base font-semibold">
+            {label}
+          </span>
+          {win ? (
+            <Badge tone="success" className="shrink-0">
+              Win
+            </Badge>
+          ) : (
+            <Badge className="shrink-0">Loss</Badge>
+          )}
         </span>
         {hasNet ? (
-          <span className="text-xs text-muted">
+          <span className="shrink-0 text-xs text-muted">
             Net worth{" "}
             <span className="font-mono text-accent">
               {formatNetWorth(totalNet)}
@@ -1118,14 +1147,36 @@ async function RescheduleSection({
   };
 }) {
   const viewer = await getSessionUser();
-  if (
-    !viewer ||
-    (match.homeTeam.captainId !== viewer.id &&
-      match.awayTeam.captainId !== viewer.id)
-  ) {
-    return null;
+  const isCaptain =
+    !!viewer &&
+    (match.homeTeam.captainId === viewer.id ||
+      match.awayTeam.captainId === viewer.id);
+  if (isCaptain) {
+    return <RescheduleCard match={match} viewerId={viewer!.id} />;
   }
-  return <RescheduleCard match={match} viewerId={viewer.id} />;
+  // Everyone else gets a read-only heads-up that a time change is pending, so
+  // spectators/scouts aren't blindsided by a moved match.
+  const pending = await prisma.rescheduleRequest.findFirst({
+    where: { matchId: match.id, status: "PENDING" },
+    select: { proposedTime: true },
+  });
+  if (!pending) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted">
+      <span aria-hidden>⏳</span>
+      <span>
+        Reschedule proposed —{" "}
+        <strong className="text-fg">
+          <LocalTime
+            ts={pending.proposedTime.getTime()}
+            variant="full"
+            initial={formatMatchTime(pending.proposedTime, "full")}
+          />
+        </strong>{" "}
+        pending the captains&apos; agreement.
+      </span>
+    </div>
+  );
 }
 
 async function RescheduleCard({

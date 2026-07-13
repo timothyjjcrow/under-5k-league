@@ -25,6 +25,8 @@ export type PoolFilter = {
   role?: string | null;
   sort?: PoolSort;
   captainOnly?: boolean;
+  /** Draft-status filter; players without a `drafted` field always pass. */
+  status?: "all" | "drafted" | "free";
 };
 
 /** The fields filtering/sorting actually reads — callers can pass any superset
@@ -35,18 +37,29 @@ export type FilterablePlayer = {
   rankTier: number | null;
   roles: string;
   wantsCaptain?: boolean;
+  drafted?: boolean;
 };
 
 /** Filter + sort a player list. Never mutates the input. */
 export function filterAndSortPlayers<T extends FilterablePlayer>(
   players: T[],
-  { query = "", role = null, sort = "mmr", captainOnly = false }: PoolFilter,
+  {
+    query = "",
+    role = null,
+    sort = "mmr",
+    captainOnly = false,
+    status = "all",
+  }: PoolFilter,
 ): T[] {
   const q = query.trim().toLowerCase();
   const filtered = players.filter((p) => {
     if (q && !p.name.toLowerCase().includes(q)) return false;
     if (role && !parseRoles(p.roles).includes(role)) return false;
     if (captainOnly && !p.wantsCaptain) return false;
+    if (status !== "all" && p.drafted !== undefined) {
+      if (status === "drafted" && !p.drafted) return false;
+      if (status === "free" && p.drafted) return false;
+    }
     return true;
   });
   return [...filtered].sort((a, b) => {

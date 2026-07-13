@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { DEFAULTS, DRAFT_STATUS } from "./constants";
+import { steamIdToAccountId } from "./dota";
 import {
   canBid,
   maxBid,
@@ -338,6 +339,10 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
           favoriteHeroes: nominatedPlayer.favoriteHeroes,
           statement: nominatedPlayer.statement,
           captainNote: nominatedPlayer.captainNote,
+          // Same derivation as /players: linked Dota account, else from Steam.
+          accountId:
+            nominatedPlayer.user.dotaAccountId ??
+            steamIdToAccountId(nominatedPlayer.user.steamId),
         }
       : null,
     teams: teamViews,

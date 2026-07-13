@@ -8,6 +8,7 @@ import {
   SEASON_STATUS,
   SEASON_PHASE_ORDER,
   REGISTRATION_TYPE,
+  REGISTRATION_STATUS,
   DRAFT_STATUS,
   MATCH_STATUS,
   MATCH_PHASE,
@@ -50,6 +51,7 @@ import {
 } from "@/lib/discord";
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
+import { withdrawGateError } from "@/lib/registration";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -282,14 +284,108 @@ export async function removeCaptain(
   return { message: `${team.captain.name} is no longer a captain` };
 }
 
-/** Rename a team. */
-export async function renameTeam(formData: FormData) {
-  await requireAdmin();
+/** Rename a team in the active season (captains can't set their own name). */
+export async function renameTeam(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
   const teamId = str(formData, "teamId");
-  const name = str(formData, "name").trim();
-  if (!name) return;
-  await prisma.team.update({ where: { id: teamId }, data: { name } });
+  const name = str(formData, "name").trim().slice(0, 60);
+  if (!name) return { error: "Enter a team name" };
+  // Only rename teams in the active season — teamId is client-controlled and
+  // archived teams belong to a finished season's record.
+  const team = await prisma.team.findFirst({
+    where: { id: teamId, seasonId: season.id },
+  });
+  if (!team) return { error: "Unknown team" };
+  await prisma.team.update({ where: { id: team.id }, data: { name } });
   refresh();
+  return { message: `Renamed to ${name}` };
+}
+
+/**
+ * Admin signup moderation — withdraw a bogus/duplicate/ghost signup so it stops
+ * counting toward the draft threshold and skewing MMR-weighted budgets. A
+ * captain or rostered player must be released/replaced first (withdrawGateError).
+ */
+export async function withdrawSignup(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const registrationId = str(formData, "registrationId");
+  const reg = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    include: { user: true },
+  });
+  if (!reg || reg.seasonId !== season.id) return { error: "Unknown signup" };
+
+  const [captainTeam, membership] = await Promise.all([
+    prisma.team.findUnique({
+      where: {
+        seasonId_captainId: { seasonId: season.id, captainId: reg.userId },
+      },
+    }),
+    prisma.teamMember.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: reg.userId } },
+    }),
+  ]);
+  const gate = withdrawGateError({
+    status: reg.status,
+    isCaptain: !!captainTeam,
+    isRostered: !!membership,
+  });
+  if (gate) return { error: gate };
+
+  await prisma.registration.update({
+    where: { id: reg.id },
+    data: { status: REGISTRATION_STATUS.WITHDRAWN },
+  });
+  refresh();
+  return { message: `Withdrew ${reg.user.name}'s signup` };
+}
+
+/**
+ * Admin correction for a fat-fingered self-reported MMR — clamped 0..12000
+ * (players set it on /me; admin can fix it without asking them to re-file).
+ */
+export async function setRegistrationMmr(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const registrationId = str(formData, "registrationId");
+  const mmr = clampInt(formData, "mmr", 0, 0, 12000);
+  const reg = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    include: { user: true },
+  });
+  if (!reg || reg.seasonId !== season.id) return { error: "Unknown signup" };
+  await prisma.registration.update({
+    where: { id: reg.id },
+    data: { mmr },
+  });
+  refresh();
+  return { message: `${reg.user.name}'s MMR set to ${mmr}` };
 }
 
 /** Randomize the nomination/draft order of teams. */

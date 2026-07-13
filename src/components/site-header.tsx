@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -106,14 +106,43 @@ export function SiteHeader({
   const items = navItems(phase, myTeamId, hasHistory);
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
 
   // Close the mobile menu whenever the route changes (e.g. a link was tapped).
   useEffect(() => setOpen(false), [pathname]);
 
+  // While the mobile menu is open, Escape closes it (returning focus to the
+  // toggle so keyboard users don't lose their place) and a tap/click outside
+  // the header dismisses it — a route change already closes it otherwise.
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    }
+    function onPointerDown(e: PointerEvent) {
+      if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open]);
+
   const adminActive = pathname.startsWith("/admin");
 
   return (
-    <header className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur">
+    <header
+      ref={headerRef}
+      className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur"
+    >
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
         <Link
           href="/"
@@ -167,6 +196,7 @@ export function SiteHeader({
               {user.role === "ADMIN" ? (
                 <Link
                   href="/admin"
+                  aria-current={adminActive ? "page" : undefined}
                   className={cn(
                     "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors xl:block",
                     adminActive
@@ -205,6 +235,7 @@ export function SiteHeader({
 
           {/* Menu toggle — only below lg, where the inline nav is hidden. */}
           <button
+            ref={buttonRef}
             type="button"
             onClick={() => setOpen((o) => !o)}
             aria-label={open ? "Close menu" : "Open menu"}
@@ -223,7 +254,7 @@ export function SiteHeader({
         <nav
           id="mobile-nav"
           aria-label="Primary"
-          className="absolute inset-x-0 top-full border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur xl:hidden"
+          className="absolute inset-x-0 top-full max-h-[70vh] overflow-y-auto overscroll-contain border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur xl:hidden"
         >
           <div className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
             {items.map((item) => {

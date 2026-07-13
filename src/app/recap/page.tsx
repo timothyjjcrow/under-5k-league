@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { shareMetadata } from "@/lib/share-metadata";
@@ -36,13 +37,49 @@ function safeParse(json: string): PlayerStat[] {
   }
 }
 
-export default async function RecapPage() {
-  const season = await getActiveSeason();
+export default async function RecapPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ season?: string }>;
+}) {
+  const { season: seasonParam } = await searchParams;
+  // ?season=<id> recaps an archived (or any) season; default is the active one.
+  const season = seasonParam
+    ? await prisma.season.findUnique({ where: { id: seasonParam } })
+    : await getActiveSeason();
+  if (seasonParam && !season) notFound();
   if (!season) {
+    const archived = await prisma.season.findMany({
+      where: { isActive: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true },
+    });
     return (
       <div className="space-y-6">
         <PageTitle title="Season Recap" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="No active season"
+          description={
+            archived.length > 0
+              ? "Relive a past season's awards instead."
+              : undefined
+          }
+          action={
+            archived.length > 0 ? (
+              <div className="flex flex-wrap justify-center gap-2">
+                {archived.map((s) => (
+                  <Link
+                    key={s.id}
+                    href={`/recap?season=${s.id}`}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    {s.name} →
+                  </Link>
+                ))}
+              </div>
+            ) : undefined
+          }
+        />
       </div>
     );
   }
@@ -121,7 +158,7 @@ export default async function RecapPage() {
   const userIds = [
     ...new Set(awards.map((a) => a.userId).filter((x): x is string => !!x)),
   ];
-  const [users, heroNames, champion] = await Promise.all([
+  const [users, heroNames, champion, memberships] = await Promise.all([
     userIds.length
       ? prisma.user.findMany({
           where: { id: { in: userIds } },
@@ -135,8 +172,16 @@ export default async function RecapPage() {
           include: { members: { include: { user: true } } },
         })
       : Promise.resolve(null),
+    userIds.length
+      ? prisma.teamMember.findMany({
+          where: { seasonId: season.id, userId: { in: userIds } },
+          select: { userId: true, team: { select: { id: true, name: true } } },
+        })
+      : Promise.resolve([]),
   ]);
   const userMap = new Map(users.map((u) => [u.id, u]));
+  // Which team the winner played for THAT season — standins simply have none.
+  const teamByUser = new Map(memberships.map((m) => [m.userId, m.team]));
 
   const isComplete = season.status === "COMPLETE";
   const totalKills = headerKills > 0 ? headerKills : lineKills;
@@ -222,6 +267,7 @@ export default async function RecapPage() {
               key={a.key}
               award={a}
               user={a.userId ? userMap.get(a.userId) : undefined}
+              team={a.userId ? teamByUser.get(a.userId) : undefined}
               heroName={a.heroId ? heroNames[a.heroId] : undefined}
             />
           ))}
@@ -234,10 +280,12 @@ export default async function RecapPage() {
 function AwardCard({
   award,
   user,
+  team,
   heroName,
 }: {
   award: Award;
   user?: { id: string; name: string; avatar: string | null; rankTier: number | null };
+  team?: { id: string; name: string };
   heroName?: string;
 }) {
   const hero = award.heroId ? heroById(award.heroId) : null;
@@ -265,6 +313,15 @@ function AwardCard({
               >
                 {user.name}
               </PlayerLink>
+              {team ? (
+                <Link
+                  href={`/teams/${team.id}`}
+                  className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted hover:text-info"
+                >
+                  <TeamCrest name={team.name} seed={team.id} size={14} />
+                  <span className="truncate">{team.name}</span>
+                </Link>
+              ) : null}
               <span className="mt-0.5 block">
                 <RankBadge rankTier={user.rankTier} />
               </span>

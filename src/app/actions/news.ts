@@ -27,12 +27,13 @@ export async function createNewsPost(
   const error = newsPostError(title, body);
   if (error) return { error };
 
-  await prisma.newsPost.create({
+  const post = await prisma.newsPost.create({
     data: { title, body, authorId: admin.id },
   });
   refresh();
-  // Best-effort — a dead webhook must never block the post.
-  void sendDiscordMessage(newsMessage(title, body));
+  // Best-effort — a dead webhook must never block the post. Deep-links to the
+  // new post so readers land on it, not the top of the archive.
+  void sendDiscordMessage(newsMessage(title, body, post.id));
   return { message: "Posted — it's live on the dashboard" };
 }
 

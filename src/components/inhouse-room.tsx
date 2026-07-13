@@ -540,6 +540,7 @@ function VoteView({
               <button
                 key={c.userId}
                 disabled={!me.canVote || pending}
+                aria-pressed={picked}
                 onClick={() => act({ action: "vote", method: "VOTE", nomineeId: c.userId })}
                 className={cn(
                   "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",
@@ -756,6 +757,7 @@ function DraftView({
                 <button
                   key={p.userId}
                   disabled={!pickable}
+                  aria-pressed={isSel}
                   onClick={() => setSelected(isSel ? null : p.userId)}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",

@@ -6,6 +6,7 @@ import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { type Hero, heroById, heroIcon, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
+import { splitLinks } from "@/lib/linkify";
 import { CountUp } from "./count-up";
 
 // ---------- Button ----------
@@ -574,6 +575,37 @@ export function EmptyState({
       </div>
       {action}
     </div>
+  );
+}
+
+// ---------- LinkifiedText ----------
+
+/** Free text with bare http(s) URLs rendered as real links (news bodies). */
+export function LinkifiedText({
+  text,
+  className,
+}: {
+  text: string;
+  className?: string;
+}) {
+  return (
+    <span className={className}>
+      {splitLinks(text).map((t, i) =>
+        t.type === "link" ? (
+          <a
+            key={i}
+            href={t.value}
+            target="_blank"
+            rel="noreferrer"
+            className="break-all text-info hover:underline"
+          >
+            {t.value}
+          </a>
+        ) : (
+          <React.Fragment key={i}>{t.value}</React.Fragment>
+        ),
+      )}
+    </span>
   );
 }
 

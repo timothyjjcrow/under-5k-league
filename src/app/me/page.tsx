@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
@@ -11,6 +12,9 @@ import {
 } from "@/app/actions/registration";
 import { steamIdToAccountId } from "@/lib/dota";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
+import { matchPhaseLabel } from "@/lib/schedule";
+import { formatMatchTime } from "@/lib/match-time";
+import { LocalTime } from "@/components/local-time";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
 import {
@@ -22,6 +26,7 @@ import {
   PageTitle,
   RankBadge,
   ScheduleCallout,
+  TeamCrest,
 } from "@/components/ui";
 
 export const metadata = { title: "Your profile" };
@@ -50,6 +55,30 @@ export default async function MePage() {
   const form = reg ?? previous;
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+
+  // Your-season context: the roster seat (from DRAFT on) or, for standins,
+  // the matches they've been assigned to cover.
+  const member =
+    season
+      ? await prisma.teamMember.findUnique({
+          where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+          include: { team: true },
+        })
+      : null;
+  const standinAssignments =
+    season && reg?.type === "STANDIN" && reg.status === "ACTIVE"
+      ? await prisma.standinAssignment.findMany({
+          where: {
+            standinUserId: user.id,
+            match: { seasonId: season.id, status: { not: "COMPLETED" } },
+          },
+          include: { match: { include: { homeTeam: true, awayTeam: true } } },
+          orderBy: { match: { week: "asc" } },
+        })
+      : null;
+  const isRostered = !!member;
+  const isCaptain = !!member?.isCaptain;
+
   const isRegistered = reg?.status === "ACTIVE";
   const signupsOpen = season?.status === "SIGNUPS";
   // Post-signups, PLAYER stays available only to those already registered as
@@ -86,11 +115,19 @@ export default async function MePage() {
               Steam: {user.steamId}
             </a>
           </div>
-          <ActionForm action={refreshSteamProfile} className="ml-auto">
-            <SubmitButton variant="secondary" size="sm">
-              Refresh from Steam
-            </SubmitButton>
-          </ActionForm>
+          <div className="ml-auto flex flex-col items-end gap-2">
+            <ActionForm action={refreshSteamProfile}>
+              <SubmitButton variant="secondary" size="sm">
+                Refresh from Steam
+              </SubmitButton>
+            </ActionForm>
+            <Link
+              href={`/players/${user.id}`}
+              className="whitespace-nowrap text-sm text-info hover:underline"
+            >
+              View public profile →
+            </Link>
+          </div>
         </CardBody>
       </Card>
 
@@ -126,6 +163,104 @@ export default async function MePage() {
             }
           />
           <CardBody className="space-y-5">
+            {member ? (
+              <Link
+                href={`/teams/${member.team.id}`}
+                className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-muted/60"
+              >
+                <TeamCrest
+                  name={member.team.name}
+                  seed={member.team.id}
+                  size={40}
+                />
+                <div className="min-w-0">
+                  <div className="text-xs uppercase tracking-wide text-muted">
+                    Your team
+                  </div>
+                  <div className="truncate font-medium">
+                    {member.team.name}
+                  </div>
+                </div>
+                <div className="ml-auto shrink-0">
+                  {member.isCaptain ? (
+                    <Badge tone="brand">Captain</Badge>
+                  ) : (
+                    <span className="text-sm text-muted">
+                      Drafted for{" "}
+                      <span className="font-semibold text-fg">
+                        ${member.price}
+                      </span>
+                    </span>
+                  )}
+                </div>
+              </Link>
+            ) : null}
+
+            {isRegistered && !member && standinAssignments ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  Your standin assignments
+                </div>
+                {standinAssignments.length === 0 ? (
+                  <p className="mt-1 text-sm text-muted">
+                    No assignments yet — admins place standins as matches need
+                    cover.
+                  </p>
+                ) : (
+                  <ul className="mt-2 space-y-2">
+                    {standinAssignments.map((a) => {
+                      const fillFor =
+                        a.match.homeTeamId === a.teamId
+                          ? a.match.homeTeam
+                          : a.match.awayTeam;
+                      const opponent =
+                        a.match.homeTeamId === a.teamId
+                          ? a.match.awayTeam
+                          : a.match.homeTeam;
+                      return (
+                        <li key={a.id}>
+                          <Link
+                            href={`/matches/${a.match.id}`}
+                            className="block rounded-md border border-line bg-surface/60 px-3 py-2 transition-colors hover:border-muted/60"
+                          >
+                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                              <Badge tone="info">
+                                {matchPhaseLabel(a.match.phase, a.match.week)}
+                              </Badge>
+                              <span className="min-w-0">
+                                Filling in for{" "}
+                                <span className="font-medium text-fg">
+                                  {fillFor.name}
+                                </span>{" "}
+                                vs{" "}
+                                <span className="font-medium text-fg">
+                                  {opponent.name}
+                                </span>
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs text-muted">
+                              {a.match.scheduledAt ? (
+                                <LocalTime
+                                  ts={a.match.scheduledAt.getTime()}
+                                  variant="short"
+                                  initial={formatMatchTime(
+                                    a.match.scheduledAt,
+                                    "short",
+                                  )}
+                                />
+                              ) : (
+                                "Time TBD"
+                              )}
+                            </div>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            ) : null}
+
             <ScheduleCallout label={season.matchSchedule} />
             {!reg && previous ? (
               <div className="flex items-start gap-2 rounded-lg border border-info/40 bg-info/10 px-3 py-2 text-xs">
@@ -225,7 +360,13 @@ export default async function MePage() {
                   defaultValue={form?.favoriteHeroes}
                 />
                 <p className="mt-1 text-xs text-muted">
-                  Pick the heroes you&apos;re known for — captains see these
+                  Pick the heroes you&apos;re known for —{" "}
+                  <Link
+                    href={`/players/${user.id}`}
+                    className="text-info hover:underline"
+                  >
+                    captains see these
+                  </Link>{" "}
                   during the draft.
                 </p>
               </div>
@@ -289,15 +430,34 @@ export default async function MePage() {
             </ActionForm>
 
             {isRegistered ? (
-              <form action={leaveLeague} className="mt-4 border-t border-line pt-4">
-                <SubmitButton
-                  variant="ghost"
-                  size="sm"
-                  confirm="Withdraw from this season?"
-                >
-                  Withdraw from this season
-                </SubmitButton>
-              </form>
+              <div className="mt-4 border-t border-line pt-4">
+                {isRostered || isCaptain ? (
+                  <p className="text-xs text-muted">
+                    {isCaptain ? (
+                      <>
+                        You captain{" "}
+                        <b>{member?.team.name}</b> — ask an admin to replace you
+                        before you can withdraw.
+                      </>
+                    ) : (
+                      <>
+                        You&apos;re on <b>{member?.team.name}</b>&apos;s roster —
+                        ask an admin to release you before withdrawing.
+                      </>
+                    )}
+                  </p>
+                ) : (
+                  <ActionForm action={leaveLeague}>
+                    <SubmitButton
+                      variant="ghost"
+                      size="sm"
+                      confirm="Withdraw from this season?"
+                    >
+                      Withdraw from this season
+                    </SubmitButton>
+                  </ActionForm>
+                )}
+              </div>
             ) : null}
           </CardBody>
         </Card>

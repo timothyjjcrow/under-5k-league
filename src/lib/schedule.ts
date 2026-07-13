@@ -130,6 +130,39 @@ export function roundName(roundIndex: number, totalRounds: number): string {
   return `Round ${roundIndex + 1}`;
 }
 
+/**
+ * Human label for a match's slot in the season: playoff matches carry a
+ * continuing week number in the DB, so raw "Week N" reads wrong for them.
+ */
+export function matchPhaseLabel(phase: string, week: number): string {
+  if (phase === "FINAL") return "Grand final";
+  if (phase === "PLAYOFF") return "Playoffs";
+  return `Week ${week}`;
+}
+
+/** Compact chip form of matchPhaseLabel: "GF" | "PO" | "W3". */
+export function matchPhaseAbbrev(phase: string, week: number): string {
+  if (phase === "FINAL") return "GF";
+  if (phase === "PLAYOFF") return "PO";
+  return `W${week}`;
+}
+
+/**
+ * Chronological comparator for match lists: kickoff time first (unscheduled
+ * last), then week, then creation order. Reschedules can move a match past its
+ * week-mates, so week order alone is NOT chronological.
+ */
+export function byKickoff(
+  a: { scheduledAt: Date | null; week: number; createdAt?: Date },
+  b: { scheduledAt: Date | null; week: number; createdAt?: Date },
+): number {
+  const at = a.scheduledAt ? a.scheduledAt.getTime() : Infinity;
+  const bt = b.scheduledAt ? b.scheduledAt.getTime() : Infinity;
+  if (at !== bt) return at - bt;
+  if (a.week !== b.week) return a.week - b.week;
+  return (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0);
+}
+
 /** Pair the winners of one round (in bracket order) into the next round. */
 export function nextRoundPairings(winnersInOrder: string[]): Pairing[] {
   const pairings: Pairing[] = [];

@@ -151,4 +151,9 @@ describe("newsMessage", () => {
     expect(msg).toContain("…");
     expect(msg.length).toBeLessThan(300);
   });
+
+  it("deep-links to a specific post when given an id", () => {
+    expect(newsMessage("T", "b", "abc123")).toContain("/news#abc123");
+    expect(newsMessage("T", "b")).toMatch(/\/news(?!#)/);
+  });
 });

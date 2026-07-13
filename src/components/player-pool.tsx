@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
   Avatar,
@@ -9,6 +10,7 @@ import {
   PlayerLink,
   RankBadge,
   RoleBadges,
+  TeamCrest,
   buttonClasses,
 } from "@/components/ui";
 import { DOTA_ROLES } from "@/lib/roles";
@@ -19,27 +21,46 @@ import {
 } from "@/lib/player-pool";
 import { cn } from "@/lib/utils";
 
+/** Which team drafted a player, keyed by userId (parallel to the frozen
+ * PoolPlayer type). `price` is null for captains — no draft price shown. */
+export type PoolDraftInfo = Record<
+  string,
+  { teamId: string; teamName: string; price: number | null }
+>;
+
+type PoolStatus = "all" | "drafted" | "free";
+
 export function PlayerPool({
   players,
   showDraftStatus,
+  draftInfo,
 }: {
   players: PoolPlayer[];
   showDraftStatus: boolean;
+  draftInfo?: PoolDraftInfo;
 }) {
   const [query, setQuery] = useState("");
   const [role, setRole] = useState<string | null>(null);
   const [sort, setSort] = useState<PoolSort>("mmr");
   const [captainOnly, setCaptainOnly] = useState(false);
+  const [status, setStatus] = useState<PoolStatus>("all");
+
+  // The draft-status filter only makes sense once someone's been drafted
+  // (post-draft phases) — during SIGNUPS/an empty DRAFT the pool is all free.
+  const anyDrafted = useMemo(() => players.some((p) => p.drafted), [players]);
 
   const filtered = useMemo(
-    () => filterAndSortPlayers(players, { query, role, sort, captainOnly }),
-    [players, query, role, sort, captainOnly],
+    () =>
+      filterAndSortPlayers(players, { query, role, sort, captainOnly, status }),
+    [players, query, role, sort, captainOnly, status],
   );
-  const filtersActive = query !== "" || role !== null || captainOnly;
+  const filtersActive =
+    query !== "" || role !== null || captainOnly || status !== "all";
   const resetFilters = () => {
     setQuery("");
     setRole(null);
     setCaptainOnly(false);
+    setStatus("all");
   };
 
   return (
@@ -93,6 +114,29 @@ export function PlayerPool({
         >
           Wants captain
         </button>
+
+        {anyDrafted ? (
+          <div
+            className="flex items-center gap-1"
+            role="group"
+            aria-label="Filter by draft status"
+          >
+            <StatusChip
+              active={status === "drafted"}
+              onClick={() =>
+                setStatus((s) => (s === "drafted" ? "all" : "drafted"))
+              }
+            >
+              Drafted
+            </StatusChip>
+            <StatusChip
+              active={status === "free"}
+              onClick={() => setStatus((s) => (s === "free" ? "all" : "free"))}
+            >
+              Free agents
+            </StatusChip>
+          </div>
+        ) : null}
 
         <select
           value={sort}
@@ -183,7 +227,11 @@ export function PlayerPool({
                 <span className="flex shrink-0 items-center gap-2">
                   {p.wantsCaptain ? <Badge tone="brand">Wants captain</Badge> : null}
                   {p.drafted ? (
-                    <Badge tone="success">Drafted</Badge>
+                    draftInfo?.[p.userId] ? (
+                      <TeamChip info={draftInfo[p.userId]} />
+                    ) : (
+                      <Badge tone="success">Drafted</Badge>
+                    )
                   ) : showDraftStatus ? (
                     <Badge>Undrafted</Badge>
                   ) : null}
@@ -222,5 +270,57 @@ function RoleChip({
     >
       {children}
     </button>
+  );
+}
+
+function StatusChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "h-9 rounded-lg border px-3 text-sm font-medium transition-colors",
+        active
+          ? "border-accent/50 bg-accent/15 text-accent"
+          : "border-line text-muted hover:text-fg",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Post-draft chip: crest + team name (links to the team) with a muted draft
+ * price. `TeamCrest` is decorative, so the adjacent name carries the label. */
+function TeamChip({
+  info,
+}: {
+  info: { teamId: string; teamName: string; price: number | null };
+}) {
+  return (
+    <Link
+      href={`/teams/${info.teamId}`}
+      className="flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2 text-xs hover:border-muted/60 hover:no-underline"
+    >
+      <TeamCrest
+        name={info.teamName}
+        seed={info.teamId}
+        size={16}
+        className="rounded"
+      />
+      <span className="max-w-[9rem] truncate">{info.teamName}</span>
+      {info.price != null ? (
+        <span className="text-muted">${info.price}</span>
+      ) : null}
+    </Link>
   );
 }

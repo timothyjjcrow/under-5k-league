@@ -75,3 +75,21 @@ describe("filterAndSortPlayers", () => {
     expect(players.map((p) => p.name)).toEqual(before);
   });
 });
+
+describe("draft-status filter", () => {
+  const base = { mmr: 0, rankTier: null, roles: "" };
+  const players = [
+    { ...base, name: "Taken", drafted: true },
+    { ...base, name: "Free", drafted: false },
+    { ...base, name: "NoField" }, // e.g. draft-room rows without the field
+  ];
+
+  it("filters to drafted / free while passing rows without the field", async () => {
+    const { filterAndSortPlayers } = await import("./player-pool");
+    const names = (status: "all" | "drafted" | "free") =>
+      filterAndSortPlayers(players, { status, sort: "name" }).map((p) => p.name);
+    expect(names("all")).toEqual(["Free", "NoField", "Taken"]);
+    expect(names("drafted")).toEqual(["NoField", "Taken"]);
+    expect(names("free")).toEqual(["Free", "NoField"]);
+  });
+});

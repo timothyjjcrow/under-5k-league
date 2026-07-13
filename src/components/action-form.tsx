@@ -50,6 +50,7 @@ export function SubmitButton({
   className,
   confirm,
   disabled,
+  "aria-pressed": ariaPressed,
 }: {
   children: React.ReactNode;
   variant?: ButtonVariant;
@@ -57,11 +58,14 @@ export function SubmitButton({
   className?: string;
   confirm?: string;
   disabled?: boolean;
+  /** Toggle-state pass-through for pick-one button groups (e.g. pick'em). */
+  "aria-pressed"?: boolean;
 }) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
+      aria-pressed={ariaPressed}
       disabled={pending || disabled}
       onClick={
         confirm

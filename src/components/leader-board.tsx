@@ -25,6 +25,8 @@ export type LeaderBoardRow = {
   valueLabel: string;
   hint: string;
   isViewer: boolean;
+  /** The player's team this season, when known — shown as a muted suffix. */
+  team?: string | null;
 };
 
 const TOP = 5;
@@ -124,6 +126,9 @@ function BoardRow({
             </span>
           ) : null}
           <RankBadge rankTier={r.rankTier} className="ml-1.5" />
+          {r.team ? (
+            <span className="ml-1.5 text-xs text-muted">· {r.team}</span>
+          ) : null}
         </span>
         <span className="shrink-0 text-right">
           <span className="font-display text-base font-bold tabular-nums">

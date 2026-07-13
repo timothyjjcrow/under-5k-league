@@ -7,6 +7,7 @@ import {
   Card,
   CardBody,
   EmptyState,
+  LinkifiedText,
   PageTitle,
 } from "@/components/ui";
 
@@ -33,13 +34,21 @@ export default async function NewsPage() {
       ) : (
         <div className="space-y-4">
           {posts.map((p) => (
-            <Card key={p.id}>
+            <Card key={p.id} id={p.id} className="scroll-mt-24">
               <CardBody>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="min-w-0 flex-1 truncate font-display text-lg font-semibold">
+                  <h2 className="min-w-0 flex-1 font-display text-lg font-semibold [overflow-wrap:anywhere]">
                     {p.title}
                   </h2>
                   {p.pinned && <Badge tone="accent">📌 Pinned</Badge>}
+                  <a
+                    href={`#${p.id}`}
+                    className="shrink-0 text-sm text-muted hover:text-info"
+                    aria-label="Permalink to this post"
+                    title="Permalink to this post"
+                  >
+                    #
+                  </a>
                 </div>
                 <div className="mt-0.5 text-xs text-muted">
                   <LocalTime
@@ -49,9 +58,10 @@ export default async function NewsPage() {
                   />
                   {p.author ? ` · ${p.author.name}` : ""}
                 </div>
-                <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg/90">
-                  {p.body}
-                </p>
+                <LinkifiedText
+                  text={p.body}
+                  className="mt-3 block whitespace-pre-wrap text-sm leading-relaxed text-fg/90"
+                />
               </CardBody>
             </Card>
           ))}

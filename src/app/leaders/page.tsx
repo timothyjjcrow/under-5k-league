@@ -115,7 +115,8 @@ export default async function LeadersPage() {
     users.map((u) => [u.id, { name: u.name, avatar: u.avatar, rankTier: u.rankTier }]),
   );
 
-  // Weekly honors: Player/Team of the Week per regular week with games in.
+  // Season rosters + team names: shared by the Weekly honors card and the
+  // team suffix on every board row below.
   const [members, teams, heroNames] = await Promise.all([
     prisma.teamMember.findMany({
       where: { seasonId: season.id },
@@ -129,6 +130,10 @@ export default async function LeadersPage() {
   ]);
   const teamOf = new Map(members.map((m) => [m.userId, m.teamId]));
   const teamNameOf = new Map(teams.map((t) => [t.id, t.name]));
+  // null for unrostered players (free agents/standins) — the row suffix
+  // simply doesn't render.
+  const teamNameFor = (userId: string) =>
+    teamNameOf.get(teamOf.get(userId) ?? "") ?? null;
   const regularWeeks = [
     ...new Set(
       games.filter((g) => g.match.phase === "REGULAR").map((g) => g.match.week),
@@ -241,6 +246,7 @@ export default async function LeadersPage() {
         valueLabel: percentLabel(report.avgPct!).replace(" percentile", ""),
         hint: `${report.graded} graded game${report.graded === 1 ? "" : "s"}${report.best ? ` · best: ${report.best.label.toLowerCase()}` : ""}`,
         isViewer: viewer?.id === id,
+        team: teamNameFor(id),
       };
     });
 
@@ -332,6 +338,7 @@ export default async function LeadersPage() {
               valueLabel: b.format(r),
               hint: b.hint(r),
               isViewer: viewer?.id === r.id,
+              team: teamNameFor(r.id),
             };
           });
           return (

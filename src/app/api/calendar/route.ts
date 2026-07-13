@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { buildCalendar } from "@/lib/ics";
+import { matchPhaseLabel } from "@/lib/schedule";
 import { resolveSiteUrl } from "@/lib/site-url";
 
 export const dynamic = "force-dynamic";
@@ -46,7 +47,7 @@ export async function GET(req: NextRequest) {
       start: m.scheduledAt as Date,
       // One rough hour per possible game, plus warm-up slack.
       durationMinutes: m.bestOf * 60 + 30,
-      summary: `Week ${m.week}: ${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`,
+      summary: `${matchPhaseLabel(m.phase, m.week)}: ${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`,
       description: `${season.name} · best of ${m.bestOf}`,
       url: `${site}/matches/${m.id}`,
     })),

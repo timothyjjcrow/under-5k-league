@@ -5,6 +5,8 @@ import { getSessionUser } from "@/lib/auth";
 import { pickemStandings, pickSplit, predictionOpen } from "@/lib/pickem";
 import { savePrediction } from "@/app/actions/pickem";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { LocalTime } from "@/components/local-time";
+import { formatMatchTime } from "@/lib/match-time";
 import {
   Avatar,
   Badge,
@@ -20,17 +22,6 @@ import {
 import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Pick'em" };
-
-function fmtWhen(d: Date | null): string | null {
-  if (!d) return null;
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 export default async function PickemPage() {
   const season = await getActiveSeason();
@@ -110,7 +101,10 @@ export default async function PickemPage() {
             {standings.map((s, i) => (
               <div
                 key={s.userId}
-                className="flex items-center gap-3 px-5 py-2.5 text-sm"
+                className={cn(
+                  "flex items-center gap-3 px-5 py-2.5 text-sm",
+                  viewer?.id === s.userId && "bg-info/[0.07]",
+                )}
               >
                 <span className="w-6 text-center text-muted">
                   {i === 0 ? "🔮" : i + 1}
@@ -120,12 +114,19 @@ export default async function PickemPage() {
                   src={userAvatar.get(s.userId) ?? null}
                   size={24}
                 />
-                <PlayerLink
-                  userId={s.userId}
-                  className="min-w-0 flex-1 truncate font-medium"
-                >
-                  {userName.get(s.userId) ?? "?"}
-                </PlayerLink>
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <PlayerLink
+                    userId={s.userId}
+                    className="min-w-0 truncate font-medium"
+                  >
+                    {userName.get(s.userId) ?? "?"}
+                  </PlayerLink>
+                  {viewer?.id === s.userId ? (
+                    <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info">
+                      You
+                    </span>
+                  ) : null}
+                </span>
                 <span className="font-mono text-xs tabular-nums text-muted">
                   {Math.round(s.accuracy * 100)}%
                 </span>
@@ -173,6 +174,7 @@ export default async function PickemPage() {
                       size="sm"
                       className="w-full"
                       disabled={!viewer}
+                      aria-pressed={mine}
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <TeamCrest
@@ -182,7 +184,12 @@ export default async function PickemPage() {
                           className="rounded"
                         />
                         <span className="truncate">{name}</span>
-                        {mine ? <span aria-hidden>✓</span> : null}
+                        {mine ? (
+                          <>
+                            <span aria-hidden>✓</span>
+                            <span className="sr-only">(your pick)</span>
+                          </>
+                        ) : null}
                         {total > 0 ? (
                           <span className="ml-auto font-mono text-xs tabular-nums opacity-70">
                             {Math.round((count / total) * 100)}%
@@ -206,7 +213,15 @@ export default async function PickemPage() {
                         ) : null}
                       </span>
                       <span className="flex items-center gap-2">
-                        {fmtWhen(m.scheduledAt) ?? "time TBD"}
+                        {m.scheduledAt ? (
+                          <LocalTime
+                            ts={m.scheduledAt.getTime()}
+                            variant="full"
+                            initial={formatMatchTime(m.scheduledAt, "full")}
+                          />
+                        ) : (
+                          "time TBD"
+                        )}
                         <Link
                           href={`/matches/${m.id}`}
                           className="text-info hover:underline"
@@ -248,16 +263,30 @@ export default async function PickemPage() {
                       key={m.id}
                       className="flex items-center gap-3 px-5 py-2.5 text-sm"
                     >
-                      <span aria-hidden>{right ? "✅" : "❌"}</span>
-                      <span className="min-w-0 flex-1 truncate">
+                      <span
+                        role="img"
+                        aria-label={right ? "Correct pick" : "Wrong pick"}
+                      >
+                        <span aria-hidden>{right ? "✅" : "❌"}</span>
+                      </span>
+                      <Link
+                        href={`/matches/${m.id}`}
+                        className="min-w-0 flex-1 truncate hover:text-info hover:underline"
+                      >
                         Week {m.week}: {teamName.get(m.homeTeamId)}{" "}
                         <span className="font-mono text-xs">
                           {m.homeScore}–{m.awayScore}
                         </span>{" "}
                         {teamName.get(m.awayTeamId)}
-                      </span>
+                      </Link>
                       <span className="shrink-0 text-xs text-muted">
-                        you picked {teamName.get(pick)}
+                        you picked{" "}
+                        <Link
+                          href={`/teams/${pick}`}
+                          className="hover:text-info hover:underline"
+                        >
+                          {teamName.get(pick)}
+                        </Link>
                       </span>
                     </div>
                   );

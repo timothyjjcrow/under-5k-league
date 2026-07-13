@@ -319,3 +319,46 @@ describe("seedsFromFirstRound (bracket-view)", () => {
     expect(seedsFromFirstRound([]).size).toBe(0);
   });
 });
+
+describe("matchPhaseLabel / matchPhaseAbbrev", () => {
+  it("labels regular weeks by number and playoff phases by name", async () => {
+    const { matchPhaseLabel, matchPhaseAbbrev } = await import("./schedule");
+    expect(matchPhaseLabel("REGULAR", 3)).toBe("Week 3");
+    expect(matchPhaseLabel("PLAYOFF", 9)).toBe("Playoffs");
+    expect(matchPhaseLabel("FINAL", 10)).toBe("Grand final");
+    expect(matchPhaseAbbrev("REGULAR", 3)).toBe("W3");
+    expect(matchPhaseAbbrev("PLAYOFF", 9)).toBe("PO");
+    expect(matchPhaseAbbrev("FINAL", 10)).toBe("GF");
+  });
+});
+
+describe("byKickoff", () => {
+  it("orders by kickoff, pushing unscheduled matches last", async () => {
+    const { byKickoff } = await import("./schedule");
+    const rows = [
+      { id: "unsched", scheduledAt: null, week: 1 },
+      { id: "late", scheduledAt: new Date(2000), week: 1 },
+      { id: "early", scheduledAt: new Date(1000), week: 2 },
+    ];
+    expect([...rows].sort(byKickoff).map((r) => r.id)).toEqual([
+      "early",
+      "late",
+      "unsched",
+    ]);
+  });
+
+  it("breaks kickoff ties by week then creation order", async () => {
+    const { byKickoff } = await import("./schedule");
+    const t = new Date(5000);
+    const rows = [
+      { id: "w2", scheduledAt: t, week: 2, createdAt: new Date(1) },
+      { id: "w1b", scheduledAt: t, week: 1, createdAt: new Date(2) },
+      { id: "w1a", scheduledAt: t, week: 1, createdAt: new Date(1) },
+    ];
+    expect([...rows].sort(byKickoff).map((r) => r.id)).toEqual([
+      "w1a",
+      "w1b",
+      "w2",
+    ]);
+  });
+});

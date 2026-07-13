@@ -94,6 +94,25 @@ export function pointsByPlayer(games: FantasyGame[]): Map<string, number> {
   return totals;
 }
 
+/**
+ * How contested each player is: fraction of fantasy rosters (0..1) that picked
+ * them. Players nobody picked are absent from the map.
+ */
+export function ownershipByPlayer(
+  rosters: { pickUserIds: string[] }[],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const r of rosters) {
+    for (const id of new Set(r.pickUserIds)) {
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+  }
+  const total = rosters.length;
+  return new Map(
+    [...counts.entries()].map(([id, n]) => [id, total > 0 ? n / total : 0]),
+  );
+}
+
 export type FantasyStanding = {
   managerId: string;
   points: number;

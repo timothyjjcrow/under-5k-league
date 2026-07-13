@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
+import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { steamIdToAccountId } from "@/lib/dota";
-import { PlayerPool } from "@/components/player-pool";
+import { PlayerPool, type PoolDraftInfo } from "@/components/player-pool";
 import {
   Avatar,
   Badge,
+  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -31,7 +33,9 @@ export default async function PlayersPage() {
     );
   }
 
-  const [players, standins, teams] = await Promise.all([
+  const viewer = await getSessionUser();
+
+  const [players, standins, teams, viewerReg] = await Promise.all([
     prisma.registration.findMany({
       where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
       include: { user: true },
@@ -50,12 +54,35 @@ export default async function PlayersPage() {
         members: { include: { user: true }, orderBy: { price: "desc" } },
       },
     }),
+    viewer
+      ? prisma.registration.findUnique({
+          where: {
+            seasonId_userId: { seasonId: season.id, userId: viewer.id },
+          },
+        })
+      : Promise.resolve(null),
   ]);
 
   const draftDone = teams.length > 0 && season.status !== "DRAFT";
   const draftedUserIds = new Set(
     teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
+  // Who drafted each rostered player, so the pool list can chip the team
+  // (captains have no draft price → null suppresses the "$0").
+  const draftInfo: PoolDraftInfo = {};
+  for (const t of teams) {
+    for (const m of t.members) {
+      draftInfo[m.userId] = {
+        teamId: t.id,
+        teamName: t.name,
+        price: m.isCaptain ? null : m.price,
+      };
+    }
+  }
+  // During SIGNUPS this is where shared links land — offer a join affordance
+  // unless the viewer already holds an ACTIVE registration (/me covers login).
+  const canSignUp =
+    season.status === "SIGNUPS" && viewerReg?.status !== "ACTIVE";
   const poolPlayers = players.map((p) => ({
     userId: p.userId,
     name: p.user.name,
@@ -78,12 +105,19 @@ export default async function PlayersPage() {
         title="Players"
         subtitle={`${season.name} · ${players.length} players, ${standins.length} standins`}
         action={
-          <Link
-            href="/players/compare"
-            className="text-sm text-info hover:underline"
-          >
-            Compare players →
-          </Link>
+          <span className="flex flex-wrap items-center gap-3">
+            {canSignUp ? (
+              <Link href="/me" className={buttonClasses("primary", "sm")}>
+                Join the season →
+              </Link>
+            ) : null}
+            <Link
+              href="/players/compare"
+              className="text-sm text-info hover:underline"
+            >
+              Compare players →
+            </Link>
+          </span>
         }
       />
 
@@ -205,6 +239,7 @@ export default async function PlayersPage() {
           <PlayerPool
             players={poolPlayers}
             showDraftStatus={season.status !== "SIGNUPS"}
+            draftInfo={draftInfo}
           />
         )}
       </section>

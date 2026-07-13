@@ -17,6 +17,7 @@ import {
   RankBadge,
   SectionTitle,
   TeamCrest,
+  buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { Match } from "@prisma/client";
@@ -67,9 +68,12 @@ function ResultRow({
           {teamName.get(m.homeTeamId) ?? "?"}
         </Link>
       </div>
-      <span className="shrink-0 rounded-md bg-surface-2 px-2 py-0.5 font-mono text-xs tabular-nums">
+      <Link
+        href={`/matches/${m.id}`}
+        className="shrink-0 rounded-md bg-surface-2 px-2 py-0.5 font-mono text-xs tabular-nums transition-colors hover:bg-surface-2/80 hover:text-info"
+      >
         {done ? `${m.homeScore} – ${m.awayScore}` : "not played"}
-      </span>
+      </Link>
       <div className="min-w-0 flex-1 truncate">
         <Link
           href={`/teams/${m.awayTeamId}`}
@@ -91,19 +95,22 @@ export default async function SeasonArchivePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const season = await prisma.season.findUnique({
-    where: { id },
-    include: {
-      teams: {
-        orderBy: { draftOrder: "asc" },
-        include: {
-          captain: true,
-          members: { include: { user: true }, orderBy: { price: "desc" } },
+  const [season, gameCount] = await Promise.all([
+    prisma.season.findUnique({
+      where: { id },
+      include: {
+        teams: {
+          orderBy: { draftOrder: "asc" },
+          include: {
+            captain: true,
+            members: { include: { user: true }, orderBy: { price: "desc" } },
+          },
         },
+        matches: { orderBy: [{ week: "asc" }, { createdAt: "asc" }] },
       },
-      matches: { orderBy: [{ week: "asc" }, { createdAt: "asc" }] },
-    },
-  });
+    }),
+    prisma.game.count({ where: { match: { seasonId: id } } }),
+  ]);
   if (!season) notFound();
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
@@ -145,10 +152,18 @@ export default async function SeasonArchivePage({
           )
         }
       />
-      <div className="text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <Link href="/seasons" className="text-muted hover:text-info">
           ← All seasons
         </Link>
+        {gameCount > 0 ? (
+          <Link
+            href={`/recap?season=${season.id}`}
+            className={buttonClasses("secondary", "sm")}
+          >
+            Season recap →
+          </Link>
+        ) : null}
       </div>
 
       {champion ? (

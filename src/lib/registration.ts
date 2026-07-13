@@ -21,6 +21,35 @@ export type RegistrationGateInput = {
  * themselves to a full player once signups have closed (that would sneak past
  * the closed-signups rule). Returns an error message, or null when allowed.
  */
+export type WithdrawGateInput = {
+  /** The registration's current status string. */
+  status: string;
+  /** Does this user captain a team this season? */
+  isCaptain: boolean;
+  /** Is this user on a roster this season? */
+  isRostered: boolean;
+};
+
+/**
+ * Whether a signup can be withdrawn (by the player or an admin). Rostered
+ * players and captains must be released/replaced first — withdrawing them
+ * would silently orphan a team. Returns an error message, or null when OK.
+ */
+export function withdrawGateError({
+  status,
+  isCaptain,
+  isRostered,
+}: WithdrawGateInput): string | null {
+  if (status !== "ACTIVE") return "This signup isn't active.";
+  if (isCaptain) {
+    return "They captain a team — replace the captain first.";
+  }
+  if (isRostered) {
+    return "They're on a roster — release them from the team first.";
+  }
+  return null;
+}
+
 export function registrationGate({
   season,
   type,

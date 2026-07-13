@@ -103,3 +103,24 @@ describe("pointsByPlayer + fantasyStandings", () => {
     expect(standings[1]).toMatchObject({ managerId: "m2", points: -5 });
   });
 });
+
+describe("ownershipByPlayer", () => {
+  it("reports the fraction of rosters picking each player", async () => {
+    const { ownershipByPlayer } = await import("./fantasy");
+    const own = ownershipByPlayer([
+      { pickUserIds: ["a", "b"] },
+      { pickUserIds: ["a", "c"] },
+      { pickUserIds: ["a", "a"] }, // dupes in one roster count once
+      { pickUserIds: [] },
+    ]);
+    expect(own.get("a")).toBeCloseTo(3 / 4);
+    expect(own.get("b")).toBeCloseTo(1 / 4);
+    expect(own.get("c")).toBeCloseTo(1 / 4);
+    expect(own.has("nobody")).toBe(false);
+  });
+
+  it("returns an empty map with no rosters", async () => {
+    const { ownershipByPlayer } = await import("./fantasy");
+    expect(ownershipByPlayer([]).size).toBe(0);
+  });
+});

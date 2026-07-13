@@ -133,11 +133,15 @@ export function testMessage(): string {
   return `👋 Webhook test from **${process.env.NEXT_PUBLIC_APP_NAME || "the league site"}** — notifications are wired up.`;
 }
 
-/** League news post → announcement with a body snippet and a link to /news. */
-export function newsMessage(title: string, body: string): string {
+/**
+ * League news post → announcement with a body snippet and a link to /news.
+ * Given the post id, the link deep-links to that specific post (/news#id).
+ */
+export function newsMessage(title: string, body: string, id?: string): string {
   const flat = body.replace(/\s+/g, " ").trim();
   const snippet = flat.length > 200 ? `${flat.slice(0, 199).trimEnd()}…` : flat;
-  return `📣 **${title}**\n${snippet}\nMore: ${resolveSiteUrl()}/news`;
+  const link = `${resolveSiteUrl()}/news${id ? `#${id}` : ""}`;
+  return `📣 **${title}**\n${snippet}\nMore: ${link}`;
 }
 
 // ---------------------------------------------------------------------------
