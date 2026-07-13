@@ -120,7 +120,7 @@ const SECTIONS: Section[] = [
       {
         icon: "🧢",
         title: "Built for Under 4.5K",
-        desc: "A hard MMR cap every season. Even footing for everyone.",
+        desc: "4.5K is a soft limit, not a hard cap. Over it? We review case by case — the real line is keeping out Immortals and anyone past 5K.",
       },
     ],
   },

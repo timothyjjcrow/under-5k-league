@@ -162,3 +162,11 @@ export const MATCH_SCHEDULE = {
 // home page so players know where they'll be playing. Change here to adjust it
 // league-wide.
 export const GAME_SERVER_REGION = "US East" as const;
+
+// MMR policy. 4.5K is a SOFT limit, not a hard cap: players above it can still
+// sign up, but they're reviewed before the draft (`Season.maxMmr` is that
+// per-season soft/review threshold — default `SOFT_MMR_LIMIT`, 0 = no soft
+// limit). `HARD_MMR_CEILING` is the one firm line the site actually enforces —
+// nobody over it can join — which keeps out 5K+ players and Immortals.
+export const SOFT_MMR_LIMIT = 4500 as const;
+export const HARD_MMR_CEILING = 5000 as const;

@@ -20,7 +20,7 @@ import { resolveSiteUrl } from "@/lib/site-url";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
-  "A sub-4500 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.";
+  "An amateur Dota 2 league built around a soft 4.5K MMR limit — sign in with Steam, join the season, get drafted, and compete.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

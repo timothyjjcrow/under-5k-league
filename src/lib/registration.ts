@@ -1,4 +1,5 @@
 import {
+  HARD_MMR_CEILING,
   REGISTRATION_TYPE,
   SEASON_STATUS,
   type RegistrationType,
@@ -15,11 +16,14 @@ export type RegistrationGateInput = {
 };
 
 /**
- * Enforce signup rules: the season's MMR cap, and that PLAYER registrations
- * only *begin* during SIGNUPS. Standins may sign up any time; an existing
- * registrant may always update their signup — but a standin can't upgrade
- * themselves to a full player once signups have closed (that would sneak past
- * the closed-signups rule). Returns an error message, or null when allowed.
+ * Enforce signup rules: the hard MMR ceiling, and that PLAYER registrations
+ * only *begin* during SIGNUPS. The soft limit (`season.maxMmr`) does NOT block
+ * signup — players above it join and are reviewed before the draft; only the
+ * `HARD_MMR_CEILING` (no 5K+/Immortals) is a firm reject. Standins may sign up
+ * any time; an existing registrant may always update their signup — but a
+ * standin can't upgrade themselves to a full player once signups have closed
+ * (that would sneak past the closed-signups rule). Returns an error message,
+ * or null when allowed.
  */
 export type WithdrawGateInput = {
   /** The registration's current status string. */
@@ -57,8 +61,10 @@ export function registrationGate({
   hasExisting,
   existingType,
 }: RegistrationGateInput): string | null {
-  if (season.maxMmr > 0 && mmr > season.maxMmr) {
-    return `This league is capped at ${season.maxMmr} MMR — you entered ${mmr}.`;
+  // The soft limit (season.maxMmr) is a review threshold, not a block — only
+  // the hard ceiling turns anyone away (keeps out 5K+ players and Immortals).
+  if (mmr > HARD_MMR_CEILING) {
+    return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — you entered ${mmr}.`;
   }
   const wasPlayer = hasExisting && existingType === REGISTRATION_TYPE.PLAYER;
   if (

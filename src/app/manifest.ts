@@ -7,7 +7,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Under 4.5K League",
     short_name: "Under 4.5K",
     description:
-      "A sub-4500 MMR Dota 2 amateur league — sign in with Steam, join the season, get drafted, and compete.",
+      "An amateur Dota 2 league built around a soft 4.5K MMR limit — sign in with Steam, join the season, get drafted, and compete.",
     start_url: "/",
     display: "standalone",
     background_color: "#0b0f17",

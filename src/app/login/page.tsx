@@ -25,7 +25,7 @@ export default async function LoginPage() {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/banner.png"
-              alt="Under 4.5K League — amateur Dota 2 for players under 4500 MMR"
+              alt="Under 4.5K League — amateur Dota 2 built around a soft 4.5K MMR limit"
               width={1024}
               height={400}
               className="mx-auto w-full rounded-lg border border-line/70 shadow-sm"

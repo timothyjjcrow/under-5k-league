@@ -54,8 +54,9 @@ export async function saveRegistration(
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
   });
 
-  // MMR cap + "new full players only during SIGNUPS" (standins any time;
-  // existing signups can always be updated). Rules live in registrationGate.
+  // Hard MMR ceiling (the soft limit doesn't block) + "new full players only
+  // during SIGNUPS" (standins any time; existing signups can always be
+  // updated). Rules live in registrationGate.
   const gateError = registrationGate({
     season,
     type,

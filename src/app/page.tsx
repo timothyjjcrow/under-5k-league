@@ -724,7 +724,9 @@ async function SignupsView({
               <span className="font-normal text-muted">
                 {" "}
                 · teams of {season.teamSize}
-                {season.maxMmr > 0 ? ` · capped at ${season.maxMmr} MMR` : ""}
+                {season.maxMmr > 0
+                  ? ` · ${season.maxMmr} MMR soft limit`
+                  : ""}
               </span>
             </span>
             <span className="text-muted">

@@ -84,7 +84,8 @@ export function SiteFooter({
               </span>
             </div>
             <p className="mt-2 text-sm text-muted">
-              A drafted, team-based Dota 2 league for players under 4500 MMR.
+              A drafted, team-based Dota 2 league built around a soft 4.5K MMR
+              limit.
             </p>
             <DiscordButton size="sm" className="mt-4" />
           </div>

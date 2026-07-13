@@ -1286,7 +1286,7 @@ export async function syncPlayerRanks(
   return { message: `Synced ${regs.length} players · ${ranked} ranked` };
 }
 
-/** Set the active season's signup MMR cap (0 = no cap). */
+/** Set the active season's soft MMR limit / review threshold (0 = none). */
 export async function setMaxMmr(formData: FormData) {
   await requireAdmin();
   const season = await getActiveSeason();

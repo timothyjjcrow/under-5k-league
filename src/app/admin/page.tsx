@@ -56,7 +56,11 @@ import {
   groupPlayoffRounds,
 } from "@/lib/schedule";
 import { mmrWeightedBudgets } from "@/lib/draft";
-import { MATCH_SCHEDULE } from "@/lib/constants";
+import {
+  MATCH_SCHEDULE,
+  SOFT_MMR_LIMIT,
+  HARD_MMR_CEILING,
+} from "@/lib/constants";
 import {
   regularSeasonStatus,
   pendingResultsMessage,
@@ -193,14 +197,14 @@ export default async function AdminPage() {
                 className={inputCls}
               />
             </Field>
-            <Field label="Max MMR (0 = none)" htmlFor="maxMmr">
+            <Field label="Soft MMR limit (0 = none)" htmlFor="maxMmr">
               <input
                 id="maxMmr"
                 name="maxMmr"
                 type="number"
-                defaultValue={4500}
+                defaultValue={SOFT_MMR_LIMIT}
                 min={0}
-                max={20000}
+                max={HARD_MMR_CEILING}
                 className={inputCls}
               />
             </Field>
@@ -349,24 +353,24 @@ function SeasonControls({
           className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
         >
           <label htmlFor="seasonMaxMmr" className="text-muted">
-            Signup MMR cap
+            Soft MMR limit
           </label>
           <input
             id="seasonMaxMmr"
             name="maxMmr"
             type="number"
             min={0}
-            max={20000}
+            max={HARD_MMR_CEILING}
             defaultValue={season.maxMmr}
             className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
           />
           <SubmitButton variant="secondary" size="sm">
-            Save cap
+            Save limit
           </SubmitButton>
           <span className="text-xs text-muted">
             {season.maxMmr > 0
-              ? `players over ${season.maxMmr} MMR can't join`
-              : "no cap — anyone can join"}
+              ? `players over ${season.maxMmr} are reviewed before joining · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`
+              : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
           </span>
         </form>
         <form

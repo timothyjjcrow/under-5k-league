@@ -11,6 +11,7 @@ import {
   refreshSteamProfile,
 } from "@/app/actions/registration";
 import { steamIdToAccountId } from "@/lib/dota";
+import { HARD_MMR_CEILING } from "@/lib/constants";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchPhaseLabel } from "@/lib/schedule";
 import { formatMatchTime } from "@/lib/match-time";
@@ -314,7 +315,7 @@ export default async function MePage() {
                   name="mmr"
                   type="number"
                   min={0}
-                  max={season.maxMmr > 0 ? season.maxMmr : 12000}
+                  max={HARD_MMR_CEILING}
                   defaultValue={form?.mmr ?? ""}
                   placeholder="e.g. 3200"
                   className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
@@ -322,8 +323,8 @@ export default async function MePage() {
                 <p className="mt-1 text-xs text-muted">
                   Used to help balance the draft. Be honest!
                   {season.maxMmr > 0
-                    ? ` This league is capped at ${season.maxMmr} MMR — players above it can't join.`
-                    : ""}
+                    ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
+                    : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}
                 </p>
               </div>
 

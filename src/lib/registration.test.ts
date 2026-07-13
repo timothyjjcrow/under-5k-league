@@ -1,30 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { registrationGate } from "./registration";
 
-const capped = { maxMmr: 5000, status: "SIGNUPS" };
+// maxMmr 4500 = the 4.5K soft/review limit; the hard ceiling (5000) is what
+// actually blocks. maxMmr 0 = no soft limit (the hard ceiling still applies).
+const soft = { maxMmr: 4500, status: "SIGNUPS" };
 const signups = { maxMmr: 0, status: "SIGNUPS" };
 const regular = { maxMmr: 0, status: "REGULAR_SEASON" };
 
-describe("registrationGate — MMR cap", () => {
-  it("rejects MMR above the cap", () => {
+describe("registrationGate — MMR limits", () => {
+  it("rejects MMR above the hard ceiling", () => {
     expect(
-      registrationGate({ season: capped, type: "PLAYER", mmr: 5001, hasExisting: false }),
-    ).toMatch(/capped at 5000/);
+      registrationGate({ season: soft, type: "PLAYER", mmr: 5001, hasExisting: false }),
+    ).toMatch(/over 5000/);
   });
-  it("allows MMR exactly at the cap", () => {
+  it("allows MMR exactly at the hard ceiling", () => {
     expect(
-      registrationGate({ season: capped, type: "PLAYER", mmr: 5000, hasExisting: false }),
+      registrationGate({ season: soft, type: "PLAYER", mmr: 5000, hasExisting: false }),
     ).toBeNull();
   });
-  it("ignores the cap when maxMmr is 0", () => {
+  it("allows MMR above the soft limit but under the ceiling (reviewed, not blocked)", () => {
+    expect(
+      registrationGate({ season: soft, type: "PLAYER", mmr: 4800, hasExisting: false }),
+    ).toBeNull();
+  });
+  it("enforces the hard ceiling even when there's no soft limit", () => {
     expect(
       registrationGate({ season: signups, type: "PLAYER", mmr: 9000, hasExisting: false }),
-    ).toBeNull();
+    ).toMatch(/over 5000/);
   });
-  it("applies the cap to standins too", () => {
+  it("applies the hard ceiling to standins too", () => {
     expect(
-      registrationGate({ season: capped, type: "STANDIN", mmr: 6000, hasExisting: false }),
-    ).toMatch(/capped at 5000/);
+      registrationGate({ season: soft, type: "STANDIN", mmr: 6000, hasExisting: false }),
+    ).toMatch(/over 5000/);
   });
 });
 
