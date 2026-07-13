@@ -117,13 +117,41 @@ export async function saveRegistration(
     );
   }
 
+  // On a brand-new signup, pull the player's ranked medal from Dota (via
+  // OpenDota — the free public API over Valve's match data that Dotabuff-style
+  // sites read too; Dotabuff itself has no public API) so captains see a rank
+  // without the player manually linking their account first. Best-effort:
+  // fetchPlayerRankTier never throws and returns null when the profile is
+  // private or unavailable. Only fetch when they don't already have a medal,
+  // so we never overwrite a good value with a null and never re-hit the API on
+  // signup edits.
+  let medalLabel = "";
+  if (!existing) {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { dotaAccountId: true, rankTier: true },
+    });
+    if (dbUser && dbUser.rankTier == null) {
+      const accountId =
+        dbUser.dotaAccountId ?? steamIdToAccountId(user.steamId);
+      const rankTier = accountId ? await fetchPlayerRankTier(accountId) : null;
+      if (rankTier != null) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { rankTier },
+        });
+        medalLabel = ` · ${rankMedalName(rankTier)}`;
+      }
+    }
+  }
+
   refresh();
   return {
     message: existing
       ? "Signup updated"
-      : type === REGISTRATION_TYPE.STANDIN
-        ? "Registered as a standin"
-        : "You're signed up!",
+      : (type === REGISTRATION_TYPE.STANDIN
+          ? "Registered as a standin"
+          : "You're signed up!") + medalLabel,
   };
 }
 
