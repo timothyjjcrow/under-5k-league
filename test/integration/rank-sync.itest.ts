@@ -11,9 +11,10 @@ vi.mock("@/lib/dota", async (importOriginal) => ({
 }));
 
 import { syncPlayerRanks } from "@/app/actions/admin";
+import { ensureRankTier } from "@/lib/users";
 import { fetchRankTier } from "@/lib/dota";
 import { prisma } from "@/lib/prisma";
-import { makeSeason, makePlayer } from "./factories";
+import { makeSeason, makePlayer, makeUser } from "./factories";
 
 const mockFetch = vi.mocked(fetchRankTier);
 
@@ -85,5 +86,63 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(await medalOf(user.id)).toBe(61);
     expect(res?.message).toMatch(/1 ranked/);
+  });
+});
+
+describe("ensureRankTier — medals for accounts that never signed up", () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  it("fetches and stores a medal for a user with none yet", async () => {
+    const user = await makeUser("Not Registered");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: null, dotaAccountId: 555 },
+    });
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 50 }); // Legend
+
+    await ensureRankTier(prisma, {
+      id: user.id,
+      steamId: user.steamId,
+      dotaAccountId: 555,
+      rankTier: null,
+    });
+
+    expect(await medalOf(user.id)).toBe(50);
+  });
+
+  it("is a no-op when the user already has a medal (doesn't even fetch)", async () => {
+    const user = await makeUser("Has Medal");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: 44, dotaAccountId: 556 },
+    });
+
+    await ensureRankTier(prisma, {
+      id: user.id,
+      steamId: user.steamId,
+      dotaAccountId: 556,
+      rankTier: 44,
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(await medalOf(user.id)).toBe(44);
+  });
+
+  it("doesn't write when OpenDota is unreachable", async () => {
+    const user = await makeUser("Unreachable");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: null, dotaAccountId: 557 },
+    });
+    mockFetch.mockResolvedValue({ ok: false, rankTier: null });
+
+    await ensureRankTier(prisma, {
+      id: user.id,
+      steamId: user.steamId,
+      dotaAccountId: 557,
+      rankTier: null,
+    });
+
+    expect(await medalOf(user.id)).toBeNull();
   });
 });

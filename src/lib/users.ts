@@ -1,5 +1,6 @@
 import type { PrismaClient, User } from "@prisma/client";
 import { ROLE } from "./constants";
+import { fetchRankTier, steamIdToAccountId } from "./dota";
 
 type UpsertInput = {
   steamId: string;
@@ -77,4 +78,33 @@ export async function upsertLeagueUser(
       ...(listConfigured ? { role } : role === ROLE.ADMIN ? { role } : {}),
     },
   });
+}
+
+/**
+ * Best-effort: fill in a user's ranked medal from OpenDota if they don't have
+ * one yet. Called at login so EVERY account gets a medal — not only players who
+ * sign up (signup + the admin sync only ever touch registrants, which is why a
+ * logged-in-but-not-registered account showed no medal). Only when they have no
+ * medal yet, and only writes a real one — a failed / rate-limited call is a
+ * no-op, so it never wipes or blocks login on OpenDota being slow.
+ */
+export async function ensureRankTier(
+  prisma: PrismaClient,
+  user: {
+    id: string;
+    steamId: string;
+    dotaAccountId: number | null;
+    rankTier: number | null;
+  },
+): Promise<void> {
+  if (user.rankTier != null) return;
+  const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  if (!accountId) return;
+  const result = await fetchRankTier(accountId);
+  if (result.ok && result.rankTier != null) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: result.rankTier },
+    });
+  }
 }
