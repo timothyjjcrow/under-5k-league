@@ -50,6 +50,7 @@ import {
   testMessage,
 } from "@/lib/discord";
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
+import { bumpSessionEpoch } from "@/lib/session-epoch";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
 import { withdrawGateError } from "@/lib/registration";
 import type { ActionResult } from "@/lib/action-result";
@@ -1349,6 +1350,27 @@ export async function syncAllRanks(
   refresh();
   return {
     message: `Checked ${users.length} account(s) without a medal · ${ranked} now ranked${unreachableTail(unreachable)}`,
+  };
+}
+
+/**
+ * Break-glass: invalidate EVERY signed-in session (advances the session epoch).
+ * Use if a token may have leaked / an account is compromised — everyone,
+ * including the admin who ran it, must log in again. Normal logout is unchanged.
+ */
+export async function revokeAllSessions(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  await bumpSessionEpoch();
+  refresh();
+  return {
+    message: "Signed out all users — everyone must log in again.",
   };
 }
 

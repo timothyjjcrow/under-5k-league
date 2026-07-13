@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "./prisma";
 import { SESSION_COOKIE } from "./constants";
+import { getSessionEpoch } from "./session-epoch";
 
 // Session-signing key. Resolved lazily (so a missing secret fails a request,
 // not the build) and FAIL-CLOSED: in production a missing/short AUTH_SECRET
@@ -38,7 +39,8 @@ export type SessionUser = {
 
 /** Sign a session JWT and set it as an httpOnly cookie. Route handlers/actions only. */
 export async function createSession(userId: string) {
-  const token = await new SignJWT({ uid: userId })
+  const ep = await getSessionEpoch(Date.now());
+  const token = await new SignJWT({ uid: userId, ep })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("30d")
@@ -68,6 +70,10 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     const { payload } = await jwtVerify(token, secret(), {
       algorithms: ["HS256"],
     });
+    // Reject sessions minted before the current epoch — the break-glass that
+    // makes "sign out all users" able to revoke stolen/outstanding tokens.
+    const tokenEpoch = Number(payload.ep ?? 0);
+    if (tokenEpoch < (await getSessionEpoch(Date.now()))) return null;
     const uid = payload.uid as string;
     const user = await prisma.user.findUnique({ where: { id: uid } });
     if (!user) return null;

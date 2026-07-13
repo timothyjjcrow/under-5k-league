@@ -30,6 +30,9 @@ export async function resetDb() {
   await prisma.registration.deleteMany();
   await prisma.season.deleteMany();
   await prisma.user.deleteMany();
+  // Relationless key-value store (webhook, league id, honors markers, session
+  // epoch) — reset it too so tests are fully isolated.
+  await prisma.setting.deleteMany();
 }
 
 let seq = 0;

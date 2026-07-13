@@ -19,13 +19,41 @@ export function buildSteamLoginUrl(returnTo: string, realm: string): string {
   return `${STEAM_OPENID}?${params.toString()}`;
 }
 
-/** Verify the OpenID callback with Steam. Returns the SteamID64 or null. */
+/** Same origin + path (ignoring query/trailing slash). Pure — unit-tested. */
+export function steamReturnToMatches(
+  actual: string | null,
+  expected: string,
+): boolean {
+  if (!actual) return false;
+  try {
+    const a = new URL(actual);
+    const b = new URL(expected);
+    return (
+      a.origin === b.origin &&
+      a.pathname.replace(/\/$/, "") === b.pathname.replace(/\/$/, "")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify the OpenID callback with Steam. Returns the SteamID64 or null.
+ * `expectedReturnTo` pins the (Steam-signed) `openid.return_to` to OUR callback
+ * so a valid assertion issued for a different relying party can't be replayed
+ * here to log in as that assertion's SteamID.
+ */
 export async function verifySteamCallback(
   query: URLSearchParams,
+  expectedReturnTo: string,
 ): Promise<string | null> {
   const claimedId = query.get("openid.claimed_id") || "";
   const idMatch = claimedId.match(/(\d{17})$/);
   if (!idMatch) return null;
+
+  if (!steamReturnToMatches(query.get("openid.return_to"), expectedReturnTo)) {
+    return null;
+  }
 
   const params = new URLSearchParams();
   for (const [k, v] of query.entries()) params.set(k, v);
