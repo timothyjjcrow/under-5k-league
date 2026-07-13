@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { steamIdToAccountId, accountIdToSteamId64, parseAccountId, parseMatchId } from "./dota";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  steamIdToAccountId,
+  accountIdToSteamId64,
+  parseAccountId,
+  parseMatchId,
+  fetchRankTier,
+} from "./dota";
 
 describe("steamIdToAccountId", () => {
   it("converts a SteamID64 to a 32-bit Dota account id and back", () => {
@@ -50,5 +56,34 @@ describe("parseAccountId", () => {
   it("accepts the 32-bit boundary and rejects garbage", () => {
     expect(parseAccountId("4294967295")).toBe(4294967295);
     expect(parseAccountId("no digits here")).toBeNull();
+  });
+});
+
+describe("fetchRankTier", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const stubFetch = (impl: () => Promise<unknown>) =>
+    vi.stubGlobal("fetch", vi.fn(impl));
+
+  it("returns ok:true with the medal on a 200", async () => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ rank_tier: 55 }) }));
+    expect(await fetchRankTier(123)).toEqual({ ok: true, rankTier: 55 });
+  });
+
+  it("returns ok:true rankTier:null when the profile has no rank", async () => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ rank_tier: null }) }));
+    expect(await fetchRankTier(123)).toEqual({ ok: true, rankTier: null });
+  });
+
+  it("returns ok:FALSE on a 429 rate limit — not a null medal", async () => {
+    stubFetch(async () => ({ ok: false, status: 429, json: async () => ({}) }));
+    expect(await fetchRankTier(123)).toEqual({ ok: false, rankTier: null });
+  });
+
+  it("returns ok:FALSE when the request throws (timeout / network)", async () => {
+    stubFetch(async () => {
+      throw new Error("The operation timed out");
+    });
+    expect(await fetchRankTier(123)).toEqual({ ok: false, rankTier: null });
   });
 });

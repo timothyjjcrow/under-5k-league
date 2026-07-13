@@ -14,6 +14,7 @@ import {
   parseAccountId,
   steamIdToAccountId,
   fetchPlayerRankTier,
+  fetchRankTier,
 } from "@/lib/dota";
 import { rankMedalName } from "@/lib/rank";
 import { serializeRoles } from "@/lib/roles";
@@ -238,11 +239,27 @@ export async function updateDotaAccount(
     });
   }
 
-  const rankTier = accountId ? await fetchPlayerRankTier(accountId) : null;
-  await prisma.user.update({ where: { id: user.id }, data: { rankTier } });
+  let medal = "";
+  if (accountId) {
+    const result = await fetchRankTier(accountId);
+    if (result.ok) {
+      // OpenDota answered — trust it for the (possibly new) account.
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { rankTier: result.rankTier },
+      });
+      medal = result.rankTier ? ` · ${rankMedalName(result.rankTier)}` : "";
+    } else {
+      // Couldn't reach OpenDota — leave the stored medal alone rather than
+      // wiping it; they can retry with "Refresh medal".
+      medal = " · couldn't fetch medal (try Refresh)";
+    }
+  } else {
+    // No derivable account — clear any stale medal.
+    await prisma.user.update({ where: { id: user.id }, data: { rankTier: null } });
+  }
 
   refresh();
-  const medal = rankTier ? ` · ${rankMedalName(rankTier)}` : "";
   return { message: (raw ? "Account linked" : "Cleared — using Steam") + medal };
 }
 
@@ -261,12 +278,21 @@ export async function refreshRank(
   const accountId = dbUser?.dotaAccountId ?? steamIdToAccountId(user.steamId);
   if (!accountId) return { error: "Link your account first" };
 
-  const rankTier = await fetchPlayerRankTier(accountId);
-  await prisma.user.update({ where: { id: user.id }, data: { rankTier } });
+  const result = await fetchRankTier(accountId);
+  if (!result.ok) {
+    // Don't wipe a stored medal because OpenDota was momentarily unreachable.
+    return {
+      error: "Couldn't reach OpenDota (rate limited?) — try again in a moment",
+    };
+  }
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { rankTier: result.rankTier },
+  });
   refresh();
   return {
-    message: rankTier
-      ? `Medal: ${rankMedalName(rankTier)}`
+    message: result.rankTier
+      ? `Medal: ${rankMedalName(result.rankTier)}`
       : "No medal found — is your match data public?",
   };
 }

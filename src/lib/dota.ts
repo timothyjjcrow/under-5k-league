@@ -127,21 +127,45 @@ export async function fetchRecentMatchIds(
   }
 }
 
-/** A player's current ranked medal (OpenDota rank_tier), or null if unavailable. */
-export async function fetchPlayerRankTier(
-  accountId: number,
-): Promise<number | null> {
+/**
+ * Result of a rank fetch. `ok:false` means OpenDota couldn't be reached — a
+ * rate-limit (HTTP 429), 5xx, or an 8s timeout — which is NOT the same as "no
+ * medal". Callers doing a bulk sync must not overwrite a stored medal with the
+ * null from a failed call, or a busy moment silently wipes everyone's rank.
+ * `ok:true` means OpenDota answered; `rankTier` is the medal, or null when the
+ * profile is genuinely unranked / has public match data off.
+ */
+export type RankTierResult =
+  | { ok: true; rankTier: number | null }
+  | { ok: false; rankTier: null };
+
+/** Fetch a player's ranked medal, distinguishing "unreachable" from "no rank". */
+export async function fetchRankTier(accountId: number): Promise<RankTierResult> {
   try {
     const res = await fetch(withKey(`${BASE}/players/${accountId}`), {
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { ok: false, rankTier: null };
     const data = await res.json();
-    return typeof data?.rank_tier === "number" ? data.rank_tier : null;
+    const rankTier =
+      typeof data?.rank_tier === "number" ? data.rank_tier : null;
+    return { ok: true, rankTier };
   } catch {
-    return null;
+    return { ok: false, rankTier: null };
   }
+}
+
+/**
+ * A player's current ranked medal (OpenDota rank_tier), or null if unavailable.
+ * Convenience wrapper over `fetchRankTier` that collapses "unreachable" and "no
+ * rank" back to null — only safe where a null result won't overwrite a stored
+ * medal (e.g. the signup fetch, which writes only when it gets a real medal).
+ */
+export async function fetchPlayerRankTier(
+  accountId: number,
+): Promise<number | null> {
+  return (await fetchRankTier(accountId)).rankTier;
 }
 
 /** All match ids for a Valve league id (from OpenDota /leagues/{id}/matches). */

@@ -36,7 +36,7 @@ import {
 import {
   parseMatchId,
   steamIdToAccountId,
-  fetchPlayerRankTier,
+  fetchRankTier,
 } from "@/lib/dota";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { clampInt, localDate, str } from "@/lib/form";
@@ -1274,16 +1274,38 @@ export async function syncPlayerRanks(
     where: { seasonId: season.id, status: "ACTIVE" },
     include: { user: true },
   });
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let ranked = 0;
+  let unreachable = 0;
   for (const r of regs) {
     const acc = r.user.dotaAccountId ?? steamIdToAccountId(r.user.steamId);
     if (!acc) continue;
-    const rankTier = await fetchPlayerRankTier(acc);
-    await prisma.user.update({ where: { id: r.userId }, data: { rankTier } });
-    if (rankTier) ranked++;
+    // Retry once on failure: a bulk sync easily trips OpenDota's free rate
+    // limit (HTTP 429) or an 8s timeout, and a brief back-off usually clears it.
+    let result = await fetchRankTier(acc);
+    if (!result.ok) {
+      await sleep(700);
+      result = await fetchRankTier(acc);
+    }
+    // Only write a real medal. Never overwrite a stored medal with null —
+    // whether the null is "couldn't reach OpenDota" (unreachable) or "OpenDota
+    // returned no rank" — so a rate-limited run can't wipe everyone's rank.
+    if (!result.ok) {
+      unreachable++;
+      continue;
+    }
+    if (result.rankTier == null) continue;
+    await prisma.user.update({
+      where: { id: r.userId },
+      data: { rankTier: result.rankTier },
+    });
+    ranked++;
   }
   refresh();
-  return { message: `Synced ${regs.length} players · ${ranked} ranked` };
+  const tail = unreachable
+    ? ` · ${unreachable} couldn't be reached (rate limit? run it again${process.env.OPENDOTA_API_KEY ? "" : " — an OPENDOTA_API_KEY raises the limit"})`
+    : "";
+  return { message: `Synced ${regs.length} players · ${ranked} ranked${tail}` };
 }
 
 /** Set the active season's soft MMR limit / review threshold (0 = none). */
