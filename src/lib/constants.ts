@@ -157,3 +157,8 @@ export const MATCH_SCHEDULE = {
   /** Full human label shown wherever the match time appears. */
   label: "Sundays at 6:00 PM PST",
 } as const;
+
+// Dota 2 matchmaking region every league game is hosted on. Surfaced on the
+// home page so players know where they'll be playing. Change here to adjust it
+// league-wide.
+export const GAME_SERVER_REGION = "US East" as const;

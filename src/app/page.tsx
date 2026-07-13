@@ -54,6 +54,7 @@ import {
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
+  GAME_SERVER_REGION,
 } from "@/lib/constants";
 import { predictionOpen } from "@/lib/pickem";
 import { HeroVideo } from "@/components/hero-video";
@@ -550,6 +551,14 @@ function Hero({
           {title}
         </h1>
         <p className="mx-auto mt-3 max-w-xl text-muted sm:text-lg">{subtitle}</p>
+        {/* Persistent league fact: the Dota region every game is played on. */}
+        <div className="mt-4 flex justify-center">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/60 px-3 py-1 text-xs font-medium text-muted">
+            <span aria-hidden>🌐</span>
+            Game servers:{" "}
+            <span className="font-semibold text-fg">{GAME_SERVER_REGION}</span>
+          </span>
+        </div>
         {meta ? (
           <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
             {meta}
