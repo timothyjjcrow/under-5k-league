@@ -181,7 +181,10 @@ export async function sendDiscordMessage(content: string): Promise<boolean> {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content }),
+      // allowed_mentions: parse:[] means NO mention ever resolves — a player
+      // whose Steam persona is "@everyone" (or a team/news title with @here,
+      // <@id>, <@&role>) can't turn an announcement into a mass ping.
+      body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
       signal: AbortSignal.timeout(5000),
     });
     return res.ok;

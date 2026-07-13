@@ -3,9 +3,30 @@ import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "./prisma";
 import { SESSION_COOKIE } from "./constants";
 
-const secret = new TextEncoder().encode(
-  process.env.AUTH_SECRET || "insecure-dev-secret-please-change-0123456789abcd",
-);
+// Session-signing key. Resolved lazily (so a missing secret fails a request,
+// not the build) and FAIL-CLOSED: in production a missing/short AUTH_SECRET
+// throws instead of silently falling back to a known constant — otherwise
+// anyone could forge a session for any userId (uids are public in /players/[id]
+// URLs) and take over an admin account. The dev fallback only applies outside
+// production so local dev and tests work without config.
+const DEV_FALLBACK_SECRET = "insecure-dev-secret-please-change-0123456789abcd";
+let cachedSecret: Uint8Array | null = null;
+
+function secret(): Uint8Array {
+  if (cachedSecret) return cachedSecret;
+  const configured = process.env.AUTH_SECRET;
+  if (configured && configured.length >= 32) {
+    cachedSecret = new TextEncoder().encode(configured);
+    return cachedSecret;
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "AUTH_SECRET must be set to a random string of at least 32 characters in production.",
+    );
+  }
+  cachedSecret = new TextEncoder().encode(DEV_FALLBACK_SECRET);
+  return cachedSecret;
+}
 
 export type SessionUser = {
   id: string;
@@ -21,7 +42,7 @@ export async function createSession(userId: string) {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("30d")
-    .sign(secret);
+    .sign(secret());
 
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
@@ -44,7 +65,9 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   try {
-    const { payload } = await jwtVerify(token, secret);
+    const { payload } = await jwtVerify(token, secret(), {
+      algorithms: ["HS256"],
+    });
     const uid = payload.uid as string;
     const user = await prisma.user.findUnique({ where: { id: uid } });
     if (!user) return null;

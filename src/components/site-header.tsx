@@ -216,13 +216,19 @@ export function SiteHeader({
                   {user.name}
                 </span>
               </Link>
-              <a
-                href="/api/auth/logout"
-                className="hidden text-sm text-muted hover:text-fg xl:inline"
-                title="Log out"
+              <form
+                action="/api/auth/logout"
+                method="POST"
+                className="hidden xl:inline"
               >
-                Logout
-              </a>
+                <button
+                  type="submit"
+                  className="text-sm text-muted hover:text-fg"
+                  title="Log out"
+                >
+                  Logout
+                </button>
+              </form>
             </>
           ) : (
             <Link
@@ -293,12 +299,14 @@ export function SiteHeader({
                   </Link>
                 ) : null}
                 {user ? (
-                  <a
-                    href="/api/auth/logout"
-                    className="block rounded-lg px-3 py-2.5 text-sm font-medium text-muted hover:bg-surface-2/60 hover:text-fg"
-                  >
-                    Log out
-                  </a>
+                  <form action="/api/auth/logout" method="POST">
+                    <button
+                      type="submit"
+                      className="block w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium text-muted hover:bg-surface-2/60 hover:text-fg"
+                    >
+                      Log out
+                    </button>
+                  </form>
                 ) : null}
                 {seasonName ? (
                   <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted">
