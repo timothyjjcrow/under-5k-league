@@ -215,6 +215,16 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   never throws). Webhook URL: `Setting` table key `discordWebhookUrl`
   (`src/lib/settings.ts`, admin panel card with save/validate/test) with
   `DISCORD_WEBHOOK_URL` env as fallback.
+- **The webhook URL is a bearer credential (anyone holding it can post to the
+  channel — prime phishing bait) and is NEVER sent to the client.** The admin
+  card renders only a boolean + a masked fingerprint from pure `maskWebhookUrl`
+  (`discord.ts`, tested — hides the secret token, keeps a short id hint); the
+  input starts EMPTY (no `defaultValue`). Because the field is blank on purpose,
+  `setDiscordWebhook` treats a blank submit as a no-op (never a wipe); turning
+  announcements off is the explicit `clearDiscordWebhook` action + Remove
+  button. Env-managed webhooks (`DISCORD_WEBHOOK_URL` only, no DB row) show a
+  note and hide Remove (clearing the DB key can't touch env). Regression guard:
+  don't reintroduce any client render of the raw URL.
 - Announces: new player signups (with countdown to the draft threshold), draft
   started (`startDraft`), every auction sale (`resolveExpiredNomination`,
   captured in-tx and sent post-commit — one message per sale, idempotent),

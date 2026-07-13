@@ -11,6 +11,7 @@ import {
   playerSoldMessage,
   playoffsStartedMessage,
   championMessage,
+  maskWebhookUrl,
 } from "./discord";
 
 describe("discord message formatters", () => {
@@ -155,5 +156,35 @@ describe("newsMessage", () => {
   it("deep-links to a specific post when given an id", () => {
     expect(newsMessage("T", "b", "abc123")).toContain("/news#abc123");
     expect(newsMessage("T", "b")).toMatch(/\/news(?!#)/);
+  });
+});
+
+describe("maskWebhookUrl", () => {
+  const real =
+    "https://discord.com/api/webhooks/1379001234567890123/aB3xY-secretTOKENvalue_should_never_leak";
+
+  it("never reveals the secret token", () => {
+    const masked = maskWebhookUrl(real);
+    expect(masked).not.toContain("secretTOKEN");
+    expect(masked).not.toContain("aB3xY");
+    expect(masked).toContain("••••");
+  });
+
+  it("shows only a short id fingerprint, not the full id", () => {
+    const masked = maskWebhookUrl(real);
+    expect(masked).not.toContain("1379001234567890123");
+    expect(masked).toContain("1379");
+  });
+
+  it("returns empty for a missing webhook", () => {
+    expect(maskWebhookUrl(null)).toBe("");
+    expect(maskWebhookUrl(undefined)).toBe("");
+    expect(maskWebhookUrl("")).toBe("");
+  });
+
+  it("falls back to a generic label for unexpected shapes", () => {
+    expect(maskWebhookUrl("https://example.com/not-a-webhook")).toBe(
+      "configured",
+    );
   });
 });

@@ -32,6 +32,7 @@ import {
   syncLeagueAction,
   enrichGamesAction,
   setDiscordWebhook,
+  clearDiscordWebhook,
   testDiscordWebhook,
   signFreeAgent,
   releasePlayer,
@@ -47,6 +48,7 @@ import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
+import { maskWebhookUrl } from "@/lib/discord";
 import {
   pickBracketSize,
   roundName,
@@ -94,8 +96,17 @@ export default async function AdminPage() {
   const data = season
     ? await loadSeasonAdminData(season.id)
     : null;
-  const discordWebhookUrl =
-    (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
+  // Never hand the raw webhook URL to the client — it's a bearer credential.
+  // Resolve it server-side only to derive a boolean + a masked fingerprint.
+  const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
+  const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
+  const discordStatus = {
+    configured: !!activeWebhook,
+    masked: maskWebhookUrl(activeWebhook),
+    // Set only via env, not the DB — Remove (which clears the DB key) can't
+    // touch it, so we hide that button and say where it lives.
+    envManaged: !dbWebhook && !!process.env.DISCORD_WEBHOOK_URL,
+  };
   const newsPosts = sortNews(
     await prisma.newsPost.findMany({
       include: { author: { select: { name: true } } },
@@ -118,7 +129,7 @@ export default async function AdminPage() {
           <RosterMoves season={season} data={data} />
           <StandinControls data={data} />
           <LeagueControls season={season} />
-          <DiscordControls webhookUrl={discordWebhookUrl} />
+          <DiscordControls status={discordStatus} />
         </>
       ) : (
         <Card>
@@ -1487,7 +1498,12 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   );
 }
 
-function DiscordControls({ webhookUrl }: { webhookUrl: string }) {
+function DiscordControls({
+  status,
+}: {
+  status: { configured: boolean; masked: string; envManaged: boolean };
+}) {
+  const { configured, masked, envManaged } = status;
   return (
     <Card>
       <CardHeader
@@ -1495,13 +1511,29 @@ function DiscordControls({ webhookUrl }: { webhookUrl: string }) {
         subtitle="Announce signups, the draft, results, playoffs, and the champion in your Discord."
         action={
           <ActionForm action={testDiscordWebhook}>
-            <SubmitButton variant="secondary" size="sm" disabled={!webhookUrl}>
+            <SubmitButton variant="secondary" size="sm" disabled={!configured}>
               Send test message
             </SubmitButton>
           </ActionForm>
         }
       />
       <CardBody className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          {configured ? (
+            <>
+              <Badge tone="success">Configured</Badge>
+              <span className="font-mono text-xs text-muted">{masked}</span>
+              {envManaged ? (
+                <span className="text-xs text-muted">
+                  · via <code>DISCORD_WEBHOOK_URL</code> env var
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <Badge tone="neutral">Not configured</Badge>
+          )}
+        </div>
+
         <ActionForm
           action={setDiscordWebhook}
           className="flex flex-wrap items-end gap-2"
@@ -1511,13 +1543,13 @@ function DiscordControls({ webhookUrl }: { webhookUrl: string }) {
               htmlFor="discordWebhookUrl"
               className="mb-1 block text-xs text-muted"
             >
-              Webhook URL
+              {configured ? "Replace webhook URL" : "Webhook URL"}
             </label>
             <input
               id="discordWebhookUrl"
               name="discordWebhookUrl"
               type="url"
-              defaultValue={webhookUrl}
+              autoComplete="off"
               placeholder="https://discord.com/api/webhooks/…"
               className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
             />
@@ -1526,10 +1558,24 @@ function DiscordControls({ webhookUrl }: { webhookUrl: string }) {
             Save webhook
           </SubmitButton>
         </ActionForm>
+
+        {configured && !envManaged ? (
+          <ActionForm action={clearDiscordWebhook}>
+            <SubmitButton
+              variant="ghost"
+              size="sm"
+              confirm="Turn off Discord announcements? This removes the saved webhook."
+            >
+              Remove webhook
+            </SubmitButton>
+          </ActionForm>
+        ) : null}
+
         <p className="text-xs text-muted">
           In Discord: <b>Server Settings → Integrations → Webhooks → New
           Webhook</b>, pick the announcements channel, copy the URL and paste it
-          here. Clear the field to turn announcements off.
+          here. For security the saved URL is never shown again — paste a new one
+          to replace it, or Remove to turn announcements off.
         </p>
       </CardBody>
     </Card>

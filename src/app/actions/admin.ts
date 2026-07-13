@@ -1350,7 +1350,7 @@ export async function setMatchSchedule(formData: FormData) {
   refresh();
 }
 
-/** Save (or clear) the Discord webhook used for league announcements. */
+/** Save the Discord webhook used for league announcements. */
 export async function setDiscordWebhook(
   _prev: ActionResult,
   formData: FormData,
@@ -1361,7 +1361,15 @@ export async function setDiscordWebhook(
     return { error: "Not authorized" };
   }
   const value = str(formData, "discordWebhookUrl").trim();
-  if (value && !/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+  // The field renders EMPTY on purpose — the saved URL is a secret we never
+  // send back to the browser. So a blank submit must be a no-op, not a wipe;
+  // turning announcements off is the explicit clearDiscordWebhook action.
+  if (!value) {
+    return {
+      message: "No change — paste a new URL to replace it, or use Remove.",
+    };
+  }
+  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -1369,9 +1377,22 @@ export async function setDiscordWebhook(
   }
   await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, value);
   refresh();
-  return {
-    message: value ? "Webhook saved — announcements are on" : "Webhook cleared",
-  };
+  return { message: "Webhook saved — announcements are on" };
+}
+
+/** Turn off Discord announcements by removing the stored webhook. */
+export async function clearDiscordWebhook(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
+  refresh();
+  return { message: "Webhook removed — announcements are off" };
 }
 
 /** Post a test message so the admin can confirm the webhook works. */

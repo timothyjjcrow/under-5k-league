@@ -154,6 +154,23 @@ export async function getWebhookUrl(): Promise<string | null> {
 }
 
 /**
+ * A safe, display-only fingerprint of a webhook URL. The full URL is a bearer
+ * credential (anyone holding it can post to the channel — prime phishing bait),
+ * so it must NEVER be sent to the browser. This keeps a short piece of the id
+ * (a Discord webhook is `…/webhooks/<id>/<secret-token>`) and hides the token
+ * entirely — enough for an admin to confirm one is set, useless to an attacker.
+ * Pure so it can be unit-tested.
+ */
+export function maskWebhookUrl(url: string | null | undefined): string {
+  if (!url) return "";
+  const m = url.match(/\/webhooks\/(\d+)\/(.+)$/);
+  if (!m) return "configured";
+  const id = m[1];
+  const idHint = id.length > 6 ? `${id.slice(0, 4)}…${id.slice(-2)}` : id;
+  return `discord.com/api/webhooks/${idHint}/••••••••`;
+}
+
+/**
  * POST a message to the configured webhook. Best-effort: resolves false on
  * any failure (no webhook configured, network error, non-2xx) and never throws.
  */
