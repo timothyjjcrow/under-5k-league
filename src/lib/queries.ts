@@ -27,8 +27,21 @@ export async function getSeasonSnapshot(userId?: string) {
       where: { seasonId: season.id },
       orderBy: { draftOrder: "asc" },
       include: {
-        captain: true,
-        members: { include: { user: true }, orderBy: { price: "desc" } },
+        // Only the display fields — this snapshot serializes into the dashboard,
+        // teams and admin RSC payloads, so shipping full user rows (steamId,
+        // timestamps…) is wasted bytes the browser downloads + hydrates. tsc
+        // enforces that every consumer sticks to these fields.
+        captain: {
+          select: { id: true, name: true, avatar: true, rankTier: true },
+        },
+        members: {
+          include: {
+            user: {
+              select: { id: true, name: true, avatar: true, rankTier: true },
+            },
+          },
+          orderBy: { price: "desc" },
+        },
       },
     }),
     userId

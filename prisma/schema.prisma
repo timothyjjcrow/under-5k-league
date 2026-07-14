@@ -102,6 +102,11 @@ model Registration {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([seasonId, userId])
+  // Hot counts/pool queries filter seasonId+status+type; userId lookups
+  // (returning-player prefill, profiles) can't use the unique (userId isn't
+  // its leftmost column).
+  @@index([seasonId, status, type])
+  @@index([userId])
 }
 
 model Team {
@@ -138,6 +143,10 @@ model TeamMember {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([seasonId, userId])
+  // Roster include (team.members) filters teamId; career pages filter userId —
+  // neither is the leftmost column of the unique above.
+  @@index([teamId])
+  @@index([userId])
 }
 
 // Singleton per season — server-authoritative auction draft state.
@@ -171,6 +180,8 @@ model Bid {
   season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
   team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id])
+
+  @@index([draftId])
 }
 
 model Match {
@@ -197,6 +208,12 @@ model Match {
   availability MatchAvailability[]
   predictions  Prediction[]
   reschedules  RescheduleRequest[]
+
+  // seasonId is filtered on nearly every mid-season page; team pages/standings
+  // filter home/away team ids.
+  @@index([seasonId])
+  @@index([homeTeamId])
+  @@index([awayTeamId])
 }
 
 // A captain's proposal to move a match to a different time. The opposing
@@ -242,6 +259,8 @@ model StandinAssignment {
   match    Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
   standin  User  @relation("StandinUser", fields: [standinUserId], references: [id])
   replaced User? @relation("ReplacedUser", fields: [replacingUserId], references: [id])
+
+  @@index([matchId])
 }
 
 // An individual Dota 2 game fetched from OpenDota, rolled up into a league Match.
@@ -262,6 +281,9 @@ model Game {
   fetchedAt     DateTime @default(now())
 
   match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  // Every stat roll-up joins game → match; recomputeSeries loads a match's games.
+  @@index([matchId])
 }
 
 // Simple key/value store for global config (e.g. activeSeasonId).
@@ -321,6 +343,8 @@ model Prediction {
   picked Team  @relation(fields: [pickedTeamId], references: [id], onDelete: Cascade)
 
   @@unique([matchId, userId])
+  // Per-user oracle history (userId isn't the unique's leftmost column).
+  @@index([userId])
 }
 
 // A single global queue of players waiting for the next inhouse. One row per

@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -47,6 +48,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  CardSkeleton,
   EmptyState,
   FormStrip,
   HeroIcon,
@@ -200,7 +202,11 @@ export default async function MatchDetailPage({
       {match.status !== "COMPLETED" ? <RescheduleSection match={match} /> : null}
 
       {games.length === 0 && match.status !== "COMPLETED" ? (
-        <MatchPreview match={match} />
+        <Suspense fallback={<CardSkeleton rows={5} />}>
+          {/* Rosters, scouting (scans all seasons' box scores) and the stakes
+              banner stream in so the header + check-in paint immediately. */}
+          <MatchPreview match={match} />
+        </Suspense>
       ) : games.length === 0 ? (
         <EmptyState
           title="No games recorded yet"

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getAllGameLines } from "@/lib/cached-queries";
 import { shareMetadata } from "@/lib/share-metadata";
 import { getActiveSeason } from "@/lib/season";
 import { steamIdToAccountId, getHeroNames } from "@/lib/dota";
@@ -108,7 +109,9 @@ export default async function PlayerProfilePage({
     }),
     // A player's userId lives inside each game's stored box-score JSON, not a
     // column, so pass 1 is a lightweight scan (no joins) to find their game ids.
-    prisma.game.findMany({ select: { id: true, players: true } }),
+    // Cached (viewer-independent) so every profile view doesn't re-scan the
+    // whole Game table — see getAllGameLines.
+    getAllGameLines(),
   ]);
 
   // Pass 2: only THIS player's games carry the heavy match/team/season joins

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getAllGameScores } from "@/lib/cached-queries";
 import { careerCounts, topCounts, type HofRow } from "@/lib/hall-of-fame";
 import { pointsByPlayer, type FantasyGame } from "@/lib/fantasy";
 import { pickemStandings } from "@/lib/pickem";
@@ -37,7 +38,7 @@ export default async function HallOfFamePage() {
           scheduledAt: true,
         },
       }),
-      prisma.game.findMany({ select: { players: true, radiantWin: true } }),
+      getAllGameScores(),
       prisma.prediction.findMany({
         select: { matchId: true, userId: true, pickedTeamId: true },
       }),

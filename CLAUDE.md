@@ -641,6 +641,38 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   its `.env` at an absolute fixture `DATABASE_URL`, and `next dev -p 3111`
   from the copy.
 
+## Performance (done — keep following these)
+
+- **In-page streaming**: the dashboard (`page.tsx`) and the match preview wrap
+  their slower async sub-sections in `<Suspense fallback={<CardSkeleton/>}>` so
+  the hero/shell paints before the heavy queries resolve. When adding a new
+  async card, wrap it too; use `CardSkeleton`/`Skeleton` (`ui.tsx`) for a
+  fixed-height fallback (no CLS). The root `loading.tsx` still covers navigation.
+- **Cached stat scans**: player attribution lives in each `Game.players` JSON,
+  so the leaders/meta/records/hall-of-fame/profile roll-ups must scan the whole
+  table. Those scans go through `src/lib/cached-queries.ts` (`unstable_cache`,
+  60s TTL, tagged `"games"`) — viewer-independent, shared across requests. Add
+  new all-games roll-ups there, not as inline `prisma.game.findMany`. The
+  game-import admin actions call `refreshGames()` (`revalidateTag("games")` +
+  path revalidate) so stats reflect a new import immediately; the 60s TTL is
+  just the backstop. `revalidatePath` alone does NOT clear unstable_cache tags —
+  bust the tag from a request scope (an action/route), never from the lib (it
+  throws outside a request, breaking the integration tests that call it directly).
+- **Live-room clocks**: the draft/inhouse countdowns tick inside leaf
+  components via `useSecondsLeft`/`useElapsedMs` (`src/components/room-clock.tsx`)
+  so only the clock text re-renders each 250ms — NOT the room + player pool.
+  Don't reintroduce a room-level `forceTick`; keep new countdowns in a leaf.
+- **DB indexes**: hot filter/join columns are indexed (`Match.seasonId`/home/
+  away, `Game.matchId`, `Registration(seasonId,status,type)`, `TeamMember`
+  team/user, `Bid.draftId`, `StandinAssignment.matchId`, `Prediction.userId`).
+  Add an `@@index` when a new query filters a non-indexed column; skip it when
+  an existing `@@unique` already has that column leftmost.
+- **Payload trimming**: queries whose rows serialize into the client (the
+  `getSeasonSnapshot` rosters, dashboard signup chips) `select` only the display
+  fields (`id/name/avatar/rankTier`) instead of `include: { user: true }`.
+  Don't re-add full user rows to snapshot/roster queries — the derived
+  `SeasonSnapshot` type makes tsc enforce the narrowed shape.
+
 ## Good next steps
 
 - Production deploy config (swap SQLite → Postgres, real Steam key).

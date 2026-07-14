@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
@@ -56,6 +56,17 @@ import { withdrawGateError } from "@/lib/registration";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
+  revalidatePath("/", "layout");
+}
+
+// Game imports/edits also invalidate the cached all-games stat scans
+// (src/lib/cached-queries.ts, tagged "games") so leaders / meta / records /
+// hall-of-fame / player profiles reflect the change immediately instead of
+// after the 60s TTL. revalidatePath alone does NOT clear unstable_cache tags.
+function refreshGames() {
+  // Next 16 requires the cacheLife profile arg; "max" is the documented
+  // equivalent of the old one-arg revalidateTag — invalidate the tag now.
+  revalidateTag("games", "max");
   revalidatePath("/", "layout");
 }
 
@@ -1032,7 +1043,7 @@ export async function importGameAction(
   if (!dotaMatchId) return { error: "Enter a valid match id or URL" };
   const res = await importGameForMatch(matchId, dotaMatchId);
   if (!res.ok) return { error: res.error };
-  revalidatePath("/", "layout");
+  refreshGames();
   return { ok: true, message: "Game imported" };
 }
 
@@ -1049,7 +1060,7 @@ export async function autoDetectAction(
   const matchId = str(formData, "matchId");
   const res = await autoDetectGamesForMatch(matchId);
   if (res.error) return { error: res.error };
-  revalidatePath("/", "layout");
+  refreshGames();
   return {
     ok: true,
     message: `Scanned ${res.scanned} players · imported ${res.imported} game(s)`,
@@ -1110,7 +1121,7 @@ export async function removeGame(
 
   await prisma.game.deleteMany({ where: { id: gameId } });
   await recomputeSeries(game.matchId);
-  refresh();
+  refreshGames();
   return { message: "Game removed — series recomputed" };
 }
 
@@ -1517,7 +1528,7 @@ export async function syncLeagueAction(
   if (!season) return { error: "No active season" };
   const res = await syncLeagueGames(season.id);
   if (res.error) return { error: res.error };
-  refresh();
+  refreshGames();
   return {
     message: `League sync · imported ${res.imported} of ${res.scanned} league games`,
   };
@@ -1537,7 +1548,7 @@ export async function enrichGamesAction(
   if (res.enriched === 0 && res.remaining === 0) {
     return { message: "Every stored game already has report-card data" };
   }
-  refresh();
+  refreshGames();
   return {
     message: `Enriched ${res.enriched} game(s)${
       res.failed ? ` · ${res.failed} not on OpenDota right now` : ""

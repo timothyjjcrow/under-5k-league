@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, Suspense, type ReactNode } from "react";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
@@ -35,6 +35,7 @@ import {
   CardBody,
   CardHeader,
   DiscordButton,
+  CardSkeleton,
   EmptyState,
   FormStrip,
   HeroIcon,
@@ -44,6 +45,7 @@ import {
   RankBadge,
   RoleBadges,
   ScheduleCallout,
+  Skeleton,
   Stat,
   SteamSafetyNote,
   TeamCrest,
@@ -314,21 +316,65 @@ export default async function Home() {
         meta={heroMeta}
       />
       <SeasonTimeline phase={season.status} />
-      <LeagueNews />
-      <InhouseStrip />
+      {/* Below the hero everything streams: the shell (hero + timeline) paints
+          immediately while each section resolves its own queries behind a
+          Suspense boundary, instead of the whole page blocking on the slowest.
+          Sections that can render NOTHING (no news, no upcoming match, no games
+          yet) use fallback={null} so an empty state never flashes a phantom
+          skeleton that then collapses — only guaranteed-content sections show a
+          placeholder. */}
+      <Suspense fallback={null}>
+        <LeagueNews />
+      </Suspense>
+      <Suspense fallback={<div className="skeleton h-12 rounded-[var(--radius)]" />}>
+        <InhouseStrip />
+      </Suspense>
       {season.status === "SIGNUPS" && (
-        <SignupsView snapshot={snapshot} loggedIn={!!user} />
+        <Suspense fallback={<CardSkeleton rows={4} />}>
+          <SignupsView snapshot={snapshot} loggedIn={!!user} />
+        </Suspense>
       )}
       {season.status === "DRAFT" && <DraftPhaseView snapshot={snapshot} />}
       {(season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS") && (
         <>
-          {user ? <MyNextMatch seasonId={season.id} userId={user.id} /> : null}
-          <SeasonView snapshot={snapshot} userId={user?.id} matches={matches} />
+          {user ? (
+            <Suspense fallback={null}>
+              <MyNextMatch seasonId={season.id} userId={user.id} />
+            </Suspense>
+          ) : null}
+          <Suspense fallback={<SeasonViewSkeleton />}>
+            <SeasonView snapshot={snapshot} userId={user?.id} matches={matches} />
+          </Suspense>
         </>
       )}
       {season.status === "COMPLETE" && (
-        <CompleteView snapshot={snapshot} matches={matches} />
+        <Suspense fallback={<CardSkeleton rows={4} />}>
+          <CompleteView snapshot={snapshot} matches={matches} />
+        </Suspense>
       )}
+    </div>
+  );
+}
+
+// Fallback for the mid-season dashboard: the side-game row + a two-column
+// standings/aside layout, so the streamed content lands where the skeleton sat.
+function SeasonViewSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
+        ))}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <CardSkeleton rows={6} />
+        </div>
+        <div className="space-y-6">
+          <CardSkeleton rows={3} />
+          <CardSkeleton rows={3} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -782,7 +828,9 @@ async function SignupsView({
         </CardBody>
       </Card>
 
-      <PoolComposition seasonId={season.id} />
+      <Suspense fallback={null}>
+        <PoolComposition seasonId={season.id} />
+      </Suspense>
 
       <Card>
         <CardHeader
@@ -795,7 +843,9 @@ async function SignupsView({
           }
         />
         <CardBody>
-          <RecentSignups seasonId={season.id} />
+          <Suspense fallback={<Skeleton className="h-8 w-full" />}>
+            <RecentSignups seasonId={season.id} />
+          </Suspense>
         </CardBody>
       </Card>
     </div>
@@ -805,7 +855,10 @@ async function SignupsView({
 async function RecentSignups({ seasonId }: { seasonId: string }) {
   const regs = await prisma.registration.findMany({
     where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-    include: { user: true },
+    // Only the fields the chips render — this list serializes into the page.
+    include: {
+      user: { select: { id: true, name: true, avatar: true, rankTier: true } },
+    },
     orderBy: { createdAt: "desc" },
     take: 12,
   });
@@ -1040,7 +1093,9 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
   const { teams, season } = snapshot;
   return (
     <div className="space-y-6">
-      <DraftPulse seasonId={season.id} />
+      <Suspense fallback={null}>
+        <DraftPulse seasonId={season.id} />
+      </Suspense>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {teams.map((t) => {
           const spent = t.members.reduce((sum, m) => sum + m.price, 0);
@@ -1295,13 +1350,15 @@ async function SeasonView({
         </Card>
       ) : null}
 
-      <ThisWeek
-        season={season}
-        matches={matches}
-        teams={teams}
-        teamName={teamName}
-        report={report}
-      />
+      <Suspense fallback={null}>
+        <ThisWeek
+          season={season}
+          matches={matches}
+          teams={teams}
+          teamName={teamName}
+          report={report}
+        />
+      </Suspense>
 
       {/* min-w-0: grid items otherwise refuse to shrink below their content,
           letting a long team name widen the page on mobile. */}
@@ -1511,7 +1568,9 @@ async function SeasonView({
             </Card>
           ) : null}
 
-          <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
+          <Suspense fallback={null}>
+            <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
+          </Suspense>
         </div>
       </div>
 

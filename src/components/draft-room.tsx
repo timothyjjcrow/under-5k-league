@@ -13,6 +13,7 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useSecondsLeft } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
 import { maxBid } from "@/lib/draft";
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
@@ -26,11 +27,96 @@ type FeedEvent = {
   amount: number;
 };
 
+// --- Countdown leaves -------------------------------------------------------
+// These own the 250ms tick via useSecondsLeft, so only the clock text
+// re-renders each second — the room + player pool no longer do. Markup matches
+// the originals exactly.
+
+// Compact clock for the sticky bar that pins under the header.
+function CompactClock({
+  endsAtMs,
+  offsetMs,
+  urgentAt,
+  calmTone,
+}: {
+  endsAtMs: number | null;
+  offsetMs: number;
+  urgentAt: number;
+  calmTone: string;
+}) {
+  const seconds = useSecondsLeft(endsAtMs, offsetMs);
+  return (
+    <span
+      className={cn(
+        "shrink-0 font-mono text-lg font-bold tabular-nums",
+        seconds <= urgentAt ? "text-danger" : calmTone,
+      )}
+    >
+      {seconds}s
+    </span>
+  );
+}
+
+// The big bid clock in the "on the block" banner (ping dot under 5s).
+function BidClock({
+  endsAtMs,
+  offsetMs,
+}: {
+  endsAtMs: number | null;
+  offsetMs: number;
+}) {
+  const seconds = useSecondsLeft(endsAtMs, offsetMs);
+  return (
+    <div
+      role="timer"
+      aria-label={`${seconds} seconds left on the bid clock`}
+      className={cn(
+        "flex items-center gap-2 font-mono text-2xl font-bold tabular-nums",
+        seconds <= 5 ? "text-danger" : "text-accent",
+      )}
+    >
+      {seconds <= 5 ? (
+        <span className="relative flex h-2.5 w-2.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
+        </span>
+      ) : null}
+      <span className={seconds <= 5 ? "animate-countdown-urgent" : ""}>
+        {seconds}s
+      </span>
+    </div>
+  );
+}
+
+// The big nomination clock in the banner (auto-skip warning under 10s).
+function NomClock({
+  endsAtMs,
+  offsetMs,
+}: {
+  endsAtMs: number | null;
+  offsetMs: number;
+}) {
+  const seconds = useSecondsLeft(endsAtMs, offsetMs);
+  return (
+    <div
+      role="timer"
+      aria-label={`${seconds} seconds left to nominate`}
+      className={cn(
+        "flex items-center gap-2 font-mono text-2xl font-bold tabular-nums",
+        seconds <= 10 ? "text-danger" : "text-muted",
+      )}
+    >
+      <span className={seconds <= 10 ? "animate-countdown-urgent" : ""}>
+        {seconds}s
+      </span>
+    </div>
+  );
+}
+
 export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   const [state, setState] = useState<DraftState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [, forceTick] = useState(0);
   const offsetRef = useRef(0); // serverNow - clientNow, to sync the countdown
   const [selected, setSelected] = useState<string | null>(null);
   const [nomAmount, setNomAmount] = useState(1);
@@ -68,11 +154,6 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     const id = setInterval(poll, pollMs);
     return () => clearInterval(id);
   }, [poll, pollMs]);
-
-  useEffect(() => {
-    const id = setInterval(() => forceTick((t) => t + 1), 250);
-    return () => clearInterval(id);
-  }, []);
 
   // Diff each new state against the previous one to build the live feed +
   // trigger the SOLD! flash. Read-only — never mutates draft state.
@@ -212,16 +293,9 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   }
 
   const { me } = state;
-  const remainingMs = state.bidEndsAt
-    ? state.bidEndsAt - (Date.now() + offsetRef.current)
-    : 0;
-  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  // The nomination window has its own (server-authoritative) deadline —
-  // surface it too, or the auto-skip fires with zero warning.
-  const nomRemainingMs = state.nominationEndsAt
-    ? state.nominationEndsAt - (Date.now() + offsetRef.current)
-    : 0;
-  const nomSeconds = Math.max(0, Math.ceil(nomRemainingMs / 1000));
+  // The countdowns tick inside <BidClock>/<NomClock> leaves (see below) so the
+  // per-second update doesn't re-render the whole room + player pool.
+  const offsetMs = offsetRef.current;
   const nominatorName =
     state.teams.find((t) => t.id === state.nominatorTeamId)?.name ?? "—";
   const highBidderName = state.teams.find(
@@ -303,28 +377,24 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
                     </span>
                   ) : null}
                 </span>
-                <span
-                  className={cn(
-                    "shrink-0 font-mono text-lg font-bold tabular-nums",
-                    seconds <= 5 ? "text-danger" : "text-accent",
-                  )}
-                >
-                  {seconds}s
-                </span>
+                <CompactClock
+                  endsAtMs={state.bidEndsAt}
+                  offsetMs={offsetMs}
+                  urgentAt={5}
+                  calmTone="text-accent"
+                />
               </>
             ) : (
               <>
                 <span className="min-w-0 truncate text-muted">
                   {nominatorName} to nominate…
                 </span>
-                <span
-                  className={cn(
-                    "shrink-0 font-mono text-lg font-bold tabular-nums",
-                    nomSeconds <= 10 ? "text-danger" : "text-muted",
-                  )}
-                >
-                  {nomSeconds}s
-                </span>
+                <CompactClock
+                  endsAtMs={state.nominationEndsAt}
+                  offsetMs={offsetMs}
+                  urgentAt={10}
+                  calmTone="text-muted"
+                />
               </>
             )}
           </div>
@@ -341,39 +411,9 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
             On the clock: <span className="text-fg">{nominatorName}</span>
           </div>
           {state.nominatedPlayer ? (
-            <div
-              role="timer"
-              aria-label={`${seconds} seconds left on the bid clock`}
-              className={cn(
-                "flex items-center gap-2 font-mono text-2xl font-bold tabular-nums",
-                seconds <= 5 ? "text-danger" : "text-accent",
-              )}
-            >
-              {seconds <= 5 ? (
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
-                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
-                </span>
-              ) : null}
-              <span className={seconds <= 5 ? "animate-countdown-urgent" : ""}>
-                {seconds}s
-              </span>
-            </div>
+            <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
           ) : state.nominationEndsAt ? (
-            <div
-              role="timer"
-              aria-label={`${nomSeconds} seconds left to nominate`}
-              className={cn(
-                "flex items-center gap-2 font-mono text-2xl font-bold tabular-nums",
-                nomSeconds <= 10 ? "text-danger" : "text-muted",
-              )}
-            >
-              <span
-                className={nomSeconds <= 10 ? "animate-countdown-urgent" : ""}
-              >
-                {nomSeconds}s
-              </span>
-            </div>
+            <NomClock endsAtMs={state.nominationEndsAt} offsetMs={offsetMs} />
           ) : null}
         </div>
 

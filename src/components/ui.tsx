@@ -476,6 +476,38 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cn("skeleton rounded-md", className)} />;
 }
 
+// A card-shaped placeholder for streaming Suspense fallbacks. `rows` sets the
+// body line count; `header` draws a title/subtitle bar. Sized to roughly match
+// a populated card so streamed content swaps in with minimal layout shift.
+export function CardSkeleton({
+  rows = 3,
+  header = true,
+  className,
+}: {
+  rows?: number;
+  header?: boolean;
+  className?: string;
+}) {
+  return (
+    <Card className={className} aria-hidden>
+      {header ? (
+        <div className="border-b border-line px-5 py-4">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="mt-1.5 h-3 w-24" />
+        </div>
+      ) : null}
+      <CardBody className="space-y-2.5">
+        {Array.from({ length: rows }).map((_, i) => (
+          <Skeleton
+            key={i}
+            className={cn("h-3.5", i === rows - 1 ? "w-2/3" : "w-full")}
+          />
+        ))}
+      </CardBody>
+    </Card>
+  );
+}
+
 // ---------- Sparkline ----------
 
 /** A tiny trend line (SVG) with a soft area fill and an end dot. */

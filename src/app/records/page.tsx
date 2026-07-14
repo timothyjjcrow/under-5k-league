@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getAllGamesForRecords } from "@/lib/cached-queries";
 import {
   formatGameDuration,
   leagueRecords,
@@ -73,24 +74,7 @@ const GAME_BLURB: Record<string, string> = {
 };
 
 export default async function RecordsPage() {
-  const games = await prisma.game.findMany({
-    orderBy: [{ startTime: "asc" }, { fetchedAt: "asc" }],
-    select: {
-      matchId: true,
-      radiantWin: true,
-      durationSecs: true,
-      radiantScore: true,
-      direScore: true,
-      players: true,
-      match: {
-        select: {
-          seasonId: true,
-          homeTeam: { select: { name: true } },
-          awayTeam: { select: { name: true } },
-        },
-      },
-    },
-  });
+  const games = await getAllGamesForRecords();
 
   // Game records name the matchup. Home/away come off the match — radiant/dire
   // sides can swap between games of a series, so the kill score stays

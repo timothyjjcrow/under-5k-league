@@ -1,5 +1,6 @@
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
+import { getSeasonGameScores } from "@/lib/cached-queries";
 import {
   bestWinRates,
   heroMeta,
@@ -143,10 +144,7 @@ export default async function MetaPage() {
     );
   }
 
-  const games = await prisma.game.findMany({
-    where: { match: { seasonId: season.id } },
-    select: { players: true, radiantWin: true },
-  });
+  const games = await getSeasonGameScores(season.id);
 
   const metaGames: MetaGame[] = games.map((g) => ({
     radiantWin: g.radiantWin,

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Avatar, Badge, PlayerLink, RankBadge, buttonClasses } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
+import { useSecondsLeft, useElapsedMs } from "@/components/room-clock";
 import { mmrBalance } from "@/lib/inhouse";
 import type { InhouseState } from "@/lib/inhouse-service";
 
@@ -93,7 +94,6 @@ export function InhouseRoom({
   const [state, setState] = useState<InhouseState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [, forceTick] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [mmr, setMmr] = useState<number>(defaultMmr);
   const [soundOn, setSoundOn] = useState(true);
@@ -141,11 +141,9 @@ export function InhouseRoom({
     return () => clearInterval(id);
   }, [poll, pollMs]);
 
-  // Local 250ms ticker keeps the countdown smooth between server polls.
-  useEffect(() => {
-    const id = setInterval(() => forceTick((t) => t + 1), 250);
-    return () => clearInterval(id);
-  }, []);
+  // The vote/pick countdowns and the elapsed timer tick inside their own leaf
+  // components (see <SecondsClock>/<ElapsedClock>), so the per-second update
+  // doesn't re-render this room or the drafting pool.
 
   // When a lobby ends (or a new one forms), refresh the server-rendered
   // leaderboard + recent games sitting below this component.
@@ -453,8 +451,6 @@ function VoteView({
   const vote = lobby.vote;
   if (!vote) return null;
 
-  const remainingMs = lobby.voteEndsAt ? lobby.voteEndsAt - (Date.now() + offset) : 0;
-  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
   const myMethod = me.myVote?.method ?? null;
   const myNominee = me.myVote?.nomineeId ?? null;
 
@@ -480,16 +476,12 @@ function VoteView({
             {vote.votedCount}/{vote.voterCount} voted · lobby decides by majority
           </div>
         </div>
-        <div
-          role="timer"
-          aria-label={`${seconds} seconds left to vote`}
-          className={cn(
-            "font-mono text-xl font-bold tabular-nums",
-            seconds <= 5 ? "text-danger" : "text-accent",
-          )}
-        >
-          {seconds}s
-        </div>
+        <SecondsClock
+          endsAtMs={lobby.voteEndsAt}
+          offsetMs={offset}
+          urgentAt={5}
+          label={(s) => `${s} seconds left to vote`}
+        />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -668,8 +660,6 @@ function DraftView({
   act: (body: Record<string, unknown>) => void;
 }) {
   const { me, teamSize } = state;
-  const remainingMs = lobby.pickEndsAt ? lobby.pickEndsAt - (Date.now() + offset) : 0;
-  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
   const onClockTeam = lobby.teams.find((t) => t.team === lobby.pickTeam);
   const onClockSide = onClockTeam ? sideMeta(onClockTeam.isRadiant) : null;
   // "Pick 4 of 8" — captains fill one slot each, the rest are drafted.
@@ -724,16 +714,12 @@ function DraftView({
           ) : (
             <span className="text-xs text-muted">Drafting…</span>
           )}
-          <div
-            role="timer"
-            aria-label={`${seconds} seconds left on the pick clock`}
-            className={cn(
-              "font-mono text-xl font-bold tabular-nums",
-              seconds <= 10 ? "text-danger" : "text-accent",
-            )}
-          >
-            {seconds}s
-          </div>
+          <SecondsClock
+            endsAtMs={lobby.pickEndsAt}
+            offsetMs={offset}
+            urgentAt={10}
+            label={(s) => `${s} seconds left on the pick clock`}
+          />
         </div>
       </div>
 
@@ -951,6 +937,58 @@ function fmtElapsed(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }
 
+// --- Countdown leaves -------------------------------------------------------
+// Own the 250ms tick (useSecondsLeft/useElapsedMs) so only the clock text
+// re-renders each second — not the whole room or the drafting pool.
+
+// The vote & pick countdowns share one shape; urgency threshold + label vary.
+function SecondsClock({
+  endsAtMs,
+  offsetMs,
+  urgentAt,
+  label,
+}: {
+  endsAtMs: number | null;
+  offsetMs: number;
+  urgentAt: number;
+  label: (seconds: number) => string;
+}) {
+  const seconds = useSecondsLeft(endsAtMs, offsetMs);
+  return (
+    <div
+      role="timer"
+      aria-label={label(seconds)}
+      className={cn(
+        "font-mono text-xl font-bold tabular-nums",
+        seconds <= urgentAt ? "text-danger" : "text-accent",
+      )}
+    >
+      {seconds}s
+    </div>
+  );
+}
+
+// The running "12:34" game timer in the in-progress banner.
+function ElapsedClock({
+  startedAtMs,
+  offsetMs,
+}: {
+  startedAtMs: number | null;
+  offsetMs: number;
+}) {
+  const elapsedMs = useElapsedMs(startedAtMs, offsetMs);
+  if (elapsedMs == null) return null;
+  return (
+    <span
+      role="timer"
+      aria-label={`game running for ${fmtElapsed(elapsedMs)}`}
+      className="font-mono text-base font-bold tabular-nums text-info"
+    >
+      {fmtElapsed(elapsedMs)}
+    </span>
+  );
+}
+
 function InProgressView({
   lobby,
   me,
@@ -967,6 +1005,8 @@ function InProgressView({
   act: (body: Record<string, unknown>) => void;
 }) {
   const [matchId, setMatchId] = useState("");
+  // Poll-driven (not ticking) — only gates the "auto-scan is live" note, which
+  // flips once, minutes in; the visible timer ticks in <ElapsedClock>.
   const elapsedMs =
     lobby.startedAt != null ? Date.now() + offset - lobby.startedAt : null;
   const scanLive =
@@ -981,14 +1021,8 @@ function InProgressView({
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-info" />
           </span>
           Game in progress
-          {elapsedMs != null ? (
-            <span
-              role="timer"
-              aria-label={`game running for ${fmtElapsed(elapsedMs)}`}
-              className="font-mono text-base font-bold tabular-nums text-info"
-            >
-              {fmtElapsed(elapsedMs)}
-            </span>
+          {lobby.startedAt != null ? (
+            <ElapsedClock startedAtMs={lobby.startedAt} offsetMs={offset} />
           ) : null}
         </div>
         {lobby.startedByName ? (

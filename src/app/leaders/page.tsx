@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getSeasonGameLeaders } from "@/lib/cached-queries";
 import {
   LeaderBoard,
   type LeaderBoardRow,
@@ -56,14 +57,7 @@ export default async function LeadersPage() {
     );
   }
 
-  const games = await prisma.game.findMany({
-    where: { match: { seasonId: season.id } },
-    select: {
-      players: true,
-      radiantWin: true,
-      match: { select: { week: true, phase: true } },
-    },
-  });
+  const games = await getSeasonGameLeaders(season.id);
 
   // Accumulate each mapped player's per-game lines across the whole season —
   // and the raw stored lines too, which carry the benchmark percentiles the
