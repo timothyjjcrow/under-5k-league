@@ -1671,6 +1671,10 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
               placeholder="What the league needs to know…"
               className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
             />
+            <p className="mt-1 text-xs text-muted">
+              Drop a direct GIF link (Giphy → “Copy GIF Link”, ends in .gif) on
+              its own line to embed it on the site and in Discord.
+            </p>
           </Field>
           <SubmitButton variant="accent">Post announcement</SubmitButton>
         </ActionForm>

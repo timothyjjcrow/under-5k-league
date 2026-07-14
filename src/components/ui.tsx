@@ -612,31 +612,56 @@ export function EmptyState({
 
 // ---------- LinkifiedText ----------
 
-/** Free text with bare http(s) URLs rendered as real links (news bodies). */
+/**
+ * Free text with bare http(s) URLs rendered as real links, and direct image/
+ * GIF URLs rendered inline (news bodies). `images="hide"` collapses a GIF to a
+ * tiny chip instead — for compact previews (the dashboard's clamped news card)
+ * where a full image would blow out the layout.
+ */
 export function LinkifiedText({
   text,
   className,
+  images = "inline",
 }: {
   text: string;
   className?: string;
+  images?: "inline" | "hide";
 }) {
   return (
     <span className={className}>
-      {splitLinks(text).map((t, i) =>
-        t.type === "link" ? (
-          <a
-            key={i}
-            href={t.value}
-            target="_blank"
-            rel="noreferrer"
-            className="break-all text-info hover:underline"
-          >
-            {t.value}
-          </a>
-        ) : (
-          <React.Fragment key={i}>{t.value}</React.Fragment>
-        ),
-      )}
+      {splitLinks(text).map((t, i) => {
+        if (t.type === "link") {
+          return (
+            <a
+              key={i}
+              href={t.value}
+              target="_blank"
+              rel="noreferrer"
+              className="break-all text-info hover:underline"
+            >
+              {t.value}
+            </a>
+          );
+        }
+        if (t.type === "image") {
+          return images === "hide" ? (
+            <span key={i} className="text-muted">
+              🎞️ GIF
+            </span>
+          ) : (
+            // Capped height + max-w-full keep any GIF inside the card and on its
+            // own line so it never disrupts the surrounding text flow.
+            <img
+              key={i}
+              src={t.value}
+              alt=""
+              loading="lazy"
+              className="my-2 block max-h-72 max-w-full rounded-lg border border-line"
+            />
+          );
+        }
+        return <React.Fragment key={i}>{t.value}</React.Fragment>;
+      })}
     </span>
   );
 }

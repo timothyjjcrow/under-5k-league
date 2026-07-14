@@ -157,6 +157,19 @@ describe("newsMessage", () => {
     expect(newsMessage("T", "b", "abc123")).toContain("/news#abc123");
     expect(newsMessage("T", "b")).toMatch(/\/news(?!#)/);
   });
+
+  it("hoists a GIF URL onto its own trailing line so it survives truncation", () => {
+    const gif = "https://media.giphy.com/media/xyz/giphy.gif";
+    const msg = newsMessage("Big win", `We did it! ${gif}`, "p1");
+    const lines = msg.split("\n");
+    // GIF sits on the last line (past the /news link), out of the snippet.
+    expect(lines[lines.length - 1]).toBe(gif);
+    expect(msg).toContain("We did it!");
+    // Even when the body is long enough to truncate, the GIF is preserved.
+    const long = newsMessage("T", `${"x".repeat(300)} ${gif}`);
+    expect(long).toContain(gif);
+    expect(long).toContain("…");
+  });
 });
 
 describe("maskWebhookUrl", () => {

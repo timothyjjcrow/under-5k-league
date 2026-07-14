@@ -428,7 +428,7 @@ async function LeagueNews() {
               </span>
             </div>
             <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-muted">
-              <LinkifiedText text={p.body} />
+              <LinkifiedText text={p.body} images="hide" />
             </p>
           </div>
         ))}

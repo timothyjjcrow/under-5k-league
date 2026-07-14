@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitLinks } from "./linkify";
+import { firstImageUrl, isImageUrl, splitLinks } from "./linkify";
 
 describe("splitLinks", () => {
   it("passes through text with no URLs as one token", () => {
@@ -78,5 +78,45 @@ describe("splitLinks", () => {
     expect(splitLinks("steam://run/570 is not linked")).toEqual([
       { type: "text", value: "steam://run/570 is not linked" },
     ]);
+  });
+
+  it("tokenizes a direct GIF URL as an image, not a link", () => {
+    expect(
+      splitLinks("gg! https://media.giphy.com/media/xyz/giphy.gif"),
+    ).toEqual([
+      { type: "text", value: "gg! " },
+      { type: "image", value: "https://media.giphy.com/media/xyz/giphy.gif" },
+    ]);
+  });
+
+  it("keeps a Giphy *page* URL (no extension) as a plain link", () => {
+    expect(splitLinks("https://giphy.com/gifs/celebrate-abc123")).toEqual([
+      { type: "link", value: "https://giphy.com/gifs/celebrate-abc123" },
+    ]);
+  });
+});
+
+describe("isImageUrl", () => {
+  it("matches direct image extensions, incl. a trailing query string", () => {
+    expect(isImageUrl("https://media.tenor.com/x/foo.gif")).toBe(true);
+    expect(isImageUrl("https://ex.com/a.png?cid=1&ct=g")).toBe(true);
+    expect(isImageUrl("https://ex.com/pic.JPEG")).toBe(true);
+  });
+
+  it("rejects non-image URLs", () => {
+    expect(isImageUrl("https://giphy.com/gifs/slug-abc")).toBe(false);
+    expect(isImageUrl("https://ld2l.gg/news")).toBe(false);
+  });
+});
+
+describe("firstImageUrl", () => {
+  it("returns the first embeddable image URL in free text", () => {
+    expect(
+      firstImageUrl("hype https://ex.com/a.gif and https://ex.com/b.gif"),
+    ).toBe("https://ex.com/a.gif");
+  });
+
+  it("returns null when there's no image (plain link is not an image)", () => {
+    expect(firstImageUrl("read https://ld2l.gg/schedule")).toBeNull();
   });
 });

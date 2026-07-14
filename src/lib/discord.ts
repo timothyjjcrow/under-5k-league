@@ -1,5 +1,6 @@
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
+import { firstImageUrl } from "./linkify";
 
 // Push league moments to the community's Discord via an incoming webhook.
 // The webhook URL lives in the Setting table (admin panel) with the
@@ -138,10 +139,19 @@ export function testMessage(): string {
  * Given the post id, the link deep-links to that specific post (/news#id).
  */
 export function newsMessage(title: string, body: string, id?: string): string {
-  const flat = body.replace(/\s+/g, " ").trim();
+  // Pull a GIF/image URL out of the body so it's never lost to the 200-char
+  // snippet truncation, and append it on its own trailing line where Discord
+  // reliably auto-embeds it.
+  const imageUrl = firstImageUrl(body);
+  const prose = imageUrl ? body.split(imageUrl).join(" ") : body;
+  const flat = prose.replace(/\s+/g, " ").trim();
   const snippet = flat.length > 200 ? `${flat.slice(0, 199).trimEnd()}…` : flat;
   const link = `${resolveSiteUrl()}/news${id ? `#${id}` : ""}`;
-  return `📣 **${title}**\n${snippet}\nMore: ${link}`;
+  const lines = [`📣 **${title}**`];
+  if (snippet) lines.push(snippet);
+  lines.push(`More: ${link}`);
+  if (imageUrl) lines.push(imageUrl);
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
