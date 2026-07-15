@@ -147,11 +147,16 @@ export function SiteHeader({
         <Link
           href="/"
           aria-label="GGD2L — home"
-          className="flex shrink-0 items-center gap-2"
+          className="flex shrink-0 items-center"
         >
-          <span className="grid h-9 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand/70 px-2.5 font-display text-lg font-bold uppercase tracking-tight text-brand-fg ring-1 ring-white/15">
-            GGD2L
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/ggd2l-logo.png"
+            alt="GGD2L"
+            width={768}
+            height={512}
+            className="h-12 w-auto"
+          />
         </Link>
 
         {/* Inline nav — only when there's room (xl+). Below that it collapses

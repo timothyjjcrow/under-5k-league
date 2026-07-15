@@ -75,11 +75,14 @@ export function SiteFooter({
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6">
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-sm">
-            <div className="flex items-center gap-3">
-              <span className="grid h-16 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand/60 px-6 font-display text-4xl font-bold uppercase tracking-tight text-brand-fg shadow-lg shadow-brand/30 ring-1 ring-white/15">
-                GGD2L
-              </span>
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/ggd2l-logo.png"
+              alt="GGD2L"
+              width={768}
+              height={512}
+              className="h-24 w-auto"
+            />
             <p className="mt-2 text-sm text-muted">
               A drafted, team-based Dota 2 league built around a soft 4.5K MMR
               limit.

@@ -26,7 +26,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
     default: "GGD2L",
-    template: "%s · Under 4.5K League",
+    template: "%s · GGD2L",
   },
   description: DESCRIPTION,
   applicationName: "GGD2L",

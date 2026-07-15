@@ -21,7 +21,7 @@ describe("buildCalendar", () => {
     start: new Date("2026-07-12T02:00:00.000Z"),
     durationMinutes: 120,
     summary: "Week 1: Raiders vs Wolves",
-    description: "Under 4.5K League match",
+    description: "GGD2L match",
     url: "https://league.test/matches/m1",
   };
 

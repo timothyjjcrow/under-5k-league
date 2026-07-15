@@ -24,11 +24,11 @@ export default async function LoginPage() {
           <div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/brand/banner.png"
-              alt="Under 4.5K League — amateur Dota 2 built around a soft 4.5K MMR limit"
-              width={1024}
-              height={400}
-              className="mx-auto w-full rounded-lg border border-line/70 shadow-sm"
+              src="/brand/ggd2l-logo.png"
+              alt="GGD2L — amateur Dota 2 league"
+              width={768}
+              height={512}
+              className="mx-auto w-56 max-w-full"
             />
             <p className="mt-4 text-sm text-muted">
               Sign in with Steam to join the season.
