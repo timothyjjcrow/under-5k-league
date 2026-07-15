@@ -75,12 +75,9 @@ export function SiteFooter({
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6">
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-sm">
-            <div className="flex items-center gap-2">
-              <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand/60 text-[10px] font-bold tracking-tight text-brand-fg ring-1 ring-white/15">
-                4.5K
-              </span>
-              <span className="font-display text-base font-semibold uppercase tracking-wide">
-                Under 4.5K League
+            <div className="flex items-center gap-3">
+              <span className="grid h-16 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand/60 px-6 font-display text-4xl font-bold uppercase tracking-tight text-brand-fg shadow-lg shadow-brand/30 ring-1 ring-white/15">
+                GGD2L
               </span>
             </div>
             <p className="mt-2 text-sm text-muted">
@@ -132,7 +129,7 @@ export function SiteFooter({
           </nav>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-4 text-xs text-muted">
-          <span>© {year} Under 4.5K League</span>
+          <span>© {year} GGD2L</span>
           {seasonName ? (
             <span className="flex items-center gap-2">
               <span>{seasonName}</span>

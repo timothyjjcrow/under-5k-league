@@ -51,7 +51,7 @@ export async function generateMetadata({
   if (!team) notFound();
   return shareMetadata(
     team.name,
-    `${team.name} — roster, results, and stats in the Under 4.5K League.`,
+    `${team.name} — roster, results, and stats in GGD2L.`,
   );
 }
 

@@ -54,7 +54,7 @@ export async function generateMetadata({
   if (!user) notFound();
   return shareMetadata(
     `${user.name} · Player`,
-    `${user.name}'s player profile — record, heroes, and match history in the Under 4.5K League.`,
+    `${user.name}'s player profile — record, heroes, and match history in GGD2L.`,
   );
 }
 

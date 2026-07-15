@@ -146,14 +146,11 @@ export function SiteHeader({
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
         <Link
           href="/"
-          aria-label="Under 4.5K League — home"
+          aria-label="GGD2L — home"
           className="flex shrink-0 items-center gap-2"
         >
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-[11px] font-bold tracking-tight text-brand-fg">
-            4.5K
-          </span>
-          <span className="hidden font-display text-lg font-semibold uppercase tracking-wide sm:block">
-            Under 4.5K League
+          <span className="grid h-9 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand/70 px-2.5 font-display text-lg font-bold uppercase tracking-tight text-brand-fg ring-1 ring-white/15">
+            GGD2L
           </span>
         </Link>
 

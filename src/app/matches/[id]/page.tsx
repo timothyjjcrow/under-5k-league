@@ -80,7 +80,7 @@ export async function generateMetadata({
   const title = `${match.homeTeam.name} vs ${match.awayTeam.name}`;
   return shareMetadata(
     title,
-    `${title} — box score and results in the Under 4.5K League.`,
+    `${title} — box score and results in GGD2L.`,
   );
 }
 

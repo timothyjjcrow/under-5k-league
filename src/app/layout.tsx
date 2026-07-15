@@ -25,20 +25,20 @@ const DESCRIPTION =
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Under 4.5K League",
+    default: "GGD2L",
     template: "%s · Under 4.5K League",
   },
   description: DESCRIPTION,
-  applicationName: "Under 4.5K League",
+  applicationName: "GGD2L",
   openGraph: {
-    title: "Under 4.5K League",
+    title: "GGD2L",
     description: DESCRIPTION,
-    siteName: "Under 4.5K League",
+    siteName: "GGD2L",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Under 4.5K League",
+    title: "GGD2L",
     description: DESCRIPTION,
   },
 };

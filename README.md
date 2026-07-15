@@ -1,4 +1,4 @@
-# Under 4.5K League
+# GGD2L
 
 A cleaner, simpler, fully-functional amateur Dota 2 league site. Players sign in
 with Steam, join the current season, get drafted onto teams via a live auction,

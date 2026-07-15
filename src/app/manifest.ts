@@ -4,8 +4,8 @@ import type { MetadataRoute } from "next";
 // matters for the mobile-majority audience. Icons reuse the existing app icons.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Under 4.5K League",
-    short_name: "Under 4.5K",
+    name: "GGD2L",
+    short_name: "GGD2L",
     description:
       "An amateur Dota 2 league built around a soft 4.5K MMR limit — sign in with Steam, join the season, get drafted, and compete.",
     start_url: "/",
