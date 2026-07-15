@@ -155,7 +155,7 @@ export function SiteHeader({
             alt="GGD2L"
             width={768}
             height={512}
-            className="h-12 w-auto"
+            className="h-14 w-auto"
           />
         </Link>
 

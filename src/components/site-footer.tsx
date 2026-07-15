@@ -81,7 +81,7 @@ export function SiteFooter({
               alt="GGD2L"
               width={768}
               height={512}
-              className="h-24 w-auto"
+              className="h-32 w-auto"
             />
             <p className="mt-2 text-sm text-muted">
               A drafted, team-based Dota 2 league built around a soft 4.5K MMR
