@@ -616,9 +616,9 @@ export function EmptyState({
 /**
  * Free text with bare http(s) URLs rendered as real links, and image/GIF/video
  * URLs (incl. pasted Giphy/Tenor/Klipy links, normalized in `splitLinks`)
- * rendered inline (news bodies). `images="hide"` collapses media to a tiny chip
- * instead — for compact previews (the dashboard's clamped news card) where a
- * full embed would blow out the layout.
+ * rendered inline (news bodies). `images="hide"` drops media from the text
+ * entirely — for compact previews (the dashboard's clamped news card) that
+ * render the GIF separately below via `firstMedia` + `<NewsMedia>`.
  */
 export function LinkifiedText({
   text,
@@ -646,11 +646,7 @@ export function LinkifiedText({
           );
         }
         if (t.type === "image" || t.type === "video") {
-          return images === "hide" ? (
-            <span key={i} className="text-muted">
-              🎞️ GIF
-            </span>
-          ) : (
+          return images === "hide" ? null : (
             <NewsMedia key={i} src={t.value} kind={t.type} />
           );
         }

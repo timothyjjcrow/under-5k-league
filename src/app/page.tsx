@@ -67,7 +67,9 @@ import {
   type StandingsRowView,
 } from "@/components/standings-table";
 import { LocalTime } from "@/components/local-time";
+import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
+import { firstMedia } from "@/lib/linkify";
 import { sortNews } from "@/lib/news";
 import { cn } from "@/lib/utils";
 
@@ -410,28 +412,41 @@ async function LeagueNews() {
         }
       />
       <CardBody className="space-y-4">
-        {posts.map((p) => (
-          <div key={p.id} className="min-w-0">
-            <div className="flex flex-wrap items-baseline gap-x-2">
-              <h3 className="min-w-0 truncate text-sm font-semibold">
-                <Link href={`/news#${p.id}`} className="hover:text-info">
-                  {p.pinned ? "📌 " : ""}
-                  {p.title}
-                </Link>
-              </h3>
-              <span className="text-xs text-muted">
-                <LocalTime
-                  ts={p.createdAt.getTime()}
-                  variant="short"
-                  initial={formatMatchTime(p.createdAt, "short")}
+        {posts.map((p) => {
+          // Render the GIF below the clamped text, not inside it — a block embed
+          // inside a -webkit-line-clamp box breaks the clamp. Capped shorter than
+          // /news so three previews stay tidy.
+          const media = firstMedia(p.body);
+          return (
+            <div key={p.id} className="min-w-0">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <h3 className="min-w-0 truncate text-sm font-semibold">
+                  <Link href={`/news#${p.id}`} className="hover:text-info">
+                    {p.pinned ? "📌 " : ""}
+                    {p.title}
+                  </Link>
+                </h3>
+                <span className="text-xs text-muted">
+                  <LocalTime
+                    ts={p.createdAt.getTime()}
+                    variant="short"
+                    initial={formatMatchTime(p.createdAt, "short")}
+                  />
+                </span>
+              </div>
+              <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-muted">
+                <LinkifiedText text={p.body} images="hide" />
+              </p>
+              {media && (
+                <NewsMedia
+                  src={media.value}
+                  kind={media.kind}
+                  className="mt-2 block max-h-40 max-w-full rounded-lg border border-line"
                 />
-              </span>
+              )}
             </div>
-            <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-muted">
-              <LinkifiedText text={p.body} images="hide" />
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </CardBody>
     </Card>
   );

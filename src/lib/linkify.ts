@@ -65,13 +65,25 @@ export function normalizeMediaUrl(url: string): string {
   return url;
 }
 
+/** First embeddable media in free text (normalized direct URL + kind), or null.
+ *  Lets a caller render the GIF/video on its own — e.g. the dashboard preview
+ *  shows it below the clamped text rather than inside it. */
+export function firstMedia(
+  text: string,
+): { value: string; kind: MediaKind } | null {
+  for (const t of splitLinks(text)) {
+    if (t.type === "image" || t.type === "video") {
+      return { value: t.value, kind: t.type };
+    }
+  }
+  return null;
+}
+
 /** First embeddable media URL (image or video) in free text, or null — shared
  *  by news rendering and the Discord announcement so both agree, and so the
  *  normalized direct URL (not the original page link) is what gets embedded. */
 export function firstMediaUrl(text: string): string | null {
-  for (const t of splitLinks(text))
-    if (t.type === "image" || t.type === "video") return t.value;
-  return null;
+  return firstMedia(text)?.value ?? null;
 }
 
 /** Tokenize text into plain-text and http(s)-link runs, in order. */

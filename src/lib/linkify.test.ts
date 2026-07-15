@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  firstMedia,
   firstMediaUrl,
   mediaKind,
   normalizeMediaUrl,
@@ -182,5 +183,22 @@ describe("firstMediaUrl", () => {
 
   it("returns null when there's no media (plain link is not media)", () => {
     expect(firstMediaUrl("read https://ld2l.gg/schedule")).toBeNull();
+  });
+});
+
+describe("firstMedia", () => {
+  it("returns the normalized URL and its kind (for rendering the embed apart)", () => {
+    expect(firstMedia("gg https://static.klipy.com/a/b/c/x.mp4")).toEqual({
+      value: "https://static.klipy.com/a/b/c/x.mp4",
+      kind: "video",
+    });
+    expect(firstMedia("watch https://giphy.com/gifs/win-Zz9Yy8Xx7")).toEqual({
+      value: "https://media.giphy.com/media/Zz9Yy8Xx7/giphy.gif",
+      kind: "image",
+    });
+  });
+
+  it("returns null when there's no embeddable media", () => {
+    expect(firstMedia("just text and https://ld2l.gg/news")).toBeNull();
   });
 });

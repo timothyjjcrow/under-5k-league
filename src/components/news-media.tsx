@@ -11,7 +11,16 @@ import type { MediaKind } from "@/lib/linkify";
  * or a broken-image icon. Videos are how those services actually serve "GIFs"
  * now — rendered muted/looping/autoplaying to match GIF behavior.
  */
-export function NewsMedia({ src, kind }: { src: string; kind: MediaKind }) {
+export function NewsMedia({
+  src,
+  kind,
+  className = "my-2 block max-h-72 max-w-full rounded-lg border border-line",
+}: {
+  src: string;
+  kind: MediaKind;
+  /** Sizing/spacing override — the dashboard preview caps it shorter. */
+  className?: string;
+}) {
   const [failed, setFailed] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -41,8 +50,6 @@ export function NewsMedia({ src, kind }: { src: string; kind: MediaKind }) {
       </a>
     );
   }
-
-  const className = "my-2 block max-h-72 max-w-full rounded-lg border border-line";
 
   if (kind === "video") {
     return (
