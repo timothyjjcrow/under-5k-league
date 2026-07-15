@@ -8,6 +8,7 @@ import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
 import { splitLinks } from "@/lib/linkify";
 import { CountUp } from "./count-up";
+import { NewsMedia } from "./news-media";
 
 // ---------- Button ----------
 
@@ -613,10 +614,11 @@ export function EmptyState({
 // ---------- LinkifiedText ----------
 
 /**
- * Free text with bare http(s) URLs rendered as real links, and direct image/
- * GIF URLs rendered inline (news bodies). `images="hide"` collapses a GIF to a
- * tiny chip instead — for compact previews (the dashboard's clamped news card)
- * where a full image would blow out the layout.
+ * Free text with bare http(s) URLs rendered as real links, and image/GIF/video
+ * URLs (incl. pasted Giphy/Tenor/Klipy links, normalized in `splitLinks`)
+ * rendered inline (news bodies). `images="hide"` collapses media to a tiny chip
+ * instead — for compact previews (the dashboard's clamped news card) where a
+ * full embed would blow out the layout.
  */
 export function LinkifiedText({
   text,
@@ -643,21 +645,13 @@ export function LinkifiedText({
             </a>
           );
         }
-        if (t.type === "image") {
+        if (t.type === "image" || t.type === "video") {
           return images === "hide" ? (
             <span key={i} className="text-muted">
               🎞️ GIF
             </span>
           ) : (
-            // Capped height + max-w-full keep any GIF inside the card and on its
-            // own line so it never disrupts the surrounding text flow.
-            <img
-              key={i}
-              src={t.value}
-              alt=""
-              loading="lazy"
-              className="my-2 block max-h-72 max-w-full rounded-lg border border-line"
-            />
+            <NewsMedia key={i} src={t.value} kind={t.type} />
           );
         }
         return <React.Fragment key={i}>{t.value}</React.Fragment>;

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { firstImageUrl, isImageUrl, splitLinks } from "./linkify";
+import {
+  firstMediaUrl,
+  mediaKind,
+  normalizeMediaUrl,
+  splitLinks,
+} from "./linkify";
 
 describe("splitLinks", () => {
   it("passes through text with no URLs as one token", () => {
@@ -89,34 +94,93 @@ describe("splitLinks", () => {
     ]);
   });
 
-  it("keeps a Giphy *page* URL (no extension) as a plain link", () => {
-    expect(splitLinks("https://giphy.com/gifs/celebrate-abc123")).toEqual([
-      { type: "link", value: "https://giphy.com/gifs/celebrate-abc123" },
+  it("normalizes a pasted Giphy *page* URL to a direct GIF image token", () => {
+    expect(splitLinks("https://giphy.com/gifs/celebrate-abc123XYZ")).toEqual([
+      {
+        type: "image",
+        value: "https://media.giphy.com/media/abc123XYZ/giphy.gif",
+      },
+    ]);
+  });
+
+  it("renders an .mp4 URL as a video token", () => {
+    expect(splitLinks("clip https://static.klipy.com/a/b/c/d.mp4")).toEqual([
+      { type: "text", value: "clip " },
+      { type: "video", value: "https://static.klipy.com/a/b/c/d.mp4" },
+    ]);
+  });
+
+  it("upgrades a pasted http:// image link to https (mixed-content guard)", () => {
+    expect(splitLinks("http://ex.com/a.gif")).toEqual([
+      { type: "image", value: "https://ex.com/a.gif" },
     ]);
   });
 });
 
-describe("isImageUrl", () => {
-  it("matches direct image extensions, incl. a trailing query string", () => {
-    expect(isImageUrl("https://media.tenor.com/x/foo.gif")).toBe(true);
-    expect(isImageUrl("https://ex.com/a.png?cid=1&ct=g")).toBe(true);
-    expect(isImageUrl("https://ex.com/pic.JPEG")).toBe(true);
+describe("mediaKind", () => {
+  it("classifies image extensions, incl. a trailing query or fragment", () => {
+    expect(mediaKind("https://media.tenor.com/x/foo.gif")).toBe("image");
+    expect(mediaKind("https://ex.com/a.png?cid=1&ct=g")).toBe("image");
+    expect(mediaKind("https://ex.com/pic.JPEG")).toBe("image");
+    expect(mediaKind("https://ex.com/a.gif#anchor")).toBe("image");
   });
 
-  it("rejects non-image URLs", () => {
-    expect(isImageUrl("https://giphy.com/gifs/slug-abc")).toBe(false);
-    expect(isImageUrl("https://ld2l.gg/news")).toBe(false);
+  it("classifies video extensions", () => {
+    expect(mediaKind("https://static.klipy.com/a/b/c/x.mp4")).toBe("video");
+    expect(mediaKind("https://ex.com/clip.webm?t=1")).toBe("video");
+  });
+
+  it("returns null for non-media URLs", () => {
+    expect(mediaKind("https://giphy.com/gifs/slug-abc")).toBeNull();
+    expect(mediaKind("https://ld2l.gg/news")).toBeNull();
   });
 });
 
-describe("firstImageUrl", () => {
-  it("returns the first embeddable image URL in free text", () => {
+describe("normalizeMediaUrl", () => {
+  it("maps a Giphy page/sticker URL to its direct media GIF", () => {
     expect(
-      firstImageUrl("hype https://ex.com/a.gif and https://ex.com/b.gif"),
-    ).toBe("https://ex.com/a.gif");
+      normalizeMediaUrl("https://giphy.com/gifs/happy-dance-Ab9CdEf12"),
+    ).toBe("https://media.giphy.com/media/Ab9CdEf12/giphy.gif");
+    expect(normalizeMediaUrl("https://giphy.com/stickers/xX9y8Z7w6")).toBe(
+      "https://media.giphy.com/media/xX9y8Z7w6/giphy.gif",
+    );
   });
 
-  it("returns null when there's no image (plain link is not an image)", () => {
-    expect(firstImageUrl("read https://ld2l.gg/schedule")).toBeNull();
+  it("appends .gif to a Tenor view URL (browser follows the redirect)", () => {
+    expect(
+      normalizeMediaUrl("https://tenor.com/view/excited-yes-gif-12345678"),
+    ).toBe("https://tenor.com/view/excited-yes-gif-12345678.gif");
+  });
+
+  it("leaves a Klipy direct URL and other direct media untouched", () => {
+    const klipy = "https://static.klipy.com/ii/deadbeef/ab/cd/OXB1QWhn.gif";
+    expect(normalizeMediaUrl(klipy)).toBe(klipy);
+  });
+
+  it("upgrades an http image URL to https but leaves http page links alone", () => {
+    expect(normalizeMediaUrl("http://ex.com/a.gif")).toBe(
+      "https://ex.com/a.gif",
+    );
+    expect(normalizeMediaUrl("http://ex.com/page")).toBe("http://ex.com/page");
+  });
+
+  it("doesn't misfire on a Giphy path with no valid trailing id", () => {
+    const u = "https://giphy.com/gifs/-";
+    expect(normalizeMediaUrl(u)).toBe(u);
+  });
+});
+
+describe("firstMediaUrl", () => {
+  it("returns the first embeddable media URL (normalized) in free text", () => {
+    expect(
+      firstMediaUrl("hype https://ex.com/a.gif and https://ex.com/b.gif"),
+    ).toBe("https://ex.com/a.gif");
+    expect(firstMediaUrl("watch https://giphy.com/gifs/win-Zz9Yy8Xx7")).toBe(
+      "https://media.giphy.com/media/Zz9Yy8Xx7/giphy.gif",
+    );
+  });
+
+  it("returns null when there's no media (plain link is not media)", () => {
+    expect(firstMediaUrl("read https://ld2l.gg/schedule")).toBeNull();
   });
 });

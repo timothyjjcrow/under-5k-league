@@ -1,6 +1,6 @@
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
-import { firstImageUrl } from "./linkify";
+import { splitLinks } from "./linkify";
 
 // Push league moments to the community's Discord via an incoming webhook.
 // The webhook URL lives in the Setting table (admin panel) with the
@@ -139,18 +139,24 @@ export function testMessage(): string {
  * Given the post id, the link deep-links to that specific post (/news#id).
  */
 export function newsMessage(title: string, body: string, id?: string): string {
-  // Pull a GIF/image URL out of the body so it's never lost to the 200-char
-  // snippet truncation, and append it on its own trailing line where Discord
-  // reliably auto-embeds it.
-  const imageUrl = firstImageUrl(body);
-  const prose = imageUrl ? body.split(imageUrl).join(" ") : body;
-  const flat = prose.replace(/\s+/g, " ").trim();
-  const snippet = flat.length > 200 ? `${flat.slice(0, 199).trimEnd()}…` : flat;
+  // Pull the first GIF/image/video out of the body so it's never lost to the
+  // 200-char snippet truncation, and append the *normalized* direct URL on its
+  // own trailing line where Discord reliably auto-embeds it (a pasted Giphy/
+  // Tenor page link is rewritten to its direct media URL — see normalizeMediaUrl).
+  const tokens = splitLinks(body);
+  const media = tokens.find((t) => t.type === "image" || t.type === "video");
+  const prose = tokens
+    .filter((t) => t !== media)
+    .map((t) => t.value)
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  const snippet = prose.length > 200 ? `${prose.slice(0, 199).trimEnd()}…` : prose;
   const link = `${resolveSiteUrl()}/news${id ? `#${id}` : ""}`;
   const lines = [`📣 **${title}**`];
   if (snippet) lines.push(snippet);
   lines.push(`More: ${link}`);
-  if (imageUrl) lines.push(imageUrl);
+  if (media) lines.push(media.value);
   return lines.join("\n");
 }
 
