@@ -24,6 +24,26 @@ export function sortNews<T extends NewsLike>(posts: T[]): T[] {
   );
 }
 
+// Klipy (unlike Giphy/Tenor) exposes no embeddable page URL: its pages sit
+// behind Cloudflare (403 to any server fetch) and its media is content-addressed
+// by hash, so a klipy.com/gifs/… link can't be resolved to a GIF. Its *direct*
+// media URL (static.klipy.com/…​.gif — right-click "Copy image address") does
+// embed. `static.klipy.com` isn't matched (path is /ii/…, not /gifs/…).
+const KLIPY_PAGE_RE =
+  /https?:\/\/(?:www\.)?klipy\.com\/(?:gifs|stickers|clips)\//i;
+
+/**
+ * A non-blocking heads-up for a body whose media link won't embed, or null when
+ * nothing needs saying. Surfaced in the post-success toast so the admin learns
+ * how to fix it instead of silently getting a bare link.
+ */
+export function newsMediaHint(body: string): string | null {
+  if (KLIPY_PAGE_RE.test(body)) {
+    return "Posted — but a Klipy page link won't show as a GIF (Klipy blocks embedding). On klipy.com, right-click the GIF → “Copy image address” (a static.klipy.com/…​.gif URL) and paste that, or use a Giphy/Tenor link — those embed from the page URL.";
+  }
+  return null;
+}
+
 /** Validation shared by the action; returns an error string or null when ok. */
 export function newsPostError(title: string, body: string): string | null {
   if (!title.trim()) return "Give the post a title.";

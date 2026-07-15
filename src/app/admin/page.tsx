@@ -1673,8 +1673,10 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
             />
             <p className="mt-1 text-xs text-muted">
               Drop a GIF link on its own line to embed it on the site and in
-              Discord — a Giphy or Tenor page link, or a direct image/GIF/MP4
-              URL (e.g. Klipy’s “Copy image address”).
+              Discord. Easiest: a <strong>Giphy</strong> or{" "}
+              <strong>Tenor</strong> page link. Klipy page links don’t embed —
+              right-click the GIF → “Copy image address” (a static.klipy.com/…​
+              .gif URL) instead. Direct image/GIF/MP4 URLs also work.
             </p>
           </Field>
           <SubmitButton variant="accent">Post announcement</SubmitButton>

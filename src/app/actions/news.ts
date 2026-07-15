@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
-import { newsPostError } from "@/lib/news";
+import { newsMediaHint, newsPostError } from "@/lib/news";
 import { newsMessage, sendDiscordMessage } from "@/lib/discord";
 import { str } from "@/lib/form";
 import type { ActionResult } from "@/lib/action-result";
@@ -34,7 +34,7 @@ export async function createNewsPost(
   // Best-effort — a dead webhook must never block the post. Deep-links to the
   // new post so readers land on it, not the top of the archive.
   void sendDiscordMessage(newsMessage(title, body, post.id));
-  return { message: "Posted — it's live on the dashboard" };
+  return { message: newsMediaHint(body) ?? "Posted — it's live on the dashboard" };
 }
 
 export async function toggleNewsPin(

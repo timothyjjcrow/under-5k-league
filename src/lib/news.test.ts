@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NEWS_LIMITS, newsPostError, sortNews } from "./news";
+import { NEWS_LIMITS, newsMediaHint, newsPostError, sortNews } from "./news";
 
 describe("sortNews", () => {
   it("puts pinned posts first, newest first within each group", () => {
@@ -42,5 +42,29 @@ describe("newsPostError", () => {
     expect(newsPostError("title", "b".repeat(NEWS_LIMITS.BODY_MAX + 1))).toMatch(
       /body/i,
     );
+  });
+});
+
+describe("newsMediaHint", () => {
+  it("warns when a body has a Klipy page link (won't embed)", () => {
+    const hint = newsMediaHint(
+      "gg\nhttps://klipy.com/gifs/leonardo-dicaprio-cheers-9",
+    );
+    expect(hint).toMatch(/klipy/i);
+    expect(hint).toMatch(/copy image address/i);
+  });
+
+  it("says nothing for a Klipy *direct* media URL (that one embeds)", () => {
+    expect(
+      newsMediaHint("https://static.klipy.com/ii/deadbeef/ab/cd/OXB1QWhn.gif"),
+    ).toBeNull();
+  });
+
+  it("says nothing for Giphy/Tenor links or plain text (they embed / are fine)", () => {
+    expect(newsMediaHint("https://giphy.com/gifs/win-Zz9Yy8Xx7")).toBeNull();
+    expect(
+      newsMediaHint("https://tenor.com/view/excited-yes-gif-12345678"),
+    ).toBeNull();
+    expect(newsMediaHint("Just some news, no links.")).toBeNull();
   });
 });
