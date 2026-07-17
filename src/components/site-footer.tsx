@@ -72,66 +72,72 @@ export function SiteFooter({
 
   return (
     <footer className="border-t border-line/70">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6">
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div className="max-w-sm">
+      <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
+        {/* Centered logo centerpiece with the link groups flanking it. On
+            phones it stacks logo-first, then the two link groups, all centered. */}
+        <div className="grid grid-cols-1 items-center gap-8 md:grid-cols-[1fr_auto_1fr] md:gap-12">
+          <nav
+            aria-label="Footer — league"
+            className="order-2 flex flex-col items-center gap-2 text-sm md:order-1 md:items-end"
+          >
+            <span className="text-xs font-medium uppercase tracking-wide text-muted">
+              League
+            </span>
+            {leagueLinks.map((l) => (
+              <Link
+                key={l.href}
+                href={l.href}
+                className="text-muted transition-colors hover:text-fg"
+              >
+                {l.label}
+              </Link>
+            ))}
+            {showCalendar ? (
+              <a
+                href="/api/calendar"
+                className="text-muted transition-colors hover:text-fg"
+              >
+                <span aria-hidden="true">📅</span> Calendar (.ics)
+              </a>
+            ) : null}
+          </nav>
+
+          <div className="order-1 flex flex-col items-center text-center md:order-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/ggd2l-logo.png"
               alt="GGD2L"
               width={768}
               height={512}
-              className="h-32 w-auto"
+              className="h-28 w-auto md:h-36"
             />
-            <p className="mt-2 text-sm text-muted">
+            <p className="mt-3 max-w-xs text-sm text-muted">
               A drafted, team-based Dota 2 league built around a soft 4.5K MMR
               limit.
             </p>
             <DiscordButton size="sm" className="mt-4" />
           </div>
+
           <nav
-            aria-label="Footer"
-            className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm"
+            aria-label="Footer — club"
+            className="order-3 flex flex-col items-center gap-2 text-sm md:items-start"
           >
-            <div className="flex min-w-0 flex-col gap-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-muted">
-                League
-              </span>
-              {leagueLinks.map((l) => (
-                <Link
-                  key={l.href}
-                  href={l.href}
-                  className="text-muted transition-colors hover:text-fg"
-                >
-                  {l.label}
-                </Link>
-              ))}
-              {showCalendar ? (
-                <a
-                  href="/api/calendar"
-                  className="text-muted transition-colors hover:text-fg"
-                >
-                  <span aria-hidden="true">📅</span> Calendar (.ics)
-                </a>
-              ) : null}
-            </div>
-            <div className="flex min-w-0 flex-col gap-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-muted">
-                Club
-              </span>
-              {clubLinks.map((l) => (
-                <Link
-                  key={l.href}
-                  href={l.href}
-                  className="text-muted transition-colors hover:text-fg"
-                >
-                  {l.label}
-                </Link>
-              ))}
-            </div>
+            <span className="text-xs font-medium uppercase tracking-wide text-muted">
+              Club
+            </span>
+            {clubLinks.map((l) => (
+              <Link
+                key={l.href}
+                href={l.href}
+                className="text-muted transition-colors hover:text-fg"
+              >
+                {l.label}
+              </Link>
+            ))}
           </nav>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-4 text-xs text-muted">
+
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-2 border-t border-line/60 pt-6 text-xs text-muted sm:justify-between">
           <span>© {year} GGD2L</span>
           {seasonName ? (
             <span className="flex items-center gap-2">

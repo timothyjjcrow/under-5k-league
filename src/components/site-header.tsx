@@ -143,7 +143,7 @@ export function SiteHeader({
       ref={headerRef}
       className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur"
     >
-      <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
+      <div className="mx-auto flex h-20 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
         <Link
           href="/"
           aria-label="GGD2L — home"
@@ -155,7 +155,7 @@ export function SiteHeader({
             alt="GGD2L"
             width={768}
             height={512}
-            className="h-14 w-auto"
+            className="h-16 w-auto"
           />
         </Link>
 
