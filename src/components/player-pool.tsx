@@ -20,6 +20,7 @@ import {
   type PoolSort,
 } from "@/lib/player-pool";
 import { cn } from "@/lib/utils";
+import { DiscordTag } from "@/components/discord-tag";
 
 /** Which team drafted a player, keyed by userId (parallel to the frozen
  * PoolPlayer type). `price` is null for captains — no draft price shown. */
@@ -198,7 +199,7 @@ export function PlayerPool({
                       {p.name}
                     </PlayerLink>
                     <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted">
-                      {p.mmr} MMR
+                      {p.mmr > 0 ? <span>{p.mmr} MMR</span> : null}
                       <RankBadge rankTier={p.rankTier} />
                       <RoleBadges roles={p.roles} />
                       {p.accountId ? (
@@ -211,6 +212,7 @@ export function PlayerPool({
                           Dotabuff ↗
                         </a>
                       ) : null}
+                      <DiscordTag name={p.discordName} />
                     </span>
                     {p.favoriteHeroes ? (
                       <span className="mt-1.5 block">

@@ -5,10 +5,15 @@ import {
   nextPickTeam,
   orderCaptains,
   playersNeeded,
+  queueDropCutoff,
+  queuePresence,
+  queuePresentCutoff,
+  requeueLastSeenAt,
   seedOrder,
   tallyMethod,
   type CaptainCandidate,
 } from "./inhouse";
+import { INHOUSE } from "./constants";
 
 const p = (userId: string, mmr: number, joinedAt: number) => ({
   userId,
@@ -157,5 +162,52 @@ describe("mmrBalance", () => {
 
   it("handles empty or all-unknown sides", () => {
     expect(mmrBalance([], [0, 0])).toEqual({ avg1: 0, avg2: 0, diff: 0 });
+  });
+});
+
+describe("queue presence (heartbeat math)", () => {
+  const now = 1_700_000_000_000;
+  const secsAgo = (s: number) => now - s * 1000;
+
+  it("classifies entries as present until the away window elapses", () => {
+    expect(queuePresence(now, now)).toBe("present");
+    expect(queuePresence(secsAgo(INHOUSE.QUEUE_AWAY_SECONDS), now)).toBe(
+      "present", // boundary: exactly at the window is still present
+    );
+    expect(queuePresence(secsAgo(INHOUSE.QUEUE_AWAY_SECONDS + 1), now)).toBe(
+      "away",
+    );
+  });
+
+  it("cutoffs mirror the presence/drop windows for SQL filters", () => {
+    // Seen exactly at the present cutoff → counts as present.
+    expect(
+      queuePresence(queuePresentCutoff(now).getTime(), now),
+    ).toBe("present");
+    expect(queuePresentCutoff(now).getTime()).toBe(
+      secsAgo(INHOUSE.QUEUE_AWAY_SECONDS),
+    );
+    expect(queueDropCutoff(now).getTime()).toBe(
+      secsAgo(INHOUSE.QUEUE_DROP_SECONDS),
+    );
+    // The drop window must be wider than the away window: entries go "away"
+    // (stop counting) before they're removed outright.
+    expect(INHOUSE.QUEUE_DROP_SECONDS).toBeGreaterThan(
+      INHOUSE.QUEUE_AWAY_SECONDS,
+    );
+  });
+
+  it("requeued players are away (no instant ghost lobby) but not dropped", () => {
+    const seen = requeueLastSeenAt(now).getTime();
+    // Doesn't count toward re-forming a lobby…
+    expect(queuePresence(seen, now)).toBe("away");
+    // …isn't pruned before their next poll can re-confirm them…
+    expect(seen).toBeGreaterThan(queueDropCutoff(now).getTime());
+    // …with the full reconfirm window of slack…
+    expect(seen - queueDropCutoff(now).getTime()).toBe(
+      INHOUSE.QUEUE_RECONFIRM_SECONDS * 1000,
+    );
+    // …and is stale enough that the throttled heartbeat fires immediately.
+    expect(now - seen).toBeGreaterThan(INHOUSE.QUEUE_HEARTBEAT_SECONDS * 1000);
   });
 });

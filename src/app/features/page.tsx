@@ -390,7 +390,7 @@ export default async function FeaturesPage() {
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-3">
             {!user ? (
-              <Link href="/login" className={buttonClasses("primary")}>
+              <Link href="/login?next=/me" className={buttonClasses("primary")}>
                 Sign in with Steam →
               </Link>
             ) : null}

@@ -21,6 +21,9 @@ model User {
   profileUrl    String?
   dotaAccountId Int? // Dota 2 32-bit account id (defaults to one derived from steamId)
   rankTier      Int? // OpenDota rank_tier (tens=medal, ones=stars); null if unknown
+  // Discord username — the league runs on Discord, and this is how captains
+  // reach their roster. Empty string = not provided. Persists across seasons.
+  discordName   String   @default("")
   role          String   @default("USER") // USER | ADMIN
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -72,6 +75,8 @@ model Season {
   dotaLeagueId   String? // optional Valve league id, if the league is ticketed
   matchSchedule  String? // weekly match slot shown before signup (null = app default)
   firstMatchNight DateTime? // week 1's match time; later weeks (incl. playoffs) are +7d each
+  // When the live auction happens — announced with countdowns during SIGNUPS.
+  draftAt         DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -354,6 +359,9 @@ model InhouseQueueEntry {
   userId   String   @unique
   mmr      Int      @default(0) // snapshot used to seed captains
   joinedAt DateTime @default(now())
+  // Presence heartbeat — refreshed (throttled) by the player's own /inhouse
+  // polls. Entries that go silent stop counting toward a lobby, then drop.
+  lastSeenAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

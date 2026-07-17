@@ -15,6 +15,8 @@ export type PoolPlayer = {
   drafted: boolean;
   /** Resolved Dota account id for scouting links, or null if unavailable. */
   accountId: number | null;
+  /** Discord handle — "" when unset or when the viewer isn't signed in. */
+  discordName: string;
 };
 
 export type PoolSort = "mmr" | "rank" | "name";

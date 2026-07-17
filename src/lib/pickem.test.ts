@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { pickemStandings, pickSplit, predictionOpen } from "./pickem";
+import {
+  groupOpenByWeek,
+  pickemStandings,
+  pickSplit,
+  predictionOpen,
+} from "./pickem";
 
 const m = (
   id: string,
@@ -92,5 +97,24 @@ describe("predictionOpen — live series", () => {
       scheduledAt: new Date(Date.now() + 86_400_000),
     };
     expect(predictionOpen(m)).toBe(false);
+  });
+});
+
+describe("groupOpenByWeek", () => {
+  it("groups by week ascending, preserving in-week order", () => {
+    const rows = [
+      { week: 3, id: "c" },
+      { week: 1, id: "a" },
+      { week: 3, id: "d" },
+      { week: 1, id: "b" },
+    ];
+    const grouped = groupOpenByWeek(rows);
+    expect(grouped.map((g) => g.week)).toEqual([1, 3]);
+    expect(grouped[0].matches.map((m) => m.id)).toEqual(["a", "b"]);
+    expect(grouped[1].matches.map((m) => m.id)).toEqual(["c", "d"]);
+  });
+
+  it("handles an empty list", () => {
+    expect(groupOpenByWeek([])).toEqual([]);
   });
 });

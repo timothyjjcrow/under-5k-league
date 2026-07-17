@@ -33,7 +33,14 @@ async function pendingFor(matchId: string) {
 describe("reschedule service (integration)", () => {
   it("captain proposes; a newer proposal supersedes the old one", async () => {
     const { home, match } = await setupMatch();
-    await proposeReschedule(home.captainId, match.id, NIGHT);
+    // The service returns announcement data (the action's Discord ping).
+    const proposed = await proposeReschedule(home.captainId, match.id, NIGHT);
+    expect(proposed).toMatchObject({
+      homeName: "Home",
+      awayName: "Away",
+      isPlayoff: false,
+      proposedTime: NIGHT,
+    });
     const first = await pendingFor(match.id);
     expect(first?.proposedTime.getTime()).toBe(NIGHT.getTime());
 

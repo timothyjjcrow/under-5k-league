@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
+import { WeekReminderPing } from "@/components/week-reminder-ping";
 import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
@@ -325,6 +327,10 @@ export default async function SchedulePage() {
 
   return (
     <div className="space-y-8">
+      {/* Lazy match-night Discord reminder — invisible, never blocks paint. */}
+      <Suspense fallback={null}>
+        <WeekReminderPing season={season} />
+      </Suspense>
       <PageTitle
         title="Schedule & Standings"
         subtitle={season.name}

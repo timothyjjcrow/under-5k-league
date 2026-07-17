@@ -141,6 +141,33 @@ export const INHOUSE = {
   // active lobby, so this bounds API usage globally).
   DETECT_MIN_MINUTES: 8,
   DETECT_INTERVAL_SECONDS: 180,
+  // Queue presence: a spot is held by keeping /inhouse open — each state poll
+  // refreshes the entry's lastSeenAt heartbeat, throttled to one write per
+  // interval so ten 1.5s pollers don't produce a constant write stream.
+  QUEUE_HEARTBEAT_SECONDS: 30,
+  // Seen longer ago than this = "away": still listed, but doesn't count toward
+  // forming a lobby or the public queue count. Generous because Chrome
+  // throttles hidden tabs' timers toward once a minute.
+  QUEUE_AWAY_SECONDS: 90,
+  // Silent past this = dropped from the queue entirely (ghost cleanup).
+  QUEUE_DROP_SECONDS: 180,
+  // After an admin cancels a lobby its players are re-queued with a backdated
+  // heartbeat: anyone still polling re-confirms within this window; the ghosts
+  // that likely caused the cancel never do, so the same lobby can't instantly
+  // re-form around them.
+  QUEUE_RECONFIRM_SECONDS: 45,
+  // Discord "almost there" ping: fires when a join crosses LOBBY_SIZE-2
+  // present players, at most once per this window (leave/rejoin churn at the
+  // threshold must not spam the channel).
+  QUEUE_PING_MIN_MINUTES: 15,
+} as const;
+
+// Match-night Discord reminder: announced lazily from dashboard//schedule
+// renders for the next week whose matches kick off inside the window. Sent at
+// most once per season+week (atomic Setting-row claim).
+export const WEEK_REMINDER = {
+  AHEAD_HOURS: 24, // announce once kickoff is within a day
+  BEHIND_HOURS: 3, // still worth announcing shortly after kickoff
 } as const;
 
 export const SESSION_COOKIE = "ld2l_session";

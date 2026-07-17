@@ -52,6 +52,8 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
+import { queuePresentCutoff } from "@/lib/inhouse";
+import { WeekReminderPing } from "@/components/week-reminder-ping";
 import {
   DRAFT_STATUS,
   INHOUSE,
@@ -67,6 +69,7 @@ import {
   type StandingsRowView,
 } from "@/components/standings-table";
 import { LocalTime } from "@/components/local-time";
+import { Countdown } from "@/components/countdown";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
 import { firstMedia } from "@/lib/linkify";
@@ -161,7 +164,8 @@ export default async function Home() {
     );
     heroAction = !user ? (
       <>
-        <Link href="/login" className={buttonClasses("primary", "lg")}>
+        {/* next=/me: signing in "to join" should land on the signup form. */}
+        <Link href="/login?next=/me" className={buttonClasses("primary", "lg")}>
           Sign in with Steam to join →
         </Link>
         {tourLink}
@@ -219,6 +223,12 @@ export default async function Home() {
             tone="accent"
           />
         )}
+        {season.draftAt ? (
+          <span className="flex items-center text-sm text-muted">
+            🗓️ Draft{" "}
+            <Countdown targetMs={season.draftAt.getTime()} eventLabel="Draft" />
+          </span>
+        ) : null}
       </>
     );
   } else if (season.status === "DRAFT") {
@@ -339,6 +349,10 @@ export default async function Home() {
       {season.status === "DRAFT" && <DraftPhaseView snapshot={snapshot} />}
       {(season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS") && (
         <>
+          {/* Lazy match-night Discord reminder — invisible, never blocks paint. */}
+          <Suspense fallback={null}>
+            <WeekReminderPing season={season} />
+          </Suspense>
           {user ? (
             <Suspense fallback={null}>
               <MyNextMatch seasonId={season.id} userId={user.id} />
@@ -495,20 +509,57 @@ async function MyNextMatch({
   });
   if (!next) return null;
 
-  const myRsvp = await prisma.matchAvailability.findUnique({
-    where: { matchId_userId: { matchId: next.id, userId } },
-    select: { status: true },
-  });
+  const [myRsvp, pendingReschedule] = await Promise.all([
+    prisma.matchAvailability.findUnique({
+      where: { matchId_userId: { matchId: next.id, userId } },
+      select: { status: true },
+    }),
+    prisma.rescheduleRequest.findFirst({
+      where: { matchId: next.id, status: "PENDING" },
+      include: { proposedBy: { select: { name: true } } },
+    }),
+  ]);
+
+  // A proposal awaiting THIS viewer's answer gets a strip right on the
+  // dashboard — proposals used to rot on the match page unseen.
+  const awaitingMyAnswer =
+    !!pendingReschedule &&
+    pendingReschedule.proposedById !== userId &&
+    (next.homeTeam.captainId === userId || next.awayTeam.captainId === userId);
 
   return (
-    <CheckinBanner
-      matchId={next.id}
-      heading={`Your next match — ${matchPhaseLabel(next.phase, next.week)}: ${next.homeTeam.name} vs ${next.awayTeam.name}`}
-      when={fmtWhen(next.scheduledAt)}
-      whenTs={next.scheduledAt?.getTime()}
-      myRsvp={myRsvp?.status ?? null}
-      detailsHref={`/matches/${next.id}`}
-    />
+    <div className="space-y-2">
+      <CheckinBanner
+        matchId={next.id}
+        heading={`Your next match — ${matchPhaseLabel(next.phase, next.week)}: ${next.homeTeam.name} vs ${next.awayTeam.name}`}
+        when={fmtWhen(next.scheduledAt)}
+        whenTs={next.scheduledAt?.getTime()}
+        myRsvp={myRsvp?.status ?? null}
+        detailsHref={`/matches/${next.id}`}
+      />
+      {awaitingMyAnswer ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm">
+          <span aria-hidden>⏳</span>
+          <span className="min-w-0 flex-1">
+            <strong>{pendingReschedule.proposedBy.name}</strong> proposed
+            moving this match to{" "}
+            <strong>
+              <LocalTime
+                ts={pendingReschedule.proposedTime.getTime()}
+                variant="full"
+                initial={formatMatchTime(pendingReschedule.proposedTime, "full")}
+              />
+            </strong>
+          </span>
+          <Link
+            href={`/matches/${next.id}`}
+            className="shrink-0 text-info hover:underline"
+          >
+            Respond →
+          </Link>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -713,7 +764,10 @@ function SeasonTimeline({ phase }: { phase: string }) {
 // lobby formation/resolution stays lazy on the /inhouse poll.
 async function InhouseStrip() {
   const [queued, liveLobby] = await Promise.all([
-    prisma.inhouseQueueEntry.count(),
+    // Same presence rule as /inhouse: only recently-seen players count.
+    prisma.inhouseQueueEntry.count({
+      where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
+    }),
     prisma.inhouseLobby.findFirst({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
       select: { id: true },
@@ -796,6 +850,19 @@ async function SignupsView({
                 : `${capacity.needed} more needed`}
             </span>
           </div>
+          {season.draftAt ? (
+            <p className="text-sm text-muted">
+              🗓️ Draft night:{" "}
+              <strong className="text-fg">
+                <LocalTime
+                  ts={season.draftAt.getTime()}
+                  variant="full"
+                  initial={formatMatchTime(season.draftAt, "full")}
+                />
+              </strong>
+              <Countdown targetMs={season.draftAt.getTime()} eventLabel="Draft" />
+            </p>
+          ) : null}
           <Progress value={playerCount} max={capacity.minPlayers} />
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Players" value={playerCount} />
@@ -814,7 +881,10 @@ async function SignupsView({
 
           <div className="flex flex-wrap items-center gap-3 pt-1">
             {!loggedIn ? (
-              <Link href="/login" className={buttonClasses("primary", "lg")}>
+              <Link
+                href="/login?next=/me"
+                className={buttonClasses("primary", "lg")}
+              >
                 Sign in with Steam to join
               </Link>
             ) : isActivePlayer ? (
@@ -897,7 +967,7 @@ async function RecentSignups({ seasonId }: { seasonId: string }) {
           <span className="text-sm">{r.user.name}</span>
           <RankBadge rankTier={r.user.rankTier} />
           <RoleBadges roles={r.roles} />
-          <span className="text-xs text-muted">{r.mmr}</span>
+          {r.mmr > 0 ? <span className="text-xs text-muted">{r.mmr}</span> : null}
         </PlayerLink>
       ))}
     </div>

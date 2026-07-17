@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import { parseAvailabilityStatus } from "@/lib/availability";
+import { playerOutMessage, sendDiscordMessage } from "@/lib/discord";
 import { MATCH_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 
@@ -29,7 +30,11 @@ export async function setAvailability(
 
   const match = await prisma.match.findUnique({
     where: { id: matchId },
-    include: { standins: true },
+    include: {
+      standins: true,
+      homeTeam: { select: { name: true } },
+      awayTeam: { select: { name: true } },
+    },
   });
   if (!match) return { error: "Unknown match" };
   if (match.status === MATCH_STATUS.COMPLETED) {
@@ -49,11 +54,34 @@ export async function setAvailability(
     return { error: "You're not playing in this match" };
   }
 
+  // Prior answer, so only a NEW "out" pings Discord — flipping IN↔OUT while
+  // deciding must not spam the channel with duplicate alerts.
+  const prior = await prisma.matchAvailability.findUnique({
+    where: { matchId_userId: { matchId, userId: user.id } },
+    select: { status: true },
+  });
+
   await prisma.matchAvailability.upsert({
     where: { matchId_userId: { matchId, userId: user.id } },
     create: { matchId, userId: user.id, status },
     update: { status },
   });
+
+  // An OUT demands a human response (standin hunt) — announce it the moment
+  // it's declared instead of letting it hide until match night. Best-effort:
+  // sendDiscordMessage never throws, so the RSVP itself can't fail here.
+  if (status === "OUT" && prior?.status !== "OUT") {
+    await sendDiscordMessage(
+      playerOutMessage({
+        playerName: user.name,
+        homeName: match.homeTeam.name,
+        awayName: match.awayTeam.name,
+        week: match.week,
+        isPlayoff: match.phase !== "REGULAR",
+        whenMs: match.scheduledAt?.getTime() ?? null,
+      }),
+    );
+  }
 
   revalidatePath("/", "layout");
   return {

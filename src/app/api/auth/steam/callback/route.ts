@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { createSession } from "@/lib/auth";
 import { upsertLeagueUser, ensureRankTier } from "@/lib/users";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { RETURN_COOKIE, safeReturnPath } from "@/lib/return-path";
 
 export async function GET(req: NextRequest) {
   // Unauthenticated + triggers outbound calls to Steam/OpenDota — throttle per
@@ -39,5 +40,11 @@ export async function GET(req: NextRequest) {
   // show one (best-effort; a no-op once they have a medal).
   await ensureRankTier(prisma, user);
   await createSession(user.id);
-  return NextResponse.redirect(new URL("/", req.url));
+  // Land back where they clicked Sign in (validated again — the cookie is
+  // ours, but defense in depth is free), clearing the one-shot cookie.
+  const next =
+    safeReturnPath(req.cookies.get(RETURN_COOKIE)?.value) ?? "/";
+  const res = NextResponse.redirect(new URL(next, req.url));
+  res.cookies.delete(RETURN_COOKIE);
+  return res;
 }

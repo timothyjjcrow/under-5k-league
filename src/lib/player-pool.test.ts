@@ -13,6 +13,7 @@ function mk(p: Partial<PoolPlayer> & { name: string }): PoolPlayer {
     wantsCaptain: false,
     drafted: false,
     accountId: null,
+    discordName: "",
     ...p,
   };
 }

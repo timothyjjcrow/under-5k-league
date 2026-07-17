@@ -159,12 +159,15 @@ export default async function InhousePage() {
         <div className="space-y-4">
           <SectionTitle>Recent results</SectionTitle>
           {results.map((r) => (
-            <GameResultCard
-              key={r.lobby.id}
-              lobby={r.lobby}
-              players={r.players}
-              avatarMap={avatarMap}
-            />
+            // Anchor target for the room's result banner ("Box score ↓");
+            // scroll-mt clears the sticky header.
+            <div key={r.lobby.id} id={`result-${r.lobby.id}`} className="scroll-mt-24">
+              <GameResultCard
+                lobby={r.lobby}
+                players={r.players}
+                avatarMap={avatarMap}
+              />
+            </div>
           ))}
         </div>
       ) : null}

@@ -5,64 +5,18 @@ import { useRouter } from "next/navigation";
 import { Avatar, Badge, PlayerLink, RankBadge, buttonClasses } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
-import { useSecondsLeft, useElapsedMs } from "@/components/room-clock";
+import {
+  useBannerOffscreen,
+  usePollHealth,
+  useSecondsLeft,
+  useElapsedMs,
+} from "@/components/room-clock";
 import { mmrBalance } from "@/lib/inhouse";
+import { playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
 
 type LobbyTeam = NonNullable<InhouseState["lobby"]>["teams"][number];
 type Player = LobbyTeam["players"][number];
-
-// ---- Bell "dong" notification (synthesized, no audio asset needed) ----------
-
-let audioCtx: AudioContext | null = null;
-
-/** Get (and resume) a shared AudioContext. Must be primed by a user gesture. */
-function ensureAudioCtx(): AudioContext | null {
-  if (typeof window === "undefined") return null;
-  const Ctor =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext;
-  if (!Ctor) return null;
-  if (!audioCtx) audioCtx = new Ctor();
-  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
-  return audioCtx;
-}
-
-/** Unlock audio on a user gesture (browsers block sound until then). */
-function unlockAudio() {
-  ensureAudioCtx();
-}
-
-/** A short bell "dong": a stack of decaying partials struck together. */
-function playChime() {
-  const ctx = ensureAudioCtx();
-  if (!ctx) return;
-  const now = ctx.currentTime;
-  const master = ctx.createGain();
-  master.gain.value = 0.32;
-  master.connect(ctx.destination);
-  // Fundamental + bell-like overtones, each ringing out and fading.
-  const partials: [number, number, number][] = [
-    [523.25, 1.0, 1.7], // C5
-    [1046.5, 0.5, 1.2],
-    [1568.0, 0.22, 0.8],
-    [2093.0, 0.1, 0.5],
-  ];
-  for (const [freq, gain, decay] of partials) {
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = freq;
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(gain, now + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + decay);
-    osc.connect(g);
-    g.connect(master);
-    osc.start(now);
-    osc.stop(now + decay + 0.05);
-  }
-}
 
 // Radiant = green, Dire = red — matching the in-client colors so it reads fast.
 function sideMeta(isRadiant: boolean) {
@@ -92,8 +46,11 @@ export function InhouseRoom({
 }) {
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
+  const [reqPending, setPending] = useState(false);
+  // Disconnected = all actions disabled: a pick/vote against stale state
+  // would fail (or look accepted) while the real lobby moved on.
+  const pending = reqPending || disconnected;
   const [selected, setSelected] = useState<string | null>(null);
   const [mmr, setMmr] = useState<number>(defaultMmr);
   const [soundOn, setSoundOn] = useState(true);
@@ -103,6 +60,13 @@ export function InhouseRoom({
   const soundInitRef = useRef(false);
   const prevStatusRef = useRef<string | null>(null);
   const prevOnClockRef = useRef(false);
+  const prevResultIdRef = useRef<string | null>(null);
+  const originalTitleRef = useRef<string | null>(null);
+  // Result banners the viewer closed — stays dismissed across the polls of
+  // the 10-minute lastResult window.
+  const [dismissedResults, setDismissedResults] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   useEffect(() => {
     setSoundOn(localStorage.getItem("inhouseSound") !== "off");
@@ -129,11 +93,16 @@ export function InhouseRoom({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "state" }),
       });
-      if (res.ok) apply(await res.json());
+      if (res.ok) {
+        apply(await res.json());
+        pollOk();
+      } else {
+        pollFail();
+      }
     } catch {
-      /* transient blip; next poll retries */
+      pollFail(); // transient blip; next poll retries
     }
-  }, [apply]);
+  }, [apply, pollOk, pollFail]);
 
   useEffect(() => {
     poll();
@@ -161,23 +130,49 @@ export function InhouseRoom({
     const isOnClock = state.me.isOnClock;
     const inLobby = state.me.inLobby;
 
+    const resultId = state.lastResult?.lobbyId ?? null;
     if (soundInitRef.current && soundOn) {
       const lobbyFormed = status !== null && prevStatusRef.current === null && inLobby;
       const myTurn = isOnClock && !prevOnClockRef.current;
       const teamsReady =
         status === "READY" && prevStatusRef.current !== "READY" && inLobby;
-      if (lobbyFormed || myTurn || teamsReady) playChime();
+      // Keyed off lastResult, NOT the lobby vanishing — an admin cancel also
+      // drops the lobby and must not ring a victory bell.
+      const gameEnded = !!resultId && prevResultIdRef.current !== resultId;
+      if (lobbyFormed || myTurn || teamsReady || gameEnded) playChime();
     }
     prevStatusRef.current = status;
     prevOnClockRef.current = isOnClock;
+    prevResultIdRef.current = resultId;
     soundInitRef.current = true;
   }, [state, soundOn]);
+
+  // Flip the tab title while something needs this viewer's attention. Unlike
+  // the chime this needs no sound toggle or prior-gesture audio unlock, so a
+  // backgrounded tab still shows the "(!)" in the tab strip.
+  useEffect(() => {
+    if (originalTitleRef.current === null) {
+      originalTitleRef.current = document.title;
+    }
+    const original = originalTitleRef.current;
+    const status = state?.lobby?.status ?? null;
+    const flag = state?.me.isOnClock
+      ? "(!) Your pick"
+      : state?.me.inLobby && status === "CAPTAIN_VOTE"
+        ? "(!) Lobby up — vote"
+        : state?.me.inLobby && status === "READY"
+          ? "(!) Teams locked"
+          : null;
+    document.title = flag ? `${flag} · ${original}` : original;
+    return () => {
+      document.title = original;
+    };
+  }, [state]);
 
   const act = useCallback(
     async (body: Record<string, unknown>) => {
       unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
-      setError(null);
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
@@ -185,13 +180,16 @@ export function InhouseRoom({
           body: JSON.stringify(body),
         });
         const data = await res.json();
-        if (!res.ok) setError(data.error || "Action failed");
+        // Toast, not an inline banner — same reasoning as the draft room:
+        // pick-race rejections land while the captain is scrolled into the
+        // pool, where a top-of-room banner is invisible and went stale.
+        if (!res.ok) pushToast("error", data.error || "Action failed");
         else {
           apply(data);
           setSelected(null);
         }
       } catch {
-        setError("Network error");
+        pushToast("error", "Network error — that didn't go through");
       } finally {
         setPending(false);
       }
@@ -225,9 +223,66 @@ export function InhouseRoom({
         </button>
       </div>
 
-      {error ? (
-        <div className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
-          {error}
+      {disconnected ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
+        >
+          ⚠️ Connection lost — reconnecting… The lobby keeps running on the
+          server; actions are paused until we&apos;re back.
+        </div>
+      ) : null}
+
+      {state.lastResult &&
+      !lobby &&
+      !dismissedResults.has(state.lastResult.lobbyId) ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            "flex flex-wrap items-center gap-3 rounded-[var(--radius)] border px-4 py-3",
+            state.lastResult.myTeamWon
+              ? "border-success/50 bg-success/10"
+              : "border-danger/40 bg-danger/10",
+          )}
+        >
+          <span className="text-lg" aria-hidden>
+            {state.lastResult.myTeamWon ? "🏆" : "💀"}
+          </span>
+          <span className="min-w-0 flex-1 text-sm">
+            <strong>
+              {state.lastResult.winnerSide} win {state.lastResult.radiantScore}
+              –{state.lastResult.direScore}
+            </strong>{" "}
+            — {state.lastResult.myTeamWon ? "victory" : "defeat"} for you,{" "}
+            <strong
+              className={
+                state.lastResult.eloDelta >= 0 ? "text-success" : "text-danger"
+              }
+            >
+              {state.lastResult.eloDelta >= 0 ? "+" : ""}
+              {state.lastResult.eloDelta} Elo
+            </strong>
+            .{" "}
+            <a
+              href={`#result-${state.lastResult.lobbyId}`}
+              className="text-info hover:underline"
+            >
+              Box score ↓
+            </a>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              const id = state.lastResult!.lobbyId;
+              setDismissedResults((s) => new Set(s).add(id));
+            }}
+            aria-label="Dismiss result banner"
+            className={buttonClasses("secondary", "sm", "shrink-0")}
+          >
+            Dismiss
+          </button>
         </div>
       ) : null}
 
@@ -298,9 +353,12 @@ function QueueView({
   act: (body: Record<string, unknown>) => void;
 }) {
   const { queue, lobbySize, needed, me } = state;
-  const pct = Math.min(100, Math.round((queue.length / lobbySize) * 100));
+  // "Away" players (heartbeat gone quiet) keep their row for a grace window
+  // but don't count toward forming — the headline number stays honest.
+  const present = queue.filter((q) => !q.away);
+  const pct = Math.min(100, Math.round((present.length / lobbySize) * 100));
   // Rough lobby strength while it fills (0 = unknown MMR, excluded).
-  const knownMmrs = queue.map((q) => q.mmr).filter((m) => m > 0);
+  const knownMmrs = present.map((q) => q.mmr).filter((m) => m > 0);
   const queueAvg =
     knownMmrs.length >= 2
       ? Math.round(knownMmrs.reduce((s, m) => s + m, 0) / knownMmrs.length)
@@ -314,7 +372,7 @@ function QueueView({
             Inhouse queue
           </div>
           <div className="mt-1 text-4xl font-bold tabular-nums">
-            {queue.length}
+            {present.length}
             <span className="text-muted"> / {lobbySize}</span>
           </div>
           <div className="mt-1 text-sm text-muted">
@@ -335,7 +393,7 @@ function QueueView({
 
           <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
             {!me.isLoggedIn ? (
-              <a href="/login" className={buttonClasses("primary", "lg")}>
+              <a href="/login?next=/inhouse" className={buttonClasses("primary", "lg")}>
                 Sign in to queue
               </a>
             ) : me.inQueue ? (
@@ -369,6 +427,11 @@ function QueueView({
               </div>
             )}
           </div>
+
+          <p className="mt-3 text-xs text-muted">
+            Keep this page open to hold your spot — players who close it are
+            marked away and dropped from the queue after a few minutes.
+          </p>
         </div>
 
         <div className="border-t border-line bg-surface/40 px-4 py-4">
@@ -399,6 +462,7 @@ function QueueView({
                     isMe
                       ? "border-accent/50 bg-accent/10"
                       : "border-line bg-surface-2/40",
+                    q.away && "opacity-60",
                   )}
                 >
                   <span className="w-5 shrink-0 text-center text-xs text-muted tabular-nums">
@@ -408,6 +472,15 @@ function QueueView({
                   <PlayerLink userId={q.userId} className="truncate text-sm font-medium">
                     {q.name}
                   </PlayerLink>
+                  {q.away ? (
+                    <span
+                      className="shrink-0 rounded-full border border-line px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                      aria-label={`${q.name} looks away — they won't count toward forming a lobby until they return`}
+                      title="No heartbeat from this player recently — they won't count toward forming a lobby until they return"
+                    >
+                      away
+                    </span>
+                  ) : null}
                   <span className="ml-auto flex items-center gap-2 text-xs text-muted">
                     <RankBadge rankTier={q.rankTier} />
                     {q.mmr > 0 ? <span>{q.mmr}</span> : null}
@@ -660,6 +733,9 @@ function DraftView({
   act: (body: Record<string, unknown>) => void;
 }) {
   const { me, teamSize } = state;
+  // Same mobile treatment as the league draft room: when the pick-clock
+  // banner scrolls away, a compact fixed bar keeps the clock visible.
+  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
   const onClockTeam = lobby.teams.find((t) => t.team === lobby.pickTeam);
   const onClockSide = onClockTeam ? sideMeta(onClockTeam.isRadiant) : null;
   // "Pick 4 of 8" — captains fill one slot each, the rest are drafted.
@@ -682,8 +758,44 @@ function DraftView({
 
   return (
     <div className="space-y-5">
+      {/* Compact fixed bar while the pick clock is scrolled away — the 60s
+          auto-pick clock must never be invisible mid-draft. top-20 matches
+          the 80px header (see useBannerOffscreen). */}
+      {offscreen ? (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to the pick clock"
+          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
+        >
+          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
+            <span className="flex min-w-0 items-center gap-2">
+              <span aria-hidden>⏱</span>
+              <span className="truncate font-medium">
+                {lobby.onClockCaptain?.name ?? "—"} picking
+              </span>
+              <span className="shrink-0 text-xs text-muted tabular-nums">
+                {Math.min(picksMade + 1, totalPicks)}/{totalPicks}
+              </span>
+              {me.isOnClock ? (
+                <Badge tone="accent" className="shrink-0">
+                  You
+                </Badge>
+              ) : null}
+            </span>
+            <SecondsClock
+              endsAtMs={lobby.pickEndsAt}
+              offsetMs={offset}
+              urgentAt={10}
+              label={(s) => `${s} seconds left on the pick clock`}
+            />
+          </div>
+        </button>
+      ) : null}
+
       {/* On the clock banner */}
       <div
+        ref={bannerRef}
         className={cn(
           "flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border bg-surface/80 px-5 py-3",
           onClockSide?.ring ?? "border-line",
@@ -723,15 +835,12 @@ function DraftView({
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_1.1fr_1fr]">
-        <TeamColumn
-          team={lobby.teams[0]}
-          teamSize={teamSize}
-          onClock={lobby.pickTeam === lobby.teams[0].team}
-        />
-
+      {/* Pool FIRST in DOM: on phones the on-clock captain needs it now —
+          Team 1's roster card would otherwise bury it (same treatment as the
+          league draft room). lg:order-* restores the three-column desktop. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.1fr_1fr]">
         {/* Draft pool */}
-        <div className="rounded-[var(--radius)] border border-line bg-surface/80">
+        <div className="min-w-0 rounded-[var(--radius)] border border-line bg-surface/80 lg:order-2">
           <div className="border-b border-line px-4 py-3 text-sm font-semibold">
             Draft pool · {lobby.pool.length}
           </div>
@@ -793,11 +902,20 @@ function DraftView({
           ) : null}
         </div>
 
-        <TeamColumn
-          team={lobby.teams[1]}
-          teamSize={teamSize}
-          onClock={lobby.pickTeam === lobby.teams[1].team}
-        />
+        <div className="min-w-0 lg:order-1">
+          <TeamColumn
+            team={lobby.teams[0]}
+            teamSize={teamSize}
+            onClock={lobby.pickTeam === lobby.teams[0].team}
+          />
+        </div>
+        <div className="min-w-0 lg:order-3">
+          <TeamColumn
+            team={lobby.teams[1]}
+            teamSize={teamSize}
+            onClock={lobby.pickTeam === lobby.teams[1].team}
+          />
+        </div>
       </div>
     </div>
   );

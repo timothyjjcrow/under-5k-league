@@ -194,7 +194,10 @@ export default async function RecapPage({
         title="Season Recap"
         subtitle={isComplete ? season.name : `${season.name} · awards so far`}
         action={
-          <Link href="/leaders" className={buttonClasses("secondary", "sm")}>
+          <Link
+            href={`/leaders${seasonParam ? `?season=${season.id}` : ""}`}
+            className={buttonClasses("secondary", "sm")}
+          >
             Leaderboards →
           </Link>
         }

@@ -19,6 +19,11 @@ import {
   proposeReschedule,
   respondReschedule,
 } from "@/app/actions/reschedule";
+import {
+  captainAutoDetect,
+  captainImportGame,
+} from "@/app/actions/match-report";
+import { MatchImportControls } from "@/components/match-import-controls";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   cardAverage,
@@ -200,6 +205,10 @@ export default async function MatchDetailPage({
       {/* Rescheduling stays available while the series is live — a proposal
           made before game 1 must remain answerable after it's imported. */}
       {match.status !== "COMPLETED" ? <RescheduleSection match={match} /> : null}
+
+      {/* Captains report their own results (OpenDota import) — league night
+          doesn't wait for an admin. Stays up while a Bo3/Bo5 is mid-series. */}
+      {match.status !== "COMPLETED" ? <ReportResultSection match={match} /> : null}
 
       {games.length === 0 && match.status !== "COMPLETED" ? (
         <Suspense fallback={<CardSkeleton rows={5} />}>
@@ -1141,6 +1150,41 @@ function safeParse(json: string): PlayerStat[] {
  * live match — not just the pre-import preview (a proposal made before game 1
  * must stay answerable after the game is imported).
  */
+// The two captains can pull their finished game straight from OpenDota —
+// results (and standings, bracket, fantasy, pick'em, honors downstream) stop
+// bottlenecking on an admin. Guards live in match-report-service.ts.
+async function ReportResultSection({
+  match,
+}: {
+  match: {
+    id: string;
+    homeTeam: { name: string; captainId: string };
+    awayTeam: { name: string; captainId: string };
+  };
+}) {
+  const viewer = await getSessionUser();
+  const isCaptain =
+    !!viewer &&
+    (match.homeTeam.captainId === viewer.id ||
+      match.awayTeam.captainId === viewer.id);
+  if (!isCaptain) return null;
+  return (
+    <Card>
+      <CardHeader
+        title="Report your result"
+        subtitle="Played it? Pull the finished game from OpenDota — no admin needed. Auto-fetch scans both rosters' recent games, or paste the match ID / Dotabuff-style URL."
+      />
+      <CardBody>
+        <MatchImportControls
+          matchId={match.id}
+          importAction={captainImportGame}
+          detectAction={captainAutoDetect}
+        />
+      </CardBody>
+    </Card>
+  );
+}
+
 async function RescheduleSection({
   match,
 }: {

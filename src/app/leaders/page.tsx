@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -43,19 +44,58 @@ function safeParse(json: string): PlayerStat[] {
 
 type DisplayUser = { name: string; avatar: string | null; rankTier: number | null };
 
-export default async function LeadersPage() {
+export default async function LeadersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ season?: string }>;
+}) {
+  const { season: seasonParam } = await searchParams;
+  // ?season=<id> shows an archived season's boards (recap's pattern) —
+  // otherwise leaderboards vanish forever the moment a season is archived.
   const [season, viewer] = await Promise.all([
-    getActiveSeason(),
+    seasonParam
+      ? prisma.season.findUnique({ where: { id: seasonParam } })
+      : getActiveSeason(),
     getSessionUser(),
   ]);
+  if (seasonParam && !season) notFound();
   if (!season) {
+    const archived = await prisma.season.findMany({
+      where: { isActive: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true },
+    });
     return (
       <div>
         <PageTitle title="Leaders" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="No active season"
+          description={
+            archived.length > 0
+              ? "Browse a past season's boards instead."
+              : undefined
+          }
+          action={
+            archived.length > 0 ? (
+              <div className="flex flex-wrap justify-center gap-2">
+                {archived.map((s) => (
+                  <Link
+                    key={s.id}
+                    href={`/leaders?season=${s.id}`}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    {s.name} →
+                  </Link>
+                ))}
+              </div>
+            ) : undefined
+          }
+        />
       </div>
     );
   }
+  // Keep archived-season navigation on that season across the stat pages.
+  const seasonQS = seasonParam ? `?season=${season.id}` : "";
 
   const games = await getSeasonGameLeaders(season.id);
 
@@ -92,7 +132,10 @@ export default async function LeadersPage() {
   if (entries.length === 0) {
     return (
       <div className="space-y-6">
-        <PageTitle title="Leaders" subtitle={season.name} />
+        <PageTitle
+        title="Leaders"
+        subtitle={season.isActive ? season.name : `${season.name} · archived`}
+      />
         <EmptyState
           title="No stats yet"
           description="Leaderboards fill in once match games are imported."
@@ -250,7 +293,7 @@ export default async function LeadersPage() {
         title="Leaders"
         subtitle={`${season.name} · from ${games.length} imported game${games.length === 1 ? "" : "s"}`}
         action={
-          <Link href="/recap" className={buttonClasses("secondary", "sm")}>
+          <Link href={`/recap${seasonQS}`} className={buttonClasses("secondary", "sm")}>
             Season recap →
           </Link>
         }

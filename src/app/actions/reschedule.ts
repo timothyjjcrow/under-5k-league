@@ -12,7 +12,11 @@ import {
   proposeReschedule as proposeInService,
   respondReschedule as respondInService,
 } from "@/lib/reschedule-service";
-import { rescheduleMessage, sendDiscordMessage } from "@/lib/discord";
+import {
+  rescheduleMessage,
+  rescheduleProposedMessage,
+  sendDiscordMessage,
+} from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -40,11 +44,28 @@ export async function proposeReschedule(
   if (!proposedTime || Number.isNaN(proposedTime.getTime()))
     return { error: "Pick a valid date & time" };
 
+  let proposed;
   try {
-    await proposeInService(user.id, str(formData, "matchId"), proposedTime);
+    proposed = await proposeInService(
+      user.id,
+      str(formData, "matchId"),
+      proposedTime,
+    );
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't propose" };
   }
+  // A proposal demands the OTHER captain's response — tell the channel
+  // instead of hoping they wander onto the match page. Best-effort.
+  await sendDiscordMessage(
+    rescheduleProposedMessage({
+      homeName: proposed.homeName,
+      awayName: proposed.awayName,
+      week: proposed.week,
+      isPlayoff: proposed.isPlayoff,
+      proposerName: user.name,
+      whenMs: proposed.proposedTime.getTime(),
+    }),
+  );
   refresh();
   return {
     ok: true,

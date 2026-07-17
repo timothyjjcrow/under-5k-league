@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { registrationGate } from "./registration";
+import { promoteGateError, registrationGate } from "./registration";
 
 // maxMmr 4500 = the 4.5K soft/review limit; the hard ceiling (5000) is what
 // actually blocks. maxMmr 0 = no soft limit (the hard ceiling still applies).
@@ -116,5 +116,53 @@ describe("withdrawGateError", () => {
     expect(
       withdrawGateError({ status: "WITHDRAWN", isCaptain: false, isRostered: false }),
     ).toMatch(/isn't active/i);
+  });
+});
+
+describe("registrationGate — unknown MMR", () => {
+  it("mmr 0 (blank signup = unknown) is legal and passes the gate", () => {
+    expect(
+      registrationGate({
+        season: { status: "SIGNUPS", maxMmr: 4500 },
+        type: "PLAYER",
+        mmr: 0,
+        hasExisting: false,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("promoteGateError", () => {
+  const ok = {
+    seasonStatus: "REGULAR_SEASON",
+    draftStatus: "COMPLETE",
+    registrationStatus: "ACTIVE",
+    registrationType: "STANDIN",
+    pendingAssignments: 0,
+  };
+
+  it("allows promoting an active, unassigned standin mid-season", () => {
+    expect(promoteGateError(ok)).toBeNull();
+  });
+
+  it("blocks only while the auction is actually running", () => {
+    expect(
+      promoteGateError({ ...ok, seasonStatus: "DRAFT", draftStatus: "IN_PROGRESS" }),
+    ).toMatch(/draft is live/);
+    // Pre-start: they simply join the pool and get auctioned normally.
+    expect(
+      promoteGateError({ ...ok, seasonStatus: "DRAFT", draftStatus: "NOT_STARTED" }),
+    ).toBeNull();
+    expect(
+      promoteGateError({ ...ok, seasonStatus: "DRAFT", draftStatus: "COMPLETE" }),
+    ).toBeNull();
+  });
+
+  it("rejects the wrong phases, states, and pending assignments", () => {
+    expect(promoteGateError({ ...ok, seasonStatus: "SIGNUPS" })).toMatch(/own profile/);
+    expect(promoteGateError({ ...ok, seasonStatus: "COMPLETE" })).toMatch(/over/);
+    expect(promoteGateError({ ...ok, registrationStatus: "WITHDRAWN" })).toMatch(/isn't active/);
+    expect(promoteGateError({ ...ok, registrationType: "PLAYER" })).toMatch(/already a full player/);
+    expect(promoteGateError({ ...ok, pendingAssignments: 1 })).toMatch(/remove that assignment/);
   });
 });

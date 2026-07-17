@@ -27,11 +27,28 @@ test("home renders the season timeline, pool composition, and footer", async ({
 }) => {
   await page.goto("/");
   await expect(page.getByText("Pool composition")).toBeVisible();
+  // The old hero tagline went away when the footer was slimmed down — anchor
+  // the footer assertion on its stable Discord CTA instead.
   await expect(
-    page.getByText(
-      "A drafted, team-based Dota 2 league built around a soft 4.5K MMR limit.",
-    ),
+    page.getByRole("contentinfo").getByText("Join our Discord"),
   ).toBeVisible();
+});
+
+test("mobile menu surfaces club pages and My profile", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  // Signed in, so the account group carries My profile.
+  await page.goto(
+    "/api/auth/dev?name=Menu+Tester&steamId=76561190000000042&redirect=/",
+  );
+  await page.getByRole("button", { name: "Open menu" }).click();
+  const menu = page.locator("#mobile-nav");
+  await expect(menu.getByRole("link", { name: "News" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "Hall of Fame" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "Record book" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "My profile" })).toBeVisible();
+  // SIGNUPS phase: Features is already an inline nav item — the club group
+  // must not duplicate it.
+  await expect(menu.getByRole("link", { name: "Features" })).toHaveCount(1);
 });
 
 test("features tour renders the showcase and phase-aware chapters", async ({

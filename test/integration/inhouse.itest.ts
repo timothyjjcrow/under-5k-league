@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
+import {
+  INHOUSE,
+  INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_STATUS,
+} from "@/lib/constants";
 import { summarizeInhouse } from "@/lib/inhouse-stats";
 import { steamIdToAccountId } from "@/lib/dota";
 import type { SessionUser } from "@/lib/auth";
@@ -31,8 +35,17 @@ vi.mock("@/lib/dota", async (importOriginal) => {
 });
 import { fetchOpenDotaMatch, fetchRecentMatchIds } from "@/lib/dota";
 
+// Discord sends are best-effort network calls — stub the sender (formatters
+// stay real) so tests can assert what would have been announced.
+vi.mock("@/lib/discord", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/discord")>();
+  return { ...actual, sendDiscordMessage: vi.fn(async () => true) };
+});
+import { sendDiscordMessage } from "@/lib/discord";
+
 const mockRecent = vi.mocked(fetchRecentMatchIds);
 const mockMatch = vi.mocked(fetchOpenDotaMatch);
+const mockSend = vi.mocked(sendDiscordMessage);
 
 afterEach(() => {
   mockRecent.mockReset();
@@ -43,6 +56,7 @@ afterEach(() => {
 beforeEach(() => {
   mockRecent.mockResolvedValue([]);
   mockMatch.mockResolvedValue(null);
+  mockSend.mockClear();
 });
 
 // ---- helpers ---------------------------------------------------------------
@@ -531,14 +545,152 @@ describe("inhouse — misc guards", () => {
 
     // Cancelling puts everyone back in the queue…
     expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
-    // …so the next poll forms a fresh lobby with a new captain vote.
+    // …but with backdated heartbeats, so a bystander's poll must NOT
+    // instantly re-form the same (possibly ghost-ridden) lobby.
     await getInhouseState(admin);
-    expect(await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CAPTAIN_VOTE } })).toBe(1);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: INHOUSE_STATUS.CAPTAIN_VOTE },
+      }),
+    ).toBe(0);
+    // Once the players' own polls re-confirm presence, a fresh vote forms.
+    for (const p of players) await getInhouseState(p.session);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: INHOUSE_STATUS.CAPTAIN_VOTE },
+      }),
+    ).toBe(1);
   });
 
   it("leaveQueue removes a waiting player", async () => {
     const players = await enqueue(3, () => 3000);
     expect((await leaveQueue(players[0].session)).ok).toBe(true);
     expect(await prisma.inhouseQueueEntry.count()).toBe(2);
+  });
+});
+
+describe("inhouse — discord announcements", () => {
+  const queuePings = () =>
+    mockSend.mock.calls.filter(([m]) => m.includes("Inhouse queue")).length;
+
+  it("announces the formed lobby once, with the players and link", async () => {
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const lobbyPings = mockSend.mock.calls.filter(([m]) =>
+      m.includes("Inhouse lobby is up"),
+    );
+    expect(lobbyPings).toHaveLength(1);
+    expect(lobbyPings[0][0]).toContain("IH0");
+    expect(lobbyPings[0][0]).toContain("IH9");
+    expect(lobbyPings[0][0]).toContain("/inhouse");
+  });
+
+  it("pings the milestone once — leave/rejoin churn can't spam it", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE - 2, () => 3000);
+    expect(queuePings()).toBe(1);
+
+    // Dip below the milestone and rejoin — crosses again, but throttled.
+    await leaveQueue(players[0].session);
+    await joinQueue(players[0].session, 3000);
+    expect(queuePings()).toBe(1);
+  });
+
+  it("stays quiet below the milestone", async () => {
+    await enqueue(INHOUSE.LOBBY_SIZE - 3, () => 3000);
+    expect(queuePings()).toBe(0);
+  });
+});
+
+describe("inhouse — queue presence", () => {
+  const backdate = (userId: string, secondsAgo: number) =>
+    prisma.inhouseQueueEntry.update({
+      where: { userId },
+      data: { lastSeenAt: new Date(Date.now() - secondsAgo * 1000) },
+    });
+
+  it("away players don't count toward forming; their own poll re-confirms them", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+    // One of the nine stops polling long enough to go "away"…
+    await backdate(players[0].user.id, INHOUSE.QUEUE_AWAY_SECONDS + 5);
+
+    // …so a tenth join only makes 9 present — no lobby forms.
+    const tenth = sessionFor(await makeUser("IH-tenth"));
+    await joinQueue(tenth, 3000);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
+
+    // The away player is flagged for everyone and excluded from the count.
+    const state = await getInhouseState(tenth);
+    expect(
+      state.queue.find((q) => q.userId === players[0].user.id)?.away,
+    ).toBe(true);
+    expect(state.needed).toBe(1);
+
+    // Their own next poll heartbeats them back — and the lobby forms.
+    await getInhouseState(players[0].session);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: INHOUSE_STATUS.CAPTAIN_VOTE },
+      }),
+    ).toBe(1);
+  });
+
+  it("entries silent past the drop window are pruned on the next poll", async () => {
+    const players = await enqueue(3, () => 3000);
+    await backdate(players[1].user.id, INHOUSE.QUEUE_DROP_SECONDS + 5);
+
+    const state = await getInhouseState(players[0].session);
+    expect(state.queue.map((q) => q.userId)).not.toContain(
+      players[1].user.id,
+    );
+    expect(await prisma.inhouseQueueEntry.count()).toBe(2);
+  });
+
+  it("throttles the heartbeat to one write per interval", async () => {
+    const [p] = await enqueue(1, () => 3000);
+
+    // A fresh entry isn't touched by a poll (write throttled)…
+    await backdate(p.user.id, 5);
+    const before = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: p.user.id },
+    });
+    await getInhouseState(p.session);
+    const afterFresh = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: p.user.id },
+    });
+    expect(afterFresh.lastSeenAt.getTime()).toBe(before.lastSeenAt.getTime());
+
+    // …but once past the throttle window the next poll refreshes it.
+    await backdate(p.user.id, INHOUSE.QUEUE_HEARTBEAT_SECONDS + 5);
+    await getInhouseState(p.session);
+    const afterStale = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: p.user.id },
+    });
+    expect(afterStale.lastSeenAt.getTime()).toBeGreaterThan(
+      before.lastSeenAt.getTime(),
+    );
+  });
+
+  it("a cancelled lobby's ghosts drop out instead of re-forming it", async () => {
+    const admin = sessionFor(await makeUser("AdminPresence", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    expect((await cancelLobby(admin)).ok).toBe(true);
+
+    // Nine re-confirm by polling; the tenth is a ghost — their backdated
+    // requeue heartbeat never refreshes and ages past the drop window.
+    for (const p of players.slice(1)) await getInhouseState(p.session);
+    await backdate(players[0].user.id, INHOUSE.QUEUE_DROP_SECONDS + 5);
+
+    await getInhouseState(admin);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(
+      INHOUSE.LOBBY_SIZE - 1,
+    );
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
   });
 });

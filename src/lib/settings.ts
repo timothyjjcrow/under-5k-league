@@ -5,6 +5,8 @@ import { prisma } from "./prisma";
 
 export const SETTING_KEYS = {
   DISCORD_WEBHOOK_URL: "discordWebhookUrl",
+  // Epoch ms of the last "queue is almost full" Discord ping (spam throttle).
+  INHOUSE_QUEUE_PING_AT: "inhouseQueuePingAt",
 } as const;
 
 export async function getSetting(key: string): Promise<string | null> {

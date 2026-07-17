@@ -38,6 +38,10 @@ import {
   revokeAllSessions,
   signFreeAgent,
   releasePlayer,
+  importGameAction,
+  autoDetectAction,
+  setDraftNight,
+  promoteStandinToPlayer,
 } from "@/app/actions/admin";
 import { cancelReschedule } from "@/app/actions/reschedule";
 import {
@@ -94,7 +98,7 @@ const PHASE_LABEL: Record<string, string> = {
 
 export default async function AdminPage() {
   const user = await getSessionUser();
-  if (!user) redirect("/login");
+  if (!user) redirect("/login?next=/admin");
   if (user.role !== "ADMIN") redirect("/");
 
   const season = await getActiveSeason();
@@ -441,7 +445,12 @@ function CaptainControls({
   season: Season;
   data: AdminData;
 }) {
-  const draftStarted = data.draft?.status === "IN_PROGRESS";
+  // Two tiers, matching the server guards: once the draft has RUN (live,
+  // paused, or complete) captain management and Start draft are locked —
+  // startDraft rejects re-runs server-side too. The draft-room link only
+  // makes sense while the auction is actually live.
+  const draftStarted = !!data.draft && data.draft.status !== "NOT_STARTED";
+  const draftLive = data.draft?.status === "IN_PROGRESS";
   const captainUserIds = new Set(data.teams.map((t) => t.captainId));
   const nonCaptains = data.players.filter(
     (p) => !captainUserIds.has(p.userId),
@@ -464,25 +473,62 @@ function CaptainControls({
                 Sync avatars
               </SubmitButton>
             </ActionForm>
-            <ActionForm action={randomizeDraftOrder}>
-              <SubmitButton variant="secondary" size="sm">
-                Randomize order
-              </SubmitButton>
-            </ActionForm>
-            <ActionForm action={startDraft}>
-              <SubmitButton
-                variant="accent"
-                size="sm"
-                disabled={data.teams.length < 2}
-                confirm="Start the draft now? Rosters lock to the current captains."
-              >
-                Start draft
-              </SubmitButton>
-            </ActionForm>
+            {!draftStarted ? (
+              <>
+                <ActionForm action={randomizeDraftOrder}>
+                  <SubmitButton variant="secondary" size="sm">
+                    Randomize order
+                  </SubmitButton>
+                </ActionForm>
+                <ActionForm action={startDraft}>
+                  <SubmitButton
+                    variant="accent"
+                    size="sm"
+                    disabled={data.teams.length < 2}
+                    confirm="Start the draft now? Rosters lock to the current captains."
+                  >
+                    Start draft
+                  </SubmitButton>
+                </ActionForm>
+              </>
+            ) : null}
           </div>
         }
       />
       <CardBody className="grid gap-6 md:grid-cols-2">
+        {!draftStarted ? (
+          <ActionForm
+            action={setDraftNight}
+            className="flex flex-wrap items-end gap-2 md:col-span-2"
+          >
+            <div className="flex flex-col gap-1">
+              <label htmlFor="draftAt" className="text-xs text-muted">
+                Draft night — shown with countdowns on the dashboard, /me and
+                the draft room; announced to Discord
+              </label>
+              <LocalDatetimeField
+                id="draftAt"
+                name="draftAt"
+                tsName="draftAtTs"
+                defaultTs={season.draftAt?.getTime()}
+                className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+              />
+            </div>
+            <SubmitButton variant="secondary" size="sm">
+              {season.draftAt ? "Update draft night" : "Set draft night"}
+            </SubmitButton>
+            {season.draftAt ? (
+              <span className="text-xs text-muted">
+                Currently{" "}
+                <LocalTime
+                  ts={season.draftAt.getTime()}
+                  variant="full"
+                  initial={formatMatchTime(season.draftAt, "full")}
+                />
+              </span>
+            ) : null}
+          </ActionForm>
+        ) : null}
         {season.status === "SIGNUPS" && data.teams.length >= 2 ? (
           <p className="text-xs text-muted md:col-span-2">
             {(() => {
@@ -512,7 +558,9 @@ function CaptainControls({
                   season.budgetMmrWeight,
                   data.teams.map((t) => ({
                     teamId: t.id,
-                    mmr: mmrByUser.get(t.captainId) ?? null,
+                    // `|| null`: stored 0 = unknown MMR → base budget (must
+                    // match startDraft's mapping or projections lie).
+                    mmr: mmrByUser.get(t.captainId) || null,
                   })),
                   (season.teamSize - 1),
                 );
@@ -590,13 +638,21 @@ function CaptainControls({
               captains get more to spend.
             </p>
           ) : null}
-          {draftStarted ? (
+          {draftLive ? (
             <Link
               href="/draft"
               className={buttonClasses("accent", "sm", "mt-3")}
             >
               Go to draft room →
             </Link>
+          ) : data.draft?.status === "COMPLETE" ? (
+            <p className="mt-3 text-xs text-muted">
+              ✅ Draft complete — rosters are locked. See{" "}
+              <Link href="/teams" className="text-info hover:underline">
+                the teams
+              </Link>
+              ; top up short rosters with the free-agent tools below.
+            </p>
           ) : null}
         </div>
 
@@ -1004,7 +1060,11 @@ function MatchResultRow({
         </ul>
       ) : null}
 
-      <MatchImportControls matchId={m.id} />
+      <MatchImportControls
+        matchId={m.id}
+        importAction={importGameAction}
+        detectAction={autoDetectAction}
+      />
     </div>
   );
 }
@@ -1438,13 +1498,19 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
       .filter((m) => !m.isCaptain)
       .map((m) => ({ id: m.id, name: m.user.name, teamName: t.name })),
   );
-  if (!canSign && releasable.length === 0) return null;
+  // Late joiners register as standins once signups close — promoting one is
+  // the first step of the mid-season roster refill (promote → sign above).
+  const promotableStandins = data.standins.filter(
+    (s) => !rosteredIds.has(s.userId),
+  );
+  if (!canSign && releasable.length === 0 && promotableStandins.length === 0)
+    return null;
 
   return (
     <Card>
       <CardHeader
         title="Roster moves"
-        subtitle="Sign free agents onto short teams; release players who've left."
+        subtitle="Sign free agents onto short teams; release players who've left; promote late-joining standins to full players."
       />
       <CardBody className="space-y-3">
         {canSign ? (
@@ -1476,6 +1542,41 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
             <SubmitButton variant="secondary" size="sm">
               Sign player
             </SubmitButton>
+          </ActionForm>
+        ) : null}
+
+        {promotableStandins.length > 0 ? (
+          <ActionForm
+            action={promoteStandinToPlayer}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <select
+              name="userId"
+              required
+              defaultValue=""
+              aria-label="Standin to promote to full player"
+              className={selectCls}
+            >
+              <option value="" disabled>
+                Standin…
+              </option>
+              {promotableStandins.map((s) => (
+                <option key={s.userId} value={s.userId}>
+                  {s.user.name}
+                  {s.mmr > 0 ? ` (${s.mmr} MMR)` : ""}
+                </option>
+              ))}
+            </select>
+            <SubmitButton
+              variant="secondary"
+              size="sm"
+              confirm="Promote to full player? They leave the standin pool and can be signed onto a roster."
+            >
+              Promote to player
+            </SubmitButton>
+            <span className="text-xs text-muted">
+              then sign them above — the refill path for late joiners
+            </span>
           </ActionForm>
         ) : null}
         {releasable.length > 0 ? (

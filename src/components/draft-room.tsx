@@ -13,9 +13,18 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { useSecondsLeft } from "@/components/room-clock";
+import { pushToast } from "@/components/toaster";
+import { Countdown } from "@/components/countdown";
+import { DiscordTag } from "@/components/discord-tag";
+import { playChime, unlockAudio } from "@/components/chime";
+import {
+  useBannerOffscreen,
+  usePollHealth,
+  useSecondsLeft,
+} from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
-import { maxBid } from "@/lib/draft";
+import { maxBid, wasOutbid } from "@/lib/draft";
+import { DEFAULTS } from "@/lib/constants";
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 
@@ -113,10 +122,31 @@ function NomClock({
   );
 }
 
-export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
+export function DraftRoom({
+  pollMs = 1200,
+  draftAtMs = null,
+}: {
+  pollMs?: number;
+  /** Scheduled draft night (server-passed) — shown in the waiting room. */
+  draftAtMs?: number | null;
+}) {
   const [state, setState] = useState<DraftState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
+  // While there's no active season the tick 404s forever — terminal state.
+  const [noSeason, setNoSeason] = useState(false);
+  const [reqPending, setPending] = useState(false);
+  // Disconnected = every action disabled: a bid against stale state would
+  // either fail or, worse, look accepted while the real auction moved on.
+  const pending = reqPending || disconnected;
+  const [soundOn, setSoundOn] = useState(true);
+  // Latched while the viewer's team has lost the high bid on the live
+  // nomination — cleared by the poll once it's stale (re-took the bid, the
+  // player sold, or bidding closed).
+  const [outbid, setOutbid] = useState<{
+    player: string;
+    team: string;
+    amount: number;
+  } | null>(null);
   const offsetRef = useRef(0); // serverNow - clientNow, to sync the countdown
   const [selected, setSelected] = useState<string | null>(null);
   const [nomAmount, setNomAmount] = useState(1);
@@ -125,15 +155,26 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   const prevRef = useRef<DraftState | null>(null);
   const eventIdRef = useRef(0);
   const [events, setEvents] = useState<FeedEvent[]>([]);
-  // The clock banner scrolls away while captains browse the pool — track its
-  // visibility so a compact sticky bar can take over.
-  const bannerRef = useRef<HTMLDivElement | null>(null);
-  const [bannerOffscreen, setBannerOffscreen] = useState(false);
   const [soldFlash, setSoldFlash] = useState<{
     name: string;
     team: string;
     price: number;
+    /** The viewer themself was just sold — their personal draft moment. */
+    isMe: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    setSoundOn(localStorage.getItem("draftSound") !== "off");
+  }, []);
+
+  const toggleSound = useCallback(() => {
+    setSoundOn((on) => {
+      const next = !on;
+      localStorage.setItem("draftSound", next ? "on" : "off");
+      if (next) playChime(); // confirm + unlock audio on this gesture
+      return next;
+    });
+  }, []);
 
   const apply = useCallback((s: DraftState) => {
     offsetRef.current = s.now - Date.now();
@@ -143,11 +184,18 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
   const poll = useCallback(async () => {
     try {
       const res = await fetch("/api/draft/tick", { method: "POST" });
-      if (res.ok) apply(await res.json());
+      if (res.ok) {
+        apply(await res.json());
+        pollOk();
+      } else if (res.status === 404) {
+        setNoSeason(true); // season deactivated under us — stop pretending
+      } else {
+        pollFail();
+      }
     } catch {
-      /* transient network blip; next poll retries */
+      pollFail(); // network blip; next poll retries
     }
-  }, [apply]);
+  }, [apply, pollOk, pollFail]);
 
   useEffect(() => {
     poll();
@@ -202,13 +250,19 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
             text: `${m.name} → ${t.name}`,
             amount: m.price,
           });
-          setSoldFlash({ name: m.name, team: t.name, price: m.price });
+          const isMe = !!state.me.userId && m.userId === state.me.userId;
+          setSoldFlash({ name: m.name, team: t.name, price: m.price, isMe });
+          if (isMe && soundOn) playChime(); // your personal draft moment
         }
       }
     }
 
     const prevNom = prev.nominatedPlayer?.userId ?? null;
     const curNom = state.nominatedPlayer?.userId ?? null;
+    // YOU just went on the block — worth a bell even for non-captains.
+    if (curNom && curNom !== prevNom && curNom === state.me.userId && soundOn) {
+      playChime();
+    }
     if (curNom && curNom !== prevNom) {
       add.push({
         id: eventIdRef.current++,
@@ -226,7 +280,37 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     }
 
     if (add.length) setEvents((e) => [...add, ...e].slice(0, 12));
-  }, [state]);
+
+    // Outbid latch: clear stale first, then a fresh detection wins the tick.
+    const myTeamId = state.me.myTeamId;
+    if (
+      (myTeamId && state.currentBidTeamId === myTeamId) ||
+      curNom !== prevNom ||
+      !curNom ||
+      !state.me.canBid
+    ) {
+      setOutbid(null);
+    }
+    if (
+      wasOutbid({
+        myTeamId,
+        prevBidTeamId: prev.currentBidTeamId,
+        curBidTeamId: state.currentBidTeamId,
+        prevNominatedId: prevNom,
+        curNominatedId: curNom,
+      })
+    ) {
+      setOutbid({
+        player: state.nominatedPlayer!.name,
+        team: nameOf(state.currentBidTeamId),
+        amount: state.currentBid,
+      });
+      if (soundOn) playChime();
+    }
+
+    // Your turn to nominate — the moment auto-skip punishes hardest.
+    if (state.me.canNominate && !prev.me.canNominate && soundOn) playChime();
+  }, [state, soundOn]);
 
   useEffect(() => {
     if (!soldFlash) return;
@@ -234,40 +318,39 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     return () => clearTimeout(id);
   }, [soldFlash]);
 
-  // A captain tabbed away can miss their nomination window entirely (the
-  // auto-skip then picks for them) — flag the turn in the tab title.
+  // A captain tabbed away can miss their nomination window (auto-skip picks
+  // for them) or lose a player to the 30s bid clock — flag both in the tab
+  // title. The outbid prefix is latched on the actual outbid event, never on
+  // merely "not holding the high bid" (that would mislabel every nomination
+  // the captain never bid on).
   const myPick = !!state && state.status !== "COMPLETE" && state.me.canNominate;
+  const titleFlag = myPick
+    ? "⏰ Your pick — "
+    : outbid
+      ? "💸 Outbid — "
+      : null;
   useEffect(() => {
-    const PREFIX = "⏰ Your pick — ";
-    const base = document.title.startsWith(PREFIX)
-      ? document.title.slice(PREFIX.length)
-      : document.title;
-    document.title = myPick ? PREFIX + base : base;
-    return () => {
-      if (document.title.startsWith(PREFIX)) {
-        document.title = document.title.slice(PREFIX.length);
-      }
+    const PREFIXES = ["⏰ Your pick — ", "💸 Outbid — "];
+    const strip = (t: string) => {
+      for (const p of PREFIXES) if (t.startsWith(p)) return t.slice(p.length);
+      return t;
     };
-  }, [myPick]);
+    const base = strip(document.title);
+    document.title = titleFlag ? titleFlag + base : base;
+    return () => {
+      document.title = strip(document.title);
+    };
+  }, [titleFlag]);
 
+  // The clock banner scrolls away while captains browse the pool — a compact
+  // sticky bar takes over (shared hook; the inhouse room uses it too).
   const draftLive = !!state && state.status !== "COMPLETE";
-  useEffect(() => {
-    const el = bannerRef.current;
-    if (!el || !draftLive || typeof IntersectionObserver === "undefined")
-      return;
-    const obs = new IntersectionObserver(
-      ([entry]) => setBannerOffscreen(!entry.isIntersecting),
-      // The sticky site header is 64px tall — treat the banner as gone once
-      // it slides underneath it.
-      { rootMargin: "-64px 0px 0px 0px" },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [draftLive]);
+  const { ref: bannerRef, offscreen: bannerOffscreen } =
+    useBannerOffscreen(draftLive);
 
   async function act(url: string, body: Record<string, unknown>) {
+    unlockAudio(); // this click is a user gesture — prime audio for later
     setPending(true);
-    setError(null);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -276,21 +359,51 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Action failed");
+        // Toast, not an inline banner: race rejections ("Another bid just
+        // landed") arrive exactly while the captain is scrolled deep in the
+        // pool, where a top-of-room banner is invisible — a silently lost
+        // bid under a 30s clock. The global toaster is fixed-position.
+        pushToast("error", data.error || "Action failed");
       } else {
         apply(data);
         setSelected(null);
       }
     } catch {
-      setError("Network error");
+      pushToast("error", "Network error — that didn't go through");
     } finally {
       setPending(false);
     }
   }
 
+  if (noSeason) {
+    return (
+      <div className="rounded-[var(--radius)] border border-line bg-surface/60 p-8 text-center">
+        <div className="text-lg font-semibold">The draft isn&apos;t available</div>
+        <p className="mt-1 text-sm text-muted">
+          There&apos;s no active season right now.
+        </p>
+        <Link href="/" className={buttonClasses("secondary", "sm", "mt-4")}>
+          Back to home
+        </Link>
+      </div>
+    );
+  }
+
   if (!state) {
     return <div className="py-10 text-center text-muted">Loading draft…</div>;
   }
+
+  // Shared "polling is dead" strip — clocks below are ticking on stale state.
+  const disconnectedStrip = disconnected ? (
+    <div
+      role="status"
+      aria-live="polite"
+      className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
+    >
+      ⚠️ Connection lost — reconnecting… The auction keeps running on the
+      server; actions are paused until we&apos;re back.
+    </div>
+  ) : null;
 
   const { me } = state;
   // The countdowns tick inside <BidClock>/<NomClock> leaves (see below) so the
@@ -315,6 +428,65 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
     act("/api/draft/bid", { amount });
   };
 
+  if (state.status === "NOT_STARTED") {
+    // Waiting room, not a dead end: the poll flips this live the moment the
+    // admin starts — nobody has to hand-refresh into a running clock. The
+    // admin CTA renders only for admins (everyone else used to get bounced
+    // off /admin with no explanation).
+    return (
+      <div className="space-y-6">
+        {disconnectedStrip}
+        <div className="rounded-[var(--radius)] border border-line bg-surface/60 p-6 text-center">
+          <div className="text-2xl" aria-hidden>
+            ⏳
+          </div>
+          <div className="mt-1 text-lg font-semibold">
+            Waiting for the admin to start the auction
+          </div>
+          <div className="text-sm text-muted">
+            This page goes live automatically — no need to refresh.
+          </div>
+          {draftAtMs ? (
+            <div className="mt-2 text-sm text-muted">
+              🗓️ Draft night:{" "}
+              {/* Client component — this branch never SSRs (state loads via
+                  poll first), so browser-local formatting can't mismatch. */}
+              <strong className="text-fg">
+                {new Date(draftAtMs).toLocaleString(undefined, {
+                  weekday: "short",
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                })}
+              </strong>
+              <Countdown targetMs={draftAtMs} eventLabel="Draft" />
+            </div>
+          ) : null}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <Link href="/players" className={buttonClasses("secondary", "sm")}>
+              Scout the player pool
+            </Link>
+            <Link href="/teams" className={buttonClasses("secondary", "sm")}>
+              Captains &amp; budgets
+            </Link>
+            {me.isAdmin ? (
+              <Link href="/admin" className={buttonClasses("accent", "sm")}>
+                Start it from the admin panel →
+              </Link>
+            ) : null}
+          </div>
+        </div>
+        <AuctionPrimer
+          minBid={state.minBid}
+          teamSize={state.teamSize}
+          defaultOpen
+        />
+        {state.teams.length > 0 ? <TeamsGrid state={state} /> : null}
+      </div>
+    );
+  }
+
   if (state.status === "COMPLETE") {
     return (
       <div className="space-y-6">
@@ -332,21 +504,81 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
 
   return (
     <div className="space-y-6">
-      {error ? (
-        <div className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
-          {error}
+      {disconnectedStrip}
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          onClick={toggleSound}
+          aria-pressed={soundOn}
+          title={
+            soundOn
+              ? "Notification sound on — click to mute"
+              : "Notifications muted — click to enable a bell"
+          }
+          className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
+        >
+          <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
+          {soundOn ? "Sound on" : "Muted"}
+        </button>
+      </div>
+
+      {outbid ? (
+        <div
+          role="status"
+          className="flex flex-col items-center gap-1 rounded-[var(--radius)] border border-danger/50 bg-gradient-to-r from-danger/15 via-danger/10 to-danger/15 px-5 py-3 text-center"
+        >
+          <div className="font-display text-lg font-black uppercase tracking-widest text-danger">
+            💸 Outbid!
+          </div>
+          <div className="text-sm">
+            <span className="font-semibold">{outbid.team}</span> bid $
+            {outbid.amount} on <span className="font-semibold">{outbid.player}</span>
+          </div>
+          {state.me.canBid ? (
+            <button
+              type="button"
+              onClick={() => quickBid(1)}
+              disabled={pending || state.currentBid + 1 > me.myMaxBid}
+              className={buttonClasses("accent", "sm", "mt-1")}
+            >
+              Re-bid ${state.currentBid + 1}
+            </button>
+          ) : null}
         </div>
       ) : null}
 
       {soldFlash ? (
-        <div className="sold-flash flex flex-col items-center gap-1 rounded-[var(--radius)] border border-success/50 bg-gradient-to-r from-success/15 via-success/10 to-success/15 px-5 py-4 text-center">
-          <div className="font-display text-2xl font-black uppercase tracking-widest text-success">
-            Sold!
+        <div
+          className={cn(
+            "sold-flash flex flex-col items-center gap-1 rounded-[var(--radius)] border px-5 py-4 text-center",
+            soldFlash.isMe
+              ? "border-accent/60 bg-gradient-to-r from-accent/20 via-accent/10 to-accent/20"
+              : "border-success/50 bg-gradient-to-r from-success/15 via-success/10 to-success/15",
+          )}
+        >
+          <div
+            className={cn(
+              "font-display text-2xl font-black uppercase tracking-widest",
+              soldFlash.isMe ? "text-accent" : "text-success",
+            )}
+          >
+            {soldFlash.isMe ? "🎉 You're drafted!" : "Sold!"}
           </div>
           <div className="text-sm">
-            <span className="font-semibold">{soldFlash.name}</span> →{" "}
-            {soldFlash.team} for{" "}
-            <span className="font-bold text-accent">${soldFlash.price}</span>
+            {soldFlash.isMe ? (
+              <>
+                Welcome to <span className="font-semibold">{soldFlash.team}</span>{" "}
+                — they paid{" "}
+                <span className="font-bold text-accent">${soldFlash.price}</span>{" "}
+                for you.
+              </>
+            ) : (
+              <>
+                <span className="font-semibold">{soldFlash.name}</span> →{" "}
+                {soldFlash.team} for{" "}
+                <span className="font-bold text-accent">${soldFlash.price}</span>
+              </>
+            )}
           </div>
         </div>
       ) : null}
@@ -354,57 +586,112 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
       {/* Compact clock bar — pins under the site header while the captain is
           deep in the player pool, so the auction never disappears. */}
       {bannerOffscreen && (state.nominatedPlayer || state.nominationEndsAt) ? (
-        <button
-          type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          aria-label="Back to the auction clock"
-          className="fixed inset-x-0 top-16 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
-        >
-          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
-            {state.nominatedPlayer ? (
-              <>
-                <span className="flex min-w-0 items-center gap-2">
-                  <span aria-hidden>🔨</span>
-                  <span className="truncate font-medium">
-                    {state.nominatedPlayer.name}
-                  </span>
-                  <span className="shrink-0 font-mono font-semibold text-accent">
-                    ${state.currentBid}
-                  </span>
-                  {highBidderName ? (
-                    <span className="hidden truncate text-muted sm:inline">
-                      · {highBidderName}
+        // Outer element is a DIV so the action button can sit beside the
+        // scroll-back button — interactive content nested inside a <button>
+        // is invalid HTML (unreliable clicks, screen-reader breakage).
+        <div className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 backdrop-blur">
+          <div className="mx-auto flex h-11 w-full max-w-6xl items-center gap-3 px-4 text-sm sm:px-6">
+            <button
+              type="button"
+              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              aria-label="Back to the auction clock"
+              className="flex h-full min-w-0 flex-1 items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+            >
+              {disconnected ? (
+                <span className="shrink-0 text-xs font-medium text-danger">
+                  ⚠ reconnecting…
+                </span>
+              ) : null}
+              {state.nominatedPlayer ? (
+                <>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span aria-hidden>🔨</span>
+                    <span className="truncate font-medium">
+                      {state.nominatedPlayer.name}
                     </span>
-                  ) : null}
+                    <span className="shrink-0 font-mono font-semibold text-accent">
+                      ${state.currentBid}
+                    </span>
+                    {highBidderName ? (
+                      <span className="hidden truncate text-muted sm:inline">
+                        · {highBidderName}
+                      </span>
+                    ) : null}
+                  </span>
+                  <CompactClock
+                    endsAtMs={state.bidEndsAt}
+                    offsetMs={offsetMs}
+                    urgentAt={5}
+                    calmTone="text-accent"
+                  />
+                </>
+              ) : (
+                <>
+                  <span className="min-w-0 truncate text-muted">
+                    {nominatorName} to nominate…
+                  </span>
+                  <CompactClock
+                    endsAtMs={state.nominationEndsAt}
+                    offsetMs={offsetMs}
+                    urgentAt={10}
+                    calmTone="text-muted"
+                  />
+                </>
+              )}
+            </button>
+            {/* Act from HERE: scrolling a full page up and re-orienting burns
+                5-10s of a 30s bid clock — the dominant flow on phones where
+                the pool is deliberately DOM-first. */}
+            {state.nominatedPlayer && me.canBid ? (
+              <button
+                type="button"
+                onClick={() => quickBid(1)}
+                disabled={pending || state.currentBid + 1 > me.myMaxBid}
+                className={buttonClasses("accent", "sm", "shrink-0")}
+              >
+                {outbid
+                  ? `Re-bid $${state.currentBid + 1}`
+                  : `Bid $${state.currentBid + 1}`}
+              </button>
+            ) : !state.nominatedPlayer && me.canNominate && selected ? (
+              <button
+                type="button"
+                onClick={() =>
+                  act("/api/draft/nominate", {
+                    playerId: selected,
+                    amount: nomAmount,
+                  })
+                }
+                disabled={
+                  pending || nomAmount < state.minBid || nomAmount > me.myMaxBid
+                }
+                className={buttonClasses("accent", "sm", "max-w-[14rem] shrink-0")}
+              >
+                <span className="truncate">
+                  Nominate{" "}
+                  {state.available.find((p) => p.userId === selected)?.name ??
+                    ""}{" "}
+                  · ${nomAmount}
                 </span>
-                <CompactClock
-                  endsAtMs={state.bidEndsAt}
-                  offsetMs={offsetMs}
-                  urgentAt={5}
-                  calmTone="text-accent"
-                />
-              </>
-            ) : (
-              <>
-                <span className="min-w-0 truncate text-muted">
-                  {nominatorName} to nominate…
-                </span>
-                <CompactClock
-                  endsAtMs={state.nominationEndsAt}
-                  offsetMs={offsetMs}
-                  urgentAt={10}
-                  calmTone="text-muted"
-                />
-              </>
-            )}
+              </button>
+            ) : null}
           </div>
-        </button>
+        </div>
       ) : null}
 
       {/* On the block */}
       <div
         ref={bannerRef}
-        className="rounded-[var(--radius)] border border-line bg-surface/80"
+        className={cn(
+          "rounded-[var(--radius)] border border-line bg-surface/80",
+          // The viewer IS the player being auctioned — their moment glows.
+          !!me.userId &&
+            state.nominatedPlayer?.userId === me.userId &&
+            "border-accent/70 ring-2 ring-accent/30",
+          // Dim the (stale) clocks while polling is dead — they're ticking on
+          // the last state we saw, not the live auction.
+          disconnected && "opacity-50",
+        )}
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
           <div className="text-sm text-muted">
@@ -427,13 +714,19 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
                   size={52}
                 />
                 <div>
-                  <div className="text-xl font-bold">
+                  <div className="flex flex-wrap items-center gap-2 text-xl font-bold">
                     {state.nominatedPlayer.name}
+                    {me.userId === state.nominatedPlayer.userId ? (
+                      <Badge tone="accent">You're on the block!</Badge>
+                    ) : null}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted">
-                    {state.nominatedPlayer.mmr} MMR
+                    {state.nominatedPlayer.mmr > 0 ? (
+                      <span>{state.nominatedPlayer.mmr} MMR</span>
+                    ) : null}
                     <RankBadge rankTier={state.nominatedPlayer.rankTier} />
                     <RoleBadges roles={state.nominatedPlayer.roles} />
+                    <DiscordTag name={state.nominatedPlayer.discordName} />
                     {/* Scouting links — open in a new tab so a captain can't
                         navigate away mid-auction. */}
                     <Link
@@ -566,21 +859,38 @@ export function DraftRoom({ pollMs = 1200 }: { pollMs?: number }) {
         </div>
       </div>
 
+      <AuctionPrimer
+        minBid={state.minBid}
+        teamSize={state.teamSize}
+        defaultOpen={false}
+      />
+
+      {/* Pool column FIRST in DOM: on a phone the pool is what a captain on
+          the clock needs NOW — team cards would otherwise bury it 3-4 screens
+          down (and screen readers/tab order reach the pool first too).
+          lg:order-* restores the desktop layout: teams left, feed above pool
+          on the right. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="min-w-0 lg:col-span-2">
-          <TeamsGrid state={state} />
+        <div className="flex min-w-0 flex-col gap-6 lg:order-2">
+          {/* scroll-mt clears the 80px sticky header + the fixed clock bar
+              when the NominateBar's #player-pool anchor jumps here. */}
+          <div id="player-pool" className="scroll-mt-32 lg:order-2">
+            <AvailableList
+              state={state}
+              canNominate={me.canNominate}
+              selected={selected}
+              onPick={(userId) => {
+                setSelected(userId);
+                setNomAmount(state.minBid);
+              }}
+            />
+          </div>
+          <div className="lg:order-1">
+            <BidFeed events={events} />
+          </div>
         </div>
-        <div className="min-w-0 space-y-6">
-          <BidFeed events={events} />
-          <AvailableList
-            state={state}
-            canNominate={me.canNominate}
-            selected={selected}
-            onPick={(userId) => {
-              setSelected(userId);
-              setNomAmount(state.minBid);
-            }}
-          />
+        <div className="min-w-0 lg:order-1 lg:col-span-2">
+          <TeamsGrid state={state} />
         </div>
       </div>
     </div>
@@ -706,7 +1016,7 @@ function AvailableList({
                 <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <RoleBadges roles={p.roles} />
                   <RankBadge rankTier={p.rankTier} />
-                  {p.mmr}
+                  {p.mmr > 0 ? <span>{p.mmr}</span> : null}
                 </span>
               </button>
               <Link
@@ -803,9 +1113,14 @@ function NominateBar({
           {player.name}
         </span>
       ) : (
-        <span className="text-sm text-muted">
-          Pick a player from the list →
-        </span>
+        <a
+          href="#player-pool"
+          className="text-sm text-muted underline decoration-line underline-offset-4 hover:text-fg"
+        >
+          Pick a player from the pool
+          <span className="lg:hidden"> ↓</span>
+          <span className="hidden lg:inline"> →</span>
+        </a>
       )}
       <div className="ml-auto flex items-center gap-2">
         <label className="text-sm text-muted">Opening $</label>
@@ -834,6 +1149,63 @@ function NominateBar({
   );
 }
 
+// How the auction works — the learn audience has mostly never drafted this
+// way, and every one of these rules was previously discoverable only by being
+// burned by it. Static native <details>: accessible by default, no clock leaf.
+function AuctionPrimer({
+  minBid,
+  teamSize,
+  defaultOpen,
+}: {
+  minBid: number;
+  teamSize: number;
+  defaultOpen: boolean;
+}) {
+  return (
+    <details
+      open={defaultOpen || undefined}
+      className="rounded-[var(--radius)] border border-line bg-surface/60"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+        <span aria-hidden>📖</span> How the auction works
+        <span className="ml-auto text-xs font-normal text-muted">
+          rules &amp; timers
+        </span>
+      </summary>
+      <ul className="space-y-2 border-t border-line/60 px-5 py-4 text-sm text-muted">
+        <li>
+          <strong className="text-fg">Captains take turns nominating</strong>{" "}
+          a player from the pool — the order rotates until every roster is
+          full. Non-captains: sit back, you're the merchandise.
+        </li>
+        <li>
+          <strong className="text-fg">
+            Idle for {DEFAULTS.NOMINATION_TIMER_SECONDS}s on your nomination
+          </strong>{" "}
+          and the draft auto-nominates the top available player at ${minBid}{" "}
+          for you — take your time, but not all of it.
+        </li>
+        <li>
+          <strong className="text-fg">
+            Every bid resets the {DEFAULTS.BID_TIMER_SECONDS}s clock.
+          </strong>{" "}
+          When it hits zero, the high bidder wins the player.
+        </li>
+        <li>
+          <strong className="text-fg">Your max bid is capped</strong> — the
+          room reserves ${minBid} for each seat you'd still have to fill
+          afterwards, so you can always finish your roster.
+        </li>
+        <li>
+          <strong className="text-fg">Captains cost $0</strong> (they fill one
+          of the {teamSize} roster seats), and leftover budget is worth
+          nothing once the draft ends — spend it.
+        </li>
+      </ul>
+    </details>
+  );
+}
+
 function TeamsGrid({ state }: { state: DraftState }) {
   // A player is up for auction → the "max bid" lines can flag who's priced out.
   const nominationLive = !!state.nominatedPlayer;
@@ -843,6 +1215,11 @@ function TeamsGrid({ state }: { state: DraftState }) {
         const onClock =
           state.status === "IN_PROGRESS" && t.id === state.nominatorTeamId;
         const highBid = t.id === state.currentBidTeamId;
+        // Derived from the roster, not me.myTeamId (that's captain-only) —
+        // drafted players get a persistent home marker too.
+        const isMyTeam =
+          !!state.me.userId &&
+          t.members.some((m) => m.userId === state.me.userId);
         // The most this team can still bid on the current player while
         // reserving the minimum for its remaining empty slots.
         const cap = maxBid(
@@ -880,6 +1257,11 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   {onClock ? (
                     <span className="shrink-0">
                       <Badge tone="accent">on clock</Badge>
+                    </span>
+                  ) : null}
+                  {isMyTeam ? (
+                    <span className="shrink-0">
+                      <Badge tone="info">Your team</Badge>
                     </span>
                   ) : null}
                   {highBid ? (

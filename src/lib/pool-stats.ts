@@ -41,18 +41,22 @@ const BUCKETS: { label: string; min: number; max: number }[] = [
   { label: "4.5k+", min: 4500, max: Number.POSITIVE_INFINITY },
 ];
 
-/** Count players into fixed 1k-wide MMR buckets. */
+/** Count players into fixed 1k-wide MMR buckets (0 = unknown, excluded). */
 export function mmrDistribution(players: { mmr: number }[]): MmrBucket[] {
+  // MMR 0 means "unknown" (blank signup), not a very low MMR — bucketing it
+  // would paint unranked players as the bottom of the pool.
+  const known = players.filter((p) => p.mmr > 0);
   return BUCKETS.map((b) => ({
     label: b.label,
     min: b.min,
     max: b.max,
-    count: players.filter((p) => p.mmr >= b.min && p.mmr <= b.max).length,
+    count: known.filter((p) => p.mmr >= b.min && p.mmr <= b.max).length,
   }));
 }
 
-/** Mean MMR, rounded; 0 for an empty pool. */
+/** Mean of KNOWN MMRs (0 = unknown, excluded), rounded; 0 when none known. */
 export function averageMmr(players: { mmr: number }[]): number {
-  if (players.length === 0) return 0;
-  return Math.round(players.reduce((sum, p) => sum + p.mmr, 0) / players.length);
+  const known = players.filter((p) => p.mmr > 0);
+  if (known.length === 0) return 0;
+  return Math.round(known.reduce((sum, p) => sum + p.mmr, 0) / known.length);
 }

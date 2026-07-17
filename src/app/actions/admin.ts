@@ -48,11 +48,12 @@ import {
   playoffsStartedMessage,
   sendDiscordMessage,
   testMessage,
+  draftScheduledMessage,
 } from "@/lib/discord";
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import { bumpSessionEpoch } from "@/lib/session-epoch";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
-import { withdrawGateError } from "@/lib/registration";
+import { promoteGateError, withdrawGateError } from "@/lib/registration";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -443,6 +444,21 @@ export async function startDraft(
   }
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
+
+  // One-shot: the auction must never rerun over drafted rosters — re-running
+  // resets every budget to its full starting value while purchased TeamMember
+  // rows stay, and yanks the whole season back to DRAFT. Same guard family as
+  // addCaptain/removeCaptain/randomizeDraftOrder.
+  const existingDraft = await prisma.draft.findUnique({
+    where: { seasonId: season.id },
+    select: { status: true },
+  });
+  if (existingDraft && existingDraft.status !== DRAFT_STATUS.NOT_STARTED) {
+    return {
+      error: "The draft has already run — create a new season to redraft",
+    };
+  }
+
   const teams = await prisma.team.findMany({
     where: { seasonId: season.id },
     orderBy: { draftOrder: "asc" },
@@ -475,7 +491,10 @@ export async function startDraft(
   const budgets = mmrWeightedBudgets(
     season.draftBudget,
     season.budgetMmrWeight,
-    teams.map((t) => ({ teamId: t.id, mmr: mmrByUser.get(t.captainId) ?? null })),
+    // `|| null`, not `?? null`: a stored 0 means "MMR unknown" — passing it
+    // through as a known MMR would make that captain the pool minimum and
+    // hand them the maximum low-MMR budget boost while skewing everyone else.
+    teams.map((t) => ({ teamId: t.id, mmr: mmrByUser.get(t.captainId) || null })),
     (season.teamSize - 1) * DEFAULTS.MIN_BID,
   );
 
@@ -1580,4 +1599,89 @@ export async function syncSteamProfiles(
   }
   refresh();
   return { message: `Updated ${updated} of ${users.length} Steam profiles` };
+}
+
+/** Set (or clear) the draft night — announced with countdowns during signups. */
+export async function setDraftNight(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+
+  const raw = str(formData, "draftAt").trim();
+  const when = localDate(formData, "draftAt", "draftAtTs");
+  if (raw && !when) return { error: "Invalid draft night" };
+
+  await prisma.season.update({
+    where: { id: season.id },
+    data: { draftAt: when },
+  });
+  // Best-effort announcement — the countdown surfaces update either way.
+  if (when) {
+    await sendDiscordMessage(draftScheduledMessage(season.name, when.getTime()));
+  }
+  refresh();
+  return { message: when ? "Draft night set 🗓️" : "Draft night cleared" };
+}
+
+/**
+ * Promote an ACTIVE standin registration to a full PLAYER — the mid-season
+ * roster refill. Self-serve PLAYER signups close after SIGNUPS
+ * (registrationGate) and signFreeAgent refuses standins, so without this the
+ * only path to fill an abandoned seat was flipping the whole season back to
+ * SIGNUPS. Flow: late joiner registers as standin on /me → admin promotes →
+ * signs them via the free-agent form (which does the Discord announcement).
+ */
+export async function promoteStandinToPlayer(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const userId = str(formData, "userId");
+
+  const [registration, draftRow, pendingAssignments] = await Promise.all([
+    prisma.registration.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId } },
+      include: { user: true },
+    }),
+    prisma.draft.findUnique({ where: { seasonId: season.id } }),
+    prisma.standinAssignment.count({
+      where: {
+        standinUserId: userId,
+        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+      },
+    }),
+  ]);
+  if (!registration) {
+    return { error: "That person isn't registered for this season" };
+  }
+  const gateError = promoteGateError({
+    seasonStatus: season.status,
+    draftStatus: draftRow?.status ?? null,
+    registrationStatus: registration.status,
+    registrationType: registration.type,
+    pendingAssignments,
+  });
+  if (gateError) return { error: gateError };
+
+  await prisma.registration.update({
+    where: { id: registration.id },
+    data: { type: REGISTRATION_TYPE.PLAYER },
+  });
+  refresh();
+  return {
+    message: `${registration.user.name} is now a full player — sign them onto a team in Roster moves`,
+  };
 }

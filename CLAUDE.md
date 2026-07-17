@@ -50,6 +50,10 @@ renders per-phase so unused features stay hidden.
   `<ActionForm>` (`src/components/action-form.tsx`), which toasts the result via
   the global `<Toaster>`. Use `<SubmitButton confirm="…">` for destructive
   actions. Global `error.tsx` / `not-found.tsx` / `loading.tsx` exist.
+  The live rooms (draft/inhouse) toast `act()` failures via `pushToast` too —
+  never reintroduce inline top-of-room error banners there: race rejections
+  ("Another bid just landed") arrive while the captain is scrolled deep in the
+  pool where a banner is invisible, and the old banner persisted stale.
 - Run `npx tsc --noEmit` for a fast type check; `npm test` for unit;
   `npm run test:e2e` for Playwright — fully isolated: it schema-pushes and
   reseeds a DEDICATED `prisma/e2e.db` and serves it on port 3210 (never
@@ -68,6 +72,15 @@ renders per-phase so unused features stay hidden.
 - Both announced in Discord; the admin "Roster moves" card shows whichever
   forms currently apply (sign needs a short team + free agent; release needs
   any non-captain rostered).
+- `promoteStandinToPlayer`: flips an ACTIVE STANDIN registration to PLAYER —
+  the mid-season refill path (late joiners can only register as standins once
+  signups close, and `signFreeAgent` refuses standins). Guards in pure
+  `promoteGateError` (`registration.ts`, tested): blocked during SIGNUPS
+  (self-serve covers it), COMPLETE, a LIVE/PAUSED draft (would inject into
+  the running auction pool — pre-start and post-draft are fine), and while
+  the standin has assignments on unplayed matches (remove those first).
+  Third row in the Roster moves card; flow is promote → sign via the
+  free-agent form (which does the Discord announcement).
 
 ## Playoffs & standins (done)
 
@@ -91,6 +104,14 @@ renders per-phase so unused features stay hidden.
   `Game.dotaMatchId` unique to dedupe.
 - Admin: `MatchImportControls` (client, `useActionState` for inline errors) →
   `importGameAction` / `autoDetectAction`. Box score lives at `/matches/[id]`.
+- **Captain result reporting**: the two captains can import their own finished
+  games on `/matches/[id]` ("Report your result" card, shown while the match
+  isn't COMPLETED) — guards in `src/lib/match-report-service.ts`
+  (reschedule-service pattern, integration-tested in
+  `test/integration/match-report.itest.ts`), thin actions in
+  `src/app/actions/match-report.ts` (auth + "games" tag bust + toasts).
+  `MatchImportControls` now takes the two server actions as props (admin panel
+  passes the admin ones). Import-only — manual score entry stays admin-only.
 - Games roll up into `Match.homeScore/awayScore`; playoff game imports call
   `advancePlayoffBracket`. Note: `tsconfig` target is ES2017, so use
   `BigInt("…")` not `123n` literals.
@@ -102,6 +123,14 @@ renders per-phase so unused features stay hidden.
   `/leagues/{id}/matches`, `classifyGame` each vs. scheduled matches, import).
   Admin `setLeagueId` / `syncLeagueAction`. League registration is done at
   dota2.com/league; games are tagged by hosting private lobbies with the id.
+- **Discord contact**: `User.discordName` (empty string = unset; persists
+  across seasons). Pure `normalizeDiscordName` (`src/lib/discord-name.ts`,
+  tested — modern lowercase handles + legacy Name#1234, strips @, "" clears),
+  `updateDiscordName` action, edit card on `/me`. Rendered as the copyable
+  `<DiscordTag>` chip (`src/components/discord-tag.tsx`, clipboard + toast)
+  on the signup pool, team rosters, player profiles, and the draft room's
+  nominated panel — ALWAYS gated to signed-in viewers (contact info is for
+  members, not the public internet; keep that rule on new surfaces).
 - **Player questionnaire**: `Registration.roles` (comma-sep position keys,
   helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
   `captainNote` — captured on `/me`, surfaced in the player pool and draft room
@@ -191,7 +220,20 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   to update the server-rendered leaderboard + results). Page: `src/app/inhouse/page.tsx`.
   Nav link is always visible (season-independent).
 - **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
-  players so `/inhouse` isn't empty on a fresh DB.
+  players so `/inhouse` isn't empty on a fresh DB (they prune ~3 min after
+  seeding once someone polls /inhouse — expected, see queue presence).
+- **Queue presence (heartbeat)**: `InhouseQueueEntry.lastSeenAt`, refreshed
+  (throttled, `QUEUE_HEARTBEAT_SECONDS`) by the viewer's own polls at the top
+  of `getInhouseState` — a spot is held by keeping /inhouse open. Entries seen
+  more than `QUEUE_AWAY_SECONDS` ago are "away" (listed dimmed with an away
+  chip, excluded from `needed`, the headline count, the dashboard strip count,
+  and lobby formation); past `QUEUE_DROP_SECONDS` they're pruned inside
+  `maybeFormLobby` (runs on every poll, before the active-lobby early return).
+  `cancelLobby` re-queues its players with a BACKDATED heartbeat
+  (`requeueLastSeenAt`) so present players re-confirm on their next poll and
+  ghosts drop out instead of instantly re-forming the lobby. Pure helpers
+  (`queuePresence`/`queuePresentCutoff`/`queueDropCutoff`/`requeueLastSeenAt`)
+  in `inhouse.ts`, tested; window invariants asserted in `inhouse.test.ts`.
 - **Balance meter**: pure `mmrBalance` (`inhouse.ts`, tested — MMR 0 =
   unknown, excluded) drives per-team "avg N" chips on the drafting columns
   and a "⚖️ X ahead by N avg MMR" line in the on-the-clock banner (sm+).
@@ -205,8 +247,9 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `startDraft` warns in its success toast when seats outnumber the pool.
 - `recordResult` validates scores against the match's `bestOf` via pure
   `seriesScoreError` (`standings.ts`); partial results/forfeits are allowed.
-- Cancelling an inhouse lobby re-queues its 10 players (fresh captain vote on
-  the next poll).
+- Cancelling an inhouse lobby re-queues its 10 players with a backdated
+  presence heartbeat — a fresh captain vote forms once the players still on
+  the page have re-confirmed via their own polls (ghosts drop out instead).
 
 ## Discord notifications (done)
 
@@ -229,8 +272,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   started (`startDraft`), every auction sale (`resolveExpiredNomination`,
   captured in-tx and sent post-commit — one message per sale, idempotent),
   draft complete (both draft-service resolvers), match results
-  (`recordResult`), playoff bracket (`startPlayoffs`), and the champion
-  (`advancePlayoffBracket`).
+  (`recordResult`), playoff bracket (`startPlayoffs`), the champion
+  (`advancePlayoffBracket`), and inhouse moments: lobby formed
+  (`maybeFormLobby`, captured in-tx/sent post-commit) plus a "queue is two
+  short" ping (`joinQueue` — fires only on an upward crossing of
+  `LOBBY_SIZE-2` present players, never on the lobby-forming join, throttled
+  via the `inhouseQueuePingAt` Setting to one per `QUEUE_PING_MIN_MINUTES`).
+  The inhouse room also flips `document.title` ("(!) Your pick…") while the
+  viewer's attention is needed — works without the sound toggle/audio unlock.
 
 ## Match-night check-in (done)
 
@@ -244,6 +293,17 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   while a match is unplayed.
 - Admin standin card flags players who declared OUT and aren't covered by an
   assignment yet, right above the assign form.
+- **Match-night Discord reminder**: `src/lib/reminder-service.ts`
+  (`maybeAnnounceUpcomingWeek`) — lazy, fired by the invisible
+  `<WeekReminderPing>` server component (own `<Suspense fallback={null}>`) on
+  the dashboard and /schedule. Announces the next week's unplayed fixtures
+  once kickoff is within `WEEK_REMINDER.AHEAD_HOURS` (24h ahead, up to 3h
+  after) with `<t:epoch:R>` kickoffs and standin-aware check-in counts (same
+  `matchNightRoster`/`teamAvailability` as /schedule). Idempotent via an
+  ATOMIC `weekReminder:<season>:<week>` Setting CREATE (P2002 ⇒ already sent
+  — deliberately stronger than honors' read-then-upsert, the trigger is
+  concurrent page loads). The send is awaited (serverless kills orphans).
+  Integration-tested in `test/integration/reminders.itest.ts`.
 
 ## Returning-player prefill (done)
 
@@ -303,6 +363,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 ## Draft room QoL (done)
 
+- Draft-night alerts: the room chimes (shared `src/components/chime.ts`, also
+  used by inhouse; persisted `draftSound` toggle, gesture unlock in `act()`)
+  on your-turn-to-nominate and on being outbid; an OUTBID flash (with one-tap
+  re-bid via `quickBid`) latches until the poll sees it stale, and the tab
+  title flips "⏰ Your pick — "/"💸 Outbid — ". The outbid predicate is pure
+  `wasOutbid` (`draft.ts`, tested) — its same-player guard prevents a false
+  flash when a winning bid resolves into a fresh nomination within one poll.
 - The auction's "Available" list has search, position-filter chips, and
   MMR/rank/name sorting (`AvailableList` in `draft-room.tsx`).
   `filterAndSortPlayers` (`player-pool.ts`) is generic over
@@ -360,6 +427,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   container and a `truncate` span needs `min-w-0`.
 - `CheckinBanner` text has `min-w-[14rem]` so the RSVP buttons wrap below the
   copy on phones instead of crushing it.
+- **The site header is `h-20` (80px)** — anything pinned beneath it must use
+  the same offset and be updated TOGETHER: the draft room's fixed compact
+  clock bar (`top-20`) and its IntersectionObserver (`rootMargin -80px`),
+  anchor targets (`scroll-mt-20`, pool anchor `scroll-mt-32` = header + bar).
+  A past header resize (h-16→h-20) silently clipped the clock bar.
+- Draft room on phones: the player-pool column comes FIRST in DOM (captains
+  on the clock need it now; `lg:order-*` restores teams-left/feed-above-pool
+  on desktop). Keep the `#player-pool` anchor + NominateBar's ↓ link working.
 
 ## Fantasy league (done, branch: bigger-features)
 
@@ -608,6 +683,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 ## Rescheduling (done)
 
+- **Both demand-a-response events announce to Discord**: a NEW "OUT" RSVP
+  (`setAvailability` — reads the prior row first so IN↔OUT flapping can't
+  spam; `playerOutMessage`) and a fresh reschedule proposal
+  (`proposeReschedule` service now returns `ProposedReschedule` announcement
+  data, action sends `rescheduleProposedMessage`). The dashboard's
+  `MyNextMatch` also shows a "⏳ … Respond →" strip to the opposing captain
+  while a proposal is pending.
 - **Admin week mover**: `setWeekNight` action — retimes a week's unplayed
   matches from one input; optional cascade shifts later scheduled weeks by
   the same delta. Form lives in the admin Schedule & results card.
@@ -662,6 +744,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   components via `useSecondsLeft`/`useElapsedMs` (`src/components/room-clock.tsx`)
   so only the clock text re-renders each 250ms — NOT the room + player pool.
   Don't reintroduce a room-level `forceTick`; keep new countdowns in a leaf.
+- **Poll health**: both rooms wire `usePollHealth` (`room-clock.tsx`) into
+  their poll loops — failures counted in refs, one `disconnected` boolean
+  flips at ≥3 consecutive failures (never a per-poll re-render). While
+  disconnected: aria-live danger strip, ALL actions disabled (each room
+  derives `pending = reqPending || disconnected`), draft clock banner dimmed
+  + "reconnecting" in the sticky bar. A 404 from `/api/draft/tick` is
+  terminal ("no active season" card), not a retry loop. Never swallow poll
+  failures silently — that's how captains watched a frozen auction sell
+  their player.
 - **DB indexes**: hot filter/join columns are indexed (`Match.seasonId`/home/
   away, `Game.matchId`, `Registration(seasonId,status,type)`, `TeamMember`
   team/user, `Bid.draftId`, `StandinAssignment.matchId`, `Prediction.userId`).

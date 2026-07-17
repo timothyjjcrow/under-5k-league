@@ -13,6 +13,17 @@ export type AcceptedReschedule = {
   newTime: Date;
 };
 
+// Announcement data for a fresh proposal (mirrors AcceptedReschedule) — the
+// action layer does the Discord send, so a webhook failure can never affect
+// the proposal write itself.
+export type ProposedReschedule = {
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  proposedTime: Date;
+};
+
 // Sanity bounds for a proposed time: a datetime-local typo (year 0002 from
 // typing "2", 20268 from a stray digit) or a past date would otherwise sail
 // straight into Match.scheduledAt on acceptance.
@@ -31,7 +42,7 @@ export async function proposeReschedule(
   userId: string,
   matchId: string,
   proposedTime: Date,
-): Promise<void> {
+): Promise<ProposedReschedule> {
   const match = await prisma.match.findUnique({
     where: { id: matchId },
     include: { homeTeam: true, awayTeam: true },
@@ -56,6 +67,14 @@ export async function proposeReschedule(
       data: { matchId, proposedById: userId, proposedTime },
     }),
   ]);
+
+  return {
+    homeName: match.homeTeam.name,
+    awayName: match.awayTeam.name,
+    week: match.week,
+    isPlayoff: match.phase !== "REGULAR",
+    proposedTime,
+  };
 }
 
 /**

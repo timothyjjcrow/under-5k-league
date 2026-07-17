@@ -128,6 +128,47 @@ export function playersNeeded(
   return Math.max(0, lobbySize - queueSize);
 }
 
+// ---- Queue presence (heartbeat math) ----------------------------------------
+// A queue spot is held by keeping /inhouse open: every state poll refreshes the
+// entry's lastSeenAt (see touchQueueHeartbeat in inhouse-service.ts). These pure
+// helpers classify entries by heartbeat age so the service, the queue UI, and
+// the dashboard count all agree on who is actually here.
+
+export type QueuePresence = "present" | "away";
+
+/** Present = heartbeat recent enough to count toward forming a lobby. */
+export function queuePresence(
+  lastSeenAtMs: number,
+  nowMs: number,
+  awaySeconds: number = INHOUSE.QUEUE_AWAY_SECONDS,
+): QueuePresence {
+  return nowMs - lastSeenAtMs > awaySeconds * 1000 ? "away" : "present";
+}
+
+/** SQL cutoff: entries seen at/after this Date count as present. */
+export function queuePresentCutoff(nowMs: number): Date {
+  return new Date(nowMs - INHOUSE.QUEUE_AWAY_SECONDS * 1000);
+}
+
+/** SQL cutoff: entries seen before this Date are dropped from the queue. */
+export function queueDropCutoff(nowMs: number): Date {
+  return new Date(nowMs - INHOUSE.QUEUE_DROP_SECONDS * 1000);
+}
+
+/**
+ * lastSeenAt for players re-queued by a cancelled lobby: stale enough that
+ * they DON'T count toward re-forming (no ghost lobby seconds after a cancel),
+ * past the heartbeat throttle so a present player's very next poll re-confirms
+ * them, yet inside the drop window so nobody is pruned before they get the
+ * chance (QUEUE_RECONFIRM_SECONDS of slack).
+ */
+export function requeueLastSeenAt(nowMs: number): Date {
+  return new Date(
+    nowMs -
+      (INHOUSE.QUEUE_DROP_SECONDS - INHOUSE.QUEUE_RECONFIRM_SECONDS) * 1000,
+  );
+}
+
 export type MmrBalance = {
   avg1: number;
   avg2: number;

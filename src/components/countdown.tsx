@@ -7,7 +7,14 @@
 import { useEffect, useState } from "react";
 import { countdownLabel } from "@/lib/countdown";
 
-export function Countdown({ targetMs }: { targetMs: number }) {
+export function Countdown({
+  targetMs,
+  eventLabel = "Match",
+}: {
+  targetMs: number;
+  /** Spoken event name — "Draft starts in 2d", not every timer is a match. */
+  eventLabel?: string;
+}) {
   const [label, setLabel] = useState<string | null>(null);
   useEffect(() => {
     const compute = () => setLabel(countdownLabel(targetMs, Date.now()));
@@ -20,7 +27,9 @@ export function Countdown({ targetMs }: { targetMs: number }) {
   return (
     <span
       role="timer"
-      aria-label={live ? "Match is happening now" : `Match starts ${label}`}
+      aria-label={
+        live ? `${eventLabel} is happening now` : `${eventLabel} starts ${label}`
+      }
       className={
         live
           ? "ml-1.5 inline-block whitespace-nowrap rounded-full border border-success/40 bg-success/15 px-2 py-0.5 align-middle text-xs font-medium text-success"

@@ -2,10 +2,11 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
-import { pickemStandings, pickSplit, predictionOpen } from "@/lib/pickem";
+import { pickemStandings, pickSplit, predictionOpen , groupOpenByWeek } from "@/lib/pickem";
 import { savePrediction } from "@/app/actions/pickem";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { LocalTime } from "@/components/local-time";
+import { Countdown } from "@/components/countdown";
 import { formatMatchTime } from "@/lib/match-time";
 import {
   Avatar,
@@ -84,7 +85,7 @@ export default async function PickemPage() {
         subtitle={`${season.name} · call every match, top the oracle board`}
         action={
           viewer ? null : (
-            <Link href="/login" className="text-sm text-info hover:underline">
+            <Link href="/login?next=/pickem" className="text-sm text-info hover:underline">
               Sign in to play →
             </Link>
           )
@@ -155,8 +156,15 @@ export default async function PickemPage() {
             description="Every remaining match is locked or finished — check the oracle board."
           />
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {open.map((m) => {
+          <div className="space-y-4">
+            {groupOpenByWeek(open).map(({ week, matches: weekMatches }, wi) => {
+              const isFirstWeek = wi === 0;
+              const picked = viewer
+                ? weekMatches.filter((wm) => myPicks.has(wm.id)).length
+                : 0;
+              const grid = (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {weekMatches.map((m) => {
               const split = pickSplit(predictions, m.id, m.homeTeamId);
               const total = split.home + split.away;
               const myPick = myPicks.get(m.id);
@@ -214,11 +222,19 @@ export default async function PickemPage() {
                       </span>
                       <span className="flex items-center gap-2">
                         {m.scheduledAt ? (
-                          <LocalTime
-                            ts={m.scheduledAt.getTime()}
-                            variant="full"
-                            initial={formatMatchTime(m.scheduledAt, "full")}
-                          />
+                          <>
+                            <LocalTime
+                              ts={m.scheduledAt.getTime()}
+                              variant="full"
+                              initial={formatMatchTime(m.scheduledAt, "full")}
+                            />
+                            {/* Lock countdown — picks lock at start. Only the
+                                earliest open week; Countdown itself renders
+                                for ANY future target. */}
+                            {isFirstWeek ? (
+                              <Countdown targetMs={m.scheduledAt.getTime()} />
+                            ) : null}
+                          </>
                         ) : (
                           "time TBD"
                         )}
@@ -242,6 +258,34 @@ export default async function PickemPage() {
                     ) : null}
                   </CardBody>
                 </Card>
+              );
+                  })}
+                </div>
+              );
+              const headerAside = viewer
+                ? ` — you've picked ${picked} of ${weekMatches.length}`
+                : ` — ${weekMatches.length} match${weekMatches.length === 1 ? "" : "es"}`;
+              return isFirstWeek ? (
+                <section key={week} className="space-y-3">
+                  <h3 className="text-sm font-semibold">
+                    Week {week}
+                    <span className="font-normal text-muted">{headerAside}</span>
+                  </h3>
+                  {grid}
+                </section>
+              ) : (
+                // Later weeks stay pickable but collapsed — the weekly ritual
+                // is about what locks NEXT, not week 7's coin flips.
+                <details
+                  key={week}
+                  className="rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3"
+                >
+                  <summary className="cursor-pointer text-sm font-semibold marker:text-muted">
+                    Week {week}
+                    <span className="font-normal text-muted">{headerAside}</span>
+                  </summary>
+                  <div className="mt-4">{grid}</div>
+                </details>
               );
             })}
           </div>

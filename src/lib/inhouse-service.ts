@@ -8,6 +8,10 @@ import {
   nextPickTeam,
   orderCaptains,
   playersNeeded,
+  queueDropCutoff,
+  queuePresence,
+  queuePresentCutoff,
+  requeueLastSeenAt,
   tallyMethod,
   type CaptainCandidate,
   type CaptainMethod,
@@ -21,6 +25,12 @@ import {
   type OpenDotaMatch,
 } from "./dota";
 import { classifyGame } from "./match-import";
+import {
+  inhouseLobbyMessage,
+  inhouseQueueMessage,
+  sendDiscordMessage,
+} from "./discord";
+import { getSetting, setSetting, SETTING_KEYS } from "./settings";
 import type { SessionUser } from "./auth";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -76,14 +86,29 @@ async function loadRecords(
  * vote on how captains are chosen before the draft starts (resolveCaptainVote).
  */
 export async function maybeFormLobby(): Promise<boolean> {
-  return prisma.$transaction(async (tx) => {
+  // Captured in-tx, sent post-commit (draft-sale pattern) — the active-lobby
+  // guard means at most one formation, so at most one announcement.
+  let announce: string | null = null;
+  const formed = await prisma.$transaction(async (tx) => {
+    const now = Date.now();
+    // Ghosts never get drafted: drop entries whose heartbeat went silent (the
+    // player closed /inhouse long ago), so the queue count everyone watches
+    // stays honest. Runs on every poll — the table only ever holds a handful
+    // of rows.
+    await tx.inhouseQueueEntry.deleteMany({
+      where: { lastSeenAt: { lt: queueDropCutoff(now) } },
+    });
+
     const active = await tx.inhouseLobby.findFirst({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
       select: { id: true },
     });
     if (active) return false;
 
+    // Only players seen recently count toward the ten — an "away" entry keeps
+    // its queue position but can't be pulled into a lobby it won't show up to.
     const queue = await tx.inhouseQueueEntry.findMany({
+      where: { lastSeenAt: { gte: queuePresentCutoff(now) } },
       orderBy: { joinedAt: "asc" },
       take: INHOUSE.LOBBY_SIZE,
     });
@@ -109,8 +134,20 @@ export async function maybeFormLobby(): Promise<boolean> {
     await tx.inhouseQueueEntry.deleteMany({
       where: { userId: { in: queue.map((q) => q.userId) } },
     });
+
+    // Player names for the Discord announcement, in queue order.
+    const users = await tx.user.findMany({
+      where: { id: { in: queue.map((q) => q.userId) } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(users.map((u) => [u.id, u.name]));
+    announce = inhouseLobbyMessage(
+      queue.map((q) => nameById.get(q.userId) ?? "?"),
+    );
     return true;
   });
+  if (formed && announce) await sendDiscordMessage(announce);
+  return formed;
 }
 
 /**
@@ -351,13 +388,57 @@ export async function joinQueue(
     return { ok: false, error: "You're already in a live inhouse" };
   }
 
+  const presentBefore = await prisma.inhouseQueueEntry.count({
+    where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
+  });
+
   await prisma.inhouseQueueEntry.upsert({
     where: { userId: viewer.id },
     create: { userId: viewer.id, mmr: safeMmr },
-    update: { mmr: safeMmr }, // keep original joinedAt so we don't lose queue position
+    // Keep original joinedAt so we don't lose queue position; an explicit
+    // re-join is also a fresh sign of life.
+    update: { mmr: safeMmr, lastSeenAt: new Date() },
   });
-  await maybeFormLobby();
+  const formed = await maybeFormLobby();
+
+  // "Almost there" Discord ping: only when THIS join crosses the milestone
+  // upward (so hovering at the threshold stays quiet), never on the join that
+  // formed a lobby (that gets its own announcement), and at most once per
+  // throttle window so leave/rejoin churn can't spam the channel.
+  if (!formed) {
+    const milestone = INHOUSE.LOBBY_SIZE - 2;
+    const presentAfter = await prisma.inhouseQueueEntry.count({
+      where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
+    });
+    if (presentBefore < milestone && presentAfter >= milestone) {
+      const last = Number(
+        (await getSetting(SETTING_KEYS.INHOUSE_QUEUE_PING_AT)) ?? 0,
+      );
+      if (Date.now() - last > INHOUSE.QUEUE_PING_MIN_MINUTES * 60_000) {
+        // Claim the throttle before sending so concurrent joins can't double-ping.
+        await setSetting(SETTING_KEYS.INHOUSE_QUEUE_PING_AT, String(Date.now()));
+        await sendDiscordMessage(
+          inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE),
+        );
+      }
+    }
+  }
   return { ok: true };
+}
+
+/**
+ * Holding a queue spot means keeping /inhouse open: every state poll refreshes
+ * the viewer's own heartbeat. Throttled — the conditional update only writes
+ * once per QUEUE_HEARTBEAT_SECONDS, so pollers don't hammer the DB.
+ */
+async function touchQueueHeartbeat(viewerId: string): Promise<void> {
+  const staleBefore = new Date(
+    Date.now() - INHOUSE.QUEUE_HEARTBEAT_SECONDS * 1000,
+  );
+  await prisma.inhouseQueueEntry.updateMany({
+    where: { userId: viewerId, lastSeenAt: { lt: staleBefore } },
+    data: { lastSeenAt: new Date() },
+  });
 }
 
 /** Remove the current user from the queue. No-op if they're not queued. */
@@ -681,7 +762,9 @@ export async function cancelLobby(viewer: SessionUser): Promise<ActionResult> {
     }),
     // Put everyone back in the queue so a cancelled lobby (wrong captains,
     // someone AFK, …) re-forms with a fresh vote instead of stranding 10
-    // players. Anyone who's done for the night just leaves the queue.
+    // players. The heartbeat is backdated: players still on the page
+    // re-confirm on their next poll, while the ghosts that likely caused the
+    // cancel never do — so the same lobby can't instantly re-form around them.
     ...players.map((p, i) =>
       prisma.inhouseQueueEntry.upsert({
         where: { userId: p.userId },
@@ -690,8 +773,9 @@ export async function cancelLobby(viewer: SessionUser): Promise<ActionResult> {
           mmr: p.mmr,
           // Stagger joins so queue order stays deterministic.
           joinedAt: new Date(Date.now() + i),
+          lastSeenAt: requeueLastSeenAt(Date.now()),
         },
-        update: {},
+        update: { lastSeenAt: requeueLastSeenAt(Date.now()) },
       }),
     ),
   ]);
@@ -734,6 +818,8 @@ type VoteBlock = {
 
 /** Everything the inhouse room client needs, tailored to the viewing user. */
 export async function getInhouseState(viewer: SessionUser | null) {
+  // Heartbeat before forming: the polling viewer must count as present.
+  if (viewer) await touchQueueHeartbeat(viewer.id);
   await maybeFormLobby();
   await resolveCaptainVote();
   await resolveStalledPick();
@@ -891,6 +977,79 @@ export async function getInhouseState(viewer: SessionUser | null) {
       }
     : null;
 
+  // Personal end-of-game payoff: the active-statuses query above drops a
+  // COMPLETED lobby instantly, so the room would silently snap to the queue.
+  // Probe cheaply (the 1.5s poll must not scan history every tick) for a
+  // completed lobby the viewer just played; only on a hit run the
+  // full-history Elo summary (no take window — Elo accumulates over ALL
+  // games, per CLAUDE.md) to read their rating delta.
+  let lastResult: null | {
+    lobbyId: string;
+    winnerSide: "Radiant" | "Dire";
+    radiantScore: number;
+    direScore: number;
+    myTeamWon: boolean;
+    eloDelta: number;
+  } = null;
+  if (viewer) {
+    const recent = await prisma.inhouseLobby.findFirst({
+      where: {
+        status: INHOUSE_STATUS.COMPLETED,
+        updatedAt: { gte: new Date(now - 10 * 60_000) },
+        players: { some: { userId: viewer.id } },
+      },
+      orderBy: { updatedAt: "desc" },
+      include: { players: true },
+    });
+    if (recent && recent.winnerTeam != null) {
+      const history = await prisma.inhouseLobby.findMany({
+        where: { status: INHOUSE_STATUS.COMPLETED },
+        select: {
+          id: true,
+          winnerTeam: true,
+          createdAt: true,
+          players: {
+            select: {
+              userId: true,
+              team: true,
+              user: { select: { name: true, avatar: true } },
+            },
+          },
+        },
+      });
+      const recs = summarizeInhouse(
+        history.map((l) => ({
+          id: l.id,
+          winnerTeam: l.winnerTeam,
+          createdAt: l.createdAt,
+          players: l.players.map((pl) => ({
+            userId: pl.userId,
+            name: pl.user.name,
+            avatar: pl.user.avatar,
+            team: pl.team,
+          })),
+        })),
+      );
+      const mine = recs.find((r) => r.userId === viewer.id);
+      const myPlayer = recent.players.find((pl) => pl.userId === viewer.id);
+      lastResult = {
+        lobbyId: recent.id,
+        winnerSide:
+          recent.winnerTeam === recent.radiantTeam ? "Radiant" : "Dire",
+        radiantScore: recent.radiantScore ?? 0,
+        direScore: recent.direScore ?? 0,
+        myTeamWon: myPlayer?.team === recent.winnerTeam,
+        eloDelta: mine?.lastChange ?? 0,
+      };
+    }
+  }
+
+  // "Away" entries (heartbeat gone quiet — tab closed or backgrounded hard)
+  // keep their spot for a grace window but don't count toward the ten.
+  const presentCount = queue.filter(
+    (q) => queuePresence(q.lastSeenAt.getTime(), now) === "present",
+  ).length;
+
   return {
     now,
     lobbySize: INHOUSE.LOBBY_SIZE,
@@ -898,13 +1057,15 @@ export async function getInhouseState(viewer: SessionUser | null) {
     pickSeconds: INHOUSE.PICK_SECONDS,
     voteSeconds: INHOUSE.VOTE_SECONDS,
     detectMinMinutes: INHOUSE.DETECT_MIN_MINUTES,
-    needed: playersNeeded(queue.length),
+    lastResult,
+    needed: playersNeeded(presentCount),
     queue: queue.map((q) => ({
       userId: q.userId,
       name: q.user.name,
       avatar: q.user.avatar,
       rankTier: q.user.rankTier,
       mmr: q.mmr,
+      away: queuePresence(q.lastSeenAt.getTime(), now) === "away",
     })),
     lobby,
     me: {

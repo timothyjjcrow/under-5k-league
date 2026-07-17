@@ -121,3 +121,25 @@ export function nextNominatorIndex(
   }
   return -1;
 }
+
+/**
+ * Did the viewer's team just lose the high bid between two polls? The
+ * same-player guard matters: when a winning bid resolves into a sale AND the
+ * next nomination lands within one poll, the bid team changes but it's a new
+ * auction — flashing "Outbid!" then would be a lie.
+ */
+export function wasOutbid(args: {
+  myTeamId: string | null;
+  prevBidTeamId: string | null;
+  curBidTeamId: string | null;
+  prevNominatedId: string | null;
+  curNominatedId: string | null;
+}): boolean {
+  return (
+    !!args.myTeamId &&
+    args.prevBidTeamId === args.myTeamId &&
+    args.curBidTeamId !== args.myTeamId &&
+    !!args.curNominatedId &&
+    args.curNominatedId === args.prevNominatedId
+  );
+}

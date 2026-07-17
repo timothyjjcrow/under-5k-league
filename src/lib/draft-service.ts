@@ -343,6 +343,9 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
           accountId:
             nominatedPlayer.user.dotaAccountId ??
             steamIdToAccountId(nominatedPlayer.user.steamId),
+          // Contact chip is for league members — the room is signed-in-gated
+          // in practice, but keep the same rule as /players anyway.
+          discordName: viewer ? nominatedPlayer.user.discordName : "",
         }
       : null,
     teams: teamViews,

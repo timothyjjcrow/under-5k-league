@@ -9,6 +9,7 @@ import {
   updateDotaAccount,
   refreshRank,
   refreshSteamProfile,
+  updateDiscordName,
 } from "@/app/actions/registration";
 import { steamIdToAccountId } from "@/lib/dota";
 import { HARD_MMR_CEILING } from "@/lib/constants";
@@ -16,6 +17,7 @@ import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchPhaseLabel } from "@/lib/schedule";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
+import { Countdown } from "@/components/countdown";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
 import {
@@ -34,7 +36,7 @@ export const metadata = { title: "Your profile" };
 
 export default async function MePage() {
   const user = await getSessionUser();
-  if (!user) redirect("/login");
+  if (!user) redirect("/login?next=/me");
 
   const season = await getActiveSeason();
   const reg = season
@@ -138,6 +140,40 @@ export default async function MePage() {
         rankTier={dbUser?.rankTier ?? null}
       />
 
+      {/* The league coordinates on Discord — this is how captains reach their
+          roster for scheduling, check-ins, and standin scrambles. */}
+      <Card>
+        <CardHeader
+          title="Discord"
+          subtitle={
+            dbUser?.discordName
+              ? "Shown to signed-in league members on rosters and the player pool."
+              : "Add your Discord so your captain can reach you — it's how the league talks."
+          }
+        />
+        <CardBody>
+          <ActionForm
+            action={updateDiscordName}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <input
+              name="discordName"
+              defaultValue={dbUser?.discordName ?? ""}
+              placeholder="e.g. dendi_official"
+              aria-label="Discord username"
+              maxLength={40}
+              className="h-10 w-full max-w-xs rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+            />
+            <SubmitButton variant="secondary" size="sm">
+              Save
+            </SubmitButton>
+            <span className="text-xs text-muted">
+              Blank clears it. Legacy Name#1234 tags work too.
+            </span>
+          </ActionForm>
+        </CardBody>
+      </Card>
+
       {!season ? (
         <Card>
           <CardBody className="text-center text-muted">
@@ -164,6 +200,22 @@ export default async function MePage() {
             }
           />
           <CardBody className="space-y-5">
+            {season.draftAt && season.status === "SIGNUPS" ? (
+              <p className="text-sm text-muted">
+                🗓️ Draft night:{" "}
+                <strong className="text-fg">
+                  <LocalTime
+                    ts={season.draftAt.getTime()}
+                    variant="full"
+                    initial={formatMatchTime(season.draftAt, "full")}
+                  />
+                </strong>
+                <Countdown
+                  targetMs={season.draftAt.getTime()}
+                  eventLabel="Draft"
+                />
+              </p>
+            ) : null}
             {member ? (
               <Link
                 href={`/teams/${member.team.id}`}
@@ -314,14 +366,20 @@ export default async function MePage() {
                   id="mmr"
                   name="mmr"
                   type="number"
-                  min={0}
+                  // min=1: a typed 0 fails native validation, while BLANK stays
+                  // allowed — 0 is the stored "unknown" sentinel, never typed.
+                  min={1}
                   max={HARD_MMR_CEILING}
-                  defaultValue={form?.mmr ?? ""}
+                  // `|| ""` (not ??): a stored unknown (0) must render blank,
+                  // or resubmitting the form trips the min=1 validation.
+                  defaultValue={form?.mmr || ""}
                   placeholder="e.g. 3200"
                   className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
                 />
                 <p className="mt-1 text-xs text-muted">
-                  Used to help balance the draft. Be honest!
+                  Unranked or not sure? Leave it blank — captains will see your
+                  ranked medal instead, and you can update it later. Used to
+                  help balance the draft. Be honest!
                   {season.maxMmr > 0
                     ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
                     : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}

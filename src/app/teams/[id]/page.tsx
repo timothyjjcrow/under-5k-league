@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
+import { DiscordTag } from "@/components/discord-tag";
 import { shareMetadata } from "@/lib/share-metadata";
 import { LocalTime } from "@/components/local-time";
 import { computeStandings } from "@/lib/standings";
@@ -81,6 +83,7 @@ export default async function TeamPage({
     },
   });
   if (!team) notFound();
+  const viewer = await getSessionUser(); // contact chips are members-only
 
   const memberIds = team.members.map((m) => m.userId);
   const [allTeams, allMatches, myMatches, rosterRegs, seasonGames] =
@@ -384,6 +387,12 @@ export default async function TeamPage({
                   <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
                   {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
                   <RankBadge rankTier={m.user.rankTier} />
+                  {viewer ? (
+                    <DiscordTag
+                      name={m.user.discordName}
+                      className="hidden sm:inline-flex"
+                    />
+                  ) : null}
                   <RoleBadges
                     roles={rolesByUser.get(m.userId)}
                     className="hidden sm:inline-flex"

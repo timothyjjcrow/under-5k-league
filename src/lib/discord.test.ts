@@ -6,12 +6,18 @@ import {
   draftStartedMessage,
   draftCompleteMessage,
   freeAgentSignedMessage,
+  inhouseLobbyMessage,
+  inhouseQueueMessage,
   matchResultMessage,
   playerReleasedMessage,
   playerSoldMessage,
   playoffsStartedMessage,
   championMessage,
   maskWebhookUrl,
+  draftScheduledMessage,
+  playerOutMessage,
+  rescheduleProposedMessage,
+  weekReminderMessage,
 } from "./discord";
 
 describe("discord message formatters", () => {
@@ -108,6 +114,123 @@ describe("discord message formatters", () => {
     expect(playerSoldMessage("A", "T", 1)).toContain("steal");
     expect(playerSoldMessage("A", "T", 75)).toContain("big spender");
     expect(playerSoldMessage("A", "T", 20)).not.toMatch(/steal|big spender/);
+  });
+});
+
+describe("draft scheduling", () => {
+  it("announces the scheduled draft night reader-local", () => {
+    const msg = draftScheduledMessage("Season 2", 1_800_000_000_000);
+    expect(msg).toContain("Season 2");
+    expect(msg).toContain("<t:1800000000:F>");
+    expect(msg).toContain("/draft");
+  });
+
+  it("signupMessage appends draft night only when one is set", () => {
+    expect(signupMessage("Dendi", 3, 20, 1_800_000_000_000)).toContain(
+      "Draft night: <t:1800000000:F>",
+    );
+    expect(signupMessage("Dendi", 3, 20)).not.toContain("Draft night");
+    expect(signupMessage("Dendi", 3, 20, null)).not.toContain("Draft night");
+  });
+});
+
+describe("inhouse messages", () => {
+  it("pings the queue milestone with the live count and link", () => {
+    const msg = inhouseQueueMessage(8, 10);
+    expect(msg).toContain("8/10");
+    expect(msg).toContain("2 more players");
+    expect(msg).toContain("/inhouse");
+  });
+
+  it("uses singular when one player is missing", () => {
+    expect(inhouseQueueMessage(9, 10)).toContain("1 more player and");
+  });
+
+  it("announces a formed lobby with every name and the link", () => {
+    const names = Array.from({ length: 10 }, (_, i) => `P${i}`);
+    const msg = inhouseLobbyMessage(names);
+    expect(msg).toContain("Inhouse lobby is up");
+    expect(msg).toContain("P0, P1");
+    expect(msg).toContain("P9");
+    expect(msg).toContain("/inhouse");
+  });
+});
+
+describe("playerOutMessage / rescheduleProposedMessage", () => {
+  it("announces a fresh OUT with the fixture and reader-local kickoff", () => {
+    const msg = playerOutMessage({
+      playerName: "Dendi",
+      homeName: "Radiant Raccoons",
+      awayName: "Dire Wolves",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+    });
+    expect(msg).toContain("Dendi");
+    expect(msg).toContain("week 4");
+    expect(msg).toContain("<t:1800000000:F>");
+    expect(msg).toContain("standin");
+  });
+
+  it("omits the kickoff line when the match is unscheduled, labels playoffs", () => {
+    const msg = playerOutMessage({
+      playerName: "Puppey",
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      whenMs: null,
+    });
+    expect(msg).toContain("playoff match");
+    expect(msg).not.toContain("<t:");
+    expect(msg).not.toContain("week 9");
+  });
+
+  it("pings a fresh reschedule proposal at the proposed reader-local time", () => {
+    const msg = rescheduleProposedMessage({
+      homeName: "A",
+      awayName: "B",
+      week: 2,
+      isPlayoff: false,
+      proposerName: "Kuroky",
+      whenMs: 1_800_000_000_000,
+    });
+    expect(msg).toContain("Kuroky");
+    expect(msg).toContain("week 2");
+    expect(msg).toContain("<t:1800000000:F>");
+  });
+});
+
+describe("weekReminderMessage", () => {
+  it("lists fixtures with reader-local timestamps, check-ins, and links", () => {
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [
+        {
+          matchId: "m1",
+          homeName: "Radiant Raccoons",
+          awayName: "Dire Wolves",
+          scheduledAt: 1_800_000_000_000,
+          homeIn: 3,
+          homeSize: 5,
+          awayIn: 2,
+          awaySize: 5,
+        },
+      ],
+    });
+    expect(msg).toContain("Week 3");
+    // Discord timestamps carry SECONDS so every reader sees their own zone.
+    expect(msg).toContain("<t:1800000000:R>");
+    expect(msg).not.toContain("1800000000000");
+    expect(msg).toContain("3/5 vs 2/5");
+    expect(msg).toContain("/matches/m1");
+  });
+
+  it("labels playoff rounds without a week number", () => {
+    const msg = weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [] });
+    expect(msg).toContain("Playoff matches");
+    expect(msg).not.toContain("Week 9");
   });
 });
 

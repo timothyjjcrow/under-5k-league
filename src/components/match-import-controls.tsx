@@ -1,16 +1,32 @@
 "use client";
 
 import { useActionState } from "react";
-import { importGameAction, autoDetectAction } from "@/app/actions/admin";
 import { Button } from "@/components/ui";
+import type { ActionResult } from "@/lib/action-result";
 
-export function MatchImportControls({ matchId }: { matchId: string }) {
+type ImportFormAction = (
+  prev: ActionResult,
+  formData: FormData,
+) => Promise<ActionResult>;
+
+// Shared by the admin panel (admin import actions) and the match page's
+// captain "Report your result" card (captain-guarded actions) — the server
+// actions arrive as props, which is legal for a client component.
+export function MatchImportControls({
+  matchId,
+  importAction,
+  detectAction,
+}: {
+  matchId: string;
+  importAction: ImportFormAction;
+  detectAction: ImportFormAction;
+}) {
   const [autoState, autoAction, autoPending] = useActionState(
-    autoDetectAction,
+    detectAction,
     null,
   );
   const [impState, impAction, impPending] = useActionState(
-    importGameAction,
+    importAction,
     null,
   );
 

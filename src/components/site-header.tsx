@@ -138,6 +138,24 @@ export function SiteHeader({
 
   const adminActive = pathname.startsWith("/admin");
 
+  // Club pages that otherwise live only in the footer — on phones that's
+  // below very long pages, so the menu is their only discoverable home.
+  // Deduped against navItems: Features is already inline during
+  // SIGNUPS/DRAFT, and History (/seasons) is inline once archives exist.
+  const teamsExist =
+    phase === "DRAFT" ||
+    phase === "REGULAR_SEASON" ||
+    phase === "PLAYOFFS" ||
+    phase === "COMPLETE";
+  const clubItems: { href: string; label: string }[] = [
+    ...(teamsExist && phase !== "DRAFT"
+      ? [{ href: "/features", label: "Features" }]
+      : []),
+    { href: "/news", label: "News" },
+    { href: "/hall-of-fame", label: "Hall of Fame" },
+    { href: "/records", label: "Record book" },
+  ];
+
   return (
     <header
       ref={headerRef}
@@ -213,6 +231,9 @@ export function SiteHeader({
               ) : null}
               <Link
                 href="/me"
+                // Below xl the name is hidden and this is an unlabeled 30px
+                // pill — give assistive tech its destination.
+                aria-label={`My profile — ${user.name}`}
                 className="flex items-center gap-2 rounded-full border border-line py-1 pl-1 pr-1 text-sm hover:border-muted/60 xl:pr-3"
               >
                 <Avatar name={user.name} src={user.avatar} size={28} />
@@ -236,7 +257,13 @@ export function SiteHeader({
             </>
           ) : (
             <Link
-              href="/login"
+              // Carry the current page through sign-in — landing back on the
+              // dashboard after every login was a pointless extra hop.
+              href={
+                pathname && pathname !== "/"
+                  ? `/login?next=${encodeURIComponent(pathname)}`
+                  : "/login"
+              }
               className="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 sm:px-4"
             >
               Sign in
@@ -286,6 +313,28 @@ export function SiteHeader({
               );
             })}
 
+            {/* Club pages — footer-only otherwise, invisible on phones. */}
+            <div className="mt-1 space-y-1 border-t border-line/80 pt-2">
+              {clubItems.map((item) => {
+                const active = isActive(pathname, item.href, myTeamHref);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                      active
+                        ? "bg-accent/15 text-fg"
+                        : "text-muted hover:bg-surface-2/60 hover:text-fg",
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
+
             {(user?.role === "ADMIN" || user || seasonName) && (
               <div className="mt-1 space-y-1 border-t border-line/80 pt-2">
                 {user?.role === "ADMIN" ? (
@@ -300,6 +349,22 @@ export function SiteHeader({
                     )}
                   >
                     Admin
+                  </Link>
+                ) : null}
+                {user ? (
+                  <Link
+                    href="/me"
+                    aria-current={
+                      isActive(pathname, "/me", null) ? "page" : undefined
+                    }
+                    className={cn(
+                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                      isActive(pathname, "/me", null)
+                        ? "bg-accent/15 text-fg"
+                        : "text-muted hover:bg-surface-2/60 hover:text-fg",
+                    )}
+                  >
+                    My profile
                   </Link>
                 ) : null}
                 {user ? (

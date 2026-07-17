@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGameScores } from "@/lib/cached-queries";
@@ -19,6 +21,7 @@ import {
   PageTitle,
   PlayerLink,
   Stat,
+  buttonClasses,
 } from "@/components/ui";
 
 export const metadata = { title: "Hero meta" };
@@ -133,13 +136,49 @@ function MetaTable({
   );
 }
 
-export default async function MetaPage() {
-  const season = await getActiveSeason();
+export default async function MetaPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ season?: string }>;
+}) {
+  const { season: seasonParam } = await searchParams;
+  // ?season=<id> shows an archived season's meta (recap's pattern).
+  const season = seasonParam
+    ? await prisma.season.findUnique({ where: { id: seasonParam } })
+    : await getActiveSeason();
+  if (seasonParam && !season) notFound();
   if (!season) {
+    const archived = await prisma.season.findMany({
+      where: { isActive: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true },
+    });
     return (
       <div>
         <PageTitle title="Hero meta" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="No active season"
+          description={
+            archived.length > 0
+              ? "Browse a past season's meta instead."
+              : undefined
+          }
+          action={
+            archived.length > 0 ? (
+              <div className="flex flex-wrap justify-center gap-2">
+                {archived.map((s) => (
+                  <Link
+                    key={s.id}
+                    href={`/meta?season=${s.id}`}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    {s.name} →
+                  </Link>
+                ))}
+              </div>
+            ) : undefined
+          }
+        />
       </div>
     );
   }
@@ -162,7 +201,12 @@ export default async function MetaPage() {
   if (meta.rows.length === 0) {
     return (
       <div className="space-y-6">
-        <PageTitle title="Hero meta" subtitle={season.name} />
+        <PageTitle
+          title="Hero meta"
+          subtitle={
+            season.isActive ? season.name : `${season.name} · archived`
+          }
+        />
         <EmptyState
           title="No games yet"
           description="The meta report fills in once match games are imported."
@@ -195,7 +239,7 @@ export default async function MetaPage() {
     <div className="space-y-6">
       <PageTitle
         title="Hero meta"
-        subtitle={`${season.name} — what the league is actually playing`}
+        subtitle={`${season.name}${season.isActive ? "" : " · archived"} — what the league is actually playing`}
       />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

@@ -57,3 +57,15 @@ describe("averageMmr", () => {
     expect(averageMmr([])).toBe(0);
   });
 });
+
+describe("MMR 0 = unknown (blank signup)", () => {
+  it("averageMmr ignores unknowns instead of dragging the pool down", () => {
+    expect(averageMmr([{ mmr: 3000 }, { mmr: 0 }, { mmr: 0 }])).toBe(3000);
+    expect(averageMmr([{ mmr: 0 }])).toBe(0);
+  });
+
+  it("mmrDistribution never buckets unknowns as bottom-of-pool", () => {
+    const dist = mmrDistribution([{ mmr: 0 }, { mmr: 4600 }]);
+    expect(dist.reduce((s, b) => s + b.count, 0)).toBe(1);
+  });
+});

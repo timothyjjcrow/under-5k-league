@@ -86,3 +86,23 @@ export function pickSplit(
   }
   return { home, away };
 }
+
+/**
+ * Group open matches by week (ascending), preserving in-week order. The
+ * pick'em page renders the earliest week expanded with lock countdowns and
+ * collapses the rest — a flat season-long grid buried "locks tonight" among
+ * "locks in six weeks".
+ */
+export function groupOpenByWeek<T extends { week: number }>(
+  open: T[],
+): { week: number; matches: T[] }[] {
+  const byWeek = new Map<number, T[]>();
+  for (const m of open) {
+    const arr = byWeek.get(m.week) ?? [];
+    arr.push(m);
+    byWeek.set(m.week, arr);
+  }
+  return [...byWeek.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([week, matches]) => ({ week, matches }));
+}

@@ -9,6 +9,7 @@ import {
   type RegistrationType,
 } from "@/lib/constants";
 import { registrationGate, withdrawGateError } from "@/lib/registration";
+import { normalizeDiscordName } from "@/lib/discord-name";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -115,7 +116,12 @@ export async function saveRegistration(
       where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
     });
     await sendDiscordMessage(
-      signupMessage(user.name, playerCount, season.minTeams * season.teamSize),
+      signupMessage(
+        user.name,
+        playerCount,
+        season.minTeams * season.teamSize,
+        season.draftAt?.getTime() ?? null,
+      ),
     );
   }
 
@@ -321,4 +327,34 @@ export async function refreshSteamProfile(
   });
   refresh();
   return { message: "Profile refreshed from Steam" };
+}
+
+/** Save (or clear) the player's Discord handle — how captains reach them. */
+export async function updateDiscordName(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  const normalized = normalizeDiscordName(str(formData, "discordName"));
+  if (normalized === null) {
+    return {
+      error:
+        "That doesn't look like a Discord username — copy the handle from your Discord profile (e.g. dendi_official)",
+    };
+  }
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { discordName: normalized },
+  });
+  refresh();
+  return {
+    message: normalized
+      ? `Discord handle saved — ${normalized}`
+      : "Discord handle cleared",
+  };
 }

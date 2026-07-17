@@ -10,6 +10,7 @@ import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
 import { matchPhaseLabel } from "@/lib/schedule";
 import { getSessionUser } from "@/lib/auth";
+import { DiscordTag } from "@/components/discord-tag";
 import {
   currentStreak,
   summarizePlayerGames,
@@ -452,6 +453,7 @@ export default async function PlayerProfilePage({
                     </a>
                   </>
                 ) : null}
+                {viewer ? <DiscordTag name={user.discordName} /> : null}
               </div>
             </div>
             {team ? (

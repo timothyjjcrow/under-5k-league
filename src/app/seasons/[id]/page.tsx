@@ -157,12 +157,26 @@ export default async function SeasonArchivePage({
           ← All seasons
         </Link>
         {gameCount > 0 ? (
-          <Link
-            href={`/recap?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Season recap →
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={`/leaders?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Leaders
+            </Link>
+            <Link
+              href={`/meta?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Hero meta
+            </Link>
+            <Link
+              href={`/recap?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Season recap →
+            </Link>
+          </div>
         ) : null}
       </div>
 

@@ -323,3 +323,19 @@ a {
     animation: bar-grow 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 }
+
+/* iOS Safari auto-zooms the viewport when a focused control's font-size is
+   under 16px — on phones every tap into a text-sm field lurched the page,
+   including mid-auction in the draft room. 16px on phones kills the zoom;
+   ≥640px (Tailwind sm) keeps the text-sm design. Deliberately UNLAYERED:
+   Tailwind v4 uses real cascade layers, so this unlayered rule outranks the
+   text-sm utility without !important (inside @layer base it would lose).
+   Never "fix" this with viewport maximum-scale=1 — that disables pinch zoom
+   for low-vision users. */
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: 1rem;
+  }
+}

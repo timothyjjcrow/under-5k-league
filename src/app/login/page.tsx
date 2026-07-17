@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
+import { safeReturnPath } from "@/lib/return-path";
 import {
   Card,
   CardBody,
@@ -11,9 +12,34 @@ import {
 
 export const metadata = { title: "Sign in" };
 
-export default async function LoginPage() {
+// The Steam callback bounces failures back here as ?error=<code>. Map only
+// KNOWN codes to copy — never echo the raw query value (injection/phishing
+// hygiene); anything unknown gets the generic line.
+const LOGIN_ERRORS: Record<string, string> = {
+  steam: "Steam didn't confirm your sign-in — give it another try.",
+  rate: "Too many sign-in attempts — wait a minute, then try again.",
+};
+const GENERIC_LOGIN_ERROR = "Sign-in didn't go through — please try again.";
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string; next?: string }>;
+}) {
+  const { error, next: rawNext } = await searchParams;
+  // Validated same-origin path to land on after sign-in (never echoed as
+  // text; only ever used inside our own hrefs/redirects).
+  const next = safeReturnPath(rawNext);
+
   const user = await getSessionUser();
-  if (user) redirect("/");
+  if (user) redirect(next ?? "/"); // already signed in → straight back
+
+  const errorCopy = error ? (LOGIN_ERRORS[error] ?? GENERIC_LOGIN_ERROR) : null;
+
+  const steamHref = next
+    ? `/api/auth/steam?next=${encodeURIComponent(next)}`
+    : "/api/auth/steam";
+  const devSuffix = next ? `&redirect=${encodeURIComponent(next)}` : "";
 
   const devLogin = process.env.ALLOW_DEV_LOGIN === "true";
 
@@ -35,9 +61,18 @@ export default async function LoginPage() {
             </p>
           </div>
 
+          {errorCopy ? (
+            <div
+              role="alert"
+              className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2.5 text-sm text-danger"
+            >
+              {errorCopy}
+            </div>
+          ) : null}
+
           <div className="space-y-2">
             <a
-              href="/api/auth/steam"
+              href={steamHref}
               className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-[#1b2838] px-4 font-medium text-white transition-colors hover:bg-[#223247]"
             >
               <SteamIcon />
@@ -66,12 +101,12 @@ export default async function LoginPage() {
               <div className="grid grid-cols-2 gap-2">
                 <DevLoginLink
                   label="Admin"
-                  href="/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1"
+                  href={`/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1${devSuffix}`}
                   accent
                 />
                 <DevLoginLink
                   label="Player"
-                  href="/api/auth/dev?name=Test+Player&steamId=76561190000000002"
+                  href={`/api/auth/dev?name=Test+Player&steamId=76561190000000002${devSuffix}`}
                 />
               </div>
               <p className="text-center text-[11px] text-muted">

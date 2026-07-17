@@ -95,6 +95,8 @@ export default async function PlayersPage() {
     wantsCaptain: p.wantsCaptain,
     drafted: draftedUserIds.has(p.userId),
     accountId: p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId),
+    // Contact info is for league members, not the public internet.
+    discordName: viewer ? p.user.discordName : "",
   }));
   const captainHopefuls = players.filter((p) => p.wantsCaptain);
   const preDraft = season.status === "SIGNUPS" || season.status === "DRAFT";
@@ -198,7 +200,7 @@ export default async function PlayersPage() {
                         <Badge tone="brand">Wants to captain</Badge>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
-                        {p.mmr} MMR
+                        {p.mmr > 0 ? <span>{p.mmr} MMR</span> : null}
                         <RankBadge rankTier={p.user.rankTier} />
                         <RoleBadges roles={p.roles} />
                         {accountId ? (
@@ -262,7 +264,9 @@ export default async function PlayersPage() {
                 <Avatar name={s.user.name} src={s.user.avatar} size={26} />
                 <span className="text-sm">{s.user.name}</span>
                 <RankBadge rankTier={s.user.rankTier} />
-                <span className="text-xs text-muted">{s.mmr}</span>
+                {s.mmr > 0 ? (
+                  <span className="text-xs text-muted">{s.mmr}</span>
+                ) : null}
               </PlayerLink>
             ))}
           </div>

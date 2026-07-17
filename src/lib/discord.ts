@@ -16,13 +16,25 @@ export function signupMessage(
   playerName: string,
   signedUp: number,
   neededToStart: number,
+  /** Epoch ms of the scheduled draft night, if the admin has set one. */
+  draftAtMs?: number | null,
 ): string {
   const remaining = Math.max(0, neededToStart - signedUp);
   const tail =
     remaining === 0
       ? "that's enough to start the draft! 🎉"
       : `${remaining} more to start the draft.`;
-  return `📝 **${playerName}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}`;
+  const when = draftAtMs
+    ? ` Draft night: <t:${Math.floor(draftAtMs / 1000)}:F>.`
+    : "";
+  return `📝 **${playerName}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when}`;
+}
+
+export function draftScheduledMessage(
+  seasonName: string,
+  whenMs: number,
+): string {
+  return `🗓️ **The ${seasonName} draft is set for <t:${Math.floor(whenMs / 1000)}:F>** — captains and players, be there: ${resolveSiteUrl()}/draft`;
 }
 
 export function draftStartedMessage(seasonName: string): string {
@@ -89,6 +101,70 @@ export function playerReleasedMessage(
   teamName: string,
 ): string {
   return `📤 **${playerName}** released from **${teamName}** — they're a free agent again.`;
+}
+
+export function inhouseQueueMessage(present: number, lobbySize: number): string {
+  const needed = Math.max(0, lobbySize - present);
+  return `🎮 **Inhouse queue is heating up** — ${present}/${lobbySize} in, ${needed} more ${needed === 1 ? "player" : "players"} and the lobby fires. Queue up at ${resolveSiteUrl()}/inhouse`;
+}
+
+export function inhouseLobbyMessage(playerNames: string[]): string {
+  return `🚨 **Inhouse lobby is up!** The captain vote is live — get to ${resolveSiteUrl()}/inhouse\n${playerNames.join(", ")}`;
+}
+
+export function playerOutMessage(m: {
+  playerName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
+  whenMs: number | null;
+}): string {
+  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const when =
+    m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
+  return `🚑 **${m.playerName}** can't make the ${label} — **${m.homeName}** vs **${m.awayName}**${when}. Captains/admin: time to line up a standin.`;
+}
+
+export function rescheduleProposedMessage(m: {
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  proposerName: string;
+  whenMs: number;
+}): string {
+  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  return `⏳ **${m.proposerName}** proposed moving the ${label} **${m.homeName}** vs **${m.awayName}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
+}
+
+export function weekReminderMessage(m: {
+  week: number;
+  isPlayoff: boolean;
+  fixtures: {
+    matchId: string;
+    homeName: string;
+    awayName: string;
+    /** Epoch ms — rendered as <t:…> so every reader sees their own zone. */
+    scheduledAt: number;
+    homeIn: number;
+    homeSize: number;
+    awayIn: number;
+    awaySize: number;
+  }[];
+}): string {
+  const site = resolveSiteUrl();
+  const label = m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
+  const lines = [`⏰ **${label} coming up — check in!**`];
+  for (const f of m.fixtures) {
+    const t = Math.floor(f.scheduledAt / 1000);
+    lines.push(
+      `🆚 **${f.homeName}** vs **${f.awayName}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · ${site}/matches/${f.matchId}`,
+    );
+  }
+  lines.push("RSVP on your match page so captains can plan standins early.");
+  return lines.join("\n");
 }
 
 export function weeklyHonorsMessage(honors: {

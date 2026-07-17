@@ -76,3 +76,41 @@ export function registrationGate({
   }
   return null;
 }
+
+export type PromoteGateInput = {
+  seasonStatus: string;
+  /** Draft row status, or null when no draft row exists yet. */
+  draftStatus: string | null;
+  registrationStatus: string;
+  registrationType: string;
+  /** Standin assignments on this season's UNPLAYED matches. */
+  pendingAssignments: number;
+};
+
+/**
+ * Why an admin can't promote this standin to a full player (null = can).
+ * The mid-season roster refill path: registrationGate closes self-serve
+ * PLAYER signups after SIGNUPS, so late joiners file as standins and an
+ * admin upgrades them here before signing them via the free-agent form.
+ */
+export function promoteGateError(i: PromoteGateInput): string | null {
+  if (i.seasonStatus === "SIGNUPS") {
+    return "Signups are open — they can just switch to Player on their own profile.";
+  }
+  if (i.seasonStatus === "COMPLETE") return "The season is over.";
+  // Live auction: the pool is ACTIVE PLAYER registrations, so promoting
+  // mid-run would inject them into the running draft. Pre-start (they'll be
+  // auctioned normally) and post-draft (free-agent top-up) are both fine.
+  if (
+    i.seasonStatus === "DRAFT" &&
+    (i.draftStatus === "IN_PROGRESS" || i.draftStatus === "PAUSED")
+  ) {
+    return "The draft is live — promote before it starts or after it completes.";
+  }
+  if (i.registrationStatus !== "ACTIVE") return "This signup isn't active.";
+  if (i.registrationType !== "STANDIN") return "They're already a full player.";
+  if (i.pendingAssignments > 0) {
+    return "They're assigned as a standin for an unplayed match — remove that assignment first.";
+  }
+  return null;
+}

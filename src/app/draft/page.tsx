@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
-import { prisma } from "@/lib/prisma";
 import { DraftRoom } from "@/components/draft-room";
-import { EmptyState, PageTitle, Badge, buttonClasses } from "@/components/ui";
+import { EmptyState, PageTitle, buttonClasses } from "@/components/ui";
 
 export const metadata = { title: "Draft" };
 
@@ -26,38 +25,17 @@ export default async function DraftPage() {
     );
   }
 
-  const draft = await prisma.draft.findUnique({
-    where: { seasonId: season.id },
-  });
-
   return (
     <div className="space-y-6">
       <PageTitle
         title="Draft room"
         subtitle={`${season.name} · live auction draft`}
-        action={
-          <Badge tone={draft?.status === "IN_PROGRESS" ? "accent" : "neutral"}>
-            {draft?.status === "IN_PROGRESS"
-              ? "Live"
-              : draft?.status === "COMPLETE"
-                ? "Complete"
-                : "Not started"}
-          </Badge>
-        }
       />
-      {draft?.status === "IN_PROGRESS" || draft?.status === "COMPLETE" ? (
-        <DraftRoom />
-      ) : (
-        <EmptyState
-          title="Draft hasn't started yet"
-          description="An admin will start the auction from the admin panel."
-          action={
-            <Link href="/admin" className={buttonClasses("accent")}>
-              Go to admin
-            </Link>
-          }
-        />
-      )}
+      {/* The room handles every draft status itself (waiting → live →
+          complete) via its poll. A server-rendered gate here went stale the
+          moment the admin clicked start, stranding the whole league on a
+          dead page at the worst possible time — nominations run on a clock. */}
+      <DraftRoom draftAtMs={season.draftAt?.getTime() ?? null} />
     </div>
   );
 }

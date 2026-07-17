@@ -7,6 +7,7 @@ import {
   nextNominatorIndex,
   mmrWeightedBudgets,
   type DraftTeam,
+  wasOutbid,
 } from "./draft";
 
 const team = (rosterCount: number, budget = 100): DraftTeam => ({
@@ -160,5 +161,53 @@ describe("mmrWeightedBudgets", () => {
     const b = mmrWeightedBudgets(100, NaN, [cap("a", 1000), cap("b", 4000)]);
     expect(b.get("a")).toBe(100);
     expect(b.get("b")).toBe(100);
+  });
+});
+
+describe("wasOutbid", () => {
+  const base = {
+    myTeamId: "me",
+    prevBidTeamId: "me",
+    curBidTeamId: "them",
+    prevNominatedId: "p1",
+    curNominatedId: "p1",
+  };
+
+  it("fires when another team takes the high bid on the same player", () => {
+    expect(wasOutbid(base)).toBe(true);
+  });
+
+  it("stays quiet when we still hold (or just took) the high bid", () => {
+    expect(wasOutbid({ ...base, curBidTeamId: "me" })).toBe(false);
+    expect(wasOutbid({ ...base, prevBidTeamId: "them" })).toBe(false);
+  });
+
+  it("same-player guard: a sale + fresh nomination within one poll is NOT an outbid", () => {
+    expect(wasOutbid({ ...base, curNominatedId: "p2" })).toBe(false);
+    expect(wasOutbid({ ...base, curNominatedId: null })).toBe(false);
+  });
+
+  it("spectators (no team) are never outbid", () => {
+    expect(wasOutbid({ ...base, myTeamId: null })).toBe(false);
+  });
+});
+
+describe("mmrWeightedBudgets — unknown-MMR captains (stored 0 mapped to null)", () => {
+  it("gives an unknown captain the base budget without skewing the others", () => {
+    // Call sites map a stored 0 ("unknown") to null via `|| null` — this is
+    // the contract that keeps a blank-MMR captain from becoming the pool
+    // minimum and pocketing the maximum low-MMR boost.
+    const b = mmrWeightedBudgets(100, 20, [
+      { teamId: "low", mmr: 2000 },
+      { teamId: "high", mmr: 4000 },
+      { teamId: "unknown", mmr: null },
+    ]);
+    expect(b.get("unknown")).toBe(100); // base, not boosted
+    const withoutUnknown = mmrWeightedBudgets(100, 20, [
+      { teamId: "low", mmr: 2000 },
+      { teamId: "high", mmr: 4000 },
+    ]);
+    expect(b.get("low")).toBe(withoutUnknown.get("low"));
+    expect(b.get("high")).toBe(withoutUnknown.get("high"));
   });
 });
