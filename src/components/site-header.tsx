@@ -149,13 +149,15 @@ export function SiteHeader({
           aria-label="GGD2L — home"
           className="flex shrink-0 items-center"
         >
+          {/* Tight-cropped emblem (glow/margins trimmed) sized to nearly fill
+              the bar so there's minimal top/bottom padding. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/brand/ggd2l-logo.png"
+            src="/brand/ggd2l-logo-nav.png"
             alt="GGD2L"
-            width={768}
-            height={512}
-            className="h-16 w-auto"
+            width={520}
+            height={427}
+            className="h-[76px] w-auto"
           />
         </Link>
 
