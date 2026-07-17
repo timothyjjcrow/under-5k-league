@@ -146,7 +146,7 @@ export const INHOUSE = {
 export const SESSION_COOKIE = "ld2l_session";
 
 // Community — the league's Discord invite.
-export const DISCORD_INVITE_URL = "https://discord.gg/YkTWVfZRY";
+export const DISCORD_INVITE_URL = "https://discord.gg/JmfNJJCpzg";
 
 // Weekly match slot — surfaced before signup so players know the commitment.
 // Change here to adjust it league-wide (can become a per-season setting later).
