@@ -102,21 +102,20 @@ export function SiteFooter({
             ) : null}
           </nav>
 
-          <div className="order-1 flex flex-col items-center text-center md:order-2">
+          <Link
+            href="/"
+            aria-label="GGD2L — home"
+            className="order-1 flex justify-center md:order-2"
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/ggd2l-logo.png"
               alt="GGD2L"
               width={768}
               height={512}
-              className="h-28 w-auto md:h-36"
+              className="h-44 w-auto md:h-64"
             />
-            <p className="mt-3 max-w-xs text-sm text-muted">
-              A drafted, team-based Dota 2 league built around a soft 4.5K MMR
-              limit.
-            </p>
-            <DiscordButton size="sm" className="mt-4" />
-          </div>
+          </Link>
 
           <nav
             aria-label="Footer — club"
@@ -137,18 +136,27 @@ export function SiteFooter({
           </nav>
         </div>
 
-        <div className="mt-10 flex flex-wrap items-center justify-center gap-2 border-t border-line/60 pt-6 text-xs text-muted sm:justify-between">
-          <span>© {year} GGD2L</span>
-          {seasonName ? (
-            <span className="flex items-center gap-2">
-              <span>{seasonName}</span>
-              {phase ? (
-                <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
-                  {PHASE_LABEL[phase] ?? phase}
-                </Badge>
-              ) : null}
-            </span>
-          ) : null}
+        <div className="mt-8 flex flex-col gap-5 border-t border-line/60 pt-6 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex flex-col items-center gap-3 text-center sm:items-start sm:text-left">
+            <p className="max-w-md text-sm text-muted">
+              A drafted, team-based Dota 2 league built around a soft 4.5K MMR
+              limit.
+            </p>
+            <DiscordButton size="sm" />
+          </div>
+          <div className="flex flex-col items-center gap-2 text-xs text-muted sm:items-end">
+            {seasonName ? (
+              <span className="flex items-center gap-2">
+                <span>{seasonName}</span>
+                {phase ? (
+                  <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+                    {PHASE_LABEL[phase] ?? phase}
+                  </Badge>
+                ) : null}
+              </span>
+            ) : null}
+            <span>© {year} GGD2L</span>
+          </div>
         </div>
       </div>
     </footer>
