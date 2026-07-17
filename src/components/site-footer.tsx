@@ -72,7 +72,7 @@ export function SiteFooter({
 
   return (
     <footer className="border-t border-line/70">
-      <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
+      <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
         {/* Centered logo centerpiece with the link groups flanking it. On
             phones it stacks logo-first, then the two link groups, all centered. */}
         <div className="grid grid-cols-1 items-center gap-8 md:grid-cols-[1fr_auto_1fr] md:gap-12">
@@ -107,13 +107,15 @@ export function SiteFooter({
             aria-label="GGD2L — home"
             className="order-1 flex justify-center md:order-2"
           >
+            {/* Tight-cropped emblem (shared with the nav) — no baked-in
+                transparent margin, so it reads compact at a smaller height. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/brand/ggd2l-logo.png"
+              src="/brand/ggd2l-logo-nav.png"
               alt="GGD2L"
-              width={768}
-              height={512}
-              className="h-44 w-auto md:h-64"
+              width={520}
+              height={427}
+              className="h-24 w-auto md:h-40"
             />
           </Link>
 
@@ -137,11 +139,7 @@ export function SiteFooter({
         </div>
 
         <div className="mt-8 flex flex-col gap-5 border-t border-line/60 pt-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex flex-col items-center gap-3 text-center sm:items-start sm:text-left">
-            <p className="max-w-md text-sm text-muted">
-              A drafted, team-based Dota 2 league built around a soft 4.5K MMR
-              limit.
-            </p>
+          <div className="flex justify-center sm:justify-start">
             <DiscordButton size="sm" />
           </div>
           <div className="flex flex-col items-center gap-2 text-xs text-muted sm:items-end">
