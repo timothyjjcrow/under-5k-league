@@ -914,8 +914,12 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - **`scripts/build-db.mjs` gates the build's `prisma db push` to
   `VERCEL_ENV === "production"`** (previews only `prisma generate`) — a
   preview deploy of a WIP branch must never push its schema into the live DB.
-  Pinned by `src/lib/build-db.test.ts` (drives the script in dry-run); don't
-  put a bare `prisma db push` back in vercel.json.
+  The production push runs `--accept-data-loss`: push-without-history fails
+  the build on ANY schema warning otherwise, additive ones included (a new
+  nullable unique column blocked a deploy); back up before destructive
+  schema changes — that's the safety net, not the flag. Pinned by
+  `src/lib/build-db.test.ts` (drives the script in dry-run); don't put a
+  bare `prisma db push` back in vercel.json.
 - **`npm run db:backup`** (`scripts/backup-db.mjs`): pg_dump for Postgres
   URLs, file-copy for SQLite, timestamped into gitignored `backups/`. README
   documents the prod recipe. Tested end-to-end for the SQLite path.

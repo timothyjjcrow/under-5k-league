@@ -12,7 +12,15 @@ import { execSync } from "node:child_process";
 
 /** Exported for tests via dry-run output: the command for an environment. */
 export function commandFor(vercelEnv) {
-  return vercelEnv === "production" ? "prisma db push" : "prisma generate";
+  // --accept-data-loss: db push IS this project's migration mechanism (no
+  // migrate history), and without the flag the build fails on ANY warning —
+  // even a purely additive one (a new nullable unique column blocked the
+  // 2026-07 Discord-linking deploy). The safety net for genuinely destructive
+  // changes is `npm run db:backup` before shipping schema changes (README),
+  // plus the production-only gate below.
+  return vercelEnv === "production"
+    ? "prisma db push --accept-data-loss"
+    : "prisma generate";
 }
 
 const cmd = commandFor(process.env.VERCEL_ENV);

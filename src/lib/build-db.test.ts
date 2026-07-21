@@ -22,7 +22,10 @@ function decide(vercelEnv?: string): string {
 
 describe("build-db deploy gate", () => {
   it("pushes the schema ONLY on production deploys", () => {
-    expect(decide("production")).toContain("prisma db push");
+    // --accept-data-loss because push-without-history fails the build on ANY
+    // schema warning otherwise, additive ones included (backups are the
+    // documented safety net for genuinely destructive changes).
+    expect(decide("production")).toContain("prisma db push --accept-data-loss");
   });
 
   it("preview and development deploys only generate the client", () => {
