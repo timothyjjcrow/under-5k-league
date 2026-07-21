@@ -50,7 +50,12 @@ import {
   testMessage,
   draftScheduledMessage,
 } from "@/lib/discord";
-import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
+import {
+  getSetting,
+  setSetting,
+  stampResultChange,
+  SETTING_KEYS,
+} from "@/lib/settings";
 import { bumpSessionEpoch } from "@/lib/session-epoch";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
 import { promoteGateError, withdrawGateError } from "@/lib/registration";
@@ -764,6 +769,20 @@ export async function recordResult(
     },
   });
 
+  // Manual results move standings too — bump the sync cursor so parked
+  // dashboards repaint on their next /api/sync poll.
+  await stampResultChange();
+  // An explicit admin save always announces (corrections included), but it
+  // stamps the once-per-match marker so recomputeSeries (a later game import
+  // for this match) can't post the same result a second time.
+  await prisma.setting.upsert({
+    where: { key: `resultAnnounced:${matchId}` },
+    create: {
+      key: `resultAnnounced:${matchId}`,
+      value: new Date().toISOString(),
+    },
+    update: { value: new Date().toISOString() },
+  });
   const [home, away] = await Promise.all([
     prisma.team.findUnique({ where: { id: match.homeTeamId } }),
     prisma.team.findUnique({ where: { id: match.awayTeamId } }),

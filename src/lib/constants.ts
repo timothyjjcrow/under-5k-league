@@ -170,6 +170,46 @@ export const WEEK_REMINDER = {
   BEHIND_HOURS: 3, // still worth announcing shortly after kickoff
 } as const;
 
+// Automatic result sync: league games are pulled from OpenDota without anyone
+// pressing a button. Driven lazily by the sitewide <ResultSyncPing> hitting
+// POST /api/sync (no cron/websocket — same philosophy as the draft clock).
+// A match is scannable from shortly after kickoff (a Dota game can't be over
+// sooner) until the window closes (after that it's captain/admin territory —
+// no point burning API budget on a fixture nobody played).
+export const AUTO_SYNC = {
+  MIN_MINUTES_AFTER_KICKOFF: 25,
+  WINDOW_HOURS: 48,
+  // One roster scan is ~10 recentMatches + up to 12 match fetches, so each
+  // match is rescanned at most once per interval, ONE match per sync run —
+  // that keeps worst-case OpenDota usage inside the free tier on a full
+  // league night while every series still lands within minutes.
+  MATCH_INTERVAL_SECONDS: 240,
+  // Consecutive EMPTY scans double a match's rescan interval (capped at
+  // MATCH_INTERVAL << BACKOFF_DOUBLINGS ≈ 4.3h), so a fixture that never
+  // yields games — forfeit, no-show, private match data — costs a handful of
+  // scans across its whole 48h window instead of one every 4 minutes. Any
+  // imported game resets the counter (a live Bo3 keeps rescanning briskly).
+  BACKOFF_DOUBLINGS: 6,
+  // Global floor between roster scans (Setting claim): N concurrent pollers
+  // can otherwise each claim a DIFFERENT due match in the same instant and
+  // burst past OpenDota's per-minute cap on league nights.
+  SCAN_GAP_SECONDS: 45,
+  // The league-id path (one /leagues/{id}/matches call) is cheap; its global
+  // throttle can be tighter.
+  LEAGUE_INTERVAL_SECONDS: 180,
+  // Automated league-id runs fetch at most this many unknown game ids per run
+  // (a typo'd league id can list thousands) and remember ids that fetched but
+  // didn't import so they're never refetched. The admin's manual sync button
+  // bypasses both (rosters/standins may have changed since an id was skipped).
+  LEAGUE_MAX_FETCHES_PER_RUN: 25,
+  LEAGUE_SKIP_MEMORY: 1000,
+  // Client ping cadence: fast while matches are in their detection window or
+  // an inhouse game is live (so parked dashboards update themselves), slow
+  // otherwise (a near-free keepalive that notices a window opening).
+  WATCH_POLL_SECONDS: 60,
+  IDLE_POLL_SECONDS: 300,
+} as const;
+
 export const SESSION_COOKIE = "ld2l_session";
 
 // Community — the league's Discord invite.

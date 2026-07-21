@@ -9,11 +9,58 @@ import {
 } from "./dota";
 import { advancePlayoffBracket } from "./playoff-service";
 import { maybeAnnounceWeekHonors } from "./honors-service";
-import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { matchResultMessage, sendDiscordMessage } from "./discord";
+import { getSetting, setSetting, stampResultChange } from "./settings";
+import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
+
+/**
+ * Announce a decided series to Discord exactly once per match, whichever path
+ * completed it (captain import, auto sync, league sync, admin import — and
+ * admin recordResult, which claims the same marker before its own send).
+ * Atomic Setting-row CREATE, the reminder-service pattern: concurrent
+ * completions race to a P2002 instead of double-posting.
+ */
+export async function announceSeriesResultOnce(match: {
+  id: string;
+  homeTeamId: string;
+  awayTeamId: string;
+  homeScore: number;
+  awayScore: number;
+  week: number;
+  phase: string;
+}): Promise<boolean> {
+  try {
+    await prisma.setting.create({
+      data: {
+        key: `resultAnnounced:${match.id}`,
+        value: new Date().toISOString(),
+      },
+    });
+  } catch (e) {
+    if ((e as { code?: string }).code === "P2002") return false; // already sent
+    throw e;
+  }
+  const [home, away] = await Promise.all([
+    prisma.team.findUnique({ where: { id: match.homeTeamId } }),
+    prisma.team.findUnique({ where: { id: match.awayTeamId } }),
+  ]);
+  if (!home || !away) return false;
+  await sendDiscordMessage(
+    matchResultMessage({
+      homeName: home.name,
+      awayName: away.name,
+      homeScore: match.homeScore,
+      awayScore: match.awayScore,
+      week: match.week,
+      isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+    }),
+  );
+  return true;
+}
 
 export type GameClassification = {
   ok: boolean;
@@ -232,6 +279,20 @@ export async function recomputeSeries(matchId: string) {
     },
   });
 
+  // A freshly decided series announces itself (idempotent claim) — imported
+  // results used to reach Discord only when an admin typed the score in.
+  if (decided && match.status !== MATCH_STATUS.COMPLETED) {
+    await announceSeriesResultOnce({
+      id: match.id,
+      homeTeamId: match.homeTeamId,
+      awayTeamId: match.awayTeamId,
+      homeScore: homeWins,
+      awayScore: awayWins,
+      week: match.week,
+      phase: match.phase,
+    });
+  }
+
   // Advance the playoff bracket only once the series has a decided winner.
   if (match.phase !== MATCH_PHASE.REGULAR && decided && winnerTeamId) {
     await advancePlayoffBracket(match.seasonId);
@@ -322,6 +383,9 @@ export async function importGameForMatch(
   }
 
   await recomputeSeries(matchId);
+  // Bump the change cursor so every parked client (not just whoever triggered
+  // this import) learns the league moved on its next /api/sync poll.
+  await stampResultChange();
   return { ok: true };
 }
 
@@ -516,9 +580,19 @@ export type LeagueSyncResult = {
  * and import the ones that match a scheduled league match. This is the cleanest
  * path once the league is registered in the Dota client: league games are
  * tagged with the league id, so no per-player public match data is required.
+ *
+ * `auto: true` (the result-sync path, fired unattended every few minutes)
+ * bounds the run: at most LEAGUE_MAX_FETCHES_PER_RUN unknown ids are fetched
+ * (a typo'd league id can list thousands), and ids that fetched but didn't
+ * import are remembered in a per-season skip list so they're never refetched —
+ * without it every never-importable league game (scrims in the league lobby,
+ * games of manually-recorded matches) costs a fetch per run forever. The
+ * admin's manual button runs unbounded and ignores the skip list, because a
+ * skipped game can become importable after a roster/standin change.
  */
 export async function syncLeagueGames(
   seasonId: string,
+  opts: { auto?: boolean } = {},
 ): Promise<LeagueSyncResult> {
   const season = await prisma.season.findUnique({ where: { id: seasonId } });
   if (!season) return { imported: 0, scanned: 0, error: "No season" };
@@ -536,32 +610,62 @@ export async function syncLeagueGames(
     include: { games: { select: { id: true } } },
   });
 
-  // Precompute each scheduled match's team account sets once.
+  const skipKey = `leagueSyncSkip:${seasonId}`;
+  let skipList: string[] = [];
+  if (opts.auto) {
+    try {
+      const parsed = JSON.parse((await getSetting(skipKey)) ?? "[]");
+      if (Array.isArray(parsed)) skipList = parsed.map(String);
+    } catch {
+      // corrupt skip memory — start fresh rather than fail the sync
+    }
+  }
+  const skip = new Set(skipList);
+  const newlySkipped: string[] = [];
+
+  // Building account sets is O(matches × roster queries) — do it only once a
+  // fetched game actually needs classifying, so a steady-state auto run
+  // (everything known or skipped) touches no roster tables at all.
   const accountsByMatch = new Map<
     string,
     { home: Set<number>; away: Set<number>; teamSize: number }
   >();
-  for (const m of scheduled) {
-    const { homeSet, awaySet, teamSize } = await gatherTeamAccounts(m);
-    accountsByMatch.set(m.id, { home: homeSet, away: awaySet, teamSize });
-  }
+  let accountsReady = false;
+  const ensureAccounts = async () => {
+    if (accountsReady) return;
+    for (const m of scheduled) {
+      const { homeSet, awaySet, teamSize } = await gatherTeamAccounts(m);
+      accountsByMatch.set(m.id, { home: homeSet, away: awaySet, teamSize });
+    }
+    accountsReady = true;
+  };
 
+  const maxFetches = opts.auto
+    ? AUTO_SYNC.LEAGUE_MAX_FETCHES_PER_RUN
+    : Number.POSITIVE_INFINITY;
+  let fetches = 0;
   let imported = 0;
   for (const dotaId of leagueMatchIds) {
     const idStr = String(dotaId);
+    if (skip.has(idStr)) continue;
     if (await prisma.game.findUnique({ where: { dotaMatchId: idStr } })) continue;
+    if (fetches >= maxFetches) break;
+    fetches++;
     const od = await fetchOpenDotaMatch(idStr);
-    if (!od) continue;
+    if (!od) continue; // transient fetch failure — retry later, never skip-listed
+    await ensureAccounts();
 
     // classifyGame is roster-based and time-blind, and a single round robin
     // means every playoff pairing is a regular-season rematch — so collect
     // EVERY match these rosters fit, then attribute by kickoff proximity.
-    // Full series and manually-recorded results never take a game.
+    // COMPLETED matches never take a game: a decided series (or an admin's
+    // manual/forfeit ruling) must not be silently rewritten by a late import —
+    // amending one is an explicit per-match admin action.
     const fits = scheduled.filter((m) => {
       const acc = accountsByMatch.get(m.id);
       if (!acc) return false;
       if (m.games.length >= m.bestOf) return false;
-      if (m.status === "COMPLETED" && m.games.length === 0) return false;
+      if (m.status === MATCH_STATUS.COMPLETED) return false;
       return classifyGame(
         od,
         { teamId: m.homeTeamId, accountIds: acc.home },
@@ -569,7 +673,10 @@ export async function syncLeagueGames(
         Math.min(3, acc.teamSize),
       ).ok;
     });
-    if (fits.length === 0) continue;
+    if (fits.length === 0) {
+      newlySkipped.push(idStr);
+      continue;
+    }
 
     const gameMs = (od.start_time ?? 0) * 1000;
     const best = fits.reduce((a, b) => {
@@ -587,7 +694,19 @@ export async function syncLeagueGames(
       imported++;
       // Keep the in-memory game counts honest for later league games.
       best.games.push({ id: idStr });
+    } else {
+      // A refused import (recorded for another match, full series, manual
+      // result) won't succeed next run either — stop refetching it.
+      newlySkipped.push(idStr);
     }
+  }
+  if (opts.auto && newlySkipped.length > 0) {
+    await setSetting(
+      skipKey,
+      JSON.stringify(
+        [...skipList, ...newlySkipped].slice(-AUTO_SYNC.LEAGUE_SKIP_MEMORY),
+      ),
+    );
   }
   return { imported, scanned: leagueMatchIds.length };
 }

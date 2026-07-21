@@ -30,7 +30,12 @@ import {
   inhouseQueueMessage,
   sendDiscordMessage,
 } from "./discord";
-import { getSetting, setSetting, SETTING_KEYS } from "./settings";
+import {
+  getSetting,
+  setSetting,
+  stampResultChange,
+  SETTING_KEYS,
+} from "./settings";
 import type { SessionUser } from "./auth";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -582,6 +587,8 @@ async function applyResult(lobbyId: string, r: BuiltResult) {
       boxScore: JSON.stringify(r.boxScore),
     },
   });
+  // Every parked client learns via the /api/sync cursor, not just this one.
+  await stampResultChange();
 }
 
 /**

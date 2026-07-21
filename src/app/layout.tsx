@@ -13,6 +13,7 @@ const display = Oswald({
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Toaster } from "@/components/toaster";
+import { ResultSyncPing } from "@/components/result-sync-ping";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
@@ -88,6 +89,8 @@ export default async function RootLayout({
           hasHistory={archivedCount > 0}
         />
         <Toaster />
+        {/* Lazy automatic result sync — league + inhouse update themselves. */}
+        <ResultSyncPing />
       </body>
     </html>
   );

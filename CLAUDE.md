@@ -115,6 +115,10 @@ renders per-phase so unused features stay hidden.
 - Games roll up into `Match.homeScore/awayScore`; playoff game imports call
   `advancePlayoffBracket`. Note: `tsconfig` target is ES2017, so use
   `BigInt("…")` not `123n` literals.
+- **Automatic result sync**: see its own section below — league + inhouse
+  results now pull themselves from OpenDota with no button press; the captain
+  and admin controls above remain as manual overrides (players with public
+  match data off, unscheduled fixtures).
 - **Ranked medals**: `src/lib/rank.ts` decodes OpenDota `rank_tier` (pure,
   tested) → `<RankBadge>`. `fetchPlayerRankTier` fills `User.rankTier` on profile
   link/refresh (`updateDotaAccount`/`refreshRank`) and in bulk via admin
@@ -135,6 +139,63 @@ renders per-phase so unused features stay hidden.
   helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
   `captainNote` — captured on `/me`, surfaced in the player pool and draft room
   (`getDraftState` carries roles/heroes/note for the nominated player).
+
+## Automatic result sync (done)
+
+The league updates itself — results flow in from OpenDota with no captain or
+admin button press. Lazy, no cron/websocket (draft-clock philosophy).
+
+- **Trigger**: `<ResultSyncPing>` (`src/components/result-sync-ping.tsx`,
+  mounted once in the root layout, renders nothing) POSTs `/api/sync` on page
+  view, then heartbeats — `AUTO_SYNC.WATCH_POLL_SECONDS` while the server says
+  `watch: true` (matches in their detection window or a live inhouse), else
+  `IDLE_POLL_SECONDS`. Hidden tabs don't ping; a visibilitychange → visible
+  syncs immediately. TWO refresh triggers, both required: `updated` (this
+  client's own request performed the import) and the `cursor` advancing — the
+  atomic claims mean exactly ONE request ever "does" an import, so without
+  the cursor every other parked dashboard would poll `updated:false` forever
+  and stay stale. The cursor is the `resultChangedAt` Setting, bumped by
+  `stampResultChange()` (`settings.ts`) from EVERY result path:
+  `importGameForMatch`, admin `recordResult`, and inhouse `applyResult`.
+- **Route** (`src/app/api/sync/route.ts`): per-IP `rateLimit` speed bump, runs
+  `runResultSync`, and busts the `"games"` tag on imports — it's a route
+  handler (not a `<WeekReminderPing>`-style server component) precisely
+  because `revalidateTag` is only legal from a request scope.
+- **Service** (`src/lib/result-sync-service.ts` + pure window math in
+  `src/lib/result-sync.ts`, both tested;
+  `test/integration/result-sync.itest.ts`): a match is due from
+  `AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF` after its `scheduledAt` until
+  `WINDOW_HOURS` later, while not COMPLETED (LIVE partial series keep
+  scanning — Bo3 games 2/3 arrive later; unscheduled matches never auto-scan).
+  With a `Season.dotaLeagueId` one `syncLeagueGames({ auto: true })` call
+  covers everything, globally throttled via the `leagueAutoSyncAt` Setting
+  claim — auto mode fetches at most `LEAGUE_MAX_FETCHES_PER_RUN` unknown ids
+  per run (a typo'd league id can list thousands) and remembers
+  fetched-but-not-imported ids in a per-season `leagueSyncSkip:` Setting so
+  they're never refetched (the admin's manual button bypasses both, since a
+  skipped game can become importable after a roster/standin change).
+  Otherwise ONE due match per run (stalest first) is claimed atomically on
+  `Match.autoSyncedAt` (updateMany — the inhouse `detectedAt` pattern) and
+  roster-scanned with `autoDetectGamesForMatch`. API budget guards, all
+  load-bearing: consecutive EMPTY scans back off exponentially via
+  `Match.autoSyncAttempts` (interval doubles per miss, cap ≈4.3h, reset on
+  any import — a forfeited/private-data fixture costs ~15 scans across its
+  48h window instead of ~700), and a global `rosterAutoSyncAt` Setting claim
+  (`SCAN_GAP_SECONDS`) stops N simultaneous pollers fanning out into N
+  parallel scans. One scan ≈ 10 recentMatches + ≤12 match fetches.
+  `syncLeagueGames` never touches a COMPLETED match (was: completed-with-0-
+  games only) — a decided series or an admin forfeit ruling must not be
+  rewritten by a late league-lobby import; amending is per-match admin work.
+- **Inhouse from anywhere**: the same run executes the inhouse lazy resolvers
+  (`maybeFormLobby`/`resolveCaptainVote`/`resolveStalledPick`/
+  `maybeAutoDetectResult`) behind a cheap active-lobby/queue gate — while all
+  ten players are in the Dota client with /inhouse closed, any page view on
+  the site still closes the lobby out.
+- Downstream effects are free: imports funnel through `importGameForMatch` →
+  `recomputeSeries`, so brackets advance, honors fire, and the new
+  `announceSeriesResultOnce` posts the result to Discord (see Discord section)
+  whichever path — captain, admin, league sync, or auto sync — finished the
+  series.
 
 ## Player-facing navigation & info pages (done)
 
@@ -271,8 +332,12 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - Announces: new player signups (with countdown to the draft threshold), draft
   started (`startDraft`), every auction sale (`resolveExpiredNomination`,
   captured in-tx and sent post-commit — one message per sale, idempotent),
-  draft complete (both draft-service resolvers), match results
-  (`recordResult`), playoff bracket (`startPlayoffs`), the champion
+  draft complete (both draft-service resolvers), match results — every decided
+  series announces via `announceSeriesResultOnce` (`match-import.ts`, fired
+  from `recomputeSeries` on the transition to decided, idempotent through an
+  atomic `resultAnnounced:<matchId>` Setting CREATE; admin `recordResult`
+  always sends but upserts the same marker so a later game import can't
+  double-post), playoff bracket (`startPlayoffs`), the champion
   (`advancePlayoffBracket`), and inhouse moments: lobby formed
   (`maybeFormLobby`, captured in-tx/sent post-commit) plus a "queue is two
   short" ping (`joinQueue` — fires only on an upward crossing of
@@ -301,8 +366,9 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   after) with `<t:epoch:R>` kickoffs and standin-aware check-in counts (same
   `matchNightRoster`/`teamAvailability` as /schedule). Idempotent via an
   ATOMIC `weekReminder:<season>:<week>` Setting CREATE (P2002 ⇒ already sent
-  — deliberately stronger than honors' read-then-upsert, the trigger is
-  concurrent page loads). The send is awaited (serverless kills orphans).
+  — the trigger is concurrent page loads; honors uses the same atomic
+  pattern since auto-sync made its triggers concurrent too).
+  The send is awaited (serverless kills orphans).
   Integration-tested in `test/integration/reminders.itest.ts`.
 
 ## Returning-player prefill (done)
@@ -484,9 +550,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   best fantasy points that week (same `fantasyPoints` identity as the
   fantasy league); Team of the Week = most game wins, points tiebreak.
 - `honors-service.ts`: `maybeAnnounceWeekHonors(seasonId, week)` fires once
-  a regular week's matches are all COMPLETED — idempotent via a
-  `honorsAnnounced:<season>:<week>` Setting marker (claimed before sending).
-  Hooked in `recomputeSeries` (all import paths) and manual `recordResult`.
+  a regular week's matches are all COMPLETED — idempotent via an ATOMIC
+  `honorsAnnounced:<season>:<week>` Setting CREATE (P2002 ⇒ already sent;
+  claimed only after the nothing-imported check so a games-less week never
+  burns the marker — auto-sync means the week's last two series can finish
+  from two concurrent unauthenticated pings, which the old read-then-upsert
+  could double-announce). Hooked in `recomputeSeries` (all import paths) and
+  manual `recordResult`.
 - `/leaders` shows a "Weekly honors" card (newest week first, hero name via
   `getHeroNames`).
 

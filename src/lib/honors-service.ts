@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { weeklyHonors, type HonorsGame, type WeeklyHonors } from "./honors";
-import { getSetting, setSetting } from "./settings";
+import { getSetting } from "./settings";
 import { sendDiscordMessage, weeklyHonorsMessage } from "./discord";
 import { getHeroNames } from "./dota";
 
@@ -54,10 +54,25 @@ export async function maybeAnnounceWeekHonors(
   if (weekMatches.some((m) => m.status !== "COMPLETED")) return;
 
   const marker = `honorsAnnounced:${seasonId}:${week}`;
-  if (await getSetting(marker)) return;
+  if (await getSetting(marker)) return; // cheap pre-check; the CREATE decides
 
   const honors = await getWeekHonors(seasonId, week);
   if (!honors.player && !honors.team) return; // nothing imported — stay quiet
+
+  // ATOMIC claim (create, P2002 = already sent — the week-reminder pattern):
+  // auto-sync means the week's last two series can finish from two concurrent
+  // unauthenticated pings, and the old read-then-upsert left a wide window
+  // between check and claim for both to send. Claimed only after the
+  // nothing-imported check above, so a games-less week never burns the marker
+  // and a later box-score import can still announce.
+  try {
+    await prisma.setting.create({
+      data: { key: marker, value: new Date().toISOString() },
+    });
+  } catch (e) {
+    if ((e as { code?: string }).code === "P2002") return; // lost the race
+    throw e;
+  }
 
   const [playerUser, team, heroNames] = await Promise.all([
     honors.player
@@ -68,10 +83,6 @@ export async function maybeAnnounceWeekHonors(
       : null,
     honors.player?.heroId ? getHeroNames() : ({} as Record<number, string>),
   ]);
-
-  // Claim the marker before sending so a concurrent import can't race us
-  // into a duplicate announcement.
-  await setSetting(marker, new Date().toISOString());
   await sendDiscordMessage(
     weeklyHonorsMessage({
       week,

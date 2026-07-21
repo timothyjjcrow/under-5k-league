@@ -203,6 +203,14 @@ model Match {
   bestOf       Int       @default(1) // series length; a team clinches at floor(bestOf/2)+1
   winnerTeamId String?
   bracketSlot  String?
+  // Last automatic OpenDota scan for this match (result-sync-service). Updated
+  // via an atomic claim so concurrent pollers can't double-scan — the inhouse
+  // `detectedAt` pattern.
+  autoSyncedAt DateTime?
+  // Consecutive empty automatic scans — drives exponential backoff so a match
+  // that never produces games (forfeit, private match data) stops burning the
+  // OpenDota budget. Reset to 0 whenever a scan imports a game.
+  autoSyncAttempts Int   @default(0)
   createdAt    DateTime  @default(now())
 
   season       Season              @relation(fields: [seasonId], references: [id], onDelete: Cascade)
