@@ -5,19 +5,23 @@ import { cn } from "@/lib/utils";
 
 // Copyable Discord-handle chip. The league coordinates on Discord, so every
 // roster surface offers a player's handle one tap from the clipboard.
+// `verified` = the handle came from the Discord OAuth link (proven account
+// ownership), not typed by hand — captains can trust it's really them.
 export function DiscordTag({
   name,
+  verified = false,
   className,
 }: {
   name: string;
+  verified?: boolean;
   className?: string;
 }) {
   if (!name) return null;
   return (
     <button
       type="button"
-      title="Copy Discord handle"
-      aria-label={`Copy Discord handle ${name}`}
+      title={verified ? "Copy Discord handle (verified)" : "Copy Discord handle"}
+      aria-label={`Copy Discord handle ${name}${verified ? " (verified)" : ""}`}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(name);
@@ -33,6 +37,11 @@ export function DiscordTag({
     >
       <span aria-hidden>🗨</span>
       <span className="truncate">{name}</span>
+      {verified ? (
+        <span aria-hidden className="text-success">
+          ✓
+        </span>
+      ) : null}
     </button>
   );
 }

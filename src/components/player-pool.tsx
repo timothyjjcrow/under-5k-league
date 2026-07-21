@@ -212,7 +212,10 @@ export function PlayerPool({
                           Dotabuff ↗
                         </a>
                       ) : null}
-                      <DiscordTag name={p.discordName} />
+                      <DiscordTag
+                        name={p.discordName}
+                        verified={p.discordVerified}
+                      />
                     </span>
                     {p.favoriteHeroes ? (
                       <span className="mt-1.5 block">

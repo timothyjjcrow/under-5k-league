@@ -10,6 +10,7 @@ import {
 } from "@/lib/constants";
 import { registrationGate, withdrawGateError } from "@/lib/registration";
 import { normalizeDiscordName } from "@/lib/discord-name";
+import { unlinkDiscordAccount } from "@/lib/discord-link-service";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -363,14 +364,41 @@ export async function updateDiscordName(
         "That doesn't look like a Discord username — copy the handle from your Discord profile (e.g. dendi_official)",
     };
   }
-  await prisma.user.update({
-    where: { id: user.id },
+  // A linked account's handle is Discord's word, not the player's. The guard
+  // must be ATOMIC with the write (updateMany conditioned on discordId null,
+  // the Match.autoSyncedAt claim pattern) — a separate read-then-write would
+  // let a concurrent OAuth callback land between the check and the update,
+  // leaving a hand-typed handle wearing the verified ✓.
+  const updated = await prisma.user.updateMany({
+    where: { id: user.id, discordId: null },
     data: { discordName: normalized },
   });
+  if (updated.count === 0) {
+    return {
+      error:
+        "Your Discord is linked, so the handle comes from Discord — unlink it first to edit manually.",
+    };
+  }
   refresh();
   return {
     message: normalized
       ? `Discord handle saved — ${normalized}`
       : "Discord handle cleared",
   };
+}
+
+/** Remove the OAuth-verified Discord link (and the handle it set). */
+export async function unlinkDiscord(
+  _prev: ActionResult,
+  _formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  await unlinkDiscordAccount(prisma, user.id);
+  refresh();
+  return { message: "Discord unlinked — your handle was removed from the site" };
 }

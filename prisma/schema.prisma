@@ -30,6 +30,11 @@ model User {
   // Discord username — the league runs on Discord, and this is how captains
   // reach their roster. Empty string = not provided. Persists across seasons.
   discordName   String   @default("")
+  // Discord account link (OAuth2 `identify`): the snowflake id, set ONLY by
+  // the OAuth callback — proof the player owns that Discord account, unlike
+  // the typed discordName fallback. @unique stops two site accounts claiming
+  // the same Discord account. Null = not linked. No tokens are ever stored.
+  discordId     String?  @unique
   role          String   @default("USER") // USER | ADMIN
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

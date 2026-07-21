@@ -390,6 +390,7 @@ export default async function TeamPage({
                   {viewer ? (
                     <DiscordTag
                       name={m.user.discordName}
+                      verified={!!m.user.discordId}
                       className="hidden sm:inline-flex"
                     />
                   ) : null}

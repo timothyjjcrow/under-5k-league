@@ -10,7 +10,10 @@ import {
   refreshRank,
   refreshSteamProfile,
   updateDiscordName,
+  unlinkDiscord,
 } from "@/app/actions/registration";
+import { DiscordTag } from "@/components/discord-tag";
+import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import { HARD_MMR_CEILING } from "@/lib/constants";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
@@ -23,6 +26,7 @@ import { HeroPicker } from "@/components/hero-picker";
 import {
   Avatar,
   Badge,
+  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -34,9 +38,60 @@ import {
 
 export const metadata = { title: "Your profile" };
 
-export default async function MePage() {
+// The Discord OAuth callback bounces outcomes back here as ?discord=<code>.
+// Map only KNOWN codes to copy — never echo the raw query value (same
+// injection/phishing hygiene as the login page's ?error=).
+const DISCORD_LINK_NOTES: Record<
+  string,
+  { tone: "success" | "danger" | "muted"; text: string }
+> = {
+  linked: {
+    tone: "success",
+    text: "Discord linked — your handle is now verified.",
+  },
+  denied: {
+    tone: "muted",
+    text: "Discord link cancelled — nothing was changed.",
+  },
+  taken: {
+    tone: "danger",
+    text: "That Discord account is already linked to another player — sign in to that account and unlink it there first.",
+  },
+  state: {
+    tone: "danger",
+    text: "That link attempt expired or didn't start here — try Link Discord again.",
+  },
+  error: {
+    tone: "danger",
+    text: "Discord didn't confirm the link — give it another try.",
+  },
+  unconfigured: {
+    tone: "danger",
+    text: "Discord linking isn't set up on this server yet (admin: set DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET).",
+  },
+};
+
+export default async function MePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ discord?: string }>;
+}) {
   const user = await getSessionUser();
   if (!user) redirect("/login?next=/me");
+  const { discord: discordParam } = await searchParams;
+  // hasOwnProperty guard: a crafted ?discord=__proto__/constructor/toString
+  // would otherwise resolve an inherited truthy value past the ?? fallback
+  // and render an empty note instead of the generic error copy.
+  const discordNote = discordParam
+    ? Object.prototype.hasOwnProperty.call(DISCORD_LINK_NOTES, discordParam)
+      ? DISCORD_LINK_NOTES[discordParam]
+      : DISCORD_LINK_NOTES.error
+    : null;
+  // Server component, so we can check the OAuth app config directly and only
+  // offer "Link Discord" when clicking it can actually work.
+  const discordLinkAvailable = !!(
+    process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
+  );
 
   const season = await getActiveSeason();
   const reg = season
@@ -142,36 +197,88 @@ export default async function MePage() {
       />
 
       {/* The league coordinates on Discord — this is how captains reach their
-          roster for scheduling, check-ins, and standin scrambles. */}
+          roster for scheduling, check-ins, and standin scrambles. Linking via
+          OAuth proves account ownership; the typed handle is the fallback. */}
       <Card>
         <CardHeader
           title="Discord"
           subtitle={
-            dbUser?.discordName
-              ? "Shown to signed-in league members on rosters and the player pool."
-              : "Add your Discord so your captain can reach you — it's how the league talks."
+            dbUser?.discordId
+              ? "Linked via Discord — your handle is verified, and shown to signed-in league members."
+              : dbUser?.discordName
+                ? "Shown to signed-in league members on rosters and the player pool."
+                : "Add your Discord so your captain can reach you — it's how the league talks."
+          }
+          action={
+            dbUser?.discordId ? <Badge tone="success">Linked ✓</Badge> : null
           }
         />
-        <CardBody>
-          <ActionForm
-            action={updateDiscordName}
-            className="flex flex-wrap items-center gap-2"
-          >
-            <input
-              name="discordName"
-              defaultValue={dbUser?.discordName ?? ""}
-              placeholder="e.g. dendi_official"
-              aria-label="Discord username"
-              maxLength={40}
-              className="h-10 w-full max-w-xs rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-            />
-            <SubmitButton variant="secondary" size="sm">
-              Save
-            </SubmitButton>
-            <span className="text-xs text-muted">
-              Blank clears it. Legacy Name#1234 tags work too.
-            </span>
-          </ActionForm>
+        <CardBody className="space-y-3">
+          {discordNote ? <StripQueryParam param="discord" /> : null}
+          {discordNote ? (
+            <p
+              role="status"
+              className={
+                discordNote.tone === "success"
+                  ? "rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
+                  : discordNote.tone === "danger"
+                    ? "rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+                    : "rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm text-muted"
+              }
+            >
+              {discordNote.text}
+            </p>
+          ) : null}
+          {dbUser?.discordId ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <DiscordTag name={dbUser.discordName} verified />
+              <ActionForm action={unlinkDiscord}>
+                <SubmitButton
+                  variant="secondary"
+                  size="sm"
+                  confirm="Unlink Discord? Your handle disappears from rosters until you link or type one again."
+                >
+                  Unlink
+                </SubmitButton>
+              </ActionForm>
+            </div>
+          ) : (
+            <>
+              {discordLinkAvailable ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href="/api/auth/discord"
+                    className={buttonClasses("primary", "sm")}
+                  >
+                    Link Discord
+                  </a>
+                  <span className="text-xs text-muted">
+                    Sign in with Discord once — proves the handle is really
+                    yours. We only ever see your username, nothing else.
+                  </span>
+                </div>
+              ) : null}
+              <ActionForm
+                action={updateDiscordName}
+                className="flex flex-wrap items-center gap-2"
+              >
+                <input
+                  name="discordName"
+                  defaultValue={dbUser?.discordName ?? ""}
+                  placeholder="or type it — e.g. dendi_official"
+                  aria-label="Discord username"
+                  maxLength={40}
+                  className="h-10 w-full max-w-xs rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+                />
+                <SubmitButton variant="secondary" size="sm">
+                  Save
+                </SubmitButton>
+                <span className="text-xs text-muted">
+                  Blank clears it. Legacy Name#1234 tags work too.
+                </span>
+              </ActionForm>
+            </>
+          )}
         </CardBody>
       </Card>
 

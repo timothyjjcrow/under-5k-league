@@ -154,6 +154,29 @@ renders per-phase so unused features stay hidden.
   on the signup pool, team rosters, player profiles, and the draft room's
   nominated panel — ALWAYS gated to signed-in viewers (contact info is for
   members, not the public internet; keep that rule on new surfaces).
+- **Discord account linking (OAuth2)**: `User.discordId` (@unique snowflake,
+  null = unlinked) is set ONLY by the OAuth callback — proof the player owns
+  the account; the typed `discordName` stays as the unverified fallback, and
+  `<DiscordTag verified>` shows a ✓ wherever `!!discordId`. Flow mirrors
+  Steam: `/api/auth/discord` (session required — this is linking, not login;
+  state+PKCE verifier in a one-shot httpOnly cookie scoped to the callback
+  path) → Discord (`identify` scope ONLY — no email/guilds) →
+  `/api/auth/discord/callback`, a thin shell over `handleDiscordCallback`
+  (`src/lib/discord-link-service.ts`, reschedule-service pattern,
+  integration-tested in `test/integration/discord-link.itest.ts`): state
+  checked before the code is spent, tokens fetched server-side and DISCARDED
+  (only id+username persist), collisions → `?discord=taken`. Pure URL/PKCE/
+  parse helpers in `src/lib/discord-oauth.ts` (tested; RFC 7636 vector).
+  `/me` maps KNOWN `?discord=` codes to copy (hasOwnProperty-guarded — a
+  `?discord=__proto__` must fall back to the generic note, never echo), and
+  `<StripQueryParam>` scrubs the one-shot param after first render so the
+  note can't go stale against the card. The Link button hides unless
+  `DISCORD_CLIENT_ID`+`DISCORD_CLIENT_SECRET` are set. `updateDiscordName`
+  refuses while linked via an ATOMIC `updateMany({where:{discordId:null}})`
+  claim — a plain read-then-write loses a race against the callback and a
+  typed handle would wear the verified ✓; `unlinkDiscord` clears both
+  fields. The client secret follows the webhook rule: server-only, never
+  rendered or logged.
 - **Player questionnaire**: `Registration.roles` (comma-sep position keys,
   helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
   `captainNote` — captured on `/me`, surfaced in the player pool and draft room

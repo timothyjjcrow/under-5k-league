@@ -453,7 +453,12 @@ export default async function PlayerProfilePage({
                     </a>
                   </>
                 ) : null}
-                {viewer ? <DiscordTag name={user.discordName} /> : null}
+                {viewer ? (
+                  <DiscordTag
+                    name={user.discordName}
+                    verified={!!user.discordId}
+                  />
+                ) : null}
               </div>
             </div>
             {team ? (

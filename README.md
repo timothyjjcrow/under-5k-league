@@ -81,6 +81,17 @@ dev-login buttons. You can also hit the endpoint directly:
 3. Set `ADMIN_STEAM_IDS` to the SteamID64s that should be admins.
 4. Set `ALLOW_DEV_LOGIN=false` for production.
 
+### Enabling Discord account linking
+
+Players can prove they own their Discord account ("Link Discord" on `/me`) via
+Discord OAuth2 with the minimal `identify` scope — the site stores only the
+account id + username (no tokens, no email), and rosters show a ✓ on verified
+handles. Typed handles still work as an unverified fallback.
+
+1. Create an application at https://discord.com/developers/applications
+2. OAuth2 → add `<APP_URL>/api/auth/discord/callback` as a **Redirect**.
+3. Set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` in `.env`.
+
 ### Match data (OpenDota)
 
 Real games are pulled from the free [OpenDota API](https://docs.opendota.com/) —
@@ -172,6 +183,7 @@ serverless.
    | `APP_URL` | `https://<your-project>.vercel.app` |
    | `ADMIN_STEAM_IDS` | your SteamID64 (guarantees you're admin) |
    | `OPENDOTA_API_KEY` | optional |
+   | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional — enables "Link Discord" account verification |
 
    Leave `ALLOW_DEV_LOGIN` unset — dev login stays disabled in production.
 

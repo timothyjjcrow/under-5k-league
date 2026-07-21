@@ -726,7 +726,10 @@ export function DraftRoom({
                     ) : null}
                     <RankBadge rankTier={state.nominatedPlayer.rankTier} />
                     <RoleBadges roles={state.nominatedPlayer.roles} />
-                    <DiscordTag name={state.nominatedPlayer.discordName} />
+                    <DiscordTag
+                      name={state.nominatedPlayer.discordName}
+                      verified={state.nominatedPlayer.discordVerified}
+                    />
                     {/* Scouting links — open in a new tab so a captain can't
                         navigate away mid-auction. */}
                     <Link

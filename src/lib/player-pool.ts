@@ -17,6 +17,8 @@ export type PoolPlayer = {
   accountId: number | null;
   /** Discord handle — "" when unset or when the viewer isn't signed in. */
   discordName: string;
+  /** True when the handle came from the OAuth link (proven), not typed. */
+  discordVerified: boolean;
 };
 
 export type PoolSort = "mmr" | "rank" | "name";

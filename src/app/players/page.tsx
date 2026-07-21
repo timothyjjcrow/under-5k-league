@@ -97,6 +97,7 @@ export default async function PlayersPage() {
     accountId: p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId),
     // Contact info is for league members, not the public internet.
     discordName: viewer ? p.user.discordName : "",
+    discordVerified: viewer ? !!p.user.discordId : false,
   }));
   const captainHopefuls = players.filter((p) => p.wantsCaptain);
   const preDraft = season.status === "SIGNUPS" || season.status === "DRAFT";

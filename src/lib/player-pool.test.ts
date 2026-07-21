@@ -14,6 +14,7 @@ function mk(p: Partial<PoolPlayer> & { name: string }): PoolPlayer {
     drafted: false,
     accountId: null,
     discordName: "",
+    discordVerified: false,
     ...p,
   };
 }
