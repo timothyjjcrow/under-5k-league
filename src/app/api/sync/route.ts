@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // server-component ping like <WeekReminderPing> — because imported games must
 // bust the unstable_cache "games" tag, and revalidateTag is only legal from a
 // request scope (CLAUDE.md), never mid-render.
-export async function POST(req: NextRequest) {
+async function handleSync(req: NextRequest) {
   // Unauthenticated + triggers outbound OpenDota calls — same per-IP speed
   // bump as the Steam callback. The service's atomic claims are the real
   // budget guard; this just stops one source hammering the endpoint.
@@ -35,9 +35,25 @@ export async function POST(req: NextRequest) {
   // moves for every viewer whenever ANY path lands a result — the client
   // refreshes on either, so parked dashboards that lost the claim race (or
   // never raced) still repaint.
-  return NextResponse.json({
-    updated: out.imported > 0 || out.inhouse,
-    watch: out.watch,
-    cursor: out.cursor,
-  });
+  return NextResponse.json(
+    {
+      updated: out.imported > 0 || out.inhouse,
+      watch: out.watch,
+      cursor: out.cursor,
+    },
+    { headers: { "cache-control": "no-store" } },
+  );
+}
+
+export async function POST(req: NextRequest) {
+  return handleSync(req);
+}
+
+// GET exists for external pingers (a free 5-minute uptime monitor): the whole
+// lazy automation layer otherwise only runs while a human has a page open —
+// a match finishing at 1am with no visitors would wait until morning, and
+// site downtime itself would alert no one. Same throttled sync, so pointing a
+// monitor here buys a sync backstop AND downtime alerting in one move.
+export async function GET(req: NextRequest) {
+  return handleSync(req);
 }

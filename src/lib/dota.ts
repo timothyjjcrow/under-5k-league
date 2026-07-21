@@ -136,23 +136,35 @@ export async function fetchRecentMatchIds(
  * profile is genuinely unranked / has public match data off.
  */
 export type RankTierResult =
-  | { ok: true; rankTier: number | null }
-  | { ok: false; rankTier: null };
+  | { ok: true; rankTier: number | null; fhUnavailable: boolean | null }
+  | { ok: false; rankTier: null; fhUnavailable: null };
 
-/** Fetch a player's ranked medal, distinguishing "unreachable" from "no rank". */
+/**
+ * Fetch a player's ranked medal, distinguishing "unreachable" from "no rank".
+ * Also carries `profile.fh_unavailable` — OpenDota's "full history
+ * unavailable" flag, true when the player's "Expose Public Match Data" is off.
+ * That setting is the #1 reason automatic result import can't see a player's
+ * games, so every medal refresh doubles as a private-data check. Null when
+ * OpenDota didn't include the field.
+ */
 export async function fetchRankTier(accountId: number): Promise<RankTierResult> {
   try {
     const res = await fetch(withKey(`${BASE}/players/${accountId}`), {
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return { ok: false, rankTier: null };
+    if (!res.ok) return { ok: false, rankTier: null, fhUnavailable: null };
     const data = await res.json();
     const rankTier =
       typeof data?.rank_tier === "number" ? data.rank_tier : null;
-    return { ok: true, rankTier };
+    const fh = data?.profile?.fh_unavailable;
+    return {
+      ok: true,
+      rankTier,
+      fhUnavailable: typeof fh === "boolean" ? fh : null,
+    };
   } catch {
-    return { ok: false, rankTier: null };
+    return { ok: false, rankTier: null, fhUnavailable: null };
   }
 }
 

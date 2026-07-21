@@ -22,6 +22,9 @@ export type MatchView = {
   homeScore: number;
   awayScore: number;
   done: boolean;
+  /** Series in progress — some games imported, not decided (auto-sync makes
+   *  "Bo3 at 1–0" a common minutes-fresh state worth showing live). */
+  live: boolean;
   homeWin: boolean;
   awayWin: boolean;
   /** Pre-formatted on the server; null when unscheduled. */
@@ -306,6 +309,21 @@ function MatchRow({ match: m }: { match: MatchView }) {
                 className={m.awayWin ? "font-semibold text-fg" : "text-muted"}
               >
                 {m.awayScore}
+              </span>
+            </span>
+          ) : m.live ? (
+            <span
+              role="img"
+              aria-label={`Live — series at ${m.homeScore}–${m.awayScore}`}
+              title={`Series in progress — ${m.homeScore}–${m.awayScore} so far`}
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-danger/10 px-2 py-0.5 font-mono text-sm tabular-nums text-danger"
+            >
+              <span aria-hidden className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-danger" />
+              </span>
+              <span aria-hidden>
+                {m.homeScore}–{m.awayScore}
               </span>
             </span>
           ) : m.whenFull && m.whenTs != null ? (

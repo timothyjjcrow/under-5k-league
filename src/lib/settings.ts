@@ -18,6 +18,8 @@ export const SETTING_KEYS = {
   // parked client — not just the one whose ping performed the import — can
   // see the league changed and refresh itself.
   RESULT_CHANGED_AT: "resultChangedAt",
+  // ISO timestamp of the last failed-announcement retry sweep (throttle).
+  ANNOUNCE_RETRY_AT: "announceRetryAt",
 } as const;
 
 /**

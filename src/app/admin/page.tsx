@@ -3,7 +3,8 @@ import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason, capacityInfo } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
-import { SEASON_PHASE_ORDER } from "@/lib/constants";
+import { AUTO_SYNC, SEASON_PHASE_ORDER } from "@/lib/constants";
+import { nextAutoSyncAt } from "@/lib/result-sync";
 import {
   createSeason,
   setSeasonPhase,
@@ -139,6 +140,7 @@ export default async function AdminPage() {
           <RosterMoves season={season} data={data} />
           <StandinControls data={data} />
           <LeagueControls season={season} />
+          <AutoSyncHealth season={season} />
           <DiscordControls status={discordStatus} />
         </>
       ) : (
@@ -684,6 +686,15 @@ function CaptainControls({
                       {p.wantsCaptain ? (
                         <Badge tone="brand" className="shrink-0">
                           wants C
+                        </Badge>
+                      ) : null}
+                      {p.user.fhUnavailable === true ? (
+                        <Badge
+                          tone="danger"
+                          className="shrink-0"
+                          title="OpenDota reports their match data as private — automatic result import can't see this player's games"
+                        >
+                          private data
                         </Badge>
                       ) : null}
                     </span>
@@ -1376,6 +1387,183 @@ function StandinMatchBlock({
         </Button>
       </ActionForm>
     </div>
+  );
+}
+
+/**
+ * Auto-sync health: the automation trains everyone to stop pressing import
+ * buttons, so its state must be visible — a match parked in exponential
+ * backoff (private match data, forfeit) is otherwise indistinguishable from
+ * "no games yet". Reads the same window/claim fields the service writes.
+ */
+async function AutoSyncHealth({ season }: { season: Season }) {
+  if (
+    season.status !== "REGULAR_SEASON" &&
+    season.status !== "PLAYOFFS"
+  ) {
+    return null;
+  }
+  const now = Date.now();
+  const [inWindow, leagueSyncAt, cursor, skipRaw, privatePlayers] =
+    await Promise.all([
+      prisma.match.findMany({
+        where: {
+          seasonId: season.id,
+          status: { not: "COMPLETED" },
+          scheduledAt: {
+            gte: new Date(now - AUTO_SYNC.WINDOW_HOURS * 3600_000),
+            lte: new Date(now - AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF * 60_000),
+          },
+        },
+        orderBy: { scheduledAt: "asc" },
+        include: {
+          homeTeam: { select: { name: true } },
+          awayTeam: { select: { name: true } },
+        },
+      }),
+      getSetting(SETTING_KEYS.LEAGUE_AUTO_SYNC_AT),
+      getSetting(SETTING_KEYS.RESULT_CHANGED_AT),
+      getSetting(`leagueSyncSkip:${season.id}`),
+      // WHO the roster scans can't see — OpenDota flagged their match data
+      // private. This is the admin's only mid-season surface for it (the
+      // signup-pool badge lives on a card that retires after the draft).
+      prisma.user.findMany({
+        where: {
+          fhUnavailable: true,
+          registrations: {
+            some: { seasonId: season.id, status: "ACTIVE" },
+          },
+        },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      }),
+    ]);
+  let skippedIds = 0;
+  try {
+    const parsed = JSON.parse(skipRaw ?? "[]");
+    if (Array.isArray(parsed)) skippedIds = parsed.length;
+  } catch {
+    // unreadable skip memory — just report 0
+  }
+  const ts = (iso: string | null) => {
+    const t = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(t) ? t : null;
+  };
+  const cursorTs = ts(cursor);
+  const leagueTs = ts(leagueSyncAt);
+
+  return (
+    <Card>
+      <CardHeader
+        title="Automatic result sync"
+        subtitle="What the OpenDota watcher is doing right now — nobody should need the manual buttons unless something here looks stuck."
+      />
+      <CardBody className="space-y-3">
+        {inWindow.length === 0 ? (
+          <p className="text-sm text-muted">
+            No matches in their detection window — the sync sleeps until{" "}
+            {AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the next
+            kickoff.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {inWindow.map((m) => {
+              const next = nextAutoSyncAt(m.autoSyncedAt, m.autoSyncAttempts);
+              const backedOff = m.autoSyncAttempts >= 3;
+              return (
+                <li
+                  key={m.id}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-line bg-surface-2/40 p-3 text-sm"
+                >
+                  <Link
+                    href={`/matches/${m.id}`}
+                    className="min-w-0 flex-1 basis-48 truncate font-medium hover:text-info"
+                  >
+                    {m.homeTeam.name} vs {m.awayTeam.name}
+                  </Link>
+                  {m.status === "LIVE" ? (
+                    <Badge tone="accent">LIVE {m.homeScore}–{m.awayScore}</Badge>
+                  ) : null}
+                  <span className="text-xs text-muted">
+                    {m.autoSyncedAt ? (
+                      <>
+                        scanned{" "}
+                        <LocalTime
+                          ts={m.autoSyncedAt.getTime()}
+                          variant="short"
+                          initial={formatMatchTime(m.autoSyncedAt, "short")}
+                        />
+                        {" · "}
+                        {m.autoSyncAttempts} empty scan
+                        {m.autoSyncAttempts === 1 ? "" : "s"}
+                        {" · next "}
+                        {next && next.getTime() > now ? (
+                          <LocalTime
+                            ts={next.getTime()}
+                            variant="short"
+                            initial={formatMatchTime(next, "short")}
+                          />
+                        ) : (
+                          "on the next ping"
+                        )}
+                      </>
+                    ) : (
+                      "not scanned yet — next ping picks it up"
+                    )}
+                  </span>
+                  {backedOff ? (
+                    <Badge tone="danger">
+                      backed off — check players&apos; public match data or
+                      import manually
+                    </Badge>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {privatePlayers.length > 0 ? (
+          <p className="text-xs text-danger">
+            Private match data (roster scans can&apos;t see their games):{" "}
+            {privatePlayers.map((p, i) => (
+              <span key={p.id}>
+                {i > 0 ? ", " : ""}
+                <PlayerLink userId={p.id} className="underline">
+                  {p.name}
+                </PlayerLink>
+              </span>
+            ))}
+          </p>
+        ) : null}
+        <p className="text-xs text-muted">
+          Last result landed:{" "}
+          {cursorTs ? (
+            <LocalTime
+              ts={cursorTs}
+              variant="full"
+              initial={formatMatchTime(new Date(cursorTs), "full")}
+            />
+          ) : (
+            "never"
+          )}
+          {season.dotaLeagueId ? (
+            <>
+              {" · League feed last checked: "}
+              {leagueTs ? (
+                <LocalTime
+                  ts={leagueTs}
+                  variant="short"
+                  initial={formatMatchTime(new Date(leagueTs), "short")}
+                />
+              ) : (
+                "never"
+              )}
+              {` · ${skippedIds} league game${skippedIds === 1 ? "" : "s"} skipped as not ours`}
+            </>
+          ) : null}
+        </p>
+      </CardBody>
+    </Card>
   );
 }
 

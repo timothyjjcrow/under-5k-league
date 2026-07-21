@@ -174,14 +174,43 @@ serverless.
    | `OPENDOTA_API_KEY` | optional |
 
    Leave `ALLOW_DEV_LOGIN` unset — dev login stays disabled in production.
-5. **Deploy.** The build swaps Prisma to Postgres, runs `prisma db push` (creates
-   the tables in Neon via `DIRECT_URL`), and builds the app.
+
+   > Scope `DATABASE_URL`/`DIRECT_URL` to the **Production** environment (or
+   > point Preview at a separate branch database). Builds only run
+   > `prisma db push` on production deploys (`scripts/build-db.mjs`), but a
+   > preview deploy sharing the prod URL still *runs* against the live data.
+5. **Deploy.** The build swaps Prisma to Postgres, runs `prisma db push`
+   **on production deploys only** (creates the tables in Neon via
+   `DIRECT_URL`; previews just generate the client), and builds the app.
 6. **First login = admin.** Open your site → **Sign in through Steam**. The first
    user is auto-granted admin; then go to **/admin**, create your season, and set
    the **MMR cap** (4500). Steam pulls everyone's name + avatar automatically.
 
 Update `APP_URL` if you add a custom domain, so Steam login redirects back
 correctly.
+
+### Backups
+
+The league's entire history lives in that one database — back it up before
+schema changes and on a habit cadence:
+
+```bash
+# Production (paste the Neon DIRECT url; needs pg_dump — brew install postgresql)
+DATABASE_URL="postgres://…direct…" npm run db:backup
+# Local dev (copies the SQLite file)
+npm run db:backup
+```
+
+Timestamped dumps land in `backups/` (gitignored). Restore Postgres with
+`psql "$URL" < backups/<file>.sql`; for SQLite just copy the `.db` file back.
+
+### Uptime monitor (recommended)
+
+Point a free uptime monitor (UptimeRobot etc., 5-minute interval) at
+`GET https://<your-site>/api/sync`. That buys two things at once: you're
+alerted if the site goes down, and the automatic result sync gets a heartbeat
+even when nobody has a page open (it's lazy by design — a match finishing at
+1am with zero visitors would otherwise wait for the morning's first page view).
 
 ### Alternatives (keep SQLite, no DB change)
 **Fly.io / Railway / a cheap VPS** can run `next start` with a persistent volume

@@ -21,6 +21,12 @@ model User {
   profileUrl    String?
   dotaAccountId Int? // Dota 2 32-bit account id (defaults to one derived from steamId)
   rankTier      Int? // OpenDota rank_tier (tens=medal, ones=stars); null if unknown
+  // OpenDota profile.fh_unavailable: true = "Expose Public Match Data" is OFF,
+  // so every automatic import path is blind to this player's games. Null =
+  // unknown (never fetched / OpenDota didn't say). Refreshed wherever the
+  // medal is (login, /me refresh, admin bulk sync); never overwritten on a
+  // failed fetch — same rule as rankTier.
+  fhUnavailable Boolean?
   // Discord username — the league runs on Discord, and this is how captains
   // reach their roster. Empty string = not provided. Persists across seasons.
   discordName   String   @default("")

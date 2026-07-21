@@ -1788,7 +1788,21 @@ async function ThisWeek({
                 <span className="uppercase">
                   {matchPhaseLabel(m.phase, m.week)}
                 </span>
-                {m.scheduledAt ? (
+                {m.status === "LIVE" ? (
+                  <span
+                    role="img"
+                    aria-label={`Live — series at ${m.homeScore}–${m.awayScore}`}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-1.5 py-0.5 font-mono text-xs tabular-nums text-danger"
+                  >
+                    <span aria-hidden className="relative flex h-1.5 w-1.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-danger" />
+                    </span>
+                    <span aria-hidden>
+                      LIVE {m.homeScore}–{m.awayScore}
+                    </span>
+                  </span>
+                ) : m.scheduledAt ? (
                   <LocalTime
                     ts={m.scheduledAt.getTime()}
                     variant="full"

@@ -47,3 +47,17 @@ export function autoSyncIntervalSeconds(attempts: number): number {
 export function autoSyncClaimCutoff(nowMs: number, attempts = 0): Date {
   return new Date(nowMs - autoSyncIntervalSeconds(attempts) * 1000);
 }
+
+/**
+ * When a match becomes claimable for its next automatic scan (admin health
+ * card). Null = never scanned yet, so it's claimable immediately.
+ */
+export function nextAutoSyncAt(
+  autoSyncedAt: Date | null,
+  attempts: number,
+): Date | null {
+  if (!autoSyncedAt) return null;
+  return new Date(
+    autoSyncedAt.getTime() + autoSyncIntervalSeconds(attempts) * 1000,
+  );
+}

@@ -9,7 +9,7 @@ import {
 } from "./dota";
 import { advancePlayoffBracket } from "./playoff-service";
 import { maybeAnnounceWeekHonors } from "./honors-service";
-import { matchResultMessage, sendDiscordMessage } from "./discord";
+import { getWebhookUrl, matchResultMessage, sendDiscordMessage } from "./discord";
 import { getSetting, setSetting, stampResultChange } from "./settings";
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 
@@ -17,12 +17,21 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
+/** Marker value recording a send that failed — claimable for a retry. */
+export const ANNOUNCE_FAILED_PREFIX = "failed:";
+
 /**
  * Announce a decided series to Discord exactly once per match, whichever path
  * completed it (captain import, auto sync, league sync, admin import — and
  * admin recordResult, which claims the same marker before its own send).
  * Atomic Setting-row CREATE, the reminder-service pattern: concurrent
  * completions race to a P2002 instead of double-posting.
+ *
+ * A FAILED send doesn't release the marker (unlike honors/reminders, nothing
+ * naturally re-triggers this match — the run whose send failed is the run
+ * that completed it): it stamps the marker `failed:<iso>` instead, and the
+ * result-sync retry sweep atomically re-claims exactly those. Only rows this
+ * code marked failed are ever retried, so a deploy can't re-announce history.
  */
 export async function announceSeriesResultOnce(match: {
   id: string;
@@ -33,23 +42,30 @@ export async function announceSeriesResultOnce(match: {
   week: number;
   phase: string;
 }): Promise<boolean> {
+  // Without a webhook, don't burn the once-only marker — if the admin wires
+  // Discord up later, results that complete after that still announce.
+  if (!(await getWebhookUrl())) return false;
+  const marker = `resultAnnounced:${match.id}`;
   try {
     await prisma.setting.create({
-      data: {
-        key: `resultAnnounced:${match.id}`,
-        value: new Date().toISOString(),
-      },
+      data: { key: marker, value: new Date().toISOString() },
     });
   } catch (e) {
-    if ((e as { code?: string }).code === "P2002") return false; // already sent
-    throw e;
+    if ((e as { code?: string }).code !== "P2002") throw e;
+    // Marker exists: only a failed prior send may be retried — the
+    // conditional update is the atomic claim (one retrier wins).
+    const reclaimed = await prisma.setting.updateMany({
+      where: { key: marker, value: { startsWith: ANNOUNCE_FAILED_PREFIX } },
+      data: { value: new Date().toISOString() },
+    });
+    if (reclaimed.count === 0) return false; // already sent (or being sent)
   }
   const [home, away] = await Promise.all([
     prisma.team.findUnique({ where: { id: match.homeTeamId } }),
     prisma.team.findUnique({ where: { id: match.awayTeamId } }),
   ]);
   if (!home || !away) return false;
-  await sendDiscordMessage(
+  const sent = await sendDiscordMessage(
     matchResultMessage({
       homeName: home.name,
       awayName: away.name,
@@ -59,6 +75,15 @@ export async function announceSeriesResultOnce(match: {
       isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
     }),
   );
+  if (!sent) {
+    // A Discord blip must not permanently eat the announcement — flag the
+    // marker for the sync sweep to retry.
+    await prisma.setting.updateMany({
+      where: { key: marker },
+      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
+    });
+    return false;
+  }
   return true;
 }
 

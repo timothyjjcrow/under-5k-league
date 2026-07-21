@@ -3,7 +3,11 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
-import { getActiveSeason } from "@/lib/season";
+import { getActiveSeason, reactivateSeason } from "@/lib/season";
+import {
+  assignStandinGuarded,
+  removeStandinGuarded,
+} from "@/lib/standin-service";
 import {
   SEASON_STATUS,
   SEASON_PHASE_ORDER,
@@ -151,6 +155,22 @@ export async function deleteSeason(
   ]);
   refresh();
   return { message: `Deleted ${season.name} and all of its history` };
+}
+
+/** Make an archived season active again (undo an accidental Create season). */
+export async function reactivateSeasonAction(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const res = await reactivateSeason(str(formData, "seasonId"));
+  if (!res.ok) return { error: res.error };
+  refresh();
+  return { message: `${res.name} is the active season again` };
 }
 
 /** Directly set the active season's phase (admin override). */
@@ -788,7 +808,7 @@ export async function recordResult(
     prisma.team.findUnique({ where: { id: match.awayTeamId } }),
   ]);
   if (home && away) {
-    await sendDiscordMessage(
+    const sent = await sendDiscordMessage(
       matchResultMessage({
         homeName: home.name,
         awayName: away.name,
@@ -798,6 +818,14 @@ export async function recordResult(
         isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
       }),
     );
+    if (!sent) {
+      // Nothing was posted (no webhook, or Discord failed) — flag the marker
+      // failed so the result-sync retry sweep (or a later import) announces.
+      await prisma.setting.updateMany({
+        where: { key: `resultAnnounced:${matchId}` },
+        data: { value: `failed:${new Date().toISOString()}` },
+      });
+    }
   }
 
   // Playoff results auto-advance the bracket (and crown the champion at the end).
@@ -958,7 +986,8 @@ export async function releasePlayer(
   return { message: `${member.user.name} released from ${member.team.name}` };
 }
 
-/** Assign a standin to fill in for a rostered player in a specific match. */
+/** Assign a standin to fill in for a rostered player in a specific match.
+ *  Guards live in standin-service (shared with the captain self-serve path). */
 export async function assignStandin(
   _prev: ActionResult,
   formData: FormData,
@@ -968,71 +997,17 @@ export async function assignStandin(
   } catch {
     return { error: "Not authorized" };
   }
-  const matchId = str(formData, "matchId");
-  const standinUserId = str(formData, "standinUserId");
-  const replacingUserId = str(formData, "replacingUserId");
-  if (!matchId || !standinUserId || !replacingUserId)
-    return { error: "Pick a standin and the player they cover" };
-  if (standinUserId === replacingUserId)
-    return { error: "A player can't stand in for themselves" };
-
-  const season = await getActiveSeason();
-  if (!season) return { error: "No active season" };
-  const match = await prisma.match.findUnique({
-    where: { id: matchId },
-    include: { games: { select: { id: true } } },
+  const res = await assignStandinGuarded({
+    matchId: str(formData, "matchId"),
+    standinUserId: str(formData, "standinUserId"),
+    replacingUserId: str(formData, "replacingUserId"),
+    actingCaptainId: null, // admin override — either team
   });
-  if (!match) return { error: "Unknown match" };
-  if (match.status === MATCH_STATUS.COMPLETED)
-    return { error: "This match is already played" };
-
-  // The standin must be a real signup who ISN'T on a roster this season — a
-  // rostered player covering another team would land in BOTH account sets on
-  // import, mis-crediting their box-score lines (a "double agent").
-  const [standinReg, standinRoster] = await Promise.all([
-    prisma.registration.findUnique({
-      where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
-    }),
-    prisma.teamMember.findUnique({
-      where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
-    }),
-  ]);
-  if (!standinReg || standinReg.status !== "ACTIVE")
-    return { error: "That standin has no active signup this season" };
-  if (standinRoster)
-    return { error: "That player is on a roster — they can't stand in" };
-
-  // The replaced player's roster tells us which team the standin fills for.
-  const membership = await prisma.teamMember.findUnique({
-    where: { seasonId_userId: { seasonId: season.id, userId: replacingUserId } },
-  });
-  if (!membership) return { error: "Replaced player is not on a team" };
-  if (
-    membership.teamId !== match.homeTeamId &&
-    membership.teamId !== match.awayTeamId
-  ) {
-    return { error: "That player's team isn't in this match" };
-  }
-
-  // One standin covers one seat in one match — assigning the same person to
-  // both sides (or twice) would double-count their stats on import.
-  const already = await prisma.standinAssignment.findFirst({
-    where: { matchId, standinUserId },
-  });
-  if (already)
-    return { error: "That standin is already assigned to this match" };
-
-  await prisma.standinAssignment.create({
-    data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
-  });
+  if (!res.ok) return { error: res.error };
+  // The standin must HEAR about their game night — best-effort, never blocks.
+  await sendDiscordMessage(res.announcement);
   refresh();
-  return {
-    message:
-      "Standin assigned" +
-      (match.games.length > 0
-        ? " — heads up: already-imported games keep their original attribution"
-        : ""),
-  };
+  return { message: res.message };
 }
 
 /** Remove a standin assignment. */
@@ -1045,25 +1020,14 @@ export async function removeStandin(
   } catch {
     return { error: "Not authorized" };
   }
-  const id = str(formData, "assignmentId");
-  const assignment = await prisma.standinAssignment.findUnique({
-    where: { id },
-    include: { match: { include: { games: { select: { id: true } } } } },
+  const res = await removeStandinGuarded({
+    assignmentId: str(formData, "assignmentId"),
+    actingCaptainId: null,
   });
-  if (!assignment) return { error: "That assignment is already gone" };
-  // Once games are in the books the assignment is part of the record: later
-  // imports would silently drop the standin's stats (or fail classification),
-  // and removing it from a played match erases the "in for" history.
-  if (assignment.match.status === MATCH_STATUS.COMPLETED)
-    return { error: "This match is already played — the assignment is history" };
-  if (assignment.match.games.length > 0)
-    return {
-      error:
-        "Games are already imported — removing the standin now would strip them from the rest of the series",
-    };
-  await prisma.standinAssignment.delete({ where: { id } });
+  if (!res.ok) return { error: res.error };
+  await sendDiscordMessage(res.announcement);
   refresh();
-  return { message: "Standin assignment removed" };
+  return { message: res.message };
 }
 
 /** Import a specific Dota game (by id or URL) into a scheduled match. */
@@ -1336,12 +1300,15 @@ async function syncRanksFor(
       unreachable++;
       continue;
     }
-    if (result.rankTier == null) continue;
-    await prisma.user.update({
-      where: { id: u.id },
-      data: { rankTier: result.rankTier },
-    });
-    ranked++;
+    // Store what OpenDota definitely said: a real medal, and/or the
+    // public-match-data flag (fh_unavailable) auto-import depends on.
+    const data: { rankTier?: number; fhUnavailable?: boolean } = {};
+    if (result.rankTier != null) data.rankTier = result.rankTier;
+    if (result.fhUnavailable !== null) data.fhUnavailable = result.fhUnavailable;
+    if (Object.keys(data).length > 0) {
+      await prisma.user.update({ where: { id: u.id }, data });
+    }
+    if (result.rankTier != null) ranked++;
   }
   return { ranked, unreachable };
 }

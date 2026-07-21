@@ -249,6 +249,7 @@ export default async function SchedulePage() {
     homeScore: m.homeScore,
     awayScore: m.awayScore,
     done: m.status === "COMPLETED",
+    live: m.status === "LIVE",
     homeWin: m.winnerTeamId === m.homeTeamId,
     awayWin: m.winnerTeamId === m.awayTeamId,
     whenFull: fmtWhen(m.scheduledAt),

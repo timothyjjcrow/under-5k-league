@@ -134,12 +134,20 @@ export async function maybeAnnounceUpcomingWeek(season: {
     };
   });
 
-  await sendDiscordMessage(
+  const sent = await sendDiscordMessage(
     weekReminderMessage({
       week: next.week,
       isPlayoff: next.phase !== "REGULAR",
       fixtures,
     }),
   );
+  if (!sent) {
+    // A Discord blip must not eat the week's reminder — release the claim so
+    // the next page load inside the window retries.
+    await prisma.setting.deleteMany({
+      where: { key: `weekReminder:${season.id}:${next.week}` },
+    });
+    return false;
+  }
   return true;
 }

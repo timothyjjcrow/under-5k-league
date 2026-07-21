@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { deleteSeason } from "@/app/actions/admin";
+import { deleteSeason, reactivateSeasonAction } from "@/app/actions/admin";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   Badge,
@@ -107,16 +107,30 @@ export default async function SeasonsPage() {
                 </Card>
                 </Link>
                 {isAdmin && !s.isActive ? (
-                  <ActionForm action={deleteSeason} hidden={{ seasonId: s.id }}>
-                    <SubmitButton
-                      variant="secondary"
-                      size="sm"
-                      className="text-danger"
-                      confirm={`Permanently delete ${s.name}? Its teams, matches, and draft history are erased. This cannot be undone.`}
+                  <div className="flex flex-wrap gap-2">
+                    <ActionForm
+                      action={reactivateSeasonAction}
+                      hidden={{ seasonId: s.id }}
                     >
-                      🗑 Remove from history
-                    </SubmitButton>
-                  </ActionForm>
+                      <SubmitButton
+                        variant="secondary"
+                        size="sm"
+                        confirm={`Make ${s.name} the active season again? The current active season is archived (nothing is deleted — you can switch back the same way).`}
+                      >
+                        ↩ Make active again
+                      </SubmitButton>
+                    </ActionForm>
+                    <ActionForm action={deleteSeason} hidden={{ seasonId: s.id }}>
+                      <SubmitButton
+                        variant="secondary"
+                        size="sm"
+                        className="text-danger"
+                        confirm={`Permanently delete ${s.name}? Its teams, matches, and draft history are erased. This cannot be undone.`}
+                      >
+                        🗑 Remove from history
+                      </SubmitButton>
+                    </ActionForm>
+                  </div>
                 ) : null}
               </div>
             );

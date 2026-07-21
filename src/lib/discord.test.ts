@@ -17,6 +17,8 @@ import {
   draftScheduledMessage,
   playerOutMessage,
   rescheduleProposedMessage,
+  standinAssignedMessage,
+  standinRemovedMessage,
   weekReminderMessage,
 } from "./discord";
 
@@ -322,5 +324,55 @@ describe("maskWebhookUrl", () => {
     expect(maskWebhookUrl("https://example.com/not-a-webhook")).toBe(
       "configured",
     );
+  });
+});
+
+describe("standinAssignedMessage", () => {
+  it("tells the standin whose seat they fill, where, and when (reader-local)", () => {
+    const msg = standinAssignedMessage({
+      standinName: "Sub Sam",
+      replacedName: "Home Carry",
+      teamName: "Roshan's Rejects",
+      homeName: "Roshan's Rejects",
+      awayName: "Dire Straits",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_760_000_000_000,
+    });
+    expect(msg).toContain("Sub Sam");
+    expect(msg).toContain("Home Carry");
+    expect(msg).toContain("Roshan's Rejects");
+    expect(msg).toContain("week 4");
+    expect(msg).toContain("<t:1760000000:F>");
+  });
+
+  it("omits the kickoff for unscheduled matches and says playoff when it is one", () => {
+    const msg = standinAssignedMessage({
+      standinName: "Sub Sam",
+      replacedName: "Away Mid",
+      teamName: "Dire Straits",
+      homeName: "Roshan's Rejects",
+      awayName: "Dire Straits",
+      week: 8,
+      isPlayoff: true,
+      whenMs: null,
+    });
+    expect(msg).toContain("playoff match");
+    expect(msg).not.toContain("<t:");
+  });
+});
+
+describe("standinRemovedMessage", () => {
+  it("stands the substitute down by name", () => {
+    const msg = standinRemovedMessage({
+      standinName: "Sub Sam",
+      teamName: "Dire Straits",
+      homeName: "Roshan's Rejects",
+      awayName: "Dire Straits",
+      week: 4,
+      isPlayoff: false,
+    });
+    expect(msg).toContain("Sub Sam");
+    expect(msg).toContain("no longer standing in");
   });
 });

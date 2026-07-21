@@ -138,6 +138,7 @@ export default async function MePage() {
         effectiveId={dbUser?.dotaAccountId ?? steamIdToAccountId(user.steamId)}
         override={dbUser?.dotaAccountId ?? null}
         rankTier={dbUser?.rankTier ?? null}
+        fhUnavailable={dbUser?.fhUnavailable ?? null}
       />
 
       {/* The league coordinates on Discord — this is how captains reach their
@@ -566,10 +567,13 @@ function DotaAccountCard({
   effectiveId,
   override,
   rankTier,
+  fhUnavailable,
 }: {
   effectiveId: number | null;
   override: number | null;
   rankTier: number | null;
+  /** OpenDota fh_unavailable: true = match data private (auto-import blind). */
+  fhUnavailable: boolean | null;
 }) {
   return (
     <Card>
@@ -600,6 +604,17 @@ function DotaAccountCard({
         }
       />
       <CardBody className="space-y-3">
+        {fhUnavailable === true ? (
+          <div
+            role="status"
+            className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
+          >
+            <b>Your Dota match data is private</b> — league results can&apos;t
+            auto-import your games, and your medal/stats stay invisible. In
+            Dota 2: <b>Settings → Options → Advanced → Social → Expose Public
+            Match Data</b>, play a game, then hit Refresh medal below.
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
           {effectiveId ? (
             <>

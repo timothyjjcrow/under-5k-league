@@ -23,6 +23,10 @@ import {
   captainAutoDetect,
   captainImportGame,
 } from "@/app/actions/match-report";
+import {
+  captainAssignStandin,
+  captainRemoveStandin,
+} from "@/app/actions/standins";
 import { MatchImportControls } from "@/components/match-import-controls";
 import type { PlayerStat } from "@/lib/match-import";
 import {
@@ -209,6 +213,10 @@ export default async function MatchDetailPage({
       {/* Captains report their own results (OpenDota import) — league night
           doesn't wait for an admin. Stays up while a Bo3/Bo5 is mid-series. */}
       {match.status !== "COMPLETED" ? <ReportResultSection match={match} /> : null}
+
+      {/* Captains line up their own standin cover — the OUT-ping → DM-the-admin
+          relay is gone. Admin's panel keeps the any-team override. */}
+      {match.status !== "COMPLETED" ? <StandinSection match={match} /> : null}
 
       {games.length === 0 && match.status !== "COMPLETED" ? (
         <Suspense fallback={<CardSkeleton rows={5} />}>
@@ -1180,6 +1188,171 @@ async function ReportResultSection({
           importAction={captainImportGame}
           detectAction={captainAutoDetect}
         />
+      </CardBody>
+    </Card>
+  );
+}
+
+// Captain-facing standin management (guards in standin-service): current
+// cover for both sides, remove for your own team, and an assign form scoped
+// to your roster + the season's unrostered ACTIVE signups.
+async function StandinSection({
+  match,
+}: {
+  match: {
+    id: string;
+    seasonId: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeam: { name: string; captainId: string };
+    awayTeam: { name: string; captainId: string };
+  };
+}) {
+  const viewer = await getSessionUser();
+  if (!viewer) return null;
+  const isAdmin = viewer.role === "ADMIN";
+  const myTeamId =
+    match.homeTeam.captainId === viewer.id
+      ? match.homeTeamId
+      : match.awayTeam.captainId === viewer.id
+        ? match.awayTeamId
+        : null;
+  if (!myTeamId && !isAdmin) return null;
+  // Admin passing by uses their panel; this card is the captain's tool. An
+  // admin who IS a captain still gets their own team's view.
+  if (!myTeamId) return null;
+
+  // The service refuses archived-season matches (its guards key on the
+  // active season) — don't render a form that can only error.
+  const season = await prisma.season.findUnique({
+    where: { id: match.seasonId },
+    select: { isActive: true },
+  });
+  if (!season?.isActive) return null;
+
+  const [assignments, roster, registrations, rostered] = await Promise.all([
+    prisma.standinAssignment.findMany({
+      where: { matchId: match.id },
+      include: {
+        standin: { select: { id: true, name: true } },
+        replaced: { select: { id: true, name: true } },
+      },
+    }),
+    prisma.teamMember.findMany({
+      where: { seasonId: match.seasonId, teamId: myTeamId },
+      include: { user: { select: { id: true, name: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.registration.findMany({
+      where: { seasonId: match.seasonId, status: "ACTIVE" },
+      include: { user: { select: { id: true, name: true } } },
+      orderBy: { mmr: "desc" },
+    }),
+    prisma.teamMember.findMany({
+      where: { seasonId: match.seasonId },
+      select: { userId: true },
+    }),
+  ]);
+  const rosteredIds = new Set(rostered.map((m) => m.userId));
+  const pool = registrations.filter((r) => !rosteredIds.has(r.userId));
+  // One seat, one standin — players already covered leave the Covers list.
+  const coveredIds = new Set(
+    assignments.map((a) => a.replaced?.id).filter(Boolean),
+  );
+  const coverable = roster.filter((m) => !coveredIds.has(m.userId));
+  const teamNameOf = (teamId: string) =>
+    teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
+
+  return (
+    <Card>
+      <CardHeader
+        title="Standins"
+        subtitle="Someone can't make it? Line up cover from the standin pool yourself — the assignment announces to Discord."
+      />
+      <CardBody className="space-y-3">
+        {assignments.length > 0 ? (
+          <ul className="space-y-1.5 text-sm">
+            {assignments.map((a) => (
+              <li
+                key={a.id}
+                className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-line bg-surface-2/40 px-3 py-1.5"
+              >
+                <span className="min-w-0">
+                  <strong>{a.standin.name}</strong>{" "}
+                  <span className="text-muted">in for</span>{" "}
+                  {a.replaced?.name ?? "?"}{" "}
+                  <span className="text-muted">· {teamNameOf(a.teamId)}</span>
+                </span>
+                {a.teamId === myTeamId ? (
+                  <ActionForm
+                    action={captainRemoveStandin}
+                    hidden={{ assignmentId: a.id }}
+                    className="ml-auto"
+                  >
+                    <SubmitButton
+                      variant="ghost"
+                      size="sm"
+                      className="text-danger"
+                      confirm={`Remove ${a.standin.name} as standin? Discord is told to stand down.`}
+                    >
+                      Remove
+                    </SubmitButton>
+                  </ActionForm>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted">No standins assigned yet.</p>
+        )}
+        {pool.length === 0 ? (
+          <p className="text-sm text-muted">
+            Nobody is in the standin pool right now — ask around the Discord;
+            late joiners can still sign up as standins.
+          </p>
+        ) : (
+          <ActionForm
+            action={captainAssignStandin}
+            hidden={{ matchId: match.id }}
+            className="flex flex-wrap items-end gap-2"
+          >
+            <select
+              name="standinUserId"
+              required
+              aria-label="Standin to bring in"
+              className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
+              defaultValue=""
+            >
+              <option value="" disabled>
+                Standin…
+              </option>
+              {pool.map((r) => (
+                <option key={r.userId} value={r.userId}>
+                  {r.user.name} ({r.mmr} MMR)
+                </option>
+              ))}
+            </select>
+            <select
+              name="replacingUserId"
+              required
+              aria-label="Player they cover"
+              className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
+              defaultValue=""
+            >
+              <option value="" disabled>
+                Covers…
+              </option>
+              {coverable.map((m) => (
+                <option key={m.userId} value={m.userId}>
+                  {m.user.name}
+                </option>
+              ))}
+            </select>
+            <SubmitButton variant="secondary" size="sm">
+              Assign standin
+            </SubmitButton>
+          </ActionForm>
+        )}
       </CardBody>
     </Card>
   );

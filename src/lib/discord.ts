@@ -127,6 +127,35 @@ export function playerOutMessage(m: {
   return `🚑 **${m.playerName}** can't make the ${label} — **${m.homeName}** vs **${m.awayName}**${when}. Captains/admin: time to line up a standin.`;
 }
 
+export function standinAssignedMessage(m: {
+  standinName: string;
+  replacedName: string;
+  teamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
+  whenMs: number | null;
+}): string {
+  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const when =
+    m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
+  return `🧩 **${m.standinName}** stands in for **${m.replacedName}** on **${m.teamName}** — ${label} **${m.homeName}** vs **${m.awayName}**${when}. ${m.standinName}: that's your game night now, check in on the match page.`;
+}
+
+export function standinRemovedMessage(m: {
+  standinName: string;
+  teamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+}): string {
+  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  return `🧩 **${m.standinName}** is no longer standing in for **${m.teamName}** (${label} **${m.homeName}** vs **${m.awayName}**) — stand down.`;
+}
+
 export function rescheduleProposedMessage(m: {
   homeName: string;
   awayName: string;

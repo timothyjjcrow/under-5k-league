@@ -6,7 +6,12 @@ import {
   SEASON_STATUS,
 } from "./constants";
 import { autoSyncClaimCutoff } from "./result-sync";
-import { autoDetectGamesForMatch, syncLeagueGames } from "./match-import";
+import {
+  ANNOUNCE_FAILED_PREFIX,
+  announceSeriesResultOnce,
+  autoDetectGamesForMatch,
+  syncLeagueGames,
+} from "./match-import";
 import {
   maybeAutoDetectResult,
   maybeFormLobby,
@@ -198,9 +203,53 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
   return { recorded, watch: !!stillActive };
 }
 
+/**
+ * Retry series announcements whose Discord send failed. The failing run is
+ * the one that COMPLETED the match, so no import path ever re-triggers it —
+ * this throttled sweep re-claims exactly the markers announceSeriesResultOnce
+ * stamped `failed:` (never anything else, so history can't re-announce).
+ */
+async function retryFailedAnnouncements(nowMs: number): Promise<void> {
+  if (
+    !(await claimSyncThrottle(
+      SETTING_KEYS.ANNOUNCE_RETRY_AT,
+      AUTO_SYNC.LEAGUE_INTERVAL_SECONDS,
+      nowMs,
+    ))
+  ) {
+    return;
+  }
+  const failed = await prisma.setting.findMany({
+    where: {
+      key: { startsWith: "resultAnnounced:" },
+      value: { startsWith: ANNOUNCE_FAILED_PREFIX },
+    },
+    take: 3, // a Discord outage queues several — drain a few per sweep
+  });
+  if (failed.length === 0) return;
+  const matches = await prisma.match.findMany({
+    where: {
+      id: { in: failed.map((f) => f.key.slice("resultAnnounced:".length)) },
+    },
+    select: {
+      id: true,
+      homeTeamId: true,
+      awayTeamId: true,
+      homeScore: true,
+      awayScore: true,
+      week: true,
+      phase: true,
+    },
+  });
+  for (const m of matches) {
+    await announceSeriesResultOnce(m);
+  }
+}
+
 /** One sync pass: league matches + inhouse. Safe (and cheap) on every ping. */
 export async function runResultSync(): Promise<ResultSyncOutcome> {
   const nowMs = Date.now();
+  await retryFailedAnnouncements(nowMs);
   const [league, inhouse] = await Promise.all([
     syncDueMatches(nowMs),
     syncInhouse(),

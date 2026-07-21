@@ -6,6 +6,7 @@ import {
   autoSyncIntervalSeconds,
   autoSyncOpensAt,
   isAutoSyncDue,
+  nextAutoSyncAt,
 } from "./result-sync";
 
 const NOW = Date.UTC(2026, 6, 12, 20, 0, 0); // an arbitrary league night
@@ -101,5 +102,18 @@ describe("autoSyncClaimCutoff", () => {
     expect(autoSyncClaimCutoff(NOW, 2).getTime()).toBe(
       NOW - AUTO_SYNC.MATCH_INTERVAL_SECONDS * 4 * 1000,
     );
+  });
+});
+
+describe("nextAutoSyncAt", () => {
+  it("projects the next scan from the last one plus the backoff interval", () => {
+    const last = new Date(NOW);
+    expect(nextAutoSyncAt(last, 0)?.getTime()).toBe(
+      NOW + AUTO_SYNC.MATCH_INTERVAL_SECONDS * 1000,
+    );
+    expect(nextAutoSyncAt(last, 3)?.getTime()).toBe(
+      NOW + AUTO_SYNC.MATCH_INTERVAL_SECONDS * 8 * 1000,
+    );
+    expect(nextAutoSyncAt(null, 5)).toBeNull(); // never scanned → due now
   });
 });

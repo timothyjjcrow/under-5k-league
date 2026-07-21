@@ -249,10 +249,17 @@ export async function updateDotaAccount(
   if (accountId) {
     const result = await fetchRankTier(accountId);
     if (result.ok) {
-      // OpenDota answered — trust it for the (possibly new) account.
+      // OpenDota answered — trust it for the (possibly new) account,
+      // INCLUDING the null fhUnavailable case: the flag described the OLD
+      // account, so on an account change "OpenDota didn't say" must reset to
+      // unknown, or a once-private player keeps the danger banner forever on
+      // a fresh public account.
       await prisma.user.update({
         where: { id: user.id },
-        data: { rankTier: result.rankTier },
+        data: {
+          rankTier: result.rankTier,
+          fhUnavailable: result.fhUnavailable,
+        },
       });
       medal = result.rankTier ? ` · ${rankMedalName(result.rankTier)}` : "";
     } else {
@@ -261,8 +268,12 @@ export async function updateDotaAccount(
       medal = " · couldn't fetch medal (try Refresh)";
     }
   } else {
-    // No derivable account — clear any stale medal.
-    await prisma.user.update({ where: { id: user.id }, data: { rankTier: null } });
+    // No derivable account — clear any stale medal (and the private-data
+    // flag, which belonged to the unlinked account).
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: null, fhUnavailable: null },
+    });
   }
 
   refresh();
@@ -293,7 +304,12 @@ export async function refreshRank(
   }
   await prisma.user.update({
     where: { id: user.id },
-    data: { rankTier: result.rankTier },
+    data: {
+      rankTier: result.rankTier,
+      ...(result.fhUnavailable !== null
+        ? { fhUnavailable: result.fhUnavailable }
+        : {}),
+    },
   });
   refresh();
   return {

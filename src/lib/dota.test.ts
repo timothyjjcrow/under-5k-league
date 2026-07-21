@@ -67,23 +67,67 @@ describe("fetchRankTier", () => {
 
   it("returns ok:true with the medal on a 200", async () => {
     stubFetch(async () => ({ ok: true, json: async () => ({ rank_tier: 55 }) }));
-    expect(await fetchRankTier(123)).toEqual({ ok: true, rankTier: 55 });
+    expect(await fetchRankTier(123)).toEqual({
+      ok: true,
+      rankTier: 55,
+      fhUnavailable: null,
+    });
   });
 
   it("returns ok:true rankTier:null when the profile has no rank", async () => {
     stubFetch(async () => ({ ok: true, json: async () => ({ rank_tier: null }) }));
-    expect(await fetchRankTier(123)).toEqual({ ok: true, rankTier: null });
+    expect(await fetchRankTier(123)).toEqual({
+      ok: true,
+      rankTier: null,
+      fhUnavailable: null,
+    });
+  });
+
+  it("carries the private-match-data flag when OpenDota includes it", async () => {
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        rank_tier: 44,
+        profile: { fh_unavailable: true },
+      }),
+    }));
+    expect(await fetchRankTier(123)).toEqual({
+      ok: true,
+      rankTier: 44,
+      fhUnavailable: true,
+    });
+
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({ rank_tier: 44, profile: { fh_unavailable: false } }),
+    }));
+    expect((await fetchRankTier(123)).fhUnavailable).toBe(false);
+
+    // Non-boolean junk → unknown, never a guess.
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({ rank_tier: 44, profile: { fh_unavailable: "yes" } }),
+    }));
+    expect((await fetchRankTier(123)).fhUnavailable).toBeNull();
   });
 
   it("returns ok:FALSE on a 429 rate limit — not a null medal", async () => {
     stubFetch(async () => ({ ok: false, status: 429, json: async () => ({}) }));
-    expect(await fetchRankTier(123)).toEqual({ ok: false, rankTier: null });
+    expect(await fetchRankTier(123)).toEqual({
+      ok: false,
+      rankTier: null,
+      fhUnavailable: null,
+    });
   });
 
   it("returns ok:FALSE when the request throws (timeout / network)", async () => {
     stubFetch(async () => {
       throw new Error("The operation timed out");
     });
-    expect(await fetchRankTier(123)).toEqual({ ok: false, rankTier: null });
+    expect(await fetchRankTier(123)).toEqual({
+      ok: false,
+      rankTier: null,
+      fhUnavailable: null,
+    });
   });
 });

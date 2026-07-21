@@ -1,7 +1,7 @@
 import { prisma } from "./prisma";
 import { weeklyHonors, type HonorsGame, type WeeklyHonors } from "./honors";
 import { getSetting } from "./settings";
-import { sendDiscordMessage, weeklyHonorsMessage } from "./discord";
+import { getWebhookUrl, sendDiscordMessage, weeklyHonorsMessage } from "./discord";
 import { getHeroNames } from "./dota";
 
 function parsePlayers(json: string): HonorsGame["players"] {
@@ -54,6 +54,9 @@ export async function maybeAnnounceWeekHonors(
   if (weekMatches.some((m) => m.status !== "COMPLETED")) return;
 
   const marker = `honorsAnnounced:${seasonId}:${week}`;
+  // No webhook → don't burn the marker; wiring Discord later still announces
+  // any week that completes (or re-triggers) after that.
+  if (!(await getWebhookUrl())) return;
   if (await getSetting(marker)) return; // cheap pre-check; the CREATE decides
 
   const honors = await getWeekHonors(seasonId, week);
@@ -83,7 +86,7 @@ export async function maybeAnnounceWeekHonors(
       : null,
     honors.player?.heroId ? getHeroNames() : ({} as Record<number, string>),
   ]);
-  await sendDiscordMessage(
+  const sent = await sendDiscordMessage(
     weeklyHonorsMessage({
       week,
       playerName: playerUser?.name ?? null,
@@ -96,4 +99,8 @@ export async function maybeAnnounceWeekHonors(
       teamGameWins: honors.team?.gameWins ?? 0,
     }),
   );
+  if (!sent) {
+    // Release the claim so the next result-driven trigger retries the send.
+    await prisma.setting.deleteMany({ where: { key: marker } });
+  }
 }

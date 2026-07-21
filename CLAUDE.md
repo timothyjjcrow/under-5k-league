@@ -90,8 +90,16 @@ renders per-phase so unused features stay hidden.
   crowns the champion when the final ends. Bracket slots are `R{round}M{match}`.
   Pure helpers live in `schedule.ts` (`pickBracketSize`, `nextRoundPairings`,
   `roundName`).
-- **Standins**: `assignStandin` / `removeStandin` admin actions; the replaced
-  player's roster infers which team the standin fills for. Shown on `/schedule`.
+- **Standins**: guards live in `src/lib/standin-service.ts`
+  (reschedule-service pattern, integration-tested in
+  `test/integration/standins.itest.ts`); the replaced player's roster infers
+  which team the standin fills for. CAPTAINS self-serve their own team's cover
+  via the match-page "Standins" card (`captainAssignStandin`/
+  `captainRemoveStandin` in `src/app/actions/standins.ts` — actingCaptainId
+  must own the covered team); the admin panel keeps the any-team override
+  (`actingCaptainId: null`). Assign AND remove announce to Discord
+  (`standinAssignedMessage`/`standinRemovedMessage`) — being assigned is the
+  most action-demanding event a standin can get. Shown on `/schedule`.
 
 ## Match data / OpenDota (done)
 
@@ -196,6 +204,24 @@ admin button press. Lazy, no cron/websocket (draft-clock philosophy).
   `announceSeriesResultOnce` posts the result to Discord (see Discord section)
   whichever path — captain, admin, league sync, or auto sync — finished the
   series.
+- **GET /api/sync** exists for external pingers: point a free 5-minute uptime
+  monitor at it (README) — downtime alerting + a sync heartbeat for the
+  nobody-on-site window, without abandoning the lazy no-cron design.
+- **Health surface**: the admin "Automatic result sync" card (`AutoSyncHealth`
+  in `admin/page.tsx`) renders each in-window match's last scan / empty-scan
+  count / next-scan time (pure `nextAutoSyncAt`, tested), the league-feed
+  throttle, the change cursor, and skip-memory size — a match parked in
+  backoff is otherwise indistinguishable from "no games yet".
+- **Private match data**: `User.fhUnavailable` (OpenDota `profile.
+  fh_unavailable` — true means "Expose Public Match Data" is off, the #1
+  reason auto-import can't see a player). Captured wherever the medal is
+  fetched (`fetchRankTier` carries it; login `ensureRankTier`, /me
+  link/refresh, admin bulk sync) under the same never-overwrite-on-failure
+  rule as `rankTier` (rank-sync.itest). Surfaced as a danger note on /me and
+  a "private data" badge in the admin player list.
+- **LIVE chips**: /schedule rows and the dashboard This-week strip show a
+  pulsing partial score (`live` flag on `MatchView`) while a series is LIVE —
+  auto-sync makes "Bo3 at 1–0" a common minutes-fresh state.
 
 ## Player-facing navigation & info pages (done)
 
@@ -833,6 +859,30 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   fields (`id/name/avatar/rankTier`) instead of `include: { user: true }`.
   Don't re-add full user rows to snapshot/roster queries — the derived
   `SeasonSnapshot` type makes tsc enforce the narrowed shape.
+
+## Deploy safety & ops (done — keep following these)
+
+- **`scripts/build-db.mjs` gates the build's `prisma db push` to
+  `VERCEL_ENV === "production"`** (previews only `prisma generate`) — a
+  preview deploy of a WIP branch must never push its schema into the live DB.
+  Pinned by `src/lib/build-db.test.ts` (drives the script in dry-run); don't
+  put a bare `prisma db push` back in vercel.json.
+- **`npm run db:backup`** (`scripts/backup-db.mjs`): pg_dump for Postgres
+  URLs, file-copy for SQLite, timestamped into gitignored `backups/`. README
+  documents the prod recipe. Tested end-to-end for the SQLite path.
+- **`reactivateSeason`** (`src/lib/season.ts`, integration-tested): archived
+  seasons get a "Make active again" button on /seasons — the undo for a
+  mis-clicked Create season (previously nothing ever wrote `isActive` back).
+- **Failed Discord sends never permanently eat an announcement**
+  (announce-retry.itest.ts); no-webhook never burns a marker. Two shapes:
+  honors + week reminders DELETE their marker on a failed send (their
+  triggers naturally re-fire — later imports / page loads in the window);
+  series results instead stamp the marker `failed:<iso>` and the throttled
+  `retryFailedAnnouncements` sweep in result-sync-service re-claims exactly
+  those (the run whose send failed is the run that COMPLETED the match, so
+  no import path would ever re-trigger it — and only rows stamped failed are
+  retried, so a deploy can't re-announce history). Keep the matching shape
+  when adding claim-then-send announcements.
 
 ## Good next steps
 

@@ -101,10 +101,13 @@ export async function ensureRankTier(
   const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
   if (!accountId) return;
   const result = await fetchRankTier(accountId);
-  if (result.ok && result.rankTier != null) {
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { rankTier: result.rankTier },
-    });
+  if (!result.ok) return;
+  const data: { rankTier?: number; fhUnavailable?: boolean } = {};
+  if (result.rankTier != null) data.rankTier = result.rankTier;
+  // The same payload says whether their match data is public — the flag every
+  // automatic import path depends on. Only a definite answer is stored.
+  if (result.fhUnavailable !== null) data.fhUnavailable = result.fhUnavailable;
+  if (Object.keys(data).length > 0) {
+    await prisma.user.update({ where: { id: user.id }, data });
   }
 }

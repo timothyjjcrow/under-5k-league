@@ -53,3 +53,6 @@ next-env.d.ts
 
 # local editor / tooling settings
 .claude/settings.local.json
+
+# Database backups (scripts/backup-db.mjs)
+backups/
