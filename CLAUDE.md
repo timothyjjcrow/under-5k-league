@@ -59,6 +59,17 @@ renders per-phase so unused features stay hidden.
   reseeds a DEDICATED `prisma/e2e.db` and serves it on port 3210 (never
   dev.db/:3000, safe to run any time). Caveat: Next 16's project-dir lock
   means it can't start while another `next dev` runs from this repo.
+- `npm run test:e2e:mid` is the MID-SEASON browser suite
+  (`playwright.midseason.config.ts`, specs in `e2e-mid/`): its own
+  `prisma/e2e-fixture.db` (name satisfies seed-fixture's guard) seeded to
+  `FIXTURE_MODE=regular` + a staged LIVE match (`e2e-mid/stage.ts`), port
+  3212. Covers dashboard/standings sorting, schedule (collapse/filter/LIVE
+  chip/calendar), box scores, leaders/meta/records, team/player pages,
+  fantasy+pick'em signed-in, and a mobile no-horizontal-overflow tripwire
+  whose failure output names the offending elements and the scroll chain.
+  Every spec asserts zero uncaught client errors (`trackPageErrors`) — the
+  crash class raw-HTML checks can't see. Can't run SIMULTANEOUSLY with the
+  main e2e (one dev server per repo) — CI runs them sequentially.
 
 ## Roster moves (done)
 
@@ -519,6 +530,12 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   container and a `truncate` span needs `min-w-0`.
 - `CheckinBanner` text has `min-w-[14rem]` so the RSVP buttons wrap below the
   copy on phones instead of crushing it.
+- **A card holding an `overflow-x-auto` scroller needs `overflow-hidden` on
+  the CARD** (see SeasonGrid): Chrome propagates the inner scroller's full
+  table width into the page scroll area through the card otherwise — every
+  phone got a ~100px horizontal page scroll before the mid-season mobile e2e
+  caught it. Flex-wrap chips need `min-w-0` to truncate instead of widening
+  the page (Run-in opponent chips).
 - **The site header is `h-20` (80px)** — anything pinned beneath it must use
   the same offset and be updated TOGETHER: the draft room's fixed compact
   clock bar (`top-20`) and its IntersectionObserver (`rootMargin -80px`),
@@ -748,6 +765,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   (`standingsMovement`), ✓/✗ clinch marks (`clinchStatuses` — conservative
   points-only math, suppressed when everyone makes the bracket). Cut line +
   shading + arrows only render in league order.
+- **Tiebreak chain** (`computeStandings`, tested): points → game diff →
+  series wins → HEAD-TO-HEAD among the still-tied (a mini-table of the tied
+  group's meetings via `headToHeadRanks` — mini points then mini game diff;
+  applied as a second GROUP pass, never inside the comparator, because a
+  3-way cycle isn't pairwise-transitive) → team id as determinism's last
+  resort. Teams with identical mini-records SHARE a rank so H2H never invents
+  an order it can't justify. The scenario engine inherits it for free (its
+  property test re-derives every leaf via computeStandings); `clinchStatuses`
+  stays deliberately points-only and is unaffected.
 - **/schedule** during REGULAR_SEASON: "Playoff picture" (projected first
   round via `playoffFirstRound` over live standings) and "Run-in"
   (`remainingSchedule` — rank-tagged remaining-opponent chips, in-cut

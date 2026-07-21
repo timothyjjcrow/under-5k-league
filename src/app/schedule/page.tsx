@@ -542,7 +542,12 @@ function SeasonGrid({
   };
 
   return (
-    <Card>
+    // overflow-hidden on the CARD is load-bearing: Chrome adds the inner
+    // scroller's full table width to the page's scroll area through the
+    // card otherwise, giving every phone a 100px+ horizontal page scroll
+    // (caught by the mid-season mobile e2e). It also clips the table's
+    // square corners to the card radius while scrolling.
+    <Card className="overflow-hidden">
       <CardHeader
         title="Season grid"
         subtitle="Who's played who — each cell is the row team's result in that meeting"
@@ -813,7 +818,7 @@ function RunIn({
           >
             <Link
               href={`/teams/${s.teamId}`}
-              className="flex w-44 min-w-0 shrink-0 items-center gap-2 hover:text-info"
+              className="flex w-32 min-w-0 shrink-0 items-center gap-2 hover:text-info sm:w-44"
             >
               <TeamCrest
                 name={teamName.get(s.teamId) ?? "?"}
@@ -833,7 +838,11 @@ function RunIn({
                     href={`/teams/${r.opponentId}`}
                     title={`Week ${r.week} vs ${teamName.get(r.opponentId) ?? "?"} (currently #${oppRank})`}
                     className={cn(
-                      "flex max-w-[11rem] items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-muted/70",
+                      // min-w-0 matters: a wrap-line chip wider than the
+                      // remaining row width must truncate, not push the page
+                      // wider (CLAUDE.md mobile rules — a long team name once
+                      // gave /schedule a 26px horizontal scroll on phones).
+                      "flex min-w-0 max-w-[11rem] items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-muted/70",
                       tough
                         ? "border-accent/40 text-fg"
                         : "border-line text-muted",

@@ -1,6 +1,9 @@
 // Compute league standings from completed matches. Pure + testable.
 // Points: 3 per series win, 0 per loss. Tiebreakers: game (map) differential,
-// then total series wins.
+// total series wins, then HEAD-TO-HEAD among the still-tied (a mini-table of
+// the tied teams' meetings — mini points, then mini game diff), and only then
+// team id — determinism's last resort, never the thing that decides a playoff
+// seed between teams the schedule actually separated.
 
 export type MatchLike = {
   homeTeamId: string;
@@ -199,5 +202,74 @@ export function computeStandings(
       b.wins - a.wins ||
       a.teamId.localeCompare(b.teamId),
   );
+
+  // Head-to-head pass: re-order each group tied on EVERY criterion above
+  // (bar the id fallback) by their own meetings. Done as a second pass —
+  // not inside the comparator — because a mini-table is a property of the
+  // whole tied GROUP, and pairwise comparison of a 3-way tie isn't
+  // transitive (A beat B, B beat C, C beat A would break Array.sort).
+  const samePrimary = (a: TeamStanding, b: TeamStanding) =>
+    a.points === b.points && a.gameDiff === b.gameDiff && a.wins === b.wins;
+  for (let i = 0; i < rows.length; ) {
+    let j = i + 1;
+    while (j < rows.length && samePrimary(rows[i], rows[j])) j++;
+    if (j - i > 1) {
+      const group = rows.slice(i, j);
+      const h2h = headToHeadRanks(
+        group.map((r) => r.teamId),
+        matches,
+      );
+      group.sort(
+        (a, b) =>
+          h2h.get(a.teamId)! - h2h.get(b.teamId)! ||
+          a.teamId.localeCompare(b.teamId),
+      );
+      rows.splice(i, j - i, ...group);
+    }
+    i = j;
+  }
   return rows;
+}
+
+/**
+ * Rank a fully-tied group by a mini-table of ONLY their meetings (regular
+ * season, same 3/1/0 scoring; mini game diff as its own tiebreak). Teams with
+ * identical mini-records SHARE a rank — head-to-head must never invent an
+ * ordering it can't justify, so the caller's deterministic id fallback decides
+ * those (exactly the pre-head-to-head behavior). Pure and exported for tests.
+ */
+export function headToHeadRanks(
+  tiedIds: string[],
+  matches: MatchLike[],
+): Map<string, number> {
+  const inGroup = new Set(tiedIds);
+  const mini = new Map(tiedIds.map((id) => [id, { points: 0, diff: 0 }]));
+  for (const m of matches) {
+    if (m.status !== "COMPLETED" || m.phase !== "REGULAR") continue;
+    if (!inGroup.has(m.homeTeamId) || !inGroup.has(m.awayTeamId)) continue;
+    const home = mini.get(m.homeTeamId)!;
+    const away = mini.get(m.awayTeamId)!;
+    home.diff += m.homeScore - m.awayScore;
+    away.diff += m.awayScore - m.homeScore;
+    if (m.winnerTeamId === m.homeTeamId) home.points += 3;
+    else if (m.winnerTeamId === m.awayTeamId) away.points += 3;
+    else {
+      home.points += 1;
+      away.points += 1;
+    }
+  }
+  const ordered = [...mini.entries()].sort(
+    ([, a], [, b]) => b.points - a.points || b.diff - a.diff,
+  );
+  const ranks = new Map<string, number>();
+  ordered.forEach(([id, rec], i) => {
+    const prev = i > 0 ? ordered[i - 1] : null;
+    ranks.set(
+      id,
+      prev && prev[1].points === rec.points && prev[1].diff === rec.diff
+        ? ranks.get(prev[0])!
+        : i,
+    );
+  });
+  return ranks;
 }

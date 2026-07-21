@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "test:inhouse": "vitest run --config vitest.integration.config.mts test/integration/inhouse.itest.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:mid": "playwright test --config playwright.midseason.config.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

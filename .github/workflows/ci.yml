@@ -50,3 +50,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run e2e (seeds the DB + boots next dev)
         run: npm run test:e2e
+      - name: Run mid-season e2e (fixture DB, own port)
+        # Sequential on purpose — Next's project-dir lock allows one dev
+        # server per repo, so the two suites can never run simultaneously.
+        run: npm run test:e2e:mid
