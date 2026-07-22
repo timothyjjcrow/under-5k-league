@@ -18,7 +18,7 @@ import {
   fetchPlayerRankTier,
   fetchRankTier,
 } from "@/lib/dota";
-import { rankMedalName } from "@/lib/rank";
+import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
 import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
@@ -57,17 +57,59 @@ export async function saveRegistration(
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
   });
 
+  // The player's ranked medal, needed BEFORE the gate: claimed MMR is
+  // validated against it. On a brand-new signup with no stored medal, pull it
+  // from Dota (via OpenDota — the free public API over Valve's match data
+  // that Dotabuff-style sites read too; Dotabuff itself has no public API) so
+  // captains see a rank without the player manually linking their account
+  // first. Best-effort: fetchPlayerRankTier never throws and returns null
+  // when the profile is private or unavailable. Only fetch when they don't
+  // already have a medal, so we never overwrite a good value with a null and
+  // never re-hit the API on signup edits.
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { dotaAccountId: true, rankTier: true },
+  });
+  let rankTier = dbUser?.rankTier ?? null;
+  let medalLabel = "";
+  if (!existing && dbUser && dbUser.rankTier == null) {
+    const accountId = dbUser.dotaAccountId ?? steamIdToAccountId(user.steamId);
+    const fetched = accountId ? await fetchPlayerRankTier(accountId) : null;
+    if (fetched != null) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { rankTier: fetched },
+      });
+      rankTier = fetched;
+      medalLabel = ` · ${rankMedalName(fetched)}`;
+    }
+  }
+
   // Hard MMR ceiling (the soft limit doesn't block) + "new full players only
   // during SIGNUPS" (standins any time; existing signups can always be
-  // updated). Rules live in registrationGate.
+  // updated). Rules live in registrationGate — judged on the RAW claim plus
+  // the medal (never the clamped value: the clamp snaps down to a floor
+  // under the ceiling, so gating post-clamp would admit any overstated lie).
   const gateError = registrationGate({
     season,
     type,
     mmr,
+    rankTier,
     hasExisting: !!existing,
     existingType: (existing?.type as RegistrationType | undefined) ?? null,
   });
   if (gateError) return { error: gateError };
+
+  // Medal check: a claim outside the medal's plausible window (blank
+  // included) snaps to the window's floor — the conservative estimate. No
+  // medal on file = the typed value stands. An UNCHANGED resubmit is never
+  // re-clamped: the stored number is already league-approved (clamped at its
+  // own save, or set by an admin override — the escape hatch for stale
+  // medals, which editing your roles must not silently destroy).
+  const untouched = !!existing && mmr === existing.mmr;
+  const check = untouched
+    ? { mmr, adjusted: false, range: null }
+    : clampMmrToRank(mmr, rankTier);
 
   // A rostered player can't flip themselves to STANDIN: their TeamMember row
   // survives the switch, so they'd sit on a roster AND in the standin pool —
@@ -90,7 +132,7 @@ export async function saveRegistration(
       seasonId: season.id,
       userId: user.id,
       type,
-      mmr,
+      mmr: check.mmr,
       wantsCaptain,
       roles,
       favoriteHeroes,
@@ -100,7 +142,7 @@ export async function saveRegistration(
     },
     update: {
       type,
-      mmr,
+      mmr: check.mmr,
       wantsCaptain,
       roles,
       favoriteHeroes,
@@ -126,41 +168,30 @@ export async function saveRegistration(
     );
   }
 
-  // On a brand-new signup, pull the player's ranked medal from Dota (via
-  // OpenDota — the free public API over Valve's match data that Dotabuff-style
-  // sites read too; Dotabuff itself has no public API) so captains see a rank
-  // without the player manually linking their account first. Best-effort:
-  // fetchPlayerRankTier never throws and returns null when the profile is
-  // private or unavailable. Only fetch when they don't already have a medal,
-  // so we never overwrite a good value with a null and never re-hit the API on
-  // signup edits.
-  let medalLabel = "";
-  if (!existing) {
-    const dbUser = await prisma.user.findUnique({
-      where: { id: user.id },
-      select: { dotaAccountId: true, rankTier: true },
-    });
-    if (dbUser && dbUser.rankTier == null) {
-      const accountId =
-        dbUser.dotaAccountId ?? steamIdToAccountId(user.steamId);
-      const rankTier = accountId ? await fetchPlayerRankTier(accountId) : null;
-      if (rankTier != null) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { rankTier },
-        });
-        medalLabel = ` · ${rankMedalName(rankTier)}`;
-      }
-    }
+  // Tell the player what the medal check did to their number — a silent
+  // rewrite of a form value they typed would read as a bug.
+  let mmrNote = "";
+  if (check.adjusted && check.range) {
+    const medal = rankMedalName(rankTier);
+    const range = formatMmrRange(check.range);
+    mmrNote =
+      mmr === 0
+        ? ` · MMR estimated at ${check.mmr} from your ${medal} medal`
+        : check.mmr === 0
+          ? ` · MMR left unknown — ${mmr} doesn't fit your ${medal} medal (${range}); captains will judge by the medal`
+          : ` · MMR set to ${check.mmr} — your ${medal} medal puts you in the ${range} range`;
   }
 
   refresh();
   return {
-    message: existing
-      ? "Signup updated"
-      : (type === REGISTRATION_TYPE.STANDIN
-          ? "Registered as a standin"
-          : "You're signed up!") + medalLabel,
+    message:
+      (existing
+        ? "Signup updated"
+        : (type === REGISTRATION_TYPE.STANDIN
+            ? "Registered as a standin"
+            : "You're signed up!") +
+          // The adjustment note already names the medal — don't say it twice.
+          (mmrNote ? "" : medalLabel)) + mmrNote,
   };
 }
 

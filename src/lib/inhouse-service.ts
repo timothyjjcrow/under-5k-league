@@ -36,6 +36,7 @@ import {
   sendDiscordMessage,
 } from "./discord";
 import { stampResultChange, SETTING_KEYS } from "./settings";
+import { clampMmrToRank } from "./rank";
 import type { SessionUser } from "./auth";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -430,21 +431,39 @@ export async function joinQueue(
   // only seeds players who never registered for a season; a blank re-join
   // ("Run it back") falls back to their last lobby's snapshot instead of
   // silently resetting them to unknown.
-  const reg = await prisma.registration.findFirst({
-    where: { userId: viewer.id, mmr: { gt: 0 } },
-    orderBy: { createdAt: "desc" },
-    select: { mmr: true },
-  });
-  let safeMmr =
-    reg?.mmr ??
-    (Number.isFinite(mmr) ? Math.max(0, Math.min(12000, Math.floor(mmr))) : 0);
-  if (safeMmr === 0) {
-    const last = await prisma.inhouseLobbyPlayer.findFirst({
+  const [reg, dbUser] = await Promise.all([
+    prisma.registration.findFirst({
       where: { userId: viewer.id, mmr: { gt: 0 } },
       orderBy: { createdAt: "desc" },
       select: { mmr: true },
-    });
-    if (last) safeMmr = last.mmr;
+    }),
+    prisma.user.findUnique({
+      where: { id: viewer.id },
+      select: { rankTier: true },
+    }),
+  ]);
+  // A registration MMR is league-approved as-is — clamped against the medal
+  // at its own save, or deliberately set by an admin override (the escape
+  // hatch for stale medals, which this path must not silently undo). Only
+  // SELF-reported numbers get the medal check: the free-typed value and the
+  // old lobby snapshot (which may predate medal validation). A blank-but-
+  // medaled player seeds at the medal floor instead of unknown.
+  let safeMmr: number;
+  if (reg) {
+    safeMmr = reg.mmr;
+  } else {
+    safeMmr = Number.isFinite(mmr)
+      ? Math.max(0, Math.min(12000, Math.floor(mmr)))
+      : 0;
+    if (safeMmr === 0) {
+      const last = await prisma.inhouseLobbyPlayer.findFirst({
+        where: { userId: viewer.id, mmr: { gt: 0 } },
+        orderBy: { createdAt: "desc" },
+        select: { mmr: true },
+      });
+      if (last) safeMmr = last.mmr;
+    }
+    safeMmr = clampMmrToRank(safeMmr, dbUser?.rankTier).mmr;
   }
 
   // Counted BEFORE the join so the Discord milestone check below sees the

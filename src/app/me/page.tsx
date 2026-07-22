@@ -16,6 +16,12 @@ import { DiscordTag } from "@/components/discord-tag";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import { HARD_MMR_CEILING } from "@/lib/constants";
+import {
+  formatMmrRange,
+  mmrRangeForRankTier,
+  rankMedalName,
+  rankTierExactMinMmr,
+} from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchPhaseLabel } from "@/lib/schedule";
 import { formatMatchTime } from "@/lib/match-time";
@@ -113,6 +119,13 @@ export default async function MePage({
   const form = reg ?? previous;
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+  // The medal's plausible MMR window — signup claims outside it are snapped
+  // to its floor by saveRegistration, so tell the player up front. A medal
+  // whose EXACT band floor clears the hard ceiling (Divine 4+/Immortal) is
+  // ineligible outright — registrationGate will reject it whatever they type.
+  const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
+  const medalFloor = rankTierExactMinMmr(dbUser?.rankTier ?? null);
+  const medalBlocked = medalFloor != null && medalFloor > HARD_MMR_CEILING;
 
   // Your-season context: the roster seat (from DRAFT on) or, for standins,
   // the matches they've been assigned to cover.
@@ -485,13 +498,41 @@ export default async function MePage({
                   className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
                 />
                 <p className="mt-1 text-xs text-muted">
-                  Unranked or not sure? Leave it blank — captains will see your
-                  ranked medal instead, and you can update it later. Used to
-                  help balance the draft. Be honest!
+                  {mmrWindow && mmrWindow.min > 0
+                    ? "Not sure? Leave it blank — we'll estimate it from your ranked medal. "
+                    : "Unranked or not sure? Leave it blank — captains will see your ranked medal instead, and you can update it later. "}
+                  Used to help balance the draft. Be honest!
                   {season.maxMmr > 0
                     ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
                     : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}
                 </p>
+                {medalBlocked ? (
+                  <p className="mt-1 text-xs text-danger">
+                    Your {rankMedalName(dbUser?.rankTier)} medal puts you above{" "}
+                    {HARD_MMR_CEILING} MMR, so this league can&apos;t take your
+                    signup.
+                  </p>
+                ) : mmrWindow ? (
+                  <p className="mt-1 text-xs text-muted">
+                    Your {rankMedalName(dbUser?.rankTier)} medal puts you
+                    around{" "}
+                    <strong>
+                      {/* Display capped at the ceiling — the form's max —
+                          even where the tolerance window runs past it. */}
+                      {formatMmrRange({
+                        min: mmrWindow.min,
+                        max:
+                          mmrWindow.max === null
+                            ? HARD_MMR_CEILING
+                            : Math.min(mmrWindow.max, HARD_MMR_CEILING),
+                      })}
+                    </strong>{" "}
+                    MMR —{" "}
+                    {mmrWindow.min > 0
+                      ? `a value outside that range is automatically set to ${mmrWindow.min}.`
+                      : "a value outside that range is treated as unknown (captains judge by your medal)."}
+                  </p>
+                ) : null}
               </div>
 
               <div>

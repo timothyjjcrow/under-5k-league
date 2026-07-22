@@ -594,6 +594,39 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - Gotcha: after `prisma db push` regenerates the client, restart the dev
   server or new Season fields read as `undefined` in the running process.
 
+## Medal MMR validation (done)
+
+- Pure lib in `src/lib/rank.ts` (tested): `mmrRangeForRankTier` — the wide
+  plausible-MMR window for an OpenDota medal (exact inverse of
+  `approxRankTierFromMmr`'s star bands, widened ±`MMR_MEDAL_TOLERANCE` = 770;
+  Immortal open-ended), `clampMmrToRank` (an out-of-window claim, blank/0
+  included, snaps to the window FLOOR; no medal = no clamp), and
+  `rankTierExactMinMmr` (the no-tolerance band floor, for eligibility).
+- **Gate order is load-bearing** (`saveRegistration`): the medal is ensured
+  (new-signup OpenDota fetch) BEFORE `registrationGate`; the gate judges the
+  RAW claim + medal — never the clamped value (clamping snaps DOWN under the
+  ceiling, so gating post-clamp would admit any overstated lie — the bigger
+  the lie, the lower the number the gate would see); and the medal-floor rule
+  rejects Divine 4+/Immortal (`rankTierExactMinMmr > HARD_MMR_CEILING`)
+  whatever they type, so sandbagging can't walk past the ceiling either.
+  Only gate-approved claims are clamped and stored.
+- **A stored registration MMR is league-approved**: an UNCHANGED resubmit is
+  never re-clamped (an admin `setRegistrationMmr` correction — the documented
+  never-clamped escape hatch for stale medals — must survive the player
+  editing their roles), and inhouse `joinQueue` trusts reg-sourced MMR as-is,
+  clamping only the self-reported sources (the typed value and the old lobby
+  snapshot; blank+medal seeds the medal floor instead of unknown).
+- Surfaces: /me signup hint (range display capped at the ceiling; floor-0
+  medals say "treated as unknown", 5K+ medals get a danger note), the inhouse
+  queue panel hint (always visible — it explains why the listed MMR can
+  differ from what was typed), an adjustment note in the signup toast
+  (estimated / left unknown / set to N — never a silent rewrite), and the
+  advisory "heads up" mismatch flag in the admin override's message.
+- Tested end-to-end: `rank.test.ts` (incl. an exhaustive inverse-consistency
+  sweep vs `approxRankTierFromMmr`), `registration.test.ts` gate rules,
+  `registration.itest.ts` + `inhouse.itest.ts` clamp paths, override trust,
+  and the `setRegistrationMmr` advisory contract.
+
 ## Draft room QoL (done)
 
 - Draft-night alerts: the room chimes (shared `src/components/chime.ts`, also

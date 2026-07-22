@@ -4,11 +4,20 @@ import {
   SEASON_STATUS,
   type RegistrationType,
 } from "./constants";
+import { rankMedalName, rankTierExactMinMmr } from "./rank";
 
 export type RegistrationGateInput = {
   season: { maxMmr: number; status: string };
   type: RegistrationType;
+  /**
+   * The RAW claimed MMR — never the medal-clamped value. The clamp snaps
+   * implausible claims DOWN to a medal floor (always under the ceiling), so
+   * gating the clamped number would let any medaled player through by
+   * overstating: the bigger the lie, the more acceptable it becomes.
+   */
   mmr: number;
+  /** OpenDota medal, when known — a 5K+ medal is ineligible whatever they type. */
+  rankTier?: number | null;
   /** Whether the user already has a registration for this season. */
   hasExisting: boolean;
   /** The existing registration's type, when there is one. */
@@ -58,6 +67,7 @@ export function registrationGate({
   season,
   type,
   mmr,
+  rankTier,
   hasExisting,
   existingType,
 }: RegistrationGateInput): string | null {
@@ -65,6 +75,14 @@ export function registrationGate({
   // the hard ceiling turns anyone away (keeps out 5K+ players and Immortals).
   if (mmr > HARD_MMR_CEILING) {
     return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — you entered ${mmr}.`;
+  }
+  // The medal alone can prove ineligibility: a Divine 4+/Immortal medal means
+  // 5K+ MMR whatever number is typed (its EXACT band floor is over the
+  // ceiling — no tolerance here, tolerance is for validating claims). Without
+  // this, sandbagging a low claim under a high medal walks past the ceiling.
+  const medalFloor = rankTierExactMinMmr(rankTier);
+  if (medalFloor != null && medalFloor > HARD_MMR_CEILING) {
+    return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — your ${rankMedalName(rankTier)} medal puts you above it.`;
   }
   const wasPlayer = hasExisting && existingType === REGISTRATION_TYPE.PLAYER;
   if (

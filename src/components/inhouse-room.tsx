@@ -40,9 +40,12 @@ function sideMeta(isRadiant: boolean) {
 export function InhouseRoom({
   pollMs = 1500,
   defaultMmr = 0,
+  mmrHint = null,
 }: {
   pollMs?: number;
   defaultMmr?: number;
+  /** Server-computed medal→MMR window note for the queue join panel. */
+  mmrHint?: string | null;
 }) {
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
@@ -310,7 +313,7 @@ export function InhouseRoom({
       ) : null}
 
       {!lobby ? (
-        <QueueView state={state} pending={pending} mmr={mmr} setMmr={setMmr} act={act} />
+        <QueueView state={state} pending={pending} mmr={mmr} setMmr={setMmr} mmrHint={mmrHint} act={act} />
       ) : lobby.status === "CAPTAIN_VOTE" ? (
         <VoteView lobby={lobby} me={me} offset={offset} pending={pending} act={act} />
       ) : lobby.status === "DRAFTING" ? (
@@ -370,12 +373,14 @@ function QueueView({
   pending,
   mmr,
   setMmr,
+  mmrHint,
   act,
 }: {
   state: InhouseState;
   pending: boolean;
   mmr: number;
   setMmr: (n: number) => void;
+  mmrHint: string | null;
   act: (body: Record<string, unknown>) => void;
 }) {
   const { queue, lobbySize, needed, me } = state;
@@ -457,6 +462,9 @@ function QueueView({
             )}
           </div>
 
+          {/* Stays visible after joining — it's the explanation for why the
+              listed MMR can differ from what was typed. */}
+          {mmrHint ? <p className="mt-3 text-xs text-muted">{mmrHint}</p> : null}
           <p className="mt-3 text-xs text-muted">
             Keep this page open to hold your spot — players who close it are
             marked away and dropped from the queue after a few minutes.

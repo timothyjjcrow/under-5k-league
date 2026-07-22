@@ -20,7 +20,7 @@ import {
   autoDetectResult,
   startGame,
 } from "@/lib/inhouse-service";
-import { makeUser, sessionFor } from "./factories";
+import { makeSeason, makeUser, sessionFor } from "./factories";
 
 // The inhouse result path only ever touches OpenDota — never a Valve league
 // ticket. We stub the two network calls it makes (recent-match lists + a full
@@ -964,5 +964,77 @@ describe("inhouse — queue MMR trust", () => {
       where: { userId: players[3].user.id },
     });
     expect(entry.mmr).toBe(4700);
+  });
+});
+
+// Medal MMR validation: joinQueue snaps whatever the trust chain resolved —
+// typed value, stale registration, or lobby snapshot — to the OpenDota
+// medal's plausible window (clampMmrToRank), so captain selection and the
+// balance meter can't be gamed by a typed number the medal contradicts.
+describe("inhouse — medal MMR validation on joinQueue", () => {
+  async function medaledUser(name: string, rankTier: number | null) {
+    const user = await makeUser(name);
+    if (rankTier != null) {
+      await prisma.user.update({ where: { id: user.id }, data: { rankTier } });
+    }
+    return user;
+  }
+
+  async function queuedMmr(userId: string) {
+    return (
+      await prisma.inhouseQueueEntry.findUniqueOrThrow({ where: { userId } })
+    ).mmr;
+  }
+
+  it("snaps an inflated typed MMR to the medal window's floor", async () => {
+    // Legend 4 (tier 54) window is 2772–4465; an Immortal-sized claim lies.
+    const user = await medaledUser("Inflated", 54);
+    expect((await joinQueue(sessionFor(user), 6800)).ok).toBe(true);
+    expect(await queuedMmr(user.id)).toBe(2772);
+  });
+
+  it("keeps a typed MMR the medal finds plausible", async () => {
+    const user = await medaledUser("Honest", 54);
+    await joinQueue(sessionFor(user), 4000);
+    expect(await queuedMmr(user.id)).toBe(4000);
+  });
+
+  it("seeds a blank join from the medal floor instead of unknown", async () => {
+    const user = await medaledUser("Blank", 54);
+    await joinQueue(sessionFor(user), 0);
+    expect(await queuedMmr(user.id)).toBe(2772);
+  });
+
+  it("trusts a registration MMR as-is — even outside the medal window", async () => {
+    // Registration MMRs are league-approved: clamped at their own save, or
+    // deliberately set by an admin override (the stale-medal escape hatch,
+    // which this path must not silently undo).
+    const season = await makeSeason();
+    const user = await medaledUser("AdminFixed", 11); // Herald 1: window 0–923
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: user.id, mmr: 4800 },
+    });
+    await joinQueue(sessionFor(user), 0);
+    expect(await queuedMmr(user.id)).toBe(4800);
+  });
+
+  it("clamps an out-of-window lobby-snapshot fallback on a blank re-join", async () => {
+    // No registration; the last lobby's snapshot (self-reported back then)
+    // still gets the medal check.
+    const user = await medaledUser("OldSnapshot", 54);
+    const lobby = await prisma.inhouseLobby.create({
+      data: { status: INHOUSE_STATUS.COMPLETED, radiantTeam: 1, winnerTeam: 1 },
+    });
+    await prisma.inhouseLobbyPlayer.create({
+      data: { lobbyId: lobby.id, userId: user.id, mmr: 6000, team: 1 },
+    });
+    await joinQueue(sessionFor(user), 0);
+    expect(await queuedMmr(user.id)).toBe(2772);
+  });
+
+  it("leaves the typed value alone when there's no medal on file", async () => {
+    const user = await medaledUser("NoMedal", null);
+    await joinQueue(sessionFor(user), 3000);
+    expect(await queuedMmr(user.id)).toBe(3000);
   });
 });

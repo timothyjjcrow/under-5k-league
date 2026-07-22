@@ -35,6 +35,72 @@ describe("registrationGate — MMR limits", () => {
   });
 });
 
+describe("registrationGate — medal floor (the anti-sandbagging line)", () => {
+  it("rejects a medal whose exact band floor clears the ceiling, whatever they type", () => {
+    // Immortal (5620+) and Divine 4/5 (5082+/5236+) are 5K+ by medal alone —
+    // a sandbagged low claim must not walk past the ceiling.
+    for (const tier of [74, 75, 80]) {
+      expect(
+        registrationGate({
+          season: signups,
+          type: "PLAYER",
+          mmr: 3000,
+          rankTier: tier,
+          hasExisting: false,
+        }),
+      ).toMatch(/medal puts you above/);
+    }
+  });
+
+  it("judges the RAW claim, not a clamped one — an overstated lie can't slip under", () => {
+    // Ancient 5's window (3696–5389) crosses the ceiling: a 6000 claim is
+    // out-of-window, but the gate sees the raw 6000 and rejects it the same
+    // as a plausible 5200 — the clamp only ever runs on gate-approved claims.
+    expect(
+      registrationGate({
+        season: signups,
+        type: "PLAYER",
+        mmr: 6000,
+        rankTier: 65,
+        hasExisting: false,
+      }),
+    ).toMatch(/over 5000/);
+  });
+
+  it("lets sub-5K medals through on their merits", () => {
+    expect(
+      registrationGate({
+        season: signups,
+        type: "PLAYER",
+        mmr: 3000,
+        rankTier: 73, // Divine 3 — exact floor 4928, under the line
+        hasExisting: false,
+      }),
+    ).toBeNull();
+    expect(
+      registrationGate({
+        season: signups,
+        type: "PLAYER",
+        mmr: 3000,
+        rankTier: 54,
+        hasExisting: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("changes nothing when no medal is known", () => {
+    expect(
+      registrationGate({
+        season: signups,
+        type: "PLAYER",
+        mmr: 4900,
+        rankTier: null,
+        hasExisting: false,
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("registrationGate — phase rules", () => {
   it("lets a new player join during SIGNUPS", () => {
     expect(

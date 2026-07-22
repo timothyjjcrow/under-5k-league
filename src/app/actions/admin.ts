@@ -22,6 +22,7 @@ import {
 import { roundRobin, matchNightForWeek, slotRound } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
 import { mmrWeightedBudgets } from "@/lib/draft";
+import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
 import { pauseDraft, resumeDraft, undoLastSale } from "@/lib/draft-service";
 import {
   createPlayoffBracket,
@@ -457,7 +458,15 @@ export async function setRegistrationMmr(
     data: { mmr },
   });
   refresh();
-  return { message: `${reg.user.name}'s MMR set to ${mmr}` };
+  // The admin override is the escape hatch when the medal check is wrong
+  // (stale medal, recalibration) — never clamped, but flag a mismatch so a
+  // fat-fingered correction doesn't slip by unnoticed.
+  const check = clampMmrToRank(mmr, reg.user.rankTier);
+  const rangeNote =
+    check.adjusted && check.range
+      ? ` (heads up: their ${rankMedalName(reg.user.rankTier)} medal suggests ${formatMmrRange(check.range)})`
+      : "";
+  return { message: `${reg.user.name}'s MMR set to ${mmr}${rangeNote}` };
 }
 
 /** Randomize the nomination/draft order of teams. */

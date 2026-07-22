@@ -16,6 +16,7 @@ import {
 import { heroById } from "@/lib/heroes";
 import { gameMvp } from "@/lib/achievements";
 import { formatMatchTime } from "@/lib/match-time";
+import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { HeroVideo } from "@/components/hero-video";
 import { LocalTime } from "@/components/local-time";
@@ -45,13 +46,29 @@ export const metadata = {
 export default async function InhousePage() {
   const user = await getSessionUser();
 
-  // Seed the MMR field from the player's most recent league signup, if any.
-  const lastReg = user
-    ? await prisma.registration.findFirst({
-        where: { userId: user.id },
-        orderBy: { createdAt: "desc" },
-        select: { mmr: true },
-      })
+  // Seed the MMR field from the player's most recent league signup, if any,
+  // and fetch the medal so the join panel can explain the MMR check (the
+  // server clamps implausible values to the medal window's floor on join).
+  const [lastReg, dbUser] = user
+    ? await Promise.all([
+        prisma.registration.findFirst({
+          where: { userId: user.id },
+          orderBy: { createdAt: "desc" },
+          select: { mmr: true },
+        }),
+        prisma.user.findUnique({
+          where: { id: user.id },
+          select: { rankTier: true },
+        }),
+      ])
+    : [null, null];
+  const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
+  const mmrHint = mmrWindow
+    ? `Your ${rankMedalName(dbUser?.rankTier)} medal puts you around ${formatMmrRange(mmrWindow)} MMR — ${
+        mmrWindow.min > 0
+          ? `a typed value outside that range is set to ${mmrWindow.min}`
+          : "a typed value outside that range is treated as unknown"
+      }. League signup MMR, when you have one, is used as-is.`
     : null;
 
   return (
@@ -78,7 +95,7 @@ export default async function InhousePage() {
           action={<Badge tone="accent">Casual mode</Badge>}
         />
 
-        <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} />
+        <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} mmrHint={mmrHint} />
 
         <OpenDotaGuide />
 
