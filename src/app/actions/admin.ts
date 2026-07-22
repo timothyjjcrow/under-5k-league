@@ -22,6 +22,7 @@ import {
 import { roundRobin, matchNightForWeek, slotRound } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
 import { mmrWeightedBudgets } from "@/lib/draft";
+import { pauseDraft, resumeDraft, undoLastSale } from "@/lib/draft-service";
 import {
   createPlayoffBracket,
   advancePlayoffBracket,
@@ -189,6 +190,21 @@ export async function setSeasonPhase(
   if (!season) return { error: "No active season" };
   if (season.status === target) {
     return { error: `The season is already in ${PHASE_LABELS[target]}` };
+  }
+  // A LIVE auction must never be stranded by a phase flip — captains would be
+  // mid-bid on a page whose engine just stopped resolving. Finish it first.
+  const draft = await prisma.draft.findUnique({
+    where: { seasonId: season.id },
+    select: { status: true },
+  });
+  if (
+    draft?.status === DRAFT_STATUS.IN_PROGRESS &&
+    target !== SEASON_STATUS.DRAFT
+  ) {
+    return {
+      error:
+        "The auction is live — let it finish (or keep the season in Draft) before moving on.",
+    };
   }
   await prisma.season.update({
     where: { id: season.id },
@@ -388,6 +404,24 @@ export async function withdrawSignup(
   });
   if (gate) return { error: gate };
 
+  // Never withdraw the player who is ON THE BLOCK: every room would render a
+  // headless auction, and the expiring lot would charge a team for a
+  // withdrawn player (the resolver also voids such lots, belt-and-braces).
+  const draft = await prisma.draft.findUnique({
+    where: { seasonId: season.id },
+    select: { status: true, nominatedUserId: true },
+  });
+  if (
+    draft &&
+    (draft.status === DRAFT_STATUS.IN_PROGRESS ||
+      draft.status === DRAFT_STATUS.PAUSED) &&
+    draft.nominatedUserId === reg.userId
+  ) {
+    return {
+      error: `${reg.user.name} is on the auction block right now — wait for the lot to settle.`,
+    };
+  }
+
   await prisma.registration.update({
     where: { id: reg.id },
     data: { status: REGISTRATION_STATUS.WITHDRAWN },
@@ -573,6 +607,66 @@ export async function startDraft(
         ? `Draft started — heads up: ${poolCount} players for ${openSeats} seats, so ${shortfall} seat(s) will go unfilled${budgetNote}`
         : `Draft started — the auction is live${budgetNote}`,
   };
+}
+
+/** Admin: revert the most recent auction sale (mis-click / dispute recovery). */
+export async function undoLastSaleAction(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  let admin;
+  try {
+    admin = await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const res = await undoLastSale(season.id, admin);
+  if (!res.ok) return { error: res.error };
+  refresh();
+  return {
+    message:
+      "Sale undone — the player is back in the pool and the buyer has the next nomination.",
+  };
+}
+
+/** Admin: pause the live auction (clocks park; nothing can sell). */
+export async function pauseDraftAction(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  let admin;
+  try {
+    admin = await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const res = await pauseDraft(season.id, admin);
+  if (!res.ok) return { error: res.error };
+  refresh();
+  return { message: "Auction paused — clocks are parked until you resume." };
+}
+
+/** Admin: resume a paused auction with a fresh clock. */
+export async function resumeDraftAction(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  let admin;
+  try {
+    admin = await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const res = await resumeDraft(season.id, admin);
+  if (!res.ok) return { error: res.error };
+  refresh();
+  return { message: "Auction resumed — the clock is running again." };
 }
 
 /** Generate a round-robin regular-season schedule from the drafted teams. */
@@ -1604,12 +1698,14 @@ export async function setDraftNight(
   const when = localDate(formData, "draftAt", "draftAtTs");
   if (raw && !when) return { error: "Invalid draft night" };
 
+  // A no-op resubmit (same timestamp) must not re-announce to Discord.
+  const changed = (when?.getTime() ?? null) !== (season.draftAt?.getTime() ?? null);
   await prisma.season.update({
     where: { id: season.id },
     data: { draftAt: when },
   });
   // Best-effort announcement — the countdown surfaces update either way.
-  if (when) {
+  if (when && changed) {
     await sendDiscordMessage(draftScheduledMessage(season.name, when.getTime()));
   }
   refresh();

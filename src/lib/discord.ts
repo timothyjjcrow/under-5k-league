@@ -45,6 +45,32 @@ export function draftCompleteMessage(seasonName: string): string {
   return `✅ **The ${seasonName} draft is complete!** Rosters are locked — see the teams at ${resolveSiteUrl()}/teams`;
 }
 
+/** Draft-night superlatives, appended right after the complete message. */
+export function draftRecapMessage(r: {
+  biggestSpend: { name: string; teamName: string; price: number } | null;
+  bestValue: { name: string; teamName: string; price: number } | null;
+  topSpender: { teamName: string; spent: number } | null;
+  totalSpent: number;
+}): string {
+  const lines = [`📊 **Draft night in numbers** — $${r.totalSpent} changed hands.`];
+  if (r.biggestSpend) {
+    lines.push(
+      `💰 Biggest buy: **${r.biggestSpend.name}** to ${r.biggestSpend.teamName} for $${r.biggestSpend.price}`,
+    );
+  }
+  if (r.bestValue) {
+    lines.push(
+      `🕵️ Steal of the night: **${r.bestValue.name}** to ${r.bestValue.teamName} at $${r.bestValue.price}`,
+    );
+  }
+  if (r.topSpender) {
+    lines.push(
+      `🏦 Deepest pockets: **${r.topSpender.teamName}** ($${r.topSpender.spent} spent)`,
+    );
+  }
+  return lines.join("\n");
+}
+
 export function playerSoldMessage(
   playerName: string,
   teamName: string,

@@ -27,8 +27,10 @@ test("draft room on a phone: pool first, working anchor, unclipped clock bar", a
   expect(poolTop).toBeLessThan(teamsTop);
 
   // Scroll deep: the compact clock bar appears and clears the 80px header.
+  // Targeted by title — the button deliberately has NO aria-label so screen
+  // readers hear its live content (lot, price, clock) as its name.
   await page.mouse.wheel(0, 2400);
-  const bar = page.getByRole("button", { name: "Back to the auction clock" });
+  const bar = page.getByTitle("Back to the auction clock");
   await expect(bar).toBeVisible();
   const barBox = (await bar.boundingBox())!;
   expect(barBox.y).toBeGreaterThanOrEqual(80);

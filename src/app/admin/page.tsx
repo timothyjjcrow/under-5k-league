@@ -43,6 +43,9 @@ import {
   autoDetectAction,
   setDraftNight,
   promoteStandinToPlayer,
+  undoLastSaleAction,
+  pauseDraftAction,
+  resumeDraftAction,
 } from "@/app/actions/admin";
 import { cancelReschedule } from "@/app/actions/reschedule";
 import {
@@ -493,6 +496,31 @@ function CaptainControls({
                   </SubmitButton>
                 </ActionForm>
               </>
+            ) : null}
+            {draftLive ? (
+              <ActionForm action={pauseDraftAction}>
+                <SubmitButton variant="secondary" size="sm">
+                  Pause auction
+                </SubmitButton>
+              </ActionForm>
+            ) : null}
+            {data.draft?.status === "PAUSED" ? (
+              <ActionForm action={resumeDraftAction}>
+                <SubmitButton variant="accent" size="sm">
+                  Resume auction
+                </SubmitButton>
+              </ActionForm>
+            ) : null}
+            {draftStarted ? (
+              <ActionForm action={undoLastSaleAction}>
+                <SubmitButton
+                  variant="secondary"
+                  size="sm"
+                  confirm="Undo the most recent sale? The player returns to the pool and the buyer gets the money back and the next nomination."
+                >
+                  Undo last sale
+                </SubmitButton>
+              </ActionForm>
             ) : null}
           </div>
         }

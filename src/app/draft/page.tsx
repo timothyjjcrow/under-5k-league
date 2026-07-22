@@ -8,13 +8,17 @@ export const metadata = { title: "Draft" };
 export default async function DraftPage() {
   const season = await getActiveSeason();
 
-  if (!season || season.status !== "DRAFT") {
+  // Gate ONLY on "no active season". A status gate here is a static dead end:
+  // the league parks on /draft during SIGNUPS waiting for draft night, and a
+  // server-rendered "isn't running" page never learns the admin hit start —
+  // the room's own poll handles waiting → live → complete seamlessly.
+  if (!season) {
     return (
       <div>
         <PageTitle title="Draft" />
         <EmptyState
           title="The draft isn't running"
-          description="This page opens for the live auction while the season is in its draft phase."
+          description="This page opens for the live auction once a season exists."
           action={
             <Link href="/" className={buttonClasses("secondary")}>
               Back to home

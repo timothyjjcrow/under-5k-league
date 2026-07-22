@@ -7,13 +7,13 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { roundRobin } from "@/lib/schedule";
-import {
-  getDraftState,
-  nominatePlayer,
-  resolveExpiredNomination,
-} from "@/lib/draft-service";
-import { advancePlayoffBracket } from "@/lib/playoff-service";
 import type { SessionUser } from "@/lib/auth";
+
+// draft-service / playoff-service are imported LAZILY inside the helpers that
+// need them: this file is loaded by the setup file (resetDb) BEFORE a test
+// file's vi.mock registrations apply, so a static import here would bake the
+// real "@/lib/discord" into those services' graphs and silently defeat any
+// test that mocks the Discord sender to assert announcements.
 
 /** Wipe every table (children first) so each test starts from empty. */
 export async function resetDb() {
@@ -203,6 +203,8 @@ export async function generateRegularSchedule(seasonId: string) {
 /** Auto-run the auction: the team on the clock nominates the top available
  *  player at the minimum bid, unopposed, until every roster is full. */
 export async function runDraftToCompletion(seasonId: string) {
+  const { getDraftState, nominatePlayer, resolveExpiredNomination } =
+    await import("@/lib/draft-service");
   for (let step = 0; step < 500; step++) {
     const state = await getDraftState(seasonId, null);
     if (!state || state.status === DRAFT_STATUS.COMPLETE) return;
@@ -258,6 +260,7 @@ export async function addGameToMatch(
 
 /** Play out every playoff round (home team wins) until a champion is crowned. */
 export async function drivePlayoffsToChampion(seasonId: string) {
+  const { advancePlayoffBracket } = await import("@/lib/playoff-service");
   for (let guard = 0; guard < 20; guard++) {
     const season = await prisma.season.findUniqueOrThrow({
       where: { id: seasonId },

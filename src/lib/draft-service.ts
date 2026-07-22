@@ -9,8 +9,10 @@ import {
   type DraftTeam,
 } from "./draft";
 import type { SessionUser } from "./auth";
+import { draftRecap } from "./draft-recap";
 import {
   draftCompleteMessage,
+  draftRecapMessage,
   playerSoldMessage,
   sendDiscordMessage,
 } from "./discord";
@@ -44,26 +46,57 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     const season = await tx.season.findUnique({ where: { id: seasonId } });
     if (!season) return false;
 
-    // Award the player to the winning team.
-    await tx.teamMember.create({
-      data: {
+    // Claim the resolution atomically (the placeBid optimistic-lock pattern):
+    // clear the nomination only if the auction is still exactly as read. Two
+    // concurrent pollers both reaching here must produce ONE sale — without
+    // this, Postgres read-committed lets both award the player (double
+    // TeamMember create → P2002 explosion mid-poll, double budget decrement).
+    const claim = await tx.draft.updateMany({
+      where: {
         seasonId,
-        teamId: draft.currentBidTeamId,
-        userId: draft.nominatedUserId,
-        price: draft.currentBid,
-        isCaptain: false,
+        status: DRAFT_STATUS.IN_PROGRESS,
+        nominatedUserId: draft.nominatedUserId,
+        currentBidTeamId: draft.currentBidTeamId,
+        currentBid: draft.currentBid,
+        bidEndsAt: draft.bidEndsAt,
+      },
+      data: {
+        nominatedUserId: null,
+        currentBid: 0,
+        currentBidTeamId: null,
+        bidEndsAt: null,
       },
     });
-    await tx.team.update({
-      where: { id: draft.currentBidTeamId },
-      data: { budget: { decrement: draft.currentBid } },
+    if (claim.count === 0) return false;
+
+    // Void the lot — no charge, no roster add — if the player was withdrawn
+    // mid-auction (admin moderation). The claim above already cleared the
+    // nomination; the rotation still advances below.
+    const nomReg = await tx.registration.findUnique({
+      where: { seasonId_userId: { seasonId, userId: draft.nominatedUserId } },
     });
-    const [soldUser, soldTeam] = await Promise.all([
-      tx.user.findUnique({ where: { id: draft.nominatedUserId } }),
-      tx.team.findUnique({ where: { id: draft.currentBidTeamId } }),
-    ]);
-    if (soldUser && soldTeam) {
-      sale = { player: soldUser.name, team: soldTeam.name, price: draft.currentBid };
+    if (nomReg && nomReg.status === "ACTIVE") {
+      // Award the player to the winning team.
+      await tx.teamMember.create({
+        data: {
+          seasonId,
+          teamId: draft.currentBidTeamId,
+          userId: draft.nominatedUserId,
+          price: draft.currentBid,
+          isCaptain: false,
+        },
+      });
+      await tx.team.update({
+        where: { id: draft.currentBidTeamId },
+        data: { budget: { decrement: draft.currentBid } },
+      });
+      const [soldUser, soldTeam] = await Promise.all([
+        tx.user.findUnique({ where: { id: draft.nominatedUserId } }),
+        tx.team.findUnique({ where: { id: draft.currentBidTeamId } }),
+      ]);
+      if (soldUser && soldTeam) {
+        sale = { player: soldUser.name, team: soldTeam.name, price: draft.currentBid };
+      }
     }
 
     // Recompute needs and pick the next nominator.
@@ -97,23 +130,18 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     const draftedIds = new Set(members.map((m) => m.userId));
     const poolDry = !regs.some((r) => !draftedIds.has(r.userId));
 
-    const cleared = {
-      nominatedUserId: null,
-      currentBid: 0,
-      currentBidTeamId: null,
-      bidEndsAt: null,
-    };
+    // The nomination fields were already cleared by the claim above; these
+    // updates only advance the rotation (or finish the draft).
     if (nextIdx === -1 || poolDry) {
       await tx.draft.update({
         where: { seasonId },
-        data: { ...cleared, nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
+        data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
       });
       completedSeasonName = season.name;
     } else {
       await tx.draft.update({
         where: { seasonId },
         data: {
-          ...cleared,
           nominatorTeamId: teams[nextIdx].id,
           nominationIndex: nextIdx,
           nominationEndsAt: new Date(
@@ -130,8 +158,41 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
   }
   if (completedSeasonName) {
     await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
+    await sendDraftRecap(seasonId);
   }
   return resolved;
+}
+
+/**
+ * Post-completion Discord recap (best-effort, like every send): the auction's
+ * superlatives via the same tested draftRecap math the /teams card uses.
+ */
+async function sendDraftRecap(seasonId: string): Promise<void> {
+  const [teams, regs] = await Promise.all([
+    prisma.team.findMany({
+      where: { seasonId },
+      include: { members: { include: { user: { select: { name: true } } } } },
+    }),
+    prisma.registration.findMany({
+      where: { seasonId },
+      select: { userId: true, mmr: true },
+    }),
+  ]);
+  const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
+  const recap = draftRecap(
+    teams.flatMap((t) =>
+      t.members.map((m) => ({
+        name: m.user.name,
+        teamName: t.name,
+        price: m.price,
+        isCaptain: m.isCaptain,
+        mmr: mmrByUser.get(m.userId) ?? null,
+      })),
+    ),
+  );
+  if (recap.totalSpent > 0) {
+    await sendDiscordMessage(draftRecapMessage(recap));
+  }
 }
 
 /**
@@ -164,7 +225,55 @@ export async function resolveStalledNomination(
       }),
     ]);
     if (!season || !nominator) return false;
-    if (teamNeed(season.teamSize, nominator._count.members) <= 0) return false;
+    if (teamNeed(season.teamSize, nominator._count.members) <= 0) {
+      // The rotation only lands on needy teams, but if something ever fills
+      // the on-clock roster out-of-band, ADVANCE instead of no-opping forever
+      // (an expired clock + full nominator would otherwise freeze the draft).
+      const teams = await tx.team.findMany({
+        where: { seasonId },
+        orderBy: { draftOrder: "asc" },
+        include: { _count: { select: { members: true } } },
+      });
+      const idx = teams.findIndex((t) => t.id === nominator.id);
+      const nextIdx = nextNominatorIndex(
+        teams.map((t) => ({
+          id: t.id,
+          budget: t.budget,
+          rosterCount: t._count.members,
+        })),
+        season.teamSize,
+        idx < 0 ? 0 : idx,
+      );
+      if (nextIdx === -1) {
+        const done = await tx.draft.updateMany({
+          where: {
+            seasonId,
+            status: DRAFT_STATUS.IN_PROGRESS,
+            nominationEndsAt: draft.nominationEndsAt,
+          },
+          data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
+        });
+        if (done.count === 0) return false;
+        completedSeasonName = season.name;
+      } else {
+        const adv = await tx.draft.updateMany({
+          where: {
+            seasonId,
+            status: DRAFT_STATUS.IN_PROGRESS,
+            nominationEndsAt: draft.nominationEndsAt,
+          },
+          data: {
+            nominatorTeamId: teams[nextIdx].id,
+            nominationIndex: nextIdx,
+            nominationEndsAt: new Date(
+              Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+            ),
+          },
+        });
+        if (adv.count === 0) return false;
+      }
+      return true;
+    }
 
     const [regs, members] = await Promise.all([
       tx.registration.findMany({
@@ -177,9 +286,14 @@ export async function resolveStalledNomination(
     const pick = regs.find((r) => !drafted.has(r.userId));
     if (!pick) {
       // Pool is dry — nothing left to nominate, so the draft is over even
-      // though this team is short (they'll play with standins).
-      await tx.draft.update({
-        where: { seasonId },
+      // though this team is short (they'll play with standins). Claimed, so
+      // two concurrent pollers can't both COMPLETE and double-announce.
+      const done = await tx.draft.updateMany({
+        where: {
+          seasonId,
+          status: DRAFT_STATUS.IN_PROGRESS,
+          nominationEndsAt: draft.nominationEndsAt,
+        },
         data: {
           nominatedUserId: null,
           currentBid: 0,
@@ -189,13 +303,22 @@ export async function resolveStalledNomination(
           status: DRAFT_STATUS.COMPLETE,
         },
       });
+      if (done.count === 0) return false;
       completedSeasonName = season.name;
       return true;
     }
 
     const amount = DEFAULTS.MIN_BID;
-    await tx.draft.update({
-      where: { seasonId },
+    // Claim the auto-nomination: only fire if nothing else nominated (or a
+    // rival resolver already fired) since our read — two concurrent pollers
+    // must open ONE auction with ONE opening Bid row.
+    const claim = await tx.draft.updateMany({
+      where: {
+        seasonId,
+        status: DRAFT_STATUS.IN_PROGRESS,
+        nominatedUserId: null,
+        nominationEndsAt: draft.nominationEndsAt,
+      },
       data: {
         nominatedUserId: pick.userId,
         currentBid: amount,
@@ -204,6 +327,7 @@ export async function resolveStalledNomination(
         nominationEndsAt: null,
       },
     });
+    if (claim.count === 0) return false;
     await tx.bid.create({
       data: {
         draftId: draft.id,
@@ -217,8 +341,118 @@ export async function resolveStalledNomination(
   });
   if (completedSeasonName) {
     await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
+    await sendDraftRecap(seasonId);
   }
   return resolved;
+}
+
+/**
+ * Admin: pause the live auction (disputes, bio breaks). Clocks are parked —
+ * the lazy resolvers only fire on IN_PROGRESS, so nothing can expire or sell
+ * while paused. Resume restarts whichever clock was running, at full length.
+ */
+export async function pauseDraft(
+  seasonId: string,
+  viewer: SessionUser,
+): Promise<ActionResult> {
+  if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
+  const claim = await prisma.draft.updateMany({
+    where: { seasonId, status: DRAFT_STATUS.IN_PROGRESS },
+    data: {
+      status: DRAFT_STATUS.PAUSED,
+      bidEndsAt: null,
+      nominationEndsAt: null,
+    },
+  });
+  if (claim.count === 0) return { ok: false, error: "The draft isn't live" };
+  return { ok: true };
+}
+
+/** Admin: resume a paused auction with a fresh full clock for the live lot. */
+export async function resumeDraft(
+  seasonId: string,
+  viewer: SessionUser,
+): Promise<ActionResult> {
+  if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
+  const draft = await prisma.draft.findUnique({ where: { seasonId } });
+  if (!draft || draft.status !== DRAFT_STATUS.PAUSED) {
+    return { ok: false, error: "The draft isn't paused" };
+  }
+  const clock = draft.nominatedUserId
+    ? { bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000) }
+    : {
+        nominationEndsAt: new Date(
+          Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+        ),
+      };
+  const claim = await prisma.draft.updateMany({
+    where: { seasonId, status: DRAFT_STATUS.PAUSED },
+    data: { status: DRAFT_STATUS.IN_PROGRESS, ...clock },
+  });
+  if (claim.count === 0) return { ok: false, error: "The draft isn't paused" };
+  return { ok: true };
+}
+
+/**
+ * Admin: revert the most recent sale — the recovery path for a mis-click or a
+ * disputed lot (previously nothing short of SQL could fix one). The player
+ * returns to the pool, the buyer gets their money back and the next
+ * nomination (they have the open seat); works from COMPLETE too, re-opening
+ * the draft. Refused while a lot is live — undoing under an active clock
+ * would shift budgets mid-auction.
+ */
+export async function undoLastSale(
+  seasonId: string,
+  viewer: SessionUser,
+): Promise<ActionResult> {
+  if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
+  return prisma.$transaction(async (tx) => {
+    const draft = await tx.draft.findUnique({ where: { seasonId } });
+    if (!draft) return { ok: false as const, error: "No draft" };
+    if (
+      draft.status !== DRAFT_STATUS.IN_PROGRESS &&
+      draft.status !== DRAFT_STATUS.PAUSED &&
+      draft.status !== DRAFT_STATUS.COMPLETE
+    ) {
+      return { ok: false as const, error: "The draft hasn't started" };
+    }
+    if (draft.nominatedUserId) {
+      return {
+        ok: false as const,
+        error: "A lot is live — wait for it to settle before undoing.",
+      };
+    }
+    const last = await tx.teamMember.findFirst({
+      where: { seasonId, isCaptain: false },
+      orderBy: { createdAt: "desc" },
+      include: { user: { select: { name: true } }, team: { select: { name: true } } },
+    });
+    if (!last) return { ok: false as const, error: "No sale to undo" };
+
+    await tx.teamMember.delete({ where: { id: last.id } });
+    await tx.team.update({
+      where: { id: last.teamId },
+      data: { budget: { increment: last.price } },
+    });
+    const order = await tx.team.findMany({
+      where: { seasonId },
+      orderBy: { draftOrder: "asc" },
+      select: { id: true },
+    });
+    const nomIdx = order.findIndex((t) => t.id === last.teamId);
+    await tx.draft.update({
+      where: { seasonId },
+      data: {
+        status: DRAFT_STATUS.IN_PROGRESS,
+        nominatorTeamId: last.teamId,
+        nominationIndex: nomIdx < 0 ? draft.nominationIndex : nomIdx,
+        nominationEndsAt: new Date(
+          Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+        ),
+      },
+    });
+    return { ok: true as const };
+  });
 }
 
 async function loadTeamsWithCounts(seasonId: string) {
@@ -315,6 +549,24 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
     ? (playerRegs.find((r) => r.userId === draft.nominatedUserId) ?? null)
     : null;
 
+  // The current lot's bid trail (the Bid table is the audit log — surfacing
+  // it kills "wait, who bid what?" disputes mid-auction). Newest first.
+  const lotBids =
+    draft && draft.nominatedUserId
+      ? (
+          await prisma.bid.findMany({
+            where: { draftId: draft.id, userId: draft.nominatedUserId },
+            orderBy: { createdAt: "desc" },
+            take: 8,
+            select: { teamId: true, amount: true, createdAt: true },
+          })
+        ).map((b) => ({
+          teamId: b.teamId,
+          amount: b.amount,
+          at: b.createdAt.getTime(),
+        }))
+      : [];
+
   return {
     status: draft?.status ?? DRAFT_STATUS.NOT_STARTED,
     teamSize: season.teamSize,
@@ -327,6 +579,7 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
     nominatorTeamId: draft?.nominatorTeamId ?? null,
     currentBid: draft?.currentBid ?? 0,
     currentBidTeamId: draft?.currentBidTeamId ?? null,
+    lotBids,
     recentSales,
     nominatedPlayer: nominatedPlayer
       ? {
@@ -429,8 +682,11 @@ export async function nominatePlayer(
       return { ok: false as const, error: "You can't afford that opening bid" };
 
     const bidEndsAt = new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000);
-    await tx.draft.update({
-      where: { seasonId },
+    // Claim the nomination slot: if the auto-skip resolver (or an admin
+    // nomination) landed between our read and this write, reject instead of
+    // silently replacing a live auction.
+    const claim = await tx.draft.updateMany({
+      where: { seasonId, status: DRAFT_STATUS.IN_PROGRESS, nominatedUserId: null },
       data: {
         nominatedUserId: playerId,
         currentBid: amount,
@@ -439,6 +695,9 @@ export async function nominatePlayer(
         nominationEndsAt: null,
       },
     });
+    if (claim.count === 0) {
+      return { ok: false as const, error: "A nomination is already in progress" };
+    }
     await tx.bid.create({
       data: {
         draftId: draft.id,

@@ -435,6 +435,50 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   presence heartbeat — a fresh captain vote forms once the players still on
   the page have re-confirmed via their own polls (ghosts drop out instead).
 
+## Draft hardening (2026-07 — keep these invariants)
+
+- **Every draft transition is a guarded claim** (the inhouse bar):
+  `resolveExpiredNomination` claims the exact-nomination clear before awarding
+  (two pollers → ONE sale/decrement/announcement); it also VOIDS the lot (no
+  charge, rotation still advances) if the player's registration went
+  non-ACTIVE mid-auction. `resolveStalledNomination` claims the
+  auto-nomination AND both completion/advance branches (no duplicate opening
+  Bid rows, no double draft-complete announce), and advances the rotation
+  instead of freezing if the on-clock team is somehow already full.
+  `nominatePlayer` claims `{nominatedUserId: null}` so it can't replace a
+  live lot. `placeBid` already had the optimistic lock — keep the pattern.
+- **withdrawSignup refuses the player currently ON THE BLOCK** (live/paused
+  draft) — otherwise every room renders a headless auction and the expiring
+  lot charges a team for a withdrawn player (the resolver void above is the
+  belt-and-braces).
+- **setSeasonPhase refuses to leave DRAFT while the auction is IN_PROGRESS**
+  — a phase flip mid-auction strands every captain.
+- **Admin night-of controls**: `pauseDraft`/`resumeDraft` (PAUSED parks the
+  clocks; resolvers/bids all key off IN_PROGRESS so nothing can sell; resume
+  restarts the live lot's clock at full length) and `undoLastSale` (delete
+  the newest non-captain TeamMember, refund the budget, hand the buyer the
+  next nomination; works from COMPLETE — re-opens the draft; refused while a
+  lot is live). Buttons in the admin Captains & draft card.
+- **/draft page gates ONLY on "no active season"** — never on season.status:
+  the league parks there during SIGNUPS and a static gate never learns the
+  admin hit start. The room's poll handles waiting → live → complete.
+- **Room correctness**: poll/action responses are sequence-ordered (a slow
+  tick must not clobber a fresher bid response); the outbid latch is NOT
+  cleared just because the captain is priced out (they most need to see it);
+  a `selected` pool player who got drafted is auto-cleared. `/api/draft/tick`
+  has the standard per-IP `rateLimit` speed bump.
+- **Draft-night UX added**: per-lot "Bid trail" (from the Bid audit table,
+  served as `lotBids` in state), "next: <team>" nominator preview,
+  budget-after-win line under the bid controls, quick-bid steppers show the
+  absolute amount they'll submit, Max-bid + admin-auto-nominate confirms,
+  paused strip, Discord `draftRecapMessage` (biggest buy/steal/top spender
+  via the tested draftRecap lib) sent after draft-complete, and
+  `setDraftNight` no longer re-announces an unchanged timestamp.
+- **e2e**: `zz-admin-draft.spec.ts` registers two KNOWN captains and drives a
+  real nominate → quick-bid → 💸 outbid → re-bid in two browser contexts
+  (plus waiting-room flip-to-live with no reload). The compact clock bar has
+  NO aria-label on purpose (content = accessible name) — target it by title.
+
 ## Discord notifications (done)
 
 - `src/lib/discord.ts` — pure message formatters (unit-tested) +
