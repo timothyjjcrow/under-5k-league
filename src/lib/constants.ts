@@ -140,7 +140,9 @@ export const INHOUSE = {
   // Seconds a captain has to pick before the draft auto-picks the top player.
   PICK_SECONDS: 60,
   // The lower-seeded captain (team 2) drafts first, a small nod to the fact
-  // that team 1's captain is the higher-seeded player. Strict back-and-forth after.
+  // that team 1's captain is the higher-seeded player. A SNAKE draft follows
+  // (single, then pairs, closing on a single) so first pick isn't a standing
+  // advantage — see nextPickTeam.
   FIRST_PICK_TEAM: 2,
   // Auto result detection (OpenDota): don't scan until a game could plausibly be
   // over, and don't scan more than once per interval (there's only ever one

@@ -293,6 +293,26 @@ describe("inhouse — drafting", () => {
     expect(lobby.pickTeam).toBe(1);
   });
 
+  it("drafts in SNAKE order (2,1,1,2,2,1,1,2) so neither captain is favoured", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR"); // captains: players[0] (T1), players[1] (T2)
+    await driveDraftToReady(admin);
+
+    // Reconstruct the true draft order from the stored pickIndex (the final
+    // player is auto-assigned once the pool is down to one, so it lands in the
+    // roster rather than through an on-clock poll).
+    const done = await lobbyByStatus(INHOUSE_STATUS.READY);
+    const order = done.players
+      .filter((p) => !p.isCaptain)
+      .sort((a, b) => (a.pickIndex ?? 0) - (b.pickIndex ?? 0))
+      .map((p) => p.team);
+    // Team 2 (lower seed) opens, then the snake pairs up and closes on team 2.
+    expect(order).toEqual([2, 1, 1, 2, 2, 1, 1, 2]);
+    expect(order.filter((t) => t === 1)).toHaveLength(4);
+    expect(order.filter((t) => t === 2)).toHaveLength(4);
+  });
+
   it("fills both rosters 5v5 and lands in READY", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);

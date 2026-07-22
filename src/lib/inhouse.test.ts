@@ -106,22 +106,64 @@ describe("nextPickTeam", () => {
     expect(nextPickTeam(0, 0, 5, 1)).toBe(1);
   });
 
-  it("alternates strictly back and forth for a 5v5 draft", () => {
-    // firstPickTeam = 2 → order of teams to pick the 8 remaining slots.
-    const order: (1 | 2 | null)[] = [];
+  /** Walk the whole draft, returning the team-per-pick order. */
+  function draftOrder(
+    teamSize: number,
+    firstPickTeam: 1 | 2,
+  ): { order: (1 | 2)[]; t1: number; t2: number } {
+    const order: (1 | 2)[] = [];
     let t1 = 0;
     let t2 = 0;
-    for (let i = 0; i < 8; i++) {
-      const team = nextPickTeam(t1, t2, 5, 2);
+    // (teamSize-1) picks per side.
+    for (let i = 0; i < (teamSize - 1) * 2; i++) {
+      const team = nextPickTeam(t1, t2, teamSize, firstPickTeam);
+      if (team === null) break;
       order.push(team);
       if (team === 1) t1++;
-      else if (team === 2) t2++;
+      else t2++;
     }
-    expect(order).toEqual([2, 1, 2, 1, 2, 1, 2, 1]);
+    return { order, t1, t2 };
+  }
+
+  it("runs a SNAKE (1-2-2-…-1) draft for a 5v5, not strict alternation", () => {
+    const { order, t1, t2 } = draftOrder(5, 2);
+    // firstPickTeam = 2: single, then pairs, ending on a single.
+    expect(order).toEqual([2, 1, 1, 2, 2, 1, 1, 2]);
     expect(t1).toBe(4);
     expect(t2).toBe(4);
     // Both rosters (captain + 4 picks) are now full.
     expect(nextPickTeam(t1, t2, 5, 2)).toBeNull();
+  });
+
+  it("mirrors the snake when team 1 picks first", () => {
+    expect(draftOrder(5, 1).order).toEqual([1, 2, 2, 1, 1, 2, 2, 1]);
+  });
+
+  it("equalises each side's summed pick position — the fairness guarantee", () => {
+    // The sum of 1-indexed pick positions must be identical for both sides;
+    // that's what makes neither captain systematically advantaged. (Strict
+    // alternation would give 16 vs 20.)
+    for (const first of [1, 2] as const) {
+      const { order } = draftOrder(5, first);
+      let sum1 = 0;
+      let sum2 = 0;
+      order.forEach((team, i) => {
+        if (team === 1) sum1 += i + 1;
+        else sum2 += i + 1;
+      });
+      expect(sum1).toBe(sum2);
+    }
+  });
+
+  it("keeps the pick counts balanced at every step (never more than one apart)", () => {
+    let t1 = 0;
+    let t2 = 0;
+    for (let i = 0; i < 8; i++) {
+      const team = nextPickTeam(t1, t2, 5, 2)!;
+      if (team === 1) t1++;
+      else t2++;
+      expect(Math.abs(t1 - t2)).toBeLessThanOrEqual(1);
+    }
   });
 
   it("skips a full side instead of overfilling it", () => {

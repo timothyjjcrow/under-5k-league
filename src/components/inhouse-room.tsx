@@ -591,9 +591,9 @@ function QueueView({
       <p className="text-center text-xs text-muted">
         How it works: {lobbySize} players queue → everyone accepts the match →
         vote how captains are chosen (elect them, highest MMR, or best record)
-        → captains draft <span className="text-success">Radiant</span> &{" "}
-        <span className="text-danger">Dire</span> back and forth → anyone hosts
-        a private lobby in Dota 2 and the result records itself.
+        → captains snake-draft <span className="text-success">Radiant</span> &{" "}
+        <span className="text-danger">Dire</span> (1, then 2 at a time) → anyone
+        hosts a private lobby in Dota 2 and the result records itself.
       </p>
     </div>
   );
@@ -1124,6 +1124,11 @@ function DraftView({
           />
         </div>
       </div>
+
+      <p className="-mt-3 text-center text-xs text-muted">
+        Snake draft — the first captain picks once, then picks come in pairs, so
+        neither side gets the better player at every tier.
+      </p>
 
       {/* Pool FIRST in DOM: on phones the on-clock captain needs it now —
           Team 1's roster card would otherwise bury it (same treatment as the

@@ -395,8 +395,10 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   installs the top two and drops into `DRAFTING`.
 - **Pure, tested logic**: `src/lib/inhouse.ts` — `tallyMethod` (winning method,
   ties lean `VOTE > RECORD > MMR`), `orderCaptains(method, candidates)` (ranks
-  captains per method, always MMR/join fallback), `nextPickTeam` (strict
-  back-and-forth; team 2 — the lower seed — picks first via
+  captains per method, always MMR/join fallback), `nextPickTeam` (SNAKE draft
+  — single, then pairs, closing on a single: `F O O F F O O F` for a 5v5 — so
+  each side's summed pick position is equal and first pick isn't a standing
+  advantage; team 2 — the lower seed — picks first via
   `INHOUSE.FIRST_PICK_TEAM`), `isDraftComplete`, `playersNeeded`.
   `src/lib/inhouse-stats.ts` — `summarizeInhouse` ladder
   (wins/losses/win%/streak + personal team-Elo `rating`/`peak`: start 1000,

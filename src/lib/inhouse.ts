@@ -89,8 +89,19 @@ export function orderCaptains(
 
 /**
  * Which team is on the clock to pick, given how many non-captain players each
- * side has drafted so far. Strict back-and-forth starting with `firstPickTeam`;
- * a full side is skipped, and we return null once both rosters are full.
+ * side has drafted so far. Uses a SNAKE (balanced) draft starting with
+ * `firstPickTeam`: the first pick is a single, then picks come in pairs and it
+ * ends on a single —
+ *
+ *     F · OO · FF · OO · FF · …
+ *
+ * so for a 5v5 (8 picks) the order is F O O F F O O F. Strict back-and-forth
+ * (F O F O …) instead hands the first team the better player at EVERY tier;
+ * the snake gives the second team the next two after the first team's opener,
+ * which equalises each side's summed pick position (18 vs 18 for a 5v5) — as
+ * fair as a sequential draft gets. A full side is skipped (belt-and-braces:
+ * the snake already fills both sides evenly), and we return null once both
+ * rosters are full.
  */
 export function nextPickTeam(
   team1Picks: number,
@@ -108,7 +119,11 @@ export function nextPickTeam(
 
   const otherTeam: 1 | 2 = firstPickTeam === 1 ? 2 : 1;
   const totalPicks = team1Picks + team2Picks;
-  return totalPicks % 2 === 0 ? firstPickTeam : otherTeam;
+  // Snake pattern by 0-indexed pick number: n=0 → first team; thereafter picks
+  // pair up (n=1,2 → other; n=3,4 → first; …). `floor((n+1)/2) % 2 === 0`
+  // captures exactly that F,O,O,F,F,O,O,F,… cadence.
+  const onFirstPick = Math.floor((totalPicks + 1) / 2) % 2 === 0;
+  return onFirstPick ? firstPickTeam : otherTeam;
 }
 
 /** The draft is done once both teams have a full roster (captain + picks). */
