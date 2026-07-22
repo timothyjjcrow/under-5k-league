@@ -76,9 +76,9 @@ export function registrationGate({
   if (mmr > HARD_MMR_CEILING) {
     return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — you entered ${mmr}.`;
   }
-  // The medal alone can prove ineligibility: a Divine 4+/Immortal medal means
+  // The medal alone can prove ineligibility: a Divine 3+/Immortal medal means
   // 5K+ MMR whatever number is typed (its EXACT band floor is over the
-  // ceiling — no tolerance here, tolerance is for validating claims). Without
+  // ceiling — no padding here, padding is for validating claims). Without
   // this, sandbagging a low claim under a high medal walks past the ceiling.
   const medalFloor = rankTierExactMinMmr(rankTier);
   if (medalFloor != null && medalFloor > HARD_MMR_CEILING) {

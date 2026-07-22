@@ -121,7 +121,7 @@ export default async function MePage({
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
   // The medal's plausible MMR window — signup claims outside it are snapped
   // to its floor by saveRegistration, so tell the player up front. A medal
-  // whose EXACT band floor clears the hard ceiling (Divine 4+/Immortal) is
+  // whose EXACT band floor clears the hard ceiling (Divine 3+/Immortal) is
   // ineligible outright — registrationGate will reject it whatever they type.
   const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
   const medalFloor = rankTierExactMinMmr(dbUser?.rankTier ?? null);

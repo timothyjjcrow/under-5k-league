@@ -37,9 +37,10 @@ describe("registrationGate — MMR limits", () => {
 
 describe("registrationGate — medal floor (the anti-sandbagging line)", () => {
   it("rejects a medal whose exact band floor clears the ceiling, whatever they type", () => {
-    // Immortal (5620+) and Divine 4/5 (5082+/5236+) are 5K+ by medal alone —
-    // a sandbagged low claim must not walk past the ceiling.
-    for (const tier of [74, 75, 80]) {
+    // Immortal (5620+) and Divine 3/4/5 (5020+/5220+/5420+ — Divine stars
+    // are 200 MMR each) are 5K+ by medal alone — a sandbagged low claim must
+    // not walk past the ceiling.
+    for (const tier of [73, 74, 75, 80]) {
       expect(
         registrationGate({
           season: signups,
@@ -73,7 +74,7 @@ describe("registrationGate — medal floor (the anti-sandbagging line)", () => {
         season: signups,
         type: "PLAYER",
         mmr: 3000,
-        rankTier: 73, // Divine 3 — exact floor 4928, under the line
+        rankTier: 72, // Divine 2 — exact floor 4820, under the line
         hasExisting: false,
       }),
     ).toBeNull();

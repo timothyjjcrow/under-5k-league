@@ -596,18 +596,22 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 ## Medal MMR validation (done)
 
-- Pure lib in `src/lib/rank.ts` (tested): `mmrRangeForRankTier` — the wide
-  plausible-MMR window for an OpenDota medal (exact inverse of
-  `approxRankTierFromMmr`'s star bands, widened ±`MMR_MEDAL_TOLERANCE` = 770;
-  Immortal open-ended), `clampMmrToRank` (an out-of-window claim, blank/0
-  included, snaps to the window FLOOR; no medal = no clamp), and
-  `rankTierExactMinMmr` (the no-tolerance band floor, for eligibility).
+- Pure lib in `src/lib/rank.ts` (tested): `mmrRangeForRankTier` — the
+  plausible-MMR window for an OpenDota medal: the exact star band from the
+  accepted ladder (154/star Herald–Ancient, 770/medal; DIVINE stars are 200
+  each — 4620/4820/5020/5220/5420 — ending at the 5620 Immortal floor)
+  padded symmetrically up to `MMR_WINDOW_MAX` = 1000, so no window is ever
+  wider than 1000 MMR (Immortal open-ended above 5220). `clampMmrToRank`
+  (an out-of-window claim, blank/0 included, snaps to the window FLOOR; no
+  medal = no clamp) and `rankTierExactMinMmr` (the no-padding band floor,
+  for eligibility). `approxRankTierFromMmr` shares the same band constants —
+  the inverse-consistency sweep in rank.test.ts pins that they never drift.
 - **Gate order is load-bearing** (`saveRegistration`): the medal is ensured
   (new-signup OpenDota fetch) BEFORE `registrationGate`; the gate judges the
   RAW claim + medal — never the clamped value (clamping snaps DOWN under the
   ceiling, so gating post-clamp would admit any overstated lie — the bigger
   the lie, the lower the number the gate would see); and the medal-floor rule
-  rejects Divine 4+/Immortal (`rankTierExactMinMmr > HARD_MMR_CEILING`)
+  rejects Divine 3+/Immortal (`rankTierExactMinMmr > HARD_MMR_CEILING`)
   whatever they type, so sandbagging can't walk past the ceiling either.
   Only gate-approved claims are clamped and stored.
 - **A stored registration MMR is league-approved**: an UNCHANGED resubmit is

@@ -13,33 +13,45 @@ export const RANK_MEDALS = [
   "Immortal",
 ] as const;
 
-// The common MMR ladder: ~154 per star, 5 stars (~770) per medal, Immortal
-// above 5620. Shared by approxRankTierFromMmr and its inverse
-// (mmrRangeForRankTier) so the two mappings can never drift apart.
+// The accepted MMR ladder (Dota 2 wiki / rank guides, stable for years):
+// 154 per star and 770 per medal from Herald through Ancient, then Divine's
+// five stars are 200 each (4620/4820/5020/5220/5420), and Immortal starts at
+// 5620. Shared by approxRankTierFromMmr and its inverse (mmrRangeForRankTier)
+// so the two mappings can never drift apart.
 export const STAR_MMR = 154;
 export const MEDAL_MMR = STAR_MMR * 5; // 770
+export const DIVINE_STAR_MMR = 200;
 export const IMMORTAL_MMR_FLOOR = 5620;
 
-// How far outside a medal's exact star band a claimed MMR may sit before we
-// stop believing it: a full medal each way. Medals lag behind live MMR and
-// the star→MMR ladder shifts by patch, so the "possible" range must stay
-// generous — the clamp exists to catch gross misclaims, not honest drift.
-export const MMR_MEDAL_TOLERANCE = MEDAL_MMR;
+// The widest a medal's plausible-MMR window may ever be. Each star's exact
+// band is padded symmetrically up to this cap — enough slack for medals that
+// lag behind live MMR, tight enough that a claim a whole medal away from the
+// badge is called out.
+export const MMR_WINDOW_MAX = 1000;
+
+/** Symmetric padding that grows a band of `width` MMR to MMR_WINDOW_MAX. */
+function windowPad(width: number): number {
+  return Math.max(0, Math.floor((MMR_WINDOW_MAX - width) / 2));
+}
+
+/** Width of one star's exact band inside a medal. */
+function starWidth(medal: number): number {
+  return medal === 7 ? DIVINE_STAR_MMR : STAR_MMR;
+}
 
 /**
- * Approximate a `rank_tier` from an MMR number, using the common ladder of
- * ~154 MMR per star / ~770 per medal (Immortal above 5620). Dota's true
- * mapping shifts by patch — this is for demo/seed data and rough displays;
- * real accounts get their actual tier from OpenDota.
+ * Approximate a `rank_tier` from an MMR number using the ladder above.
+ * Dota's true mapping shifts by patch — this is for demo/seed data and rough
+ * displays; real accounts get their actual tier from OpenDota.
  */
 export function approxRankTierFromMmr(mmr: number): number {
   if (mmr >= IMMORTAL_MMR_FLOOR) return 80;
   const clamped = Math.max(0, mmr);
   const medal = Math.min(7, Math.floor(clamped / MEDAL_MMR) + 1);
-  // Stars from the position inside the (clamped) medal's band, so the value
-  // stays monotonic even where Divine stretches past the uniform band width.
+  // Stars from the position inside the (clamped) medal's band — Divine's
+  // band runs to the Immortal floor with wider (200) stars.
   const withinBand = clamped - (medal - 1) * MEDAL_MMR;
-  const stars = Math.min(5, Math.floor(withinBand / STAR_MMR) + 1);
+  const stars = Math.min(5, Math.floor(withinBand / starWidth(medal)) + 1);
   return medal * 10 + stars;
 }
 
@@ -47,9 +59,9 @@ export function approxRankTierFromMmr(mmr: number): number {
 export type MmrRange = { min: number; max: number | null };
 
 /**
- * The wide range of MMRs a player holding this OpenDota medal could
- * plausibly have: the medal's exact star band (the inverse of
- * `approxRankTierFromMmr`) widened by `MMR_MEDAL_TOLERANCE` on both sides.
+ * The range of MMRs a player holding this OpenDota medal could plausibly
+ * have: the medal's exact star band (the inverse of `approxRankTierFromMmr`)
+ * padded symmetrically up to `MMR_WINDOW_MAX` — never wider than 1000 MMR.
  * Returns null when the tier is missing/unranked — no medal, no opinion.
  */
 export function mmrRangeForRankTier(
@@ -58,23 +70,26 @@ export function mmrRangeForRankTier(
   const medal = rankMedalTier(rankTier);
   if (medal === 0) return null;
   if (medal === 8) {
-    return { min: Math.max(0, IMMORTAL_MMR_FLOOR - MMR_MEDAL_TOLERANCE), max: null };
+    // Open-ended above; below the floor, allow the same slack a Divine star
+    // gets — an Immortal claiming less than that is sandbagging.
+    return {
+      min: Math.max(0, IMMORTAL_MMR_FLOOR - windowPad(DIVINE_STAR_MMR)),
+      max: null,
+    };
   }
   const stars = rankStars(rankTier);
   // A starless tier (malformed, e.g. 46) still names a medal — fall back to
-  // the whole medal's band rather than refusing to validate.
-  const bandMin = (medal - 1) * MEDAL_MMR + (stars ? (stars - 1) * STAR_MMR : 0);
-  // Divine's band stretches to the Immortal floor (wider than 5 uniform
-  // stars); everywhere else a star is exactly STAR_MMR wide.
-  const bandMax =
-    medal === 7 && (stars === 5 || stars === 0)
-      ? IMMORTAL_MMR_FLOOR - 1
-      : stars
-        ? bandMin + STAR_MMR - 1
-        : medal * MEDAL_MMR - 1;
+  // the whole medal's band rather than refusing to validate. Divine's medal
+  // band runs to the Immortal floor.
+  const bandMin =
+    (medal - 1) * MEDAL_MMR + (stars ? (stars - 1) * starWidth(medal) : 0);
+  const bandMax = stars
+    ? bandMin + starWidth(medal) - 1
+    : (medal === 7 ? IMMORTAL_MMR_FLOOR : medal * MEDAL_MMR) - 1;
+  const pad = windowPad(bandMax - bandMin + 1);
   return {
-    min: Math.max(0, bandMin - MMR_MEDAL_TOLERANCE),
-    max: bandMax + MMR_MEDAL_TOLERANCE,
+    min: Math.max(0, bandMin - pad),
+    max: bandMax + pad,
   };
 }
 
@@ -91,7 +106,7 @@ export function rankTierExactMinMmr(
   if (medal === 0) return null;
   if (medal === 8) return IMMORTAL_MMR_FLOOR;
   const stars = rankStars(rankTier);
-  return (medal - 1) * MEDAL_MMR + (stars ? (stars - 1) * STAR_MMR : 0);
+  return (medal - 1) * MEDAL_MMR + (stars ? (stars - 1) * starWidth(medal) : 0);
 }
 
 export type MmrClampResult = {
@@ -121,7 +136,7 @@ export function clampMmrToRank(
   return { mmr: range.min, adjusted: true, range };
 }
 
-/** Hint copy for an MmrRange: "2772–4465", or "4850+" when open-ended. */
+/** Hint copy for an MmrRange: "3119–4118", or "5220+" when open-ended. */
 export function formatMmrRange(range: MmrRange): string {
   return range.max === null ? `${range.min}+` : `${range.min}–${range.max}`;
 }

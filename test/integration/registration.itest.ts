@@ -81,9 +81,9 @@ describe("saveRegistration — MMR soft limit / hard ceiling", () => {
   });
 });
 
-// Medal MMR validation: the claimed MMR is checked against the player's
-// OpenDota medal (clampMmrToRank) BEFORE the gate and the upsert — a claim
-// outside the medal's plausible window is stored as the window's floor.
+// Medal MMR validation: the gate judges the RAW claim + medal, then a
+// gate-approved claim outside the medal's plausible window (clampMmrToRank,
+// ≤1000 MMR wide) is stored as the window's floor.
 describe("saveRegistration — medal MMR validation", () => {
   beforeEach(() => {
     vi.mocked(requireUser).mockReset();
@@ -99,16 +99,16 @@ describe("saveRegistration — medal MMR validation", () => {
 
   it("snaps an inflated claim to the medal window's floor and says so", async () => {
     const season = await makeSeason({ status: "SIGNUPS" });
-    const user = await medaled("Fibber", 54); // Legend 4 → window 2772–4465
+    const user = await medaled("Fibber", 54); // Legend 4 → window 3119–4118
     vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
 
     const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 4900 }));
 
     expect(res?.error).toBeUndefined();
-    expect((await regFor(season.id, user.id))?.mmr).toBe(2772);
+    expect((await regFor(season.id, user.id))?.mmr).toBe(3119);
     // The toast must own the rewrite — silently changing a typed value reads
     // as a bug to the player.
-    expect(res?.message).toMatch(/2772/);
+    expect(res?.message).toMatch(/3119/);
     expect(res?.message).toMatch(/Legend 4/);
   });
 
@@ -130,7 +130,7 @@ describe("saveRegistration — medal MMR validation", () => {
 
     const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 0 }));
 
-    expect((await regFor(season.id, user.id))?.mmr).toBe(2772);
+    expect((await regFor(season.id, user.id))?.mmr).toBe(3119);
     expect(res?.message).toMatch(/estimated/i);
   });
 
@@ -172,11 +172,11 @@ describe("saveRegistration — medal MMR validation", () => {
     expect(res?.error).toBeUndefined();
     const reg = await regFor(season.id, user.id);
     expect(reg?.type).toBe("STANDIN");
-    expect(reg?.mmr).toBe(2772);
+    expect(reg?.mmr).toBe(3119);
   });
 
   it("clears an implausible claim to unknown when the medal floor is 0", async () => {
-    // Herald 1's window is 0–923: a 3000 claim snaps to 0, the unknown
+    // Herald 1's window is 0–576: a 3000 claim snaps to 0, the unknown
     // sentinel — the toast owns that (captains judge by the medal).
     const season = await makeSeason({ status: "SIGNUPS" });
     const user = await medaled("Humble Herald", 11);
@@ -191,7 +191,7 @@ describe("saveRegistration — medal MMR validation", () => {
 
   it("never re-clamps an untouched resubmit — admin corrections survive edits", async () => {
     // An admin corrected this stale-medal player to 4800 (Herald 1 window is
-    // 0–923). Editing roles resubmits the prefilled 4800 — it must stand.
+    // 0–576). Editing roles resubmits the prefilled 4800 — it must stand.
     const season = await makeSeason({ status: "SIGNUPS" });
     const user = await medaled("Admin Fixed", 11);
     await prisma.registration.create({
@@ -228,7 +228,7 @@ describe("saveRegistration — medal MMR validation", () => {
     const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 900 }));
 
     expect(res?.error).toBeUndefined();
-    expect((await regFor(season.id, user.id))?.mmr).toBe(2772);
+    expect((await regFor(season.id, user.id))?.mmr).toBe(3119);
     const dbUser = await prisma.user.findUniqueOrThrow({
       where: { id: user.id },
     });
@@ -249,7 +249,7 @@ describe("saveRegistration — medal MMR validation", () => {
     const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 4900 }));
 
     expect(res?.error).toBeUndefined();
-    expect((await regFor(season.id, user.id))?.mmr).toBe(2772);
+    expect((await regFor(season.id, user.id))?.mmr).toBe(3119);
     // Edits never re-hit OpenDota (API budget rule).
     expect(vi.mocked(fetchPlayerRankTier)).not.toHaveBeenCalled();
   });
@@ -290,7 +290,7 @@ describe("setRegistrationMmr — advisory-only admin override", () => {
   }
 
   it("stores an out-of-window value RAW and flags the mismatch", async () => {
-    const { reg } = await registered(11, 500); // Herald 1, window 0–923
+    const { reg } = await registered(11, 500); // Herald 1, window 0–576
     const res = await setRegistrationMmr(
       {},
       form({ registrationId: reg.id, mmr: 4800 }),

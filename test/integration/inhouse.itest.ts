@@ -987,10 +987,10 @@ describe("inhouse — medal MMR validation on joinQueue", () => {
   }
 
   it("snaps an inflated typed MMR to the medal window's floor", async () => {
-    // Legend 4 (tier 54) window is 2772–4465; an Immortal-sized claim lies.
+    // Legend 4 (tier 54) window is 3119–4118; an Immortal-sized claim lies.
     const user = await medaledUser("Inflated", 54);
     expect((await joinQueue(sessionFor(user), 6800)).ok).toBe(true);
-    expect(await queuedMmr(user.id)).toBe(2772);
+    expect(await queuedMmr(user.id)).toBe(3119);
   });
 
   it("keeps a typed MMR the medal finds plausible", async () => {
@@ -1002,7 +1002,7 @@ describe("inhouse — medal MMR validation on joinQueue", () => {
   it("seeds a blank join from the medal floor instead of unknown", async () => {
     const user = await medaledUser("Blank", 54);
     await joinQueue(sessionFor(user), 0);
-    expect(await queuedMmr(user.id)).toBe(2772);
+    expect(await queuedMmr(user.id)).toBe(3119);
   });
 
   it("trusts a registration MMR as-is — even outside the medal window", async () => {
@@ -1010,7 +1010,7 @@ describe("inhouse — medal MMR validation on joinQueue", () => {
     // deliberately set by an admin override (the stale-medal escape hatch,
     // which this path must not silently undo).
     const season = await makeSeason();
-    const user = await medaledUser("AdminFixed", 11); // Herald 1: window 0–923
+    const user = await medaledUser("AdminFixed", 11); // Herald 1: window 0–576
     await prisma.registration.create({
       data: { seasonId: season.id, userId: user.id, mmr: 4800 },
     });
@@ -1029,7 +1029,7 @@ describe("inhouse — medal MMR validation on joinQueue", () => {
       data: { lobbyId: lobby.id, userId: user.id, mmr: 6000, team: 1 },
     });
     await joinQueue(sessionFor(user), 0);
-    expect(await queuedMmr(user.id)).toBe(2772);
+    expect(await queuedMmr(user.id)).toBe(3119);
   });
 
   it("leaves the typed value alone when there's no medal on file", async () => {
