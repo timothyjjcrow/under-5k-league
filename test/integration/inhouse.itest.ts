@@ -9,14 +9,17 @@ import { summarizeInhouse } from "@/lib/inhouse-stats";
 import { steamIdToAccountId } from "@/lib/dota";
 import type { SessionUser } from "@/lib/auth";
 import {
+  acceptMatch,
   cancelLobby,
   castVote,
+  declineMatch,
   getInhouseState,
   joinQueue,
   leaveQueue,
   makePick,
   maybeAutoDetectResult,
   recordMatch,
+  resolveReadyCheck,
   autoDetectResult,
   startGame,
 } from "@/lib/inhouse-service";
@@ -134,8 +137,18 @@ function fakeMatch(opts: {
   };
 }
 
-/** Everyone casts the same captain-selection method (last vote resolves it). */
+/** Everyone presses ACCEPT on the ready check (the last accept opens the vote). */
+async function acceptAll(players: QueuedUser[]) {
+  for (const p of players) await acceptMatch(p.session);
+}
+
+/**
+ * Everyone accepts the ready check, then casts the same captain-selection
+ * method (last vote resolves it). acceptMatch quietly no-ops when the lobby
+ * is already past the ready check.
+ */
 async function voteAll(players: QueuedUser[], method: string, nomineeId?: string) {
+  await acceptAll(players);
   for (const p of players) await castVote(p.session, method, nomineeId);
 }
 
@@ -178,18 +191,22 @@ describe("inhouse — lobby formation", () => {
     const lobby = await prisma.inhouseLobby.findFirstOrThrow({
       include: { players: true },
     });
-    expect(lobby.status).toBe(INHOUSE_STATUS.CAPTAIN_VOTE);
+    // The lobby opens in the READY CHECK — everyone must accept before the
+    // captain vote begins.
+    expect(lobby.status).toBe(INHOUSE_STATUS.READY_CHECK);
     expect(lobby.players).toHaveLength(INHOUSE.LOBBY_SIZE);
-    expect(lobby.voteEndsAt).not.toBeNull();
+    expect(lobby.acceptEndsAt).not.toBeNull();
+    expect(lobby.voteEndsAt).toBeNull();
     expect(lobby.radiantTeam).toBe(1);
-    // Everyone drained from the queue into the lobby.
+    // Everyone drained from the queue into the lobby, nobody has accepted yet.
     expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    expect(lobby.players.every((p) => p.acceptedAt === null)).toBe(true);
     // Nobody has a team yet — the vote decides captains first.
     expect(lobby.players.every((p) => p.team === null && !p.isCaptain)).toBe(true);
   });
 
   it("keeps a second batch of 10 in the queue while one lobby is active", async () => {
-    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // forms lobby #1 (CAPTAIN_VOTE)
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // forms lobby #1 (READY_CHECK)
     await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // second batch must wait
     expect(await prisma.inhouseLobby.count()).toBe(1);
     expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
@@ -216,6 +233,7 @@ describe("inhouse — captain vote", () => {
 
   it("VOTE: the two most-nominated players become captains", async () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 3000 + i); // low, distinct MMR
+    await acceptAll(players);
     // Everyone elects players[7] and players[8] (not the top-MMR pair).
     for (const p of players.slice(0, 5)) await castVote(p.session, "VOTE", players[7].user.id);
     for (const p of players.slice(5)) await castVote(p.session, "VOTE", players[8].user.id);
@@ -228,6 +246,7 @@ describe("inhouse — captain vote", () => {
 
   it("resolves on timeout with no votes cast, defaulting to MMR", async () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await acceptAll(players);
     const lobby = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
     // Force the vote clock into the past, then poll (getInhouseState resolves it).
     await prisma.inhouseLobby.update({
@@ -243,6 +262,7 @@ describe("inhouse — captain vote", () => {
 
   it("rejects votes from outsiders and invalid methods", async () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    await acceptAll(players);
     const outsider = sessionFor(await makeUser("Nosy"));
     expect((await castVote(outsider, "MMR")).ok).toBe(false);
     expect((await castVote(players[0].session, "BOGUS")).ok).toBe(false);
@@ -530,8 +550,9 @@ describe("inhouse — scoring feeds ranking across games", () => {
     // ---- GAME 2: same 10 requeue and vote RECORD → captains come from the winners ----
     const g1Users = g1.players.map((p) => p.user);
     for (const u of g1Users) await joinQueue(sessionFor(u), 3000);
-    const lobby2 = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
+    const lobby2 = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
     const sessById = new Map(g1Users.map((u) => [u.id, sessionFor(u)]));
+    for (const p of lobby2.players) await acceptMatch(sessById.get(p.userId)!);
     for (const p of lobby2.players) await castVote(sessById.get(p.userId)!, "RECORD");
 
     const drafting2 = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
@@ -547,7 +568,7 @@ describe("inhouse — misc guards", () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
 
-    // A player already in the active (CAPTAIN_VOTE) lobby can't re-queue.
+    // A player already in the active (READY_CHECK) lobby can't re-queue.
     expect((await joinQueue(players[0].session, 3000)).ok).toBe(false);
 
     // A non-admin can't cancel; the admin can, freeing the slot.
@@ -563,14 +584,14 @@ describe("inhouse — misc guards", () => {
     await getInhouseState(admin);
     expect(
       await prisma.inhouseLobby.count({
-        where: { status: INHOUSE_STATUS.CAPTAIN_VOTE },
+        where: { status: INHOUSE_STATUS.READY_CHECK },
       }),
     ).toBe(0);
-    // Once the players' own polls re-confirm presence, a fresh vote forms.
+    // Once the players' own polls re-confirm presence, a fresh check forms.
     for (const p of players) await getInhouseState(p.session);
     expect(
       await prisma.inhouseLobby.count({
-        where: { status: INHOUSE_STATUS.CAPTAIN_VOTE },
+        where: { status: INHOUSE_STATUS.READY_CHECK },
       }),
     ).toBe(1);
   });
@@ -589,7 +610,7 @@ describe("inhouse — discord announcements", () => {
   it("announces the formed lobby once, with the players and link", async () => {
     await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     const lobbyPings = mockSend.mock.calls.filter(([m]) =>
-      m.includes("Inhouse lobby is up"),
+      m.includes("Inhouse match found"),
     );
     expect(lobbyPings).toHaveLength(1);
     expect(lobbyPings[0][0]).toContain("IH0");
@@ -645,7 +666,7 @@ describe("inhouse — queue presence", () => {
     await getInhouseState(players[0].session);
     expect(
       await prisma.inhouseLobby.count({
-        where: { status: INHOUSE_STATUS.CAPTAIN_VOTE },
+        where: { status: INHOUSE_STATUS.READY_CHECK },
       }),
     ).toBe(1);
   });
@@ -705,6 +726,235 @@ describe("inhouse — queue presence", () => {
         where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
       }),
     ).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ready check: a filled lobby opens as an accept gate — all ten must
+// press ACCEPT before the captain vote begins, so an AFK player is dropped
+// instead of drafted.
+
+describe("inhouse — ready check", () => {
+  it("opens the captain vote only when all ten accept", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+
+    // Nine accepts aren't enough.
+    for (const p of players.slice(0, 9)) {
+      expect((await acceptMatch(p.session)).ok).toBe(true);
+    }
+    expect(
+      (await lobbyByStatus(INHOUSE_STATUS.READY_CHECK)).players.filter(
+        (p) => p.acceptedAt,
+      ),
+    ).toHaveLength(9);
+
+    // The tenth accept flips READY_CHECK → CAPTAIN_VOTE and starts the clock.
+    expect((await acceptMatch(players[9].session)).ok).toBe(true);
+    const voting = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
+    expect(voting.voteEndsAt).not.toBeNull();
+    expect(voting.acceptEndsAt).toBeNull();
+  });
+
+  it("double-accept is one accept; outsiders can't accept", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    expect((await acceptMatch(players[0].session)).ok).toBe(true);
+    expect((await acceptMatch(players[0].session)).ok).toBe(true); // quiet no-op
+    const outsider = sessionFor(await makeUser("Lurker"));
+    expect((await acceptMatch(outsider)).ok).toBe(false);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    expect(lobby.players.filter((p) => p.acceptedAt)).toHaveLength(1);
+  });
+
+  it("accepting a lobby that was cancelled out from under you reports failure, not success", async () => {
+    // The Postgres race the guard closes: a decline/expiry CANCELS the lobby
+    // between the accepter's read and their write. The claim must see the
+    // status change and refuse, or the player gets a false "accepted".
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { status: INHOUSE_STATUS.CANCELLED },
+    });
+    const res = await acceptMatch(players[0].session);
+    expect(res.ok).toBe(false);
+    // No acceptedAt was stamped on the dead lobby.
+    const row = await prisma.inhouseLobbyPlayer.findFirstOrThrow({
+      where: { lobbyId: lobby.id, userId: players[0].user.id },
+    });
+    expect(row.acceptedAt).toBeNull();
+  });
+
+  it("a decline fails the match NOW: decliner dropped, accepters keep their spot + MMR", async () => {
+    // Distinct MMRs so a requeue that dropped the snapshot to 0 would show.
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 3000 + i * 100);
+    for (const p of players.slice(0, 8)) await acceptMatch(p.session);
+
+    // players[8] declines; players[9] never responded.
+    expect((await declineMatch(players[8].session)).ok).toBe(true);
+    const lobby = await prisma.inhouseLobby.findFirstOrThrow();
+    expect(lobby.status).toBe(INHOUSE_STATUS.CANCELLED);
+
+    const queued = await prisma.inhouseQueueEntry.findMany();
+    const byId = new Map(queued.map((q) => [q.userId, q]));
+    // The decliner is out entirely.
+    expect(byId.has(players[8].user.id)).toBe(false);
+    const now = Date.now();
+    for (const [i, p] of players.slice(0, 8).entries()) {
+      const q = byId.get(p.user.id)!;
+      // The eight accepters re-queued with LIVE heartbeats (instantly present)…
+      expect(now - q.lastSeenAt.getTime()).toBeLessThan(
+        INHOUSE.QUEUE_AWAY_SECONDS * 1000,
+      );
+      // …and their MMR snapshot survived the round-trip.
+      expect(q.mmr).toBe(3000 + i * 100);
+    }
+    // …while the still-pending player re-queued BACKDATED but INSIDE the drop
+    // window: away (won't re-form) yet not pruned, so their own next poll can
+    // re-confirm them (the cancelLobby pattern).
+    const pending = byId.get(players[9].user.id)!;
+    const age = now - pending.lastSeenAt.getTime();
+    expect(age).toBeGreaterThan(INHOUSE.QUEUE_AWAY_SECONDS * 1000);
+    expect(age).toBeLessThan(INHOUSE.QUEUE_DROP_SECONDS * 1000);
+    // Their own poll re-confirms them (heartbeat refreshes → present).
+    await getInhouseState(players[9].session);
+    const reconfirmed = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: players[9].user.id },
+    });
+    expect(Date.now() - reconfirmed.lastSeenAt.getTime()).toBeLessThan(
+      INHOUSE.QUEUE_AWAY_SECONDS * 1000,
+    );
+  });
+
+  it("re-queued accepters keep priority over players who joined during the check", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    for (const p of players.slice(0, 9)) await acceptMatch(p.session);
+    // A spectator joins the queue mid-check (behind the ten in the lobby).
+    const latecomer = sessionFor(await makeUser("Latecomer"));
+    await joinQueue(latecomer, 3000);
+
+    // players[9] never accepts → the check times out.
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { acceptEndsAt: new Date(Date.now() - 1000) },
+    });
+    await getInhouseState(players[0].session);
+
+    // Queue order: the nine accepters (anchored to formation) BEFORE the
+    // latecomer who joined during the check.
+    const queued = await prisma.inhouseQueueEntry.findMany({
+      orderBy: { joinedAt: "asc" },
+    });
+    const order = queued.map((q) => q.userId);
+    const latecomerPos = order.indexOf(latecomer.id);
+    for (const p of players.slice(0, 9)) {
+      expect(order.indexOf(p.user.id)).toBeLessThan(latecomerPos);
+    }
+  });
+
+  it("an expired check cancels the lobby and drops the no-shows", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    for (const p of players.slice(0, 7)) await acceptMatch(p.session);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { acceptEndsAt: new Date(Date.now() - 1000) },
+    });
+
+    // Any poll resolves it lazily.
+    await getInhouseState(players[0].session);
+    expect(
+      (await prisma.inhouseLobby.findFirstOrThrow()).status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+
+    // Only the seven accepters are back in the queue, present.
+    const queued = await prisma.inhouseQueueEntry.findMany();
+    expect(queued).toHaveLength(7);
+    const ids = queued.map((q) => q.userId);
+    for (const p of players.slice(0, 7)) expect(ids).toContain(p.user.id);
+    for (const p of players.slice(7)) expect(ids).not.toContain(p.user.id);
+  });
+
+  it("resolveReadyCheck rescues a stuck all-accepted lobby (the concurrent-final-accept race)", async () => {
+    // Simulate the Postgres race: two final accepts each saw the other's write
+    // uncommitted, so NEITHER flipped — all ten accepted but status is still
+    // READY_CHECK. resolveReadyCheck's all-accepted branch must rescue it, even
+    // before the clock expires.
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    await prisma.inhouseLobbyPlayer.updateMany({
+      where: { lobbyId: lobby.id },
+      data: { acceptedAt: new Date() },
+    });
+    // Clock still in the future — only the all-accepted branch can flip it.
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { acceptEndsAt: new Date(Date.now() + 60_000) },
+    });
+
+    expect(await resolveReadyCheck()).toBe(true);
+    const voting = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(voting.status).toBe(INHOUSE_STATUS.CAPTAIN_VOTE);
+    expect(voting.voteEndsAt).not.toBeNull();
+  });
+
+  it("a failed check re-forms and pings again when the queue refills", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    for (const p of players.slice(0, 9)) await acceptMatch(p.session);
+    mockSend.mockClear();
+
+    // players[9] declines → 9 accepters re-queue present.
+    await declineMatch(players[9].session);
+    // The failure itself announces nothing.
+    expect(
+      mockSend.mock.calls.filter(([m]) => m.includes("Inhouse match found")),
+    ).toHaveLength(0);
+
+    // One fresh join refills to ten → a NEW lobby forms and pings again
+    // (players must accept the new match).
+    const refill = sessionFor(await makeUser("Refill"));
+    await joinQueue(refill, 3000);
+    expect(
+      mockSend.mock.calls.filter(([m]) => m.includes("Inhouse match found")),
+    ).toHaveLength(1);
+    expect(
+      (await prisma.inhouseLobby.findFirstOrThrow({
+        where: { status: INHOUSE_STATUS.READY_CHECK },
+      })).id,
+    ).not.toBe(players[0].user.id);
+  });
+
+  it("state.lobby.readyCheck reports the count, pending-first order, and clock", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    await acceptMatch(players[0].session);
+    await acceptMatch(players[1].session);
+
+    const state = await getInhouseState(players[0].session);
+    const rc = state.lobby?.readyCheck;
+    expect(rc).not.toBeNull();
+    expect(rc!.acceptedCount).toBe(2);
+    expect(rc!.total).toBe(INHOUSE.LOBBY_SIZE);
+    // Pending players sort ahead of accepted ones (they're the holdup).
+    const firstAcceptedIdx = rc!.players.findIndex((p) => p.accepted);
+    const lastPendingIdx = rc!.players.map((p) => p.accepted).lastIndexOf(false);
+    expect(lastPendingIdx).toBeLessThan(firstAcceptedIdx);
+    // The accept clock is serialized as an epoch, and the viewer's own flags.
+    expect(typeof state.lobby?.acceptEndsAt).toBe("number");
+    expect(state.me.canAccept).toBe(true);
+    expect(state.me.hasAccepted).toBe(true);
+  });
+
+  it("admin can cancel a stuck ready check (everyone re-queues backdated)", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    await acceptMatch(players[0].session);
+    expect((await cancelLobby(admin)).ok).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findFirstOrThrow()).status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
   });
 });
 

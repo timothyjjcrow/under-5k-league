@@ -16,6 +16,7 @@ import {
   maybeAutoDetectResult,
   maybeFormLobby,
   resolveCaptainVote,
+  resolveReadyCheck,
   resolveStalledPick,
 } from "./inhouse-service";
 import { getSetting, SETTING_KEYS } from "./settings";
@@ -192,6 +193,7 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
   if (!active && queued === 0) return { recorded: false, watch: false };
 
   await maybeFormLobby();
+  await resolveReadyCheck();
   await resolveCaptainVote();
   await resolveStalledPick();
   const recorded = await maybeAutoDetectResult();

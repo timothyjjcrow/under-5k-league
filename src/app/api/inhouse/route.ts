@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import {
+  acceptMatch,
   autoDetectResult,
   cancelLobby,
   castVote,
+  declineMatch,
   getInhouseState,
   joinQueue,
   leaveQueue,
@@ -50,6 +52,12 @@ export async function POST(req: NextRequest) {
       break;
     case "leave":
       res = await leaveQueue(user);
+      break;
+    case "accept":
+      res = await acceptMatch(user);
+      break;
+    case "decline":
+      res = await declineMatch(user);
       break;
     case "vote":
       res = await castVote(user, String(body.method ?? ""), body.nomineeId ? String(body.nomineeId) : undefined);

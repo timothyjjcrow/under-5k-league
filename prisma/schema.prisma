@@ -389,7 +389,8 @@ model InhouseQueueEntry {
 // league Draft: the pick clock is enforced lazily on poll (no cron/websocket).
 model InhouseLobby {
   id          String    @id @default(cuid())
-  status      String    @default("CAPTAIN_VOTE") // CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | COMPLETED | CANCELLED
+  status      String    @default("READY_CHECK") // READY_CHECK | CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | COMPLETED | CANCELLED
+  acceptEndsAt DateTime? // ready-check deadline (READY_CHECK phase) — all ten must accept before it
   voteEndsAt  DateTime? // captain-selection vote deadline (CAPTAIN_VOTE phase)
   pickTeam    Int? // 1 | 2 — team on the clock while DRAFTING
   pickEndsAt  DateTime? // captain auto-picks when this passes
@@ -425,6 +426,7 @@ model InhouseLobbyPlayer {
   isCaptain      Boolean  @default(false)
   pickIndex      Int? // 0-based order picked (captains stay null)
   mmr            Int      @default(0)
+  acceptedAt     DateTime? // when they pressed ACCEPT in the ready check (null = pending)
   votedMethod    String? // CAPTAIN_VOTE ballot: MMR | RECORD | VOTE
   votedNomineeId String? // player they nominated as captain (when votedMethod = VOTE)
   // Inhouse record snapshot, frozen at lobby formation (no results can land

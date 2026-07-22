@@ -135,7 +135,7 @@ export function inhouseQueueMessage(present: number, lobbySize: number): string 
 }
 
 export function inhouseLobbyMessage(playerNames: string[]): string {
-  return `🚨 **Inhouse lobby is up!** The captain vote is live — get to ${resolveSiteUrl()}/inhouse\n${playerNames.join(", ")}`;
+  return `🚨 **Inhouse match found!** Accept your game before the clock runs out — get to ${resolveSiteUrl()}/inhouse\n${playerNames.join(", ")}`;
 }
 
 export function inhouseResultMessage(m: {

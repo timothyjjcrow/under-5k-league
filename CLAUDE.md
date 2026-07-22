@@ -353,10 +353,41 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 - **Models** (`schema.prisma`): `InhouseQueueEntry` (one global rolling queue,
   `userId` unique), `InhouseLobby` (the game + its state machine:
-  `CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS → COMPLETED`/`CANCELLED`),
-  `InhouseLobbyPlayer` (`team` 1/2, `isCaptain`, `pickIndex`, `mmr` snapshot,
+  `READY_CHECK → CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS →
+  COMPLETED`/`CANCELLED`), `InhouseLobbyPlayer` (`team` 1/2, `isCaptain`,
+  `pickIndex`, `mmr` snapshot, `acceptedAt` for the ready check,
   `votedMethod`/`votedNomineeId` for the captain vote). One active lobby at a
   time (`INHOUSE_ACTIVE_STATUSES`).
+- **Ready check (Dota-style accept gate)**: a filled lobby opens in
+  `READY_CHECK` with `acceptEndsAt` (`INHOUSE.ACCEPT_SECONDS` = 45 — web
+  players need the chime/tab-title to reach them first). All ten must
+  `acceptMatch` (idempotent claim guarded on BOTH `acceptedAt: null` AND
+  `lobby: { status: READY_CHECK }` — the relation filter stops a Postgres
+  race where a concurrent decline/expiry cancels the lobby between the read
+  and the write, which would otherwise stamp acceptedAt on a dead lobby and
+  falsely report success; zero rows + gone lobby ⇒ "match was cancelled").
+  The last accept claims the `READY_CHECK → CAPTAIN_VOTE` flip via
+  `startCaptainVote` and only then starts `voteEndsAt`; the
+  `resolveReadyCheck` all-accepted branch is the safety net for the
+  two-concurrent-final-accepts race where neither inline flip fires (runs on
+  every poll, before the expiry check). `declineMatch` fails the match NOW;
+  an expired check resolves lazily via `resolveReadyCheck` (wired into
+  getInhouseState AND result-sync's inhouse hook — a Discord-queued group who
+  never open /inhouse still gets their stuck check cleared, freeing the single
+  active slot). Failure policy (`failReadyCheck`): it re-reads `acceptedAt`
+  AFTER winning the CANCELLED claim (never the caller's pre-claim snapshot —
+  an accept committed mid-cancel must count, not be dropped as a no-show),
+  then accepters re-queue with LIVE heartbeats + priority (queue slot anchored
+  to `lobby.createdAt` so they outrank anyone who joined DURING the check), a
+  decline's still-pending players re-queue BACKDATED but inside the drop
+  window (their own poll re-confirms — the cancelLobby pattern), and the
+  decliner + timeout no-shows are DROPPED. The Discord lobby ping now says
+  "accept your game"; the room shows an ACCEPT MATCH button + accepted-grid
+  (pending players sort first) + the standard compact clock bar, the tab title
+  flips "(!) Accept your match" until accepted, a chime fires both on the
+  ready check AND on the vote opening (a player may accept early and tab away),
+  and a failed check that snaps the room back to the queue toasts
+  "Match cancelled" instead of vanishing silently.
 - **Captain-selection vote**: when a lobby fills it opens in `CAPTAIN_VOTE` — the
   10 players vote how captains are chosen so it isn't always the same top-2 MMR
   pair: `VOTE` (elect specific players), `MMR` (highest 2), or `RECORD` (best 2

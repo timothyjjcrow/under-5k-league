@@ -62,6 +62,9 @@ export function InhouseRoom({
   // For the bell notification: remember what we saw last poll.
   const soundInitRef = useRef(false);
   const prevStatusRef = useRef<string | null>(null);
+  // Was the viewer sitting in a READY_CHECK last poll? Drives the
+  // "match cancelled" toast when the check fails out from under them.
+  const prevInReadyCheckRef = useRef(false);
   const prevOnClockRef = useRef(false);
   const prevResultIdRef = useRef<string | null>(null);
   const originalTitleRef = useRef<string | null>(null);
@@ -128,26 +131,53 @@ export function InhouseRoom({
     prevLobbyId.current = cur;
   }, [state?.lobby?.id, router]);
 
-  // Ring a bell on the moments that matter to this viewer: their lobby forming,
-  // their turn to pick, and teams locking in. Skips the initial page load.
+  // Ring a bell on the moments that matter to this viewer: their match found
+  // (ready check), the captain vote opening, their turn to pick, and teams
+  // locking in. Skips the initial page load.
   useEffect(() => {
     if (!state) return;
     const status = state.lobby?.status ?? null;
     const isOnClock = state.me.isOnClock;
     const inLobby = state.me.inLobby;
+    const prevStatus = prevStatusRef.current;
+
+    // A ready check the viewer was in vanished without advancing to the vote —
+    // a decline, an expiry, or an admin cancel scrapped it. The lobby query
+    // drops CANCELLED instantly, so without this the room would silently snap
+    // back to the queue with no explanation. (prevInReadyCheckRef, not
+    // prevStatus alone: the same-poll flip READY_CHECK→CAPTAIN_VOTE keeps the
+    // viewer in the lobby and must stay quiet.)
+    if (
+      prevInReadyCheckRef.current &&
+      status !== "READY_CHECK" &&
+      status !== "CAPTAIN_VOTE"
+    ) {
+      pushToast(
+        "info",
+        "Match cancelled — someone didn't accept. You're back in the queue.",
+      );
+    }
 
     const resultId = state.lastResult?.lobbyId ?? null;
     if (soundInitRef.current && soundOn) {
-      const lobbyFormed = status !== null && prevStatusRef.current === null && inLobby;
+      const lobbyFormed = status !== null && prevStatus === null && inLobby;
+      // The vote opening is its own alert: a player may have accepted early
+      // and tabbed away during the 45s check (exactly what ACCEPT_SECONDS
+      // anticipates), so the READY_CHECK→CAPTAIN_VOTE flip must re-ring.
+      const voteOpened =
+        status === "CAPTAIN_VOTE" && prevStatus === "READY_CHECK" && inLobby;
       const myTurn = isOnClock && !prevOnClockRef.current;
       const teamsReady =
-        status === "READY" && prevStatusRef.current !== "READY" && inLobby;
+        status === "READY" && prevStatus !== "READY" && inLobby;
       // Keyed off lastResult, NOT the lobby vanishing — an admin cancel also
       // drops the lobby and must not ring a victory bell.
       const gameEnded = !!resultId && prevResultIdRef.current !== resultId;
-      if (lobbyFormed || myTurn || teamsReady || gameEnded) playChime();
+      if (lobbyFormed || voteOpened || myTurn || teamsReady || gameEnded) {
+        playChime();
+      }
     }
     prevStatusRef.current = status;
+    prevInReadyCheckRef.current = inLobby && status === "READY_CHECK";
     prevOnClockRef.current = isOnClock;
     prevResultIdRef.current = resultId;
     soundInitRef.current = true;
@@ -164,11 +194,13 @@ export function InhouseRoom({
     const status = state?.lobby?.status ?? null;
     const flag = state?.me.isOnClock
       ? "(!) Your pick"
-      : state?.me.inLobby && status === "CAPTAIN_VOTE"
-        ? "(!) Lobby up — vote"
-        : state?.me.inLobby && status === "READY"
-          ? "(!) Teams locked"
-          : null;
+      : state?.me.inLobby && status === "READY_CHECK" && !state.me.hasAccepted
+        ? "(!) Accept your match"
+        : state?.me.inLobby && status === "CAPTAIN_VOTE"
+          ? "(!) Lobby up — vote"
+          : state?.me.inLobby && status === "READY"
+            ? "(!) Teams locked"
+            : null;
     document.title = flag ? `${flag} · ${original}` : original;
     return () => {
       document.title = original;
@@ -314,6 +346,8 @@ export function InhouseRoom({
 
       {!lobby ? (
         <QueueView state={state} pending={pending} mmr={mmr} setMmr={setMmr} mmrHint={mmrHint} act={act} />
+      ) : lobby.status === "READY_CHECK" ? (
+        <ReadyCheckView lobby={lobby} me={me} offset={offset} pending={pending} act={act} />
       ) : lobby.status === "CAPTAIN_VOTE" ? (
         <VoteView lobby={lobby} me={me} offset={offset} pending={pending} act={act} />
       ) : lobby.status === "DRAFTING" ? (
@@ -408,8 +442,8 @@ function QueueView({
           </div>
           <div className="mt-1 text-sm text-muted">
             {needed > 0
-              ? `${needed} more ${needed === 1 ? "player" : "players"} to fire up a draft`
-              : "Lobby full — forming the draft…"}
+              ? `${needed} more ${needed === 1 ? "player" : "players"} to fire up a game`
+              : "Lobby full — starting the ready check…"}
             {queueAvg > 0 ? (
               <span className="tabular-nums"> · avg {queueAvg} MMR</span>
             ) : null}
@@ -555,9 +589,9 @@ function QueueView({
       </div>
 
       <p className="text-center text-xs text-muted">
-        How it works: {lobbySize} players queue → vote how captains are chosen
-        (elect them, highest MMR, or best record) → captains draft{" "}
-        <span className="text-success">Radiant</span> &{" "}
+        How it works: {lobbySize} players queue → everyone accepts the match →
+        vote how captains are chosen (elect them, highest MMR, or best record)
+        → captains draft <span className="text-success">Radiant</span> &{" "}
         <span className="text-danger">Dire</span> back and forth → anyone hosts
         a private lobby in Dota 2 and the result records itself.
       </p>
@@ -569,6 +603,161 @@ function QueueView({
 
 type VoteLobby = NonNullable<InhouseState["lobby"]>;
 type Candidate = NonNullable<VoteLobby["vote"]>["candidates"][number];
+
+// ---------- Ready check ----------
+
+function ReadyCheckView({
+  lobby,
+  me,
+  offset,
+  pending,
+  act,
+}: {
+  lobby: VoteLobby;
+  me: InhouseState["me"];
+  offset: number;
+  pending: boolean;
+  act: (body: Record<string, unknown>) => void;
+}) {
+  const check = lobby.readyCheck;
+  // The accept clock must stay visible if the player scrolls — same
+  // compact-bar treatment as the vote and pick clocks.
+  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
+  if (!check) return null;
+
+  const waitingOn = check.total - check.acceptedCount;
+
+  return (
+    <div className="space-y-5">
+      {/* Compact fixed bar while the accept clock is scrolled away. top-20
+          matches the 80px header (see useBannerOffscreen). */}
+      {offscreen ? (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to the match accept"
+          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
+        >
+          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
+            <span className="flex min-w-0 items-center gap-2">
+              <span aria-hidden>🎮</span>
+              <span className="truncate font-medium">Match found</span>
+              <span className="shrink-0 text-xs text-muted tabular-nums">
+                {check.acceptedCount}/{check.total} accepted
+              </span>
+            </span>
+            <SecondsClock
+              endsAtMs={lobby.acceptEndsAt}
+              offsetMs={offset}
+              urgentAt={10}
+              label={(s) => `${s} seconds left to accept`}
+            />
+          </div>
+        </button>
+      ) : null}
+
+      <div
+        ref={bannerRef}
+        className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-4"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">
+              {me.canAccept
+                ? "🎮 Match found — accept to play!"
+                : "🎮 A match is filling up"}
+            </div>
+            <div className="text-xs text-muted">
+              {check.acceptedCount}/{check.total} accepted
+              {waitingOn > 0
+                ? ` · waiting on ${waitingOn} ${waitingOn === 1 ? "player" : "players"}`
+                : ""}
+              {me.canAccept
+                ? " · accept before the timer or you'll lose your spot"
+                : " · you're next in line — this match has to fill first"}
+            </div>
+          </div>
+          <SecondsClock
+            endsAtMs={lobby.acceptEndsAt}
+            offsetMs={offset}
+            urgentAt={10}
+            label={(s) => `${s} seconds left to accept`}
+          />
+        </div>
+
+        {me.canAccept ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            {me.hasAccepted ? (
+              <span className="inline-flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-4 py-2.5 text-sm font-semibold text-success">
+                <span aria-hidden>✓</span> Accepted — waiting for the others
+              </span>
+            ) : (
+              <button
+                disabled={pending}
+                onClick={() => act({ action: "accept" })}
+                className={cn(buttonClasses("accent", "lg"), "px-10 font-bold")}
+              >
+                ACCEPT MATCH
+              </button>
+            )}
+            {!me.hasAccepted ? (
+              <button
+                disabled={pending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Decline this match? The lobby is scrapped and you leave the queue. Everyone who accepted keeps their spot at the front of the queue.",
+                    )
+                  ) {
+                    act({ action: "decline" });
+                  }
+                }}
+                className="rounded text-xs text-muted hover:text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
+              >
+                Decline
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {/* Who's in — pending players sort first (they're the holdup). */}
+      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {check.players.map((p) => (
+          <li
+            key={p.userId}
+            className={cn(
+              "flex items-center gap-3 rounded-lg border px-3 py-2",
+              p.accepted
+                ? "border-success/40 bg-success/5"
+                : "border-line bg-surface-2/40",
+            )}
+          >
+            <Avatar name={p.name} src={p.avatar} size={28} />
+            <span className="min-w-0 flex-1 truncate text-sm">{p.name}</span>
+            {p.accepted ? (
+              <span
+                role="img"
+                aria-label={`${p.name} accepted`}
+                className="text-sm text-success"
+              >
+                <span aria-hidden>✓</span>
+              </span>
+            ) : (
+              <span
+                role="img"
+                aria-label={`${p.name} hasn't accepted yet`}
+                className="animate-pulse text-sm text-muted"
+              >
+                <span aria-hidden>…</span>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function VoteView({
   lobby,

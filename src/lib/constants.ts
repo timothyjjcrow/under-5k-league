@@ -90,6 +90,7 @@ export const FANTASY = {
 // ---------- Inhouse (casual pick-up mode, separate from the league) ----------
 
 export const INHOUSE_STATUS = {
+  READY_CHECK: "READY_CHECK",
   CAPTAIN_VOTE: "CAPTAIN_VOTE",
   DRAFTING: "DRAFTING",
   READY: "READY",
@@ -101,6 +102,7 @@ export type InhouseStatus = (typeof INHOUSE_STATUS)[keyof typeof INHOUSE_STATUS]
 
 // A lobby is "active" (occupies the single live slot) until it ends.
 export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
+  INHOUSE_STATUS.READY_CHECK,
   INHOUSE_STATUS.CAPTAIN_VOTE,
   INHOUSE_STATUS.DRAFTING,
   INHOUSE_STATUS.READY,
@@ -129,7 +131,11 @@ export const CAPTAIN_METHOD = {
 export const INHOUSE = {
   TEAM_SIZE: 5,
   LOBBY_SIZE: 10, // players needed before a lobby forms
-  // Seconds players get to vote on how captains are chosen once a lobby fills.
+  // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
+  // Generous vs. the client's ~10s: web players may be in another tab — the
+  // chime + "(!)" tab title have to reach them first.
+  ACCEPT_SECONDS: 45,
+  // Seconds players get to vote on how captains are chosen once everyone accepts.
   VOTE_SECONDS: 25,
   // Seconds a captain has to pick before the draft auto-picks the top player.
   PICK_SECONDS: 60,

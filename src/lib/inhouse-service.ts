@@ -46,6 +46,8 @@ type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
 const pickDeadline = () => new Date(Date.now() + INHOUSE.PICK_SECONDS * 1000);
 const voteDeadline = () => new Date(Date.now() + INHOUSE.VOTE_SECONDS * 1000);
+const acceptDeadline = () =>
+  new Date(Date.now() + INHOUSE.ACCEPT_SECONDS * 1000);
 
 type WinLoss = { wins: number; losses: number; winRate: number; games: number };
 
@@ -88,8 +90,10 @@ async function loadRecords(
 /**
  * Form a lobby when enough players are waiting. Idempotent + safe to call on
  * every poll: no-ops unless the single active-lobby slot is free AND the queue
- * has reached LOBBY_SIZE. The lobby opens in the CAPTAIN_VOTE phase — players
- * vote on how captains are chosen before the draft starts (resolveCaptainVote).
+ * has reached LOBBY_SIZE. The lobby opens in the READY_CHECK phase — the
+ * Dota-style accept gate: all ten must press ACCEPT before the captain vote
+ * starts (acceptMatch / resolveReadyCheck), so an AFK player is dropped
+ * instead of drafted.
  */
 export async function maybeFormLobby(): Promise<boolean> {
   // Captured in-tx, sent post-commit (draft-sale pattern) — the active-lobby
@@ -124,8 +128,8 @@ export async function maybeFormLobby(): Promise<boolean> {
 
     const lobby = await tx.inhouseLobby.create({
       data: {
-        status: INHOUSE_STATUS.CAPTAIN_VOTE,
-        voteEndsAt: voteDeadline(),
+        status: INHOUSE_STATUS.READY_CHECK,
+        acceptEndsAt: acceptDeadline(),
         radiantTeam: 1,
       },
     });
@@ -180,6 +184,176 @@ export async function maybeFormLobby(): Promise<boolean> {
   }
   if (formed && announce) await sendDiscordMessage(announce);
   return formed;
+}
+
+/**
+ * Claim the READY_CHECK → CAPTAIN_VOTE flip (all ten accepted) and start the
+ * vote clock. updateMany-guarded: two concurrent resolvers flip it once.
+ */
+async function startCaptainVote(tx: Tx, lobbyId: string): Promise<boolean> {
+  const flip = await tx.inhouseLobby.updateMany({
+    where: { id: lobbyId, status: INHOUSE_STATUS.READY_CHECK },
+    data: {
+      status: INHOUSE_STATUS.CAPTAIN_VOTE,
+      acceptEndsAt: null,
+      voteEndsAt: voteDeadline(),
+    },
+  });
+  return flip.count > 0;
+}
+
+/**
+ * Fail the ready check: cancel the lobby and re-queue ONLY the players who
+ * deserve their spot back. Accepters proved they're present — they re-queue
+ * with a live heartbeat AND keep priority (their queue slot is anchored to the
+ * lobby's formation time, so it outranks anyone who joined during the check).
+ * `pendingBackdated` players (a decline aborted the check before their clock
+ * ran out) re-queue with a BACKDATED heartbeat — their own next poll
+ * re-confirms them within seconds if they're really there (the cancelLobby
+ * pattern). Everyone else (the decliner, or no-shows whose clock expired) is
+ * dropped and must rejoin.
+ *
+ * The requeue set is decided from a re-read of `acceptedAt` taken AFTER the
+ * CANCELLED claim wins — never from the caller's pre-claim snapshot. On
+ * Postgres read-committed an accept can commit between the caller's read and
+ * this claim (the claim locks only the lobby row, not the player rows); that
+ * player holds a committed accept + an ok response, so they MUST be treated as
+ * an accepter, not a dropped no-show.
+ */
+async function failReadyCheck(
+  tx: Tx,
+  lobbyId: string,
+  opts: { pendingBackdated: boolean; dropUserId?: string },
+): Promise<boolean> {
+  const claim = await tx.inhouseLobby.updateMany({
+    where: { id: lobbyId, status: INHOUSE_STATUS.READY_CHECK },
+    data: { status: INHOUSE_STATUS.CANCELLED, acceptEndsAt: null },
+  });
+  if (claim.count === 0) return false;
+  const lobby = await tx.inhouseLobby.findUniqueOrThrow({
+    where: { id: lobbyId },
+    select: {
+      createdAt: true,
+      players: { select: { userId: true, mmr: true, acceptedAt: true } },
+    },
+  });
+  const requeue = lobby.players.filter((p) => {
+    if (p.userId === opts.dropUserId) return false;
+    return p.acceptedAt != null || opts.pendingBackdated;
+  });
+  const now = Date.now();
+  for (const [i, p] of requeue.entries()) {
+    const lastSeenAt =
+      p.acceptedAt != null ? new Date() : requeueLastSeenAt(now);
+    // Anchor queue order to the lobby's formation instant (+ index) so
+    // re-queued players outrank anyone who joined the queue DURING the check —
+    // they were here first. Staggered by index for deterministic order.
+    const joinedAt = new Date(lobby.createdAt.getTime() + i);
+    await tx.inhouseQueueEntry.upsert({
+      where: { userId: p.userId },
+      create: { userId: p.userId, mmr: p.mmr, joinedAt, lastSeenAt },
+      update: { joinedAt, lastSeenAt },
+    });
+  }
+  return true;
+}
+
+/** Press ACCEPT on the ready check. Idempotent — a double-click is one accept. */
+export async function acceptMatch(viewer: SessionUser): Promise<ActionResult> {
+  return prisma.$transaction(async (tx) => {
+    const lobby = await tx.inhouseLobby.findFirst({
+      where: { status: INHOUSE_STATUS.READY_CHECK },
+      include: { players: true },
+    });
+    if (!lobby) return { ok: false as const, error: "No match to accept" };
+    const mine = lobby.players.find((p) => p.userId === viewer.id);
+    if (!mine) {
+      return { ok: false as const, error: "You're not in this lobby" };
+    }
+    // Claim the accept (null → now) AND re-assert the lobby is still in the
+    // ready check, atomically — on Postgres a concurrent decline/expiry could
+    // have CANCELLED it between the read above and here; without the relation
+    // filter this would stamp acceptedAt on a dead lobby and falsely report
+    // success. Zero rows = either already accepted (quiet success) or the
+    // lobby is gone (tell them).
+    const claimed = await tx.inhouseLobbyPlayer.updateMany({
+      where: {
+        id: mine.id,
+        acceptedAt: null,
+        lobby: { status: INHOUSE_STATUS.READY_CHECK },
+      },
+      data: { acceptedAt: new Date() },
+    });
+    if (claimed.count === 0) {
+      const stillOpen = await tx.inhouseLobby.count({
+        where: { id: lobby.id, status: INHOUSE_STATUS.READY_CHECK },
+      });
+      if (stillOpen === 0) {
+        return { ok: false as const, error: "The match was cancelled" };
+      }
+      // else: they'd already accepted — fall through as a quiet success.
+    }
+    const pending = await tx.inhouseLobbyPlayer.count({
+      where: { lobbyId: lobby.id, acceptedAt: null },
+    });
+    if (pending === 0) await startCaptainVote(tx, lobby.id);
+    return { ok: true as const };
+  });
+}
+
+/**
+ * Decline the ready check: the match fails NOW (no point running out the
+ * clock), the decliner is dropped from the queue, accepters re-queue with
+ * priority, and still-pending players re-queue with a backdated heartbeat —
+ * they did nothing wrong, but must re-confirm presence via their own poll.
+ */
+export async function declineMatch(viewer: SessionUser): Promise<ActionResult> {
+  return prisma.$transaction(async (tx) => {
+    const lobby = await tx.inhouseLobby.findFirst({
+      where: { status: INHOUSE_STATUS.READY_CHECK },
+      include: { players: true },
+    });
+    if (!lobby) return { ok: false as const, error: "No match to decline" };
+    if (!lobby.players.some((p) => p.userId === viewer.id)) {
+      return { ok: false as const, error: "You're not in this lobby" };
+    }
+    const failed = await failReadyCheck(tx, lobby.id, {
+      pendingBackdated: true,
+      dropUserId: viewer.id,
+    });
+    if (!failed) {
+      // Lost the claim: the check already resolved (everyone accepted, a
+      // faster decline, an expiry, or an admin cancel) — not necessarily
+      // "started".
+      return { ok: false as const, error: "The match is no longer waiting" };
+    }
+    return { ok: true as const };
+  });
+}
+
+/**
+ * Resolve an expired ready check: everyone accepted → captain vote (the last
+ * accept may race the clock — completeness wins); otherwise cancel and drop
+ * the no-shows, re-queuing only the players who accepted. Idempotent; safe on
+ * every poll.
+ */
+export async function resolveReadyCheck(): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const lobby = await tx.inhouseLobby.findFirst({
+      where: { status: INHOUSE_STATUS.READY_CHECK },
+      include: { players: true },
+    });
+    if (!lobby) return false;
+    const allAccepted =
+      lobby.players.length > 0 && lobby.players.every((p) => p.acceptedAt);
+    if (allAccepted) return startCaptainVote(tx, lobby.id);
+    const expired =
+      !!lobby.acceptEndsAt && lobby.acceptEndsAt.getTime() <= Date.now();
+    if (!expired) return false;
+    // Timed out with pending players: they ignored a 45s chime + tab flash —
+    // proven AFK, dropped. Accepters go back to the front of the queue.
+    return failReadyCheck(tx, lobby.id, { pendingBackdated: false });
+  });
 }
 
 /**
@@ -1063,11 +1237,23 @@ type VoteBlock = {
   voterCount: number;
 };
 
+type ReadyCheckBlock = {
+  acceptedCount: number;
+  total: number;
+  players: {
+    userId: string;
+    name: string;
+    avatar: string | null;
+    accepted: boolean;
+  }[];
+};
+
 /** Everything the inhouse room client needs, tailored to the viewing user. */
 export async function getInhouseState(viewer: SessionUser | null) {
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
   await maybeFormLobby();
+  await resolveReadyCheck();
   await resolveCaptainVote();
   await resolveStalledPick();
   await maybeAutoDetectResult();
@@ -1105,6 +1291,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
   let lobby: null | {
     id: string;
     status: string;
+    acceptEndsAt: number | null;
     voteEndsAt: number | null;
     pickTeam: number | null;
     pickEndsAt: number | null;
@@ -1121,6 +1308,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
     }[];
     pool: PlayerView[];
     vote: VoteBlock | null;
+    readyCheck: ReadyCheckBlock | null;
   } = null;
 
   if (lobbyRow) {
@@ -1176,9 +1364,35 @@ export async function getInhouseState(viewer: SessionUser | null) {
       };
     }
 
+    // The accept grid: who's in, who has pressed ACCEPT (sorted so pending
+    // players surface first — the ones everyone is waiting on).
+    let readyCheck: ReadyCheckBlock | null = null;
+    if (lobbyRow.status === INHOUSE_STATUS.READY_CHECK) {
+      const players = lobbyRow.players
+        .map((p) => ({
+          userId: p.userId,
+          name: p.user.name,
+          avatar: p.user.avatar,
+          accepted: p.acceptedAt != null,
+        }))
+        .sort(
+          (a, b) =>
+            Number(a.accepted) - Number(b.accepted) ||
+            a.name.localeCompare(b.name),
+        );
+      readyCheck = {
+        acceptedCount: players.filter((p) => p.accepted).length,
+        total: players.length,
+        players,
+      };
+    }
+
     lobby = {
       id: lobbyRow.id,
       status: lobbyRow.status,
+      acceptEndsAt: lobbyRow.acceptEndsAt
+        ? lobbyRow.acceptEndsAt.getTime()
+        : null,
       voteEndsAt: lobbyRow.voteEndsAt ? lobbyRow.voteEndsAt.getTime() : null,
       pickTeam: lobbyRow.pickTeam,
       pickEndsAt: lobbyRow.pickEndsAt ? lobbyRow.pickEndsAt.getTime() : null,
@@ -1195,6 +1409,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
         .sort((a, b) => b.mmr - a.mmr || a.createdAt.getTime() - b.createdAt.getTime())
         .map(toView),
       vote,
+      readyCheck,
     };
   }
 
@@ -1270,6 +1485,7 @@ export async function getInhouseState(viewer: SessionUser | null) {
     teamSize: INHOUSE.TEAM_SIZE,
     pickSeconds: INHOUSE.PICK_SECONDS,
     voteSeconds: INHOUSE.VOTE_SECONDS,
+    acceptSeconds: INHOUSE.ACCEPT_SECONDS,
     detectMinMinutes: INHOUSE.DETECT_MIN_MINUTES,
     lastResult,
     needed: playersNeeded(presentCount),
@@ -1296,6 +1512,9 @@ export async function getInhouseState(viewer: SessionUser | null) {
         myTeam === lobby.pickTeam,
       canVote: lobby?.status === INHOUSE_STATUS.CAPTAIN_VOTE && inLobby,
       myVote,
+      // Ready check: can this viewer accept, and have they already?
+      canAccept: lobby?.status === INHOUSE_STATUS.READY_CHECK && inLobby,
+      hasAccepted: myLobbyPlayer?.acceptedAt != null,
       canJoin: !!viewer && !inQueue && !inLobby,
       canStart:
         lobby?.status === INHOUSE_STATUS.READY &&

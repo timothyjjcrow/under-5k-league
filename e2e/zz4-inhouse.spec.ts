@@ -6,10 +6,11 @@ import {
   type Page,
 } from "@playwright/test";
 
-// The inhouse's full browser lifecycle: queue → captain vote → live draft →
-// ready → in progress — one real page (the "observer", who captains team 1)
-// plus nine API-driven players. Runs zz-last: it forms and cancels a lobby,
-// which must not race the earlier phase-sensitive league specs.
+// The inhouse's full browser lifecycle: queue → ready check (accept) →
+// captain vote → live draft → ready → in progress — one real page (the
+// "observer", who captains team 1) plus nine API-driven players. Runs
+// zz-last: it forms and cancels a lobby, which must not race the earlier
+// phase-sensitive league specs.
 //
 // The seeded demo queue entries are ALREADY AWAY (prisma/seed.ts backdates
 // their heartbeat), so the ten fresh players here form a clean lobby.
@@ -77,7 +78,7 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test("full lobby lifecycle: vote → draft → ready → in progress", async ({
+test("full lobby lifecycle: accept → vote → draft → ready → in progress", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -100,6 +101,20 @@ test("full lobby lifecycle: vote → draft → ready → in progress", async ({
   );
   await page.getByLabel("MMR").fill("6000");
   await page.getByRole("button", { name: /Join queue/ }).click();
+
+  // Ready check opens — the observer accepts through the real UI…
+  await expect(
+    page.getByText("Match found — accept to play!"),
+  ).toBeVisible();
+  await expect(page.getByRole("timer")).toBeVisible();
+  await page.getByRole("button", { name: "ACCEPT MATCH" }).click();
+  await expect(page.getByText(/Accepted — waiting/)).toBeVisible();
+
+  // …and the nine API accepts flip the lobby into the captain vote.
+  for (const ctx of players) {
+    const accepted = await act(ctx, { action: "accept" });
+    expect(accepted.ok).toBe(true);
+  }
 
   // Captain vote opens, clock ticking.
   await expect(page.getByText("How should captains be picked?")).toBeVisible();

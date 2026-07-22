@@ -61,7 +61,7 @@ const SECTIONS: Section[] = [
       {
         icon: "⚔️",
         title: "Inhouses",
-        desc: "Queue with nine players, vote how captains are chosen, draft, play. Results auto-detect from Dota and the Elo ladder updates itself.",
+        desc: "Queue with nine players, accept the match, vote how captains are chosen, draft, play. Results auto-detect from Dota and the Elo ladder updates itself.",
         href: "/inhouse",
       },
       {

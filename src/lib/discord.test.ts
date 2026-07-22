@@ -152,7 +152,8 @@ describe("inhouse messages", () => {
   it("announces a formed lobby with every name and the link", () => {
     const names = Array.from({ length: 10 }, (_, i) => `P${i}`);
     const msg = inhouseLobbyMessage(names);
-    expect(msg).toContain("Inhouse lobby is up");
+    expect(msg).toContain("Inhouse match found");
+    expect(msg).toContain("Accept your game");
     expect(msg).toContain("P0, P1");
     expect(msg).toContain("P9");
     expect(msg).toContain("/inhouse");

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import {
   AUTO_SYNC,
   INHOUSE,
+  INHOUSE_ACTIVE_STATUSES,
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -509,5 +510,45 @@ describe("result sync — inhouse (integration)", () => {
     expect(out.inhouse).toBe(false);
     expect(out.watch).toBe(true); // live lobby → fast client polling
     expect(mockRecent).not.toHaveBeenCalled();
+  });
+
+  it("resolves an EXPIRED ready check from any page view (frees the active slot)", async () => {
+    // Ten queued from Discord, none kept /inhouse open: the check formed and
+    // its clock ran out with nobody polling. runResultSync must resolve it —
+    // a READY_CHECK is in INHOUSE_ACTIVE_STATUSES, so a stuck one would block
+    // the next lobby forever and keep every parked dashboard fast-polling.
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.READY_CHECK,
+        radiantTeam: 1,
+        acceptEndsAt: new Date(Date.now() - 1000), // already expired
+      },
+    });
+    for (let i = 0; i < INHOUSE.LOBBY_SIZE; i++) {
+      const user = await makeUser(`RC${i}`);
+      await prisma.inhouseLobbyPlayer.create({
+        data: {
+          lobbyId: lobby.id,
+          userId: user.id,
+          mmr: 3000,
+          // Half accepted, half no-show — so it must FAIL, not advance.
+          acceptedAt: i < 5 ? new Date() : null,
+        },
+      });
+    }
+
+    await runResultSync();
+
+    const resolved = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(resolved.status).toBe(INHOUSE_STATUS.CANCELLED);
+    // The active slot is free again and the five accepters are re-queued.
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(5);
   });
 });
