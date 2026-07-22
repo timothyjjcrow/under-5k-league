@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   INHOUSE_ELO,
+  PROVISIONAL_GAMES,
+  rankInhouse,
   summarizeInhouse,
   type FinishedLobby,
+  type InhouseRecord,
 } from "./inhouse-stats";
 
 function lobby(
@@ -156,5 +159,42 @@ describe("summarizeInhouse", () => {
     const c = recs.find((r) => r.userId === "c")!;
     expect(c.games).toBe(1);
     expect(c.rating).toBe(INHOUSE_ELO.START);
+  });
+});
+
+describe("rankInhouse", () => {
+  const rec = (userId: string, games: number, rating: number): InhouseRecord => ({
+    userId,
+    name: userId,
+    avatar: null,
+    games,
+    wins: games,
+    losses: 0,
+    winRate: 1,
+    streak: games,
+    rating,
+    peak: rating,
+    form: [],
+    lastChange: 0,
+  });
+
+  it("keeps provisional accounts off the ranked block, preserving order", () => {
+    // Ladder order: hot 1-game account first — but it must not outrank the
+    // established grinders.
+    const rows = [
+      rec("newbie", 1, 1016),
+      rec("grinder", PROVISIONAL_GAMES + 10, 1010),
+      rec("steady", PROVISIONAL_GAMES, 1005),
+      rec("fresh", PROVISIONAL_GAMES - 1, 1002),
+    ];
+    const { ranked, provisional } = rankInhouse(rows);
+    expect(ranked.map((r) => r.userId)).toEqual(["grinder", "steady"]);
+    expect(provisional.map((r) => r.userId)).toEqual(["newbie", "fresh"]);
+  });
+
+  it("handles an all-provisional (fresh league) ladder", () => {
+    const { ranked, provisional } = rankInhouse([rec("a", 1, 1016)]);
+    expect(ranked).toEqual([]);
+    expect(provisional).toHaveLength(1);
   });
 });

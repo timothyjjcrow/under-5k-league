@@ -288,6 +288,69 @@ A casual pick-up mode, **entirely separate from the league** (no `Season`
 coupling — touches only `User`). Mirrors the draft engine's architecture:
 server-authoritative, resolves lazily on poll (no cron/websocket).
 
+- **Every state transition is a guarded claim (2026-07 hardening — keep it
+  that way)**: `applyResult` is `updateMany({id, status: IN_PROGRESS})` (a
+  cancel racing the seconds-long OpenDota fetch must never be overwritten,
+  nor a CANCELLED lobby resurrected — the claim winner alone stamps
+  `eloDeltas`, bumps the cursor, and sends the Discord result); `cancelLobby`
+  re-claims inside its tx (loses to a landed result, skips the requeue);
+  `applyPick` claims the target row `{team: null}` (double-click = one turn)
+  and AUTO-ASSIGNS the final pool player (no dead-air last clock);
+  `resolveCaptainVote` claims the `CAPTAIN_VOTE → DRAFTING` flip before
+  installing captains; `maybeFormLobby` runs Serializable + catches P2034
+  (the one-active-lobby invariant has no DB constraint — this is what holds
+  it on Postgres); `joinQueue` wraps guard+upsert in one tx. The queue ping
+  throttle is the Setting create/P2002/conditional-update claim.
+- **`InhouseLobby.eloDeltas`** (JSON userId → Elo swing) is stamped once at
+  completion; the room's post-game banner reads it — never re-derive the
+  ladder on the poll path. **`InhouseLobbyPlayer.wins/losses/games`** are
+  record snapshots frozen at formation (safe: results can't land while the
+  lobby is active) — the vote/draft views and RECORD ordering read them, so
+  polls never scan history. `@@index([status])` on lobbies,
+  `@@index([userId])` on lobby players.
+- **Queue MMR trust chain**: latest `Registration.mmr` (league-trusted) >
+  clamped typed value > the player's last lobby snapshot (so the one-tap
+  "Run it back" join with a blank field doesn't reset anyone to unknown).
+  Client-claimed MMR alone never decides captaincy for registered players.
+- **recordMatch (paste path)**: rejects matches that started before the lobby
+  formed (same floor as auto-detect — yesterday's game can't replay as
+  today's result) but accepts `minPerSide 2` (vs the background scan's 3) —
+  the escape hatch when most players have public match data off. buildResult
+  refuses 0-duration games. Auto-scan cadence: pure `detectIntervalSeconds`
+  grows the `detectedAt` claim interval with game age (base 180s → cap 1800s)
+  so an abandoned IN_PROGRESS lobby scans at a trickle, not forever at rate.
+- **Discord result announcement**: `inhouseResultMessage` (score, duration,
+  MVP via the league's `gameMvp`, OpenDota link) fires from `applyResult`
+  post-claim — exactly once whichever path (button, paste, background scan)
+  lands the result.
+- **Surfaces added**: `/inhouse/history` (compact archive of every completed
+  game — date, score, winner, MVP, OpenDota link; linked from "All results →");
+  "Run it back →" on the victory/defeat banner (dismissal persists across
+  reloads via localStorage); a vote-phase compact fixed clock bar (same
+  `useBannerOffscreen`/`top-20` contract as the draft); queued players beyond
+  the ten slots render as an "In line for the next game" chip list (never
+  silently hidden); `/api/inhouse` has the same per-IP `rateLimit` speed bump
+  as `/api/sync`; the page streams results + ladder behind `Suspense` (room
+  paints immediately); an "Inhouse" career card on `/players/[id]`
+  (`InhouseCareerCard` — ladder line + last 3 games with hero/KDA, streamed).
+- **Provisional gating**: pure `rankInhouse` (`inhouse-stats.ts`, tested)
+  splits the ladder — medals and `#N` ranks belong to established accounts
+  (≥ PROVISIONAL_GAMES) only; provisionals list after, dimmed, `—`-ranked.
+  Both the /inhouse ladder and the profile card use it.
+- **`fetchRecentMatchIds` returns `null` on fetch failure** (429/5xx/timeout)
+  vs `[]` for a genuinely empty history — the detect button's error blames
+  OpenDota when it was unreachable and privacy settings only when it wasn't.
+  League caller (`autoDetectGamesForMatch`) treats null as empty.
+- **No ticket required — keep the copy honest**: inhouses are plain private
+  lobbies; results come from players' match histories. Never reintroduce
+  "league ticket" language on inhouse surfaces.
+- **Seeded demo queue entries are born AWAY** (backdated `lastSeenAt`) — they
+  dress the page but can never be pulled into a real first-night lobby.
+- **e2e**: `e2e/zz4-inhouse.spec.ts` (main suite, runs zz-last) drives the
+  real browser through queue join/leave (+ mobile no-overflow tripwire) and
+  the full lifecycle — vote → UI draft pick → ready → in-progress — with
+  nine API-driven players and zero-pageerror assertions.
+
 - **Models** (`schema.prisma`): `InhouseQueueEntry` (one global rolling queue,
   `userId` unique), `InhouseLobby` (the game + its state machine:
   `CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS → COMPLETED`/`CANCELLED`),

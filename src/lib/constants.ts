@@ -138,9 +138,12 @@ export const INHOUSE = {
   FIRST_PICK_TEAM: 2,
   // Auto result detection (OpenDota): don't scan until a game could plausibly be
   // over, and don't scan more than once per interval (there's only ever one
-  // active lobby, so this bounds API usage globally).
+  // active lobby, so this bounds API usage globally). The interval grows with
+  // the game's age — an abandoned IN_PROGRESS lobby nobody cancels must not
+  // scan every 3 minutes forever — up to the cap.
   DETECT_MIN_MINUTES: 8,
   DETECT_INTERVAL_SECONDS: 180,
+  DETECT_INTERVAL_MAX_SECONDS: 1800,
   // Queue presence: a spot is held by keeping /inhouse open — each state poll
   // refreshes the entry's lastSeenAt heartbeat, throttled to one write per
   // interval so ten 1.5s pollers don't produce a constant write stream.

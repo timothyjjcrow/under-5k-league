@@ -112,6 +112,24 @@ export function inhouseLobbyMessage(playerNames: string[]): string {
   return `🚨 **Inhouse lobby is up!** The captain vote is live — get to ${resolveSiteUrl()}/inhouse\n${playerNames.join(", ")}`;
 }
 
+export function inhouseResultMessage(m: {
+  winnerSide: "Radiant" | "Dire";
+  radiantScore: number;
+  direScore: number;
+  durationSecs: number;
+  /** Best line of the game (null when nobody in the box score is a member). */
+  mvpName: string | null;
+  mvpHero: string | null;
+  dotaMatchId: string;
+}): string {
+  const mins = Math.floor(m.durationSecs / 60);
+  const secs = String(m.durationSecs % 60).padStart(2, "0");
+  const mvp = m.mvpName
+    ? ` MVP: **${m.mvpName}**${m.mvpHero ? ` (${m.mvpHero})` : ""}.`
+    : "";
+  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: ${resolveSiteUrl()}/inhouse · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
+}
+
 export function playerOutMessage(m: {
   playerName: string;
   homeName: string;

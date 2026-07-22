@@ -8,6 +8,7 @@ import {
   freeAgentSignedMessage,
   inhouseLobbyMessage,
   inhouseQueueMessage,
+  inhouseResultMessage,
   matchResultMessage,
   playerReleasedMessage,
   playerSoldMessage,
@@ -155,6 +156,38 @@ describe("inhouse messages", () => {
     expect(msg).toContain("P0, P1");
     expect(msg).toContain("P9");
     expect(msg).toContain("/inhouse");
+  });
+
+  it("announces a result with score, duration, MVP, and both links", () => {
+    const msg = inhouseResultMessage({
+      winnerSide: "Dire",
+      radiantScore: 18,
+      direScore: 41,
+      durationSecs: 41 * 60 + 7,
+      mvpName: "Timo",
+      mvpHero: "Jakiro",
+      dotaMatchId: "8412345678",
+    });
+    expect(msg).toContain("Dire win 18–41");
+    expect(msg).toContain("41:07");
+    expect(msg).toContain("MVP: **Timo** (Jakiro)");
+    expect(msg).toContain("/inhouse");
+    expect(msg).toContain("opendota.com/matches/8412345678");
+  });
+
+  it("omits the MVP clause when nobody in the box score is a member", () => {
+    const msg = inhouseResultMessage({
+      winnerSide: "Radiant",
+      radiantScore: 30,
+      direScore: 5,
+      durationSecs: 600,
+      mvpName: null,
+      mvpHero: null,
+      dotaMatchId: "1",
+    });
+    expect(msg).not.toContain("MVP");
+    expect(msg).toContain("Radiant win 30–5");
+    expect(msg).toContain("10:00");
   });
 });
 

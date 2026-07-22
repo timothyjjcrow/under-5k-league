@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectIntervalSeconds,
   isDraftComplete,
   mmrBalance,
   nextPickTeam,
@@ -209,5 +210,32 @@ describe("queue presence (heartbeat math)", () => {
     );
     // …and is stale enough that the throttled heartbeat fires immediately.
     expect(now - seen).toBeGreaterThan(INHOUSE.QUEUE_HEARTBEAT_SECONDS * 1000);
+  });
+});
+
+describe("detectIntervalSeconds", () => {
+  const HOUR = 3_600_000;
+
+  it("holds the base interval through a normal game's length", () => {
+    expect(detectIntervalSeconds(0)).toBe(INHOUSE.DETECT_INTERVAL_SECONDS);
+    expect(detectIntervalSeconds(30 * 60_000)).toBe(
+      INHOUSE.DETECT_INTERVAL_SECONDS,
+    );
+    // 1h × 1/20 = 180s — exactly the base; growth starts past this.
+    expect(detectIntervalSeconds(HOUR)).toBe(INHOUSE.DETECT_INTERVAL_SECONDS);
+  });
+
+  it("stretches linearly for long-running games", () => {
+    expect(detectIntervalSeconds(2 * HOUR)).toBe(360);
+    expect(detectIntervalSeconds(4 * HOUR)).toBe(720);
+  });
+
+  it("caps so an abandoned lobby scans at a trickle, forever", () => {
+    expect(detectIntervalSeconds(24 * HOUR)).toBe(
+      INHOUSE.DETECT_INTERVAL_MAX_SECONDS,
+    );
+    expect(detectIntervalSeconds(400 * HOUR)).toBe(
+      INHOUSE.DETECT_INTERVAL_MAX_SECONDS,
+    );
   });
 });

@@ -63,13 +63,16 @@ export function InhouseRoom({
   const prevResultIdRef = useRef<string | null>(null);
   const originalTitleRef = useRef<string | null>(null);
   // Result banners the viewer closed — stays dismissed across the polls of
-  // the 10-minute lastResult window.
+  // the 10-minute lastResult window AND across reloads (localStorage), so a
+  // refresh doesn't resurrect a banner they already read.
   const [dismissedResults, setDismissedResults] = useState<Set<string>>(
     () => new Set(),
   );
 
   useEffect(() => {
     setSoundOn(localStorage.getItem("inhouseSound") !== "off");
+    const dismissed = localStorage.getItem("inhouseDismissedResult");
+    if (dismissed) setDismissedResults(new Set([dismissed]));
   }, []);
 
   const toggleSound = useCallback(() => {
@@ -170,7 +173,7 @@ export function InhouseRoom({
   }, [state]);
 
   const act = useCallback(
-    async (body: Record<string, unknown>) => {
+    async (body: Record<string, unknown>): Promise<boolean> => {
       unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
       try {
@@ -183,13 +186,16 @@ export function InhouseRoom({
         // Toast, not an inline banner — same reasoning as the draft room:
         // pick-race rejections land while the captain is scrolled into the
         // pool, where a top-of-room banner is invisible and went stale.
-        if (!res.ok) pushToast("error", data.error || "Action failed");
-        else {
-          apply(data);
-          setSelected(null);
+        if (!res.ok) {
+          pushToast("error", data.error || "Action failed");
+          return false;
         }
+        apply(data);
+        setSelected(null);
+        return true;
       } catch {
         pushToast("error", "Network error — that didn't go through");
+        return false;
       } finally {
         setPending(false);
       }
@@ -272,17 +278,34 @@ export function InhouseRoom({
               Box score ↓
             </a>
           </span>
-          <button
-            type="button"
-            onClick={() => {
-              const id = state.lastResult!.lobbyId;
-              setDismissedResults((s) => new Set(s).add(id));
-            }}
-            aria-label="Dismiss result banner"
-            className={buttonClasses("secondary", "sm", "shrink-0")}
-          >
-            Dismiss
-          </button>
+          <span className="flex shrink-0 items-center gap-2">
+            {me.canJoin ? (
+              // The retention moment: everyone's still here, the game just
+              // ended — one tap puts you back in line for the next one.
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => act({ action: "join", mmr })}
+                className={buttonClasses("accent", "sm")}
+              >
+                Run it back →
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                const id = state.lastResult!.lobbyId;
+                setDismissedResults((s) => new Set(s).add(id));
+                // The banner only ever shows the newest result, so one id is
+                // all the persistence a reload needs.
+                localStorage.setItem("inhouseDismissedResult", id);
+              }}
+              aria-label="Dismiss result banner"
+              className={buttonClasses("secondary", "sm")}
+            >
+              Dismiss
+            </button>
+          </span>
         </div>
       ) : null}
 
@@ -317,17 +340,20 @@ export function InhouseRoom({
         <div className="text-right">
           <button
             disabled={pending}
-            onClick={() => {
+            onClick={async () => {
               if (
                 window.confirm(
                   "Scrap the current inhouse lobby? Everyone goes back into the queue.",
                 )
               ) {
-                act({ action: "cancel" });
-                pushToast("success", "Lobby cancelled — players re-queued");
+                // Only claim success once the server agrees — the cancel can
+                // legitimately lose to a result landing mid-confirm.
+                if (await act({ action: "cancel" })) {
+                  pushToast("success", "Lobby cancelled — players re-queued");
+                }
               }
             }}
-            className="text-xs text-danger hover:underline"
+            className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
           >
             Admin: cancel this lobby
           </button>
@@ -406,15 +432,18 @@ function QueueView({
               </button>
             ) : (
               <div className="flex flex-wrap items-center justify-center gap-2">
-                <label className="text-sm text-muted">MMR</label>
+                <label htmlFor="inhouse-mmr" className="text-sm text-muted">
+                  MMR
+                </label>
                 <input
+                  id="inhouse-mmr"
                   type="number"
                   min={0}
                   max={12000}
                   value={mmr || ""}
                   placeholder="0"
                   onChange={(e) => setMmr(Number(e.target.value))}
-                  title="Used to rank players if the lobby votes to pick captains by MMR"
+                  title="Seeds captain selection and the balance meter. If you've registered for a season, your league signup MMR is used instead."
                   className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
                 />
                 <button
@@ -437,7 +466,7 @@ function QueueView({
         <div className="border-t border-line bg-surface/40 px-4 py-4">
           {/* All lobby slots — filled players + open placeholders, so the
               lobby visibly fills up as people queue. */}
-          <ul className="grid gap-2 sm:grid-cols-2">
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {Array.from({ length: lobbySize }).map((_, i) => {
               const q = queue[i];
               if (!q) {
@@ -489,6 +518,31 @@ function QueueView({
               );
             })}
           </ul>
+
+          {/* Players beyond the ten slots (queued while a lobby was live, or
+              an overflow crowd) — never silently hidden. */}
+          {queue.length > lobbySize ? (
+            <div className="mt-3 border-t border-line/60 pt-3">
+              <div className="mb-1.5 text-xs text-muted">
+                In line for the next game · {queue.length - lobbySize}
+              </div>
+              <ul className="flex flex-wrap gap-2">
+                {queue.slice(lobbySize).map((q) => (
+                  <li
+                    key={q.userId}
+                    className={cn(
+                      "flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 py-1 pl-1 pr-2.5 text-xs",
+                      q.away && "opacity-60",
+                    )}
+                  >
+                    <Avatar name={q.name} src={q.avatar} size={20} />
+                    <span className="max-w-[8rem] truncate">{q.name}</span>
+                    {q.away ? <span className="text-muted">away</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -496,8 +550,8 @@ function QueueView({
         How it works: {lobbySize} players queue → vote how captains are chosen
         (elect them, highest MMR, or best record) → captains draft{" "}
         <span className="text-success">Radiant</span> &{" "}
-        <span className="text-danger">Dire</span> back and forth → someone with
-        the league ticket hosts the game.
+        <span className="text-danger">Dire</span> back and forth → anyone hosts
+        a private lobby in Dota 2 and the result records itself.
       </p>
     </div>
   );
@@ -522,6 +576,9 @@ function VoteView({
   act: (body: Record<string, unknown>) => void;
 }) {
   const vote = lobby.vote;
+  // The 25s vote clock must stay visible while a player scrolls the nominate
+  // list — same compact-bar treatment as the draft's pick clock.
+  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
   if (!vote) return null;
 
   const myMethod = me.myVote?.method ?? null;
@@ -540,7 +597,37 @@ function VoteView({
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3">
+      {/* Compact fixed bar while the vote clock is scrolled away. top-20
+          matches the 80px header (see useBannerOffscreen). */}
+      {offscreen ? (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to the captain vote"
+          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
+        >
+          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
+            <span className="flex min-w-0 items-center gap-2">
+              <span aria-hidden>🗳️</span>
+              <span className="truncate font-medium">Captain vote</span>
+              <span className="shrink-0 text-xs text-muted tabular-nums">
+                {vote.votedCount}/{vote.voterCount} voted
+              </span>
+            </span>
+            <SecondsClock
+              endsAtMs={lobby.voteEndsAt}
+              offsetMs={offset}
+              urgentAt={5}
+              label={(s) => `${s} seconds left to vote`}
+            />
+          </div>
+        </button>
+      ) : null}
+
+      <div
+        ref={bannerRef}
+        className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3"
+      >
         <div>
           <div className="text-sm font-semibold">
             🗳️ How should captains be picked?
@@ -557,14 +644,19 @@ function VoteView({
         />
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <MethodCard
           label="Elect captains"
           hint="Vote for the players you want"
           tally={vote.methodTallies.VOTE}
           total={vote.voterCount}
           selected={myMethod === "VOTE"}
-          disabled
+          disabled={!me.canVote}
+          onClick={() =>
+            // Electing means naming a player — point at the list instead of
+            // silently ignoring the tap.
+            pushToast("info", "Tap a player below to nominate them as captain")
+          }
           preview={hasNominations ? byVotes.slice(0, 2) : []}
           previewEmpty="Tap players below to nominate"
         />
@@ -598,7 +690,7 @@ function VoteView({
             {me.canVote ? "tap a player to vote for them" : "spectating"}
           </span>
         </div>
-        <div className="grid gap-1.5 p-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-1.5 p-3 sm:grid-cols-2">
           {vote.candidates.map((c) => {
             const picked = myNominee === c.userId && myMethod === "VOTE";
             return (
@@ -606,6 +698,7 @@ function VoteView({
                 key={c.userId}
                 disabled={!me.canVote || pending}
                 aria-pressed={picked}
+                aria-label={`Vote for ${c.name} as captain`}
                 onClick={() => act({ action: "vote", method: "VOTE", nomineeId: c.userId })}
                 className={cn(
                   "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",
@@ -853,6 +946,7 @@ function DraftView({
                   key={p.userId}
                   disabled={!pickable}
                   aria-pressed={isSel}
+                  aria-label={`Select ${p.name} to draft`}
                   onClick={() => setSelected(isSel ? null : p.userId)}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",
@@ -1021,13 +1115,25 @@ function ReadyView({
         <div className="text-2xl">🎮</div>
         <div className="mt-1 text-lg font-semibold">Teams are set!</div>
         <p className="mx-auto mt-1 max-w-md text-sm text-muted">
-          Whoever has the league ticket hosts a private lobby in Dota 2, invites
-          both teams, then hits start below once everyone&apos;s in.
+          Anyone can host: create a private lobby in Dota 2, invite both
+          teams, then hit start below once everyone&apos;s in. No ticket or
+          league id needed — the result is found from players&apos; match
+          histories.
         </p>
         {me.canStart ? (
           <button
             disabled={pending}
-            onClick={() => act({ action: "start" })}
+            onClick={() => {
+              // One unconfirmed tap from any of the ten would start the clock
+              // for everyone — make it deliberate.
+              if (
+                window.confirm(
+                  "Start the game for all ten players? Do this once the in-client lobby is up and everyone's in.",
+                )
+              ) {
+                act({ action: "start" });
+              }
+            }}
             className={buttonClasses("accent", "lg", "mt-4")}
           >
             Start the game →
@@ -1164,8 +1270,11 @@ function InProgressView({
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2 border-t border-info/20 pt-3">
-              <span className="text-xs text-muted">or paste the match ID:</span>
+              <label htmlFor="inhouse-match-id" className="text-xs text-muted">
+                or paste the match ID:
+              </label>
               <input
+                id="inhouse-match-id"
                 value={matchId}
                 onChange={(e) => setMatchId(e.target.value)}
                 placeholder="e.g. 7891234567"
@@ -1202,7 +1311,7 @@ function MatchupGrid({
   lobby: NonNullable<InhouseState["lobby"]>;
 }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       {lobby.teams.map((t) => {
         const meta = sideMeta(t.isRadiant);
         const roster = t.captain ? [t.captain, ...t.players] : t.players;

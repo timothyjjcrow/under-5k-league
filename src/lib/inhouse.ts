@@ -169,6 +169,21 @@ export function requeueLastSeenAt(nowMs: number): Date {
   );
 }
 
+/**
+ * Seconds between automatic OpenDota result scans for a game that started
+ * `elapsedMs` ago: the base interval while the game is normal-length, growing
+ * linearly (1/20 of the game's age) once it runs long, capped. An abandoned
+ * IN_PROGRESS lobby decays toward one scan per cap interval instead of
+ * scanning at full rate forever.
+ */
+export function detectIntervalSeconds(elapsedMs: number): number {
+  const grown = Math.floor(elapsedMs / 20 / 1000);
+  return Math.min(
+    Math.max(INHOUSE.DETECT_INTERVAL_SECONDS, grown),
+    INHOUSE.DETECT_INTERVAL_MAX_SECONDS,
+  );
+}
+
 export type MmrBalance = {
   avg1: number;
   avg2: number;

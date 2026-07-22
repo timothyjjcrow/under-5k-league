@@ -403,11 +403,18 @@ model InhouseLobby {
   radiantScore Int? // Radiant kills (box-score header)
   direScore    Int? // Dire kills
   boxScore     String    @default("[]") // JSON per-player breakdown (hero, KDA…)
+  // JSON userId → Elo change, stamped once when the result lands — the room's
+  // post-game banner reads this instead of re-deriving the ladder per poll.
+  eloDeltas    String    @default("{}")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   players   InhouseLobbyPlayer[]
   startedBy User?                @relation("InhouseStarter", fields: [startedById], references: [id])
+
+  // Nearly every service query filters on status (single active lobby,
+  // completed-history scans).
+  @@index([status])
 }
 
 model InhouseLobbyPlayer {
@@ -420,10 +427,18 @@ model InhouseLobbyPlayer {
   mmr            Int      @default(0)
   votedMethod    String? // CAPTAIN_VOTE ballot: MMR | RECORD | VOTE
   votedNomineeId String? // player they nominated as captain (when votedMethod = VOTE)
+  // Inhouse record snapshot, frozen at lobby formation (no results can land
+  // while this lobby is the active one) — feeds the vote's RECORD ordering and
+  // the vote/draft UI without a full-history scan on every poll.
+  wins           Int      @default(0)
+  losses         Int      @default(0)
+  games          Int      @default(0)
   createdAt      DateTime @default(now())
 
   lobby InhouseLobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
   user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([lobbyId, userId])
+  // The "is this user in a live lobby" guard filters by userId first.
+  @@index([userId])
 }

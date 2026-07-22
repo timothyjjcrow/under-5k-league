@@ -138,3 +138,22 @@ export function summarizeInhouse(lobbies: FinishedLobby[]): InhouseRecord[] {
         b.games - a.games,
     );
 }
+
+export type RankedInhouse = {
+  /** Established players (>= PROVISIONAL_GAMES), ladder order — rank = index+1. */
+  ranked: InhouseRecord[];
+  /** Under the games floor: listed after the ranked block, never medalled. */
+  provisional: InhouseRecord[];
+};
+
+/**
+ * Split a summarizeInhouse ladder into ranked vs provisional players. The
+ * medals and "#N" ranks belong to established accounts only — a 1-game
+ * player at 1016 must not sit above a 30-game grinder.
+ */
+export function rankInhouse(rows: InhouseRecord[]): RankedInhouse {
+  return {
+    ranked: rows.filter((r) => r.games >= PROVISIONAL_GAMES),
+    provisional: rows.filter((r) => r.games < PROVISIONAL_GAMES),
+  };
+}

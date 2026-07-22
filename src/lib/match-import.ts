@@ -437,7 +437,7 @@ export async function autoDetectGamesForMatch(
   // Count how many of our players share each recent match id.
   const counts = new Map<number, number>();
   for (const acc of accounts) {
-    const ids = await fetchRecentMatchIds(acc, 20);
+    const ids = (await fetchRecentMatchIds(acc, 20)) ?? []; // null = unreachable
     for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
 

@@ -135,10 +135,19 @@ async function main() {
 
   console.log("Seeding an inhouse queue (6/10) for demo…");
   // Independent of the league — puts a partial queue on /inhouse out of the box.
+  // Heartbeats are seeded ALREADY-AWAY: the rows render (dimmed, "away" chip)
+  // so the page looks alive, but they can never be pulled into a REAL lobby —
+  // without this, four humans queueing within 90s of a fresh seed would form
+  // a lobby around six ghosts. (Also keeps the e2e's lobby formation clean.)
   let joined = Date.now() - 6 * 60_000;
   for (const p of playerSeeds.slice(0, 6)) {
     await prisma.inhouseQueueEntry.create({
-      data: { userId: p.id, mmr: p.mmr, joinedAt: new Date(joined) },
+      data: {
+        userId: p.id,
+        mmr: p.mmr,
+        joinedAt: new Date(joined),
+        lastSeenAt: new Date(Date.now() - 100_000),
+      },
     });
     joined += 60_000;
   }

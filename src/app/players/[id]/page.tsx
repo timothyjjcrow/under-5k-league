@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getAllGameLines } from "@/lib/cached-queries";
@@ -25,6 +26,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  CardSkeleton,
   EmptyState,
   FormStrip,
   HeroIcon,
@@ -37,6 +39,15 @@ import {
   Stat,
   TeamCrest,
 } from "@/components/ui";
+import { INHOUSE_STATUS } from "@/lib/constants";
+import {
+  PROVISIONAL_GAMES,
+  rankInhouse,
+  summarizeInhouse,
+} from "@/lib/inhouse-stats";
+import { parseInhouseBox } from "@/lib/inhouse-box";
+import { formatMatchTime } from "@/lib/match-time";
+import { LocalTime } from "@/components/local-time";
 import { resultFor, type FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
 import { careerReportCard, gradeFor, gradeTone, percentLabel } from "@/lib/benchmarks";
@@ -778,6 +789,11 @@ export default async function PlayerProfilePage({
         </Card>
       ) : null}
 
+      {/* Inhouse career — streamed; the ladder scan mustn't block the page. */}
+      <Suspense fallback={<CardSkeleton rows={3} />}>
+        <InhouseCareerCard userId={user.id} />
+      </Suspense>
+
       <Card>
         <CardHeader
           title="Match history"
@@ -887,5 +903,157 @@ function Detail({
       </span>
       <span className="flex flex-wrap items-center gap-2">{children}</span>
     </div>
+  );
+}
+
+// ---------- Inhouse career ----------
+
+// The player's ladder identity, surfaced where people actually look each
+// other up. Rank comes from the FULL ladder (Elo accumulates globally); the
+// recent-game rows come from a separate small query with box scores.
+async function InhouseCareerCard({ userId }: { userId: string }) {
+  const [ladderLobbies, recent] = await Promise.all([
+    prisma.inhouseLobby.findMany({
+      where: { status: INHOUSE_STATUS.COMPLETED },
+      select: {
+        id: true,
+        winnerTeam: true,
+        createdAt: true,
+        players: {
+          select: {
+            userId: true,
+            team: true,
+            user: { select: { name: true, avatar: true } },
+          },
+        },
+      },
+    }),
+    prisma.inhouseLobby.findMany({
+      where: {
+        status: INHOUSE_STATUS.COMPLETED,
+        players: { some: { userId } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 3,
+      select: {
+        id: true,
+        winnerTeam: true,
+        radiantTeam: true,
+        radiantScore: true,
+        direScore: true,
+        boxScore: true,
+        createdAt: true,
+        players: { select: { userId: true, team: true } },
+      },
+    }),
+  ]);
+  if (recent.length === 0) return null;
+
+  const ladder = summarizeInhouse(
+    ladderLobbies.map((l) => ({
+      id: l.id,
+      winnerTeam: l.winnerTeam,
+      createdAt: l.createdAt,
+      players: l.players.map((p) => ({
+        userId: p.userId,
+        name: p.user.name,
+        avatar: p.user.avatar,
+        team: p.team,
+      })),
+    })),
+  );
+  const me = ladder.find((r) => r.userId === userId);
+  if (!me) return null;
+  const { ranked } = rankInhouse(ladder);
+  const rank = ranked.findIndex((r) => r.userId === userId);
+
+  const games = recent.map((l) => {
+    const mine = l.players.find((p) => p.userId === userId);
+    const line = parseInhouseBox(l.boxScore).find((b) => b.userId === userId);
+    const won = mine?.team != null && mine.team === l.winnerTeam;
+    return { lobby: l, line, won };
+  });
+
+  return (
+    <Card>
+      <CardHeader
+        title="Inhouse"
+        subtitle="Pick-up ladder across every inhouse game"
+        action={
+          <Link href="/inhouse" className="text-sm text-info hover:underline">
+            Ladder →
+          </Link>
+        }
+      />
+      <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
+          <span className="tabular-nums">
+            <span className="font-semibold">{me.rating}</span>
+            <span className="text-muted"> Elo</span>
+            <span className="ml-1 text-xs text-muted">(peak {me.peak})</span>
+          </span>
+          <span className="text-muted tabular-nums">
+            {rank >= 0 ? `#${rank + 1} of ${ranked.length}` : "unranked"}
+          </span>
+          <span className="tabular-nums">
+            <span className="text-success">{me.wins}W</span>
+            <span className="text-muted">–</span>
+            <span className="text-danger">{me.losses}L</span>
+            <span className="ml-1 text-xs text-muted">
+              {Math.round(me.winRate * 100)}%
+            </span>
+          </span>
+          <FormStrip form={me.form} size={4} />
+          {me.games < PROVISIONAL_GAMES ? (
+            <Badge tone="neutral">provisional</Badge>
+          ) : null}
+        </div>
+
+        <div className="divide-y divide-line/60 border-t border-line/60">
+          {games.map(({ lobby, line, won }) => {
+            const hero = line ? heroById(line.heroId) : null;
+            return (
+              <Link
+                key={lobby.id}
+                href="/inhouse/history"
+                className="flex items-center gap-3 py-2 text-sm transition-colors hover:bg-surface-2/40"
+              >
+                <span className="w-24 shrink-0 text-xs text-muted">
+                  <LocalTime
+                    ts={lobby.createdAt.getTime()}
+                    variant="short"
+                    initial={formatMatchTime(lobby.createdAt, "short")}
+                  />
+                </span>
+                <Badge tone={won ? "success" : "danger"}>
+                  {won ? "Win" : "Loss"}
+                </Badge>
+                <span className="font-mono text-xs tabular-nums text-muted">
+                  {lobby.radiantScore ?? 0}–{lobby.direScore ?? 0}
+                </span>
+                <span className="flex min-w-0 flex-1 items-center justify-end gap-2">
+                  {hero ? (
+                    <>
+                      <HeroIcon hero={hero} size={24} />
+                      <span className="hidden truncate text-xs text-muted sm:inline">
+                        {hero.name}
+                      </span>
+                    </>
+                  ) : null}
+                  {line ? (
+                    <KDA
+                      kills={line.kills}
+                      deaths={line.deaths}
+                      assists={line.assists}
+                      className="shrink-0 text-xs"
+                    />
+                  ) : null}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      </CardBody>
+    </Card>
   );
 }

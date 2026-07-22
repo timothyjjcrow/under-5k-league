@@ -105,25 +105,30 @@ export async function fetchOpenDotaMatch(
   }
 }
 
-/** Recent match ids for a player (needs public match data enabled in Dota). */
+/**
+ * Recent match ids for a player (needs public match data enabled in Dota).
+ * `null` = OpenDota unreachable (non-2xx, rate limit, timeout) — NOT the same
+ * as an empty history; callers reasoning about "is this player private?" must
+ * not conflate the two (same rule as fetchRankTier's ok flag).
+ */
 export async function fetchRecentMatchIds(
   accountId: number,
   limit = 20,
-): Promise<number[]> {
+): Promise<number[] | null> {
   try {
     const res = await fetch(
       withKey(`${BASE}/players/${accountId}/recentMatches`),
       { cache: "no-store", signal: AbortSignal.timeout(8_000) },
     );
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = await res.json();
-    if (!Array.isArray(data)) return [];
+    if (!Array.isArray(data)) return null;
     return data
       .slice(0, limit)
       .map((m: { match_id?: number }) => m.match_id)
       .filter((x): x is number => typeof x === "number");
   } catch {
-    return [];
+    return null;
   }
 }
 

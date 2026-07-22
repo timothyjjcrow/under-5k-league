@@ -1,9 +1,15 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { INHOUSE_STATUS } from "@/lib/constants";
 import {
+  parseInhouseBox,
+  type InhouseBoxPlayer as BoxPlayer,
+} from "@/lib/inhouse-box";
+import {
   PROVISIONAL_GAMES,
+  rankInhouse,
   summarizeInhouse,
   type FinishedLobby,
 } from "@/lib/inhouse-stats";
@@ -19,6 +25,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  CardSkeleton,
   EmptyState,
   FormStrip,
   HeroIcon,
@@ -29,31 +36,11 @@ import {
 } from "@/components/ui";
 import { cn, formatNetWorth } from "@/lib/utils";
 
-// One per-player line of a stored inhouse box score (see inhouse-service).
-type BoxPlayer = {
-  userId: string | null;
-  name: string | null;
-  team: number | null;
-  isRadiant: boolean;
-  heroId: number;
-  kills: number;
-  deaths: number;
-  assists: number;
-  netWorth: number | null;
-  gpm: number | null;
-  lastHits: number | null;
+export const metadata = {
+  title: "Inhouse",
+  description:
+    "Pick-up Dota 2 games, drafted live: queue up, vote captains, draft teams, and play — results auto-record from OpenDota onto the Elo ladder.",
 };
-
-function parseBox(json: string): BoxPlayer[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? (v as BoxPlayer[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export const metadata = { title: "Inhouse" };
 
 export default async function InhousePage() {
   const user = await getSessionUser();
@@ -66,66 +53,6 @@ export default async function InhousePage() {
         select: { mmr: true },
       })
     : null;
-
-  // Two reads: the ladder needs EVERY completed lobby (Elo accumulates over
-  // full history — a window would drift), the result cards only a few recent
-  // ones with their heavy boxScore payloads.
-  const [ladderLobbies, completed] = await Promise.all([
-    prisma.inhouseLobby.findMany({
-      where: { status: INHOUSE_STATUS.COMPLETED },
-      select: {
-        id: true,
-        winnerTeam: true,
-        createdAt: true,
-        players: {
-          select: {
-            userId: true,
-            team: true,
-            user: { select: { name: true, avatar: true } },
-          },
-        },
-      },
-    }),
-    prisma.inhouseLobby.findMany({
-      where: { status: INHOUSE_STATUS.COMPLETED },
-      orderBy: { createdAt: "desc" },
-      take: 12,
-      include: { players: { include: { user: true } } },
-    }),
-  ]);
-
-  const finished: FinishedLobby[] = ladderLobbies.map((l) => ({
-    id: l.id,
-    winnerTeam: l.winnerTeam,
-    createdAt: l.createdAt,
-    players: l.players.map((p) => ({
-      userId: p.userId,
-      name: p.user.name,
-      avatar: p.user.avatar,
-      team: p.team,
-    })),
-  }));
-  const leaderboard = summarizeInhouse(finished);
-
-  // Recent games that have a fetched box score → rich result cards.
-  const results = completed
-    .map((l) => ({ lobby: l, players: parseBox(l.boxScore) }))
-    .filter((r) => r.players.length > 0)
-    .slice(0, 4);
-  const avatarIds = [
-    ...new Set(
-      results.flatMap((r) =>
-        r.players.map((p) => p.userId).filter((x): x is string => !!x),
-      ),
-    ),
-  ];
-  const avatarUsers = avatarIds.length
-    ? await prisma.user.findMany({
-        where: { id: { in: avatarIds } },
-        select: { id: true, avatar: true },
-      })
-    : [];
-  const avatarMap = new Map(avatarUsers.map((u) => [u.id, u.avatar]));
 
   return (
     <>
@@ -153,37 +80,132 @@ export default async function InhousePage() {
 
         <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} />
 
-      <OpenDotaGuide />
+        <OpenDotaGuide />
 
-      {results.length > 0 ? (
-        <div className="space-y-4">
-          <SectionTitle>Recent results</SectionTitle>
-          {results.map((r) => (
-            // Anchor target for the room's result banner ("Box score ↓");
-            // scroll-mt clears the sticky header.
-            <div key={r.lobby.id} id={`result-${r.lobby.id}`} className="scroll-mt-24">
-              <GameResultCard
-                lobby={r.lobby}
-                players={r.players}
-                avatarMap={avatarMap}
-              />
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <Card>
-        <CardHeader
-          title="Inhouse ladder"
-          subtitle="Personal Elo across completed inhouse games — everyone starts at 1000, wins against stronger lobbies pay more"
-        />
-        <CardBody className="p-0">
-          <YourStanding rows={leaderboard} meId={user?.id ?? null} />
-          <Leaderboard rows={leaderboard} meId={user?.id ?? null} />
-        </CardBody>
-      </Card>
+        {/* The room above paints immediately; the history-scanning sections
+            stream in behind it (CLAUDE.md in-page streaming convention). */}
+        <Suspense fallback={<CardSkeleton rows={5} />}>
+          <RecentResults />
+        </Suspense>
+        <Suspense fallback={<CardSkeleton rows={6} />}>
+          <LadderCard meId={user?.id ?? null} />
+        </Suspense>
       </div>
     </>
+  );
+}
+
+// Latest box-score cards + the link into the full archive.
+async function RecentResults() {
+  const completed = await prisma.inhouseLobby.findMany({
+    where: { status: INHOUSE_STATUS.COMPLETED },
+    orderBy: { createdAt: "desc" },
+    take: 12,
+    select: {
+      id: true,
+      winnerTeam: true,
+      radiantTeam: true,
+      dotaMatchId: true,
+      durationSecs: true,
+      radiantScore: true,
+      direScore: true,
+      boxScore: true,
+      createdAt: true,
+    },
+  });
+
+  // Recent games that have a fetched box score → rich result cards.
+  const results = completed
+    .map((l) => ({ lobby: l, players: parseInhouseBox(l.boxScore) }))
+    .filter((r) => r.players.length > 0)
+    .slice(0, 4);
+  if (results.length === 0) return null;
+
+  const avatarIds = [
+    ...new Set(
+      results.flatMap((r) =>
+        r.players.map((p) => p.userId).filter((x): x is string => !!x),
+      ),
+    ),
+  ];
+  const avatarUsers = avatarIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: avatarIds } },
+        select: { id: true, avatar: true },
+      })
+    : [];
+  const avatarMap = new Map(avatarUsers.map((u) => [u.id, u.avatar]));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <SectionTitle>Recent results</SectionTitle>
+        <Link
+          href="/inhouse/history"
+          className="text-sm text-info hover:underline"
+        >
+          All results →
+        </Link>
+      </div>
+      {results.map((r) => (
+        // Anchor target for the room's result banner ("Box score ↓");
+        // scroll-mt clears the sticky header.
+        <div key={r.lobby.id} id={`result-${r.lobby.id}`} className="scroll-mt-24">
+          <GameResultCard
+            lobby={r.lobby}
+            players={r.players}
+            avatarMap={avatarMap}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The full-history Elo ladder (no take window — Elo accumulates over ALL
+// games, per CLAUDE.md).
+async function LadderCard({ meId }: { meId: string | null }) {
+  const ladderLobbies = await prisma.inhouseLobby.findMany({
+    where: { status: INHOUSE_STATUS.COMPLETED },
+    select: {
+      id: true,
+      winnerTeam: true,
+      createdAt: true,
+      players: {
+        select: {
+          userId: true,
+          team: true,
+          user: { select: { name: true, avatar: true } },
+        },
+      },
+    },
+  });
+  const finished: FinishedLobby[] = ladderLobbies.map((l) => ({
+    id: l.id,
+    winnerTeam: l.winnerTeam,
+    createdAt: l.createdAt,
+    players: l.players.map((p) => ({
+      userId: p.userId,
+      name: p.user.name,
+      avatar: p.user.avatar,
+      team: p.team,
+    })),
+  }));
+  const leaderboard = summarizeInhouse(finished);
+
+  return (
+    // overflow-hidden on the CARD: the table scroller inside must not leak
+    // its width into the page scroll area (CLAUDE.md mobile rule).
+    <Card className="overflow-hidden">
+      <CardHeader
+        title="Inhouse ladder"
+        subtitle="Personal Elo across completed inhouse games — everyone starts at 1000, wins against stronger lobbies pay more"
+      />
+      <CardBody className="p-0">
+        <YourStanding rows={leaderboard} meId={meId} />
+        <Leaderboard rows={leaderboard} meId={meId} />
+      </CardBody>
+    </Card>
   );
 }
 
@@ -330,7 +352,7 @@ function GameResultCard({
           ) : null}
         </div>
       </div>
-      <CardBody className="grid gap-x-4 gap-y-4 md:grid-cols-2">
+      <CardBody className="grid grid-cols-1 gap-x-4 gap-y-4 md:grid-cols-2">
         <InhouseNetWorthBar radiantNet={radiantNet} direNet={direNet} />
         <SideBox
           label="Radiant"
@@ -536,14 +558,16 @@ function YourStanding({
   meId: string | null;
 }) {
   if (!meId) return null;
-  const idx = rows.findIndex((r) => r.userId === meId);
-  if (idx < 0) return null;
-  const me = rows[idx];
+  const me = rows.find((r) => r.userId === meId);
+  if (!me) return null;
+  // Rank only counts among established players — provisionals are unranked.
+  const { ranked } = rankInhouse(rows);
+  const idx = ranked.findIndex((r) => r.userId === meId);
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-line bg-accent/5 px-5 py-3 text-sm">
       <span className="font-semibold">Your standing</span>
       <span className="text-muted tabular-nums">
-        #{idx + 1} of {rows.length}
+        {idx >= 0 ? `#${idx + 1} of ${ranked.length}` : "unranked"}
       </span>
       <span className="tabular-nums">
         <span className="font-semibold">{me.rating}</span>
@@ -597,6 +621,10 @@ function Leaderboard({
       </div>
     );
   }
+  // Medals and ranks belong to established accounts; provisional players list
+  // after them, dimmed and unranked, until they've played enough to place.
+  const { ranked, provisional } = rankInhouse(rows);
+  const ordered = [...ranked, ...provisional];
   return (
     <div className="overflow-x-auto">
     <table className="w-full text-sm">
@@ -622,7 +650,7 @@ function Leaderboard({
         </tr>
       </thead>
       <tbody>
-        {rows.map((r, i) => (
+        {ordered.map((r, i) => (
           <tr
             key={r.userId}
             className={cn(
@@ -631,12 +659,21 @@ function Leaderboard({
             )}
           >
             <td className="px-5 py-2.5 text-muted tabular-nums">
-              {i < 3 ? (
-                <span role="img" aria-label={`Rank ${i + 1}`}>
-                  {["🥇", "🥈", "🥉"][i]}
-                </span>
+              {i < ranked.length ? (
+                i < 3 ? (
+                  <span role="img" aria-label={`Rank ${i + 1}`}>
+                    {["🥇", "🥈", "🥉"][i]}
+                  </span>
+                ) : (
+                  i + 1
+                )
               ) : (
-                i + 1
+                <span
+                  title={`Provisional — under ${PROVISIONAL_GAMES} games, not ranked yet`}
+                  aria-label="Unranked (provisional)"
+                >
+                  —
+                </span>
               )}
             </td>
             <td className="px-2 py-2.5">

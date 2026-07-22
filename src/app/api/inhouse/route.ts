@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import {
   autoDetectResult,
   cancelLobby,
@@ -18,6 +19,17 @@ export const dynamic = "force-dynamic";
 // mutations. Every response is the fresh, viewer-tailored state (or { error }),
 // so the client stays in sync without extra round-trips.
 export async function POST(req: NextRequest) {
+  // Unauthenticated polls run the lazy resolvers (which can reach OpenDota) —
+  // same per-IP speed bump as /api/sync. Generous: the room polls at 1.5s
+  // (~40/min per tab) and several players can share a NAT'd IP.
+  const ip = clientIp(req);
+  if (
+    !rateLimit(`inhouse:${ip}`, { limit: 300, windowMs: 60_000 }, Date.now())
+      .allowed
+  ) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
   const user = await getSessionUser();
   const body = await req.json().catch(() => ({}));
   const action = String(body.action ?? "state");

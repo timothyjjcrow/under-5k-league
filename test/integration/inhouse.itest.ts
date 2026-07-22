@@ -447,6 +447,19 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     mockRecent.mockResolvedValue([]); // nobody has public data / game not indexed
     const res = await autoDetectResult(players[0].session);
     expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/Expose Public Match Data/);
+  });
+
+  it("blames OpenDota, not privacy settings, when every fetch fails", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players } = await runToInProgress(admin);
+    mockRecent.mockResolvedValue(null); // unreachable: 429/5xx/timeout
+    const res = await autoDetectResult(players[0].session);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toMatch(/didn't respond/i);
+      expect(res.error).not.toMatch(/Expose Public Match Data/);
+    }
   });
 
   it("won't let a non-participant record the result", async () => {
@@ -692,5 +705,264 @@ describe("inhouse — queue presence", () => {
         where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
       }),
     ).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The status-guard races: a result landing and an admin cancel can genuinely
+// collide (the OpenDota fetch takes seconds, the confirm dialog takes longer)
+// — whichever transition claims the row first must win, permanently.
+
+describe("inhouse — result vs cancel race guards", () => {
+  async function primeResult(lobbyId: string, matchId: number) {
+    const { team1, team2 } = await teamAccounts(lobbyId);
+    const lobby = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobbyId },
+    });
+    mockRecent.mockResolvedValue([matchId]);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+  }
+
+  it("cancel loses once the result is in — the game keeps its result, nobody re-queues", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    await primeResult(lobby.id, 7000000010);
+    expect((await recordMatch(players[0].session, "7000000010")).ok).toBe(true);
+
+    // Sequentially the read already sees no active lobby; in the true race
+    // the in-tx claim refuses instead. Either way: cancel loses.
+    const res = await cancelLobby(admin);
+    expect(res.ok).toBe(false);
+
+    const kept = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(kept.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+  });
+
+  it("a fetched result can't resurrect a cancelled lobby as COMPLETED", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    await primeResult(lobby.id, 7000000011);
+
+    // The cancel lands first (mid-"fetch" from the racing recorder's view).
+    expect((await cancelLobby(admin)).ok).toBe(true);
+
+    // Backdate past the detect floor so the background scan would fire if it
+    // could; the guarded applyResult must refuse the terminal flip.
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000,
+        ),
+      },
+    });
+    expect(await maybeAutoDetectResult()).toBe(false);
+
+    const still = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(still.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(still.winnerTeam).toBeNull();
+  });
+
+  it("rejects a pasted match that started before this lobby formed", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    // Same ten players, right rosters — but yesterday's game.
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000012,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) - 3600,
+      }),
+    );
+    const res = await recordMatch(players[0].session, "7000000012");
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/before this lobby/i);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.IN_PROGRESS);
+  });
+
+  it("accepts a pasted match where only two players per side have public data", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+
+    // Anonymize all but two per side (private profiles report no account_id).
+    const od = fakeMatch({
+      matchId: 7000000013,
+      team1,
+      team2,
+      radiantWin: true,
+      startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+    });
+    const keep = new Set([...team1.slice(0, 2), ...team2.slice(0, 2)]);
+    for (const p of od.players as { account_id: number | null }[]) {
+      if (p.account_id != null && !keep.has(p.account_id)) p.account_id = null;
+    }
+    mockMatch.mockResolvedValue(od);
+
+    const res = await recordMatch(players[0].session, "7000000013");
+    expect(res.ok).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.COMPLETED);
+  });
+});
+
+describe("inhouse — Elo deltas + result announcement", () => {
+  it("stamps per-player Elo deltas at completion and serves them via lastResult", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000020,
+        team1,
+        team2,
+        radiantWin: true, // team 1 wins
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    expect((await recordMatch(players[0].session, "7000000020")).ok).toBe(true);
+
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: true },
+    });
+    const deltas = JSON.parse(done.eloDeltas) as { [id: string]: number };
+    expect(Object.keys(deltas)).toHaveLength(INHOUSE.LOBBY_SIZE);
+    for (const p of done.players) {
+      const d = deltas[p.userId];
+      expect(typeof d).toBe("number");
+      if (p.team === 1) expect(d).toBeGreaterThan(0);
+      else expect(d).toBeLessThan(0);
+    }
+
+    // The room's post-game banner reads the stamped delta, not a rescan.
+    const winner = done.players.find((p) => p.team === 1)!;
+    const winnerSession = players.find((p) => p.user.id === winner.userId)!.session;
+    const state = await getInhouseState(winnerSession);
+    expect(state.lastResult).not.toBeNull();
+    expect(state.lastResult!.myTeamWon).toBe(true);
+    expect(state.lastResult!.eloDelta).toBe(deltas[winner.userId]);
+  });
+
+  it("announces the result to Discord exactly once, with the score and MVP", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000021,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    expect((await recordMatch(players[0].session, "7000000021")).ok).toBe(true);
+    // A second record attempt loses the claim — no double announcement.
+    expect((await recordMatch(players[1].session, "7000000021")).ok).toBe(false);
+
+    const resultSends = mockSend.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes("Inhouse result"));
+    expect(resultSends).toHaveLength(1);
+    expect(resultSends[0]).toMatch(/Radiant win 30–20/);
+    expect(resultSends[0]).toMatch(/MVP:/);
+    expect(resultSends[0]).toContain("opendota.com/matches/7000000021");
+  });
+});
+
+describe("inhouse — draft QoL", () => {
+  it("auto-assigns the final pool player instead of running another clock", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+
+    // Make the 7 human picks; the 8th (last pool player) must self-assign.
+    for (let pick = 0; pick < 7; pick++) {
+      const lobby = await prisma.inhouseLobby.findFirstOrThrow({
+        where: { status: INHOUSE_STATUS.DRAFTING },
+        include: { players: true },
+      });
+      const pool = lobby.players
+        .filter((p) => p.team === null)
+        .sort((a, b) => b.mmr - a.mmr);
+      expect((await makePick(admin, pool[0].userId)).ok).toBe(true);
+    }
+
+    const ready = await lobbyByStatus(INHOUSE_STATUS.READY);
+    expect(ready.players.filter((p) => p.team === 1)).toHaveLength(5);
+    expect(ready.players.filter((p) => p.team === 2)).toHaveLength(5);
+    expect(ready.players.every((p) => p.team !== null)).toBe(true);
+  });
+});
+
+describe("inhouse — queue MMR trust", () => {
+  it("prefers the league registration MMR over the typed value", async () => {
+    const user = await makeUser("Registered");
+    const season = await prisma.season.create({
+      data: { name: "IH Trust", status: "REGULAR_SEASON", isActive: false },
+    });
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: user.id, mmr: 4321, status: "ACTIVE" },
+    });
+    // The client claims 12000 — the league-trusted number wins.
+    expect((await joinQueue(sessionFor(user), 12000)).ok).toBe(true);
+    const entry = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: user.id },
+    });
+    expect(entry.mmr).toBe(4321);
+  });
+
+  it("falls back to the clamped typed value for never-registered players", async () => {
+    const user = await makeUser("Unregistered");
+    expect((await joinQueue(sessionFor(user), 99999)).ok).toBe(true);
+    const entry = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: user.id },
+    });
+    expect(entry.mmr).toBe(12000); // clamped, not trusted verbatim
+  });
+
+  it("a blank re-join reuses the last lobby's MMR snapshot (Run it back)", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000030,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    expect((await recordMatch(players[0].session, "7000000030")).ok).toBe(true);
+
+    // players[3] queued at 4700 originally; the one-tap re-join sends mmr 0.
+    expect((await joinQueue(players[3].session, 0)).ok).toBe(true);
+    const entry = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: players[3].user.id },
+    });
+    expect(entry.mmr).toBe(4700);
   });
 });
