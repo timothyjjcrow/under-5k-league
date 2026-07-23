@@ -430,12 +430,24 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   Needs players' "Expose Public Match Data" on. The page renders the box score as
   a `GameResultCard` (hero icons via `heroById`/`HeroIcon`, names, KDA, winner).
 - **API**: one dispatch endpoint `POST /api/inhouse` (`{ action, ... }`; actions:
-  `state`/`join`/`leave`/`vote`/`pick`/`start`/`detect`/`record`/`cancel`),
-  always returns fresh viewer-tailored state. Polled by `src/components/inhouse-room.tsx`
-  (`"use client"`, one view per phase incl. `VoteView`; syncs the vote/pick clocks
-  via server `now` offset like `draft-room.tsx`; `router.refresh()` on lobby end
-  to update the server-rendered leaderboard + results). Page: `src/app/inhouse/page.tsx`.
+  `state`/`join`/`leave`/`accept`/`decline`/`vote`/`pick`/`start`/`detect`/
+  `record`/`cancel`), always returns fresh viewer-tailored state. Polled by
+  `src/components/inhouse-room.tsx` (`"use client"`, one view per phase incl.
+  `VoteView`; syncs the vote/pick clocks via server `now` offset like
+  `draft-room.tsx`; `router.refresh()` on lobby end to update the
+  server-rendered leaderboard + results). Page: `src/app/inhouse/page.tsx`.
   Nav link is always visible (season-independent).
+- **Adaptive poll loop** (not a fixed `setInterval`): a self-scheduling
+  `setTimeout` that polls FAST (`pollMs`, 1500) while the viewer is in a lobby
+  or the queue — where accepts/votes/picks are second-sensitive — and IDLE-slow
+  (`INHOUSE.POLL_IDLE_MS`, 10s) when just spectating (pure `inhousePollDelayMs`
+  in `inhouse.ts`, tested). Hidden tabs DON'T fetch (browsers throttle
+  background timers anyway; the sitewide `/api/sync` ping still advances lobbies
+  meanwhile) and re-sync the instant they're refocused (`visibilitychange`) —
+  the `<ResultSyncPing>` pattern. A successful `act()` nudges the loop
+  (`bumpPollRef`) so joining an idle page snaps to fast polling in ~250ms
+  instead of waiting out a stale idle timer. Anyone IN the queue polls fast, so
+  a filling queue / forming lobby stays responsive for the players who matter.
 - **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
   players so `/inhouse` isn't empty on a fresh DB (they prune ~3 min after
   seeding once someone polls /inhouse — expected, see queue presence).

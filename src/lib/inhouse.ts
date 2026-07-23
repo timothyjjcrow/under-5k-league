@@ -143,6 +143,24 @@ export function playersNeeded(
   return Math.max(0, lobbySize - queueSize);
 }
 
+/**
+ * How long the inhouse room should wait before its next state poll. Fast while
+ * the viewer has skin in the game — in a lobby (ready check / vote / draft /
+ * live) or waiting in the queue, where seconds decide accepts, votes and picks
+ * — and slow when just spectating a page that only changes lazily. Anyone IN
+ * the queue polls fast, so a filling queue and a forming lobby stay snappy for
+ * the players who matter; a pure spectator drops to the idle rate. (Hidden-tab
+ * pausing lives in the component — it needs the DOM visibility API.)
+ */
+export function inhousePollDelayMs(
+  hasLobby: boolean,
+  inQueue: boolean,
+  activeMs: number,
+  idleMs: number = INHOUSE.POLL_IDLE_MS,
+): number {
+  return hasLobby || inQueue ? activeMs : idleMs;
+}
+
 // ---- Queue presence (heartbeat math) ----------------------------------------
 // A queue spot is held by keeping /inhouse open: every state poll refreshes the
 // entry's lastSeenAt (see touchQueueHeartbeat in inhouse-service.ts). These pure

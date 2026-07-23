@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectIntervalSeconds,
+  inhousePollDelayMs,
   isDraftComplete,
   mmrBalance,
   nextPickTeam,
@@ -186,6 +187,33 @@ describe("playersNeeded", () => {
     expect(playersNeeded(7)).toBe(3);
     expect(playersNeeded(10)).toBe(0);
     expect(playersNeeded(12)).toBe(0);
+  });
+});
+
+describe("inhousePollDelayMs", () => {
+  const FAST = 1500;
+  const IDLE = 10000;
+
+  it("polls FAST while the viewer is in a lobby (any phase)", () => {
+    expect(inhousePollDelayMs(true, false, FAST, IDLE)).toBe(FAST);
+  });
+
+  it("polls FAST while the viewer is waiting in the queue", () => {
+    // The people the filling queue / forming lobby matter to are in it — they
+    // stay responsive; a spectator does not gate their game.
+    expect(inhousePollDelayMs(false, true, FAST, IDLE)).toBe(FAST);
+  });
+
+  it("polls IDLE-slow when just spectating (no lobby, not queued)", () => {
+    expect(inhousePollDelayMs(false, false, FAST, IDLE)).toBe(IDLE);
+  });
+
+  it("a lobby always wins even if somehow also flagged in-queue", () => {
+    expect(inhousePollDelayMs(true, true, FAST, IDLE)).toBe(FAST);
+  });
+
+  it("defaults the idle rate to the INHOUSE constant", () => {
+    expect(inhousePollDelayMs(false, false, FAST)).toBe(INHOUSE.POLL_IDLE_MS);
   });
 });
 

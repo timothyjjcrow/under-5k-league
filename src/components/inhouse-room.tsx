@@ -11,7 +11,8 @@ import {
   useSecondsLeft,
   useElapsedMs,
 } from "@/components/room-clock";
-import { mmrBalance } from "@/lib/inhouse";
+import { inhousePollDelayMs, mmrBalance } from "@/lib/inhouse";
+import { INHOUSE } from "@/lib/constants";
 import { playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
 
@@ -58,6 +59,10 @@ export function InhouseRoom({
   const [mmr, setMmr] = useState<number>(defaultMmr);
   const [soundOn, setSoundOn] = useState(true);
   const offsetRef = useRef(0); // serverNow - clientNow, to sync the clock
+  // Lets an action (join/accept/vote/pick) nudge the adaptive poll loop to
+  // re-evaluate its cadence NOW instead of waiting out a stale idle timer —
+  // so joining an idle page snaps to fast polling immediately.
+  const bumpPollRef = useRef<(() => void) | null>(null);
   const prevLobbyId = useRef<string | null>(null);
   // For the bell notification: remember what we saw last poll.
   const soundInitRef = useRef(false);
@@ -95,29 +100,78 @@ export function InhouseRoom({
     setState(s);
   }, []);
 
-  const poll = useCallback(async () => {
-    try {
-      const res = await fetch("/api/inhouse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "state" }),
-      });
-      if (res.ok) {
-        apply(await res.json());
-        pollOk();
-      } else {
-        pollFail();
-      }
-    } catch {
-      pollFail(); // transient blip; next poll retries
-    }
-  }, [apply, pollOk, pollFail]);
-
+  // Adaptive, visibility-aware poll loop (self-scheduling setTimeout, not a
+  // fixed setInterval): FAST while the viewer is in a lobby or the queue,
+  // IDLE-slow when just spectating, and PAUSED while the tab is hidden —
+  // re-syncing the instant it's refocused. Mirrors <ResultSyncPing>. Kills the
+  // ~40 req/min an idle open tab used to fire; the sitewide /api/sync ping
+  // still advances lobbies while nobody is fast-polling /inhouse.
   useEffect(() => {
-    poll();
-    const id = setInterval(poll, pollMs);
-    return () => clearInterval(id);
-  }, [poll, pollMs]);
+    let alive = true;
+    let inFlight = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = (ms: number) => {
+      if (!alive) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(tick, ms);
+    };
+
+    const tick = async () => {
+      // inFlight also guards a visibilitychange firing mid-request — the active
+      // call reschedules when it settles.
+      if (!alive || inFlight) return;
+      if (document.visibilityState === "hidden") {
+        // Don't fetch from a hidden tab (browsers throttle background timers to
+        // near-uselessness anyway); the visibility listener wakes us on focus.
+        schedule(INHOUSE.POLL_IDLE_MS);
+        return;
+      }
+      inFlight = true;
+      let next: InhouseState | null = null;
+      try {
+        const res = await fetch("/api/inhouse", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "state" }),
+        });
+        if (res.ok) {
+          next = (await res.json()) as InhouseState;
+          apply(next);
+          pollOk();
+        } else {
+          pollFail();
+        }
+      } catch {
+        pollFail(); // transient blip; next poll retries
+      } finally {
+        inFlight = false;
+      }
+      // A failed poll keeps the FAST cadence (retry quickly, don't slow a live
+      // draft over one blip — sustained failures flip `disconnected` instead).
+      const delay = next
+        ? inhousePollDelayMs(!!next.lobby, next.me.inQueue, pollMs)
+        : pollMs;
+      schedule(delay);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    // An action that changes the viewer's state (join/accept/vote/pick) calls
+    // this to poll again almost immediately, so the cadence re-locks to fast
+    // right after joining instead of finishing a pending idle wait.
+    bumpPollRef.current = () => schedule(250);
+    tick();
+
+    return () => {
+      alive = false;
+      bumpPollRef.current = null;
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (timer) clearTimeout(timer);
+    };
+  }, [apply, pollOk, pollFail, pollMs]);
 
   // The vote/pick countdowns and the elapsed timer tick inside their own leaf
   // components (see <SecondsClock>/<ElapsedClock>), so the per-second update
@@ -227,6 +281,9 @@ export function InhouseRoom({
         }
         apply(data);
         setSelected(null);
+        // Re-lock the poll cadence now — joining an idle page must not keep
+        // idle-polling until a stale 10s timer expires.
+        bumpPollRef.current?.();
         return true;
       } catch {
         pushToast("error", "Network error — that didn't go through");

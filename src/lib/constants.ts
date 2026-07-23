@@ -131,6 +131,14 @@ export const CAPTAIN_METHOD = {
 export const INHOUSE = {
   TEAM_SIZE: 5,
   LOBBY_SIZE: 10, // players needed before a lobby forms
+  // Inhouse room client poll cadence (ms). The room polls fast while the
+  // viewer has skin in the game — in a lobby (ready check / vote / draft /
+  // live) or waiting in the queue, where seconds matter — and idle-slow when
+  // just spectating a page that updates lazily. Hidden tabs pause entirely and
+  // re-sync on refocus (browsers throttle background timers anyway, and the
+  // sitewide /api/sync ping keeps lobbies advancing meanwhile). The fast rate
+  // is the room's `pollMs` prop (default 1500).
+  POLL_IDLE_MS: 10000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
   // Generous vs. the client's ~10s: web players may be in another tab — the
   // chime + "(!)" tab title have to reach them first.
