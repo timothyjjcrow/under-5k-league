@@ -134,11 +134,17 @@ export const INHOUSE = {
   // Inhouse room client poll cadence (ms). The room polls fast while the
   // viewer has skin in the game — in a lobby (ready check / vote / draft /
   // live) or waiting in the queue, where seconds matter — and idle-slow when
-  // just spectating a page that updates lazily. Hidden tabs pause entirely and
-  // re-sync on refocus (browsers throttle background timers anyway, and the
-  // sitewide /api/sync ping keeps lobbies advancing meanwhile). The fast rate
-  // is the room's `pollMs` prop (default 1500).
+  // just spectating a page that updates lazily. The fast rate is the room's
+  // `pollMs` prop (default 1500).
   POLL_IDLE_MS: 10000,
+  // Hidden-tab keepalive (ms). A hidden tab with NO stake (not queued, not in a
+  // lobby) doesn't fetch at all — the sitewide /api/sync ping keeps lobbies
+  // advancing, and it re-syncs on refocus. But a hidden tab that's IN THE QUEUE
+  // (or a lobby) keeps a slow keepalive so its presence heartbeat holds the
+  // spot and a forming ready check's chime/title still reaches it. 45s keeps
+  // lastSeenAt inside QUEUE_AWAY_SECONDS (90) even after Chrome clamps hidden
+  // timers toward once a minute — which is exactly why that window is generous.
+  POLL_KEEPALIVE_MS: 45000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
   // Generous vs. the client's ~10s: web players may be in another tab — the
   // chime + "(!)" tab title have to reach them first.

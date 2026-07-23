@@ -441,10 +441,16 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `setTimeout` that polls FAST (`pollMs`, 1500) while the viewer is in a lobby
   or the queue — where accepts/votes/picks are second-sensitive — and IDLE-slow
   (`INHOUSE.POLL_IDLE_MS`, 10s) when just spectating (pure `inhousePollDelayMs`
-  in `inhouse.ts`, tested). Hidden tabs DON'T fetch (browsers throttle
-  background timers anyway; the sitewide `/api/sync` ping still advances lobbies
-  meanwhile) and re-sync the instant they're refocused (`visibilitychange`) —
-  the `<ResultSyncPing>` pattern. A successful `act()` nudges the loop
+  in `inhouse.ts`, tested). Hidden-tab handling splits on stake: a hidden tab
+  with NO stake fully pauses (no fetch — browsers throttle background timers
+  anyway; the sitewide `/api/sync` ping still advances lobbies), while a hidden
+  tab that's QUEUED or in a lobby keeps a slow keepalive (`POLL_KEEPALIVE_MS`,
+  45s — under `QUEUE_AWAY_SECONDS` 90 even after Chrome clamps hidden timers)
+  so its presence heartbeat holds the spot and a forming ready check's
+  chime/title still reaches it (`hasStakeRef`, kept current by an effect). The
+  reschedule re-checks visibility so a mid-fetch refocus snaps back to the
+  active rate; `visibilitychange → visible` re-syncs immediately (the
+  `<ResultSyncPing>` pattern). A successful `act()` nudges the loop
   (`bumpPollRef`) so joining an idle page snaps to fast polling in ~250ms
   instead of waiting out a stale idle timer. Anyone IN the queue polls fast, so
   a filling queue / forming lobby stays responsive for the players who matter.

@@ -63,6 +63,11 @@ export function InhouseRoom({
   // re-evaluate its cadence NOW instead of waiting out a stale idle timer —
   // so joining an idle page snaps to fast polling immediately.
   const bumpPollRef = useRef<(() => void) | null>(null);
+  // Does the viewer currently have a stake (queued or in a lobby)? Read by the
+  // poll loop to decide whether a HIDDEN tab keepalive-polls (hold the spot) or
+  // fully pauses. Kept current by the effect below so the closure always sees
+  // the latest, without re-subscribing the loop on every state change.
+  const hasStakeRef = useRef(false);
   const prevLobbyId = useRef<string | null>(null);
   // For the bell notification: remember what we saw last poll.
   const soundInitRef = useRef(false);
@@ -100,12 +105,20 @@ export function InhouseRoom({
     setState(s);
   }, []);
 
+  // Keep the poll loop's "has stake" flag current for its hidden-tab decision.
+  useEffect(() => {
+    hasStakeRef.current = !!state?.lobby || !!state?.me.inQueue;
+  }, [state]);
+
   // Adaptive, visibility-aware poll loop (self-scheduling setTimeout, not a
   // fixed setInterval): FAST while the viewer is in a lobby or the queue,
-  // IDLE-slow when just spectating, and PAUSED while the tab is hidden —
-  // re-syncing the instant it's refocused. Mirrors <ResultSyncPing>. Kills the
-  // ~40 req/min an idle open tab used to fire; the sitewide /api/sync ping
-  // still advances lobbies while nobody is fast-polling /inhouse.
+  // IDLE-slow when just spectating. While the tab is HIDDEN: a viewer with a
+  // stake (queued or in a lobby) keeps a slow KEEPALIVE so their presence
+  // heartbeat holds the spot and a forming ready check's chime/title still
+  // reaches them; a hidden spectator doesn't fetch at all (the sitewide
+  // /api/sync ping advances lobbies meanwhile). Either way it re-syncs the
+  // instant it's refocused. Mirrors <ResultSyncPing>; kills the ~40 req/min an
+  // idle open tab used to fire.
   useEffect(() => {
     let alive = true;
     let inFlight = false;
@@ -121,9 +134,9 @@ export function InhouseRoom({
       // inFlight also guards a visibilitychange firing mid-request — the active
       // call reschedules when it settles.
       if (!alive || inFlight) return;
-      if (document.visibilityState === "hidden") {
-        // Don't fetch from a hidden tab (browsers throttle background timers to
-        // near-uselessness anyway); the visibility listener wakes us on focus.
+      if (document.visibilityState === "hidden" && !hasStakeRef.current) {
+        // Hidden with nothing at stake: don't fetch (browsers throttle
+        // background timers anyway); the visibility listener wakes us on focus.
         schedule(INHOUSE.POLL_IDLE_MS);
         return;
       }
@@ -147,11 +160,16 @@ export function InhouseRoom({
       } finally {
         inFlight = false;
       }
-      // A failed poll keeps the FAST cadence (retry quickly, don't slow a live
-      // draft over one blip — sustained failures flip `disconnected` instead).
-      const delay = next
-        ? inhousePollDelayMs(!!next.lobby, next.me.inQueue, pollMs)
-        : pollMs;
+      // Recompute visibility HERE (not from the pre-fetch snapshot): if the tab
+      // was refocused mid-fetch this reschedules at the active rate instead of
+      // the 45s keepalive, so refocus stays snappy. A failed poll keeps the
+      // FAST cadence (retry quickly; sustained failures flip `disconnected`).
+      const delay =
+        document.visibilityState === "hidden"
+          ? INHOUSE.POLL_KEEPALIVE_MS
+          : next
+            ? inhousePollDelayMs(!!next.lobby, next.me.inQueue, pollMs)
+            : pollMs;
       schedule(delay);
     };
 
