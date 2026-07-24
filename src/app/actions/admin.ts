@@ -1384,43 +1384,104 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * OpenDota" or "OpenDota returned no rank"), so a rate-limited run can't wipe
  * everyone's rank. Shared by the registrant sync and the all-accounts backfill.
  */
+/** Per-account outcome, kept small so a batch can tally without re-fetching. */
+type RankSyncOutcome = "ranked" | "ok-no-rank" | "unreachable";
+
+/** Sync one account's medal (+ fh_unavailable), retrying once on a transient miss. */
+async function syncOneRank(
+  u: { id: string },
+  acc: number,
+): Promise<RankSyncOutcome> {
+  // A bulk sync easily trips OpenDota's free rate limit (HTTP 429) or an 8s
+  // timeout — a brief back-off + one retry usually clears it.
+  let result = await fetchRankTier(acc);
+  if (!result.ok) {
+    await sleep(700);
+    result = await fetchRankTier(acc);
+  }
+  if (!result.ok) return "unreachable";
+  // Store what OpenDota definitely said: a real medal, and/or the
+  // public-match-data flag (fh_unavailable) auto-import depends on.
+  const data: { rankTier?: number; fhUnavailable?: boolean } = {};
+  if (result.rankTier != null) data.rankTier = result.rankTier;
+  if (result.fhUnavailable !== null) data.fhUnavailable = result.fhUnavailable;
+  if (Object.keys(data).length > 0) {
+    await prisma.user.update({ where: { id: u.id }, data });
+  }
+  return result.rankTier != null ? "ranked" : "ok-no-rank";
+}
+
+// Serverless functions have a wall-clock ceiling (`maxDuration` on the admin
+// page). One OpenDota timeout is 8s and the retry doubles it, so a serial loop
+// over a full roster during an OpenDota outage blows the budget and the request
+// dies with no response — the button spins "Working…" forever. Guards: run a
+// few accounts at once, stop starting work past a time budget, and bail
+// immediately if the very first batch is entirely unreachable (a strong
+// "OpenDota is down" signal) instead of hitting an 8s timeout for every id.
+const RANK_SYNC_CONCURRENCY = 4;
+const RANK_SYNC_BUDGET_MS = 45_000;
+
+type RankSyncResult = {
+  ranked: number;
+  unreachable: number;
+  skipped: number;
+  outage: boolean;
+};
+
 async function syncRanksFor(
   users: { id: string; dotaAccountId: number | null; steamId: string }[],
-): Promise<{ ranked: number; unreachable: number }> {
+): Promise<RankSyncResult> {
+  const targets = users
+    .map((u) => ({ u, acc: u.dotaAccountId ?? steamIdToAccountId(u.steamId) }))
+    .filter((t): t is { u: (typeof users)[number]; acc: number } => !!t.acc);
+
   let ranked = 0;
   let unreachable = 0;
-  for (const u of users) {
-    const acc = u.dotaAccountId ?? steamIdToAccountId(u.steamId);
-    if (!acc) continue;
-    // A bulk sync easily trips OpenDota's free rate limit (HTTP 429) or an 8s
-    // timeout — a brief back-off + one retry usually clears it.
-    let result = await fetchRankTier(acc);
-    if (!result.ok) {
-      await sleep(700);
-      result = await fetchRankTier(acc);
+  let skipped = 0;
+  let outage = false;
+  const startedAt = Date.now();
+
+  for (let i = 0; i < targets.length; i += RANK_SYNC_CONCURRENCY) {
+    if (Date.now() - startedAt > RANK_SYNC_BUDGET_MS) {
+      skipped = targets.length - i;
+      break;
     }
-    if (!result.ok) {
-      unreachable++;
-      continue;
+    const batch = targets.slice(i, i + RANK_SYNC_CONCURRENCY);
+    const outcomes = await Promise.all(
+      batch.map(({ u, acc }) => syncOneRank(u, acc)),
+    );
+    for (const o of outcomes) {
+      if (o === "unreachable") unreachable++;
+      else if (o === "ranked") ranked++;
     }
-    // Store what OpenDota definitely said: a real medal, and/or the
-    // public-match-data flag (fh_unavailable) auto-import depends on.
-    const data: { rankTier?: number; fhUnavailable?: boolean } = {};
-    if (result.rankTier != null) data.rankTier = result.rankTier;
-    if (result.fhUnavailable !== null) data.fhUnavailable = result.fhUnavailable;
-    if (Object.keys(data).length > 0) {
-      await prisma.user.update({ where: { id: u.id }, data });
+    // Whole first batch unreachable ⇒ OpenDota is down; don't burn the budget
+    // (and the admin's patience) hitting an 8s timeout for every remaining id.
+    if (
+      i === 0 &&
+      batch.length >= 3 &&
+      outcomes.every((o) => o === "unreachable")
+    ) {
+      outage = true;
+      skipped = targets.length - batch.length;
+      break;
     }
-    if (result.rankTier != null) ranked++;
   }
-  return { ranked, unreachable };
+  return { ranked, unreachable, skipped, outage };
 }
+
+const OPENDOTA_OUTAGE_MSG =
+  "OpenDota isn't responding right now — no medals were changed. Try again in a few minutes.";
 
 /** "N couldn't be reached" suffix with a re-run / API-key hint, or "". */
 function unreachableTail(unreachable: number): string {
   return unreachable
     ? ` · ${unreachable} couldn't be reached (rate limit? run it again${process.env.OPENDOTA_API_KEY ? "" : " — an OPENDOTA_API_KEY raises the limit"})`
     : "";
+}
+
+/** " · N skipped" suffix when the time budget cut the run short, or "". */
+function skippedTail(skipped: number): string {
+  return skipped ? ` · ${skipped} skipped (time limit — run again)` : "";
 }
 
 export async function syncPlayerRanks(
@@ -1439,10 +1500,13 @@ export async function syncPlayerRanks(
     where: { seasonId: season.id, status: "ACTIVE" },
     include: { user: true },
   });
-  const { ranked, unreachable } = await syncRanksFor(regs.map((r) => r.user));
+  const { ranked, unreachable, skipped, outage } = await syncRanksFor(
+    regs.map((r) => r.user),
+  );
+  if (outage) return { error: OPENDOTA_OUTAGE_MSG };
   refresh();
   return {
-    message: `Synced ${regs.length} players · ${ranked} ranked${unreachableTail(unreachable)}`,
+    message: `Synced ${regs.length} players · ${ranked} ranked${unreachableTail(unreachable)}${skippedTail(skipped)}`,
   };
 }
 
@@ -1465,10 +1529,11 @@ export async function syncAllRanks(
   if (users.length === 0) {
     return { message: "Every account already has a medal" };
   }
-  const { ranked, unreachable } = await syncRanksFor(users);
+  const { ranked, unreachable, skipped, outage } = await syncRanksFor(users);
+  if (outage) return { error: OPENDOTA_OUTAGE_MSG };
   refresh();
   return {
-    message: `Checked ${users.length} account(s) without a medal · ${ranked} now ranked${unreachableTail(unreachable)}`,
+    message: `Checked ${users.length} account(s) without a medal · ${ranked} now ranked${unreachableTail(unreachable)}${skippedTail(skipped)}`,
   };
 }
 

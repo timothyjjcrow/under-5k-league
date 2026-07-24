@@ -92,6 +92,57 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
   });
 });
 
+describe("syncPlayerRanks — bails out fast when OpenDota is down", () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  async function fivePlayersWithAccounts() {
+    const season = await makeSeason();
+    const players = [];
+    for (let i = 0; i < 5; i++) {
+      const u = await makePlayer(season.id, `Player ${i}`, 3000);
+      await prisma.user.update({
+        where: { id: u.id },
+        data: { rankTier: null, dotaAccountId: 1000 + i },
+      });
+      players.push(u);
+    }
+    return players;
+  }
+
+  it("reports an outage and stops before scanning every id when the first batch is all unreachable", async () => {
+    const players = await fivePlayersWithAccounts();
+    mockFetch.mockResolvedValue({ ok: false, rankTier: null, fhUnavailable: null });
+
+    const res = await syncPlayerRanks({}, new FormData());
+
+    // Surfaces as an error toast (not a message), and nothing was written.
+    expect(res?.error).toMatch(/OpenDota isn't responding/);
+    expect(res?.message).toBeUndefined();
+    for (const p of players) expect(await medalOf(p.id)).toBeNull();
+    // First batch (4) × one retry each = 8 fetches; the 5th id is never hit —
+    // proof we didn't grind an 8s timeout across the whole roster.
+    expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(8);
+  });
+
+  it("does NOT declare an outage when the first batch has a reachable account", async () => {
+    const players = await fivePlayersWithAccounts();
+    // The first-created player (dotaAccountId 1000, in the first batch) answers;
+    // everyone else is unreachable.
+    mockFetch.mockImplementation(async (acc: number) =>
+      acc === 1000
+        ? { ok: true as const, rankTier: 55, fhUnavailable: null }
+        : { ok: false as const, rankTier: null, fhUnavailable: null },
+    );
+
+    const res = await syncPlayerRanks({}, new FormData());
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/1 ranked/);
+    expect(res?.message).toMatch(/couldn't be reached/);
+    expect(await medalOf(players[0].id)).toBe(55);
+  });
+});
+
 describe("ensureRankTier — medals for accounts that never signed up", () => {
   beforeEach(() => mockFetch.mockReset());
 

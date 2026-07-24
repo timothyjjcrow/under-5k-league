@@ -92,6 +92,13 @@ import {
 
 export const metadata = { title: "Admin" };
 
+// Server Actions invoked from this page inherit the segment's function budget.
+// The bulk OpenDota syncs (ranks, league) fan out network calls that can each
+// hit an 8s timeout, so give them headroom above the platform default rather
+// than being killed mid-run (which leaves the button spinning "Working…").
+// 60s is the Hobby-plan ceiling; the actions themselves stop well before it.
+export const maxDuration = 60;
+
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups",
   DRAFT: "Draft",
