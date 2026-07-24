@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectIntervalSeconds,
+  inhouseLobbyCode,
   inhousePollDelayMs,
   isDraftComplete,
   mmrBalance,
@@ -187,6 +188,23 @@ describe("playersNeeded", () => {
     expect(playersNeeded(7)).toBe(3);
     expect(playersNeeded(10)).toBe(0);
     expect(playersNeeded(12)).toBe(0);
+  });
+});
+
+describe("inhouseLobbyCode", () => {
+  it("is a stable four-digit code for a given lobby id", () => {
+    const a = inhouseLobbyCode("clz9k1abc0000xyz");
+    expect(a).toMatch(/^\d{4}$/);
+    expect(Number(a)).toBeGreaterThanOrEqual(1000);
+    expect(Number(a)).toBeLessThanOrEqual(9999);
+    // Deterministic — every player derives the same code from the same id.
+    expect(inhouseLobbyCode("clz9k1abc0000xyz")).toBe(a);
+  });
+
+  it("differs across lobby ids (so back-to-back games don't collide)", () => {
+    expect(inhouseLobbyCode("lobby-aaaaaaaa")).not.toBe(
+      inhouseLobbyCode("lobby-bbbbbbbb"),
+    );
   });
 });
 

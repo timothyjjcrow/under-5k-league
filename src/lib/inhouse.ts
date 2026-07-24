@@ -144,6 +144,21 @@ export function playersNeeded(
 }
 
 /**
+ * A stable 4-digit code for a lobby, derived from its id — so all ten players
+ * see the SAME suggested Dota 2 lobby name (`GGD2L #4821`) and password (`4821`)
+ * with no server round-trip or stored field. The host types them; everyone else
+ * finds that exact lobby in Dota's custom-lobby list and joins with the code.
+ */
+export function inhouseLobbyCode(lobbyId: string): string {
+  let h = 0;
+  for (let i = 0; i < lobbyId.length; i++) {
+    // >>> 0 keeps it an unsigned 32-bit int (deterministic across engines).
+    h = (h * 31 + lobbyId.charCodeAt(i)) >>> 0;
+  }
+  return String(1000 + (h % 9000)); // 1000–9999, always four digits
+}
+
+/**
  * How long the inhouse room should wait before its next state poll. Fast while
  * the viewer has skin in the game — in a lobby (ready check / vote / draft /
  * live) or waiting in the queue, where seconds decide accepts, votes and picks

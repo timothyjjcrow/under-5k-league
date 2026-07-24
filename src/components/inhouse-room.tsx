@@ -11,7 +11,7 @@ import {
   useSecondsLeft,
   useElapsedMs,
 } from "@/components/room-clock";
-import { inhousePollDelayMs, mmrBalance } from "@/lib/inhouse";
+import { inhouseLobbyCode, inhousePollDelayMs, mmrBalance } from "@/lib/inhouse";
 import { INHOUSE } from "@/lib/constants";
 import { playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
@@ -1392,10 +1392,9 @@ function ReadyView({
         <div className="text-2xl">🎮</div>
         <div className="mt-1 text-lg font-semibold">Teams are set!</div>
         <p className="mx-auto mt-1 max-w-md text-sm text-muted">
-          Anyone can host: create a private lobby in Dota 2, invite both
-          teams, then hit start below once everyone&apos;s in. No ticket or
-          league id needed — the result is found from players&apos; match
-          histories.
+          Set up the Dota lobby and hop into voice — the steps are just below.
+          Then hit start once everyone&apos;s in. No ticket or league id needed;
+          the result is found from players&apos; match histories.
         </p>
         {me.canStart ? (
           <button
@@ -1421,6 +1420,8 @@ function ReadyView({
           </p>
         )}
       </div>
+
+      <GameSetupCard lobby={lobby} me={me} />
 
       <MatchupGrid lobby={lobby} />
     </div>
@@ -1575,7 +1576,136 @@ function InProgressView({
         )}
       </div>
 
+      <GameSetupCard lobby={lobby} me={me} />
+
       <MatchupGrid lobby={lobby} />
+    </div>
+  );
+}
+
+// ---------- Game setup instructions (lobby + voice) ----------
+
+/** A monospace value with a click-to-copy button (name / password / etc.). */
+function CopyChip({ value, label }: { value: string; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          pushToast("success", `Copied ${label}: ${value}`);
+        } catch {
+          pushToast("error", "Couldn't copy — select it and copy manually");
+        }
+      }}
+      title={`Copy ${label}`}
+      className="inline-flex items-center gap-1.5 rounded-md border border-line bg-surface-2/60 px-2 py-1 font-mono text-sm font-semibold text-fg transition-colors hover:border-accent/60"
+    >
+      {value}
+      <span aria-hidden className="text-xs text-muted">
+        📋
+      </span>
+    </button>
+  );
+}
+
+/**
+ * What the ten players do once teams lock: one hosts the Dota 2 lobby with a
+ * shared name + password everyone sees, and each joins their team's Discord
+ * voice channel. The lobby name/password are derived from the lobby id, so all
+ * ten see the SAME values with no server round-trip.
+ */
+function GameSetupCard({
+  lobby,
+  me,
+}: {
+  lobby: NonNullable<InhouseState["lobby"]>;
+  me: InhouseState["me"];
+}) {
+  const code = inhouseLobbyCode(lobby.id);
+  const lobbyName = `${INHOUSE.LOBBY_NAME_PREFIX} #${code}`;
+  const voiceByTeam = (team: number) =>
+    team === 1 ? INHOUSE.VOICE_TEAM_1 : INHOUSE.VOICE_TEAM_2;
+
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/80 p-5">
+      <div className="mb-3 text-sm font-semibold">🕹️ How to play this game</div>
+
+      {/* Step 1 — host the Dota lobby */}
+      <div className="flex gap-3">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
+          1
+        </span>
+        <div className="min-w-0 text-sm">
+          <div className="font-medium">One player hosts the Dota 2 lobby</div>
+          <p className="mt-1 text-muted">
+            In Dota 2: <strong>Play → Custom Lobbies → Create Lobby</strong>.
+            Set the name and password below, then invite/accept everyone.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="flex items-center gap-2">
+              <span className="text-xs text-muted">Lobby name</span>
+              <CopyChip value={lobbyName} label="lobby name" />
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="text-xs text-muted">Password</span>
+              <CopyChip value={code} label="password" />
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Everyone else: open <strong>Custom Lobbies</strong>, find{" "}
+            <span className="font-mono text-fg">{lobbyName}</span> in the list
+            (or ask the host to invite you) and join with the password.
+          </p>
+        </div>
+      </div>
+
+      {/* Step 2 — join your team's voice channel */}
+      <div className="mt-4 flex gap-3">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
+          2
+        </span>
+        <div className="min-w-0 text-sm">
+          <div className="font-medium">
+            Join your team&apos;s voice channel in Discord
+          </div>
+          <p className="mt-1 text-muted">
+            Talk to your team during the game — hop into the voice channel for
+            your side.
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {lobby.teams.map((t) => {
+              const meta = sideMeta(t.isRadiant);
+              const mine = me.myTeam === t.team;
+              return (
+                <li
+                  key={t.team}
+                  className={cn(
+                    "flex flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5",
+                    mine ? meta.ring : "border-line",
+                    mine ? meta.chip : "bg-surface-2/40",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className={cn("h-2 w-2 rounded-full", meta.dot)}
+                  />
+                  <span className="font-medium">{meta.name}</span>
+                  <span className="text-xs text-muted">→</span>
+                  <span className="font-mono text-sm">
+                    🔊 {voiceByTeam(t.team)}
+                  </span>
+                  {mine ? (
+                    <Badge tone={meta.badge} className="ml-auto">
+                      Your team — join here
+                    </Badge>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }

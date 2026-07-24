@@ -131,6 +131,14 @@ export const CAPTAIN_METHOD = {
 export const INHOUSE = {
   TEAM_SIZE: 5,
   LOBBY_SIZE: 10, // players needed before a lobby forms
+  // The two Discord voice channels players join to talk during the game (one
+  // per team). Match the channel names in the Discord server exactly — change
+  // here if they're ever renamed.
+  VOICE_TEAM_1: "inhouse team 1",
+  VOICE_TEAM_2: "inhouse team 2",
+  // Prefix for the Dota 2 lobby name players host (a stable per-lobby code is
+  // appended so all ten find the same one — see inhouseLobbyCode).
+  LOBBY_NAME_PREFIX: "GGD2L",
   // Inhouse room client poll cadence (ms). The room polls fast while the
   // viewer has skin in the game — in a lobby (ready check / vote / draft /
   // live) or waiting in the queue, where seconds matter — and idle-slow when

@@ -388,6 +388,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   ready check AND on the vote opening (a player may accept early and tab away),
   and a failed check that snaps the room back to the queue toasts
   "Match cancelled" instead of vanishing silently.
+- **Game-setup instructions**: once teams lock, the READY and IN_PROGRESS
+  views render a `GameSetupCard` — step 1 hosts the Dota 2 lobby with a shared
+  name (`GGD2L #<code>`) + password (`<code>`) all ten derive identically from
+  the lobby id (pure `inhouseLobbyCode`, tested — no server round-trip/field),
+  shown as click-to-copy chips; step 2 points each player to their team's
+  Discord voice channel (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side
+  highlighted via `me.myTeam`). Channel names + lobby prefix are constants.
 - **Captain-selection vote**: when a lobby fills it opens in `CAPTAIN_VOTE` — the
   10 players vote how captains are chosen so it isn't always the same top-2 MMR
   pair: `VOTE` (elect specific players), `MMR` (highest 2), or `RECORD` (best 2

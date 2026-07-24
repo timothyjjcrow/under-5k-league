@@ -168,8 +168,14 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     expect(picked.ok).toBe(true);
   }
 
-  // Teams locked — the observer starts the game from the UI.
+  // Teams locked — the setup card tells players how to make the Dota lobby
+  // and which voice channel to join (their team's is highlighted).
   await expect(page.getByText("Teams are set!")).toBeVisible();
+  await expect(page.getByText("How to play this game")).toBeVisible();
+  await expect(page.getByText(/GGD2L #\d{4}/).first()).toBeVisible();
+  await expect(page.getByText(/inhouse team [12]/).first()).toBeVisible();
+
+  // The observer (team 1 captain) starts the game from the UI.
   await page.getByRole("button", { name: /Start the game/ }).click();
 
   // Live view: pulsing banner, elapsed clock, auto-detect controls, rosters.
