@@ -205,21 +205,53 @@ export async function fetchLeagueMatchIds(leagueId: string): Promise<number[]> {
 
 // hero_id -> localized name, cached in-memory (fetched from OpenDota constants).
 let heroCache: Record<number, string> | null = null;
+// Several server pages await getHeroNames() inline in their render path (not
+// behind Suspense), so a slow OpenDota blocks the whole shell. During an
+// OpenDota outage the fetch hangs to its socket timeout (~minutes on undici),
+// which is what made every player/match/team page take "a very long time to
+// load". Two guards: an 8s abort (the same cap every other OpenDota call in
+// this file uses) so one attempt can't hang the page, and a short negative
+// cache so a burst of page views during an outage doesn't each pay that 8s.
+const HERO_FETCH_TIMEOUT_MS = 8_000;
+const HERO_NEG_CACHE_MS = 60_000;
+let heroFetchFailedAt = 0;
+let heroInFlight: Promise<Record<number, string>> | null = null;
+
 export async function getHeroNames(): Promise<Record<number, string>> {
   if (heroCache) return heroCache;
-  try {
-    const res = await fetch(`${BASE}/constants/heroes`, {
-      next: { revalidate: 86400 },
-    });
-    const data = await res.json();
-    const map: Record<number, string> = {};
-    for (const key of Object.keys(data)) {
-      const h = data[key];
-      if (h && typeof h.id === "number") map[h.id] = h.localized_name ?? `Hero ${h.id}`;
-    }
-    heroCache = map;
-    return map;
-  } catch {
+  if (heroFetchFailedAt && Date.now() - heroFetchFailedAt < HERO_NEG_CACHE_MS) {
     return {};
   }
+  // Dedupe concurrent callers onto ONE bounded fetch. Without this, a burst of
+  // page views during a cold-cache outage each start their own 8s attempt (and
+  // can serialize behind Next's per-cache-key lock), so the page wouldn't be
+  // reliably bounded to 8s under load. One shared promise fixes both.
+  if (heroInFlight) return heroInFlight;
+  heroInFlight = (async () => {
+    try {
+      const res = await fetch(`${BASE}/constants/heroes`, {
+        next: { revalidate: 86400 },
+        signal: AbortSignal.timeout(HERO_FETCH_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`OpenDota heroes ${res.status}`);
+      const data = await res.json();
+      const map: Record<number, string> = {};
+      for (const key of Object.keys(data)) {
+        const h = data[key];
+        if (h && typeof h.id === "number")
+          map[h.id] = h.localized_name ?? `Hero ${h.id}`;
+      }
+      heroCache = map;
+      heroFetchFailedAt = 0;
+      return map;
+    } catch {
+      // A miss falls back to {} — the pages that use this also resolve names
+      // locally via heroById, so hero rendering degrades gracefully to "Hero #N".
+      heroFetchFailedAt = Date.now();
+      return {};
+    } finally {
+      heroInFlight = null;
+    }
+  })();
+  return heroInFlight;
 }
