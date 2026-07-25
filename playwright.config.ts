@@ -14,10 +14,16 @@ export default defineConfig({
   workers: 1,
   timeout: 30_000,
   expect: { timeout: 10_000 },
-  reporter: "list",
+  // On CI, capture evidence: a failure that leaves only log text is
+  // undiagnosable without repo auth, which is how the e2e job stayed red and
+  // unexplained. NOTE trace "on-first-retry" captures NOTHING while retries is 0
+  // (the default) — retain-on-failure is what actually writes a trace, and we
+  // keep retries at 0 so a flake can't be silently masked green.
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: `http://localhost:${E2E_PORT}`,
-    trace: "on-first-retry",
+    trace: process.env.CI ? "retain-on-failure" : "on-first-retry",
+    screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
