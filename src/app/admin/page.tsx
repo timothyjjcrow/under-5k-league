@@ -612,7 +612,12 @@ function CaptainControls({
         title="Captains & draft"
         subtitle="Designate captains, set the order, then start the auction."
         action={
-          <div className="flex gap-2">
+          /* flex-wrap like every other row in this file: this header holds up to
+             six controls (sync ranks/avatars, randomize, start, pause/resume,
+             undo, abort) and without wrapping they pushed /admin past a phone —
+             caught by the mobile tripwire on CI, whose fonts are a few px wider
+             than macOS's, so it read as a 7px page scroll. */
+          <div className="flex flex-wrap justify-end gap-2">
             <ActionForm action={syncPlayerRanks}>
               <SubmitButton variant="secondary" size="sm">
                 Sync ranks

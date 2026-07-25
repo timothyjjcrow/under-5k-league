@@ -31,7 +31,7 @@ test("pick'em renders the oracle board and match cards", async ({ page }) => {
 
 test("mobile schedule has no horizontal page overflow", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
-  await page.setViewportSize({ width: 375, height: 812 });
+  await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/schedule");
   await expect(page.getByText("Week 1").first()).toBeVisible();
   await expectNoHorizontalOverflow(page, "/schedule");
@@ -43,9 +43,15 @@ test("mobile schedule has no horizontal page overflow", async ({ page }) => {
 // shrink. One 32-char Steam name (Steam's own cap) used to push /admin 116px
 // and /matches/[id] 64px wider than a 375px phone. Neither page had a mobile
 // tripwire, which is how it shipped.
+//
+// Measured at 360px, not 375: it is the common narrow-Android width, and the
+// 15px of headroom is what makes these catch on a developer's machine. At 375
+// the /admin row that overflowed only tripped on CI, whose Linux fonts render a
+// few px wider than macOS's — a tripwire you can only reproduce in CI is one you
+// cannot act on.
 test("mobile admin panel has no horizontal page overflow", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
-  await page.setViewportSize({ width: 375, height: 812 });
+  await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/api/auth/dev?name=Overflow%20Admin&admin=1");
   await page.goto("/admin");
   await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
@@ -55,7 +61,7 @@ test("mobile admin panel has no horizontal page overflow", async ({ page }) => {
 
 test("mobile match page has no horizontal page overflow", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
-  await page.setViewportSize({ width: 375, height: 812 });
+  await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/schedule");
   await page.getByRole("link", { name: "details →" }).first().click();
   await expect(page).toHaveURL(/\/matches\//);
