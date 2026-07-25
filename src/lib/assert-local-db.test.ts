@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -12,7 +14,16 @@ const SCRIPT = path.resolve(process.cwd(), "scripts/assert-local-db.mjs");
 
 type Result = { code: number; stderr: string };
 
-function run(databaseUrl: string | undefined, override?: string): Result {
+/**
+ * Run the guard in a THROWAWAY cwd. The .env fallback must be tested against a
+ * .env this test controls: the repo's own is gitignored, so asserting against it
+ * passes locally and fails in CI (which is exactly what happened).
+ */
+function runIn(
+  cwd: string,
+  databaseUrl: string | undefined,
+  override?: string,
+): Result {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(
@@ -25,12 +36,39 @@ function run(databaseUrl: string | undefined, override?: string): Result {
   if (databaseUrl !== undefined) env.DATABASE_URL = databaseUrl;
   if (override !== undefined) env.I_UNDERSTAND_THIS_WIPES_THE_DATABASE = override;
   try {
-    execFileSync("node", [SCRIPT, "Seeding"], { env, encoding: "utf8", stdio: "pipe" });
+    execFileSync("node", [SCRIPT, "Seeding"], {
+      env,
+      cwd,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
     return { code: 0, stderr: "" };
   } catch (e) {
     const err = e as { status?: number; stderr?: string };
     return { code: err.status ?? 1, stderr: err.stderr ?? "" };
   }
+}
+
+/** A temp dir, optionally holding a .env with the given DATABASE_URL line. */
+function dirWithEnv(envUrl?: string): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "ld2l-guard-"));
+  if (envUrl !== undefined)
+    writeFileSync(path.join(dir, ".env"), `DATABASE_URL="${envUrl}"\n`);
+  return dir;
+}
+
+function run(databaseUrl: string | undefined, override?: string): Result {
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([k]) =>
+          k !== "DATABASE_URL" && k !== "I_UNDERSTAND_THIS_WIPES_THE_DATABASE",
+      ),
+    ),
+    NODE_ENV: "test",
+  };
+  void env;
+  return runIn(dirWithEnv(), databaseUrl, override);
 }
 
 describe("assert-local-db destructive-command guard", () => {
@@ -78,9 +116,21 @@ describe("assert-local-db destructive-command guard", () => {
     }
   });
 
-  it("falls back to .env like Prisma does (repo .env is a file: url)", () => {
-    // DATABASE_URL unset → the guard reads .env rather than refusing outright,
-    // so the documented bare `npm run db:seed` keeps working.
-    expect(run(undefined).code).toBe(0);
+  it("falls back to .env like Prisma does, so a bare `npm run db:seed` works", () => {
+    // DATABASE_URL unset → read .env from the cwd. Uses a .env this test writes:
+    // the repo's is gitignored, so asserting against it passes locally and fails
+    // in CI.
+    expect(runIn(dirWithEnv("file:./dev.db"), undefined).code).toBe(0);
+  });
+
+  it("refuses via the .env fallback too when that url isn't local", () => {
+    expect(runIn(dirWithEnv("postgresql://u:p@ep-prod.neon.tech/league"), undefined).code).toBe(1);
+  });
+
+  it("FAILS CLOSED with no DATABASE_URL and no .env — it can't know where it would write", () => {
+    // CI's situation, and the right answer: refuse rather than guess.
+    const res = runIn(dirWithEnv(), undefined);
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain("(unset)");
   });
 });
