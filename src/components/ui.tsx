@@ -764,11 +764,9 @@ export function HeroIcon({
  */
 export function HeroPool({
   heroes,
-  heroNames,
   limit = 8,
 }: {
   heroes: { heroId: number; games: number; wins: number }[];
-  heroNames?: Record<number, string>;
   limit?: number;
 }) {
   return (
@@ -791,7 +789,7 @@ export function HeroPool({
               )}
               <div className="min-w-0 text-xs">
                 <div className="truncate font-medium">
-                  {hero?.name ?? heroNames?.[h.heroId] ?? `Hero ${h.heroId}`}
+                  {hero?.name ?? `Hero ${h.heroId}`}
                 </div>
                 <div className="text-muted">
                   {h.games}g ·{" "}

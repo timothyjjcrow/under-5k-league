@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import {
+  DRAFT_STATUS,
+  REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   type RegistrationType,
 } from "@/lib/constants";
@@ -19,6 +21,7 @@ import {
   fetchRankTier,
 } from "@/lib/dota";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
+import { clampHeroList } from "@/lib/heroes";
 import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
@@ -49,9 +52,13 @@ export async function saveRegistration(
   const mmr = clampInt(formData, "mmr", 0, 0, 12000);
   const wantsCaptain = bool(formData, "wantsCaptain");
   const roles = serializeRoles(formData.getAll("roles").map(String));
-  const favoriteHeroes = str(formData, "favoriteHeroes").slice(0, 200);
-  const statement = str(formData, "statement").slice(0, 1000);
-  const captainNote = str(formData, "captainNote").slice(0, 1000);
+  // Clamp on whole hero names, not raw characters — a mid-name cut rendered
+  // as garbage in the player pool and draft room.
+  const favoriteHeroes = clampHeroList(str(formData, "favoriteHeroes"), 200);
+  // Trim before storing: a whitespace-only note used to render as an empty
+  // pair of smart quotes with a "NOTE FOR CAPTAINS" label above it.
+  const statement = str(formData, "statement").trim().slice(0, 1000);
+  const captainNote = str(formData, "captainNote").trim().slice(0, 1000);
 
   const existing = await prisma.registration.findUnique({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
@@ -124,6 +131,17 @@ export async function saveRegistration(
           "You're on a roster this season — ask an admin to release you before switching to standin",
       };
     }
+  }
+
+  // An admin removed this signup. The upsert below sets status ACTIVE
+  // unconditionally, so without this the player just reloaded /me and put
+  // themselves straight back in the pool — there was no way to keep anyone out.
+  // A self-withdrawal (status WITHDRAWN) stays freely reversible.
+  if (existing?.status === REGISTRATION_STATUS.REMOVED) {
+    return {
+      error:
+        "An admin removed your signup for this season — message them if you think that's a mistake.",
+    };
   }
 
   await prisma.registration.upsert({
@@ -219,17 +237,27 @@ export async function leaveLeague(
   });
   if (!reg) return { error: "You're not signed up for this season." };
 
-  const [member, captainTeam] = await Promise.all([
+  const [member, captainTeam, draft] = await Promise.all([
     prisma.teamMember.findUnique({
       where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
     }),
     prisma.team.findFirst({
       where: { seasonId: season.id, captainId: user.id },
     }),
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true, nominatedUserId: true },
+    }),
   ]);
+  const onTheBlock =
+    !!draft &&
+    (draft.status === DRAFT_STATUS.IN_PROGRESS ||
+      draft.status === DRAFT_STATUS.PAUSED) &&
+    draft.nominatedUserId === user.id;
 
   const gateError = withdrawGateError({
     status: reg.status,
+    isOnTheBlock: onTheBlock,
     isCaptain: !!captainTeam,
     isRostered: !!member,
   });
@@ -268,6 +296,20 @@ export async function updateDotaAccount(
     if (!parsed) {
       return {
         error: "Enter an account id, SteamID64, or Dotabuff/OpenDota URL",
+      };
+    }
+    // Nothing proves this account belongs to the person typing it, but a
+    // COLLISION is the part that actually breaks things: two league players
+    // claiming one account id puts the same account in both teams' sets, so
+    // classifyGame sees a player on both sides and every import for that match
+    // fails (or attributes the box-score line to the wrong person).
+    const taken = await prisma.user.findFirst({
+      where: { dotaAccountId: parsed, id: { not: user.id } },
+      select: { name: true },
+    });
+    if (taken) {
+      return {
+        error: `That Dota account is already linked to ${taken.name} — check you pasted your own profile`,
       };
     }
     accountId = parsed;

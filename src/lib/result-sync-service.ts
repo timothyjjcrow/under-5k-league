@@ -5,7 +5,10 @@ import {
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
-import { autoSyncClaimCutoff } from "./result-sync";
+import {
+  autoSyncClaimCutoff,
+  minutesSinceAutoSyncOpen,
+} from "./result-sync";
 import {
   ANNOUNCE_FAILED_PREFIX,
   announceSeriesResultOnce,
@@ -56,18 +59,32 @@ async function claimSyncThrottle(
   nowMs: number,
 ): Promise<boolean> {
   const value = new Date(nowMs).toISOString();
+  const staleBefore = new Date(nowMs - intervalSeconds * 1000).toISOString();
+
+  // Try the STALE-CLAIM update first. The row exists on every call but the
+  // first, so leading with `create` meant a caught-and-ignored P2002 on
+  // essentially every /api/sync hit — and the Prisma client logs at "error"
+  // level in production (src/lib/prisma.ts), so each one wrote a stack trace
+  // to the server log before our catch ever ran. /api/sync fires on every page
+  // view, so that buried real errors under constant expected-path noise.
+  const updated = await prisma.setting.updateMany({
+    where: { key, value: { lt: staleBefore } },
+    data: { value },
+  });
+  if (updated.count > 0) return true;
+
+  // Zero rows means either "exists but still fresh" (not our claim) or "row
+  // isn't there yet" (first ever call — create it, and let a genuine creation
+  // race lose on P2002).
+  const existing = await prisma.setting.findUnique({ where: { key } });
+  if (existing) return false;
   try {
     await prisma.setting.create({ data: { key, value } });
     return true;
   } catch (e) {
     if ((e as { code?: string }).code !== "P2002") throw e;
+    return false; // someone else created it in the same instant
   }
-  const staleBefore = new Date(nowMs - intervalSeconds * 1000).toISOString();
-  const updated = await prisma.setting.updateMany({
-    where: { key, value: { lt: staleBefore } },
-    data: { value },
-  });
-  return updated.count > 0;
 }
 
 /**
@@ -99,7 +116,12 @@ async function syncDueMatches(
         lte: new Date(nowMs - AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF * 60_000),
       },
     },
-    select: { id: true, autoSyncedAt: true, autoSyncAttempts: true },
+    select: {
+      id: true,
+      autoSyncedAt: true,
+      autoSyncAttempts: true,
+      scheduledAt: true,
+    },
   });
   if (due.length === 0) return { imported: 0, watch: false };
 
@@ -120,11 +142,18 @@ async function syncDueMatches(
   // Each match's rescan interval backs off exponentially with consecutive
   // empty scans (autoSyncAttempts), so a fixture that will never yield games
   // stops burning OpenDota budget while a live series stays brisk.
+  // Young matches get a floored interval (see autoSyncIntervalSeconds) so a
+  // late-starting night isn't punished for the empty scans before tip-off.
+  const dueMinutes = (m: { scheduledAt: Date | null }) =>
+    m.scheduledAt
+      ? minutesSinceAutoSyncOpen(m.scheduledAt.getTime(), nowMs)
+      : Number.POSITIVE_INFINITY;
   const claimable = [...due]
     .filter(
       (m) =>
         !m.autoSyncedAt ||
-        m.autoSyncedAt < autoSyncClaimCutoff(nowMs, m.autoSyncAttempts),
+        m.autoSyncedAt <
+          autoSyncClaimCutoff(nowMs, m.autoSyncAttempts, dueMinutes(m)),
     )
     .sort(
       (a, b) =>
@@ -154,7 +183,15 @@ async function syncDueMatches(
         status: { not: MATCH_STATUS.COMPLETED },
         OR: [
           { autoSyncedAt: null },
-          { autoSyncedAt: { lt: autoSyncClaimCutoff(nowMs, m.autoSyncAttempts) } },
+          {
+            autoSyncedAt: {
+              lt: autoSyncClaimCutoff(
+                nowMs,
+                m.autoSyncAttempts,
+                dueMinutes(m),
+              ),
+            },
+          },
         ],
       },
       data: {
@@ -168,6 +205,15 @@ async function syncDueMatches(
       await prisma.match.update({
         where: { id: m.id },
         data: { autoSyncAttempts: 0 },
+      });
+    } else if (res.unreachable) {
+      // OpenDota was down or rate-limiting, so finding nothing proves nothing.
+      // Roll the speculative increment back — otherwise a brief outage pushed
+      // every match of the night into hours-long backoff and the results only
+      // landed if somebody remembered the manual button.
+      await prisma.match.update({
+        where: { id: m.id },
+        data: { autoSyncAttempts: { decrement: 1 } },
       });
     }
     return { imported: res.imported, watch: true };
@@ -243,6 +289,16 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
       phase: true,
     },
   });
+  // A marker whose match no longer exists (a deleted test season) can never be
+  // announced, but it still occupies one of the `take` slots on every sweep —
+  // three of them permanently starved real failed announcements. Drop them.
+  const alive = new Set(matches.map((m) => m.id));
+  const orphaned = failed
+    .map((f) => f.key)
+    .filter((k) => !alive.has(k.slice("resultAnnounced:".length)));
+  if (orphaned.length > 0) {
+    await prisma.setting.deleteMany({ where: { key: { in: orphaned } } });
+  }
   for (const m of matches) {
     await announceSeriesResultOnce(m);
   }

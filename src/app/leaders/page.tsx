@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { heroById } from "@/lib/heroes";
 import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
@@ -15,11 +16,11 @@ import {
   type LeaderEntry,
   type LeaderRow,
   type PlayerGameLine,
+  parseGamePlayers,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
 import { careerReportCard, percentLabel } from "@/lib/benchmarks";
 import { weeklyHonors } from "@/lib/honors";
-import { getHeroNames } from "@/lib/dota";
 import { formatNetWorth } from "@/lib/utils";
 import {
   buttonClasses,
@@ -32,15 +33,6 @@ import {
 } from "@/components/ui";
 
 export const metadata = { title: "Leaders" };
-
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
 
 type DisplayUser = { name: string; avatar: string | null; rankTier: number | null };
 
@@ -105,7 +97,7 @@ export default async function LeadersPage({
   const linesByUser = new Map<string, PlayerGameLine[]>();
   const rawByUser = new Map<string, PlayerStat[]>();
   for (const g of games) {
-    for (const p of safeParse(g.players)) {
+    for (const p of parseGamePlayers<PlayerStat>(g.players)) {
       if (!p.userId) continue;
       const arr = linesByUser.get(p.userId) ?? [];
       arr.push({
@@ -154,7 +146,7 @@ export default async function LeadersPage({
 
   // Season rosters + team names: shared by the Weekly honors card and the
   // team suffix on every board row below.
-  const [members, teams, heroNames] = await Promise.all([
+  const [members, teams] = await Promise.all([
     prisma.teamMember.findMany({
       where: { seasonId: season.id },
       select: { userId: true, teamId: true },
@@ -163,7 +155,6 @@ export default async function LeadersPage({
       where: { seasonId: season.id },
       select: { id: true, name: true },
     }),
-    getHeroNames(),
   ]);
   const teamOf = new Map(members.map((m) => [m.userId, m.teamId]));
   const teamNameOf = new Map(teams.map((t) => [t.id, t.name]));
@@ -182,7 +173,7 @@ export default async function LeadersPage({
       honors: weeklyHonors(
         games
           .filter((g) => g.match.week === week && g.match.phase === "REGULAR")
-          .map((g) => ({ radiantWin: g.radiantWin, players: safeParse(g.players) })),
+          .map((g) => ({ radiantWin: g.radiantWin, players: parseGamePlayers<PlayerStat>(g.players) })),
         teamOf,
       ),
     }))
@@ -322,8 +313,8 @@ export default async function LeadersPage({
                     <span className="text-xs text-muted">
                       {honors.player.points} pts
                       {honors.player.heroId != null &&
-                      heroNames[honors.player.heroId]
-                        ? ` · ${heroNames[honors.player.heroId]}`
+                      heroById(honors.player.heroId)
+                        ? ` · ${heroById(honors.player.heroId)!.name}`
                         : ""}
                     </span>
                   </span>

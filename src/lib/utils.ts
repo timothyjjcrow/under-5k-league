@@ -20,3 +20,16 @@ export function formatNetWorth(n: number | null | undefined): string {
   if (n == null) return "—";
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
 }
+
+/**
+ * Does this free-text field have anything worth rendering?
+ *
+ * Player statements and captain notes are optional, and every surface used a
+ * plain truthiness check — which a whitespace-only value passes, producing an
+ * empty pair of smart quotes under a "NOTE FOR CAPTAINS" heading. Saves are
+ * trimmed now, but rows stored before that (or edited straight in the DB)
+ * still need the render side to cope.
+ */
+export function hasText(value: string | null | undefined): boolean {
+  return !!value && value.trim().length > 0;
+}

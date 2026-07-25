@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { hasText } from "@/lib/utils";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -215,7 +216,7 @@ export default async function PlayersPage() {
                           </a>
                         ) : null}
                       </div>
-                      {p.captainNote ? (
+                      {hasText(p.captainNote) ? (
                         <p className="mt-1.5 line-clamp-2 text-xs italic text-muted">
                           &ldquo;{p.captainNote}&rdquo;
                         </p>

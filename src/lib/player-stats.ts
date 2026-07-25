@@ -2,6 +2,27 @@
 // (no DB): the profile page parses each Game's stored player JSON into these
 // lines, then this rolls them up.
 
+/**
+ * Parse a Game's stored `players` JSON into typed box-score lines.
+ *
+ * Player attribution lives inside that column, so every stat surface (leaders,
+ * meta, records, hall of fame, fantasy, profiles, match pages, team pages,
+ * compare, recap, dashboard) has to parse it — and had drifted into eleven
+ * byte-identical private copies. Generic in the line type because the fantasy
+ * and hall-of-fame boards want a narrower shape than PlayerStat.
+ *
+ * Always returns an array: a malformed or legacy row yields [] rather than
+ * throwing a whole stat page off the air.
+ */
+export function parseGamePlayers<T>(json: string): T[] {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? (v as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export type PlayerGameLine = {
   isRadiant: boolean;
   radiantWin: boolean;

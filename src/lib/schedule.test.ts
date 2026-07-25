@@ -14,6 +14,7 @@ import {
   bracketSkeleton,
   groupPlayoffRounds,
   matchNightForWeek,
+  upcomingMatchNight,
 } from "./schedule";
 
 describe("matchNightForWeek", () => {
@@ -26,6 +27,41 @@ describe("matchNightForWeek", () => {
   it("adds exactly 7 days per week", () => {
     const w3 = matchNightForWeek(first, 3);
     expect(w3.getTime() - first.getTime()).toBe(14 * 24 * 3600 * 1000);
+  });
+});
+
+describe("upcomingMatchNight", () => {
+  const first = new Date("2026-07-12T18:00:00-07:00");
+  const WEEK = 7 * 24 * 3600 * 1000;
+
+  it("leaves a future night exactly where the arithmetic puts it", () => {
+    const now = new Date("2026-07-20T12:00:00-07:00").getTime();
+    const w3 = upcomingMatchNight(first, 3, now); // Jul 26
+    expect(w3.getTime()).toBe(matchNightForWeek(first, 3).getTime());
+  });
+
+  it("rolls a past night forward in whole weeks", () => {
+    // A bracket created weeks after its arithmetic date must not be born with
+    // a kickoff already outside its own auto-sync window.
+    const now = new Date("2026-09-20T21:00:00-07:00").getTime();
+    const rolled = upcomingMatchNight(first, 3, now);
+    expect(rolled.getTime()).toBeGreaterThan(now);
+    // Still the league's weekday + kickoff time: a whole number of weeks on.
+    const delta = rolled.getTime() - matchNightForWeek(first, 3).getTime();
+    expect(delta % WEEK).toBe(0);
+  });
+
+  it("rolls forward when the night is only just past", () => {
+    const w1 = matchNightForWeek(first, 1).getTime();
+    const rolled = upcomingMatchNight(first, 1, w1 + 1000);
+    expect(rolled.getTime()).toBe(w1 + WEEK);
+  });
+
+  it("is stable across a whole season of weeks", () => {
+    const now = new Date("2026-08-01T12:00:00-07:00").getTime();
+    for (let w = 1; w <= 12; w++) {
+      expect(upcomingMatchNight(first, w, now).getTime()).toBeGreaterThan(now);
+    }
   });
 });
 

@@ -5,6 +5,7 @@ import {
   acceptMatch,
   autoDetectResult,
   cancelLobby,
+  voidLastResult,
   castVote,
   declineMatch,
   getInhouseState,
@@ -76,6 +77,9 @@ export async function POST(req: NextRequest) {
       break;
     case "cancel":
       res = await cancelLobby(user);
+      break;
+    case "void":
+      res = await voidLastResult(user);
       break;
     default:
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });

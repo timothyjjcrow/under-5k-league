@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/prisma";
+import { getAllGameScores } from "@/lib/cached-queries";
 import {
   summarizePlayerGames,
   type PlayerGameLine,
+  parseGamePlayers,
 } from "@/lib/player-stats";
 import { meetings, type MeetingGame } from "@/lib/compare";
 import type { PlayerStat } from "@/lib/match-import";
@@ -22,15 +24,6 @@ import {
 
 export const metadata = { title: "Compare players" };
 
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
-
 type StatRow = {
   label: string;
   a: string;
@@ -43,9 +36,20 @@ function row(
   label: string,
   a: number | null,
   b: number | null,
-  opts: { lowerBetter?: boolean; fmt?: (n: number) => string } = {},
+  opts: {
+    lowerBetter?: boolean;
+    fmt?: (n: number) => string;
+    /** Both players' game counts — a side with none has no record to compare. */
+    contested?: boolean;
+  } = {},
 ): StatRow {
   const fmt = opts.fmt ?? ((n: number) => String(n));
+  // A player with zero games isn't "better" at anything. Left unguarded, an
+  // unplayed comparison highlighted 0 avg deaths as the winning side and
+  // 0% win rate as the losing one — both meaningless.
+  if (opts.contested === false) {
+    return { label, a: a == null ? "—" : fmt(a), b: b == null ? "—" : fmt(b), edge: 0 };
+  }
   if (a == null || b == null) {
     return {
       label,
@@ -76,15 +80,12 @@ export default async function ComparePage({
   // Career = every imported game ever, both league seasons and past ones.
   const games =
     a && b
-      ? await prisma.game.findMany({
-          orderBy: { startTime: "asc" },
-          select: { players: true, radiantWin: true },
-        })
+      ? await getAllGameScores()
       : [];
 
   const linesOf = (id: string): PlayerGameLine[] =>
     games.flatMap((g) =>
-      safeParse(g.players)
+      parseGamePlayers<PlayerStat>(g.players)
         .filter((p) => p.userId === id)
         .map((p) => ({
           isRadiant: p.isRadiant,
@@ -106,7 +107,7 @@ export default async function ComparePage({
           games.map(
             (g): MeetingGame => ({
               radiantWin: g.radiantWin,
-              lines: safeParse(g.players).map((p) => ({
+              lines: parseGamePlayers<PlayerStat>(g.players).map((p) => ({
                 userId: p.userId,
                 isRadiant: p.isRadiant,
               })),
@@ -117,24 +118,29 @@ export default async function ComparePage({
         )
       : null;
 
+  // Only compare when BOTH sides actually have games on record.
+  const contested = !!sumA && !!sumB && sumA.games > 0 && sumB.games > 0;
   const rows: StatRow[] =
     sumA && sumB
       ? [
           // Games played is context, not a contest — never highlighted.
           { label: "Games", a: String(sumA.games), b: String(sumB.games), edge: 0 },
-          row("Wins", sumA.wins, sumB.wins),
+          row("Wins", sumA.wins, sumB.wins, { contested }),
           row("Win rate", sumA.winRate, sumB.winRate, {
             fmt: (n) => `${n}%`,
+            contested,
           }),
-          row("KDA", sumA.kda, sumB.kda),
-          row("Avg kills", sumA.avgKills, sumB.avgKills),
+          row("KDA", sumA.kda, sumB.kda, { contested }),
+          row("Avg kills", sumA.avgKills, sumB.avgKills, { contested }),
           row("Avg deaths", sumA.avgDeaths, sumB.avgDeaths, {
             lowerBetter: true,
+            contested,
           }),
-          row("Avg assists", sumA.avgAssists, sumB.avgAssists),
-          row("Avg GPM", sumA.avgGpm, sumB.avgGpm),
+          row("Avg assists", sumA.avgAssists, sumB.avgAssists, { contested }),
+          row("Avg GPM", sumA.avgGpm, sumB.avgGpm, { contested }),
           row("Avg net worth", sumA.avgNetWorth, sumB.avgNetWorth, {
             fmt: formatNetWorth,
+            contested,
           }),
         ]
       : [];

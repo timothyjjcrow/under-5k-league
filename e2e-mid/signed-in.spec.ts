@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // Signed-in mid-season surfaces: fantasy (locked once games imported — the
 // fixture has games, so assert the locked state renders) and pick'em.
@@ -34,54 +34,31 @@ test("mobile schedule has no horizontal page overflow", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/schedule");
   await expect(page.getByText("Week 1").first()).toBeVisible();
-  // The page body must never scroll horizontally (CLAUDE.md mobile rules) —
-  // wide content scrolls inside its own container instead. When it fails,
-  // name the offending elements (skipping ones safely clipped by their own
-  // overflow container) so the regression is diagnosable from CI output.
-  const { overflow, offenders } = await page.evaluate(() => {
-    const docW = document.documentElement.clientWidth;
-    const overflowPx = document.documentElement.scrollWidth - docW;
-    const clipped = (el: Element): boolean => {
-      for (let p = el.parentElement; p; p = p.parentElement) {
-        const o = getComputedStyle(p).overflowX;
-        if (o === "auto" || o === "scroll" || o === "hidden") return true;
-      }
-      return false;
-    };
-    const desc = (el: Element) => {
-      const head = el.querySelector("h1,h2,h3")?.textContent?.slice(0, 30);
-      return `${el.tagName.toLowerCase()}[${String(el.className).slice(0, 60)}]${head ? ` «${head}»` : ""} scrollW=${el.scrollWidth}`;
-    };
-    const offenders: string[] = [];
-    if (overflowPx > 1) {
-      for (const el of document.querySelectorAll("*")) {
-        if (
-          el.getBoundingClientRect().right > docW + 1 &&
-          !clipped(el) &&
-          offenders.length < 6
-        ) {
-          offenders.push(desc(el));
-        }
-      }
-      // Rects miss some culprits (transforms, margins) — also walk the chain
-      // of elements whose own layout scrollWidth exceeds the viewport.
-      const walk = (el: Element, depth: number) => {
-        for (const c of el.children) {
-          if (
-            c.scrollWidth > docW + 1 &&
-            getComputedStyle(c).overflowX === "visible" &&
-            offenders.length < 12
-          ) {
-            offenders.push(`chain@${depth}: ${desc(c)}`);
-            walk(c, depth + 1);
-          }
-        }
-      };
-      walk(document.body, 0);
-    }
-    return { overflow: overflowPx, offenders };
-  });
-  expect(offenders, `page scrolls horizontally by ${overflow}px`).toEqual([]);
-  expect(overflow).toBeLessThanOrEqual(1);
+  await expectNoHorizontalOverflow(page, "/schedule");
+  assertNoErrors();
+});
+
+// The admin panel and the match page render <select>s whose options are player
+// names — a select sizes to its widest option and, as a flex item, refuses to
+// shrink. One 32-char Steam name (Steam's own cap) used to push /admin 116px
+// and /matches/[id] 64px wider than a 375px phone. Neither page had a mobile
+// tripwire, which is how it shipped.
+test("mobile admin panel has no horizontal page overflow", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/api/auth/dev?name=Overflow%20Admin&admin=1");
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/admin");
+  assertNoErrors();
+});
+
+test("mobile match page has no horizontal page overflow", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/schedule");
+  await page.getByRole("link", { name: "details →" }).first().click();
+  await expect(page).toHaveURL(/\/matches\//);
+  await expectNoHorizontalOverflow(page, "/matches/[id]");
   assertNoErrors();
 });

@@ -12,7 +12,7 @@ import {
   TeamCrest,
   buttonClasses,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { cn, hasText } from "@/lib/utils";
 import { pushToast } from "@/components/toaster";
 import { Countdown } from "@/components/countdown";
 import { DiscordTag } from "@/components/discord-tag";
@@ -24,7 +24,7 @@ import {
 } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
 import { maxBid, nextNominatorIndex, wasOutbid } from "@/lib/draft";
-import { DEFAULTS } from "@/lib/constants";
+import { DEFAULTS, DRAFT_ROOM } from "@/lib/constants";
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 
@@ -198,28 +198,97 @@ export function DraftRoom({
     setState(s);
   }, []);
 
-  const poll = useCallback(async () => {
-    const seq = ++seqRef.current;
-    try {
-      const res = await fetch("/api/draft/tick", { method: "POST" });
-      if (res.ok) {
-        apply(await res.json(), seq);
-        pollOk();
-      } else if (res.status === 404) {
-        setNoSeason(true); // season deactivated under us — stop pretending
-      } else {
-        pollFail();
-      }
-    } catch {
-      pollFail(); // network blip; next poll retries
-    }
-  }, [apply, pollOk, pollFail]);
-
+  // Does this viewer need alerts even with the tab hidden? Captains and admins
+  // act; a player still in the pool can be nominated at any moment and wants
+  // the chime. A drafted player or a logged-out spectator is just watching.
+  const hasStakeRef = useRef(false);
+  // In an effect, not during render — writing a ref while rendering is exactly
+  // what <InhouseRoom> avoids, and React's lint rules flag it.
   useEffect(() => {
-    poll();
-    const id = setInterval(poll, pollMs);
-    return () => clearInterval(id);
-  }, [poll, pollMs]);
+    hasStakeRef.current = !!(
+      state &&
+      (state.me.myTeamId ||
+        state.me.isAdmin ||
+        state.available.some((p) => p.userId === state.me.userId))
+    );
+  }, [state]);
+
+  // Self-scheduling poll (not setInterval): the cadence has to react to the
+  // draft's phase and the tab's visibility, and a fixed interval also stacks
+  // requests when one is slow. Mirrors <InhouseRoom>'s loop.
+  useEffect(() => {
+    let alive = true;
+    let inFlight = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = (ms: number) => {
+      if (!alive) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(tick, ms);
+    };
+
+    const tick = async () => {
+      // inFlight also guards a visibilitychange firing mid-request — the active
+      // call reschedules when it settles.
+      if (!alive || inFlight) return;
+      if (document.visibilityState === "hidden" && !hasStakeRef.current) {
+        // Hidden with nothing at stake: don't fetch at all. The visibility
+        // listener wakes us the instant it's refocused.
+        schedule(DRAFT_ROOM.POLL_IDLE_MS);
+        return;
+      }
+      inFlight = true;
+      const seq = ++seqRef.current;
+      let live = false;
+      let rateLimited = false;
+      try {
+        const res = await fetch("/api/draft/tick", { method: "POST" });
+        if (res.ok) {
+          const next = (await res.json()) as DraftState;
+          apply(next, seq);
+          pollOk();
+          live = next.status === "IN_PROGRESS" || next.status === "PAUSED";
+        } else if (res.status === 404) {
+          setNoSeason(true); // season deactivated under us — stop pretending
+          return;
+        } else if (res.status === 429) {
+          // Deliberately NOT a poll failure. Tripping `disconnected` here would
+          // disable every bid control over a rate limit — the exact moment a
+          // captain most needs to act — and /api/draft/bid isn't rate limited,
+          // so their bid would still land. Just ease off and keep the room live.
+          rateLimited = true;
+        } else {
+          pollFail();
+        }
+      } catch {
+        pollFail(); // network blip; next poll retries
+      } finally {
+        inFlight = false;
+      }
+      // Recompute visibility HERE, not from a pre-fetch snapshot: a tab
+      // refocused mid-request reschedules at the active rate straight away.
+      const delay = rateLimited
+        ? DRAFT_ROOM.POLL_RATE_LIMITED_MS
+        : document.visibilityState === "hidden"
+          ? DRAFT_ROOM.POLL_KEEPALIVE_MS
+          : live
+            ? pollMs
+            : DRAFT_ROOM.POLL_IDLE_MS;
+      schedule(delay);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    tick();
+
+    return () => {
+      alive = false;
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (timer) clearTimeout(timer);
+    };
+  }, [apply, pollOk, pollFail, pollMs]);
 
   // Diff each new state against the previous one to build the live feed +
   // trigger the SOLD! flash. Read-only — never mutates draft state.
@@ -832,7 +901,7 @@ export function DraftRoom({
 
               {state.nominatedPlayer.favoriteHeroes ||
               state.nominatedPlayer.statement ||
-              state.nominatedPlayer.captainNote ? (
+              hasText(state.nominatedPlayer.captainNote) ? (
                 <div className="w-full space-y-1 border-t border-line pt-3 text-sm">
                   {state.nominatedPlayer.favoriteHeroes ? (
                     <div className="flex flex-wrap items-center gap-2">
@@ -843,14 +912,18 @@ export function DraftRoom({
                       />
                     </div>
                   ) : null}
-                  {state.nominatedPlayer.captainNote ? (
-                    <div>
+                  {/* Clamped: these are free text up to 1000 chars each, and
+                      at full length the banner grew past the viewport and
+                      pushed the bid controls off-screen mid-auction. The full
+                      text is a click away on the player's profile. */}
+                  {hasText(state.nominatedPlayer.captainNote) ? (
+                    <div className="line-clamp-3 [overflow-wrap:anywhere]">
                       <span className="text-muted">Note to captains:</span>{" "}
                       {state.nominatedPlayer.captainNote}
                     </div>
                   ) : null}
-                  {state.nominatedPlayer.statement ? (
-                    <div className="text-muted">
+                  {hasText(state.nominatedPlayer.statement) ? (
+                    <div className="line-clamp-3 [overflow-wrap:anywhere] text-muted">
                       &ldquo;{state.nominatedPlayer.statement}&rdquo;
                     </div>
                   ) : null}

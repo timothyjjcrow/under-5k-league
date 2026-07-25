@@ -13,8 +13,6 @@ import { getWebhookUrl, matchResultMessage, sendDiscordMessage } from "./discord
 import { getSetting, setSetting, stampResultChange } from "./settings";
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
 /** Marker value recording a send that failed — claimable for a retry. */
@@ -142,6 +140,110 @@ export function classifyGame(
   const direTeamId = aRadiant ? teamB.teamId : teamA.teamId;
   const winnerTeamId = match.radiant_win ? radiantTeamId : direTeamId;
   return { ok: true, radiantTeamId, direTeamId, winnerTeamId };
+}
+
+/** Max gap between consecutive games of one series. A real Bo2/Bo3 is played
+ *  back-to-back; a bigger gap means a different session entirely (a scrim, a
+ *  prior meeting, a rematch for fun the next day). */
+export const SERIES_SESSION_GAP_MS = 4 * 60 * 60 * 1000;
+
+/** How long one roster scan may spend fetching candidate games. */
+export const SCAN_BUDGET_MS = 25_000;
+
+/** How far either side of its kickoff a game may sit and still belong to a
+ *  match. Generous backwards because amateur teams often play early without
+ *  filing a reschedule; mis-attribution is prevented by `claimsGame` below,
+ *  not by keeping this window tight. */
+export const DETECT_WINDOW_BEFORE_MS = 3 * 24 * 60 * 60 * 1000;
+export const DETECT_WINDOW_AFTER_MS = 6 * 24 * 60 * 60 * 1000;
+
+/**
+ * May THIS match claim a game, given the other unplayed meetings between the
+ * same two teams?
+ *
+ * Two teams meet more than once (a double round robin, or a playoff rematch),
+ * and an unimported fixture stays a live candidate forever. Windowing alone let
+ * the wrong meeting win: a regular-season game played the day before a playoff
+ * kickoff sat inside the playoff match's window, so the bracket advanced on a
+ * regular-season result. A game belongs to whichever meeting it is closest to.
+ *
+ * Ties refuse the claim — with two meetings equidistant there is no honest
+ * answer, and the admin/captain can still import by match id.
+ */
+export function claimsGame(
+  gameStartMs: number,
+  thisKickoffMs: number,
+  otherKickoffsMs: number[],
+): boolean {
+  const mine = Math.abs(gameStartMs - thisKickoffMs);
+  return otherKickoffsMs.every((o) => Math.abs(gameStartMs - o) > mine);
+}
+
+export type SeriesCandidate = {
+  id: number;
+  /** OpenDota start_time, in SECONDS. */
+  startTime: number;
+  winnerTeamId: string | null;
+};
+
+/**
+ * Choose which of the candidate games actually make up this series.
+ *
+ * This used to take the most RECENT `bestOf` games, which silently recorded the
+ * wrong result whenever two teams played an extra game after the series: a Bo2
+ * that went 2-0 plus one for fun was imported as games 2+3 and recorded 1-1, a
+ * draw, with no error anywhere (standings, tiebreaks, pick'em grading and the
+ * Discord post all took the wrong result).
+ *
+ * Instead: split the candidates into sessions on a >4h gap, take the session
+ * with the most games (ties go to the most recent, which preserves the original
+ * "a stale scrim never beats the night just played" property), then walk that
+ * session in PLAY order and stop as soon as one side has clinched. The bonus
+ * game after a decided series is never part of the record.
+ */
+export function pickSeriesGames<T extends SeriesCandidate>(
+  candidates: T[],
+  bestOf: number,
+): T[] {
+  if (candidates.length === 0) return [];
+  const sorted = [...candidates].sort((a, b) => a.startTime - b.startTime);
+
+  const sessions: T[][] = [];
+  let cur: T[] = [sorted[0]!];
+  for (let i = 1; i < sorted.length; i++) {
+    const gapMs = (sorted[i]!.startTime - sorted[i - 1]!.startTime) * 1000;
+    if (gapMs > SERIES_SESSION_GAP_MS) {
+      sessions.push(cur);
+      cur = [sorted[i]!];
+    } else {
+      cur.push(sorted[i]!);
+    }
+  }
+  sessions.push(cur);
+
+  let best = sessions[0]!;
+  for (const s of sessions) {
+    if (
+      s.length > best.length ||
+      (s.length === best.length && s[0]!.startTime > best[0]!.startTime)
+    ) {
+      best = s;
+    }
+  }
+
+  const cap = Math.max(1, bestOf);
+  const need = Math.floor(cap / 2) + 1; // wins that decide the series
+  const wins = new Map<string, number>();
+  const out: T[] = [];
+  for (const g of best) {
+    if (out.length >= cap) break;
+    out.push(g);
+    if (!g.winnerTeamId) continue; // a draw/void game decides nothing
+    const n = (wins.get(g.winnerTeamId) ?? 0) + 1;
+    wins.set(g.winnerTeamId, n);
+    if (n >= need) break; // clinched — anything after this is a bonus game
+  }
+  return out;
 }
 
 type MatchRow = {
@@ -341,13 +443,20 @@ export async function importGameForMatch(
   });
   if (!match) return { ok: false, error: "Unknown league match" };
 
-  // A COMPLETED match with no imported games was recorded manually (score
-  // entry / forfeit) — recomputeSeries would silently overwrite that result.
-  if (match.status === "COMPLETED" && match.games.length === 0) {
+  // A decided series is closed to further imports, because recomputeSeries
+  // would silently rewrite the standing result. This used to check
+  // `games.length === 0`, which only caught the pure manual-entry case: a Bo3
+  // that team B forfeited after game 1 is COMPLETED 2-0 with ONE game, so
+  // `games.length < bestOf` let a later import through and quietly replaced the
+  // admin's forfeit ruling. Auto-sync and league sync already skip COMPLETED
+  // matches; this closes the manual paths (admin "Add game", captain report).
+  if (match.status === "COMPLETED") {
     return {
       ok: false,
       error:
-        "This match's result was recorded manually — importing a game would overwrite it",
+        match.games.length === 0
+          ? "This match's result was recorded manually — reopen it first if you want to import its games"
+          : "This series is already final — remove one of its games first if you need to correct it",
     };
   }
   // A series only holds bestOf games; a Bo1 with two games is a mis-attribution.
@@ -407,6 +516,16 @@ export async function importGameForMatch(
     throw e;
   }
 
+  // A productive import clears the empty-scan backoff, wherever it came from.
+  // This lives here rather than only in the auto-sync service because the
+  // captain "Report your result" and admin auto-fetch paths call
+  // autoDetectGamesForMatch directly — so a Bo3 whose game 1 was imported by
+  // hand used to stay fully backed off for games 2 and 3.
+  await prisma.match.updateMany({
+    where: { id: matchId, autoSyncAttempts: { gt: 0 } },
+    data: { autoSyncAttempts: 0 },
+  });
+
   await recomputeSeries(matchId);
   // Bump the change cursor so every parked client (not just whoever triggered
   // this import) learns the league moved on its next /api/sync poll.
@@ -418,6 +537,9 @@ export type AutoDetectResult = {
   imported: number;
   scanned: number;
   error?: string;
+  /** At least one roster lookup couldn't reach OpenDota, so "found nothing"
+   *  proves nothing. Callers use this to avoid counting the scan as empty. */
+  unreachable?: boolean;
 };
 
 /**
@@ -436,8 +558,13 @@ export async function autoDetectGamesForMatch(
 
   // Count how many of our players share each recent match id.
   const counts = new Map<number, number>();
+  let unreachable = false;
   for (const acc of accounts) {
-    const ids = (await fetchRecentMatchIds(acc, 20)) ?? []; // null = unreachable
+    const ids = await fetchRecentMatchIds(acc, 20); // null = unreachable
+    if (ids === null) {
+      unreachable = true;
+      continue;
+    }
     for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
 
@@ -462,8 +589,15 @@ export async function autoDetectGamesForMatch(
   );
 
   const minPerSide = Math.min(3, teamSize);
-  const valid: { id: number; startTime: number }[] = [];
+  const valid: SeriesCandidate[] = [];
+  // Wall-clock budget: each candidate is a separate OpenDota round trip (8s
+  // timeout each), so a slow API turned one scan into minutes of work and the
+  // serverless function was killed before it could return. Stopping early is
+  // safe — the match stays claimable and the next run picks up where this left
+  // off (already-imported games are skipped by the `recorded` set above).
+  const scanDeadline = Date.now() + SCAN_BUDGET_MS;
   for (const id of candidateIds) {
+    if (Date.now() > scanDeadline) break;
     if (recorded.has(String(id))) continue;
     const od = await fetchOpenDotaMatch(String(id));
     if (!od) continue;
@@ -473,36 +607,55 @@ export async function autoDetectGamesForMatch(
       { teamId: match.awayTeamId, accountIds: awaySet },
       minPerSide,
     );
-    if (cls.ok) valid.push({ id, startTime: od.start_time ?? 0 });
+    if (cls.ok) {
+      valid.push({
+        id,
+        startTime: od.start_time ?? 0,
+        winnerTeamId: cls.winnerTeamId,
+      });
+    }
   }
 
-  // These teams may meet more than once a season (playoff rematches). When the
-  // match has a scheduled night, only games played around it belong to it —
-  // otherwise detecting a stale match would happily grab the *other* meeting.
+  // These teams may meet more than once a season (double round robin, playoff
+  // rematch), and an unimported fixture stays a live candidate forever. Keep
+  // only games inside this match's window AND closer to it than to any other
+  // unplayed meeting between the same two sides — see `claimsGame`.
+  const otherKickoffs = match.scheduledAt
+    ? (
+        await prisma.match.findMany({
+          where: {
+            seasonId: match.seasonId,
+            id: { not: match.id },
+            status: { not: MATCH_STATUS.COMPLETED },
+            scheduledAt: { not: null },
+            OR: [
+              { homeTeamId: match.homeTeamId, awayTeamId: match.awayTeamId },
+              { homeTeamId: match.awayTeamId, awayTeamId: match.homeTeamId },
+            ],
+          },
+          select: { scheduledAt: true },
+        })
+      ).map((m) => m.scheduledAt!.getTime())
+    : [];
+
   const windowed = match.scheduledAt
     ? valid.filter((v) => {
         const t = v.startTime * 1000;
         const night = match.scheduledAt!.getTime();
-        return t >= night - DAY_MS && t <= night + 6 * DAY_MS;
+        if (t < night - DETECT_WINDOW_BEFORE_MS) return false;
+        if (t > night + DETECT_WINDOW_AFTER_MS) return false;
+        return claimsGame(t, night, otherKickoffs);
       })
     : valid;
 
-  // Keep only the most recent `bestOf` games that check out, then import them in
-  // play order. A series can't have more games than its length, so this caps the
-  // import — and crucially means an *older* game with the same players (a scrim,
-  // a prior meeting) is always superseded by the game this match was just played,
-  // never mistaken for it.
-  const chosen = windowed
-    .sort((a, b) => b.startTime - a.startTime)
-    .slice(0, Math.max(1, match.bestOf))
-    .sort((a, b) => a.startTime - b.startTime);
+  const chosen = pickSeriesGames(windowed, match.bestOf);
 
   let imported = 0;
   for (const c of chosen) {
     const r = await importGameForMatch(matchId, String(c.id));
     if (r.ok) imported++;
   }
-  return { imported, scanned: accounts.length };
+  return { imported, scanned: accounts.length, unreachable };
 }
 
 export type EnrichResult = {

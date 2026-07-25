@@ -5,6 +5,7 @@ import {
   heroIcon,
   heroPortrait,
   parseHeroList,
+  clampHeroList,
 } from "./heroes";
 
 describe("findHero", () => {
@@ -64,5 +65,34 @@ describe("hero image urls", () => {
   it("has a unique key per hero", () => {
     const keys = new Set(HEROES.map((h) => h.key));
     expect(keys.size).toBe(HEROES.length);
+  });
+});
+
+describe("clampHeroList", () => {
+  it("leaves a short list untouched (but trimmed)", () => {
+    expect(clampHeroList("  Pudge, Lion  ", 200)).toBe("Pudge, Lion");
+  });
+
+  it("drops whole names rather than cutting one in half", () => {
+    // The bug: a raw .slice(0, n) stored "…, Legion Comman", which then
+    // rendered as garbage in the player pool and the draft room.
+    const out = clampHeroList("Anti-Mage, Legion Commander", 20);
+    expect(out).toBe("Anti-Mage");
+    expect(out.length).toBeLessThanOrEqual(20);
+  });
+
+  it("keeps as many whole names as fit", () => {
+    const out = clampHeroList("Pudge, Lion, Sniper, Invoker", 20);
+    expect(out).toBe("Pudge, Lion, Sniper");
+    expect(out.length).toBeLessThanOrEqual(20);
+  });
+
+  it("handles empty and separator-only input", () => {
+    expect(clampHeroList("", 200)).toBe("");
+    expect(clampHeroList("  ,  , ", 200)).toBe(",  ,");
+  });
+
+  it("returns nothing when even the first name doesn't fit", () => {
+    expect(clampHeroList("Legion Commander", 3)).toBe("");
   });
 });

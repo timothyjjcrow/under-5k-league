@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { parseGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
 import {
@@ -23,15 +24,6 @@ import {
 } from "@/components/ui";
 
 export const metadata = { title: "Record book" };
-
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
 
 /** Big display value per record key. */
 function playerValue(r: PlayerRecord): string {
@@ -93,7 +85,7 @@ export default async function RecordsPage() {
     durationSecs: g.durationSecs,
     radiantScore: g.radiantScore,
     direScore: g.direScore,
-    lines: safeParse(g.players).map((p) => ({
+    lines: parseGamePlayers<PlayerStat>(g.players).map((p) => ({
       userId: p.userId,
       heroId: p.heroId,
       kills: p.kills,

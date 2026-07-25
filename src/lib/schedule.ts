@@ -8,6 +8,32 @@ export function matchNightForWeek(firstNight: Date, week: number): Date {
   return new Date(firstNight.getTime() + (week - 1) * 7 * 24 * 60 * 60 * 1000);
 }
 
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The league night for `week`, rolled forward if that date has already passed.
+ *
+ * Playoff rounds are dated by pure arithmetic off `firstMatchNight`, so once a
+ * season slips (captain reschedules don't move the anchor) a bracket created
+ * today could be stamped with a kickoff LAST week. That silently disables the
+ * result pipeline for the biggest matches of the season: `isAutoSyncDue` sees a
+ * window that closed 48h ago and never scans, and `autoDetectGamesForMatch`
+ * windows its candidate games around the wrong night so a manual "Auto-fetch"
+ * reports "no games found" for games that plainly exist.
+ *
+ * Rolling forward in whole weeks keeps the league's weekday and kickoff time.
+ */
+export function upcomingMatchNight(
+  firstNight: Date,
+  week: number,
+  nowMs: number,
+): Date {
+  const t = matchNightForWeek(firstNight, week);
+  if (t.getTime() > nowMs) return t;
+  const weeksBehind = Math.ceil((nowMs - t.getTime()) / WEEK_MS);
+  return new Date(t.getTime() + weeksBehind * WEEK_MS);
+}
+
 /**
  * Generate a round-robin: every team plays every other once (or twice if
  * `doubleRound`). Returns an array of rounds (weeks); each round is a list of

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   buildPlayers,
+  claimsGame,
   classifyGame,
+  pickSeriesGames,
   sanitizeBenchmarks,
 } from "./match-import";
 import type { OpenDotaMatch, OpenDotaPlayer } from "./dota";
@@ -157,5 +159,129 @@ describe("buildPlayers report-card fields", () => {
       heroHealing: null,
       benchmarks: null,
     });
+  });
+});
+
+describe("pickSeriesGames", () => {
+  const HOUR = 3600;
+  // Games of one series, played back-to-back from a base time.
+  const g = (id: number, hoursIn: number, winner: string | null) => ({
+    id,
+    startTime: 1_700_000_000 + Math.round(hoursIn * HOUR),
+    winnerTeamId: winner,
+  });
+
+  it("takes the series in play order, not the most recent games", () => {
+    // The bug this replaced: A won a Bo2 2-0, then the teams played one more
+    // for fun that B won. Taking the newest 2 recorded games 2+3 as a 1-1 DRAW.
+    const chosen = pickSeriesGames(
+      [g(1, 0, "A"), g(2, 1, "A"), g(3, 2, "B")],
+      2,
+    );
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it("stops at the clinch so a dead rubber never joins the record", () => {
+    // Bo3 decided 2-0; the third game is exhibition and must not make it 2-1.
+    const chosen = pickSeriesGames(
+      [g(1, 0, "A"), g(2, 1, "A"), g(3, 2, "B")],
+      3,
+    );
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it("keeps a full Bo3 that genuinely goes the distance", () => {
+    const chosen = pickSeriesGames(
+      [g(1, 0, "A"), g(2, 1, "B"), g(3, 2, "A")],
+      3,
+    );
+    expect(chosen.map((c) => c.id)).toEqual([1, 2, 3]);
+  });
+
+  it("keeps both games of a drawn Bo2", () => {
+    const chosen = pickSeriesGames([g(1, 0, "A"), g(2, 1, "B")], 2);
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it("ignores an older session — a scrim days earlier isn't the series", () => {
+    const chosen = pickSeriesGames(
+      [g(9, -48, "B"), g(1, 0, "A"), g(2, 1, "A")],
+      2,
+    );
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it("prefers the most recent session when both are the same size", () => {
+    // Preserves the old behaviour's one good property: with nothing to
+    // separate them on size, the night just played wins.
+    const chosen = pickSeriesGames([g(9, -48, "B"), g(1, 0, "A")], 1);
+    expect(chosen.map((c) => c.id)).toEqual([1]);
+  });
+
+  it("treats a >4h gap as a different session", () => {
+    const chosen = pickSeriesGames(
+      [g(1, 0, "A"), g(2, 1, "A"), g(3, 9, "B"), g(4, 10, "B")],
+      2,
+    );
+    // Same size, so the later session wins — it is the night just played.
+    expect(chosen.map((c) => c.id)).toEqual([3, 4]);
+  });
+
+  it("never returns more than bestOf, and handles an empty pool", () => {
+    expect(pickSeriesGames([], 3)).toEqual([]);
+    const many = [g(1, 0, null), g(2, 1, null), g(3, 2, null), g(4, 3, null)];
+    expect(pickSeriesGames(many, 2)).toHaveLength(2);
+  });
+
+  it("does not clinch on games with no winner", () => {
+    const chosen = pickSeriesGames([g(1, 0, null), g(2, 1, "A")], 2);
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+});
+
+describe("claimsGame", () => {
+  const HOUR = 3600_000;
+  const DAY = 24 * HOUR;
+  const sunday = Date.UTC(2026, 8, 27, 18, 0); // a playoff kickoff
+
+  it("claims a game played around its own kickoff", () => {
+    expect(claimsGame(sunday + 2 * HOUR, sunday, [])).toBe(true);
+  });
+
+  it("refuses a game that belongs to another meeting between the same teams", () => {
+    // The regression: A vs B played their rescheduled REGULAR match on
+    // Saturday and nobody imported it. The playoff meeting is Sunday, and the
+    // Saturday game sat inside its window — so the bracket advanced on a
+    // regular-season result.
+    const saturdayFixture = sunday - DAY;
+    const gamePlayedSaturday = saturdayFixture + HOUR;
+    expect(claimsGame(gamePlayedSaturday, sunday, [saturdayFixture])).toBe(
+      false,
+    );
+    // …and that same game IS claimed by the fixture it actually belongs to.
+    expect(claimsGame(gamePlayedSaturday, saturdayFixture, [sunday])).toBe(
+      true,
+    );
+  });
+
+  it("lets a team play early and still claim its own fixture", () => {
+    // Two days early, but still nearer this kickoff than the other meeting.
+    const other = sunday + 14 * DAY;
+    expect(claimsGame(sunday - 2 * DAY, sunday, [other])).toBe(true);
+  });
+
+  it("refuses on an exact tie rather than guessing", () => {
+    const a = sunday;
+    const b = sunday + 4 * HOUR;
+    const midpoint = sunday + 2 * HOUR;
+    expect(claimsGame(midpoint, a, [b])).toBe(false);
+  });
+
+  it("checks against every other meeting, not just the nearest", () => {
+    const earlier = sunday - 7 * DAY;
+    const later = sunday + 30 * 60_000; // 30 min after this kickoff
+    expect(claimsGame(sunday + 20 * 60_000, sunday, [earlier, later])).toBe(
+      false,
+    );
   });
 });

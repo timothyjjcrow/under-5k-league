@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   firstMedia,
-  firstMediaUrl,
   mediaKind,
   normalizeMediaUrl,
   splitLinks,
@@ -171,20 +170,6 @@ describe("normalizeMediaUrl", () => {
   });
 });
 
-describe("firstMediaUrl", () => {
-  it("returns the first embeddable media URL (normalized) in free text", () => {
-    expect(
-      firstMediaUrl("hype https://ex.com/a.gif and https://ex.com/b.gif"),
-    ).toBe("https://ex.com/a.gif");
-    expect(firstMediaUrl("watch https://giphy.com/gifs/win-Zz9Yy8Xx7")).toBe(
-      "https://media.giphy.com/media/Zz9Yy8Xx7/giphy.gif",
-    );
-  });
-
-  it("returns null when there's no media (plain link is not media)", () => {
-    expect(firstMediaUrl("read https://ld2l.gg/schedule")).toBeNull();
-  });
-});
 
 describe("firstMedia", () => {
   it("returns the normalized URL and its kind (for rendering the embed apart)", () => {

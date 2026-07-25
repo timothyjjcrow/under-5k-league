@@ -6,6 +6,7 @@ import {
   fetchAllGameLines,
   fetchAllGameScores,
   fetchAllGamesForRecords,
+  fetchAllGamesForScouting,
   fetchSeasonGameLeaders,
   fetchSeasonGameScores,
 } from "@/lib/cached-queries";
@@ -104,6 +105,21 @@ describe("cached-queries data-equivalence", () => {
     // orderBy matters here — compare in exact returned order.
     expect(recordsCached).toEqual(recordsInline);
     expect(recordsCached[0].match.homeTeam.name).toContain("Home");
+
+    // getAllGamesForScouting === the match-preview dossier scan (all seasons)
+    const scoutCached = await fetchAllGamesForScouting();
+    const scoutInline = await prisma.game.findMany({
+      select: {
+        players: true,
+        radiantWin: true,
+        durationSecs: true,
+        startTime: true,
+      },
+    });
+    expect(sortById(scoutCached, "players")).toEqual(
+      sortById(scoutInline, "players"),
+    );
+    expect(scoutCached).toHaveLength(5);
 
     // Per-season scans must scope to their argument — A and B stay separate
     // (the cache wrapper keys on this same arg so entries don't collide).

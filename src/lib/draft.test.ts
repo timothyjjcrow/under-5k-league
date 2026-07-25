@@ -3,11 +3,11 @@ import {
   teamNeed,
   maxBid,
   canBid,
-  isDraftComplete,
   nextNominatorIndex,
   mmrWeightedBudgets,
   type DraftTeam,
   wasOutbid,
+  shuffle,
 } from "./draft";
 
 const team = (rosterCount: number, budget = 100): DraftTeam => ({
@@ -62,17 +62,6 @@ describe("canBid", () => {
   });
 });
 
-describe("isDraftComplete", () => {
-  it("is complete when every team is full", () => {
-    expect(isDraftComplete([team(5), team(5)], 5, 10)).toBe(true);
-  });
-  it("is complete when no players remain", () => {
-    expect(isDraftComplete([team(1)], 5, 0)).toBe(true);
-  });
-  it("is not complete while a team needs players and some remain", () => {
-    expect(isDraftComplete([team(1), team(5)], 5, 3)).toBe(false);
-  });
-});
 
 describe("nextNominatorIndex", () => {
   const teams = [team(1), team(5), team(1)]; // middle team is full
@@ -209,5 +198,54 @@ describe("mmrWeightedBudgets — unknown-MMR captains (stored 0 mapped to null)"
     ]);
     expect(b.get("low")).toBe(withoutUnknown.get("low"));
     expect(b.get("high")).toBe(withoutUnknown.get("high"));
+  });
+});
+
+describe("shuffle", () => {
+  it("keeps every element exactly once", () => {
+    const xs = [1, 2, 3, 4, 5, 6, 7, 8];
+    const out = shuffle(xs);
+    expect(out).toHaveLength(xs.length);
+    expect([...out].sort((a, b) => a - b)).toEqual(xs);
+  });
+
+  it("does not mutate the input", () => {
+    const xs = ["a", "b", "c"];
+    shuffle(xs);
+    expect(xs).toEqual(["a", "b", "c"]);
+  });
+
+  it("is uniform — every permutation of 3 shows up over many runs", () => {
+    // The old `sort(() => Math.random() - 0.5)` was not: its comparator is
+    // inconsistent, so results clustered near the input order and some
+    // permutations were far rarer than 1/6. Draft order decides who nominates
+    // first all night, so this needs to be genuinely random.
+    const counts = new Map<string, number>();
+    for (let i = 0; i < 6000; i++) {
+      const key = shuffle(["a", "b", "c"]).join("");
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    expect(counts.size).toBe(6);
+    // Each permutation should land near 1000; allow generous slack for noise.
+    for (const n of counts.values()) {
+      expect(n).toBeGreaterThan(700);
+      expect(n).toBeLessThan(1300);
+    }
+  });
+
+  it("is deterministic with an injected rand", () => {
+    const seq = [0, 0, 0];
+    let i = 0;
+    // rand()=0 always: i=2 swaps [2]<->[0] => c,b,a; i=1 swaps [1]<->[0] => b,c,a
+    expect(shuffle(["a", "b", "c"], () => seq[i++] ?? 0)).toEqual([
+      "b",
+      "c",
+      "a",
+    ]);
+  });
+
+  it("handles empty and single-element lists", () => {
+    expect(shuffle([])).toEqual([]);
+    expect(shuffle(["only"])).toEqual(["only"]);
   });
 });

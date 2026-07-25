@@ -1,8 +1,8 @@
 import { prisma } from "./prisma";
+import { heroById } from "./heroes";
 import { weeklyHonors, type HonorsGame, type WeeklyHonors } from "./honors";
 import { getSetting } from "./settings";
 import { getWebhookUrl, sendDiscordMessage, weeklyHonorsMessage } from "./discord";
-import { getHeroNames } from "./dota";
 
 function parsePlayers(json: string): HonorsGame["players"] {
   try {
@@ -77,14 +77,13 @@ export async function maybeAnnounceWeekHonors(
     throw e;
   }
 
-  const [playerUser, team, heroNames] = await Promise.all([
+  const [playerUser, team] = await Promise.all([
     honors.player
       ? prisma.user.findUnique({ where: { id: honors.player.userId } })
       : null,
     honors.team
       ? prisma.team.findUnique({ where: { id: honors.team.teamId } })
       : null,
-    honors.player?.heroId ? getHeroNames() : ({} as Record<number, string>),
   ]);
   const sent = await sendDiscordMessage(
     weeklyHonorsMessage({
@@ -93,7 +92,7 @@ export async function maybeAnnounceWeekHonors(
       playerPoints: honors.player?.points ?? 0,
       heroName:
         honors.player?.heroId != null
-          ? (heroNames[honors.player.heroId] ?? null)
+          ? (heroById(honors.player.heroId)?.name ?? null)
           : null,
       teamName: team?.name ?? null,
       teamGameWins: honors.team?.gameWins ?? 0,

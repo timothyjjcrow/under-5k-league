@@ -23,9 +23,11 @@ export async function GET(req: NextRequest) {
 
   const user = await upsertLeagueUser(prisma, {
     steamId,
-    name,
-    avatar: null,
-    profileUrl: `https://steamcommunity.com/profiles/${steamId}`,
+    profile: {
+      name,
+      avatar: null,
+      profileUrl: `https://steamcommunity.com/profiles/${steamId}`,
+    },
     forceAdmin,
   });
   await createSession(user.id);

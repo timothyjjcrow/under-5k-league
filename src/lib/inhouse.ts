@@ -126,15 +126,6 @@ export function nextPickTeam(
   return onFirstPick ? firstPickTeam : otherTeam;
 }
 
-/** The draft is done once both teams have a full roster (captain + picks). */
-export function isDraftComplete(
-  team1Count: number,
-  team2Count: number,
-  teamSize: number = INHOUSE.TEAM_SIZE,
-): boolean {
-  return team1Count >= teamSize && team2Count >= teamSize;
-}
-
 /** How many more players still need to queue before a lobby forms. */
 export function playersNeeded(
   queueSize: number,

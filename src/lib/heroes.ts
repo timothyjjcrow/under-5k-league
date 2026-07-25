@@ -209,6 +209,27 @@ export type ParsedHeroes = { matched: Hero[]; unmatched: string[] };
  * Split a free-text hero string (comma/slash/pipe separated) into recognized
  * heroes plus any leftover tokens we couldn't match.
  */
+/**
+ * Trim a comma-separated hero list to fit `max` characters WITHOUT cutting a
+ * name in half. A blind `.slice(0, 200)` turned the last hero into garbage
+ * ("…, Legion Comman") that then rendered in the player pool and draft room.
+ */
+export function clampHeroList(value: string, max: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) return trimmed;
+  const out: string[] = [];
+  let len = 0;
+  for (const raw of trimmed.split(",")) {
+    const token = raw.trim();
+    if (!token) continue;
+    const add = out.length === 0 ? token.length : token.length + 2; // ", "
+    if (len + add > max) break;
+    out.push(token);
+    len += add;
+  }
+  return out.join(", ");
+}
+
 export function parseHeroList(value: string | null | undefined): ParsedHeroes {
   const matched: Hero[] = [];
   const unmatched: string[] = [];

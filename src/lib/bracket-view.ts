@@ -120,16 +120,6 @@ export function mirrorLayout(rounds: BracketRound[]): MirrorLayout | null {
   };
 }
 
-/** Seed number per playoff team: 1-indexed order of the seeded standings. */
-export function seedMap(
-  standingsOrder: string[],
-  bracketSize: number,
-): Map<string, number> {
-  return new Map(
-    standingsOrder.slice(0, bracketSize).map((teamId, i) => [teamId, i + 1]),
-  );
-}
-
 /**
  * Seed numbers derived from the FIRST-ROUND pairings frozen in the DB.
  * createPlayoffBracket pairs slots by `seedOrder` (R0M0 = 1 vs N, R0M1 =

@@ -44,14 +44,22 @@ export function canBid(
   return amount <= maxBid(team, teamSize, minBid);
 }
 
-/** Draft is done when no team still needs players, or no players remain. */
-export function isDraftComplete(
-  teams: DraftTeam[],
-  teamSize: number,
-  availablePlayers: number,
-): boolean {
-  const anyNeeds = teams.some((t) => teamNeed(teamSize, t.rosterCount) > 0);
-  return !anyNeeds || availablePlayers <= 0;
+/**
+ * Uniform Fisher-Yates shuffle.
+ *
+ * `[...xs].sort(() => Math.random() - 0.5)` is NOT uniform — the comparator is
+ * inconsistent, so the result depends on the sort implementation and heavily
+ * favours orderings close to the input. Draft order decides who nominates
+ * first all night, so "randomize" needs to actually be random. `rand` is
+ * injectable for the test.
+ */
+export function shuffle<T>(items: T[], rand: () => number = Math.random): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
 }
 
 /**

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { parseGamePlayers } from "@/lib/player-stats";
 import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
@@ -25,15 +26,6 @@ import {
 } from "@/components/ui";
 
 export const metadata = { title: "Hero meta" };
-
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
 
 function winRateTone(rate: number): string {
   if (rate >= 60) return "text-success";
@@ -187,7 +179,7 @@ export default async function MetaPage({
 
   const metaGames: MetaGame[] = games.map((g) => ({
     radiantWin: g.radiantWin,
-    lines: safeParse(g.players).map((p) => ({
+    lines: parseGamePlayers<PlayerStat>(g.players).map((p) => ({
       userId: p.userId,
       heroId: p.heroId,
       isRadiant: p.isRadiant,

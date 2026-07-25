@@ -38,14 +38,42 @@ export function isAutoSyncDue(
  * private match data) then costs ~15 scans over its whole 48h window instead
  * of ~700, while a productive match (attempts reset on import) stays brisk.
  */
-export function autoSyncIntervalSeconds(attempts: number): number {
-  const doublings = Math.min(Math.max(0, attempts), AUTO_SYNC.BACKOFF_DOUBLINGS);
+export function autoSyncIntervalSeconds(
+  attempts: number,
+  minutesSinceOpen = Number.POSITIVE_INFINITY,
+): number {
+  // Backoff counts EMPTY scans, but the early ones are usually empty for a
+  // boring reason: amateur league nights start late, so nothing is on OpenDota
+  // yet. Letting those buy hours of silence meant a 2h-late start had its first
+  // result land 1-4h after the games actually finished, and the Discord post
+  // arrived in the middle of the night. Cap the doublings while the match is
+  // still young; full backoff resumes afterwards so a genuinely dead fixture
+  // (forfeit, private match data) still costs only a handful of scans.
+  const cap =
+    minutesSinceOpen < AUTO_SYNC.BACKOFF_GRACE_MINUTES
+      ? AUTO_SYNC.BACKOFF_GRACE_DOUBLINGS
+      : AUTO_SYNC.BACKOFF_DOUBLINGS;
+  const doublings = Math.min(Math.max(0, attempts), cap);
   return AUTO_SYNC.MATCH_INTERVAL_SECONDS * 2 ** doublings;
 }
 
+/** Minutes a match has been inside its detection window (0 before it opens). */
+export function minutesSinceAutoSyncOpen(
+  scheduledAtMs: number,
+  nowMs: number,
+): number {
+  return Math.max(0, (nowMs - autoSyncOpensAt(scheduledAtMs)) / MINUTE_MS);
+}
+
 /** Matches auto-synced before this instant may be claimed for a rescan. */
-export function autoSyncClaimCutoff(nowMs: number, attempts = 0): Date {
-  return new Date(nowMs - autoSyncIntervalSeconds(attempts) * 1000);
+export function autoSyncClaimCutoff(
+  nowMs: number,
+  attempts = 0,
+  minutesSinceOpen = Number.POSITIVE_INFINITY,
+): Date {
+  return new Date(
+    nowMs - autoSyncIntervalSeconds(attempts, minutesSinceOpen) * 1000,
+  );
 }
 
 /**

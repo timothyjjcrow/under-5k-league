@@ -292,7 +292,10 @@ export default async function PickemPage() {
         )}
       </section>
 
-      {graded.length > 0 && viewer ? (
+      {/* `graded` counts every decided match; without the myPicks filter here
+          a viewer who never predicted got a "Your graded picks" heading over
+          an empty bordered card. */}
+      {viewer && graded.some((m) => myPicks.has(m.id)) ? (
         <section className="space-y-4">
           <SectionTitle>Your graded picks</SectionTitle>
           <Card>

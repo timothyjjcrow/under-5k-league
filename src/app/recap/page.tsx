@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { parseGamePlayers } from "@/lib/player-stats";
 import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
@@ -6,7 +7,6 @@ import { shareMetadata } from "@/lib/share-metadata";
 import { computeSeasonAwards, type AwardGame, type Award } from "@/lib/awards";
 import type { PlayerStat } from "@/lib/match-import";
 import { heroById } from "@/lib/heroes";
-import { getHeroNames } from "@/lib/dota";
 import {
   Avatar,
   Badge,
@@ -27,15 +27,6 @@ export const metadata = shareMetadata(
   "Season Recap",
   "Awards, superlatives, and the story of the season in GGD2L.",
 );
-
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
 
 export default async function RecapPage({
   searchParams,
@@ -128,7 +119,7 @@ export default async function RecapPage({
     // ALL lines feed the awards input — hero tallies must match /meta (a
     // ringer's pick is still a pick); computeSeasonAwards itself skips
     // unmapped lines for player awards.
-    const lines = safeParse(g.players).map((p) => {
+    const lines = parseGamePlayers<PlayerStat>(g.players).map((p) => {
       lineKills += p.kills;
       if (p.userId) players.add(p.userId);
       heroes.add(p.heroId);
@@ -158,14 +149,13 @@ export default async function RecapPage({
   const userIds = [
     ...new Set(awards.map((a) => a.userId).filter((x): x is string => !!x)),
   ];
-  const [users, heroNames, champion, memberships] = await Promise.all([
+  const [users, champion, memberships] = await Promise.all([
     userIds.length
       ? prisma.user.findMany({
           where: { id: { in: userIds } },
           select: { id: true, name: true, avatar: true, rankTier: true },
         })
       : Promise.resolve([]),
-    getHeroNames(),
     season.championTeamId
       ? prisma.team.findUnique({
           where: { id: season.championTeamId },
@@ -271,7 +261,7 @@ export default async function RecapPage({
               award={a}
               user={a.userId ? userMap.get(a.userId) : undefined}
               team={a.userId ? teamByUser.get(a.userId) : undefined}
-              heroName={a.heroId ? heroNames[a.heroId] : undefined}
+              heroName={a.heroId ? (heroById(a.heroId)?.name ?? undefined) : undefined}
             />
           ))}
         </div>

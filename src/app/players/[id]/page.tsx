@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getAllGameLines } from "@/lib/cached-queries";
 import { shareMetadata } from "@/lib/share-metadata";
 import { getActiveSeason } from "@/lib/season";
-import { steamIdToAccountId, getHeroNames } from "@/lib/dota";
+import { steamIdToAccountId } from "@/lib/dota";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
@@ -17,9 +17,10 @@ import {
   summarizePlayerGames,
   wonGame,
   type PlayerGameLine,
+  parseGamePlayers,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
-import { formatNetWorth, cn } from "@/lib/utils";
+import { formatNetWorth, cn, hasText } from "@/lib/utils";
 import {
   Avatar,
   Badge,
@@ -68,15 +69,6 @@ export async function generateMetadata({
     `${user.name} · Player`,
     `${user.name}'s player profile — record, heroes, and match history in GGD2L.`,
   );
-}
-
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
 }
 
 export default async function PlayerProfilePage({
@@ -129,7 +121,7 @@ export default async function PlayerProfilePage({
   // Pass 2: only THIS player's games carry the heavy match/team/season joins
   // that feed the match history, stat tiles, achievements, and report card.
   const myGameIds = gamesLite
-    .filter((g) => safeParse(g.players).some((p) => p.userId === id))
+    .filter((g) => parseGamePlayers<PlayerStat>(g.players).some((p) => p.userId === id))
     .map((g) => g.id);
   const games = myGameIds.length
     ? await prisma.game.findMany({
@@ -142,7 +134,6 @@ export default async function PlayerProfilePage({
     : [];
 
   const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
-  const heroNames = await getHeroNames();
 
   // Career: every season this player was rostered in, with their team's record.
   const careerSeasonIds = [
@@ -180,7 +171,7 @@ export default async function PlayerProfilePage({
   // The parsed box score is kept so achievements can identify each game's MVP.
   const gameRows = games
     .map((g) => {
-      const parsed = safeParse(g.players);
+      const parsed = parseGamePlayers<PlayerStat>(g.players);
       const stat = parsed.find((p) => p.userId === id);
       if (!stat) return null;
       return { game: g, stat, parsed };
@@ -690,12 +681,12 @@ export default async function PlayerProfilePage({
                 <HeroList value={registration.favoriteHeroes} size={26} />
               </Detail>
             ) : null}
-            {registration.statement ? (
+            {hasText(registration.statement) ? (
               <Detail label="Goals">
                 <span className="text-muted">{registration.statement}</span>
               </Detail>
             ) : null}
-            {registration.captainNote ? (
+            {hasText(registration.captainNote) ? (
               <Detail label="Note for captains">
                 <span className="italic text-muted">
                   &ldquo;{registration.captainNote}&rdquo;
@@ -710,7 +701,7 @@ export default async function PlayerProfilePage({
         <Card>
           <CardHeader title="Most played heroes" subtitle="All seasons" />
           <CardBody>
-            <HeroPool heroes={careerSummary.topHeroes} heroNames={heroNames} />
+            <HeroPool heroes={careerSummary.topHeroes} />
           </CardBody>
         </Card>
       ) : null}

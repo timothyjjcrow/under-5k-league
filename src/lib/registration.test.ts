@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { promoteGateError, registrationGate } from "./registration";
+import {
+  promoteGateError,
+  registrationGate,
+  withdrawGateError,
+} from "./registration";
 
 // maxMmr 4500 = the 4.5K soft/review limit; the hard ceiling (5000) is what
 // actually blocks. maxMmr 0 = no soft limit (the hard ceiling still applies).
@@ -231,5 +235,29 @@ describe("promoteGateError", () => {
     expect(promoteGateError({ ...ok, registrationStatus: "WITHDRAWN" })).toMatch(/isn't active/);
     expect(promoteGateError({ ...ok, registrationType: "PLAYER" })).toMatch(/already a full player/);
     expect(promoteGateError({ ...ok, pendingAssignments: 1 })).toMatch(/remove that assignment/);
+  });
+});
+
+describe("withdrawGateError — on the auction block", () => {
+  const base = { status: "ACTIVE", isCaptain: false, isRostered: false };
+
+  it("refuses withdrawal while the player is the live lot", () => {
+    // Both the admin path and the player's own "Leave the league" button run
+    // through here. Only the admin one used to check this, so a player could
+    // withdraw mid-auction and leave every captain staring at a headless lot.
+    expect(withdrawGateError({ ...base, isOnTheBlock: true })).toMatch(
+      /auction block/i,
+    );
+  });
+
+  it("allows withdrawal when no lot is live", () => {
+    expect(withdrawGateError({ ...base, isOnTheBlock: false })).toBeNull();
+    expect(withdrawGateError(base)).toBeNull();
+  });
+
+  it("still reports the more specific blockers first", () => {
+    expect(
+      withdrawGateError({ ...base, status: "REMOVED", isOnTheBlock: true }),
+    ).toMatch(/isn't active/i);
   });
 });

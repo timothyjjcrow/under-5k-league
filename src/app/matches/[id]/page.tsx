@@ -1,10 +1,11 @@
 import { Suspense } from "react";
+import { fetchAllGamesForScouting } from "@/lib/cached-queries";
+import { parseGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
-import { getHeroNames } from "@/lib/dota";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
 import { recentForm, headToHead } from "@/lib/team-matches";
@@ -112,10 +113,9 @@ export default async function MatchDetailPage({
 
   // Hero names are only rendered by the box-score branch — don't make the
   // preview/empty-state paths wait on an OpenDota round trip they never use.
-  const heroes = match.games.length > 0 ? await getHeroNames() : {};
   const games = match.games.map((g) => ({
     ...g,
-    parsed: safeParse(g.players),
+    parsed: parseGamePlayers<PlayerStat>(g.players),
   }));
 
   const userIds = [
@@ -288,7 +288,6 @@ export default async function MatchDetailPage({
                   win={g.radiantWin}
                   mvpId={mvpId}
                   players={radiant}
-                  heroes={heroes}
                   userName={userName}
                   userAvatar={userAvatar}
                   maxNet={maxNet}
@@ -298,7 +297,6 @@ export default async function MatchDetailPage({
                   win={!g.radiantWin}
                   mvpId={mvpId}
                   players={dire}
-                  heroes={heroes}
                   userName={userName}
                   userAvatar={userAvatar}
                   maxNet={maxNet}
@@ -645,19 +643,14 @@ async function ScoutingReport({
     roster: { userId: string; name: string; roles: string }[];
   }[];
 }) {
-  const allGames = await prisma.game.findMany({
-    select: {
-      players: true,
-      radiantWin: true,
-      durationSecs: true,
-      startTime: true,
-    },
-  });
+  // Uncached on purpose — see fetchAllGamesForScouting in cached-queries.ts:
+  // the unstable_cache wrapper hangs inside this nested Suspense boundary.
+  const allGames = await fetchAllGamesForScouting();
   const scoutGames: ScoutGame[] = allGames.map((g) => ({
     radiantWin: g.radiantWin,
     durationSecs: g.durationSecs,
     startTime: g.startTime,
-    lines: safeParse(g.players).map((p) => ({
+    lines: parseGamePlayers<PlayerStat>(g.players).map((p) => ({
       userId: p.userId,
       heroId: p.heroId,
       isRadiant: p.isRadiant,
@@ -688,7 +681,6 @@ async function ScoutingReport({
   });
 
   if (dossiers.every((d) => d.empty)) return null;
-  const heroNames = await getHeroNames();
 
   return (
     <Card>
@@ -711,8 +703,8 @@ async function ScoutingReport({
               </p>
             ) : (
               <div className="space-y-3">
-                <ThreatList board={d.board} heroNames={heroNames} />
-                <ComfortPicks pools={d.pools} heroNames={heroNames} />
+                <ThreatList board={d.board} />
+                <ComfortPicks pools={d.pools} />
                 <PaceLine pace={d.pace} coverage={d.coverage} />
               </div>
             )}
@@ -725,10 +717,8 @@ async function ScoutingReport({
 
 function ThreatList({
   board,
-  heroNames,
 }: {
   board: ThreatBoard;
-  heroNames: Record<number, string>;
 }) {
   // Only heroes they actually WIN on earn "ban board" framing — a 0-2 hero is
   // not a threat. Without any winning hero at the floor, fall back to plain
@@ -753,7 +743,7 @@ function ThreatList({
                 <span className="h-[22px] w-[22px] shrink-0 rounded border border-line/70 bg-surface-2" />
               )}
               <span className="min-w-0 flex-1 truncate">
-                {heroNames[r.heroId] ?? hero?.name ?? `Hero ${r.heroId}`}
+                {hero?.name ?? `Hero ${r.heroId}`}
               </span>
               <span className="shrink-0 text-xs tabular-nums text-muted">
                 {r.wins}–{r.picks - r.wins}
@@ -780,10 +770,8 @@ function ThreatList({
 
 function ComfortPicks({
   pools,
-  heroNames,
 }: {
   pools: { userId: string; name: string; pool: HeroPoolRow[] }[];
-  heroNames: Record<number, string>;
 }) {
   const withPool = pools.filter((p) => p.pool.length > 0);
   if (withPool.length === 0) return null;
@@ -801,7 +789,7 @@ function ComfortPicks({
             <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
               {p.pool.slice(0, 3).map((h) => {
                 const hero = heroById(h.heroId);
-                const name = heroNames[h.heroId] ?? hero?.name ?? `Hero ${h.heroId}`;
+                const name = hero?.name ?? `Hero ${h.heroId}`;
                 return (
                   <span
                     key={h.heroId}
@@ -951,7 +939,6 @@ function SidePlayers({
   label,
   win,
   players,
-  heroes,
   userName,
   userAvatar,
   maxNet,
@@ -960,7 +947,6 @@ function SidePlayers({
   label: string;
   win: boolean;
   players: PlayerStat[];
-  heroes: Record<number, string>;
   userName: Map<string, string>;
   userAvatar: Map<string, string | null>;
   maxNet: number;
@@ -1009,7 +995,7 @@ function SidePlayers({
             ? (userName.get(p.userId) ?? p.personaname ?? "Unknown")
             : (p.personaname ?? "Unknown");
           const hero = heroById(p.heroId);
-          const heroName = heroes[p.heroId] ?? hero?.name ?? `Hero ${p.heroId}`;
+          const heroName = hero?.name ?? `Hero ${p.heroId}`;
           const nwPct =
             p.netWorth != null ? Math.round((p.netWorth / maxNet) * 100) : 0;
           return (
@@ -1140,15 +1126,6 @@ function ReportCardStrip({ line }: { line: PlayerStat }) {
       ))}
     </div>
   );
-}
-
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
 }
 
 // Captain-to-captain rescheduling: propose a time, the other captain accepts
@@ -1320,7 +1297,7 @@ async function StandinSection({
               name="standinUserId"
               required
               aria-label="Standin to bring in"
-              className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
+              className="h-10 min-w-0 max-w-full rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
               defaultValue=""
             >
               <option value="" disabled>
@@ -1336,7 +1313,7 @@ async function StandinSection({
               name="replacingUserId"
               required
               aria-label="Player they cover"
-              className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
+              className="h-10 min-w-0 max-w-full rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
               defaultValue=""
             >
               <option value="" disabled>

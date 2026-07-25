@@ -79,13 +79,6 @@ export function firstMedia(
   return null;
 }
 
-/** First embeddable media URL (image or video) in free text, or null — shared
- *  by news rendering and the Discord announcement so both agree, and so the
- *  normalized direct URL (not the original page link) is what gets embedded. */
-export function firstMediaUrl(text: string): string | null {
-  return firstMedia(text)?.value ?? null;
-}
-
 /** Tokenize text into plain-text and http(s)-link runs, in order. */
 export function splitLinks(text: string): LinkToken[] {
   const tokens: LinkToken[] = [];

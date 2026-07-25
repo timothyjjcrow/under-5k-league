@@ -6,6 +6,7 @@ import {
   autoSyncIntervalSeconds,
   autoSyncOpensAt,
   isAutoSyncDue,
+  minutesSinceAutoSyncOpen,
   nextAutoSyncAt,
 } from "./result-sync";
 
@@ -115,5 +116,58 @@ describe("nextAutoSyncAt", () => {
       NOW + AUTO_SYNC.MATCH_INTERVAL_SECONDS * 8 * 1000,
     );
     expect(nextAutoSyncAt(null, 5)).toBeNull(); // never scanned → due now
+  });
+});
+
+describe("autoSyncIntervalSeconds — young-match grace", () => {
+  const base = AUTO_SYNC.MATCH_INTERVAL_SECONDS;
+  const graceCap = base * 2 ** AUTO_SYNC.BACKOFF_GRACE_DOUBLINGS;
+
+  it("caps backoff while the match is still young", () => {
+    // League nights start late: the empty scans from before tip-off must not
+    // buy hours of silence once the games actually land.
+    for (const attempts of [3, 4, 6, 20]) {
+      expect(autoSyncIntervalSeconds(attempts, 10)).toBe(graceCap);
+    }
+    expect(graceCap).toBeLessThanOrEqual(16 * 60);
+  });
+
+  it("still tightens with attempts inside the grace window", () => {
+    expect(autoSyncIntervalSeconds(0, 10)).toBe(base);
+    expect(autoSyncIntervalSeconds(1, 10)).toBe(base * 2);
+  });
+
+  it("resumes full backoff once the match is no longer young", () => {
+    const old = AUTO_SYNC.BACKOFF_GRACE_MINUTES + 1;
+    expect(autoSyncIntervalSeconds(6, old)).toBe(
+      base * 2 ** AUTO_SYNC.BACKOFF_DOUBLINGS,
+    );
+    expect(autoSyncIntervalSeconds(6, old)).toBeGreaterThan(graceCap);
+  });
+
+  it("defaults to full backoff when no age is supplied", () => {
+    expect(autoSyncIntervalSeconds(6)).toBe(
+      base * 2 ** AUTO_SYNC.BACKOFF_DOUBLINGS,
+    );
+  });
+
+  it("a 2h-late start is rescanned within the grace cap, not hours later", () => {
+    // The regression: scans at kickoff+25m..+2h drove attempts to 5, so the
+    // next claimable instant was ~2h+ away and the result landed overnight.
+    const kickoff = NOW;
+    const twoHoursIn = kickoff + 2 * HOUR;
+    const minutes = minutesSinceAutoSyncOpen(kickoff, twoHoursIn);
+    expect(minutes).toBeLessThan(AUTO_SYNC.BACKOFF_GRACE_MINUTES);
+    expect(autoSyncIntervalSeconds(5, minutes)).toBe(graceCap);
+  });
+});
+
+describe("minutesSinceAutoSyncOpen", () => {
+  it("is 0 before the window opens and grows after", () => {
+    expect(minutesSinceAutoSyncOpen(NOW, NOW)).toBe(0);
+    expect(minutesSinceAutoSyncOpen(NOW, NOW + HOUR)).toBeCloseTo(
+      60 - AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF,
+      5,
+    );
   });
 });

@@ -2,6 +2,7 @@
 // so the guards are integration-testable (same pattern as draft-service).
 // Every function throws Error with a player-facing message on a violation.
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MATCH_STATUS } from "@/lib/constants";
 
@@ -58,15 +59,23 @@ export async function proposeReschedule(
   assertSaneProposedTime(proposedTime);
 
   // Replace any open proposal — the newest ask is the only live one.
-  await prisma.$transaction([
-    prisma.rescheduleRequest.updateMany({
-      where: { matchId, status: "PENDING" },
-      data: { status: "CANCELLED" },
-    }),
-    prisma.rescheduleRequest.create({
-      data: { matchId, proposedById: userId, proposedTime },
-    }),
-  ]);
+  // SERIALIZABLE because there is no unique constraint enforcing "at most one
+  // PENDING per match": on Postgres read-committed, two captains proposing in
+  // the same instant each cancel what they can see and then both insert,
+  // leaving TWO open proposals. The loser was a zombie the other captain could
+  // accept days later, retiming the match out from under everyone.
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.rescheduleRequest.updateMany({
+        where: { matchId, status: "PENDING" },
+        data: { status: "CANCELLED" },
+      });
+      await tx.rescheduleRequest.create({
+        data: { matchId, proposedById: userId, proposedTime },
+      });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 
   return {
     homeName: match.homeTeam.name,
@@ -113,6 +122,11 @@ export async function respondReschedule(
     return null;
   }
 
+  // Re-validate on ACCEPT, not just on propose: a proposal sat on for two
+  // weeks would otherwise move the match to a night that has already passed
+  // (which also drops it outside its own auto-sync window).
+  assertSaneProposedTime(request.proposedTime);
+
   await prisma.$transaction(async (tx) => {
     // Same conditional-write rule for accept: only a still-PENDING request
     // may retime the match.
@@ -124,7 +138,13 @@ export async function respondReschedule(
       throw new Error("That proposal is no longer open");
     await tx.match.update({
       where: { id: match.id },
-      data: { scheduledAt: request.proposedTime },
+      // New kickoff ⇒ new detection window: clear the backoff accrued
+      // against the old one so the moved night is scanned promptly.
+      data: {
+        scheduledAt: request.proposedTime,
+        autoSyncedAt: null,
+        autoSyncAttempts: 0,
+      },
     });
     // The night changed — every RSVP was an answer about the OLD night.
     // Clearing them re-prompts the rosters instead of carrying 8 stale ✓s

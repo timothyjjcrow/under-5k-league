@@ -4,7 +4,7 @@ import {
   pickBracketSize,
   playoffFirstRound,
   nextRoundPairings,
-  matchNightForWeek,
+  upcomingMatchNight,
 } from "./schedule";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { championMessage, sendDiscordMessage } from "./discord";
@@ -60,8 +60,14 @@ export async function createPlayoffBracket(seasonId: string) {
         awayTeamId: p.away,
         bracketSlot: `R0M${i}`,
         bestOf,
+        // Never stamp a kickoff that has already passed — it would put the
+        // match outside its own auto-sync window before anyone plays it.
         scheduledAt: season.firstMatchNight
-          ? matchNightForWeek(season.firstMatchNight, lastRegularWeek + 1)
+          ? upcomingMatchNight(
+              season.firstMatchNight,
+              lastRegularWeek + 1,
+              Date.now(),
+            )
           : null,
       })),
     }),
@@ -146,8 +152,10 @@ export async function advancePlayoffBracket(seasonId: string) {
         awayTeamId: p.away,
         bracketSlot: `R${nextRound}M${i}`,
         bestOf,
+        // Same guard as the first round: a round created after its arithmetic
+        // date has passed must roll forward, not be born already stale.
         scheduledAt: season.firstMatchNight
-          ? matchNightForWeek(season.firstMatchNight, week)
+          ? upcomingMatchNight(season.firstMatchNight, week, Date.now())
           : null,
       })),
     });

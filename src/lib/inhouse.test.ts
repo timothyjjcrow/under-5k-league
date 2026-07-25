@@ -3,7 +3,6 @@ import {
   detectIntervalSeconds,
   inhouseLobbyCode,
   inhousePollDelayMs,
-  isDraftComplete,
   mmrBalance,
   nextPickTeam,
   orderCaptains,
@@ -174,13 +173,6 @@ describe("nextPickTeam", () => {
   });
 });
 
-describe("isDraftComplete", () => {
-  it("is complete only when both rosters are full", () => {
-    expect(isDraftComplete(5, 5)).toBe(true);
-    expect(isDraftComplete(5, 4)).toBe(false);
-    expect(isDraftComplete(3, 5)).toBe(false);
-  });
-});
 
 describe("playersNeeded", () => {
   it("counts down to a full lobby and never goes negative", () => {

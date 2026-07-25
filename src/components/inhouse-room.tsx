@@ -107,7 +107,9 @@ export function InhouseRoom({
 
   // Keep the poll loop's "has stake" flag current for its hidden-tab decision.
   useEffect(() => {
-    hasStakeRef.current = !!state?.lobby || !!state?.me.inQueue;
+    // The viewer's OWN stake — `!!state.lobby` is true for every spectator
+    // too, so a public lobby kept every open tab on the fast path.
+    hasStakeRef.current = !!state?.me.inLobby || !!state?.me.inQueue;
   }, [state]);
 
   // Adaptive, visibility-aware poll loop (self-scheduling setTimeout, not a
@@ -168,7 +170,9 @@ export function InhouseRoom({
         document.visibilityState === "hidden"
           ? INHOUSE.POLL_KEEPALIVE_MS
           : next
-            ? inhousePollDelayMs(!!next.lobby, next.me.inQueue, pollMs)
+            ? // Membership, not mere existence: five people watching a 45min
+              // game were each firing 40 req/min because a lobby existed.
+              inhousePollDelayMs(next.me.inLobby, next.me.inQueue, pollMs)
             : pollMs;
       schedule(delay);
     };
@@ -419,6 +423,14 @@ export function InhouseRoom({
         </div>
       ) : null}
 
+      {/* Someone queued while a lobby is live (the 11th player on a busy
+          night) is NOT in that lobby — without this they lost sight of the
+          queue entirely and had no way to leave it for the ~45min the game
+          ran, while their heartbeat kept holding the spot. */}
+      {lobby && !me.inLobby && me.inQueue ? (
+        <QueueView state={state} pending={pending} mmr={mmr} setMmr={setMmr} mmrHint={mmrHint} act={act} />
+      ) : null}
+
       {!lobby ? (
         <QueueView state={state} pending={pending} mmr={mmr} setMmr={setMmr} mmrHint={mmrHint} act={act} />
       ) : lobby.status === "READY_CHECK" ? (
@@ -468,6 +480,31 @@ export function InhouseRoom({
             className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
           >
             Admin: cancel this lobby
+          </button>
+        </div>
+      ) : null}
+
+      {/* A wrong result used to be permanent — the ladder and history both
+          filter on COMPLETED, so voiding the lobby removes it and every
+          player's Elo recomputes from the surviving games on the next read. */}
+      {me.isAdmin && !lobby && state.lastResult ? (
+        <div className="text-right">
+          <button
+            disabled={pending}
+            onClick={async () => {
+              if (
+                window.confirm(
+                  "Void the last inhouse result? It leaves the ladder and history, and everyone's Elo is recalculated without it.",
+                )
+              ) {
+                if (await act({ action: "void" })) {
+                  pushToast("success", "Result voided — Elo recalculated");
+                }
+              }
+            }}
+            className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
+          >
+            Admin: void the last result
           </button>
         </div>
       ) : null}
@@ -1421,7 +1458,7 @@ function ReadyView({
         )}
       </div>
 
-      <GameSetupCard lobby={lobby} me={me} />
+      {me.inLobby ? <GameSetupCard lobby={lobby} me={me} /> : null}
 
       <MatchupGrid lobby={lobby} />
     </div>
@@ -1576,7 +1613,7 @@ function InProgressView({
         )}
       </div>
 
-      <GameSetupCard lobby={lobby} me={me} />
+      {me.inLobby ? <GameSetupCard lobby={lobby} me={me} /> : null}
 
       <MatchupGrid lobby={lobby} />
     </div>

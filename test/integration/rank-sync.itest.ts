@@ -12,7 +12,7 @@ vi.mock("@/lib/dota", async (importOriginal) => ({
 
 import { syncPlayerRanks, syncAllRanks } from "@/app/actions/admin";
 import { updateDotaAccount } from "@/app/actions/registration";
-import { ensureRankTier } from "@/lib/users";
+import { ensureRankTier, upsertLeagueUser } from "@/lib/users";
 import { requireUser } from "@/lib/auth";
 import { fetchRankTier } from "@/lib/dota";
 import { prisma } from "@/lib/prisma";
@@ -375,5 +375,49 @@ describe("account changes reset the private-data flag", () => {
     // Steam-derived id is fetchable, so the ok-path ran with nulls — either
     // way the stale true is gone.
     expect(db.fhUnavailable).toBeNull();
+  });
+});
+
+// A Steam blip must never cost a player their name/avatar. fetchSteamProfile
+// now returns null when Steam is unreachable (it used to return a
+// `Player NNNNN` placeholder), and upsertLeagueUser leaves an existing
+// account's stored profile alone when it gets one.
+describe("upsertLeagueUser — Steam outages never overwrite a real profile", () => {
+  it("keeps the stored name and avatar when Steam is unreachable", async () => {
+    const steamId = "76561199000000777";
+    await upsertLeagueUser(prisma, {
+      steamId,
+      profile: {
+        name: "RealPersonaName",
+        avatar: "https://avatars.example/real.jpg",
+        profileUrl: "https://steamcommunity.com/id/real",
+      },
+    });
+
+    // Next login, Steam is down / the API key was rotated.
+    const after = await upsertLeagueUser(prisma, { steamId, profile: null });
+
+    expect(after.name).toBe("RealPersonaName");
+    expect(after.avatar).toBe("https://avatars.example/real.jpg");
+    expect(after.profileUrl).toBe("https://steamcommunity.com/id/real");
+  });
+
+  it("still creates a usable account when Steam is down on a FIRST login", async () => {
+    const steamId = "76561199000000888";
+    const created = await upsertLeagueUser(prisma, { steamId, profile: null });
+    // Nothing to preserve here, so a placeholder is correct.
+    expect(created.name).toContain("Player");
+    expect(created.profileUrl).toContain(steamId);
+  });
+
+  it("applies a real profile when Steam answers", async () => {
+    const steamId = "76561199000000999";
+    await upsertLeagueUser(prisma, { steamId, profile: null });
+    const updated = await upsertLeagueUser(prisma, {
+      steamId,
+      profile: { name: "Dendi", avatar: "a.jpg", profileUrl: "u" },
+    });
+    expect(updated.name).toBe("Dendi");
+    expect(updated.avatar).toBe("a.jpg");
   });
 });

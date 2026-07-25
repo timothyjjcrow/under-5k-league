@@ -11,6 +11,7 @@ import type { SessionUser } from "@/lib/auth";
 import {
   acceptMatch,
   cancelLobby,
+  voidLastResult,
   castVote,
   declineMatch,
   getInhouseState,
@@ -1306,5 +1307,64 @@ describe("inhouse — medal MMR validation on joinQueue", () => {
     const user = await medaledUser("NoMedal", null);
     await joinQueue(sessionFor(user), 3000);
     expect(await queuedMmr(user.id)).toBe(3000);
+  });
+});
+
+describe("inhouse — an admin can void a wrong result", () => {
+  it("removes it from the ladder and recomputes everyone's record", async () => {
+    const admin = sessionFor(await makeUser("Void Admin", "ADMIN"));
+    const g = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(g.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7200000001,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    expect((await recordMatch(g.players[0].session, "7200000001")).ok).toBe(true);
+
+    const ladder = async () => {
+      const completed = await prisma.inhouseLobby.findMany({
+        where: { status: INHOUSE_STATUS.COMPLETED },
+        include: { players: { include: { user: true } } },
+      });
+      return summarizeInhouse(
+        completed.map((l) => ({
+          id: l.id,
+          winnerTeam: l.winnerTeam,
+          createdAt: l.createdAt,
+          players: l.players.map((p) => ({
+            userId: p.userId,
+            name: p.user.name,
+            avatar: p.user.avatar,
+            team: p.team,
+          })),
+        })),
+      );
+    };
+    expect((await ladder()).some((r) => r.wins === 1)).toBe(true);
+
+    // Players can't do this.
+    expect((await voidLastResult(g.players[0].session)).ok).toBe(false);
+
+    expect((await voidLastResult(admin)).ok).toBe(true);
+
+    const after = await prisma.inhouseLobby.findUnique({
+      where: { id: g.lobby.id },
+    });
+    expect(after?.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(after?.winnerTeam).toBeNull();
+    expect(after?.dotaMatchId).toBeNull();
+    expect(after?.eloDeltas).toBe("{}");
+
+    // The Elo swing is gone with it — the ladder is computed from the
+    // surviving COMPLETED lobbies, so nobody carries a phantom win.
+    expect(await ladder()).toEqual([]);
+
+    // Voiding twice is a no-op, not a double-apply.
+    expect((await voidLastResult(admin)).ok).toBe(false);
   });
 });

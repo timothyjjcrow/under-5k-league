@@ -82,6 +82,11 @@ export function powerRankings(
 
   const now = ratingsThroughWeek(matches, teamIds, latest);
   const before = ratingsThroughWeek(matches, teamIds, latest - 1);
+  // One completed week is a single data point: every "before" rating is still
+  // the ELO start value, so ordering them produces the arbitrary teamId
+  // sequence and the ▲/▼ arrows are alphabetical noise dressed as movement.
+  // standings.ts guards this exact case; this didn't.
+  const hasPriorWeek = completedWeeks.some((w) => w !== latest);
 
   const rankOf = (ratings: Map<string, number>) =>
     new Map(
@@ -97,10 +102,13 @@ export function powerRankings(
       teamId,
       rating: Math.round(now.get(teamId) ?? ELO.START),
       rank: nowRanks.get(teamId) ?? 0,
-      prevRank: beforeRanks.get(teamId) ?? 0,
-      delta: Math.round(
-        (now.get(teamId) ?? ELO.START) - (before.get(teamId) ?? ELO.START),
-      ),
+      // 0 = "no meaningful previous rank"; the UI renders no arrow for it.
+      prevRank: hasPriorWeek ? (beforeRanks.get(teamId) ?? 0) : 0,
+      delta: hasPriorWeek
+        ? Math.round(
+            (now.get(teamId) ?? ELO.START) - (before.get(teamId) ?? ELO.START),
+          )
+        : 0,
     }))
     .sort((a, b) => a.rank - b.rank);
 }

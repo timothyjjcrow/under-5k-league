@@ -6,6 +6,7 @@ import {
   wonGame,
   type LeaderEntry,
   type PlayerGameLine,
+  parseGamePlayers,
 } from "./player-stats";
 
 function line(partial: Partial<PlayerGameLine>): PlayerGameLine {
@@ -172,5 +173,29 @@ describe("topBy", () => {
     const rows = topBy(entries, "wins", { limit: 1 });
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe("a");
+  });
+});
+
+describe("parseGamePlayers", () => {
+  it("parses a stored box score into lines", () => {
+    const lines = parseGamePlayers<{ kills: number }>('[{"kills":7}]');
+    expect(lines).toEqual([{ kills: 7 }]);
+  });
+
+  it("returns [] for malformed JSON instead of throwing", () => {
+    // Every stat page parses this column; one bad row must not take a whole
+    // leaderboard off the air.
+    expect(parseGamePlayers("not json")).toEqual([]);
+    expect(parseGamePlayers("")).toEqual([]);
+  });
+
+  it("returns [] when the JSON isn't an array", () => {
+    expect(parseGamePlayers('{"kills":7}')).toEqual([]);
+    expect(parseGamePlayers("null")).toEqual([]);
+    expect(parseGamePlayers("42")).toEqual([]);
+  });
+
+  it("handles the default empty column value", () => {
+    expect(parseGamePlayers("[]")).toEqual([]);
   });
 });

@@ -59,16 +59,29 @@ export async function verifySteamCallback(
   for (const [k, v] of query.entries()) params.set(k, v);
   params.set("openid.mode", "check_authentication");
 
-  const res = await fetch(STEAM_OPENID, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params.toString(),
-  });
-  const text = await res.text();
+  // Bounded like every OpenDota call: Steam is regularly slow, and an
+  // unbounded POST here hangs the callback until the serverless function is
+  // killed — which also burns the one-shot OpenID assertion, so the player
+  // can't simply retry.
+  let text: string;
+  try {
+    const res = await fetch(STEAM_OPENID, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+      signal: AbortSignal.timeout(STEAM_TIMEOUT_MS),
+    });
+    text = await res.text();
+  } catch {
+    return null; // unreachable/slow Steam — the caller sends them back to /login
+  }
   if (!/is_valid\s*:\s*true/i.test(text)) return null;
 
   return idMatch[1];
 }
+
+/** Every outbound Steam call is bounded — Steam is frequently slow. */
+const STEAM_TIMEOUT_MS = 8_000;
 
 export type SteamProfile = {
   name: string;
@@ -76,30 +89,38 @@ export type SteamProfile = {
   profileUrl: string | null;
 };
 
-/** Enrich a SteamID with persona name/avatar. Falls back to a placeholder. */
-export async function fetchSteamProfile(steamId: string): Promise<SteamProfile> {
+/**
+ * Enrich a SteamID with persona name/avatar.
+ *
+ * Returns NULL when Steam couldn't be reached (no key, timeout, bad response)
+ * — the same never-overwrite-on-failure rule the bulk version documents and
+ * that rank sync follows. It used to return a `Player NNNNN` placeholder, and
+ * the login path wrote that straight over the user's real name and avatar: one
+ * rotated STEAM_API_KEY renamed every player who signed in that night, with no
+ * way back except each of them hitting "Refresh from Steam".
+ */
+export async function fetchSteamProfile(
+  steamId: string,
+): Promise<SteamProfile | null> {
   const key = process.env.STEAM_API_KEY;
-  const fallback: SteamProfile = {
-    name: `Player ${steamId.slice(-5)}`,
-    avatar: null,
-    profileUrl: `https://steamcommunity.com/profiles/${steamId}`,
-  };
-  if (!key) return fallback;
+  if (!key) return null;
   try {
     const res = await fetch(
       `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${key}&steamids=${steamId}`,
-      { cache: "no-store" },
+      { cache: "no-store", signal: AbortSignal.timeout(STEAM_TIMEOUT_MS) },
     );
+    if (!res.ok) return null;
     const data = await res.json();
     const p = data?.response?.players?.[0];
-    if (!p) return fallback;
+    if (!p) return null;
     return {
-      name: p.personaname || fallback.name,
+      name: p.personaname || `Player ${steamId.slice(-5)}`,
       avatar: p.avatarfull || null,
-      profileUrl: p.profileurl || fallback.profileUrl,
+      profileUrl:
+        p.profileurl || `https://steamcommunity.com/profiles/${steamId}`,
     };
   } catch {
-    return fallback;
+    return null;
   }
 }
 

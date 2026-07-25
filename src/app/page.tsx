@@ -1,4 +1,6 @@
 import { Fragment, Suspense, type ReactNode } from "react";
+import { getSeasonGameLeaders } from "@/lib/cached-queries";
+import { parseGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
@@ -55,6 +57,7 @@ import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import { WeekReminderPing } from "@/components/week-reminder-ping";
 import {
+  AUTO_SYNC,
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
@@ -483,30 +486,47 @@ async function MyNextMatch({
 
   // Assigned standins are participants too — without this they'd get no
   // check-in prompt anywhere but the match page itself.
-  const next = await prisma.match.findFirst({
-    where: {
-      seasonId,
-      status: { not: "COMPLETED" },
-      OR: [
-        ...(teamIds.length
-          ? [
-              { homeTeamId: { in: teamIds } },
-              { awayTeamId: { in: teamIds } },
-            ]
-          : []),
-        { standins: { some: { standinUserId: userId } } },
-      ],
-    },
-    // Chronological, not week order — an accepted reschedule can legally move
-    // a match past the next week's night, and the banner should always point
-    // at whatever plays first. Unscheduled matches sort last.
-    orderBy: [
-      { scheduledAt: { sort: "asc", nulls: "last" } },
-      { week: "asc" },
-      { createdAt: "asc" },
+  const mine = {
+    seasonId,
+    status: { not: "COMPLETED" as const },
+    OR: [
+      ...(teamIds.length
+        ? [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }]
+        : []),
+      { standins: { some: { standinUserId: userId } } },
     ],
-    include: { homeTeam: true, awayTeam: true },
-  });
+  };
+  // Chronological, not week order — an accepted reschedule can legally move a
+  // match past the next week's night, and the banner should always point at
+  // whatever plays first. Unscheduled matches sort last.
+  const order = [
+    { scheduledAt: { sort: "asc" as const, nulls: "last" as const } },
+    { week: "asc" as const },
+    { createdAt: "asc" as const },
+  ];
+  // A match nobody ever reported stays un-COMPLETED forever. Ordering purely by
+  // kickoff then pinned every participant's banner to that dead week-1 fixture
+  // for the rest of the season — they'd check in against it while the match
+  // they were actually playing that night got no check-ins at all. Prefer the
+  // earliest fixture that is still plausibly ahead of (or during) tonight, and
+  // fall back to the stale one only when there's nothing else left.
+  const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
+  const next =
+    (await prisma.match.findFirst({
+      where: { ...mine, scheduledAt: { gte: freshFrom } },
+      orderBy: order,
+      include: { homeTeam: true, awayTeam: true },
+    })) ??
+    (await prisma.match.findFirst({
+      where: { ...mine, scheduledAt: null },
+      orderBy: order,
+      include: { homeTeam: true, awayTeam: true },
+    })) ??
+    (await prisma.match.findFirst({
+      where: mine,
+      orderBy: order,
+      include: { homeTeam: true, awayTeam: true },
+    }));
   if (!next) return null;
 
   const [myRsvp, pendingReschedule] = await Promise.all([
@@ -1874,19 +1894,14 @@ async function LeaguePulse({
   teams: SeasonSnapshot["teams"];
   teamName: Map<string, string>;
 }) {
-  const games = await prisma.game.findMany({
-    where: { match: { seasonId } },
-    select: {
-      players: true,
-      radiantWin: true,
-      match: { select: { week: true, phase: true } },
-    },
-  });
+  // Shared, tag-busted scan (cached-queries.ts) rather than a private copy of
+  // the same query — an all-games roll-up repeated per request per viewer.
+  const games = await getSeasonGameLeaders(seasonId);
   if (games.length === 0) return null;
 
   const parsed = games.map((g) => ({
     ...g,
-    lines: safeParseStats(g.players),
+    lines: parseGamePlayers<PlayerStat>(g.players),
   }));
   const teamOf = new Map(
     teams.flatMap((t) => t.members.map((m) => [m.userId, t.id] as const)),
@@ -1998,15 +2013,6 @@ async function LeaguePulse({
       </CardBody>
     </Card>
   );
-}
-
-function safeParseStats(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
 }
 
 function SideGameLink({

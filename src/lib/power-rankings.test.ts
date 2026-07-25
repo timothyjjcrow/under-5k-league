@@ -71,3 +71,40 @@ describe("powerRankings", () => {
     expect(a.delta).toBeLessThan(0);
   });
 });
+
+describe("powerRankings — no invented movement after one week", () => {
+  const teams = ["zteam", "ateam", "mteam", "bteam"];
+  const m = (
+    week: number,
+    home: string,
+    away: string,
+    hs: number,
+    as: number,
+    status = "COMPLETED",
+  ) => ({ week, homeTeamId: home, awayTeamId: away, homeScore: hs, awayScore: as, status, phase: "REGULAR" });
+
+  it("reports no movement or delta when only one week is complete", () => {
+    // Every "before" rating is still the ELO start, so ordering them is just
+    // cuid alphabetical — arrows there would be noise dressed as movement.
+    const rows = powerRankings(
+      [m(1, "zteam", "ateam", 2, 0), m(1, "mteam", "bteam", 2, 0)],
+      teams,
+    );
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => r.prevRank === 0)).toBe(true);
+    expect(rows.every((r) => r.delta === 0)).toBe(true);
+  });
+
+  it("reports real movement once a second week completes", () => {
+    const rows = powerRankings(
+      [
+        m(1, "zteam", "ateam", 2, 0),
+        m(1, "mteam", "bteam", 2, 0),
+        m(2, "ateam", "zteam", 2, 0),
+      ],
+      teams,
+    );
+    expect(rows.some((r) => r.prevRank > 0)).toBe(true);
+    expect(rows.some((r) => r.delta !== 0)).toBe(true);
+  });
+});

@@ -29,13 +29,10 @@ export async function GET(req: NextRequest) {
   if (!steamId) {
     return NextResponse.redirect(new URL("/login?error=steam", req.url));
   }
+  // null = Steam unreachable; upsertLeagueUser then keeps whatever profile the
+  // account already has instead of stamping a placeholder over it.
   const profile = await fetchSteamProfile(steamId);
-  const user = await upsertLeagueUser(prisma, {
-    steamId,
-    name: profile.name,
-    avatar: profile.avatar,
-    profileUrl: profile.profileUrl,
-  });
+  const user = await upsertLeagueUser(prisma, { steamId, profile });
   // Pull their ranked medal now so accounts that log in but never sign up still
   // show one (best-effort; a no-op once they have a medal).
   await ensureRankTier(prisma, user);

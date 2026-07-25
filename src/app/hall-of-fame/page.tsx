@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { parseGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
 import { getAllGameScores } from "@/lib/cached-queries";
 import { careerCounts, topCounts, type HofRow } from "@/lib/hall-of-fame";
@@ -16,14 +17,6 @@ import {
 
 export const metadata = { title: "Hall of Fame" };
 
-function safeParse(json: string): FantasyGame["players"] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
 
 export default async function HallOfFamePage() {
   const [seasons, memberships, matches, games, predictions] =
@@ -58,7 +51,7 @@ export default async function HallOfFamePage() {
 
   // Career fantasy points from every imported game, ever.
   const fantasy = pointsByPlayer(
-    games.map((g) => ({ radiantWin: g.radiantWin, players: safeParse(g.players) })),
+    games.map((g) => ({ radiantWin: g.radiantWin, players: parseGamePlayers<FantasyGame["players"][number]>(g.players) })),
   );
   const fantasyCounts = new Map(
     [...fantasy.entries()].map(([id, pts]) => [id, Math.round(pts)]),

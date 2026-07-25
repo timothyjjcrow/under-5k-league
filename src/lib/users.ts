@@ -4,9 +4,9 @@ import { fetchRankTier, steamIdToAccountId } from "./dota";
 
 type UpsertInput = {
   steamId: string;
-  name: string;
-  avatar: string | null;
-  profileUrl: string | null;
+  /** Steam profile, or NULL when Steam couldn't be reached. A null profile
+   *  leaves an existing user's stored name/avatar alone — see below. */
+  profile: { name: string; avatar: string | null; profileUrl: string | null } | null;
   forceAdmin?: boolean;
 };
 
@@ -60,19 +60,30 @@ export async function upsertLeagueUser(
   });
   const listConfigured = adminSteamIds.length > 0;
 
+  // A brand-new account has nothing to preserve, so an unreachable Steam still
+  // gets a usable placeholder. An EXISTING account keeps whatever it already
+  // has: overwriting a real persona name with `Player NNNNN` because Steam
+  // blipped is data loss the player can't undo themselves.
+  const profile = input.profile;
   return prisma.user.upsert({
     where: { steamId: input.steamId },
     create: {
       steamId: input.steamId,
-      name: input.name,
-      avatar: input.avatar,
-      profileUrl: input.profileUrl,
+      name: profile?.name ?? `Player ${input.steamId.slice(-5)}`,
+      avatar: profile?.avatar ?? null,
+      profileUrl:
+        profile?.profileUrl ??
+        `https://steamcommunity.com/profiles/${input.steamId}`,
       role,
     },
     update: {
-      name: input.name,
-      avatar: input.avatar,
-      profileUrl: input.profileUrl,
+      ...(profile
+        ? {
+            name: profile.name,
+            avatar: profile.avatar,
+            profileUrl: profile.profileUrl,
+          }
+        : {}),
       // With an allowlist, role is authoritative (grant AND revoke). Without one,
       // only ever grant — never demote an existing (bootstrap) admin.
       ...(listConfigured ? { role } : role === ROLE.ADMIN ? { role } : {}),

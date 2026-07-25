@@ -430,6 +430,13 @@ export async function undoLastSale(
     if (!last) return { ok: false as const, error: "No sale to undo" };
 
     await tx.teamMember.delete({ where: { id: last.id } });
+    // Void this lot's audit trail too. The Bid rows are keyed by
+    // (draftId, userId) with no per-nomination id, so leaving them meant the
+    // re-run auction's "Bid trail" replayed the VOIDED sale's prices — every
+    // captain saw the price apparently falling from $57 to $1.
+    await tx.bid.deleteMany({
+      where: { draftId: draft.id, userId: last.userId },
+    });
     await tx.team.update({
       where: { id: last.teamId },
       data: { budget: { increment: last.price } },
@@ -754,6 +761,11 @@ export async function placeBid(
     const applied = await tx.draft.updateMany({
       where: {
         seasonId,
+        // The status belongs in the claim, not just the read above: an admin
+        // pausing the auction between this transaction's read and its write
+        // would otherwise have the bid land on a PAUSED draft AND re-arm
+        // bidEndsAt, so the paused lot silently kept a running clock.
+        status: DRAFT_STATUS.IN_PROGRESS,
         nominatedUserId: draft.nominatedUserId,
         currentBid: draft.currentBid,
       },

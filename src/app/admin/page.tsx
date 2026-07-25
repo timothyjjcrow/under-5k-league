@@ -3,7 +3,13 @@ import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason, capacityInfo } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
-import { AUTO_SYNC, SEASON_PHASE_ORDER } from "@/lib/constants";
+import {
+  AUTO_SYNC,
+  DRAFT_STATUS,
+  REGISTRATION_STATUS,
+  SEASON_PHASE_ORDER,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import { nextAutoSyncAt } from "@/lib/result-sync";
 import {
   createSeason,
@@ -46,6 +52,10 @@ import {
   undoLastSaleAction,
   pauseDraftAction,
   resumeDraftAction,
+  transferCaptaincy,
+  reopenMatch,
+  reinstateSignup,
+  setDraftSettings,
 } from "@/app/actions/admin";
 import { cancelReschedule } from "@/app/actions/reschedule";
 import {
@@ -258,15 +268,35 @@ export default async function AdminPage() {
 }
 
 async function loadSeasonAdminData(seasonId: string) {
-  const [players, standins, teams, matches, draft, assignments] =
+  const [players, standins, removed, teams, matches, draft, assignments] =
     await Promise.all([
       prisma.registration.findMany({
         where: { seasonId, status: "ACTIVE", type: "PLAYER" },
         include: { user: true },
         orderBy: [{ wantsCaptain: "desc" }, { mmr: "desc" }],
       }),
+      // Registered standins PLUS undrafted full players. A pool-dry draft
+      // leaves ACTIVE PLAYER signups unrostered, and assignStandinGuarded
+      // accepts them — but the panel only listed type=STANDIN and hid itself
+      // when there were none, so an admin with two undrafted players and an
+      // OUT on match night had no cover to offer. Rostered players are
+      // filtered out below (they play for their own team).
       prisma.registration.findMany({
-        where: { seasonId, status: "ACTIVE", type: "STANDIN" },
+        where: {
+          seasonId,
+          status: "ACTIVE",
+          OR: [
+            { type: "STANDIN" },
+            { type: "PLAYER", user: { teamMemberships: { none: { seasonId } } } },
+          ],
+        },
+        include: { user: true },
+        orderBy: { mmr: "desc" },
+      }),
+      // Admin-removed signups: listed so the removal stays reversible (the
+      // player can no longer re-add themselves from /me).
+      prisma.registration.findMany({
+        where: { seasonId, status: REGISTRATION_STATUS.REMOVED },
         include: { user: true },
         orderBy: { mmr: "desc" },
       }),
@@ -290,7 +320,7 @@ async function loadSeasonAdminData(seasonId: string) {
     where: { match: { seasonId }, status: "OUT" },
     include: { user: true },
   });
-  return { players, standins, teams, matches, draft, assignments, outRsvps };
+  return { players, standins, removed, teams, matches, draft, assignments, outRsvps };
 }
 
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
@@ -303,6 +333,8 @@ function SeasonControls({
   season: Season;
   data: AdminData;
 }) {
+  const configLocked =
+    !!data.draft && data.draft.status !== DRAFT_STATUS.NOT_STARTED;
   const cap = capacityInfo(season, data.players.length);
   return (
     <Card>
@@ -393,6 +425,65 @@ function SeasonControls({
               : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
           </span>
         </form>
+        {/* Editable until the auction starts. These used to be write-once at
+            Create season, so changing your mind about team size or budget meant
+            creating a NEW season and orphaning every signup so far. */}
+        <ActionForm
+          action={setDraftSettings}
+          className="flex flex-wrap items-end gap-2 border-t border-line pt-3 text-sm"
+        >
+          <Field label="Team size" htmlFor="cfgTeamSize">
+            <input
+              id="cfgTeamSize"
+              name="teamSize"
+              type="number"
+              min={2}
+              max={10}
+              defaultValue={season.teamSize}
+              className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+            />
+          </Field>
+          <Field label="Min teams" htmlFor="cfgMinTeams">
+            <input
+              id="cfgMinTeams"
+              name="minTeams"
+              type="number"
+              min={2}
+              max={32}
+              defaultValue={season.minTeams}
+              className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+            />
+          </Field>
+          <Field label="Draft budget ($)" htmlFor="cfgBudget">
+            <input
+              id="cfgBudget"
+              name="draftBudget"
+              type="number"
+              min={10}
+              defaultValue={season.draftBudget}
+              className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+            />
+          </Field>
+          <Field label="Budget MMR weight %" htmlFor="cfgWeight">
+            <input
+              id="cfgWeight"
+              name="budgetMmrWeight"
+              type="number"
+              min={0}
+              max={50}
+              defaultValue={season.budgetMmrWeight}
+              className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+            />
+          </Field>
+          <SubmitButton variant="secondary" size="sm" disabled={configLocked}>
+            Save draft settings
+          </SubmitButton>
+          <span className="text-xs text-muted">
+            {configLocked
+              ? "locked — the auction has started"
+              : "applied when the draft starts"}
+          </span>
+        </ActionForm>
         <form
           action={setMatchSchedule}
           className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
@@ -496,7 +587,11 @@ function CaptainControls({
                   <SubmitButton
                     variant="accent"
                     size="sm"
-                    disabled={data.teams.length < 2}
+                    disabled={
+                      data.teams.length < 2 ||
+                      (season.status !== SEASON_STATUS.SIGNUPS &&
+                        season.status !== SEASON_STATUS.DRAFT)
+                    }
                     confirm="Start the draft now? Rosters lock to the current captains."
                   >
                     Start draft
@@ -518,7 +613,11 @@ function CaptainControls({
                 </SubmitButton>
               </ActionForm>
             ) : null}
-            {draftStarted ? (
+            {/* Draft phase only — after that the newest non-captain roster row
+                is a free-agent signing, not an auction sale, and re-opening the
+                auction mid-season lets the stalled-nomination resolver
+                auto-draft someone onto that team. The action refuses too. */}
+            {draftStarted && season.status === SEASON_STATUS.DRAFT ? (
               <ActionForm action={undoLastSaleAction}>
                 <SubmitButton
                   variant="secondary"
@@ -532,7 +631,10 @@ function CaptainControls({
           </div>
         }
       />
-      <CardBody className="grid gap-6 md:grid-cols-2">
+      {/* grid-cols-1 is explicit on purpose (see the CLAUDE.md mobile rules):
+          without it the implicit track is `auto`, so a long team or player
+          name sizes the column past the viewport and widens the whole page. */}
+      <CardBody className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {!draftStarted ? (
           <ActionForm
             action={setDraftNight}
@@ -631,12 +733,14 @@ function CaptainControls({
                       {!draftStarted ? (
                         <ActionForm action={removeCaptain}>
                           <input type="hidden" name="teamId" value={t.id} />
-                          <button
-                            type="submit"
+                          <SubmitButton
+                            variant="ghost"
+                            size="sm"
                             className="shrink-0 text-xs text-danger hover:underline"
+                            confirm={`Remove ${t.captain.name} as captain? ${t.name} is deleted. Any generated schedule is cleared too — regenerate it once captains are final.`}
                           >
                             remove
-                          </button>
+                          </SubmitButton>
                         </ActionForm>
                       ) : null}
                     </div>
@@ -662,6 +766,55 @@ function CaptainControls({
                         </SubmitButton>
                       </ActionForm>
                     </details>
+                    {/* Post-draft only: before the auction runs, removeCaptain
+                        (which deletes the empty team) is the right tool. After
+                        it, this is the ONLY way to move captaincy off an
+                        inactive player — and it's what makes them releasable,
+                        since releasePlayer refuses captains. */}
+                    {draftStarted &&
+                    t.members.some((m) => m.userId !== t.captainId) ? (
+                      <details className="mt-1.5">
+                        <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                          ⇄ Hand over captaincy
+                        </summary>
+                        <ActionForm
+                          action={transferCaptaincy}
+                          className="mt-1.5 flex flex-wrap items-center gap-2"
+                          hidden={{ teamId: t.id }}
+                        >
+                          <select
+                            name="newCaptainUserId"
+                            required
+                            defaultValue=""
+                            aria-label={`New captain for ${t.name}`}
+                            className={selectCls}
+                          >
+                            <option value="" disabled>
+                              New captain…
+                            </option>
+                            {t.members
+                              .filter((m) => m.userId !== t.captainId)
+                              .map((m) => (
+                                <option key={m.userId} value={m.userId}>
+                                  {m.user.name}
+                                </option>
+                              ))}
+                          </select>
+                          <SubmitButton
+                            variant="secondary"
+                            size="sm"
+                            confirm={`Hand ${t.name} to a new captain? ${t.captain.name} stays on the roster as a normal player (you can release them afterwards).`}
+                          >
+                            Make captain
+                          </SubmitButton>
+                        </ActionForm>
+                        <p className="mt-1 text-xs text-muted">
+                          For a captain who&apos;s gone inactive — the team
+                          keeps its own reschedule, standin and
+                          result-reporting controls.
+                        </p>
+                      </details>
+                    ) : null}
                   </div>
                 ));
               })()
@@ -754,9 +907,9 @@ function CaptainControls({
                             variant="ghost"
                             size="sm"
                             className="text-danger hover:underline"
-                            confirm={`Withdraw ${p.user.name}'s signup? They leave the player pool.`}
+                            confirm={`Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`}
                           >
-                            withdraw
+                            remove
                           </SubmitButton>
                         </ActionForm>
                       ) : null}
@@ -791,6 +944,35 @@ function CaptainControls({
               ))
             )}
           </div>
+          {/* Removal is sticky (the player can't re-add themselves from /me),
+              so it has to be undoable from here. */}
+          {data.removed.length > 0 ? (
+            <div className="mt-4 border-t border-line/60 pt-3">
+              <h5 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+                Removed signups ({data.removed.length})
+              </h5>
+              <div className="space-y-1.5">
+                {data.removed.map((r) => (
+                  <div
+                    key={r.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-line px-3 py-1.5 text-sm"
+                  >
+                    <span className="min-w-0 truncate text-muted">
+                      {r.user.name}
+                    </span>
+                    <ActionForm
+                      action={reinstateSignup}
+                      hidden={{ registrationId: r.id }}
+                    >
+                      <SubmitButton variant="ghost" size="sm">
+                        reinstate
+                      </SubmitButton>
+                    </ActionForm>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </CardBody>
     </Card>
@@ -1055,6 +1237,29 @@ function MatchResultRow({
           Save
         </SubmitButton>
       </ActionForm>
+
+      {/* A hand-entered score marks the match COMPLETED with zero games, and
+          every import path then refuses it forever — so a stray Save (these
+          boxes default to 0 and Enter submits) used to cost the series its box
+          score permanently. This is the way back. */}
+      {m.status === "COMPLETED" && m.games.length === 0 ? (
+        <ActionForm
+          action={reopenMatch}
+          className="flex flex-wrap items-center gap-2 text-xs text-muted"
+          hidden={{ matchId: m.id }}
+        >
+          <span>
+            Recorded by hand — no games imported.
+          </span>
+          <SubmitButton
+            variant="ghost"
+            size="sm"
+            confirm="Reopen this match so its real games can be imported? The hand-entered score is cleared."
+          >
+            Reopen for import
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
 
       <form
         action={setMatchTime}
@@ -2057,8 +2262,13 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
 const inputCls =
   "h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60";
 
+// min-w-0 + max-w-full are load-bearing, not cosmetic: a <select> sizes itself
+// to its widest <option>, and as a flex item its default min-width:auto refuses
+// to shrink below that. Options here are "<player name> (<team>)", so one
+// 32-char Steam name (Steam's own cap) pushed the whole admin page ~116px wider
+// than a 375px phone. Keep these on any select whose options carry user text.
 const selectCls =
-  "h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60";
+  "h-9 min-w-0 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60";
 
 function SeriesField({
   label,

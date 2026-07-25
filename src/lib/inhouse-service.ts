@@ -491,6 +491,24 @@ async function applyPick(
     (p) => p.team !== null && !p.isCaptain,
   ).length;
 
+  // Claim the TURN first. The per-player claim below only stops the same
+  // player being taken twice; two DIFFERENT players (a captain clicking X
+  // while resolveStalledPick auto-picks Y) both succeeded, so one turn
+  // assigned two players and the lobby finished 6v4. Nulling pickTeam is the
+  // claim: a concurrent caller's `pickTeam: team` predicate then fails, and a
+  // rollback restores it. The real next turn is written at the end.
+  const turn = await tx.inhouseLobby.updateMany({
+    where: {
+      id: lobbyId,
+      status: INHOUSE_STATUS.DRAFTING,
+      pickTeam: team,
+    },
+    data: { pickTeam: null },
+  });
+  if (turn.count === 0) {
+    return { ok: false, error: "That pick was already made" };
+  }
+
   // Claim the pick atomically — a captain's double-click or an admin racing
   // them must consume ONE turn, not two (a plain read-then-write pair loses
   // that race silently under Postgres read-committed).
@@ -526,20 +544,23 @@ async function applyPick(
     }
   }
 
-  if (next === null) {
-    await tx.inhouseLobby.update({
-      where: { id: lobby.id },
-      data: {
-        status: INHOUSE_STATUS.READY,
-        pickTeam: null,
-        pickEndsAt: null,
-      },
-    });
-  } else {
-    await tx.inhouseLobby.update({
-      where: { id: lobby.id },
-      data: { pickTeam: next, pickEndsAt: pickDeadline() },
-    });
+  // Re-assert DRAFTING on the way out: an admin cancel landing mid-pick would
+  // otherwise be silently undone by a blind write-by-id, resurrecting a
+  // CANCELLED lobby whose ten players cancelLobby has already re-queued (so
+  // they'd be in a live lobby AND in the queue).
+  const advanced = await tx.inhouseLobby.updateMany({
+    where: { id: lobby.id, status: INHOUSE_STATUS.DRAFTING },
+    data:
+      next === null
+        ? {
+            status: INHOUSE_STATUS.READY,
+            pickTeam: null,
+            pickEndsAt: null,
+          }
+        : { pickTeam: next, pickEndsAt: pickDeadline() },
+  });
+  if (advanced.count === 0) {
+    return { ok: false, error: "That lobby is no longer drafting" };
   }
   return { ok: true };
 }
@@ -646,28 +667,42 @@ export async function joinQueue(
     where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
   });
 
-  // Guard + upsert in ONE transaction: a concurrent poll's maybeFormLobby
-  // (its own transaction) can't consume this player into a forming lobby
-  // between the check and the write, which would leave them both rostered in
-  // the live lobby AND queued for the next one.
-  const joined = await prisma.$transaction(async (tx) => {
-    const inActiveLobby = await tx.inhouseLobbyPlayer.findFirst({
-      where: {
-        userId: viewer.id,
-        lobby: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+  // Guard + upsert at SERIALIZABLE, matching maybeFormLobby. A plain
+  // transaction reads at read-committed on Postgres, so the findFirst below
+  // locks nothing: a concurrent poll forming a lobby could insert this
+  // player's InhouseLobbyPlayer row between the check and the upsert, leaving
+  // them rostered in the live lobby AND queued for the next one. Serializable
+  // makes the two conflict, and the loser aborts with P2034.
+  let joined: boolean;
+  try {
+    joined = await prisma.$transaction(
+      async (tx) => {
+        const inActiveLobby = await tx.inhouseLobbyPlayer.findFirst({
+          where: {
+            userId: viewer.id,
+            lobby: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+          },
+          select: { id: true },
+        });
+        if (inActiveLobby) return false;
+        await tx.inhouseQueueEntry.upsert({
+          where: { userId: viewer.id },
+          create: { userId: viewer.id, mmr: safeMmr },
+          // Keep original joinedAt so we don't lose queue position; an explicit
+          // re-join is also a fresh sign of life.
+          update: { mmr: safeMmr, lastSeenAt: new Date() },
+        });
+        return true;
       },
-      select: { id: true },
-    });
-    if (inActiveLobby) return false;
-    await tx.inhouseQueueEntry.upsert({
-      where: { userId: viewer.id },
-      create: { userId: viewer.id, mmr: safeMmr },
-      // Keep original joinedAt so we don't lose queue position; an explicit
-      // re-join is also a fresh sign of life.
-      update: { mmr: safeMmr, lastSeenAt: new Date() },
-    });
-    return true;
-  });
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    // Lost the race to a lobby forming around this player.
+    if ((e as { code?: string }).code === "P2034") {
+      return { ok: false, error: "You're already in a live inhouse" };
+    }
+    throw e;
+  }
   if (!joined) {
     return { ok: false, error: "You're already in a live inhouse" };
   }
@@ -753,14 +788,21 @@ export async function startGame(viewer: SessionUser): Promise<ActionResult> {
     if (!isMember && viewer.role !== "ADMIN") {
       return { ok: false as const, error: "Only players in the lobby can start it" };
     }
-    await tx.inhouseLobby.update({
-      where: { id: lobby.id },
+    // Guarded claim, not a write-by-id: an admin cancel committing between the
+    // read above and this write would be silently reverted, putting ten
+    // players in a live lobby AND back in the queue (cancelLobby re-queues
+    // them).
+    const started = await tx.inhouseLobby.updateMany({
+      where: { id: lobby.id, status: INHOUSE_STATUS.READY },
       data: {
         status: INHOUSE_STATUS.IN_PROGRESS,
         startedById: viewer.id,
         startedAt: new Date(),
       },
     });
+    if (started.count === 0) {
+      return { ok: false as const, error: "That lobby was just cancelled" };
+    }
     return { ok: true as const };
   });
 }
@@ -1022,10 +1064,32 @@ export async function autoDetectResult(
   ) {
     return { ok: false, error: "Only players in the game can do that" };
   }
-  await prisma.inhouseLobby.update({
-    where: { id: lobby.id },
+  // Throttled claim, not a blind stamp. Each press is ~16 OpenDota calls, and
+  // ten impatient players hammering the button after a game burned hundreds —
+  // enough to exhaust the free daily budget and take LEAGUE result sync down
+  // with it. The background scanner already claims this way; the manual button
+  // bypassed it entirely.
+  const claim = await prisma.inhouseLobby.updateMany({
+    where: {
+      id: lobby.id,
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      OR: [
+        { detectedAt: null },
+        {
+          detectedAt: {
+            lt: new Date(Date.now() - INHOUSE.DETECT_MANUAL_GAP_SECONDS * 1000),
+          },
+        },
+      ],
+    },
     data: { detectedAt: new Date() },
   });
+  if (claim.count === 0) {
+    return {
+      ok: false,
+      error: "Just checked — give it a few seconds and try again",
+    };
+  }
   const { result: found, unreachable } = await findInhouseGame(
     lobby.players,
     Math.floor(lobby.createdAt.getTime() / 1000),
@@ -1147,6 +1211,48 @@ export async function maybeAutoDetectResult(): Promise<boolean> {
 }
 
 /** Admin: scrap the current lobby (stuck draft, no-shows). Players can requeue. */
+/**
+ * Void the most recently completed inhouse result (admin).
+ *
+ * Results are recorded from OpenDota, so the wrong game can be picked up — ten
+ * players running back-to-back games in one custom lobby will have several
+ * candidates, and the scan takes the shared one that started after formation.
+ * Before this there was no way back: no re-record, no delete, and the Elo
+ * swing was already stamped. Flipping the lobby to CANCELLED drops it from the
+ * ladder and history queries (both filter on COMPLETED), and because
+ * summarizeInhouse accumulates Elo over the surviving lobbies, every player's
+ * rating recomputes correctly on the next read.
+ */
+export async function voidLastResult(
+  viewer: SessionUser,
+): Promise<ActionResult> {
+  if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
+  const last = await prisma.inhouseLobby.findFirst({
+    where: { status: INHOUSE_STATUS.COMPLETED },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!last) return { ok: false, error: "No completed game to void" };
+  // Guarded claim: a concurrent void must not double-apply.
+  const voided = await prisma.inhouseLobby.updateMany({
+    where: { id: last.id, status: INHOUSE_STATUS.COMPLETED },
+    data: {
+      status: INHOUSE_STATUS.CANCELLED,
+      winnerTeam: null,
+      dotaMatchId: null,
+      durationSecs: null,
+      radiantScore: null,
+      direScore: null,
+      boxScore: "[]",
+      eloDeltas: "{}",
+    },
+  });
+  if (voided.count === 0) {
+    return { ok: false, error: "That result was already voided" };
+  }
+  await stampResultChange();
+  return { ok: true };
+}
+
 export async function cancelLobby(viewer: SessionUser): Promise<ActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   const lobby = await prisma.inhouseLobby.findFirst({

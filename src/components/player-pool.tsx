@@ -19,7 +19,7 @@ import {
   type PoolPlayer,
   type PoolSort,
 } from "@/lib/player-pool";
-import { cn } from "@/lib/utils";
+import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
 
 /** Which team drafted a player, keyed by userId (parallel to the frozen
@@ -222,7 +222,7 @@ export function PlayerPool({
                         <HeroList value={p.favoriteHeroes} size={24} />
                       </span>
                     ) : null}
-                    {p.captainNote ? (
+                    {hasText(p.captainNote) ? (
                       <span className="mt-0.5 block max-w-xl truncate text-xs italic text-muted">
                         &ldquo;{p.captainNote}&rdquo;
                       </span>

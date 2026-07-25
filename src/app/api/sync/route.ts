@@ -4,6 +4,12 @@ import { runResultSync } from "@/lib/result-sync-service";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
+// One roster scan is up to ~22 sequential OpenDota fetches; on a slow night
+// that outruns the platform default and the request is killed mid-scan, which
+// also makes an uptime monitor pointed at this endpoint page the admin about a
+// perfectly healthy site. The scan has its own deadline (SCAN_BUDGET_MS in
+// match-import.ts) — this just gives it room to finish and return cleanly.
+export const maxDuration = 60;
 
 // The automatic-result-sync trigger, POSTed by the sitewide <ResultSyncPing>
 // on page views (and slow-polled on match nights). A route handler — not a

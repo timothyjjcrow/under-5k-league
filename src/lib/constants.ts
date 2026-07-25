@@ -27,7 +27,13 @@ export type RegistrationType = (typeof REGISTRATION_TYPE)[keyof typeof REGISTRAT
 
 export const REGISTRATION_STATUS = {
   ACTIVE: "ACTIVE",
+  /** The player withdrew themselves — they may sign up again freely. */
   WITHDRAWN: "WITHDRAWN",
+  /** An ADMIN removed the signup. Distinct from WITHDRAWN so re-submitting the
+   *  /me form can't silently undo a moderation decision: the upsert there sets
+   *  status ACTIVE unconditionally, so before this the player just reloaded
+   *  /me and signed up again. Reversible from the admin panel. */
+  REMOVED: "REMOVED",
 } as const;
 
 export const DRAFT_STATUS = {
@@ -67,6 +73,24 @@ export const DEFAULTS = {
   NOMINATION_TIMER_SECONDS: 90,
   // Minimum opening nomination bid.
   MIN_BID: 1,
+} as const;
+
+// Draft-room client poll cadence (ms). Mirrors the inhouse room's adaptive
+// loop: a fixed 1.2s setInterval meant every open tab — including hidden and
+// spectator ones — burned 50 req/min against /api/draft/tick's 300/min per-IP
+// limit, so ~6 tabs behind one NAT could saturate it and 429 everyone. The
+// room's fast rate stays its `pollMs` prop (default 1200) while the auction is
+// actually live.
+export const DRAFT_ROOM = {
+  /** Waiting room / finished draft — nothing here is second-sensitive. */
+  POLL_IDLE_MS: 3000,
+  /** Hidden tab belonging to someone with stake (captain, admin, or a player
+   *  who could be nominated at any moment). Slower, but still fast enough for
+   *  the "your turn" / "outbid" chime and tab-title flip to reach them. */
+  POLL_KEEPALIVE_MS: 5000,
+  /** Backoff after a 429. The tick limiter is a fixed 60s window, so easing
+   *  off actually lets it drain instead of re-saturating it every 1.2s. */
+  POLL_RATE_LIMITED_MS: 8000,
 } as const;
 
 // ---------- Fantasy ----------
@@ -109,24 +133,6 @@ export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.IN_PROGRESS,
 ];
 
-// How a filled lobby elects its captains — players vote on this each game.
-export const CAPTAIN_METHOD = {
-  VOTE: {
-    key: "VOTE",
-    label: "Elect captains",
-    hint: "Vote for the players you want to captain",
-  },
-  MMR: {
-    key: "MMR",
-    label: "Highest MMR",
-    hint: "The two highest-MMR players captain",
-  },
-  RECORD: {
-    key: "RECORD",
-    label: "Best record",
-    hint: "The two best inhouse records captain",
-  },
-} as const;
 
 export const INHOUSE = {
   TEAM_SIZE: 5,
@@ -173,6 +179,10 @@ export const INHOUSE = {
   // scan every 3 minutes forever — up to the cap.
   DETECT_MIN_MINUTES: 8,
   DETECT_INTERVAL_SECONDS: 180,
+  // Floor between MANUAL "Auto-detect result" presses. Short enough that the
+  // button still feels responsive, long enough that ten players spamming it
+  // can't drain the shared OpenDota budget the league's result sync needs.
+  DETECT_MANUAL_GAP_SECONDS: 20,
   DETECT_INTERVAL_MAX_SECONDS: 1800,
   // Queue presence: a spot is held by keeping /inhouse open — each state poll
   // refreshes the entry's lastSeenAt heartbeat, throttled to one write per
@@ -223,6 +233,14 @@ export const AUTO_SYNC = {
   // scans across its whole 48h window instead of one every 4 minutes. Any
   // imported game resets the counter (a live Bo3 keeps rescanning briskly).
   BACKOFF_DOUBLINGS: 6,
+  // …but only once the match has had a fair chance to be played. League nights
+  // routinely start late, and empty scans from before anyone queued used to
+  // buy hours of silence — a 2h-late start had its first result land 1-4h
+  // after the games finished. For this long after the window opens, doublings
+  // are capped at BACKOFF_GRACE_DOUBLINGS (240s → at most 16 min between
+  // scans), so a late night is still picked up promptly.
+  BACKOFF_GRACE_MINUTES: 180,
+  BACKOFF_GRACE_DOUBLINGS: 2,
   // Global floor between roster scans (Setting claim): N concurrent pollers
   // can otherwise each claim a DIFFERENT due match in the same instant and
   // burst past OpenDota's per-minute cap on league nights.

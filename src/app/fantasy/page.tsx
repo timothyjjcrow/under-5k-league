@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { getSeasonGameScores } from "@/lib/cached-queries";
+import { parseGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
@@ -29,14 +31,6 @@ import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Fantasy" };
 
-function safeParse(json: string): FantasyGame["players"] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
 
 export default async function FantasyPage() {
   const season = await getActiveSeason();
@@ -60,10 +54,7 @@ export default async function FantasyPage() {
       where: { seasonId: season.id, status: "ACTIVE" },
       select: { userId: true, mmr: true },
     }),
-    prisma.game.findMany({
-      where: { match: { seasonId: season.id } },
-      select: { players: true, radiantWin: true },
-    }),
+    getSeasonGameScores(season.id),
     prisma.fantasyRoster.findMany({
       where: { seasonId: season.id },
       include: { user: true, picks: { include: { player: true } } },
@@ -118,7 +109,7 @@ export default async function FantasyPage() {
   }
 
   const playerPoints = pointsByPlayer(
-    games.map((g) => ({ radiantWin: g.radiantWin, players: safeParse(g.players) })),
+    games.map((g) => ({ radiantWin: g.radiantWin, players: parseGamePlayers<FantasyGame["players"][number]>(g.players) })),
   );
   const standings = fantasyStandings(
     rosters.map((r) => ({

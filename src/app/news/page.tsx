@@ -60,7 +60,7 @@ export default async function NewsPage() {
                 </div>
                 <LinkifiedText
                   text={p.body}
-                  className="mt-3 block whitespace-pre-wrap text-sm leading-relaxed text-fg/90"
+                  className="mt-3 block [overflow-wrap:anywhere] whitespace-pre-wrap text-sm leading-relaxed text-fg/90"
                 />
               </CardBody>
             </Card>

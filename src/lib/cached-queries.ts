@@ -67,6 +67,25 @@ export const getAllGamesForRecords = unstable_cache(
   { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
 );
 
+/** Every game with the fields the opponent scouting report needs, all seasons.
+ *  The match preview builds both teams' dossiers from every game ever played,
+ *  so this is an unbounded scan on a page captains open on match night. */
+export function fetchAllGamesForScouting() {
+  return prisma.game.findMany({
+    select: {
+      players: true,
+      radiantWin: true,
+      durationSecs: true,
+      startTime: true,
+    },
+  });
+}
+// Deliberately NOT wrapped in unstable_cache. The match preview awaits this
+// inside a nested <Suspense> async component, and there the cache wrapper never
+// resolved — the whole scouting card silently vanished from the page (caught by
+// e2e-mid/match.spec.ts). The raw scan is still shared here so the query lives
+// with its siblings and stays covered by the data-equivalence test.
+
 /** One season's games with box score + win flag — Hero meta page. */
 export function fetchSeasonGameScores(seasonId: string) {
   return prisma.game.findMany({

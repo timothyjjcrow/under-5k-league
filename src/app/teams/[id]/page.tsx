@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getSeasonGameScores } from "@/lib/cached-queries";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
@@ -14,9 +15,9 @@ import { roleCoverage } from "@/lib/pool-stats";
 import {
   summarizePlayerGames,
   type PlayerGameLine,
+  parseGamePlayers,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
-import { getHeroNames } from "@/lib/dota";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { cn } from "@/lib/utils";
 import {
@@ -104,10 +105,7 @@ export default async function TeamPage({
           })
         : Promise.resolve([]),
       memberIds.length
-        ? prisma.game.findMany({
-            where: { match: { seasonId: team.seasonId } },
-            select: { players: true, radiantWin: true },
-          })
+        ? getSeasonGameScores(team.seasonId)
         : Promise.resolve([]),
     ]);
 
@@ -115,7 +113,7 @@ export default async function TeamPage({
   const memberIdSet = new Set(memberIds);
   const teamLines: PlayerGameLine[] = [];
   for (const g of seasonGames) {
-    for (const pl of safeParse(g.players)) {
+    for (const pl of parseGamePlayers<PlayerStat>(g.players)) {
       if (pl.userId && memberIdSet.has(pl.userId)) {
         teamLines.push({
           isRadiant: pl.isRadiant,
@@ -131,7 +129,6 @@ export default async function TeamPage({
     }
   }
   const teamHeroes = summarizePlayerGames(teamLines).topHeroes;
-  const heroNames = teamHeroes.length ? await getHeroNames() : {};
 
   const standings = computeStandings(
     allTeams.map((t) => t.id),
@@ -453,7 +450,7 @@ export default async function TeamPage({
             subtitle="Most-played heroes across the roster, with win rate"
           />
           <CardBody>
-            <HeroPool heroes={teamHeroes} heroNames={heroNames} />
+            <HeroPool heroes={teamHeroes} />
           </CardBody>
         </Card>
       ) : null}
@@ -704,11 +701,3 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
   );
 }
 
-function safeParse(json: string): PlayerStat[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}

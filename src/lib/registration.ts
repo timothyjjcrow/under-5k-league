@@ -41,6 +41,8 @@ export type WithdrawGateInput = {
   isCaptain: boolean;
   /** Is this user on a roster this season? */
   isRostered: boolean;
+  /** Is this user the lot currently under the hammer in a live auction? */
+  isOnTheBlock?: boolean;
 };
 
 /**
@@ -52,8 +54,15 @@ export function withdrawGateError({
   status,
   isCaptain,
   isRostered,
+  isOnTheBlock,
 }: WithdrawGateInput): string | null {
   if (status !== "ACTIVE") return "This signup isn't active.";
+  // The admin path checked this inline; the SELF path didn't, so a player
+  // could withdraw while captains were actively bidding on them — every draft
+  // room rendered a headless auction and the expiring lot was voided.
+  if (isOnTheBlock) {
+    return "They're on the auction block right now — wait for the lot to settle.";
+  }
   if (isCaptain) {
     return "They captain a team — replace the captain first.";
   }
