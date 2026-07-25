@@ -1,8 +1,9 @@
 import { prisma } from "./prisma";
-import { DEFAULTS, DRAFT_STATUS } from "./constants";
+import { DEFAULTS, DRAFT_STATUS, SEASON_STATUS } from "./constants";
 import { steamIdToAccountId } from "./dota";
 import {
   canBid,
+  canNominate,
   maxBid,
   teamNeed,
   nextNominatorIndex,
@@ -225,10 +226,25 @@ export async function resolveStalledNomination(
       }),
     ]);
     if (!season || !nominator) return false;
-    if (teamNeed(season.teamSize, nominator._count.members) <= 0) {
-      // The rotation only lands on needy teams, but if something ever fills
-      // the on-clock roster out-of-band, ADVANCE instead of no-opping forever
-      // (an expired clock + full nominator would otherwise freeze the draft).
+    // Full roster OR no money for even the minimum bid — both mean this team
+    // cannot legally take the clock, so ADVANCE instead of no-opping forever (an
+    // expired clock plus an ineligible nominator would otherwise freeze the
+    // draft). The affordability half matters because this is the ONE nomination
+    // path with no maxBid check: nominatePlayer and placeBid both refuse an
+    // unaffordable amount, but this resolver used to open a lot at MIN_BID on the
+    // team's behalf regardless, and resolveExpiredNomination then decremented the
+    // budget unguarded — leaving it negative. nextNominatorIndex now skips broke
+    // teams too, so advancing here cannot cycle.
+    if (
+      !canNominate(
+        {
+          id: nominator.id,
+          budget: nominator.budget,
+          rosterCount: nominator._count.members,
+        },
+        season.teamSize,
+      )
+    ) {
       const teams = await tx.team.findMany({
         where: { seasonId },
         orderBy: { draftOrder: "asc" },
@@ -393,6 +409,14 @@ export async function resumeDraft(
   return { ok: true };
 }
 
+/** Which purchase an undo actually reverted, so the toast can name it. */
+export type UndoSaleSummary = {
+  ok: true;
+  player: string;
+  team: string;
+  price: number;
+};
+
 /**
  * Admin: revert the most recent sale — the recovery path for a mis-click or a
  * disputed lot (previously nothing short of SQL could fix one). The player
@@ -404,7 +428,7 @@ export async function resumeDraft(
 export async function undoLastSale(
   seasonId: string,
   viewer: SessionUser,
-): Promise<ActionResult> {
+): Promise<UndoSaleSummary | { ok: false; error: string }> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   return prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
@@ -422,12 +446,33 @@ export async function undoLastSale(
         error: "A lot is live — wait for it to settle before undoing.",
       };
     }
+    // PROVENANCE: only ever target an actual auction purchase. `price > 0` is an
+    // exact discriminator, not a heuristic — non-captain roster rows are created
+    // in exactly two places: resolveExpiredNomination at `draft.currentBid`
+    // (which nominatePlayer floors at DEFAULTS.MIN_BID = 1) and signFreeAgent at
+    // a hard-coded 0. Without this filter "the newest non-captain row" was
+    // whatever happened last: a pool-dry draft leaves the season in DRAFT, where
+    // Sign free agent is legal, so undoing a disputed lot silently deleted the
+    // $0 free-agent signing instead — refunding nothing, leaving the disputed
+    // sale in place, and still re-opening the auction.
     const last = await tx.teamMember.findFirst({
-      where: { seasonId, isCaptain: false },
+      where: { seasonId, isCaptain: false, price: { gt: 0 } },
       orderBy: { createdAt: "desc" },
       include: { user: { select: { name: true } }, team: { select: { name: true } } },
     });
-    if (!last) return { ok: false as const, error: "No sale to undo" };
+    if (!last) {
+      // Say WHICH nothing: "no sales at all" and "only signings" need different
+      // actions from the admin.
+      const signings = await tx.teamMember.count({
+        where: { seasonId, isCaptain: false },
+      });
+      return {
+        ok: false as const,
+        error: signings
+          ? "No auction sale to undo — the players on these rosters were free-agent signings. Use Release to remove one."
+          : "No sale to undo",
+      };
+    }
 
     await tx.teamMember.delete({ where: { id: last.id } });
     // Void this lot's audit trail too. The Bid rows are keyed by
@@ -458,7 +503,132 @@ export async function undoLastSale(
         ),
       },
     });
-    return { ok: true as const };
+    return {
+      ok: true as const,
+      player: last.user.name,
+      team: last.team.name,
+      price: last.price,
+    };
+  });
+}
+
+/** What an abort actually threw away, so the caller can say so out loud. */
+export type AbortDraftSummary = {
+  ok: true;
+  playersReturned: number;
+  budgetRestored: number;
+  teams: number;
+};
+
+/**
+ * Admin: ABORT the draft and put the season back to pre-draft.
+ *
+ * The escape hatch for the one genuinely unrecoverable mistake in the league:
+ * `startDraft` is a one-way door. Nothing else ever writes `Draft.status` back
+ * to NOT_STARTED, and every captain control (addCaptain / removeCaptain /
+ * randomizeDraftOrder / setDraftSettings) refuses once the status has moved off
+ * it — so hitting "Start draft" with 2 of 8 captains designated permanently
+ * capped the season at two teams, and the only way out was creating a new
+ * season, which archives every registration and makes all 40 players sign up
+ * again. Playoffs already had "Reset playoffs"; this is the draft's equivalent.
+ *
+ * Refuses once any result exists: by then rosters are load-bearing for
+ * standings, box scores and the bracket, and dissolving them is not a recovery.
+ * Budgets are restored by crediting back exactly what each team spent, which
+ * reverses the auction whatever the starting budget was (they are MMR-weighted
+ * per captain, so there is no single figure to reset to).
+ */
+export async function abortDraft(
+  seasonId: string,
+  viewer: SessionUser,
+): Promise<AbortDraftSummary | { ok: false; error: string }> {
+  if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
+  return prisma.$transaction(async (tx) => {
+    const draft = await tx.draft.findUnique({ where: { seasonId } });
+    if (!draft || draft.status === DRAFT_STATUS.NOT_STARTED) {
+      return { ok: false as const, error: "The draft hasn't started" };
+    }
+    // Rosters become load-bearing the moment anything is played. Guard on both
+    // recorded results AND imported games — a forfeit typed by the admin has no
+    // Game rows, and an auto-synced game can land before the series completes.
+    const [played, games] = await Promise.all([
+      tx.match.count({ where: { seasonId, status: "COMPLETED" } }),
+      tx.game.count({ where: { match: { seasonId } } }),
+    ]);
+    if (played > 0 || games > 0) {
+      return {
+        ok: false as const,
+        error:
+          "Results are already recorded — the draft can't be aborted. Use Release / Sign free agent to fix a roster.",
+      };
+    }
+
+    // Claim the abort so two admins double-clicking can't both run the teardown
+    // (the guarded-claim rule every other draft transition follows).
+    const claim = await tx.draft.updateMany({
+      where: { seasonId, status: draft.status },
+      data: {
+        status: DRAFT_STATUS.NOT_STARTED,
+        nominatedUserId: null,
+        currentBid: 0,
+        currentBidTeamId: null,
+        bidEndsAt: null,
+        nominationEndsAt: null,
+        nominatorTeamId: null,
+        nominationIndex: 0,
+      },
+    });
+    if (claim.count === 0) {
+      return { ok: false as const, error: "The draft just changed — try again" };
+    }
+
+    // Undo every purchase: drop the bought players and credit each team back
+    // exactly what those rows cost. Captain rows are KEPT and deliberately not
+    // credited — usually they cost 0, but `transferCaptaincy` only flips
+    // isCaptain, so a player bought at $57 who was later promoted keeps that
+    // price on a row that survives the abort. Not crediting it is correct: that
+    // player is still rostered, so the money is still spent and
+    // `budget + spent == starting budget` continues to hold.
+    const bought = await tx.teamMember.findMany({
+      where: { seasonId, isCaptain: false },
+      select: { id: true, teamId: true, price: true },
+    });
+    const spentByTeam = new Map<string, number>();
+    for (const m of bought) {
+      spentByTeam.set(m.teamId, (spentByTeam.get(m.teamId) ?? 0) + m.price);
+    }
+    if (bought.length) {
+      await tx.teamMember.deleteMany({
+        where: { id: { in: bought.map((m) => m.id) } },
+      });
+    }
+    for (const [teamId, spent] of spentByTeam) {
+      if (spent !== 0) {
+        await tx.team.update({
+          where: { id: teamId },
+          data: { budget: { increment: spent } },
+        });
+      }
+    }
+    // Void the audit trail — otherwise the re-run auction's "Bid trail" replays
+    // the aborted draft's prices (the reason undoLastSale clears Bids too).
+    await tx.bid.deleteMany({ where: { draftId: draft.id } });
+
+    // Back to SIGNUPS: that is what reopens captain management AND lets the late
+    // players this abort exists for register at all (registrationGate blocks new
+    // PLAYER signups outside SIGNUPS).
+    await tx.season.update({
+      where: { id: seasonId },
+      data: { status: SEASON_STATUS.SIGNUPS },
+    });
+
+    const teams = await tx.team.count({ where: { seasonId } });
+    return {
+      ok: true as const,
+      playersReturned: bought.length,
+      budgetRestored: [...spentByTeam.values()].reduce((n, v) => n + v, 0),
+      teams,
+    };
   });
 }
 

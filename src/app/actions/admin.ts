@@ -18,13 +18,19 @@ import {
   MATCH_STATUS,
   MATCH_PHASE,
   DEFAULTS,
+  HARD_MMR_CEILING,
   type SeasonStatus,
 } from "@/lib/constants";
 import { roundRobin, matchNightForWeek, slotRound } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
-import { pauseDraft, resumeDraft, undoLastSale } from "@/lib/draft-service";
+import {
+  abortDraft,
+  pauseDraft,
+  resumeDraft,
+  undoLastSale,
+} from "@/lib/draft-service";
 import {
   createPlayoffBracket,
   advancePlayoffBracket,
@@ -66,7 +72,11 @@ import {
 } from "@/lib/settings";
 import { bumpSessionEpoch } from "@/lib/session-epoch";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
-import { promoteGateError, withdrawGateError } from "@/lib/registration";
+import {
+  medalProvesIneligible,
+  promoteGateError,
+  withdrawGateError,
+} from "@/lib/registration";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -194,20 +204,60 @@ export async function setSeasonPhase(
   if (season.status === target) {
     return { error: `The season is already in ${PHASE_LABELS[target]}` };
   }
-  // A LIVE auction must never be stranded by a phase flip — captains would be
-  // mid-bid on a page whose engine just stopped resolving. Finish it first.
+  // An UNFINISHED auction must never be stranded by a phase flip — captains
+  // would be mid-bid on a page whose engine just stopped resolving. PAUSED
+  // counts: it is a live auction with its clocks parked, and the admin who
+  // paused it to settle a dispute is exactly the one who then reaches for the
+  // phase buttons. Letting PAUSED through left the season outside DRAFT with
+  // half-built rosters and no auction anyone could finish from the panel.
   const draft = await prisma.draft.findUnique({
     where: { seasonId: season.id },
     select: { status: true },
   });
   if (
-    draft?.status === DRAFT_STATUS.IN_PROGRESS &&
+    (draft?.status === DRAFT_STATUS.IN_PROGRESS ||
+      draft?.status === DRAFT_STATUS.PAUSED) &&
     target !== SEASON_STATUS.DRAFT
   ) {
     return {
       error:
-        "The auction is live — let it finish (or keep the season in Draft) before moving on.",
+        draft.status === DRAFT_STATUS.PAUSED
+          ? "The auction is paused, not finished — resume and complete it (or keep the season in Draft) before moving on."
+          : "The auction is live — let it finish (or keep the season in Draft) before moving on.",
     };
+  }
+  // The MIRROR of the guard above: don't let the season walk BACKWARD into DRAFT
+  // once the auction is over and real results exist. Doing so re-arms the whole
+  // auction engine against a live league — `undoLastSaleAction` becomes callable
+  // again (its only gate is `season.status === DRAFT`), and it deletes the newest
+  // non-captain roster row, credits the budget, and forces the draft back to
+  // IN_PROGRESS with a fresh clock. From there `resolveStalledNomination` fires
+  // on the next /draft poll from ANY visitor and auto-sells an undrafted signup
+  // at MIN_BID onto a mid-season roster, announcing the sale to Discord.
+  // Verified end-to-end on a mid-season fixture during the 2026-07-25 QA pass.
+  if (
+    target === SEASON_STATUS.DRAFT &&
+    draft?.status === DRAFT_STATUS.COMPLETE
+  ) {
+    // Count IMPORTED GAMES as well as decided series — the same pair abortDraft
+    // and generateSchedule check. A COMPLETED match is not the first signal that
+    // the league is live: auto-sync makes "one series LIVE at 1-0" a routine
+    // minutes-fresh state on opening night, and `recomputeSeries` leaves an
+    // undecided series LIVE. Counting only COMPLETED left the hole open for
+    // exactly the window between the season's first imported game and its first
+    // decided series — i.e. week-1 night, while everyone is watching.
+    const [played, games] = await Promise.all([
+      prisma.match.count({
+        where: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
+      }),
+      prisma.game.count({ where: { match: { seasonId: season.id } } }),
+    ]);
+    if (played > 0 || games > 0) {
+      return {
+        error:
+          "The draft is finished and results are already recorded — reopening Draft would let the auction re-sell players mid-season. Use Roster moves to change a roster.",
+      };
+    }
   }
   // Same trap one phase later: advancePlayoffBracket no-ops unless the season
   // is in PLAYOFFS, so leaving that phase with the bracket unfinished means
@@ -541,7 +591,7 @@ export async function withdrawSignup(
   });
   if (!reg || reg.seasonId !== season.id) return { error: "Unknown signup" };
 
-  const [captainTeam, membership] = await Promise.all([
+  const [captainTeam, membership, pendingAssignments] = await Promise.all([
     prisma.team.findUnique({
       where: {
         seasonId_captainId: { seasonId: season.id, captainId: reg.userId },
@@ -550,11 +600,20 @@ export async function withdrawSignup(
     prisma.teamMember.findUnique({
       where: { seasonId_userId: { seasonId: season.id, userId: reg.userId } },
     }),
+    // Same hole as the self-serve path: removing a standin who still owes cover
+    // leaves the covered team looking staffed by someone no longer in the league.
+    prisma.standinAssignment.count({
+      where: {
+        standinUserId: reg.userId,
+        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+      },
+    }),
   ]);
   const gate = withdrawGateError({
     status: reg.status,
     isCaptain: !!captainTeam,
     isRostered: !!membership,
+    pendingAssignments,
   });
   if (gate) return { error: gate };
 
@@ -576,10 +635,39 @@ export async function withdrawSignup(
     };
   }
 
-  await prisma.registration.update({
-    where: { id: reg.id },
-    data: { status: REGISTRATION_STATUS.REMOVED },
-  });
+  // SERIALIZABLE for the same reason as the self-serve path in
+  // actions/registration.ts: the cover count above and this status write form a
+  // write-skew pair with assignStandinGuarded (which reads the registration and
+  // writes a StandinAssignment). Under read-committed a captain arranging cover
+  // in that window and this removal both commit, leaving a REMOVED standin
+  // holding live cover. Re-counting inside the transaction is what lets Postgres
+  // see the cycle.
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const live = await tx.standinAssignment.count({
+          where: {
+            standinUserId: reg.userId,
+            match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+          },
+        });
+        if (live > 0) throw new Error("COVER_APPEARED");
+        await tx.registration.update({
+          where: { id: reg.id },
+          data: { status: REGISTRATION_STATUS.REMOVED },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if ((e as Error).message === "COVER_APPEARED")
+      return {
+        error: `${reg.user.name} was just assigned to stand in for an unplayed match — remove that assignment first.`,
+      };
+    if ((e as { code?: string }).code === "P2034")
+      return { error: "That signup just changed — reload and try again." };
+    throw e;
+  }
   refresh();
   return {
     message: `Removed ${reg.user.name}'s signup — they can't re-add themselves; use Reinstate to undo`,
@@ -837,10 +925,53 @@ export async function undoLastSaleAction(
   const res = await undoLastSale(season.id, admin);
   if (!res.ok) return { error: res.error };
   refresh();
+  // Name the purchase. Undo targets the newest AUCTION sale, so when free-agent
+  // signings sit on top of it the row reverted is not the newest roster addition
+  // — saying who and for how much is what stops that being a surprise.
   return {
-    message:
-      "Sale undone — the player is back in the pool and the buyer has the next nomination.",
+    message: `Undid ${res.player} → ${res.team} ($${res.price}) — they're back in the pool, ${res.team} has the money and the next nomination.`,
   };
+}
+
+/**
+ * Admin: ABORT the draft — the way back from a premature "Start draft".
+ *
+ * Deliberately NOT phase-gated the way undoLastSaleAction is: the whole point is
+ * to recover a season whose phase already moved, and abortDraft's own guard (no
+ * recorded results, no imported games) is the safety line that matters. It puts
+ * the season back to SIGNUPS so captains can be fixed and late players can
+ * register.
+ */
+export async function abortDraftAction(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  let admin;
+  try {
+    admin = await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const res = await abortDraft(season.id, admin);
+  if (!res.ok) return { error: res.error };
+  refresh();
+  const bits = [
+    `Draft aborted — season back to Signups with ${res.teams} captain(s) intact`,
+  ];
+  if (res.playersReturned > 0) {
+    bits.push(
+      `${res.playersReturned} drafted player(s) returned to the pool and $${res.budgetRestored} refunded`,
+    );
+  }
+  bits.push("fix the captains, then start the draft again");
+  // startDraft already announced "draft night is live" to Discord, so players
+  // are on their way to /draft. Nothing announces the abort (whether to tell the
+  // channel is the operator's call — a mis-click nobody noticed needs no post),
+  // so remind them it is theirs to make.
+  bits.push("let your Discord know if the draft was already announced");
+  return { message: `${bits.join(" · ")}.` };
 }
 
 /** Admin: pause the live auction (clocks park; nothing can sell). */
@@ -1322,12 +1453,78 @@ export async function releasePlayer(
     return { error: "Captains can't be released — the team is theirs" };
   }
 
-  await prisma.teamMember.delete({ where: { id: member.id } });
+  // Release is three things, not one — do them atomically.
+  //
+  // 1. REFUND the price. The whole auction rests on `budget >= need * MIN_BID`
+  //    (maintained by maxBid on every purchase). Deleting the seat raises `need`
+  //    while leaving `budget` alone, so a team that spent out ended at
+  //    need=1/budget=$0 — and resolveStalledNomination (the one nomination path
+  //    with no affordability check) would then open a $1 lot it can't pay for and
+  //    drive the budget negative. Refunding also makes the post-draft budget
+  //    figure honest instead of counting a player who has gone.
+  // 2. CANCEL cover for the seat. StandinAssignment rows keyed to this player as
+  //    `replacingUserId` outlive them, and matchNightRoster removes the covered
+  //    player from the base roster before appending the standin — so once the
+  //    covered player is gone the filter removes nobody and the side is computed
+  //    one too large (five plus a standin in a 5v5). That inflated number feeds
+  //    /schedule, the dashboard strip and the Discord week reminder, and the
+  //    admin's uncovered-OUT alert can't catch it because it only looks at
+  //    current roster members.
+  // 3. Announce the release, as before.
+  const { cancelled, kept } = await prisma.$transaction(async (tx) => {
+    // Only cover on a series that hasn't started. Once a game is imported the
+    // assignment is load-bearing for the REST of that series: gatherTeamAccounts
+    // re-reads StandinAssignment on every import, so deleting it mid-Bo3 drops
+    // the standin from the team's account set for games 2 and 3 — their lines get
+    // stored with a null teamId, and if the side falls under classifyGame's
+    // recognizable-account floor the later games stop importing altogether. This
+    // is exactly the deletion removeStandinGuarded refuses ("would strip them
+    // from the rest of the series"); do not let release do it by the back door.
+    const covering = await tx.standinAssignment.findMany({
+      where: {
+        replacingUserId: member.userId,
+        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+      },
+      select: { id: true, match: { select: { games: { select: { id: true }, take: 1 } } } },
+    });
+    const removable = covering.filter((a) => a.match.games.length === 0);
+    if (removable.length) {
+      await tx.standinAssignment.deleteMany({
+        where: { id: { in: removable.map((s) => s.id) } },
+      });
+    }
+    await tx.teamMember.delete({ where: { id: member.id } });
+    if (member.price > 0) {
+      await tx.team.update({
+        where: { id: member.teamId },
+        data: { budget: { increment: member.price } },
+      });
+    }
+    return {
+      cancelled: removable.length,
+      kept: covering.length - removable.length,
+    };
+  });
+
   await sendDiscordMessage(
     playerReleasedMessage(member.user.name, member.team.name),
   );
   refresh();
-  return { message: `${member.user.name} released from ${member.team.name}` };
+  const extra = [
+    member.price > 0 ? `$${member.price} refunded to ${member.team.name}` : null,
+    cancelled > 0
+      ? `${cancelled} standin assignment(s) covering them cancelled — re-cover those matches`
+      : null,
+    // Left in place on purpose; the admin still needs to know it's there.
+    kept > 0
+      ? `${kept} assignment(s) on an already-started series were LEFT in place (removing a standin mid-series breaks the remaining imports) — remove by hand if they aren't playing`
+      : null,
+  ].filter(Boolean);
+  return {
+    message:
+      `${member.user.name} released from ${member.team.name}` +
+      (extra.length ? ` · ${extra.join(" · ")}` : ""),
+  };
 }
 
 /** Assign a standin to fill in for a rostered player in a specific match.
@@ -1845,9 +2042,31 @@ export async function syncPlayerRanks(
     regs.map((r) => r.user),
   );
   if (outage) return { error: OPENDOTA_OUTAGE_MSG };
+
+  // A medal learned AFTER signup can prove someone ineligible, and nothing else
+  // ever re-checks: registrationGate only runs on submit, and a stored MMR is
+  // league-approved by design. Anyone who signed up before linking their Dota
+  // account (or while OpenDota was down) therefore sits in the pool with a
+  // ceiling-breaking medal and an admitted low number. Name them here — this is
+  // the one moment the league actually learns the truth. Never auto-remove:
+  // who plays is the operator's call (withdraw/reinstate, or setRegistrationMmr).
+  // Re-read rather than reusing `regs`: that snapshot predates the sync, so its
+  // user.rankTier is exactly the null we just filled in.
+  const flagged = await prisma.registration.findMany({
+    where: { seasonId: season.id, status: "ACTIVE" },
+    include: { user: { select: { name: true, rankTier: true } } },
+  });
+  const overCeiling = flagged.filter((r) => medalProvesIneligible(r.user.rankTier));
+  const warning = overCeiling.length
+    ? ` ⚠️ ${overCeiling.length} signup(s) now have a medal above the ${HARD_MMR_CEILING} ceiling: ${overCeiling
+        .slice(0, 5)
+        .map((r) => `${r.user.name} (${rankMedalName(r.user.rankTier)}, entered ${r.mmr})`)
+        .join(", ")}${overCeiling.length > 5 ? `, +${overCeiling.length - 5} more` : ""} — review before the draft.`
+    : "";
+
   refresh();
   return {
-    message: `Synced ${regs.length} players · ${ranked} ranked${unreachableTail(unreachable)}${skippedTail(skipped)}`,
+    message: `Synced ${regs.length} players · ${ranked} ranked${unreachableTail(unreachable)}${skippedTail(skipped)}${warning}`,
   };
 }
 

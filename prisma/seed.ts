@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { approxRankTierFromMmr } from "../src/lib/rank";
+import { assertLocalDatabase } from "../scripts/assert-local-db.mjs";
 
 const prisma = new PrismaClient();
 
@@ -50,6 +51,9 @@ function randRoles(): string {
 }
 
 async function main() {
+  // This script's first act is to delete every row — never let it point at a
+  // database that isn't a local SQLite file. See scripts/assert-local-db.mjs.
+  assertLocalDatabase("Seeding");
   console.log("Resetting database…");
   // Order matters for FK constraints.
   await prisma.bid.deleteMany();

@@ -50,6 +50,7 @@ import {
   setDraftNight,
   promoteStandinToPlayer,
   undoLastSaleAction,
+  abortDraftAction,
   pauseDraftAction,
   resumeDraftAction,
   transferCaptaincy,
@@ -373,6 +374,21 @@ function SeasonControls({
             </ActionForm>
           ))}
         </div>
+        {/* The auction finishing does NOT advance the phase — nothing writes
+            REGULAR_SEASON, so the season sits in DRAFT until the admin clicks it.
+            Everything that gate silently disables (automatic result sync, the
+            player-facing nav, week reminders, match-night check-in) fails QUIETLY,
+            so the panel has to say the next step out loud rather than leave it to
+            the generic tip below. */}
+        {season.status === SEASON_STATUS.DRAFT &&
+        data.draft?.status === DRAFT_STATUS.COMPLETE ? (
+          <p className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-fg">
+            <b>Next step: move the season to Regular season.</b> The auction is
+            finished, but until you do, automatic result sync, match-night
+            check-in, the weekly Discord reminder and the Schedule/Leaders nav
+            links all stay switched off.
+          </p>
+        ) : null}
         <p className="text-xs text-muted">
           Tip: gather players in <b>Signups</b>, assign captains, then{" "}
           <b>Start draft</b> below. After the draft, generate the schedule and
@@ -559,6 +575,37 @@ function CaptainControls({
     (p) => !captainUserIds.has(p.userId),
   );
 
+  // Starting the draft is a ONE-WAY DOOR: nothing ever sets a draft back to
+  // NOT_STARTED, so addCaptain/removeCaptain are locked from here on and the
+  // season's team count is final (startDraft's own re-run error says the escape
+  // is "create a new season"). On draft night with players waiting that is the
+  // worst possible surprise, so the confirm names the count being locked in and
+  // calls out a shortfall against the season's own team target.
+  // Abort is only offered while nothing has been played — the same line the
+  // action guards on, so the button never appears where it would be refused.
+  const anyResultRecorded =
+    data.matches.some((m) => m.status === "COMPLETED") ||
+    data.matches.some((m) => (m.games?.length ?? 0) > 0);
+  const boughtCount = data.teams.reduce(
+    (n, t) => n + t.members.filter((m) => !m.isCaptain).length,
+    0,
+  );
+  const abortConfirm =
+    `Abort the draft and go back to Signups?` +
+    (boughtCount > 0
+      ? ` ${boughtCount} drafted player(s) will be returned to the pool and every team refunded.`
+      : "") +
+    ` The ${data.teams.length} captain(s) and their teams are KEPT, so you can add or remove captains and start again.`;
+
+  const captainCount = data.teams.length;
+  const startConfirm =
+    `Start the draft with ${captainCount} captain${captainCount === 1 ? "" : "s"}?` +
+    (captainCount < season.minTeams
+      ? ` That is fewer than this season's ${season.minTeams}-team target.`
+      : "") +
+    " This can't be undone — captains are locked from now on, and adding another" +
+    " team would mean starting a new season.";
+
   return (
     <Card>
       <CardHeader
@@ -592,7 +639,7 @@ function CaptainControls({
                       (season.status !== SEASON_STATUS.SIGNUPS &&
                         season.status !== SEASON_STATUS.DRAFT)
                     }
-                    confirm="Start the draft now? Rosters lock to the current captains."
+                    confirm={startConfirm}
                   >
                     Start draft
                   </SubmitButton>
@@ -625,6 +672,23 @@ function CaptainControls({
                   confirm="Undo the most recent sale? The player returns to the pool and the buyer gets the money back and the next nomination."
                 >
                   Undo last sale
+                </SubmitButton>
+              </ActionForm>
+            ) : null}
+            {/* The way back from a premature "Start draft" — nothing else ever
+                returns Draft.status to NOT_STARTED, so without this a season
+                started with the wrong captains was capped forever. Shown in
+                every phase while no result exists (recovering a season whose
+                phase already moved is the point); abortDraft refuses once any
+                match is completed or any game is imported. */}
+            {draftStarted && !anyResultRecorded ? (
+              <ActionForm action={abortDraftAction}>
+                <SubmitButton
+                  variant="danger"
+                  size="sm"
+                  confirm={abortConfirm}
+                >
+                  Abort draft
                 </SubmitButton>
               </ActionForm>
             ) : null}

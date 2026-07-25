@@ -421,3 +421,72 @@ describe("upsertLeagueUser — Steam outages never overwrite a real profile", ()
     expect(updated.avatar).toBe("a.jpg");
   });
 });
+
+// A medal is frequently learned AFTER signup — players register before linking
+// their Dota account, or OpenDota is unreachable at that moment. registrationGate
+// only runs on submit, and a stored MMR is league-approved by design (so an admin
+// correction survives a player editing their roles), so NOTHING re-judges those
+// signups. "Sync ranks" is the one moment the league learns the truth: it must
+// say so, or a ceiling-breaking player sits in the pool behind a low typed number
+// and gets drafted.
+describe("syncPlayerRanks — flags signups a new medal proves ineligible", () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  it("names the player when the synced medal is over the hard ceiling", async () => {
+    const season = await makeSeason({ maxMmr: 4500 });
+    const user = await makePlayer(season.id, "Sandbagger", 4200);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 4242, rankTier: null }, // signed up before we knew
+    });
+    // Divine 4: exact band floor 5220, above the 5000 hard ceiling.
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 74, fhUnavailable: false });
+
+    const res = await syncPlayerRanks({}, new FormData());
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toContain("Sandbagger");
+    expect(res?.message).toMatch(/above the 5000 ceiling/);
+    expect(res?.message).toContain("4200"); // what they actually typed
+    // The signup is NOT auto-removed — who plays is the operator's call.
+    const reg = await prisma.registration.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+    });
+    expect(reg?.status).toBe("ACTIVE");
+  });
+
+  it("stays quiet when every synced medal is legitimately under the ceiling", async () => {
+    const season = await makeSeason({ maxMmr: 4500 });
+    const user = await makePlayer(season.id, "Legit Legend", 3400);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 555, rankTier: null },
+    });
+    // Divine 2: floor 4820, under the ceiling — admissible.
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 72, fhUnavailable: false });
+
+    const res = await syncPlayerRanks({}, new FormData());
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).not.toMatch(/ceiling/);
+    expect(res?.message).not.toContain("⚠️");
+  });
+
+  it("does not flag a WITHDRAWN signup — only players still in the pool", async () => {
+    const season = await makeSeason({ maxMmr: 4500 });
+    const user = await makePlayer(season.id, "Gone Already", 4200);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 777, rankTier: 80 }, // Immortal
+    });
+    await prisma.registration.update({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+      data: { status: "WITHDRAWN" },
+    });
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 80, fhUnavailable: false });
+
+    const res = await syncPlayerRanks({}, new FormData());
+
+    expect(res?.message).not.toContain("Gone Already");
+  });
+});

@@ -120,10 +120,22 @@ at once with the **Sync ranks** button before the draft.
 | `npm run dev` | Start the dev server |
 | `npm run build` / `start` | Production build / serve |
 | `npm run db:push` | Apply the Prisma schema to SQLite |
-| `npm run db:seed` | Reset + seed demo data |
-| `npm run db:reset` | Force-reset the DB and reseed |
+| `npm run db:seed` | **Destructive** — wipe the DB and seed demo data |
+| `npm run db:reset` | **Destructive** — force-reset the DB and reseed |
+| `npm run db:backup` | Back up the DB (pg_dump for Postgres, file copy for SQLite) |
+| `npm run set-admins` | Reconcile existing accounts to `ADMIN_STEAM_IDS` |
 | `npm test` | Run unit tests (Vitest) |
+| `npm run test:integration` | Run integration tests (isolated `prisma/test.db`) |
+| `npm run test:pg` | Run the integration suite against **Postgres** (see below) |
 | `npm run test:e2e` | Run end-to-end tests (Playwright) |
+| `npm run test:e2e:mid` | Run the mid-season browser suite |
+
+> **The two destructive scripts refuse to run against a non-local database.**
+> `db:seed` deletes every row and `db:reset` drops the schema first, so both
+> abort unless `DATABASE_URL` is a local `file:` url. That matters because the
+> backup recipe below has you put the *production* url on a command line — one
+> shell-history recall from wiping the live league. To override deliberately:
+> `I_UNDERSTAND_THIS_WIPES_THE_DATABASE=1 npm run db:seed`.
 
 ## Project structure
 
@@ -155,6 +167,21 @@ e2e/                    # Playwright tests
   covered by Vitest: `npm test`.
 - **End-to-end** — Playwright drives a real browser through sign-in, signup, and
   admin flows: `npm run test:e2e` (runs `db:seed` first via global setup).
+- **Against Postgres** — production runs Postgres while everything local runs
+  SQLite, which serializes writers and therefore hides the write races the
+  auction/inhouse guards exist for. To run the whole integration suite on the
+  real engine:
+
+  ```bash
+  # any throwaway Postgres (a local cluster or a scratch Neon branch)
+  export PG="postgresql://user@127.0.0.1:5432/ld2l_scratch"
+  node scripts/switch-db-provider.mjs postgresql
+  DATABASE_URL="$PG" DIRECT_URL="$PG" npx prisma db push --accept-data-loss
+  DATABASE_URL="$PG" DIRECT_URL="$PG" npx prisma generate
+  PG_TEST_URL="$PG" npm run test:pg
+  # then put the local provider back
+  node scripts/switch-db-provider.mjs sqlite && npx prisma generate
+  ```
 
 ## Deployment (Vercel + Neon — free)
 
@@ -181,11 +208,26 @@ serverless.
    | `AUTH_SECRET` | long random string (`openssl rand -hex 32`) |
    | `STEAM_API_KEY` | your **rotated** Steam Web API key |
    | `APP_URL` | `https://<your-project>.vercel.app` |
-   | `ADMIN_STEAM_IDS` | your SteamID64 (guarantees you're admin) |
+   | `ADMIN_STEAM_IDS` | your **SteamID64** — 17 digits starting `7656119` (see the warning below) |
    | `OPENDOTA_API_KEY` | optional |
    | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional — enables "Link Discord" account verification |
 
    Leave `ALLOW_DEV_LOGIN` unset — dev login stays disabled in production.
+
+   > ⚠️ **`ADMIN_STEAM_IDS` is an allowlist, not a grant — get it right or you
+   > lock yourself out.** When it is set it is *authoritative*: exactly those
+   > SteamID64s are admins and every other account is demoted on login,
+   > including the first one. So if you paste anything other than your
+   > SteamID64 — the Steam3 form `[U:1:52079950]`, a friend code, a vanity
+   > name — nobody is an admin and `/admin` just redirects you away with no
+   > message. **Removing the variable does not fix it**: the
+   > first-user-becomes-admin bootstrap only fires when the users table is
+   > empty, and by then your account exists. The fix is to *correct* the value
+   > to your real SteamID64 and sign in again (or run `npm run set-admins`
+   > against the production `DATABASE_URL`). Find your SteamID64 with
+   > steamid.io or steamdb.info — it is 17 digits and starts `7656119`.
+   > Easiest safe path: leave `ADMIN_STEAM_IDS` empty for the very first login
+   > so you are bootstrapped as admin, then set it afterwards.
 
    > Scope `DATABASE_URL`/`DIRECT_URL` to the **Production** environment (or
    > point Preview at a separate branch database). Builds only run
@@ -194,9 +236,11 @@ serverless.
 5. **Deploy.** The build swaps Prisma to Postgres, runs `prisma db push`
    **on production deploys only** (creates the tables in Neon via
    `DIRECT_URL`; previews just generate the client), and builds the app.
-6. **First login = admin.** Open your site → **Sign in through Steam**. The first
-   user is auto-granted admin; then go to **/admin**, create your season, and set
-   the **MMR cap** (4500). Steam pulls everyone's name + avatar automatically.
+6. **First login = admin.** Open your site → **Sign in through Steam**. With
+   `ADMIN_STEAM_IDS` empty the first user is auto-granted admin (with it set,
+   you are admin only if your SteamID64 is in it — see the warning above). Then
+   go to **/admin**, create your season, and set the **MMR cap** (4500). Steam
+   pulls everyone's name + avatar automatically.
 
 Update `APP_URL` if you add a custom domain, so Steam login redirects back
 correctly.
@@ -207,11 +251,26 @@ The league's entire history lives in that one database — back it up before
 schema changes and on a habit cadence:
 
 ```bash
-# Production (paste the Neon DIRECT url; needs pg_dump — brew install postgresql)
+# Production (paste the Neon DIRECT url; needs pg_dump — see the version note)
 DATABASE_URL="postgres://…direct…" npm run db:backup
 # Local dev (copies the SQLite file)
 npm run db:backup
 ```
+
+> **`pg_dump` must be at least as new as the server**, or it aborts with
+> `aborting because of server version mismatch` and writes nothing. Neon runs
+> Postgres 16/17, so an older client (e.g. `postgresql@14`) will refuse. Check
+> and fix before you need it — not during an incident:
+>
+> ```bash
+> pg_dump --version                      # must be >= your Neon server major
+> psql "$DIRECT_URL" -tAc 'show server_version;'
+> brew install postgresql@17             # then use its bin, e.g.
+> PATH="$(brew --prefix postgresql@17)/bin:$PATH" DATABASE_URL="…" npm run db:backup
+> ```
+>
+> Do a restore drill once into a scratch database — an untested backup is a
+> guess: `psql "$SCRATCH_URL" < backups/<file>.sql`.
 
 Timestamped dumps land in `backups/` (gitignored). Restore Postgres with
 `psql "$URL" < backups/<file>.sql`; for SQLite just copy the `.db` file back.

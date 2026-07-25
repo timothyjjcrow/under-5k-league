@@ -3,6 +3,7 @@ import {
   teamNeed,
   maxBid,
   canBid,
+  canNominate,
   nextNominatorIndex,
   mmrWeightedBudgets,
   type DraftTeam,
@@ -63,6 +64,26 @@ describe("canBid", () => {
 });
 
 
+describe("canNominate", () => {
+  it("needs both an open seat and the money for one", () => {
+    expect(canNominate(team(1, 100), 5)).toBe(true);
+    expect(canNominate(team(5, 100), 5)).toBe(false); // full roster
+    expect(canNominate(team(4, 0), 5)).toBe(false); // last seat, no money
+  });
+
+  it("is exactly the budget >= need * minBid invariant", () => {
+    // need 2, minBid 1 -> needs at least $2
+    expect(canNominate(team(3, 2), 5)).toBe(true);
+    expect(canNominate(team(3, 1), 5)).toBe(false);
+  });
+
+  it("is false for the state a non-refunding roster move used to create", () => {
+    // spent out at 5/5, then a player is released: 4/5 with $0 left. The stall
+    // resolver would otherwise open a $1 lot and drive the budget to -1.
+    expect(canNominate(team(4, 0), 5)).toBe(false);
+  });
+});
+
 describe("nextNominatorIndex", () => {
   const teams = [team(1), team(5), team(1)]; // middle team is full
 
@@ -74,6 +95,18 @@ describe("nextNominatorIndex", () => {
   });
   it("returns -1 when all teams are full", () => {
     expect(nextNominatorIndex([team(5)], 5, 0)).toBe(-1);
+  });
+
+  it("skips a needy team that cannot afford the minimum bid", () => {
+    // index 1 needs a player but has $0 — the clock must not land there, or the
+    // stall resolver opens a lot it can't pay for.
+    const teams = [team(5, 100), team(4, 0), team(2, 50)];
+    expect(nextNominatorIndex(teams, 5, 0)).toBe(2);
+  });
+
+  it("returns -1 when every needy team is broke, so the draft completes", () => {
+    const teams = [team(4, 0), team(3, 1)]; // need 1 with $0; need 2 with $1
+    expect(nextNominatorIndex(teams, 5, 0)).toBe(-1);
   });
 });
 

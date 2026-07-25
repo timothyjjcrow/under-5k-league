@@ -84,3 +84,61 @@ describe("matchNightRoster", () => {
     expect(summary).toMatchObject({ confirmed: 3, out: 0, unanswered: 0 });
   });
 });
+
+// The swap is "remove the covered player, add the standin", so an assignment
+// whose covered player has left the roster used to make the side come out ONE
+// TOO LARGE — the filter removed nobody but the standin was still appended,
+// reporting six players in a 5v5 to /schedule, the dashboard strip and the
+// Discord week reminder.
+describe("matchNightRoster — stale cover can't inflate a side", () => {
+  const five = ["a", "b", "c", "d", "e"];
+
+  it("drops cover for someone no longer on the roster", () => {
+    // P was released and replaced by "f"; S's assignment still names P.
+    const base = ["a", "b", "c", "d", "f"];
+    const roster = matchNightRoster(base, [
+      { standinUserId: "s", replacingUserId: "p" },
+    ]);
+    expect(roster).toEqual(base);
+    expect(roster).toHaveLength(5);
+    expect(roster).not.toContain("s");
+  });
+
+  it("still applies cover for a player who IS on the roster", () => {
+    const roster = matchNightRoster(five, [
+      { standinUserId: "s", replacingUserId: "c" },
+    ]);
+    expect(roster).toHaveLength(5);
+    expect(roster).not.toContain("c");
+    expect(roster).toContain("s");
+  });
+
+  it("keeps a null-replacement standin — that fills an empty seat, not a player", () => {
+    const short = ["a", "b", "c", "d"];
+    const roster = matchNightRoster(short, [
+      { standinUserId: "s", replacingUserId: null },
+    ]);
+    expect(roster).toHaveLength(5);
+    expect(roster).toContain("s");
+  });
+
+  it("handles a mix: one live cover, one stale, one empty-seat fill", () => {
+    const base = ["a", "b", "c", "d"];
+    const roster = matchNightRoster(base, [
+      { standinUserId: "s1", replacingUserId: "c" }, // live
+      { standinUserId: "s2", replacingUserId: "gone" }, // stale -> dropped
+      { standinUserId: "s3", replacingUserId: null }, // empty seat
+    ]);
+    expect(roster.sort()).toEqual(["a", "b", "d", "s1", "s3"].sort());
+  });
+
+  it("returns the plain roster when every assignment is stale", () => {
+    expect(
+      matchNightRoster(five, [{ standinUserId: "s", replacingUserId: "ghost" }]),
+    ).toEqual(five);
+  });
+
+  it("is unchanged for the no-assignments case", () => {
+    expect(matchNightRoster(five, [])).toEqual(five);
+  });
+});

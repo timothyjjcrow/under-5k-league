@@ -10,7 +10,7 @@ vi.mock("@/lib/dota", async (importOriginal) => ({
   fetchPlayerRankTier: vi.fn(async () => null),
 }));
 
-import { saveRegistration } from "@/app/actions/registration";
+import { leaveLeague, saveRegistration } from "@/app/actions/registration";
 import { setRegistrationMmr } from "@/app/actions/admin";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { fetchPlayerRankTier } from "@/lib/dota";
@@ -318,5 +318,85 @@ describe("setRegistrationMmr — advisory-only admin override", () => {
         .mmr,
     ).toBe(4000);
     expect(res?.message).not.toMatch(/heads up/i);
+  });
+});
+
+// The self-serve withdraw path. A standin who still owes cover used to be able
+// to walk out silently: the registration flipped to WITHDRAWN, the
+// StandinAssignment survived, and matchNightRoster kept swapping the covered
+// player out for someone no longer in the league — so the team looked staffed
+// right up to kickoff while /me stopped reminding the ex-standin entirely.
+describe("leaveLeague — a standin can't walk out on cover they owe", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  async function standinWithCover(matchStatus: string) {
+    const season = await makeSeason({
+      teamSize: 5,
+      status: "REGULAR_SEASON",
+    });
+    const capA = await makeUser("Cap A");
+    const capB = await makeUser("Cap B");
+    const alpha = await prisma.team.create({
+      data: { seasonId: season.id, name: "Alpha", captainId: capA.id, budget: 100, draftOrder: 0 },
+    });
+    const bravo = await prisma.team.create({
+      data: { seasonId: season.id, name: "Bravo", captainId: capB.id, budget: 100, draftOrder: 1 },
+    });
+    const covered = await makeUser("Covered Player");
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: covered.id, type: "PLAYER", status: "ACTIVE", mmr: 3000 },
+    });
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: alpha.id, userId: covered.id, price: 10 },
+    });
+    const standin = await makeUser("The Standin");
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: standin.id, type: "STANDIN", status: "ACTIVE", mmr: 2500 },
+    });
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 4,
+        phase: "REGULAR",
+        homeTeamId: alpha.id,
+        awayTeamId: bravo.id,
+        bestOf: 2,
+        status: matchStatus,
+      },
+    });
+    await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: alpha.id,
+        standinUserId: standin.id,
+        replacingUserId: covered.id,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+    return { season, standin };
+  }
+
+  it("refuses, naming the assignment, while the match is unplayed", async () => {
+    const { season, standin } = await standinWithCover("SCHEDULED");
+
+    const res = await leaveLeague({}, new FormData());
+
+    expect(res?.error).toMatch(/standing in for an unplayed match/i);
+    const reg = await prisma.registration.findUniqueOrThrow({
+      where: { seasonId_userId: { seasonId: season.id, userId: standin.id } },
+    });
+    expect(reg.status).toBe("ACTIVE");
+  });
+
+  it("allows the withdrawal once that match has been played", async () => {
+    const { season, standin } = await standinWithCover("COMPLETED");
+
+    const res = await leaveLeague({}, new FormData());
+
+    expect(res?.error).toBeUndefined();
+    const reg = await prisma.registration.findUniqueOrThrow({
+      where: { seasonId_userId: { seasonId: season.id, userId: standin.id } },
+    });
+    expect(reg.status).not.toBe("ACTIVE");
   });
 });

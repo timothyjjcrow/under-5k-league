@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  medalProvesIneligible,
   promoteGateError,
   registrationGate,
   withdrawGateError,
@@ -259,5 +260,52 @@ describe("withdrawGateError — on the auction block", () => {
     expect(
       withdrawGateError({ ...base, status: "REMOVED", isOnTheBlock: true }),
     ).toMatch(/isn't active/i);
+  });
+});
+
+// A medal is often learned AFTER signup: players sign up before linking their
+// Dota account, or OpenDota is unreachable at that moment. registrationGate only
+// runs on submit and a stored MMR is league-approved by design, so nothing
+// re-judges those signups — the admin's "Sync ranks" is the one moment the
+// league learns the truth, and it uses this predicate to name them.
+describe("medalProvesIneligible — the post-signup ceiling check", () => {
+  it("is false when there is no medal to judge by", () => {
+    expect(medalProvesIneligible(null)).toBe(false);
+    expect(medalProvesIneligible(undefined)).toBe(false);
+    expect(medalProvesIneligible(0)).toBe(false);
+  });
+
+  it("is false for every medal whose band sits under the ceiling", () => {
+    // Herald 1 through Divine 2 (4820 floor) are all legitimately admissible.
+    for (const tier of [11, 15, 25, 35, 45, 55, 65, 71, 72]) {
+      expect(medalProvesIneligible(tier), `tier ${tier}`).toBe(false);
+    }
+  });
+
+  it("is true from Divine 3 up — the documented reject band", () => {
+    for (const tier of [73, 74, 75, 80, 81, 85]) {
+      expect(medalProvesIneligible(tier), `tier ${tier}`).toBe(true);
+    }
+  });
+
+  it("flips exactly between Divine 2 and Divine 3", () => {
+    expect(medalProvesIneligible(72)).toBe(false);
+    expect(medalProvesIneligible(73)).toBe(true);
+  });
+
+  it("agrees with registrationGate — one rule, not two", () => {
+    // Whatever the predicate rejects, the signup gate must also reject, and
+    // vice versa. If these ever drift, a sandbagger walks past the ceiling.
+    for (const tier of [null, 0, 11, 45, 71, 72, 73, 74, 80]) {
+      const gated = registrationGate({
+        season: soft,
+        type: "PLAYER",
+        mmr: 4200,
+        rankTier: tier,
+        hasExisting: false,
+      });
+      const blockedByMedal = gated != null && /medal puts you above it/.test(gated);
+      expect(blockedByMedal, `tier ${tier}`).toBe(medalProvesIneligible(tier));
+    }
   });
 });

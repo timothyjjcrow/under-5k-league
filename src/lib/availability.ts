@@ -34,10 +34,23 @@ export function matchNightRoster(
   assignments: StandinLike[],
 ): string[] {
   if (assignments.length === 0) return base;
-  const covered = new Set(assignments.map((a) => a.replacingUserId));
+  // Drop cover for somebody who is no longer on the roster. The swap is
+  // "remove the covered player, add the standin", so a stale assignment made the
+  // side come out ONE TOO LARGE — the filter removed nobody but the standin was
+  // still appended, reporting six players in a 5v5 to /schedule, the dashboard
+  // strip and the Discord week reminder. releasePlayer now cancels these at the
+  // source; this keeps the arithmetic honest for rows any other path leaves
+  // behind. A NULL replacingUserId is not stale — that is a standin filling an
+  // empty seat on a short roster, and it adds a player without replacing one.
+  const onRoster = new Set(base);
+  const live = assignments.filter(
+    (a) => a.replacingUserId == null || onRoster.has(a.replacingUserId),
+  );
+  if (live.length === 0) return base;
+  const covered = new Set(live.map((a) => a.replacingUserId));
   return [
     ...base.filter((id) => !covered.has(id)),
-    ...assignments.map((a) => a.standinUserId),
+    ...live.map((a) => a.standinUserId),
   ];
 }
 

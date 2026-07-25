@@ -1,11 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import {
   DRAFT_STATUS,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   type RegistrationType,
@@ -237,7 +239,7 @@ export async function leaveLeague(
   });
   if (!reg) return { error: "You're not signed up for this season." };
 
-  const [member, captainTeam, draft] = await Promise.all([
+  const [member, captainTeam, draft, pendingAssignments] = await Promise.all([
     prisma.teamMember.findUnique({
       where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
     }),
@@ -247,6 +249,14 @@ export async function leaveLeague(
     prisma.draft.findUnique({
       where: { seasonId: season.id },
       select: { status: true, nominatedUserId: true },
+    }),
+    // Standin cover they still owe. Withdrawing over the top of it leaves the
+    // covered team looking staffed on match night by someone who has left.
+    prisma.standinAssignment.count({
+      where: {
+        standinUserId: user.id,
+        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+      },
     }),
   ]);
   const onTheBlock =
@@ -260,13 +270,44 @@ export async function leaveLeague(
     isOnTheBlock: onTheBlock,
     isCaptain: !!captainTeam,
     isRostered: !!member,
+    pendingAssignments,
   });
   if (gateError) return { error: gateError };
 
-  await prisma.registration.updateMany({
-    where: { seasonId: season.id, userId: user.id },
-    data: { status: "WITHDRAWN" },
-  });
+  // SERIALIZABLE, not a plain write: the cover count above and the status write
+  // here are a write-skew pair with assignStandinGuarded, which reads this
+  // registration and writes a StandinAssignment. Under read-committed a captain
+  // arranging cover in that window and this withdrawal both commit, leaving a
+  // WITHDRAWN standin holding live cover — the exact state the new guard exists
+  // to prevent. Re-counting INSIDE the transaction puts the assignments in this
+  // transaction's read set so Postgres can spot the cycle (P2034).
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const live = await tx.standinAssignment.count({
+          where: {
+            standinUserId: user.id,
+            match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+          },
+        });
+        if (live > 0) throw new Error("COVER_APPEARED");
+        await tx.registration.updateMany({
+          where: { seasonId: season.id, userId: user.id, status: "ACTIVE" },
+          data: { status: "WITHDRAWN" },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if ((e as Error).message === "COVER_APPEARED")
+      return {
+        error:
+          "You've just been assigned to stand in for an unplayed match — that has to be removed first.",
+      };
+    if ((e as { code?: string }).code === "P2034")
+      return { error: "Your signup just changed — reload and try again." };
+    throw e;
+  }
   refresh();
   return { message: "Withdrawn from this season" };
 }

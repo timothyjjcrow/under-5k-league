@@ -29,6 +29,27 @@ export function maxBid(
   return Math.max(0, team.budget - (need - 1) * minBid);
 }
 
+/**
+ * Can this team still take part — does it need a player AND have the money for
+ * one at the minimum bid? Equivalent to `budget >= need * minBid`, the invariant
+ * `maxBid` maintains on every purchase, so in a healthy auction every needy team
+ * is affordable. It can be false after a roster move that removes a player
+ * without returning their fee, and the rotation must not hand the clock to a
+ * team that cannot legally bid: `resolveStalledNomination` would open a lot at
+ * MIN_BID on its behalf (it is the one nomination path with no affordability
+ * check) and the sale would then drive the budget negative.
+ */
+export function canNominate(
+  team: DraftTeam,
+  teamSize: number,
+  minBid = DEFAULTS.MIN_BID,
+): boolean {
+  return (
+    teamNeed(teamSize, team.rosterCount) > 0 &&
+    maxBid(team, teamSize, minBid) >= minBid
+  );
+}
+
 /** Whether `amount` is a legal bid for this team given the current high bid. */
 export function canBid(
   team: DraftTeam,
@@ -125,7 +146,10 @@ export function nextNominatorIndex(
   const n = teamsInOrder.length;
   for (let step = 1; step <= n; step++) {
     const idx = (lastIndex + step) % n;
-    if (teamNeed(teamSize, teamsInOrder[idx].rosterCount) > 0) return idx;
+    // Needy AND able to pay. Skipping the broke is what stops the "advance past
+    // a team that can't afford the minimum" path from cycling forever; -1 here
+    // means nobody can bid, which the callers already treat as draft-complete.
+    if (canNominate(teamsInOrder[idx], teamSize)) return idx;
   }
   return -1;
 }

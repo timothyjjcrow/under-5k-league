@@ -739,20 +739,33 @@ export async function joinQueue(
 async function claimQueuePingThrottle(nowMs: number): Promise<boolean> {
   const key = SETTING_KEYS.INHOUSE_QUEUE_PING_AT;
   const value = new Date(nowMs).toISOString();
+  const staleBefore = new Date(
+    nowMs - INHOUSE.QUEUE_PING_MIN_MINUTES * 60_000,
+  ).toISOString();
+
+  // STALE-CLAIM update first, create only as the genuine first-ever call — the
+  // ordering result-sync-service's claimThrottle documents. The row exists on
+  // every call but the first, so leading with `create` made the expected path a
+  // caught-and-ignored P2002, and the Prisma client logs at "error" level in
+  // production (src/lib/prisma.ts): every queue that filled to the ping
+  // threshold wrote a constraint-violation stack to the server log before our
+  // catch ran. Verified under concurrent joins on Postgres.
+  const updated = await prisma.setting.updateMany({
+    where: { key, value: { lt: staleBefore } },
+    data: { value },
+  });
+  if (updated.count > 0) return true;
+
+  // Zero rows = "exists but still fresh" (not our claim) or "not there yet".
+  const existing = await prisma.setting.findUnique({ where: { key } });
+  if (existing) return false;
   try {
     await prisma.setting.create({ data: { key, value } });
     return true;
   } catch (e) {
     if ((e as { code?: string }).code !== "P2002") throw e;
+    return false; // a genuine creation race — someone else got there first
   }
-  const staleBefore = new Date(
-    nowMs - INHOUSE.QUEUE_PING_MIN_MINUTES * 60_000,
-  ).toISOString();
-  const updated = await prisma.setting.updateMany({
-    where: { key, value: { lt: staleBefore } },
-    data: { value },
-  });
-  return updated.count > 0;
 }
 
 /**

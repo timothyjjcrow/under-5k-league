@@ -43,6 +43,15 @@ export type WithdrawGateInput = {
   isRostered: boolean;
   /** Is this user the lot currently under the hammer in a live auction? */
   isOnTheBlock?: boolean;
+  /**
+   * Standin assignments this user holds on UNPLAYED matches. A withdrawal that
+   * leaves these behind is invisible: nothing downstream re-checks registration
+   * status, so `matchNightRoster` keeps swapping the covered player out for a
+   * standin who has left the league — the team shows as covered right up to
+   * kickoff, and the ex-standin's own /me stops listing the match (it filters on
+   * ACTIVE), so they get no reminder either.
+   */
+  pendingAssignments?: number;
 };
 
 /**
@@ -55,6 +64,7 @@ export function withdrawGateError({
   isCaptain,
   isRostered,
   isOnTheBlock,
+  pendingAssignments = 0,
 }: WithdrawGateInput): string | null {
   if (status !== "ACTIVE") return "This signup isn't active.";
   // The admin path checked this inline; the SELF path didn't, so a player
@@ -68,6 +78,13 @@ export function withdrawGateError({
   }
   if (isRostered) {
     return "They're on a roster — release them from the team first.";
+  }
+  // Refuse rather than auto-cancelling: the captain who arranged the cover is
+  // the one who needs to know the seat is open again, and silently deleting the
+  // assignment would take that news away from them. Same rule and wording family
+  // as promoteGateError, which already blocks on this.
+  if (pendingAssignments > 0) {
+    return "They're standing in for an unplayed match — remove that assignment first.";
   }
   return null;
 }
@@ -89,8 +106,7 @@ export function registrationGate({
   // 5K+ MMR whatever number is typed (its EXACT band floor is over the
   // ceiling — no padding here, padding is for validating claims). Without
   // this, sandbagging a low claim under a high medal walks past the ceiling.
-  const medalFloor = rankTierExactMinMmr(rankTier);
-  if (medalFloor != null && medalFloor > HARD_MMR_CEILING) {
+  if (medalProvesIneligible(rankTier)) {
     return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — your ${rankMedalName(rankTier)} medal puts you above it.`;
   }
   const wasPlayer = hasExisting && existingType === REGISTRATION_TYPE.PLAYER;
@@ -102,6 +118,24 @@ export function registrationGate({
     return "Player signups are closed for this season";
   }
   return null;
+}
+
+/**
+ * Does a medal we only learned about LATER prove an already-stored signup
+ * ineligible? Same medal-floor rule `registrationGate` applies at signup — but
+ * that gate only runs when the player submits, and a stored MMR is treated as
+ * league-approved (an unchanged resubmit is never re-judged, so an admin's
+ * setRegistrationMmr correction survives). So a player who signs up before
+ * linking a Dota account — or while OpenDota is unreachable — is admitted with
+ * `rankTier: null`, and when the admin's later "Sync ranks" fills in a Divine
+ * 3+/Immortal medal, nothing re-checks: they stay ACTIVE, over the ceiling.
+ *
+ * This is the detector for that gap. It never removes anyone — who plays is the
+ * operator's call — it just lets the sync say "these N need a look".
+ */
+export function medalProvesIneligible(rankTier: number | null | undefined): boolean {
+  const medalFloor = rankTierExactMinMmr(rankTier);
+  return medalFloor != null && medalFloor > HARD_MMR_CEILING;
 }
 
 export type PromoteGateInput = {

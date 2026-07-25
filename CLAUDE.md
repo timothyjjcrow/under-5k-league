@@ -79,7 +79,37 @@ renders per-phase so unused features stay hidden.
   registration, not already rostered, seat available.
 - `releasePlayer`: removes a non-captain from their roster (registration stays
   ACTIVE → back in the free-agent pool; release + sign = replace/trade).
-  Captains can't be released.
+  Captains can't be released. **A release is THREE things in one transaction —
+  keep it that way:** free the seat, REFUND `member.price` to the team, and
+  CANCEL any `StandinAssignment` covering them on a series that HASN'T STARTED
+  (no imported games) — never one mid-series: `gatherTeamAccounts` re-reads
+  assignments on every import, so deleting one mid-Bo3 drops the standin from the
+  team's account set for games 2-3 (null `teamId` lines, and the side can fall
+  under `classifyGame`'s recognizable-account floor and stop importing). That is
+  the deletion `removeStandinGuarded` already refuses; release reports those in
+  the toast instead of doing it by the back door.
+  Skipping the refund broke the auction's `budget >= need * MIN_BID` invariant
+  (a team that spent out ended at need=1/budget=$0); leaving the cover behind
+  made `matchNightRoster` report the side ONE TOO LARGE, because the swap is
+  "remove the covered player, add the standin" and the covered player was gone —
+  six players in a 5v5 on /schedule, the dashboard strip and the Discord week
+  reminder. The toast names both effects.
+- **A roster move must never leave stale cover.** `withdrawGateError` takes
+  `pendingAssignments` and refuses a standin who still owes cover on an unplayed
+  match ("remove that assignment first" — the `promoteGateError` wording family);
+  BOTH callers pass the count (`leaveLeague` and admin `withdrawSignup`). It
+  refuses rather than auto-cancelling on purpose: the captain who arranged the
+  cover is the one who needs to know the seat reopened. **The withdraw paths AND
+  `assignStandinGuarded` all run their read+write at SERIALIZABLE** — they are a
+  write-skew pair (assign reads the Registration and writes an assignment;
+  withdraw counts assignments and writes the Registration), and SSI only spots
+  the cycle when EVERY participant is serializable, so don't drop one back to a
+  plain transaction. Proved with a forced schedule on Postgres (two connections,
+  barriered reads): at read-committed both commit and a WITHDRAWN standin keeps
+  live cover; at Serializable the assign fails P2034. Belt-and-braces,
+  `matchNightRoster` DROPS an assignment whose non-null `replacingUserId` isn't
+  on the base roster — a NULL replacingUserId is kept (that's a standin filling
+  an empty seat, which adds a player without replacing one).
 - Both announced in Discord; the admin "Roster moves" card shows whichever
   forms currently apply (sign needs a short team + free agent; release needs
   any non-captain rostered).
@@ -115,7 +145,9 @@ renders per-phase so unused features stay hidden.
 ## Match data / OpenDota (done)
 
 - `src/lib/dota.ts` — OpenDota client, SteamID64 ↔ `account_id` conversion,
-  match-id/URL parsing, cached hero names. Optional `OPENDOTA_API_KEY`.
+  match-id/URL parsing. Optional `OPENDOTA_API_KEY`. Hero names are NOT fetched
+  — `heroById` (`src/lib/heroes.ts`) is a static table, so no hero label anywhere
+  in the app depends on OpenDota being up.
 - `src/lib/match-import.ts` — `classifyGame` (pure, unit-tested) decides whether
   a fetched game is between our two teams and who won; `importGameForMatch`
   records a `Game` + `recomputeSeries`; `autoDetectGamesForMatch` scans rosters'
@@ -483,7 +515,16 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 ## Draft edge cases (done)
 
 - Nomination auto-skip: `resolveStalledNomination` nominates the top available
-  player at min bid when the nominator's clock runs out.
+  player at min bid when the nominator's clock runs out — but only if the team
+  can actually pay. It was the ONE nomination path with no affordability check
+  (nominatePlayer and placeBid both refuse an unaffordable amount), so it would
+  open a MIN_BID lot for a broke team and `resolveExpiredNomination` charged it
+  unguarded, leaving a NEGATIVE budget. Pure `canNominate` (`draft.ts`, tested)
+  = needs a player AND `maxBid >= minBid`; the resolver advances via its existing
+  full-roster branch when it fails, and `nextNominatorIndex` requires it too so
+  advancing can't cycle forever. -1 still means draft-complete. In a healthy
+  auction this is a no-op (maxBid maintains the invariant on every purchase) —
+  pinned by a 150-run randomised auction fuzz asserting no early completion.
 - Pool-dry completion: if signups run out mid-draft, both resolvers mark the
   draft COMPLETE (short teams play with standins) instead of stalling forever.
   `startDraft` warns in its success toast when seats outnumber the pool.
@@ -517,6 +558,46 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   the newest non-captain TeamMember, refund the budget, hand the buyer the
   next nomination; works from COMPLETE — re-opens the draft; refused while a
   lot is live). Buttons in the admin Captains & draft card.
+- **`undoLastSale` targets the newest AUCTION PURCHASE, not the newest roster
+  row** — filtered on `price > 0`, which is EXACT rather than a heuristic:
+  non-captain rows are created in exactly two places, `resolveExpiredNomination`
+  at `draft.currentBid` (floored at `MIN_BID` = 1) and `signFreeAgent` at a
+  hard-coded 0. A pool-dry draft leaves the season in DRAFT where Sign free
+  agent is legal, so without the filter undoing a disputed lot deleted the $0
+  signing instead — refunding nothing, leaving the disputed sale standing, and
+  re-opening the auction anyway. Because it can therefore skip past newer
+  signings, the toast NAMES the purchase it reverted (player → team, price);
+  don't reduce that back to a generic "Sale undone".
+- **`abortDraft` is the way back from a premature "Start draft"** (the draft's
+  equivalent of "Reset playoffs"). Nothing else ever writes `Draft.status` back
+  to NOT_STARTED, and addCaptain/removeCaptain/randomizeDraftOrder/
+  setDraftSettings all refuse once it has moved off — so starting with 2 of 8
+  captains used to cap the season permanently, recoverable only by creating a
+  new season (which archives every registration). In ONE tx it claims the status
+  flip (guarded `updateMany` on the status it read), deletes non-captain
+  TeamMembers, credits each team back exactly what those rows cost, clears the
+  draft's Bid rows, and drops the season to SIGNUPS — which is what reopens
+  captain management AND lets the late players it exists for register at all.
+  **Captains and Team rows are deliberately KEPT.** Refuses once ANY match is
+  COMPLETED or ANY Game exists (rosters are load-bearing for standings/box
+  scores/brackets by then — dissolving them isn't a recovery); the button's
+  visibility mirrors that exact predicate so it never appears where the action
+  would refuse. Not phase-gated on purpose: recovering a season whose phase
+  already moved is the point. Captain rows keep a nonzero `price` after
+  `transferCaptaincy` and are correctly NOT credited (that player is still
+  rostered). Verified under Postgres contention: 8 simultaneous aborts tear down
+  once, and it races cleanly against placeBid / resolveExpiredNomination.
+- **setSeasonPhase refuses to leave DRAFT while the auction is PAUSED** (parked
+  is not finished) and refuses to move BACKWARD into DRAFT once the draft is
+  COMPLETE and any result exists — **counting imported GAMES as well as decided
+  series**, the same pair `abortDraft` and `generateSchedule` use, because
+  auto-sync makes "one series LIVE at 1-0" routine on opening night and counting
+  only COMPLETED left the auction re-armable for exactly those hours. Otherwise
+  `undoLastSaleAction` (gated only on
+  `season.status === DRAFT`) becomes callable again and re-arms the auction
+  against a live league, where `resolveStalledNomination` auto-sells an
+  undrafted signup onto a mid-season roster on the next poll from any visitor.
+  Coverage in `test/integration/season-phase.itest.ts`.
 - **/draft page gates ONLY on "no active season"** — never on season.status:
   the league parks there during SIGNUPS and a static gate never learns the
   admin hit start. The room's poll handles waiting → live → complete.
@@ -826,7 +907,7 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   could double-announce). Hooked in `recomputeSeries` (all import paths) and
   manual `recordResult`.
 - `/leaders` shows a "Weekly honors" card (newest week first, hero name via
-  `getHeroNames`).
+  `heroById`).
 
 ## Pick'em (done, branch: bigger-features)
 

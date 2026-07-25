@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
 import { getActiveSeason } from "./season";
@@ -113,9 +114,41 @@ export async function assignStandinGuarded(opts: {
       error: `${membership.user.name} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
     };
 
-  await prisma.standinAssignment.create({
-    data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
-  });
+  // SERIALIZABLE, not a plain create: this and a WITHDRAWAL of the same standin
+  // are a write-skew pair. Assign reads the standin's Registration and writes a
+  // StandinAssignment; withdraw reads the assignments and writes the
+  // Registration. Under read-committed both read stale state and both commit, so
+  // the season ends up with a WITHDRAWN standin holding live cover — the team
+  // looks staffed on match night by somebody who has left. Serializable makes
+  // one of the pair fail with P2034; the withdraw paths use the same isolation,
+  // which they must, since SSI only detects the cycle when every participant is
+  // serializable. Re-reading the registration INSIDE the transaction is what
+  // puts it in this transaction's read set.
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const fresh = await tx.registration.findUnique({
+          where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
+          select: { status: true },
+        });
+        if (!fresh || fresh.status !== REGISTRATION_STATUS.ACTIVE)
+          throw new Error("STANDIN_LEFT");
+        await tx.standinAssignment.create({
+          data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if ((e as Error).message === "STANDIN_LEFT")
+      return { ok: false, error: "That standin has no active signup this season" };
+    if ((e as { code?: string }).code === "P2034")
+      return {
+        ok: false,
+        error: "That standin's signup just changed — check it and try again",
+      };
+    throw e;
+  }
 
   return {
     ok: true,
