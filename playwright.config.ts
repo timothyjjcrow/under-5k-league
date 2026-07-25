@@ -18,8 +18,13 @@ export default defineConfig({
   // undiagnosable without repo auth, which is how the e2e job stayed red and
   // unexplained. NOTE trace "on-first-retry" captures NOTHING while retries is 0
   // (the default) — retain-on-failure is what actually writes a trace, and we
-  // keep retries at 0 so a flake can't be silently masked green.
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
+  // keep retries at 0 so a flake can't be silently masked green. The "github"
+  // reporter is the important one: it emits Actions ANNOTATIONS naming the
+  // failing test, file, line and error, which show on the run summary WITHOUT
+  // signing in — the only failure detail visible to someone without repo auth.
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never" }]]
+    : "list",
   use: {
     baseURL: `http://localhost:${E2E_PORT}`,
     trace: process.env.CI ? "retain-on-failure" : "on-first-retry",
