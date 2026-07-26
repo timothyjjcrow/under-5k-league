@@ -186,7 +186,7 @@ describe("the board over a real queue", () => {
 
   it("tracks a queue filling up, with one message and no duplicates", async () => {
     await createInhouseBoard();
-    expect(boards()[0].title).toContain("queue is empty");
+    expect(boards()[0].title).toContain("slots open");
 
     // Six players join for real, each followed by the poll their client would
     // make — which is what carries the board forward on the hot path.
@@ -207,10 +207,10 @@ describe("the board over a real queue", () => {
     ).toBe(true);
 
     const last = seen[seen.length - 1];
-    expect(last.title).toBe("🎮 Inhouse queue — 6/10");
-    expect(last.description).toContain("**4 more** players");
-    expect(last.description).toContain("queuer0");
-    expect(last.description).toContain("[Queue up →]");
+    expect(last.title).toBe("Searching for Match — 6 / 10");
+    expect(last.description).toContain("## Four more.");
+    
+    expect(last.description).toContain("[Take a slot →]");
 
     // Eyeball what the channel actually shows.
     console.log(`\n${last.title}\n${last.description}\n`);

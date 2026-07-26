@@ -2353,7 +2353,10 @@ function DiscordControls({
                 <SubmitButton
                   variant="secondary"
                   size="sm"
-                  disabled={!configured}
+                  // Gated on the INHOUSE webhook, which is what the board
+                  // actually posts through — a league that configured only the
+                  // inhouse one had a working board behind a disabled button.
+                  disabled={!configured && !board.separateChannel}
                 >
                   Post queue board
                 </SubmitButton>

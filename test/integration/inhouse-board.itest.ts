@@ -6,6 +6,7 @@ import {
   removeInhouseBoard,
   syncInhouseBoard,
   getInhouseBoardStatus,
+  resetBoardStatsCache,
 } from "@/lib/inhouse-board-service";
 import { runResultSync } from "@/lib/result-sync-service";
 import { getInhouseState } from "@/lib/inhouse-service";
@@ -54,6 +55,9 @@ const mockPatch = vi.mocked(patchWebhookMessage);
 const mockDelete = vi.mocked(deleteWebhookMessage);
 
 beforeEach(() => {
+  // The empty-state stats are memoised in-process on a TTL — without this,
+  // one test's league history leaks into the next one's empty board.
+  resetBoardStatsCache();
   mockHook.mockReset().mockResolvedValue(HOOK);
   mockPost.mockReset().mockResolvedValue({ id: MSG_ID });
   mockPatch.mockReset().mockResolvedValue("ok");
@@ -175,7 +179,7 @@ describe("inhouse board — the digest gate", () => {
     expect(mockPatch).toHaveBeenCalledTimes(1);
     const [, , payload] = mockPatch.mock.calls[0];
     const embed = (payload.embeds as { title: string }[])[0];
-    expect(embed.title).toContain("empty");
+    expect(embed.title).toContain("slots open");
   });
 
   it("sends an embed, never a plain message", async () => {
@@ -220,7 +224,7 @@ describe("inhouse board — the throttle", () => {
     expect(mockPatch).toHaveBeenCalledTimes(2);
     const [, , payload] = mockPatch.mock.calls[1];
     const embed = (payload.embeds as { title: string }[])[0];
-    expect(embed.title).toContain("4/10"); // the FINAL count, not a stale step
+    expect(embed.title).toContain("4 / 10"); // the FINAL count, not a stale step
   });
 
   it("does not burn the throttle when nothing changed", async () => {
@@ -515,7 +519,7 @@ describe("inhouse board — wiring into the sitewide sync", () => {
 
     expect(mockPatch).toHaveBeenCalledTimes(1);
     const [, , payload] = mockPatch.mock.calls[0];
-    expect((payload.embeds as { title: string }[])[0].title).toContain("empty");
+    expect((payload.embeds as { title: string }[])[0].title).toContain("slots open");
   });
 
   it("repaints from a page view while a queue is filling", async () => {
@@ -528,7 +532,7 @@ describe("inhouse board — wiring into the sitewide sync", () => {
 
     expect(mockPatch).toHaveBeenCalledTimes(1);
     const [, , payload] = mockPatch.mock.calls[0];
-    expect((payload.embeds as { title: string }[])[0].title).toContain("5/10");
+    expect((payload.embeds as { title: string }[])[0].title).toContain("5 / 10");
   });
 
   it("tells parked clients to poll fast while a queue is FILLING, not just during a lobby", async () => {

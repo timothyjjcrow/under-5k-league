@@ -1,5 +1,9 @@
 import { prisma } from "./prisma";
-import { INHOUSE, INHOUSE_ACTIVE_STATUSES } from "./constants";
+import {
+  INHOUSE,
+  INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_STATUS,
+} from "./constants";
 import {
   deleteWebhookMessage,
   getInhouseWebhookUrl,
@@ -13,7 +17,11 @@ import {
   boardStateLabel,
   renderBoard,
   type BoardSnapshot,
+  type BoardStats,
 } from "./inhouse-board";
+import { gameMvp } from "./achievements";
+import { heroById } from "./heroes";
+import { rankInhouse, summarizeInhouse, type FinishedLobby } from "./inhouse-stats";
 import { claimThrottle, getSetting, SETTING_KEYS, setSetting } from "./settings";
 import { resolveSiteUrl } from "./site-url";
 
@@ -106,7 +114,7 @@ async function swapState(expected: string, next: BoardState): Promise<void> {
  */
 export async function loadBoardSnapshot(
   nowMs: number = Date.now(),
-): Promise<BoardSnapshot> {
+): Promise<BoardSnapshotInput> {
   const [queue, lobby] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
       orderBy: { joinedAt: "asc" },
@@ -117,7 +125,10 @@ export async function loadBoardSnapshot(
       select: {
         status: true,
         startedAt: true,
-        players: { select: { acceptedAt: true } },
+        acceptEndsAt: true,
+        players: {
+          select: { acceptedAt: true, user: { select: { name: true } } },
+        },
       },
     }),
   ]);
@@ -128,18 +139,157 @@ export async function loadBoardSnapshot(
     presentNames: present.map((q) => q.user.name),
     awayCount: queue.length - present.length,
     lobbySize: INHOUSE.LOBBY_SIZE,
-    lobby: lobby
-      ? {
-          status: lobby.status,
-          acceptedCount: lobby.players.filter((p) => p.acceptedAt != null)
-            .length,
-          playerCount: lobby.players.length,
-          startedAtMs: lobby.startedAt ? lobby.startedAt.getTime() : null,
-        }
-      : null,
+    lobby: lobby ? lobbyView(lobby) : null,
     siteUrl: resolveSiteUrl(),
     nowMs,
   };
+}
+
+/** The board snapshot minus `stats`, which only the empty render needs and
+ *  which syncInhouseBoard loads for itself (see resolveSnapshot). */
+export type BoardSnapshotInput = Omit<BoardSnapshot, "stats">;
+
+type LobbyRow = {
+  status: string;
+  startedAt: Date | null;
+  acceptEndsAt: Date | null;
+  players: { acceptedAt: Date | null; user: { name: string } }[];
+};
+
+/** Shared by loadBoardSnapshot and getInhouseState so the two can never drift
+ *  into describing the same lobby differently. */
+export function lobbyView(l: LobbyRow): NonNullable<BoardSnapshot["lobby"]> {
+  return {
+    status: l.status,
+    acceptedCount: l.players.filter((p) => p.acceptedAt != null).length,
+    playerCount: l.players.length,
+    startedAtMs: l.startedAt ? l.startedAt.getTime() : null,
+    acceptEndsAtMs: l.acceptEndsAt ? l.acceptEndsAt.getTime() : null,
+    acceptedNames: l.players
+      .filter((p) => p.acceptedAt != null)
+      .map((p) => p.user.name),
+    pendingNames: l.players
+      .filter((p) => p.acceptedAt == null)
+      .map((p) => p.user.name),
+  };
+}
+
+// --- Proof-of-life for the empty state --------------------------------------
+// Only the EMPTY render uses these, and that render is ~95% of polls, so the
+// read is memoised in-process on a TTL (the session-epoch.ts pattern) rather
+// than run per poll. The ladder in particular must scan ALL completed lobbies
+// because Elo accumulates over full history. 60s of staleness is invisible
+// here: every figure is either all-time or a finished result, and the board
+// repaints on the live→empty transition anyway.
+const STATS_TTL_MS = 60_000;
+let statsCache: { at: number; value: BoardStats } | null = null;
+
+export async function loadBoardStats(
+  nowMs: number = Date.now(),
+): Promise<BoardStats> {
+  if (statsCache && nowMs - statsCache.at < STATS_TTL_MS) return statsCache.value;
+
+  const [last, lobbiesPlayed, ladderRows] = await Promise.all([
+    prisma.inhouseLobby.findFirst({
+      where: { status: INHOUSE_STATUS.COMPLETED },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        id: true,
+        winnerTeam: true,
+        radiantTeam: true,
+        radiantScore: true,
+        direScore: true,
+        updatedAt: true,
+        boxScore: true,
+      },
+    }),
+    prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.COMPLETED } }),
+    prisma.inhouseLobby.findMany({
+      where: { status: INHOUSE_STATUS.COMPLETED },
+      select: {
+        id: true,
+        winnerTeam: true,
+        createdAt: true,
+        players: {
+          select: { userId: true, team: true, user: { select: { name: true } } },
+        },
+      },
+    }),
+  ]);
+
+  let mvpName: string | null = null;
+  let mvpHero: string | null = null;
+  if (last?.boxScore) {
+    try {
+      // Mirrors BoxScorePlayer in inhouse-service (the shape applyResult stores).
+      const box = JSON.parse(last.boxScore) as {
+        userId: string | null;
+        name: string | null;
+        isRadiant: boolean;
+        heroId: number;
+        kills: number;
+        deaths: number;
+        assists: number;
+        netWorth: number | null;
+      }[];
+      const radiantWin = last.winnerTeam === last.radiantTeam;
+      const id = gameMvp(box, radiantWin);
+      const line = id ? box.find((b) => b.userId === id) : null;
+      mvpName = line?.name ?? null;
+      mvpHero = line ? (heroById(line.heroId)?.name ?? null) : null;
+    } catch {
+      // Malformed box score — show the result without an MVP, never a guess.
+    }
+  }
+
+  const finished: FinishedLobby[] = ladderRows.map((l) => ({
+    id: l.id,
+    winnerTeam: l.winnerTeam,
+    createdAt: l.createdAt,
+    players: l.players.map((p) => ({
+      userId: p.userId,
+      name: p.user.name,
+      avatar: null,
+      team: p.team,
+    })),
+  }));
+  // rankInhouse drops provisionals — never crown someone with <5 games.
+  const top = rankInhouse(summarizeInhouse(finished)).ranked[0] ?? null;
+
+  const value: BoardStats = {
+    lastLobbyId: last?.id ?? null,
+    lastEndedAtMs: last ? last.updatedAt.getTime() : null,
+    // Label the winning side from what was STORED, never inferred.
+    lastWinnerSide:
+      last && last.winnerTeam != null && last.radiantTeam != null
+        ? last.winnerTeam === last.radiantTeam
+          ? "Radiant"
+          : "Dire"
+        : null,
+    lastRadiantScore: last?.radiantScore ?? null,
+    lastDireScore: last?.direScore ?? null,
+    mvpName,
+    mvpHero,
+    lobbiesPlayed,
+    ladderName: top?.name ?? null,
+    ladderRating: top ? Math.round(top.rating) : null,
+  };
+  statsCache = { at: nowMs, value };
+  return value;
+}
+
+/** Test seam — the TTL cache is module state. */
+export function resetBoardStatsCache(): void {
+  statsCache = null;
+}
+
+/** Stats are loaded ONLY for the empty render, so an active queue never pays
+ *  for them and a board that is off never reaches here at all. */
+async function resolveSnapshot(
+  base: BoardSnapshotInput,
+): Promise<BoardSnapshot> {
+  const empty = !base.lobby && base.presentNames.length === 0;
+  return { ...base, stats: empty ? await loadBoardStats(base.nowMs) : null };
 }
 
 /**
@@ -151,7 +301,7 @@ export async function loadBoardSnapshot(
  * has all of it in hand) to avoid re-querying; omit it elsewhere.
  */
 export async function syncInhouseBoard(
-  snapshot?: BoardSnapshot,
+  snapshot?: BoardSnapshotInput,
 ): Promise<void> {
   const raw = await getSetting(SETTING_KEYS.INHOUSE_BOARD);
   const state = parseState(raw);
@@ -169,7 +319,7 @@ export async function syncInhouseBoard(
     return;
   }
 
-  const snap = snapshot ?? (await loadBoardSnapshot());
+  const snap = await resolveSnapshot(snapshot ?? (await loadBoardSnapshot()));
   const { digest, embed } = renderBoard(snap);
   if (digest === state.digest) return; // nothing changed — no request, no write
 
@@ -230,7 +380,7 @@ export async function createInhouseBoard(): Promise<{
     return { ok: false, error: "The board is already posted in that channel" };
   }
 
-  const snap = await loadBoardSnapshot();
+  const snap = await resolveSnapshot(await loadBoardSnapshot());
   const { digest, embed } = renderBoard(snap);
   const posted = await postWebhookMessage(url, { embeds: [embed] });
   if (!posted) {
@@ -340,7 +490,7 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
   // Render the live queue so the card can answer the only question that
   // matters about a board — "is it lying right now?" — instead of just
   // confirming a row exists.
-  const snap = await loadBoardSnapshot();
+  const snap = await resolveSnapshot(await loadBoardSnapshot());
   return {
     posted: true,
     messageHint:

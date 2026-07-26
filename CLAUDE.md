@@ -687,6 +687,39 @@ already in the `Setting` table.
   edit and parses it with DEFAULT allowances, ignoring what the original send
   asked for. Drop it and a Steam persona of `@everyone` mass-pings the server
   on the board's next repaint — from a message that is pinned forever.
+- **Design is "Find Match"** — it borrows Dota's own matchmaking script (Find
+  Match → Searching → Match Found → Preparing → live) so every state name is a
+  phrase the reader already knows. Two glyphs carry the whole visual language:
+  `▰` taken, `▱` open — horizontal where there are no names, vertical (Dota's
+  lobby slot list) where there are. **The trailing `▱ open` rows ARE the call
+  to action**; at 9/10 a column of nine names above one open slot is the most
+  persuasive thing the channel can render. The slot list is also the only
+  name layout immune to a 32-char persona: one player per row, fixed height.
+- **NO EMOJI, deliberately.** The message is pinned, edited in place and alone
+  in its channel — permanently on screen. Decoration on a permanently-visible
+  surface becomes wallpaper within a day and drags the information beside it
+  down too. The 4px colour bar does that job instead and can't go stale through
+  familiarity, because it carries information rather than sitting next to it.
+  Colour is the ONLY chromatic element, which is what makes dropping emoji
+  costless. LIVE red means "broadcast", never Dire — which side is Radiant
+  isn't known until the match imports, so nothing is ever side-labelled.
+- **The EMPTY state is the product.** It is ~95% of views, and a bare 0/10
+  reads as a dead league. `BoardStats` (last result + MVP, all-time lobby
+  count, ladder #1) is the proof-of-life, loaded ONLY for that render and
+  memoised in-process on a 60s TTL (`loadBoardStats`) because it scans full
+  history for Elo. Every figure is monotonic or completes-with-a-state-change —
+  NEVER a trailing window like "games this week", which would silently rot
+  through the exact quiet stretch it exists to paper over. Anything missing is
+  OMITTED, never faked: a league with no games shows no stat row at all.
+  That state also carries NO "updated <t:R>" line on purpose — its digest
+  barely moves, so after a quiet weekend it would read "updated 3 days ago",
+  the single most off-putting thing a conversion surface can say.
+- **`escapeMarkdown` strips newlines FIRST, before truncation.** The rack is
+  one player per LINE, so a persona containing a newline would forge phantom
+  rows and make the board lie about its own count. Ordering is load-bearing.
+- Do NOT put `brand/banner.png` on this board. It reads "UNDER 4.5K LEAGUE ·
+  sub-4500 MMR" — a drafted-league eligibility gate that does not apply to
+  inhouses, on the state a stranger sees 95% of the time.
 - **The digest is the cost model.** It hashes SEMANTIC state only and excludes
   the clock; elapsed time renders as `<t:…:R>`, which keeps counting in every
   client with no further edits. Put anything time-varying in the digest and the

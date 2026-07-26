@@ -36,7 +36,7 @@ import {
   sendInhouseDiscordMessage,
 } from "./discord";
 import { stampResultChange, SETTING_KEYS } from "./settings";
-import { syncInhouseBoard } from "./inhouse-board-service";
+import { lobbyView, syncInhouseBoard } from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
 import type { SessionUser } from "./auth";
@@ -1625,17 +1625,9 @@ export async function getInhouseState(
       presentNames: presentEntries.map((q) => q.user.name),
       awayCount: queue.length - presentCount,
       lobbySize: INHOUSE.LOBBY_SIZE,
-      lobby: lobbyRow
-        ? {
-            status: lobbyRow.status,
-            acceptedCount: lobbyRow.players.filter((p) => p.acceptedAt != null)
-              .length,
-            playerCount: lobbyRow.players.length,
-            startedAtMs: lobbyRow.startedAt
-              ? lobbyRow.startedAt.getTime()
-              : null,
-          }
-        : null,
+      // lobbyView is shared with loadBoardSnapshot so the two builders can
+      // never describe the same lobby differently.
+      lobby: lobbyRow ? lobbyView(lobbyRow) : null,
       siteUrl: resolveSiteUrl(),
       nowMs: now,
     });
