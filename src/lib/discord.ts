@@ -10,6 +10,14 @@ import { splitLinks } from "./linkify";
 
 // ---------------------------------------------------------------------------
 // Pure message formatters (unit-tested). Discord markdown: **bold**, [link](url).
+//
+// EVERY SITE LINK IS WRAPPED IN <angle brackets>. A bare URL makes Discord
+// unfurl a full preview card — our own og:image and description — which on a
+// one-line "queue is filling" ping is roughly ten times the height of the
+// message itself and shoves everything else off screen. Angle brackets keep
+// the link clickable and kill the card. The ONE deliberate exception is
+// newsMessage's trailing media URL, which is bare precisely so Discord DOES
+// embed the GIF (see the normalizeMediaUrl note there).
 // ---------------------------------------------------------------------------
 
 export function signupMessage(
@@ -34,15 +42,15 @@ export function draftScheduledMessage(
   seasonName: string,
   whenMs: number,
 ): string {
-  return `🗓️ **The ${seasonName} draft is set for <t:${Math.floor(whenMs / 1000)}:F>** — captains and players, be there: ${resolveSiteUrl()}/draft`;
+  return `🗓️ **The ${seasonName} draft is set for <t:${Math.floor(whenMs / 1000)}:F>** — captains and players, be there: <${resolveSiteUrl()}/draft>`;
 }
 
 export function draftStartedMessage(seasonName: string): string {
-  return `🔨 **The ${seasonName} draft is LIVE!** Captains are on the clock — watch the auction at ${resolveSiteUrl()}/draft`;
+  return `🔨 **The ${seasonName} draft is LIVE!** Captains are on the clock — watch the auction at <${resolveSiteUrl()}/draft>`;
 }
 
 export function draftCompleteMessage(seasonName: string): string {
-  return `✅ **The ${seasonName} draft is complete!** Rosters are locked — see the teams at ${resolveSiteUrl()}/teams`;
+  return `✅ **The ${seasonName} draft is complete!** Rosters are locked — see the teams at <${resolveSiteUrl()}/teams>`;
 }
 
 /** Draft-night superlatives, appended right after the complete message. */
@@ -105,21 +113,21 @@ export function playoffsStartedMessage(
   pairings: { home: string; away: string }[],
 ): string {
   const lines = pairings.map((p) => `• ${p.home} vs ${p.away}`).join("\n");
-  return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: ${resolveSiteUrl()}/schedule`;
+  return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function championMessage(
   seasonName: string,
   teamName: string,
 ): string {
-  return `👑 **${teamName}** are the **${seasonName}** champions! GG everyone — recap at ${resolveSiteUrl()}/recap`;
+  return `👑 **${teamName}** are the **${seasonName}** champions! GG everyone — recap at <${resolveSiteUrl()}/recap>`;
 }
 
 export function freeAgentSignedMessage(
   playerName: string,
   teamName: string,
 ): string {
-  return `🖊️ **${playerName}** signs with **${teamName}** as a free agent — roster updated: ${resolveSiteUrl()}/teams`;
+  return `🖊️ **${playerName}** signs with **${teamName}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>`;
 }
 
 export function playerReleasedMessage(
@@ -146,7 +154,7 @@ export function inhouseQueueMessage(
   roleId?: string | null,
 ): string {
   const needed = Math.max(0, lobbySize - present);
-  return `${rolePrefix(roleId)}**Inhouse queue is filling** — ${present}/${lobbySize} in, ${needed} more ${needed === 1 ? "player" : "players"} and the lobby fires. Jump in: ${joinLink()}`;
+  return `${rolePrefix(roleId)}**Inhouse queue is filling** — ${present}/${lobbySize} in, ${needed} more ${needed === 1 ? "player" : "players"} and the lobby fires. Jump in: <${joinLink()}>`;
 }
 
 /**
@@ -162,7 +170,7 @@ export function inhouseLobbyMessage(
   const who = players
     .map((p) => (p.discordId ? `<@${p.discordId}>` : p.name))
     .join(", ");
-  return `${rolePrefix(roleId)}🚨 **Inhouse match found!** Accept your game before the clock runs out — ${resolveSiteUrl()}/inhouse\n${who}`;
+  return `${rolePrefix(roleId)}🚨 **Inhouse match found!** Accept your game before the clock runs out — <${resolveSiteUrl()}/inhouse>\n${who}`;
 }
 
 export function inhouseResultMessage(m: {
@@ -180,7 +188,7 @@ export function inhouseResultMessage(m: {
   const mvp = m.mvpName
     ? ` MVP: **${m.mvpName}**${m.mvpHero ? ` (${m.mvpHero})` : ""}.`
     : "";
-  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: ${resolveSiteUrl()}/inhouse · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
+  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: <${resolveSiteUrl()}/inhouse> · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
 }
 
 export function playerOutMessage(m: {
@@ -269,7 +277,7 @@ export function weekReminderMessage(m: {
   for (const f of m.fixtures) {
     const t = Math.floor(f.scheduledAt / 1000);
     lines.push(
-      `🆚 **${f.homeName}** vs **${f.awayName}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · ${site}/matches/${f.matchId}`,
+      `🆚 **${f.homeName}** vs **${f.awayName}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
     );
     if (f.waitingOn.length > 0) {
       const shown = f.waitingOn.slice(0, WAITING_SHOWN);
@@ -305,7 +313,7 @@ export function weeklyHonorsMessage(honors: {
       `🛡️ Team of the Week: **${honors.teamName}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
     );
   }
-  lines.push(`Full leaderboards: ${resolveSiteUrl()}/leaders`);
+  lines.push(`Full leaderboards: <${resolveSiteUrl()}/leaders>`);
   return lines.join("\n");
 }
 
@@ -350,7 +358,7 @@ export function newsMessage(title: string, body: string, id?: string): string {
   const link = `${resolveSiteUrl()}/news${id ? `#${id}` : ""}`;
   const lines = [`📣 **${title}**`];
   if (snippet) lines.push(snippet);
-  lines.push(`More: ${link}`);
+  lines.push(`More: <${link}>`);
   if (media) lines.push(media.value);
   return lines.join("\n");
 }

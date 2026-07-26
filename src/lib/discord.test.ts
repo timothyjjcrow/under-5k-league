@@ -25,6 +25,8 @@ import {
   standinAssignedMessage,
   standinRemovedMessage,
   weekReminderMessage,
+  weeklyHonorsMessage,
+  draftRecapMessage,
 } from "./discord";
 
 describe("discord message formatters", () => {
@@ -585,5 +587,81 @@ describe("standinRemovedMessage", () => {
     });
     expect(msg).toContain("Sub Sam");
     expect(msg).toContain("no longer standing in");
+  });
+});
+
+describe("no message unfurls a link preview", () => {
+  // A bare URL makes Discord render a full preview card — our own og:image and
+  // blurb — which on a one-line ping is ~10x the height of the message and
+  // pushes everything else off screen. <angle brackets> keep it clickable and
+  // kill the card. The one deliberate exception is a news post's media URL,
+  // which is bare so the GIF DOES embed.
+  const BARE = /(?<![<(])https?:\/\//;
+
+  it("wraps every site link in angle brackets", () => {
+    const messages = [
+      signupMessage("Zai", 3, 20),
+      draftScheduledMessage("S1", 1_800_000_000_000),
+      draftStartedMessage("S1"),
+      draftCompleteMessage("S1"),
+      playerSoldMessage("A", "T", 5),
+      matchResultMessage({
+        homeName: "A", awayName: "B", homeScore: 2, awayScore: 0,
+        week: 1, isPlayoff: false,
+      }),
+      playoffsStartedMessage("S1", [{ home: "A", away: "B" }]),
+      championMessage("S1", "T"),
+      freeAgentSignedMessage("A", "T"),
+      playerReleasedMessage("A", "T"),
+      inhouseQueueMessage(4, 10),
+      inhouseQueueMessage(4, 10, "999"),
+      inhouseLobbyMessage([{ name: "A", discordId: null }]),
+      inhouseResultMessage({
+        winnerSide: "Radiant", radiantScore: 1, direScore: 0, durationSecs: 60,
+        mvpName: null, mvpHero: null, dotaMatchId: "1",
+      }),
+      playerOutMessage({
+        playerName: "A", homeName: "H", awayName: "W", week: 1,
+        isPlayoff: false, whenMs: null,
+      }),
+      standinAssignedMessage({
+        standinName: "S", replacedName: "R", teamName: "T", homeName: "H",
+        awayName: "W", week: 1, isPlayoff: false, whenMs: null,
+      }),
+      standinRemovedMessage({
+        standinName: "S", teamName: "T", homeName: "H", awayName: "W",
+        week: 1, isPlayoff: false,
+      }),
+      rescheduleProposedMessage({
+        homeName: "H", awayName: "W", week: 1, isPlayoff: false,
+        proposerName: "P", whenMs: 1_800_000_000_000,
+      }),
+      rescheduleMessage({
+        homeName: "H", awayName: "W", week: 1, isPlayoff: false,
+        whenMs: 1_800_000_000_000,
+      }),
+      weeklyHonorsMessage({
+        week: 1, playerName: "A", playerPoints: 10, heroName: "Lina",
+        teamName: "T", teamGameWins: 2,
+      }),
+      weekReminderMessage({
+        week: 1, isPlayoff: false,
+        fixtures: [{
+          matchId: "m1", homeName: "H", awayName: "W",
+          scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
+          awayIn: 5, awaySize: 5, waitingOn: [],
+        }],
+      }),
+      newsMessage("Title", "Body with no media"),
+    ];
+    for (const m of messages) {
+      expect(m, `unfurls: ${m.slice(0, 80)}`).not.toMatch(BARE);
+    }
+  });
+
+  it("still lets a news GIF embed — that one is deliberate", () => {
+    const msg = newsMessage("T", "Look\nhttps://media.giphy.com/x.gif");
+    expect(msg).toMatch(BARE); // the media line stays bare on purpose
+    expect(msg).toContain("More: <"); // ...but the site link does not
   });
 });
