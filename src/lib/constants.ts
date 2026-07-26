@@ -203,6 +203,14 @@ export const INHOUSE = {
   // present players, at most once per this window (leave/rejoin churn at the
   // threshold must not spam the channel).
   QUEUE_PING_MIN_MINUTES: 15,
+  // Floor between EDITS of the pinned Discord queue board (inhouse-board.ts).
+  // Six edits/minute worst case, and only when the rendered state actually
+  // changed — a motionless queue costs zero requests. Short enough that a
+  // filling queue still shows every step, long enough to stay clear of
+  // Discord's (undocumented, per-webhook) execute limits, which the board
+  // shares with real announcements. The board must always be the one that
+  // loses a rate-limit race, never a result or a lobby ping.
+  BOARD_MIN_SECONDS: 10,
 } as const;
 
 // Match-night Discord reminder: announced lazily from dashboard//schedule

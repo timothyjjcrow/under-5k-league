@@ -20,7 +20,59 @@ export const SETTING_KEYS = {
   RESULT_CHANGED_AT: "resultChangedAt",
   // ISO timestamp of the last failed-announcement retry sweep (throttle).
   ANNOUNCE_RETRY_AT: "announceRetryAt",
+  // The pinned Discord inhouse queue board, as JSON
+  // `{webhookId, messageId, digest}`. THE ROW'S EXISTENCE IS THE ON/OFF
+  // SWITCH — absent means the feature is off and the sync path returns after
+  // one PK read. Never write it from anywhere but inhouse-board-service.
+  INHOUSE_BOARD: "inhouseBoard",
+  // ISO timestamp of the last board edit (claimThrottle spam floor).
+  INHOUSE_BOARD_AT: "inhouseBoardAt",
 } as const;
+
+/**
+ * Atomic global throttle (Setting-row claim). ISO timestamps compare
+ * lexicographically, so the conditional update below is a valid "only if
+ * stale" claim: exactly one caller wins per interval, across every serverless
+ * instance, with no lock and no cron. Returns true to the winner only.
+ *
+ * Lives here rather than beside its first caller because three unrelated
+ * subsystems now need it (result sync, the announcement retry sweep, the
+ * inhouse board) and settings.ts is the one module they can all import
+ * without a cycle.
+ */
+export async function claimThrottle(
+  key: string,
+  intervalSeconds: number,
+  nowMs: number,
+): Promise<boolean> {
+  const value = new Date(nowMs).toISOString();
+  const staleBefore = new Date(nowMs - intervalSeconds * 1000).toISOString();
+
+  // Try the STALE-CLAIM update first. The row exists on every call but the
+  // first, so leading with `create` meant a caught-and-ignored P2002 on
+  // essentially every /api/sync hit — and the Prisma client logs at "error"
+  // level in production (src/lib/prisma.ts), so each one wrote a stack trace
+  // to the server log before our catch ever ran. /api/sync fires on every page
+  // view, so that buried real errors under constant expected-path noise.
+  const updated = await prisma.setting.updateMany({
+    where: { key, value: { lt: staleBefore } },
+    data: { value },
+  });
+  if (updated.count > 0) return true;
+
+  // Zero rows means either "exists but still fresh" (not our claim) or "row
+  // isn't there yet" (first ever call — create it, and let a genuine creation
+  // race lose on P2002).
+  const existing = await prisma.setting.findUnique({ where: { key } });
+  if (existing) return false;
+  try {
+    await prisma.setting.create({ data: { key, value } });
+    return true;
+  } catch (e) {
+    if ((e as { code?: string }).code !== "P2002") throw e;
+    return false; // someone else created it in the same instant
+  }
+}
 
 /**
  * Bump the result change cursor. Called from every path that changes a

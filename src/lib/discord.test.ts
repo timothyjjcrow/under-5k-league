@@ -15,6 +15,8 @@ import {
   playoffsStartedMessage,
   championMessage,
   maskWebhookUrl,
+  webhookIdOf,
+  webhookApiUrl,
   draftScheduledMessage,
   playerOutMessage,
   rescheduleProposedMessage,
@@ -357,6 +359,70 @@ describe("maskWebhookUrl", () => {
   it("falls back to a generic label for unexpected shapes", () => {
     expect(maskWebhookUrl("https://example.com/not-a-webhook")).toBe(
       "configured",
+    );
+  });
+});
+
+describe("webhookIdOf", () => {
+  it("extracts the webhook id, never the token", () => {
+    expect(
+      webhookIdOf("https://discord.com/api/webhooks/1379001234567890123/tok"),
+    ).toBe("1379001234567890123");
+  });
+
+  it("is stable across a token regeneration — the id doesn't change", () => {
+    const base = "https://discord.com/api/webhooks/1379001234567890123/";
+    expect(webhookIdOf(`${base}oldToken`)).toBe(webhookIdOf(`${base}newToken`));
+  });
+
+  it("distinguishes a webhook pointed at a different channel", () => {
+    expect(webhookIdOf("https://discord.com/api/webhooks/111/t")).not.toBe(
+      webhookIdOf("https://discord.com/api/webhooks/222/t"),
+    );
+  });
+
+  it("returns null for nothing and for non-webhook URLs", () => {
+    expect(webhookIdOf(null)).toBeNull();
+    expect(webhookIdOf(undefined)).toBeNull();
+    expect(webhookIdOf("https://example.com/hook")).toBeNull();
+  });
+});
+
+describe("webhookApiUrl", () => {
+  const token = "aB3xY-secret";
+
+  it("pins an unversioned URL to v10 (the default is still deprecated v6)", () => {
+    expect(webhookApiUrl(`https://discord.com/api/webhooks/123/${token}`)).toBe(
+      `https://discord.com/api/v10/webhooks/123/${token}`,
+    );
+  });
+
+  it("upgrades an older pinned version", () => {
+    expect(
+      webhookApiUrl(`https://discord.com/api/v9/webhooks/123/${token}`),
+    ).toBe(`https://discord.com/api/v10/webhooks/123/${token}`);
+  });
+
+  it("is idempotent", () => {
+    const once = webhookApiUrl(`https://discord.com/api/webhooks/123/${token}`);
+    expect(webhookApiUrl(once)).toBe(once);
+  });
+
+  it("handles the discordapp.com alias the save form still accepts", () => {
+    expect(
+      webhookApiUrl(`https://discordapp.com/api/webhooks/123/${token}`),
+    ).toBe(`https://discordapp.com/api/v10/webhooks/123/${token}`);
+  });
+
+  it("preserves the token exactly — a mangled credential is a silent 401", () => {
+    expect(
+      webhookApiUrl(`https://discord.com/api/webhooks/123/${token}`),
+    ).toContain(token);
+  });
+
+  it("leaves an unrecognised URL alone rather than corrupting it", () => {
+    expect(webhookApiUrl("https://example.com/hook")).toBe(
+      "https://example.com/hook",
     );
   });
 });

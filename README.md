@@ -92,6 +92,32 @@ handles. Typed handles still work as an unverified fallback.
 2. OAuth2 → add `<APP_URL>/api/auth/discord/callback` as a **Redirect**.
 3. Set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` in `.env`.
 
+### Live inhouse queue board (Discord)
+
+A single pinned Discord message that shows how many players are in the inhouse
+queue and **rewrites itself in place** as people come and go — a live count
+with no new messages, ever. Editing a message doesn't notify anyone, mark the
+channel unread, or bump it, so the channel stays quiet.
+
+1. Configure the Discord webhook (Admin → Discord notifications) for the
+   channel you want the board in — usually your inhouse channel.
+2. Hit **Post queue board**.
+3. In Discord, right-click the message → **Pin Message**. Do not skip this: an
+   edited message never moves, so in a chatty channel it scrolls away.
+
+It shows the queue filling (with names), the ready check, drafting, and a live
+game, and returns to "queue is empty" on its own. Nothing is posted while the
+state is unchanged. The board *informs* — the separate "queue is almost full"
+ping is what actually alerts people, and it still fires as before.
+
+Because the site is lazy (no cron), the board updates whenever someone has a
+page open. If literally nobody is on the site the count freezes — the message
+carries a live "updated 12 minutes ago" stamp so staleness is visible rather
+than hidden, and the uptime monitor below is what keeps it honest overnight.
+
+Removing the webhook or pointing it at a different channel removes the board
+first, so it can't be left stranded showing a frozen number.
+
 ### Match data (OpenDota)
 
 Real games are pulled from the free [OpenDota API](https://docs.opendota.com/) —
@@ -282,6 +308,10 @@ Point a free uptime monitor (UptimeRobot etc., 5-minute interval) at
 alerted if the site goes down, and the automatic result sync gets a heartbeat
 even when nobody has a page open (it's lazy by design — a match finishing at
 1am with zero visitors would otherwise wait for the morning's first page view).
+
+If you use the **live inhouse queue board**, treat this as required rather than
+recommended: the board can only repaint when some request runs, so without a
+heartbeat a queue that empties out overnight leaves a stale count in Discord.
 
 ### Alternatives (keep SQLite, no DB change)
 **Fly.io / Railway / a cheap VPS** can run `next start` with a persistent volume

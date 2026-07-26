@@ -336,6 +336,133 @@ export function maskWebhookUrl(url: string | null | undefined): string {
 }
 
 /**
+ * The webhook id out of a webhook URL (`…/webhooks/<id>/<token>`). Used to
+ * detect that an admin swapped in a webhook for a DIFFERENT channel, which
+ * strands any message we were editing. Regenerating a token keeps the same id,
+ * so that case correctly survives. Pure.
+ */
+export function webhookIdOf(url: string | null | undefined): string | null {
+  const m = url?.match(/\/webhooks\/(\d+)\//);
+  return m ? m[1] : null;
+}
+
+/**
+ * Pin the webhook URL to API v10. An unversioned `/api/webhooks/…` routes to
+ * Discord's DEFAULT version, which is still v6 and marked deprecated; only v10
+ * and v9 are listed as available. It works today, but the message-edit
+ * endpoints this file now depends on should not ride a deprecated default.
+ * Idempotent — a URL that already carries a version is rewritten to v10. Pure.
+ */
+export function webhookApiUrl(url: string): string {
+  return url.replace(/\/api\/(v\d+\/)?webhooks\//, "/api/v10/webhooks/");
+}
+
+/** What a webhook message can carry. Embeds keep the queue board off the
+ *  plain-text path so it reads as a panel rather than a chat line. */
+export type WebhookPayload = { content?: string; embeds?: unknown[] };
+
+/** Always sent on every POST *and* PATCH — see patchWebhookMessage. */
+const NO_MENTIONS = { parse: [] as string[] };
+
+/**
+ * POST a message and return its id, via `?wait=true`.
+ *
+ * `wait` defaults to false, which answers 204 with no body — and there is no
+ * endpoint to look the id up afterwards, so a message sent without it can
+ * never be edited again. Anything we intend to rewrite in place MUST go
+ * through here. Best-effort: null on any failure, never throws.
+ */
+export async function postWebhookMessage(
+  payload: WebhookPayload,
+): Promise<{ id: string } | null> {
+  const url = await getWebhookUrl();
+  if (!url) return null;
+  try {
+    const res = await fetch(`${webhookApiUrl(url)}?wait=true`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, allowed_mentions: NO_MENTIONS }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { id?: unknown };
+    return typeof json.id === "string" ? { id: json.id } : null;
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[discord] webhook post failed:", err);
+    }
+    return null;
+  }
+}
+
+/** `gone` = the message or webhook no longer exists; stop trying forever. */
+export type WebhookEditResult = "ok" | "gone" | "failed";
+
+/**
+ * Rewrite a message this webhook sent earlier, in place.
+ *
+ * Editing does not notify anyone, does not mark the channel unread and does
+ * not bump it — that silence is the entire point of the queue board. But the
+ * silence is CONDITIONAL: Discord rebuilds a message's mention list from
+ * scratch on every edit and parses it with DEFAULT allowances, ignoring
+ * whatever the original send specified. So `allowed_mentions` has to be
+ * repeated on each PATCH or a Steam persona of "@everyone" turns a permanently
+ * pinned message into a permanent mass ping. It is not optional.
+ *
+ * Shorter timeout than an announcement (2.5s vs 5s): the board is cosmetic and
+ * rides the inhouse poll path, so it must never be what makes a room feel slow.
+ */
+export async function patchWebhookMessage(
+  messageId: string,
+  payload: WebhookPayload,
+): Promise<WebhookEditResult> {
+  const url = await getWebhookUrl();
+  if (!url) return "failed";
+  try {
+    const res = await fetch(
+      `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...payload, allowed_mentions: NO_MENTIONS }),
+        signal: AbortSignal.timeout(2500),
+      },
+    );
+    if (res.ok) return "ok";
+    // 404 = message deleted (10008) or webhook deleted (10015). 401/403 = the
+    // token was regenerated or revoked. All four are permanent for this
+    // message: retrying every 10s forever would just accumulate invalid
+    // requests, which is what Discord IP-bans on (10,000 per 10 minutes).
+    // Anything else (5xx, 429) is transient — "failed" leaves the stored
+    // digest untouched so the next tick naturally retries.
+    if (res.status === 404 || res.status === 401 || res.status === 403) {
+      return "gone";
+    }
+    return "failed";
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[discord] webhook edit failed:", err);
+    }
+    return "failed";
+  }
+}
+
+/** Remove a message this webhook sent (admin "Remove board"). Best-effort. */
+export async function deleteWebhookMessage(messageId: string): Promise<boolean> {
+  const url = await getWebhookUrl();
+  if (!url) return false;
+  try {
+    const res = await fetch(
+      `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
+      { method: "DELETE", signal: AbortSignal.timeout(2500) },
+    );
+    return res.ok || res.status === 404; // already gone is a success
+  } catch {
+    return false;
+  }
+}
+
+/**
  * POST a message to the configured webhook. Best-effort: resolves false on
  * any failure (no webhook configured, network error, non-2xx) and never throws.
  */

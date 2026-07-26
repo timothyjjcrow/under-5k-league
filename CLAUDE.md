@@ -652,6 +652,92 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   The inhouse room also flips `document.title` ("(!) Your pick…") while the
   viewer's attention is needed — works without the sound toggle/audio unlock.
 
+## Live inhouse queue board (done)
+
+ONE pinned Discord message showing the live queue count, rewritten IN PLACE —
+a live counter that never posts a second message. Pure render in
+`src/lib/inhouse-board.ts` (tested), service in `inhouse-board-service.ts`
+(reminder-service pattern, `test/integration/inhouse-board.itest.ts`),
+transport in `discord.ts` (`postWebhookMessage`/`patchWebhookMessage`/
+`deleteWebhookMessage`, real-HTTP tested in
+`test/integration/discord-webhook-transport.itest.ts`). Admin posts/removes it
+from the Discord card; no bot, no new credential — it rides the webhook URL
+already in the `Setting` table.
+
+- **The `inhouseBoard` Setting row IS the on/off switch** (JSON
+  `{webhookId, messageId, digest}`). No row = feature off, and "off" costs one
+  PK read on the poll path. Don't add a separate toggle — it would drift from
+  the message that actually exists in Discord.
+- **`?wait=true` is mandatory on the POST.** Without it Discord answers 204
+  with no body, and there is NO endpoint to look the id up afterwards — a
+  message sent without it can never be edited again.
+- **`allowed_mentions: {parse: []}` must be repeated on every PATCH, not just
+  the POST.** Discord rebuilds a message's mention list from scratch on each
+  edit and parses it with DEFAULT allowances, ignoring what the original send
+  asked for. Drop it and a Steam persona of `@everyone` mass-pings the server
+  on the board's next repaint — from a message that is pinned forever.
+- **The digest is the cost model.** It hashes SEMANTIC state only and excludes
+  the clock; elapsed time renders as `<t:…:R>`, which keeps counting in every
+  client with no further edits. Put anything time-varying in the digest and the
+  board silently burns one PATCH every `BOARD_MIN_SECONDS` forever, on an empty
+  queue. A motionless queue currently costs zero requests — verified live.
+- **`syncInhouse` repaints the board on its EARLY-RETURN path too** (queue
+  empty AND no lobby). Nothing else runs in that state — the resolvers are
+  skipped and no one is polling the room — yet it is the state the board is
+  most likely to be lying about: a game that just ENDED leaves the board
+  reading "game in progress", and the last player can leave and close the tab
+  in one breath. Pinned by `runResultSync` tests in
+  `test/integration/inhouse-board.itest.ts`; don't drop it.
+  Separately, `syncInhouse`'s `watch` includes a non-empty PRESENT queue, not
+  just a live lobby — sitewide pingers used to idle at 300s through the whole
+  fill, which is the stretch that decides whether a game happens.
+- Board freshness ultimately tracks SITE TRAFFIC, and the queue shrinking is
+  the weak direction: going "away" writes nothing (presence is classified at
+  read time from `lastSeenAt`), so a decay is only noticed when some request
+  happens to run.
+- **The board is NEVER synced on a mutation.** `/api/inhouse` answers every
+  mutation with a `getInhouseState` payload, so without
+  `getInhouseState(user, { syncBoard: false })` the player who pressed ACCEPT
+  is exactly the request that renders the changed digest, wins the edit claim
+  and blocks on Discord — on the 45s ready check. Measured with a deliberately
+  slow Discord: join 75ms, the poll behind it 2.0s. The client's own poll
+  (~250ms later via `bumpPollRef`) carries the board instead.
+- 404/401/403 on the PATCH is PERMANENT (`"gone"`): drop the row and stop.
+  It never re-posts — deleting the message in Discord is the natural "turn it
+  off" gesture, and a self-resurrecting message would be exactly the spam this
+  feature avoids. 429/5xx is `"failed"`: keep the OLD digest (so the next poll
+  retries) but bump a `failures` counter.
+- **The digest write-back is a compare-and-swap** (`swapState`) on the exact
+  previous row value: the row is read BEFORE a round trip of up to 2.5s and
+  written after, so a blind upsert would resurrect a board an admin removed
+  mid-flight.
+- **Health must not flatter itself.** `lastEdit` on the admin card is
+  `lastOkAt` — stamped only when Discord ACCEPTED an edit — never the throttle
+  timestamp, which is written when the claim is won, i.e. before the request,
+  and so keeps looking healthy while every edit fails. The card also renders
+  the LIVE queue (`boardStateLabel`) plus an `inSync` digest comparison, which
+  is the only way to answer "is the channel lying right now?".
+- **Removal reports honestly** — an orphan (row forgotten, message still
+  pinned and now unreachable) is the worst end state this feature has, and the
+  next "Post" would add a SECOND board beside it. So: Discord confirmed → ok;
+  refused → row KEPT and the admin told to retry; `force: true` (used by
+  `setDiscordWebhook`/`clearDiscordWebhook`, where the credential is about to
+  stop working) → always clear and report `orphaned` so the toast can say
+  "delete that message by hand". A STRANDED board never routes through
+  `deleteWebhookMessage` at all: that endpoint is scoped to the sending
+  webhook, so it would 404, which the transport correctly reads as success.
+- Swapping the webhook to a DIFFERENT channel strands the message;
+  `setDiscordWebhook`/`clearDiscordWebhook` tear the board down FIRST, while
+  the old credential is still the configured one. A regenerated token keeps the
+  same webhook id, so that case correctly survives (`webhookIdOf`).
+- **The board informs; it does not convert.** Edits produce no notification and
+  no unread. The `LOBBY_SIZE-2` `@`-ping in `joinQueue` is still the only thing
+  that actually gets a ninth player to queue — keep it.
+- KNOWN LIMIT: with nobody on the site at all, nothing runs and the board
+  freezes. The `updated <t:…:R>` line makes that visible rather than hidden;
+  the README's optional uptime monitor on `GET /api/sync` is what actually
+  bounds it.
+
 ## Match-night check-in (done)
 
 - `MatchAvailability` model (matchId+userId unique, status IN|OUT). Pure

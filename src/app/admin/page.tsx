@@ -42,6 +42,8 @@ import {
   setDiscordWebhook,
   clearDiscordWebhook,
   testDiscordWebhook,
+  postInhouseBoard,
+  deleteInhouseBoard,
   revokeAllSessions,
   signFreeAgent,
   releasePlayer,
@@ -70,6 +72,10 @@ import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { maskWebhookUrl } from "@/lib/discord";
+import {
+  getInhouseBoardStatus,
+  type InhouseBoardStatus,
+} from "@/lib/inhouse-board-service";
 import {
   pickBracketSize,
   roundName,
@@ -139,6 +145,7 @@ export default async function AdminPage() {
     // touch it, so we hide that button and say where it lives.
     envManaged: !dbWebhook && !!process.env.DISCORD_WEBHOOK_URL,
   };
+  const boardStatus = await getInhouseBoardStatus();
   const newsPosts = sortNews(
     await prisma.newsPost.findMany({
       include: { author: { select: { name: true } } },
@@ -162,7 +169,7 @@ export default async function AdminPage() {
           <StandinControls data={data} />
           <LeagueControls season={season} />
           <AutoSyncHealth season={season} />
-          <DiscordControls status={discordStatus} />
+          <DiscordControls status={discordStatus} board={boardStatus} />
         </>
       ) : (
         <Card>
@@ -2119,8 +2126,10 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
 
 function DiscordControls({
   status,
+  board,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
+  board: InhouseBoardStatus;
 }) {
   const { configured, masked, envManaged } = status;
   return (
@@ -2196,6 +2205,100 @@ function DiscordControls({
           here. For security the saved URL is never shown again — paste a new one
           to replace it, or Remove to turn announcements off.
         </p>
+
+        <div className="space-y-3 border-t border-line pt-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-medium">Live queue board</span>
+            {board.posted ? (
+              board.stranded ? (
+                <Badge tone="danger">Stranded</Badge>
+              ) : (
+                <Badge tone="success">Posted</Badge>
+              )
+            ) : (
+              <Badge tone="neutral">Not posted</Badge>
+            )}
+            {board.posted ? (
+              <span className="font-mono text-xs text-muted">
+                msg {board.messageHint}
+              </span>
+            ) : null}
+            {board.posted && board.failures > 0 ? (
+              <Badge tone="danger">
+                {board.failures} failed edit{board.failures === 1 ? "" : "s"}
+              </Badge>
+            ) : null}
+            {board.posted && board.lastEdit ? (
+              <span className="text-xs text-muted">
+                · last edit{" "}
+                <LocalTime
+                  ts={new Date(board.lastEdit).getTime()}
+                  variant="full"
+                  initial={formatMatchTime(new Date(board.lastEdit), "full")}
+                />
+              </span>
+            ) : null}
+          </div>
+
+          {board.posted ? (
+            <p className="text-xs text-muted">
+              Queue right now: <b>{board.liveState}</b> —{" "}
+              {board.inSync
+                ? "the board is showing this."
+                : "the board hasn't caught up yet (an edit is due on the next page view)."}
+            </p>
+          ) : null}
+
+          {board.stranded ? (
+            <p className="text-xs text-danger">
+              The board belongs to a different webhook than the one configured
+              now — it can no longer be updated or deleted from here. Remove it
+              here, delete the message by hand in the old channel, then post a
+              new one.
+            </p>
+          ) : null}
+
+          {board.posted && board.failures > 0 ? (
+            <p className="text-xs text-danger">
+              Discord has rejected the last {board.failures} edit
+              {board.failures === 1 ? "" : "s"} — the channel is showing a count
+              the site already knows is out of date. Check the webhook.
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
+            {board.posted ? (
+              <ActionForm action={deleteInhouseBoard}>
+                <SubmitButton
+                  variant="ghost"
+                  size="sm"
+                  confirm="Delete the queue board message from Discord?"
+                >
+                  Remove board
+                </SubmitButton>
+              </ActionForm>
+            ) : (
+              <ActionForm action={postInhouseBoard}>
+                <SubmitButton
+                  variant="secondary"
+                  size="sm"
+                  disabled={!configured}
+                >
+                  Post queue board
+                </SubmitButton>
+              </ActionForm>
+            )}
+          </div>
+
+          <p className="text-xs text-muted">
+            Posts <b>one</b> message showing who&apos;s in the inhouse queue and
+            rewrites it in place as players come and go — a live count with no
+            new messages, ever. Editing a message doesn&apos;t notify anyone, so{" "}
+            <b>pin it</b> (right-click → Pin Message) or it will scroll away.
+            The separate &ldquo;queue is almost full&rdquo; ping is what actually
+            alerts people; this board just shows the state.
+          </p>
+        </div>
       </CardBody>
     </Card>
   );

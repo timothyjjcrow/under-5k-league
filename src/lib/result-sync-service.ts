@@ -9,6 +9,7 @@ import {
   autoSyncClaimCutoff,
   minutesSinceAutoSyncOpen,
 } from "./result-sync";
+import { queuePresentCutoff } from "./inhouse";
 import {
   ANNOUNCE_FAILED_PREFIX,
   announceSeriesResultOnce,
@@ -22,7 +23,8 @@ import {
   resolveReadyCheck,
   resolveStalledPick,
 } from "./inhouse-service";
-import { getSetting, SETTING_KEYS } from "./settings";
+import { claimThrottle, getSetting, SETTING_KEYS } from "./settings";
+import { syncInhouseBoard } from "./inhouse-board-service";
 
 // Automatic result sync — the league updates itself instead of waiting on a
 // captain or admin to press a button. Driven lazily (no cron/websocket, same
@@ -50,42 +52,11 @@ export type ResultSyncOutcome = {
 
 /**
  * Atomic global throttle (Setting-row claim, the reminder-service pattern).
- * ISO timestamps compare lexicographically, so the conditional update is a
- * valid "only if stale" claim.
+ * Moved to settings.ts once the inhouse board needed it too — importing it
+ * back from here would have closed a cycle (result-sync → inhouse-service →
+ * inhouse-board-service → result-sync).
  */
-async function claimSyncThrottle(
-  key: string,
-  intervalSeconds: number,
-  nowMs: number,
-): Promise<boolean> {
-  const value = new Date(nowMs).toISOString();
-  const staleBefore = new Date(nowMs - intervalSeconds * 1000).toISOString();
-
-  // Try the STALE-CLAIM update first. The row exists on every call but the
-  // first, so leading with `create` meant a caught-and-ignored P2002 on
-  // essentially every /api/sync hit — and the Prisma client logs at "error"
-  // level in production (src/lib/prisma.ts), so each one wrote a stack trace
-  // to the server log before our catch ever ran. /api/sync fires on every page
-  // view, so that buried real errors under constant expected-path noise.
-  const updated = await prisma.setting.updateMany({
-    where: { key, value: { lt: staleBefore } },
-    data: { value },
-  });
-  if (updated.count > 0) return true;
-
-  // Zero rows means either "exists but still fresh" (not our claim) or "row
-  // isn't there yet" (first ever call — create it, and let a genuine creation
-  // race lose on P2002).
-  const existing = await prisma.setting.findUnique({ where: { key } });
-  if (existing) return false;
-  try {
-    await prisma.setting.create({ data: { key, value } });
-    return true;
-  } catch (e) {
-    if ((e as { code?: string }).code !== "P2002") throw e;
-    return false; // someone else created it in the same instant
-  }
-}
+const claimSyncThrottle = claimThrottle;
 
 /**
  * Scan due league matches for finished games. "Due" = unplayed/partial, with a
@@ -236,7 +207,18 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
     }),
     prisma.inhouseQueueEntry.count(),
   ]);
-  if (!active && queued === 0) return { recorded: false, watch: false };
+  if (!active && queued === 0) {
+    // Repaint the board on the way out. This branch is where the queue is
+    // ALREADY empty and no lobby is up — which is exactly the state the board
+    // is most likely to be lying about, because nothing else runs here: the
+    // resolvers below are skipped, and the inhouse room has nobody polling it.
+    // The two that bite: a game that just ENDED (the board still reads "game
+    // in progress" until something repaints it), and the last player leaving
+    // and closing the tab in the same breath. A Discord channel confidently
+    // advertising a dead queue is worse than no board at all.
+    await syncInhouseBoard();
+    return { recorded: false, watch: false };
+  }
 
   await maybeFormLobby();
   await resolveReadyCheck();
@@ -244,11 +226,23 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
   await resolveStalledPick();
   const recorded = await maybeAutoDetectResult();
 
-  const stillActive = await prisma.inhouseLobby.findFirst({
-    where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-    select: { id: true },
-  });
-  return { recorded, watch: !!stillActive };
+  const [stillActive, present] = await Promise.all([
+    prisma.inhouseLobby.findFirst({
+      where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      select: { id: true },
+    }),
+    prisma.inhouseQueueEntry.count({
+      where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
+    }),
+  ]);
+  await syncInhouseBoard();
+  // A FILLING queue is watch-worthy too, not just a live lobby. Sitewide
+  // pingers used to idle at IDLE_POLL_SECONDS (300) whenever there was no
+  // lobby yet, which left both lobby formation and the Discord board up to
+  // five minutes behind on exactly the stretch that decides whether a game
+  // happens. Present-only so a ghost row can't hold every client at the fast
+  // cadence until the 180s prune catches it.
+  return { recorded, watch: !!stillActive || present > 0 };
 }
 
 /**

@@ -63,7 +63,12 @@ import {
   sendDiscordMessage,
   testMessage,
   draftScheduledMessage,
+  webhookIdOf,
 } from "@/lib/discord";
+import {
+  createInhouseBoard,
+  removeInhouseBoard,
+} from "@/lib/inhouse-board-service";
 import {
   getSetting,
   setSetting,
@@ -2262,9 +2267,28 @@ export async function setDiscordWebhook(
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
     };
   }
+  // Moving to a webhook for a DIFFERENT channel strands the queue board: we
+  // could no longer edit it, and it would sit in the old channel forever
+  // showing a frozen count. Tear it down while the old credential is still the
+  // configured one, i.e. before the save below. A regenerated token for the
+  // SAME webhook keeps its id, so that case correctly leaves the board alone.
+  const prevId = webhookIdOf(await getWebhookUrl());
+  const nextId = webhookIdOf(value);
+  const movedChannel = !!prevId && !!nextId && prevId !== nextId;
+  // force: the old credential is about to stop being the configured one, so
+  // "keep the row and retry later" isn't an option — after the save we could
+  // never edit or delete that message again.
+  const torndown = movedChannel ? await removeInhouseBoard({ force: true }) : null;
+
   await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, value);
   refresh();
-  return { message: "Webhook saved — announcements are on" };
+  return {
+    message: !movedChannel
+      ? "Webhook saved — announcements are on"
+      : torndown?.orphaned
+        ? "Webhook saved — announcements are on. The old queue board is still in the old channel and can no longer be updated; delete that message by hand, then post a new board below."
+        : "Webhook saved — announcements are on. The queue board was removed from the old channel; post a new one below.",
+  };
 }
 
 /** Turn off Discord announcements by removing the stored webhook. */
@@ -2277,9 +2301,63 @@ export async function clearDiscordWebhook(
   } catch {
     return { error: "Not authorized" };
   }
+  // Delete the board FIRST — it needs the credential we're about to remove,
+  // and a pinned message frozen at a stale count is the worst thing this
+  // feature can leave behind.
+  const torndown = await removeInhouseBoard({ force: true });
   await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
   refresh();
-  return { message: "Webhook removed — announcements are off" };
+  return {
+    message: torndown.orphaned
+      ? "Webhook removed — announcements are off. Discord didn't confirm deleting the queue board, so delete that message by hand."
+      : "Webhook removed — announcements are off",
+  };
+}
+
+/**
+ * Post the live inhouse queue board — ONE message the site rewrites in place
+ * as players join and leave, so the channel gets a live count without a new
+ * message per join.
+ */
+export async function postInhouseBoard(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const res = await createInhouseBoard();
+  refresh();
+  return res.ok
+    ? {
+        message:
+          "Board posted — right-click it in Discord and Pin it so it never scrolls away.",
+      }
+    : { error: res.error ?? "Could not post the board" };
+}
+
+/** Delete the queue board message and stop updating it. */
+export async function deleteInhouseBoard(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const res = await removeInhouseBoard();
+  refresh();
+  if (!res.ok) return { error: res.error ?? "Could not remove the board" };
+  // Never claim a message was deleted when it wasn't — an orphaned board is
+  // pinned forever at a frozen count and nothing here can touch it again.
+  return {
+    message: res.orphaned
+      ? "Stopped updating the board — but Discord still has the message (it was posted by a different webhook). Delete it by hand."
+      : "Queue board removed",
+  };
 }
 
 /** Post a test message so the admin can confirm the webhook works. */

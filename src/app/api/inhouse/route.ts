@@ -88,5 +88,10 @@ export async function POST(req: NextRequest) {
   if (!res.ok) {
     return NextResponse.json({ error: res.error }, { status: 400 });
   }
-  return NextResponse.json(await getInhouseState(user));
+  // A mutation must never block on the Discord queue board: the request that
+  // CHANGES the state is the one that would render the new digest and win the
+  // edit claim, so ACCEPT / vote / pick — the second-sensitive clocks — would
+  // each pay a round trip. This client nudges its own poll ~250ms later
+  // (bumpPollRef in inhouse-room.tsx), and that poll repaints the board.
+  return NextResponse.json(await getInhouseState(user, { syncBoard: false }));
 }

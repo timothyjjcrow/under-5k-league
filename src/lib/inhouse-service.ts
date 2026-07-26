@@ -36,6 +36,8 @@ import {
   sendDiscordMessage,
 } from "./discord";
 import { stampResultChange, SETTING_KEYS } from "./settings";
+import { syncInhouseBoard } from "./inhouse-board-service";
+import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
 import type { SessionUser } from "./auth";
 
@@ -1368,7 +1370,12 @@ type ReadyCheckBlock = {
 };
 
 /** Everything the inhouse room client needs, tailored to the viewing user. */
-export async function getInhouseState(viewer: SessionUser | null) {
+export async function getInhouseState(
+  viewer: SessionUser | null,
+  /** Set `syncBoard: false` on the MUTATION path so a button press never waits
+   *  on Discord — see the board sync at the bottom of this function. */
+  { syncBoard = true }: { syncBoard?: boolean } = {},
+) {
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
   await maybeFormLobby();
@@ -1594,9 +1601,45 @@ export async function getInhouseState(viewer: SessionUser | null) {
 
   // "Away" entries (heartbeat gone quiet — tab closed or backgrounded hard)
   // keep their spot for a grace window but don't count toward the ten.
-  const presentCount = queue.filter(
+  const presentEntries = queue.filter(
     (q) => queuePresence(q.lastSeenAt.getTime(), now) === "present",
-  ).length;
+  );
+  const presentCount = presentEntries.length;
+
+  // Keep the pinned Discord board in step. Everything it needs is already
+  // loaded, so an enabled board costs one Setting read per poll and an edit
+  // only when the rendered state actually moved; a board that was never set up
+  // costs the read alone. Awaited on purpose — Vercel kills orphaned work
+  // after the response, so a fire-and-forget edit would land at random.
+  //
+  // ONLY ON THE POLL PATH (`syncBoard`, default on). /api/inhouse answers
+  // every MUTATION with this same state payload, so without the opt-out the
+  // player who pressed ACCEPT is precisely the request that renders the
+  // changed digest, wins the throttle claim and then blocks on Discord for up
+  // to 2.5s — on the accept/vote/pick clocks, where seconds are the whole
+  // point. The route passes syncBoard:false there; that client's own poll
+  // lands ~250ms later (act() nudges the loop via bumpPollRef) and carries the
+  // board instead, on a request nobody is waiting on.
+  if (syncBoard) {
+    await syncInhouseBoard({
+      presentNames: presentEntries.map((q) => q.user.name),
+      awayCount: queue.length - presentCount,
+      lobbySize: INHOUSE.LOBBY_SIZE,
+      lobby: lobbyRow
+        ? {
+            status: lobbyRow.status,
+            acceptedCount: lobbyRow.players.filter((p) => p.acceptedAt != null)
+              .length,
+            playerCount: lobbyRow.players.length,
+            startedAtMs: lobbyRow.startedAt
+              ? lobbyRow.startedAt.getTime()
+              : null,
+          }
+        : null,
+      siteUrl: resolveSiteUrl(),
+      nowMs: now,
+    });
+  }
 
   return {
     now,
