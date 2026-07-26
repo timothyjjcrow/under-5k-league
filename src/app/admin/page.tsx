@@ -2215,6 +2215,11 @@ function PingHealthLines({ health }: { health: PingHealth }) {
       fix: "That role id doesn't exist in this server — re-copy it.",
     },
     {
+      ok: health.hasManageRoles,
+      label: "Bot has Manage Roles",
+      fix: "Re-invite the bot with the Manage Roles permission (Developer Portal → OAuth2 → URL Generator).",
+    },
+    {
       ok: health.canGrant,
       label: "Bot can grant it",
       fix: "Server Settings → Roles: drag the bot's role ABOVE the ping role. Discord won't let a bot assign a role above its own.",
@@ -2241,6 +2246,16 @@ function PingHealthLines({ health }: { health: PingHealth }) {
           </span>
         ))}
       </div>
+      {/* The raw numbers behind the verdict. A boolean on its own is how the
+          first version of this check stayed wrong on every server it ran on —
+          there was nothing visible to sanity-check it against. */}
+      {health.botTopPosition !== null && health.rolePosition !== null ? (
+        <p className="mt-1 text-xs text-muted">
+          Bot&apos;s highest role sits at position {health.botTopPosition}; the
+          ping role is at {health.rolePosition}.
+          {health.canGrant ? " Higher, so it can assign it." : ""}
+        </p>
+      ) : null}
       {health.problem ? (
         <p className="mt-2 text-xs text-danger">{health.problem}</p>
       ) : firstBroken ? (

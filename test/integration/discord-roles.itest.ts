@@ -173,20 +173,28 @@ describe("getPingHealth — the setup diagnostic", () => {
     await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, ROLE);
   });
 
+  const BOT_USER = "900000000000000009";
+  const MANAGE_ROLES = "268435456";
+
   /** Bot holds `botRole` at `botPos`; the ping role sits at `pingPos`. */
-  const guild = (botPos: number, pingPos: number) => (r: Recorded) =>
-    r.url.endsWith("/members/@me")
-      ? {
-          status: 200,
-          body: { roles: ["botrole"], user: { username: "ggd2l" } },
-        }
-      : {
-          status: 200,
-          body: [
-            { id: "botrole", name: "ggd2l", position: botPos },
-            { id: ROLE, name: "Inhouse Ping", position: pingPos },
-          ],
-        };
+  const guild =
+    (botPos: number, pingPos: number, perms = MANAGE_ROLES) =>
+    (r: Recorded) => {
+      if (r.url === "/users/@me") {
+        return { status: 200, body: { id: BOT_USER, username: "ggd2l" } };
+      }
+      if (r.url.endsWith(`/members/${BOT_USER}`)) {
+        return { status: 200, body: { roles: ["botrole"] } };
+      }
+      return {
+        status: 200,
+        body: [
+          { id: GUILD, name: "@everyone", position: 0, permissions: "0" },
+          { id: "botrole", name: "ggd2l", position: botPos, permissions: perms },
+          { id: ROLE, name: "Inhouse Ping", position: pingPos, permissions: "0" },
+        ],
+      };
+    };
 
   it("reports every piece present and grantable", async () => {
     respond = guild(5, 2);
@@ -223,9 +231,62 @@ describe("getPingHealth — the setup diagnostic", () => {
   });
 
   it("spots a bot that was never invited", async () => {
-    respond = () => ({ status: 404 });
+    respond = (r) =>
+      r.url === "/users/@me"
+        ? { status: 200, body: { id: BOT_USER, username: "ggd2l" } }
+        : { status: 404 };
     const h = await getPingHealth();
     expect(h.botInGuild).toBe(false);
+  });
+
+  it("NEVER treats a non-2xx JSON body as data", async () => {
+    // The bug this replaces: GET /guilds/{id}/members/@me is not a route —
+    // it 400s with a perfectly valid JSON error body. Parsing that as a member
+    // object left roles undefined, so the bot's height defaulted to 0 and
+    // "can grant" was false on EVERY server, while reporting "bot in server".
+    respond = (r) =>
+      r.url === "/users/@me"
+        ? { status: 200, body: { id: BOT_USER, username: "ggd2l" } }
+        : {
+            status: 400,
+            body: {
+              code: 50035,
+              errors: { user_id: 'Value "@me" is not snowflake.' },
+            },
+          };
+    const h = await getPingHealth();
+    expect(h.canGrant).not.toBe(false); // must NOT assert a failure it can't see
+    expect(h.problem).toBeTruthy();
+  });
+
+  it("asks who it is before looking itself up — @me has no GET form", async () => {
+    respond = guild(9, 5);
+    await getPingHealth();
+    expect(recorded[0].url).toBe("/users/@me");
+    expect(recorded.some((r) => r.url.endsWith("/members/@me"))).toBe(false);
+    expect(recorded.some((r) => r.url.endsWith(`/members/${BOT_USER}`))).toBe(
+      true,
+    );
+  });
+
+  it("refuses when the bot lacks Manage Roles, even if it sits higher", async () => {
+    respond = guild(9, 5, "0");
+    const h = await getPingHealth();
+    expect(h.hasManageRoles).toBe(false);
+    expect(h.canGrant).toBe(false);
+  });
+
+  it("treats an equal position as not grantable — Discord requires strictly higher", async () => {
+    respond = guild(5, 5);
+    const h = await getPingHealth();
+    expect(h.canGrant).toBe(false);
+  });
+
+  it("reports the raw positions so a wrong verdict can't hide", async () => {
+    respond = guild(9, 5);
+    const h = await getPingHealth();
+    expect(h.botTopPosition).toBe(9);
+    expect(h.rolePosition).toBe(5);
   });
 
   it("names a bad token rather than blaming the config", async () => {

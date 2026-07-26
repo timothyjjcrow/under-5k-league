@@ -703,6 +703,24 @@ reached a player who wasn't already looking at it.
   sits below the ping role, retrying never fixes it, and the message must say so
   rather than blaming the player's click.
 
+- **`GET /guilds/{g}/members/@me` IS NOT A ROUTE.** `@me` is accepted only on
+  PATCH there; on GET it fails snowflake coercion and returns **400** with
+  `Value "@me" is not snowflake` — as perfectly valid JSON. The first version
+  of the health check parsed that as a member object, got `roles: undefined`,
+  defaulted the bot's height to 0, and reported "can't grant" on EVERY server
+  while also claiming "bot in server" (it only branched on 403/404, so a 400
+  fell through to the success path). To read its own roles a bot must
+  `GET /users/@me` for its id, then `GET /guilds/{g}/members/{thatId}`.
+  **Branch on `res.ok` for every Discord call** — an error body that parses
+  proves nothing.
+- Granting a role needs BOTH hierarchy and permission: the bot's HIGHEST role
+  strictly above the target (equal position is refused), AND MANAGE_ROLES or
+  ADMINISTRATOR — Administrator does NOT bypass hierarchy. `permissions` is a
+  STRING bitfield, so `BigInt("268435456")`, never a `1n << 28n` literal
+  (tsconfig targets ES2017).
+- The panel renders the raw positions, not just a verdict. A boolean with
+  nothing to check it against is precisely how the broken version stayed
+  invisible.
 - **`getPingHealth` + the admin checklist** — the opt-in has FOUR independent
   ways to be half-configured and three are invisible until a player clicks the
   button and gets an error. The one worth its extra API call is `canGrant`:

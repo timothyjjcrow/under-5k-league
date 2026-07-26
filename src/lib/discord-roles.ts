@@ -159,9 +159,40 @@ export type PingHealth = {
   canGrant: boolean | null;
   botName: string | null;
   roleName: string | null;
+  /** The raw numbers behind canGrant. A diagnostic that emits only a boolean
+   *  is how the previous version of this check stayed wrong for so long —
+   *  there was nothing to sanity-check it against. */
+  botTopPosition: number | null;
+  rolePosition: number | null;
+  hasManageRoles: boolean | null;
   /** Set when a check couldn't run at all, e.g. a bad token. */
   problem: string | null;
 };
+
+type Fetched = { ok: boolean; status: number; data: unknown };
+
+/**
+ * GET + parse, keeping the status. Every caller MUST branch on `ok`: Discord
+ * returns errors as perfectly valid JSON, so a body that parses proves
+ * nothing. Letting a 400 through as data is exactly the bug that made this
+ * whole check report a false failure on every server it ran on.
+ */
+async function getJson(cfg: RoleConfig, path: string): Promise<Fetched | null> {
+  const res = await call(cfg, path, "GET");
+  if (!res) return null;
+  let data: unknown = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+// tsconfig targets ES2017, so BigInt LITERALS (8n) don't compile — see the
+// same gotcha in CLAUDE.md for match ids. 1<<3 and 1<<28.
+const ADMINISTRATOR = BigInt("8");
+const MANAGE_ROLES = BigInt("268435456");
 
 export async function getPingHealth(): Promise<PingHealth> {
   const hasToken = !!process.env.DISCORD_BOT_TOKEN;
@@ -179,60 +210,91 @@ export async function getPingHealth(): Promise<PingHealth> {
     canGrant: null,
     botName: null,
     roleName: null,
+    botTopPosition: null,
+    rolePosition: null,
+    hasManageRoles: null,
     problem: null,
   };
   const cfg = await getRoleConfig();
   if (!cfg) return base;
 
-  // The bot's own member record (its roles) and the guild's role list, which
-  // together answer the hierarchy question.
-  const [meRes, rolesRes] = await Promise.all([
-    call(cfg, `/guilds/${cfg.guildId}/members/@me`, "GET"),
-    call(cfg, `/guilds/${cfg.guildId}/roles`, "GET"),
-  ]);
-
-  if (!meRes || !rolesRes) {
-    return { ...base, problem: "Couldn't reach Discord." };
-  }
-  if (meRes.status === 401 || rolesRes.status === 401) {
-    return { ...base, problem: "Discord rejected the bot token — reset it and update the env var." };
-  }
-  if (meRes.status === 403 || meRes.status === 404) {
-    // The token is valid but the bot isn't a member of this guild.
-    return { ...base, botInGuild: false };
-  }
-
-  try {
-    const me = (await meRes.json()) as {
-      roles?: string[];
-      user?: { username?: string };
-    };
-    const roles = (await rolesRes.json()) as {
-      id: string;
-      name: string;
-      position: number;
-    }[];
-    if (!Array.isArray(roles)) return { ...base, problem: "Unexpected reply from Discord." };
-
-    const byId = new Map(roles.map((r) => [r.id, r]));
-    const ping = byId.get(cfg.roleId) ?? null;
-    // A bot's effective height is its HIGHEST role; @everyone is position 0.
-    const botTop = (me.roles ?? []).reduce(
-      (top, id) => Math.max(top, byId.get(id)?.position ?? 0),
-      0,
-    );
+  // 1. Who are we? A bot token's /users/@me IS valid — unlike the member
+  //    lookup, which has no @me form on GET and 400s with "not snowflake".
+  const meUser = await getJson(cfg, "/users/@me");
+  if (!meUser) return { ...base, problem: "Couldn't reach Discord." };
+  if (meUser.status === 401) {
     return {
       ...base,
-      botInGuild: true,
-      roleExists: !!ping,
-      canGrant: ping ? botTop > ping.position : null,
-      botName: me.user?.username ?? null,
-      roleName: ping?.name ?? null,
-      problem: null,
+      problem: "Discord rejected the bot token — reset it and update the env var.",
     };
-  } catch {
-    return { ...base, problem: "Unexpected reply from Discord." };
   }
+  if (!meUser.ok) {
+    return { ...base, problem: `Discord refused the identity check (${meUser.status}).` };
+  }
+  const botId = (meUser.data as { id?: string })?.id;
+  const botName = (meUser.data as { username?: string })?.username ?? null;
+  if (!botId) return { ...base, problem: "Unexpected reply from Discord." };
+
+  // 2. Our own member row, by REAL snowflake.
+  const [member, rolesRes] = await Promise.all([
+    getJson(cfg, `/guilds/${cfg.guildId}/members/${botId}`),
+    getJson(cfg, `/guilds/${cfg.guildId}/roles`),
+  ]);
+  if (!member || !rolesRes) {
+    return { ...base, botName, problem: "Couldn't reach Discord." };
+  }
+  if (member.status === 404 || member.status === 403) {
+    return { ...base, botName, botInGuild: false };
+  }
+  if (!member.ok || !rolesRes.ok) {
+    return {
+      ...base,
+      botName,
+      problem: `Discord refused the guild lookup (${member.ok ? rolesRes.status : member.status}).`,
+    };
+  }
+
+  const roles = rolesRes.data as
+    | { id: string; name: string; position: number; permissions: string; managed?: boolean }[]
+    | undefined;
+  const myRoleIds = (member.data as { roles?: string[] })?.roles;
+  if (!Array.isArray(roles) || !Array.isArray(myRoleIds)) {
+    return { ...base, botName, botInGuild: true, problem: "Unexpected reply from Discord." };
+  }
+
+  const byId = new Map(roles.map((r) => [r.id, r]));
+  const target = byId.get(cfg.roleId) ?? null;
+  // The bot's height is its HIGHEST role; @everyone (id === guildId) is 0.
+  const botTop = myRoleIds.reduce(
+    (top, id) => Math.max(top, byId.get(id)?.position ?? 0),
+    0,
+  );
+  // Hierarchy is necessary but NOT sufficient — the bot also needs the
+  // permission. permissions is a STRING bitfield, so BigInt it.
+  const perms = myRoleIds.reduce((acc, id) => {
+    const r = byId.get(id);
+    return r ? acc | BigInt(r.permissions ?? "0") : acc;
+  }, BigInt(byId.get(cfg.guildId)?.permissions ?? "0"));
+  const hasManageRoles =
+    (perms & ADMINISTRATOR) === ADMINISTRATOR ||
+    (perms & MANAGE_ROLES) === MANAGE_ROLES;
+
+  return {
+    ...base,
+    botName,
+    botInGuild: true,
+    roleExists: !!target,
+    roleName: target?.name ?? null,
+    botTopPosition: botTop,
+    rolePosition: target?.position ?? null,
+    hasManageRoles,
+    // STRICTLY greater: an equal position is not "lower" and Discord refuses
+    // it. A managed (integration-owned) role can never be assigned by anyone.
+    canGrant: target
+      ? hasManageRoles && !target.managed && botTop > target.position
+      : null,
+    problem: null,
+  };
 }
 
 /**
