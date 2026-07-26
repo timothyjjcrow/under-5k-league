@@ -80,7 +80,11 @@ import {
   getInhouseBoardStatus,
   type InhouseBoardStatus,
 } from "@/lib/inhouse-board-service";
-import { getPingHealth, type PingHealth } from "@/lib/discord-roles";
+import {
+  getDiscordReach,
+  getPingHealth,
+  type PingHealth,
+} from "@/lib/discord-roles";
 import {
   pickBracketSize,
   roundName,
@@ -152,6 +156,7 @@ export default async function AdminPage() {
   };
   const boardStatus = await getInhouseBoardStatus();
   const pingHealth = await getPingHealth();
+  const discordReach = await getDiscordReach(season?.id ?? null);
   const newsPosts = sortNews(
     await prisma.newsPost.findMany({
       include: { author: { select: { name: true } } },
@@ -179,6 +184,7 @@ export default async function AdminPage() {
             status={discordStatus}
             board={boardStatus}
             pingHealth={pingHealth}
+            discordReach={discordReach}
           />
         </>
       ) : (
@@ -2135,6 +2141,48 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
 }
 
 /**
+ * The denominator under every notification the league sends. Personal
+ * mentions, the un-RSVP'd ping and the opt-in role all silently skip anyone
+ * who never linked Discord — so this is the number that says whether that
+ * machinery reaches the league or a handful of people.
+ */
+function DiscordReachLine({
+  reach,
+}: {
+  reach: { registered: number; linked: number; unlinkedNames: string[] };
+}) {
+  if (reach.registered === 0) return null;
+  const pct = Math.round((reach.linked / reach.registered) * 100);
+  // Below half, the useful next move is chasing links rather than building
+  // more notification machinery — so say so rather than just showing a number.
+  const thin = pct < 50;
+  return (
+    <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2">
+      <p className="text-sm">
+        <b>
+          {reach.linked} of {reach.registered}
+        </b>{" "}
+        registered players have linked Discord{" "}
+        <span className={thin ? "text-danger" : "text-success"}>({pct}%)</span>
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        {thin
+          ? "Mentions and pings reach only these players — everyone else is named as plain text and never notified. Worth chasing links before adding more notifications."
+          : "Everyone else is still named in announcements, just not notified."}
+      </p>
+      {reach.unlinkedNames.length > 0 ? (
+        <p className="mt-1 text-xs text-muted">
+          Not linked: {reach.unlinkedNames.join(", ")}
+          {reach.registered - reach.linked > reach.unlinkedNames.length
+            ? ` +${reach.registered - reach.linked - reach.unlinkedNames.length} more`
+            : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * The opt-in has four independent ways to be half-configured and three are
  * invisible until a player clicks the button and gets an error. This says
  * which one, in the order they have to be fixed.
@@ -2212,10 +2260,12 @@ function DiscordControls({
   status,
   board,
   pingHealth,
+  discordReach,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
   board: InhouseBoardStatus;
   pingHealth: PingHealth;
+  discordReach: { registered: number; linked: number; unlinkedNames: string[] };
 }) {
   const { configured, masked, envManaged } = status;
   return (
@@ -2378,6 +2428,7 @@ function DiscordControls({
           </ActionForm>
 
           <PingHealthLines health={pingHealth} />
+          <DiscordReachLine reach={discordReach} />
 
           <p className="text-xs text-muted">
             {board.pingRoleId ? (

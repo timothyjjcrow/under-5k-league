@@ -118,21 +118,43 @@ export async function maybeAnnounceUpcomingWeek(season: {
       assignments.filter((a) => a.matchId === matchId && a.teamId === teamId),
     );
 
-  const fixtures = matches.map((m) => {
+  const draft = matches.map((m) => {
     const rows = rsvps.filter((r) => r.matchId === m.id);
     const home = sideRoster(m.id, m.homeTeamId);
     const away = sideRoster(m.id, m.awayTeamId);
+    const homeAv = teamAvailability(home, rows);
+    const awayAv = teamAvailability(away, rows);
     return {
       matchId: m.id,
       homeName: m.homeTeam.name,
       awayName: m.awayTeam.name,
       scheduledAt: m.scheduledAt!.getTime(),
-      homeIn: teamAvailability(home, rows).confirmed,
+      homeIn: homeAv.confirmed,
       homeSize: home.length,
-      awayIn: teamAvailability(away, rows).confirmed,
+      awayIn: awayAv.confirmed,
       awaySize: away.length,
+      waitingIds: [...homeAv.unansweredUserIds, ...awayAv.unansweredUserIds],
     };
   });
+
+  // Name the people who owe an answer, and MENTION the ones who linked
+  // Discord. The counts above state a number into a channel; the people who
+  // haven't checked in are by definition the ones not reading it.
+  const waitingIds = [...new Set(draft.flatMap((d) => d.waitingIds))];
+  const waitingUsers = waitingIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: waitingIds } },
+        select: { id: true, name: true, discordId: true },
+      })
+    : [];
+  const userById = new Map(waitingUsers.map((u) => [u.id, u]));
+  const fixtures = draft.map(({ waitingIds: ids, ...f }) => ({
+    ...f,
+    waitingOn: ids.flatMap((id) => {
+      const u = userById.get(id);
+      return u ? [{ name: u.name, discordId: u.discordId }] : [];
+    }),
+  }));
 
   const sent = await sendDiscordMessage(
     weekReminderMessage({
@@ -140,6 +162,14 @@ export async function maybeAnnounceUpcomingWeek(season: {
       isPlayoff: next.phase !== "REGULAR",
       fixtures,
     }),
+    // Only these exact ids may ring a phone — parse:[] still blocks everything
+    // else, so a team name or persona in the same message stays inert.
+    {
+      users: fixtures
+        .flatMap((f) => f.waitingOn)
+        .map((p) => p.discordId)
+        .filter((id): id is string => !!id),
+    },
   );
   if (!sent) {
     // A Discord blip must not eat the week's reminder — release the claim so

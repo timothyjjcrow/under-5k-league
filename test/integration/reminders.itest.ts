@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
-import { makeSeason, makeTeam } from "./factories";
+import { makeSeason, makeTeam, makeUser } from "./factories";
 
 // Keep the formatters real; stub the webhook lookup + the network send.
 vi.mock("@/lib/discord", async (importOriginal) => {
@@ -85,5 +85,77 @@ describe("week reminder (integration)", () => {
     });
     expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
     expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("week reminder — reaching the people who owe an answer", () => {
+  /** Roster `n` players on a team; the first gets a linked Discord account. */
+  async function roster(seasonId: string, teamId: string, n: number, tag: string) {
+    const users = [];
+    for (let i = 0; i < n; i++) {
+      const u = await makeUser(`${tag}${i}`);
+      if (i === 0) {
+        await prisma.user.update({
+          where: { id: u.id },
+          data: { discordId: `9990000000000000${tag === "H" ? "1" : "2"}` },
+        });
+      }
+      await prisma.teamMember.create({
+        data: { seasonId, teamId, userId: u.id, price: 0 },
+      });
+      users.push(u);
+    }
+    return users;
+  }
+
+  it("mentions the un-RSVP'd by id and passes an allowlist of exactly them", async () => {
+    const { season, home, away, match } = await setupWeek(4);
+    const hs = await roster(season.id, home.id, 3, "H");
+    await roster(season.id, away.id, 3, "A");
+    // One home player checks in — they must NOT be pinged.
+    await prisma.matchAvailability.create({
+      data: { matchId: match.id, userId: hs[0].id, status: "IN" },
+    });
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [content, mentions] = mockSend.mock.calls[0];
+
+    expect(content).toContain("Still waiting on:");
+    // The player who answered is not in the ping list...
+    expect(mentions?.users ?? []).not.toContain("99900000000000001");
+    // ...but the away team's linked player, who hasn't, is.
+    expect(mentions?.users ?? []).toContain("99900000000000002");
+    // Unlinked players are still named so a captain knows who to chase.
+    expect(content).toContain("H1");
+  });
+
+  it("says nothing about waiting when everyone has answered", async () => {
+    const { season, home, away, match } = await setupWeek(4);
+    const hs = await roster(season.id, home.id, 2, "H");
+    const as = await roster(season.id, away.id, 2, "A");
+    for (const u of [...hs, ...as]) {
+      await prisma.matchAvailability.create({
+        data: { matchId: match.id, userId: u.id, status: "IN" },
+      });
+    }
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [content, mentions] = mockSend.mock.calls[0];
+    expect(content).not.toContain("Still waiting");
+    expect(mentions?.users ?? []).toHaveLength(0);
+  });
+
+  it("pings nobody when no one has linked, and still names them", async () => {
+    const { season, home, away } = await setupWeek(4);
+    for (let i = 0; i < 2; i++) {
+      const u = await makeUser(`NL${i}`);
+      await prisma.teamMember.create({
+        data: { seasonId: season.id, teamId: i === 0 ? home.id : away.id, userId: u.id, price: 0 },
+      });
+    }
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [content, mentions] = mockSend.mock.calls[0];
+    expect(mentions?.users ?? []).toHaveLength(0);
+    expect(content).toContain("NL0");
+    expect(content).not.toContain("<@null>");
   });
 });

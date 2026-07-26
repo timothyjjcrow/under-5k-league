@@ -15,6 +15,9 @@ export type TeamAvailability = {
   out: number;
   unanswered: number;
   outUserIds: string[];
+  /** Roster members with no RSVP row at all — the people the week reminder
+   *  pings by name, since they're precisely the ones not reading the channel. */
+  unansweredUserIds: string[];
 };
 
 export type StandinLike = {
@@ -69,11 +72,21 @@ export function teamAvailability(
   const confirmed = rosterUserIds.filter(
     (id) => byUser.get(id) === AVAILABILITY.IN,
   ).length;
+  // The ids, not just the count: the week reminder pings exactly these people,
+  // which is the difference between stating "3/5" into a channel and reaching
+  // the two players who actually owe an answer.
+  // Anything that isn't a valid IN or OUT is "no answer" — including a row
+  // with an unrecognised status — so this list stays exactly the count the
+  // rest of the app already shows.
+  const unansweredUserIds = rosterUserIds.filter(
+    (id) => byUser.get(id) !== AVAILABILITY.IN && byUser.get(id) !== AVAILABILITY.OUT,
+  );
   return {
     confirmed,
     out: outUserIds.length,
-    unanswered: rosterUserIds.length - confirmed - outUserIds.length,
+    unanswered: unansweredUserIds.length,
     outUserIds,
+    unansweredUserIds,
   };
 }
 

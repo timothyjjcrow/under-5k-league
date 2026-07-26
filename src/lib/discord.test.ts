@@ -289,6 +289,7 @@ describe("weekReminderMessage", () => {
           homeSize: 5,
           awayIn: 2,
           awaySize: 5,
+          waitingOn: [],
         },
       ],
     });
@@ -304,6 +305,81 @@ describe("weekReminderMessage", () => {
     const msg = weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [] });
     expect(msg).toContain("Playoff matches");
     expect(msg).not.toContain("Week 9");
+  });
+
+  it("mentions the people who owe an answer, and names the unlinked ones", () => {
+    // The counts state a number into a channel; these are the players who
+    // haven't checked in, i.e. exactly the ones not reading it.
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [
+        {
+          matchId: "m1",
+          homeName: "A",
+          awayName: "B",
+          scheduledAt: 1_800_000_000_000,
+          homeIn: 3,
+          homeSize: 5,
+          awayIn: 5,
+          awaySize: 5,
+          waitingOn: [
+            { name: "Dendi", discordId: "111222333444555666" },
+            { name: "Unlinked Guy", discordId: null },
+          ],
+        },
+      ],
+    });
+    expect(msg).toContain("Still waiting on:");
+    expect(msg).toContain("<@111222333444555666>");
+    expect(msg).toContain("Unlinked Guy");
+    expect(msg).not.toContain("<@null>");
+  });
+
+  it("says nothing when everyone has answered", () => {
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [
+        {
+          matchId: "m1",
+          homeName: "A",
+          awayName: "B",
+          scheduledAt: 1_800_000_000_000,
+          homeIn: 5,
+          homeSize: 5,
+          awayIn: 5,
+          awaySize: 5,
+          waitingOn: [],
+        },
+      ],
+    });
+    expect(msg).not.toContain("Still waiting");
+  });
+
+  it("caps a long list rather than posting a wall of mentions", () => {
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [
+        {
+          matchId: "m1",
+          homeName: "A",
+          awayName: "B",
+          scheduledAt: 1_800_000_000_000,
+          homeIn: 0,
+          homeSize: 5,
+          awayIn: 0,
+          awaySize: 5,
+          waitingOn: Array.from({ length: 10 }, (_, i) => ({
+            name: `P${i}`,
+            discordId: null,
+          })),
+        },
+      ],
+    });
+    expect(msg).toContain("+2 more");
+    expect(msg).not.toContain("P8");
   });
 });
 

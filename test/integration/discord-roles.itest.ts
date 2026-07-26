@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  getDiscordReach,
   getPingHealth,
   getRoleConfig,
   hasPingRole,
@@ -9,6 +10,8 @@ import {
   type RoleConfig,
 } from "@/lib/discord-roles";
 import { SETTING_KEYS, setSetting } from "@/lib/settings";
+import { prisma } from "@/lib/prisma";
+import { makeSeason, makeUser } from "./factories";
 
 // The self-serve inhouse ping opt-in, over REAL HTTP against a stand-in for
 // Discord. What has to hold:
@@ -239,5 +242,63 @@ describe("getPingHealth — the setup diagnostic", () => {
     expect(h.hasRole).toBe(true); // the role IS chosen; the token isn't set
     expect(h.botInGuild).toBeNull();
     expect(recorded).toHaveLength(0);
+  });
+});
+
+describe("getDiscordReach — the denominator", () => {
+  it("counts only ACTIVE registrations for the season", async () => {
+    const season = await makeSeason({});
+    const other = await makeSeason({});
+    const linked = await makeUser("Linked");
+    const plain = await makeUser("Plain");
+    const withdrawn = await makeUser("Gone");
+    const elsewhere = await makeUser("Elsewhere");
+    await prisma.user.update({
+      where: { id: linked.id },
+      data: { discordId: "111222333444555666" },
+    });
+    const reg = (userId: string, seasonId: string, status: string) =>
+      prisma.registration.create({
+        data: { seasonId, userId, status, type: "PLAYER", mmr: 3000 },
+      });
+    await reg(linked.id, season.id, "ACTIVE");
+    await reg(plain.id, season.id, "ACTIVE");
+    await reg(withdrawn.id, season.id, "WITHDRAWN");
+    await reg(elsewhere.id, other.id, "ACTIVE");
+
+    const reach = await getDiscordReach(season.id);
+    expect(reach.registered).toBe(2);
+    expect(reach.linked).toBe(1);
+    expect(reach.unlinkedNames).toEqual(["Plain"]);
+  });
+
+  it("is zero-safe with no season and makes no Discord calls", async () => {
+    recorded = [];
+    expect(await getDiscordReach(null)).toEqual({
+      registered: 0,
+      linked: 0,
+      unlinkedNames: [],
+    });
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("caps the name list so an unlinked league isn't a wall of text", async () => {
+    const season = await makeSeason({});
+    for (let i = 0; i < 15; i++) {
+      const u = await makeUser(`P${i}`);
+      await prisma.registration.create({
+        data: {
+          seasonId: season.id,
+          userId: u.id,
+          status: "ACTIVE",
+          type: "PLAYER",
+          mmr: 3000,
+        },
+      });
+    }
+    const reach = await getDiscordReach(season.id);
+    expect(reach.registered).toBe(15);
+    expect(reach.linked).toBe(0);
+    expect(reach.unlinkedNames).toHaveLength(12);
   });
 });

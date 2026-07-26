@@ -713,6 +713,25 @@ reached a player who wasn't already looking at it.
   shows the first broken step and its exact fix, in the order they must be
   fixed. Missing env is reported WITHOUT calling Discord at all.
 
+- **`getDiscordReach` — the denominator.** Every notification the league sends
+  (personal mentions on lobby formation, the un-RSVP'd ping below, the opt-in
+  role) SILENTLY skips anyone who never linked Discord, so "N of M registered
+  players have linked" is the number that says whether that machinery reaches
+  the league or six people. Deliberately a plain DB count over the @unique
+  `discordId` — no Discord calls, cannot fail. Below 50% the admin card says
+  to chase links rather than build more notifications, because that is the
+  actual next move.
+- **The week reminder MENTIONS the people who owe an answer.**
+  `teamAvailability` gained `unansweredUserIds` (the ids behind the count it
+  already reported — anything that isn't a valid IN/OUT counts as no answer,
+  so the list and the count can never disagree). `maybeAnnounceUpcomingWeek`
+  resolves those to `<@id>` for linked players and plain names for the rest,
+  and passes ONLY those ids in the `MentionAllowlist`. Teammates who already
+  checked in get nothing. This is the cheap version of "mirror rosters into
+  per-team Discord roles" — same targeting, no mirrored Discord state, none of
+  the reconcile debt. Don't build the roles version; the argument against it is
+  already written at the top of `discord-roles.ts`.
+
 ## Live inhouse queue board (done)
 
 **Inhouse has its OWN optional webhook** (`inhouseWebhookUrl` Setting /

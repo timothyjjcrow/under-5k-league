@@ -142,3 +142,41 @@ describe("matchNightRoster — stale cover can't inflate a side", () => {
     expect(matchNightRoster(five, [])).toEqual(five);
   });
 });
+
+describe("unansweredUserIds — who the week reminder pings", () => {
+  const roster = ["a", "b", "c", "d", "e"];
+
+  it("names exactly the people with no answer", () => {
+    const s = teamAvailability(roster, [
+      { userId: "a", status: "IN" },
+      { userId: "b", status: "OUT" },
+    ]);
+    expect(s.unansweredUserIds).toEqual(["c", "d", "e"]);
+  });
+
+  it("always agrees with the count the rest of the app shows", () => {
+    for (const rows of [
+      [],
+      [{ userId: "a", status: "IN" }],
+      [{ userId: "a", status: "MAYBE" }],
+      [
+        { userId: "a", status: "IN" },
+        { userId: "b", status: "OUT" },
+        { userId: "c", status: "nonsense" },
+      ],
+    ]) {
+      const s = teamAvailability(roster, rows);
+      expect(s.unansweredUserIds).toHaveLength(s.unanswered);
+    }
+  });
+
+  it("treats an unrecognised status as no answer, not as an answer", () => {
+    const s = teamAvailability(roster, [{ userId: "a", status: "MAYBE" }]);
+    expect(s.unansweredUserIds).toContain("a");
+  });
+
+  it("ignores rows for people who aren't on this roster", () => {
+    const s = teamAvailability(["a"], [{ userId: "stranger", status: "IN" }]);
+    expect(s.unansweredUserIds).toEqual(["a"]);
+  });
+});

@@ -239,6 +239,11 @@ export function rescheduleProposedMessage(m: {
   return `⏳ **${m.proposerName}** proposed moving the ${label} **${m.homeName}** vs **${m.awayName}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
 }
 
+/** Cap the ping list so one badly-organised team can't produce a wall of
+ *  mentions; a captain chasing eleven people needs the match page, not a
+ *  longer Discord line. */
+const WAITING_SHOWN = 8;
+
 export function weekReminderMessage(m: {
   week: number;
   isPlayoff: boolean;
@@ -252,6 +257,10 @@ export function weekReminderMessage(m: {
     homeSize: number;
     awayIn: number;
     awaySize: number;
+    /** Roster members with no RSVP yet. Linked players are mentioned by id so
+     *  their phone actually buzzes; the rest are named so a captain still
+     *  knows who to chase. */
+    waitingOn: { name: string; discordId: string | null }[];
   }[];
 }): string {
   const site = resolveSiteUrl();
@@ -262,6 +271,16 @@ export function weekReminderMessage(m: {
     lines.push(
       `🆚 **${f.homeName}** vs **${f.awayName}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · ${site}/matches/${f.matchId}`,
     );
+    if (f.waitingOn.length > 0) {
+      const shown = f.waitingOn.slice(0, WAITING_SHOWN);
+      const extra = f.waitingOn.length - shown.length;
+      const who = shown
+        .map((p) => (p.discordId ? `<@${p.discordId}>` : p.name))
+        .join(", ");
+      lines.push(
+        `　Still waiting on: ${who}${extra > 0 ? ` +${extra} more` : ""}`,
+      );
+    }
   }
   lines.push("RSVP on your match page so captains can plan standins early.");
   return lines.join("\n");

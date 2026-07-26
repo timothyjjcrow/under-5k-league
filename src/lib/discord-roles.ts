@@ -1,3 +1,5 @@
+import { prisma } from "./prisma";
+import { REGISTRATION_STATUS } from "./constants";
 import { getSetting, SETTING_KEYS } from "./settings";
 
 // Self-serve opt-in to the inhouse ping role.
@@ -231,4 +233,43 @@ export async function getPingHealth(): Promise<PingHealth> {
   } catch {
     return { ...base, problem: "Unexpected reply from Discord." };
   }
+}
+
+/**
+ * How many of this season's registered players can a Discord notification
+ * actually reach?
+ *
+ * This is the denominator under every notification feature the league has:
+ * personal mentions when a lobby forms, the un-RSVP'd ping in the week
+ * reminder, and the self-serve ping role all silently skip anyone who never
+ * linked. Without the number it is impossible to tell whether that machinery
+ * is aimed at the whole league or at six people — and if it's six, the useful
+ * next move is getting people to link, not building more of it.
+ *
+ * Deliberately a plain DB count over an @unique column: no Discord calls, so
+ * it costs nothing and cannot fail. It measures LINKED, not "in the server" or
+ * "DM-reachable" — those need per-member API calls, and the cheap number is
+ * the one that changes the decision.
+ */
+export async function getDiscordReach(seasonId: string | null): Promise<{
+  registered: number;
+  linked: number;
+  unlinkedNames: string[];
+}> {
+  if (!seasonId) return { registered: 0, linked: 0, unlinkedNames: [] };
+  const regs = await prisma.registration.findMany({
+    where: { seasonId, status: REGISTRATION_STATUS.ACTIVE },
+    select: { user: { select: { name: true, discordId: true } } },
+  });
+  const linked = regs.filter((r) => !!r.user.discordId).length;
+  return {
+    registered: regs.length,
+    linked,
+    // Named so an admin can actually chase them; capped so a league where
+    // nobody has linked doesn't render a wall of names.
+    unlinkedNames: regs
+      .filter((r) => !r.user.discordId)
+      .map((r) => r.user.name)
+      .slice(0, 12),
+  };
 }
