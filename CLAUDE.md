@@ -752,6 +752,17 @@ reached a player who wasn't already looking at it.
 
 ## Live inhouse queue board (done)
 
+**THREE webhooks, and the third one matters more than it looks.** The queue
+BOARD gets its own channel (`inhouseWebhookUrl`) and inhouse ALERTS — the queue
+ping, "match found", results — get another (`inhouseAlertWebhookUrl`,
+`getInhouseAlertWebhookUrl`, falling back to the board's webhook when unset).
+The board is a message read at a glance from the BOTTOM of its channel, so a
+single alert posted under it pushes it out of view and defeats the entire
+design; that surfaced the first time a real queue hit four players. Board
+transport keeps `getInhouseWebhookUrl`; `sendInhouseDiscordMessage` uses the
+alert resolver. Changing the ALERT webhook must never disturb the board — its
+webhook id is untouched, so no strand detection fires.
+
 **Inhouse has its OWN optional webhook** (`inhouseWebhookUrl` Setting /
 `DISCORD_INHOUSE_WEBHOOK_URL` env, `getInhouseWebhookUrl`, falling back to the
 league webhook when unset). A Discord webhook is bound to the channel it was

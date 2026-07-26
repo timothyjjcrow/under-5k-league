@@ -12,6 +12,12 @@ export const SETTING_KEYS = {
   // inhouse channel, not wherever league signups and match results go.
   // Unset = fall back to DISCORD_WEBHOOK_URL, i.e. previous behaviour.
   INHOUSE_WEBHOOK_URL: "inhouseWebhookUrl",
+  // OPTIONAL third webhook, for inhouse ALERTS — the queue-filling ping,
+  // "match found", and results. Splitting these off the inhouse webhook lets
+  // the queue BOARD have a channel to itself, which is the whole point of a
+  // message that lives at the bottom of the channel and is read at a glance:
+  // one alert pushes it out of view. Unset = alerts share the board's channel.
+  INHOUSE_ALERT_WEBHOOK_URL: "inhouseAlertWebhookUrl",
   // Epoch ms of the last "queue is almost full" Discord ping (spam throttle).
   INHOUSE_QUEUE_PING_AT: "inhouseQueuePingAt",
   // ISO timestamp of the last league-id OpenDota sync (result-sync-service's

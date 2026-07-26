@@ -141,6 +141,10 @@ channel unread, or bump it, so the channel stays quiet.
 2. Hit **Post queue board**.
 3. In Discord, right-click the message → **Pin Message**. Do not skip this: an
    edited message never moves, so in a chatty channel it scrolls away.
+4. Make a webhook in a SECOND channel (e.g. `#inhouse-chat`) and paste it into
+   **Alerts channel**. The queue ping, "match found" and results go there, so
+   the board's channel holds nothing but the board — otherwise every alert
+   pushes the board out of view, which is the one thing it can't survive.
 
 It shows the queue filling (with names), the ready check, drafting, and a live
 game, and returns to "queue is empty" on its own. Nothing is posted while the

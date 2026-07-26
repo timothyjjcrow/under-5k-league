@@ -2400,6 +2400,57 @@ export async function clearInhouseWebhook(
 }
 
 /**
+ * Save a SEPARATE webhook for inhouse ALERTS — the queue ping, "match found"
+ * and results — so the queue board can have a channel to itself.
+ *
+ * The board is read at a glance from the bottom of its channel; one alert
+ * posted under it pushes it out of view, which defeats the whole design.
+ */
+export async function setInhouseAlertWebhook(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const value = str(formData, "inhouseAlertWebhookUrl").trim();
+  if (!value) {
+    return {
+      message: "No change — paste a new URL to replace it, or use Remove.",
+    };
+  }
+  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+    return {
+      error:
+        "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
+    };
+  }
+  await setSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL, value);
+  refresh();
+  return {
+    message:
+      "Saved — queue pings, match-found and results now post there. The board channel keeps only the board.",
+  };
+}
+
+/** Send inhouse alerts back to the board's channel. */
+export async function clearInhouseAlertWebhook(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  await setSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL, "");
+  refresh();
+  return { message: "Alerts will post in the board's channel again" };
+}
+
+/**
  * Save the Discord ROLE the two interrupting inhouse messages may ping.
  *
  * This is the only thing in the whole integration that can reach a phone —

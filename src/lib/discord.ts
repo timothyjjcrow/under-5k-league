@@ -365,6 +365,24 @@ export async function getWebhookUrl(): Promise<string | null> {
 }
 
 /**
+ * Where inhouse ALERTS go — the queue ping, "match found", and results.
+ *
+ * Separate from getInhouseWebhookUrl (the QUEUE BOARD's channel) because the
+ * board is a message that lives at the bottom of its channel and is read at a
+ * glance: a single alert posted under it pushes it out of view, which defeats
+ * the entire design. Unset = alerts share the board's channel, i.e. the
+ * previous behaviour.
+ */
+export async function getInhouseAlertWebhookUrl(): Promise<string | null> {
+  const fromDb = await getSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL);
+  return (
+    fromDb ||
+    process.env.DISCORD_INHOUSE_ALERT_WEBHOOK_URL ||
+    (await getInhouseWebhookUrl())
+  );
+}
+
+/**
  * The role the two interrupting inhouse messages may ping. Null = nobody gets
  * notified, which is exactly what the league had before this existed.
  */
@@ -555,7 +573,7 @@ export async function sendInhouseDiscordMessage(
   content: string,
   mentions?: MentionAllowlist,
 ): Promise<boolean> {
-  return sendTo(await getInhouseWebhookUrl(), content, mentions);
+  return sendTo(await getInhouseAlertWebhookUrl(), content, mentions);
 }
 
 /**

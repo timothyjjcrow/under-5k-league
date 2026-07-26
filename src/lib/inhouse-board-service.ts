@@ -6,6 +6,7 @@ import {
 } from "./constants";
 import {
   deleteWebhookMessage,
+  getInhouseAlertWebhookUrl,
   getInhousePingRoleId,
   getInhouseWebhookUrl,
   maskWebhookUrl,
@@ -470,6 +471,10 @@ export type InhouseBoardStatus = {
   separateChannel: boolean;
   /** Masked fingerprint of that webhook — never the credential itself. */
   inhouseMasked: string;
+  /** True when alerts have their OWN channel, so the board's channel holds
+   *  nothing but the board. */
+  alertsSeparate: boolean;
+  alertsMasked: string;
   /** Role pinged by the two interrupting inhouse messages; null = nothing
    *  in the integration notifies anyone. Not a secret — a role id is public
    *  to anyone in the server. */
@@ -477,12 +482,17 @@ export type InhouseBoardStatus = {
 };
 
 export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
-  const [state, url, own, pingRoleId] = await Promise.all([
+  const [state, url, own, pingRoleId, alertOwn, alertUrl] = await Promise.all([
     getSetting(SETTING_KEYS.INHOUSE_BOARD).then(parseState),
     getInhouseWebhookUrl(),
     getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL),
     getInhousePingRoleId(),
+    getSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL),
+    getInhouseAlertWebhookUrl(),
   ]);
+  const alertsSeparate =
+    !!alertOwn || !!process.env.DISCORD_INHOUSE_ALERT_WEBHOOK_URL;
+  const alertsMasked = alertsSeparate ? maskWebhookUrl(alertUrl) : "";
   const separateChannel = !!own || !!process.env.DISCORD_INHOUSE_WEBHOOK_URL;
   // The masked form is all the browser is ever allowed to see (the raw URL is
   // a bearer credential — anyone holding it can post to the channel).
@@ -498,6 +508,8 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
       inSync: true,
       separateChannel,
       inhouseMasked,
+      alertsSeparate,
+      alertsMasked,
       pingRoleId,
     };
   }
@@ -518,6 +530,8 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
     inSync: renderBoard(snap).digest === state.digest,
     separateChannel,
     inhouseMasked,
+    alertsSeparate,
+    alertsMasked,
     pingRoleId,
   };
 }

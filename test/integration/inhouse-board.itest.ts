@@ -46,8 +46,11 @@ import {
 } from "@/lib/discord";
 // The routing tests assert on the REAL resolvers (the mock above replaces the
 // exported getInhouseWebhookUrl, which is what the service consumes).
-const { getInhouseWebhookUrl: realGetInhouseWebhookUrl, getWebhookUrl: realGetWebhookUrl } =
-  await vi.importActual<typeof import("@/lib/discord")>("@/lib/discord");
+const {
+  getInhouseWebhookUrl: realGetInhouseWebhookUrl,
+  getWebhookUrl: realGetWebhookUrl,
+  getInhouseAlertWebhookUrl: realGetInhouseAlertWebhookUrl,
+} = await vi.importActual<typeof import("@/lib/discord")>("@/lib/discord");
 
 const mockHook = vi.mocked(getInhouseWebhookUrl);
 const mockPost = vi.mocked(postWebhookMessage);
@@ -367,6 +370,45 @@ describe("inhouse routing — which channel gets what", () => {
 
     expect(mockPatch).not.toHaveBeenCalled();
     expect(await boardRow()).toBeNull();
+  });
+});
+
+describe("alerts vs the board — separate channels", () => {
+  // The board is read at a glance from the BOTTOM of its channel. One alert
+  // posted under it pushes it out of view, which defeats the whole design —
+  // so alerts get their own webhook, and the board's channel stays board-only.
+  const ALERT_HOOK = "https://discord.com/api/webhooks/4444/token-alert";
+
+  it("sends alerts to the board's channel when no alert webhook is set", async () => {
+    await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, HOOK);
+    expect(await realGetInhouseAlertWebhookUrl()).toBe(HOOK);
+    expect((await getInhouseBoardStatus()).alertsSeparate).toBe(false);
+  });
+
+  it("routes alerts away once an alert webhook exists, leaving the board put", async () => {
+    await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, HOOK);
+    await setSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL, ALERT_HOOK);
+
+    expect(await realGetInhouseAlertWebhookUrl()).toBe(ALERT_HOOK);
+    // The BOARD still resolves its own channel — unchanged.
+    expect(await realGetInhouseWebhookUrl()).toBe(HOOK);
+
+    const status = await getInhouseBoardStatus();
+    expect(status.alertsSeparate).toBe(true);
+    expect(status.alertsMasked).not.toContain("token-alert");
+  });
+
+  it("keeps editing the board in its own channel after alerts move away", async () => {
+    await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, HOOK);
+    await createInhouseBoard();
+    await expireThrottle();
+    await setSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL, ALERT_HOOK);
+
+    await enqueue(1, "z");
+    await syncInhouseBoard();
+    // Not stranded, not re-posted — the board's webhook never changed.
+    expect(mockPatch).toHaveBeenCalledTimes(1);
+    expect(await boardRow()).not.toBeNull();
   });
 });
 

@@ -44,6 +44,8 @@ import {
   testDiscordWebhook,
   setInhouseWebhook,
   clearInhouseWebhook,
+  setInhouseAlertWebhook,
+  clearInhouseAlertWebhook,
   setInhousePingRole,
   testInhouseWebhook,
   postInhouseBoard,
@@ -2415,6 +2417,73 @@ function DiscordControls({
               </SubmitButton>
             </ActionForm>
           ) : null}
+
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-medium">Alerts channel</span>
+            {board.alertsSeparate ? (
+              <Badge tone="success">Separate</Badge>
+            ) : (
+              <Badge tone="neutral">Same as the board</Badge>
+            )}
+            {board.alertsSeparate ? (
+              <span className="font-mono text-xs text-muted">
+                {board.alertsMasked}
+              </span>
+            ) : null}
+          </div>
+
+          <ActionForm
+            action={setInhouseAlertWebhook}
+            className="flex flex-wrap items-end gap-2"
+          >
+            <div className="min-w-0 flex-1">
+              <label
+                htmlFor="inhouseAlertWebhookUrl"
+                className="mb-1 block text-xs text-muted"
+              >
+                {board.alertsSeparate
+                  ? "Replace alerts webhook URL"
+                  : "Alerts webhook URL (optional)"}
+              </label>
+              <input
+                id="inhouseAlertWebhookUrl"
+                name="inhouseAlertWebhookUrl"
+                type="url"
+                autoComplete="off"
+                placeholder="https://discord.com/api/webhooks/…"
+                className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+              />
+            </div>
+            <SubmitButton variant="secondary" size="sm">
+              Save
+            </SubmitButton>
+          </ActionForm>
+
+          {board.alertsSeparate ? (
+            <ActionForm action={clearInhouseAlertWebhook}>
+              <SubmitButton variant="ghost" size="sm">
+                Send alerts to the board channel instead
+              </SubmitButton>
+            </ActionForm>
+          ) : null}
+
+          <p className="text-xs text-muted">
+            {board.alertsSeparate ? (
+              <>
+                The board&apos;s channel now holds <b>only the board</b> — queue
+                pings, &ldquo;match found&rdquo; and results post in the alerts
+                channel instead.
+              </>
+            ) : (
+              <>
+                <b>Alerts currently share the board&apos;s channel.</b> The board
+                is read at a glance from the bottom of its channel, so every
+                ping and result pushes it out of view. Make a webhook in a
+                separate channel (e.g. <b>#inhouse-chat</b>) and paste it here to
+                keep the board channel board-only.
+              </>
+            )}
+          </p>
 
           <ActionForm
             action={setInhousePingRole}
