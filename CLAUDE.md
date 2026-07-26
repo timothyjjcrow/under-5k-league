@@ -652,6 +652,42 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   The inhouse room also flips `document.title` ("(!) Your pick…") while the
   viewer's attention is needed — works without the sound toggle/audio unlock.
 
+## Discord notifications that actually notify (done)
+
+The board informs but structurally CANNOT notify (edits produce no
+notification, no unread, no bump), and every send hard-set
+`allowed_mentions: {parse: []}` — so for a while nothing in the integration
+reached a player who wasn't already looking at it.
+
+- **`MentionAllowlist` (`discord.ts`)** — an OPTIONAL per-send
+  `{roles?, users?}` id allowlist threaded through `sendTo`. `parse: []` stays
+  on every send, so a Steam persona of "@everyone" is still inert: only ids the
+  SERVER chose can ring a phone. The shape Discord rejects is `parse`
+  CONTAINING "roles"/"users" alongside the array — an empty parse plus an
+  allowlist is the documented "these and nothing else".
+- **`INHOUSE_PING_ROLE_ID` Setting** (admin field, accepts a raw snowflake or a
+  pasted `<@&id>`). Unset = nothing pings, the old behaviour. **The role must be
+  SELF-ASSIGNABLE** — a ping people can't opt out of gets the channel muted,
+  which is permanently worse than silence. Only the two INTERRUPTING messages
+  carry it (queue filling, match found); never results, never the board.
+- **`maybeFormLobby` mentions the ten by `<@discordId>`** where they linked,
+  plain escaped text where they didn't. Queueing thirty seconds ago IS the
+  consent — don't "fix" this with an opt-out later. This is the payoff for
+  OAuth linking: `discordId` stops being a cosmetic ✓. A formed lobby is the
+  scarcest thing the league produces and `ACCEPT_SECONDS` is 45, so one
+  tabbed-away player burns a lobby that already cleared the hard part.
+- **`INHOUSE.QUEUE_PING_AT` (4), was `LOBBY_SIZE - 2` (8).** Eight is a
+  threshold the queue essentially never reaches unaided: the first person to
+  queue is invisible to anyone not already on the site, so the ping meant to
+  pull people in sat downstream of the problem it exists to solve. Raise it if
+  it starts crying wolf; `QUEUE_PING_MIN_MINUTES` is the other knob.
+- **`/inhouse?join=1`** — every ping deep-links into the queue (`joinLink()`).
+  The room auto-joins ONCE per page load behind a ref, scrubs the param via
+  `history.replaceState` so a refresh can't re-enqueue, and refuses when
+  signed out, already queued, or a lobby is live (never drop someone into a
+  45-second ready check from a standing start). The `act()` call is deferred a
+  tick — setting state synchronously in an effect cascades a render.
+
 ## Live inhouse queue board (done)
 
 **Inhouse has its OWN optional webhook** (`inhouseWebhookUrl` Setting /

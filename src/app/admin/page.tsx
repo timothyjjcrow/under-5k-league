@@ -44,6 +44,7 @@ import {
   testDiscordWebhook,
   setInhouseWebhook,
   clearInhouseWebhook,
+  setInhousePingRole,
   testInhouseWebhook,
   postInhouseBoard,
   deleteInhouseBoard,
@@ -2267,6 +2268,54 @@ function DiscordControls({
               </SubmitButton>
             </ActionForm>
           ) : null}
+
+          <ActionForm
+            action={setInhousePingRole}
+            className="flex flex-wrap items-end gap-2"
+          >
+            <div className="min-w-0 flex-1">
+              <label
+                htmlFor="inhousePingRoleId"
+                className="mb-1 block text-xs text-muted"
+              >
+                Ping role {board.pingRoleId ? "" : "(optional)"}
+              </label>
+              <input
+                id="inhousePingRoleId"
+                name="inhousePingRoleId"
+                type="text"
+                autoComplete="off"
+                defaultValue={board.pingRoleId ?? ""}
+                placeholder="Role id, or paste @the-role"
+                className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+              />
+            </div>
+            <SubmitButton variant="secondary" size="sm">
+              Save role
+            </SubmitButton>
+          </ActionForm>
+
+          <p className="text-xs text-muted">
+            {board.pingRoleId ? (
+              <>
+                <b>Notifications are on.</b> Two messages ping this role — the
+                queue filling up, and a match being found. Nothing else does,
+                and board edits never notify anyone.
+              </>
+            ) : (
+              <>
+                <b>Nothing currently notifies anyone.</b> Board edits are silent
+                by design, and every message suppresses mentions. Set a role
+                here and the &ldquo;queue is filling&rdquo; and &ldquo;match
+                found&rdquo; messages will ping it.
+              </>
+            )}{" "}
+            Make the role <b>self-assignable</b> (Server Settings → Onboarding,
+            or a Channels &amp; Roles picker) — a ping people can&apos;t opt out
+            of gets the channel muted, which is worse than silence. Players who
+            queued are also mentioned directly when their match is found, if
+            they&apos;ve linked Discord on their profile.
+          </p>
 
           <p className="text-xs text-muted">
             A Discord webhook only ever posts to the channel it was made in. Make

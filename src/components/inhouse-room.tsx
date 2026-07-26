@@ -68,6 +68,11 @@ export function InhouseRoom({
   // fully pauses. Kept current by the effect below so the closure always sees
   // the latest, without re-subscribing the loop on every state change.
   const hasStakeRef = useRef(false);
+  // One-tap join from a Discord ping (?join=1). Fires at most ONCE per page
+  // load — queue membership has teeth (a filled lobby drags you into a 45s
+  // ready check whose failure drops you from the queue), so an accidental
+  // re-enqueue on a re-render would be a real cost, not a cosmetic one.
+  const autoJoinedRef = useRef(false);
   const prevLobbyId = useRef<string | null>(null);
   // For the bell notification: remember what we saw last poll.
   const soundInitRef = useRef(false);
@@ -316,6 +321,38 @@ export function InhouseRoom({
     },
     [apply],
   );
+
+  // ?join=1 — the one-tap join a Discord ping links to. Waits for the first
+  // state so it can refuse the cases where an auto-join would be wrong, then
+  // scrubs the param so a refresh can never re-enqueue you.
+  useEffect(() => {
+    if (!state || autoJoinedRef.current) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("join") !== "1") return;
+    autoJoinedRef.current = true;
+    url.searchParams.delete("join");
+    window.history.replaceState(null, "", url);
+
+    if (!state.me.isLoggedIn) return; // signed-out: the page's own CTA takes over
+    if (state.me.inQueue || state.me.inLobby) {
+      pushToast("info", "You're already in the queue");
+      return;
+    }
+    // Never drop someone straight into a live ready check they didn't watch
+    // start — they'd owe an accept inside 45s from a standing start.
+    if (state.lobby) {
+      pushToast("info", "A game is already underway — queue for the next one");
+      return;
+    }
+    // Deferred a tick: act() flips `pending` immediately, and setting state
+    // synchronously inside an effect cascades a render.
+    const t = setTimeout(() => {
+      void act({ action: "join", mmr }).then((ok) => {
+        if (ok) pushToast("success", "You're in the queue");
+      });
+    }, 0);
+    return () => clearTimeout(t);
+  }, [state, act, mmr]);
 
   if (!state) {
     return <div className="py-12 text-center text-muted">Loading inhouse…</div>;

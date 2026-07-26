@@ -25,6 +25,7 @@ import {
   startGame,
 } from "@/lib/inhouse-service";
 import { makeSeason, makeUser, sessionFor } from "./factories";
+import { SETTING_KEYS, setSetting } from "@/lib/settings";
 
 // The inhouse result path only ever touches OpenDota — never a Valve league
 // ticket. We stub the two network calls it makes (recent-match lists + a full
@@ -642,7 +643,7 @@ describe("inhouse — discord announcements", () => {
   });
 
   it("pings the milestone once — leave/rejoin churn can't spam it", async () => {
-    const players = await enqueue(INHOUSE.LOBBY_SIZE - 2, () => 3000);
+    const players = await enqueue(INHOUSE.QUEUE_PING_AT, () => 3000);
     expect(queuePings()).toBe(1);
 
     // Dip below the milestone and rejoin — crosses again, but throttled.
@@ -652,8 +653,54 @@ describe("inhouse — discord announcements", () => {
   });
 
   it("stays quiet below the milestone", async () => {
-    await enqueue(INHOUSE.LOBBY_SIZE - 3, () => 3000);
+    await enqueue(INHOUSE.QUEUE_PING_AT - 1, () => 3000);
     expect(queuePings()).toBe(0);
+  });
+
+  it("pings the configured role, and mentions the ten by verified id", async () => {
+    await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, "555000111222333444");
+    // One player links Discord BEFORE the lobby forms — maybeFormLobby reads
+    // discordId in the same transaction that empties the queue.
+    const first = await makeUser("Linked");
+    await prisma.user.update({
+      where: { id: first.id },
+      data: { discordId: "777000111222333444" },
+    });
+    await joinQueue(sessionFor(first), 3000);
+    await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+
+    const lobby = mockSend.mock.calls.find(([m]) =>
+      m.includes("Inhouse match found"),
+    );
+    expect(lobby).toBeTruthy();
+    const [content, mentions] = lobby!;
+    expect(content).toContain("<@&555000111222333444>");
+    expect(content).toContain("<@777000111222333444>");
+    // Unlinked players are still named, just not pinged.
+    expect(content).toContain("IH1");
+    // Only ids the SERVER chose may ring anyone.
+    expect(mentions).toEqual({
+      roles: ["555000111222333444"],
+      users: ["777000111222333444"],
+    });
+  });
+
+  it("pings nobody when no role is configured — the old behaviour", async () => {
+    await enqueue(INHOUSE.QUEUE_PING_AT, () => 3000);
+    const ping = mockSend.mock.calls.find(([m]) =>
+      m.includes("Inhouse queue"),
+    );
+    expect(ping![0]).not.toContain("<@&");
+    expect(ping![1]).toEqual({ roles: [] });
+  });
+
+  it("pings at a threshold the queue can actually reach on its own", async () => {
+    // It used to be LOBBY_SIZE-2 = 8, which the queue can essentially never
+    // climb to unaided: the first person to queue is invisible to everyone not
+    // already on the site, so the ping meant to pull people in sat downstream
+    // of the problem it exists to solve.
+    expect(INHOUSE.QUEUE_PING_AT).toBeLessThan(INHOUSE.LOBBY_SIZE / 2 + 1);
+    expect(INHOUSE.QUEUE_PING_AT).toBeGreaterThan(1);
   });
 });
 

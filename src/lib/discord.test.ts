@@ -15,6 +15,8 @@ import {
   playoffsStartedMessage,
   championMessage,
   maskWebhookUrl,
+  rolePrefix,
+  joinLink,
   webhookIdOf,
   webhookApiUrl,
   draftScheduledMessage,
@@ -152,13 +154,46 @@ describe("inhouse messages", () => {
   });
 
   it("announces a formed lobby with every name and the link", () => {
-    const names = Array.from({ length: 10 }, (_, i) => `P${i}`);
-    const msg = inhouseLobbyMessage(names);
+    const players = Array.from({ length: 10 }, (_, i) => ({
+      name: `P${i}`,
+      discordId: null,
+    }));
+    const msg = inhouseLobbyMessage(players);
     expect(msg).toContain("Inhouse match found");
     expect(msg).toContain("Accept your game");
     expect(msg).toContain("P0, P1");
     expect(msg).toContain("P9");
     expect(msg).toContain("/inhouse");
+  });
+
+  it("mentions linked players by id so the ping reaches a phone", () => {
+    // A formed lobby is on a 45-second clock and the site's chime can't reach
+    // a backgrounded phone. Linked players get a real mention; the rest are
+    // named as plain text rather than being left out.
+    const msg = inhouseLobbyMessage([
+      { name: "Dendi", discordId: "111222333444555666" },
+      { name: "Unlinked Guy", discordId: null },
+    ]);
+    expect(msg).toContain("<@111222333444555666>");
+    expect(msg).toContain("Unlinked Guy");
+    expect(msg).not.toContain("<@null>");
+  });
+
+  it("prefixes the role only when the league configured one", () => {
+    expect(rolePrefix("999")).toBe("<@&999> ");
+    expect(rolePrefix(null)).toBe("");
+    expect(rolePrefix(undefined)).toBe("");
+    expect(inhouseQueueMessage(4, 10, "999")).toContain("<@&999>");
+    expect(inhouseQueueMessage(4, 10)).not.toContain("<@&");
+    expect(inhouseLobbyMessage([{ name: "A", discordId: null }], "999")).toContain(
+      "<@&999>",
+    );
+  });
+
+  it("links straight into the queue, not just to the page", () => {
+    // One tap from a phone notification to actually being queued.
+    expect(joinLink()).toMatch(/\/inhouse\?join=1$/);
+    expect(inhouseQueueMessage(4, 10)).toContain("/inhouse?join=1");
   });
 
   it("announces a result with score, duration, MVP, and both links", () => {

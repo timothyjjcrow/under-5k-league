@@ -129,13 +129,40 @@ export function playerReleasedMessage(
   return `📤 **${playerName}** released from **${teamName}** — they're a free agent again.`;
 }
 
-export function inhouseQueueMessage(present: number, lobbySize: number): string {
-  const needed = Math.max(0, lobbySize - present);
-  return `🎮 **Inhouse queue is heating up** — ${present}/${lobbySize} in, ${needed} more ${needed === 1 ? "player" : "players"} and the lobby fires. Queue up at ${resolveSiteUrl()}/inhouse`;
+/** `<@&id>` prefix, or nothing when the league hasn't set a ping role. */
+export function rolePrefix(roleId: string | null | undefined): string {
+  return roleId ? `<@&${roleId}> ` : "";
 }
 
-export function inhouseLobbyMessage(playerNames: string[]): string {
-  return `🚨 **Inhouse match found!** Accept your game before the clock runs out — get to ${resolveSiteUrl()}/inhouse\n${playerNames.join(", ")}`;
+/** Deep-links straight into the queue: one tap from a phone notification to
+ *  actually being in it, instead of link → page → find the button → tap. */
+export function joinLink(): string {
+  return `${resolveSiteUrl()}/inhouse?join=1`;
+}
+
+export function inhouseQueueMessage(
+  present: number,
+  lobbySize: number,
+  roleId?: string | null,
+): string {
+  const needed = Math.max(0, lobbySize - present);
+  return `${rolePrefix(roleId)}**Inhouse queue is filling** — ${present}/${lobbySize} in, ${needed} more ${needed === 1 ? "player" : "players"} and the lobby fires. Jump in: ${joinLink()}`;
+}
+
+/**
+ * Lobby formed — the scarcest event the league produces, on a 45-second clock.
+ * Players who linked Discord are mentioned by id so the ping reaches a PHONE;
+ * the rest are named as plain text. Queueing thirty seconds ago is the consent
+ * here, which is why this needs no opt-in role (don't "fix" that later).
+ */
+export function inhouseLobbyMessage(
+  players: { name: string; discordId: string | null }[],
+  roleId?: string | null,
+): string {
+  const who = players
+    .map((p) => (p.discordId ? `<@${p.discordId}>` : p.name))
+    .join(", ");
+  return `${rolePrefix(roleId)}🚨 **Inhouse match found!** Accept your game before the clock runs out — ${resolveSiteUrl()}/inhouse\n${who}`;
 }
 
 export function inhouseResultMessage(m: {
@@ -319,6 +346,18 @@ export async function getWebhookUrl(): Promise<string | null> {
 }
 
 /**
+ * The role the two interrupting inhouse messages may ping. Null = nobody gets
+ * notified, which is exactly what the league had before this existed.
+ */
+export async function getInhousePingRoleId(): Promise<string | null> {
+  return (
+    (await getSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID)) ||
+    process.env.DISCORD_INHOUSE_ROLE_ID ||
+    null
+  );
+}
+
+/**
  * Where INHOUSE traffic goes: the queue board, "match found", the two-short
  * ping and inhouse results. A Discord webhook is bound to the channel it was
  * created in, so routing these separately is the only way to keep an evening
@@ -481,8 +520,11 @@ export async function deleteWebhookMessage(
  * POST a message to the configured webhook. Best-effort: resolves false on
  * any failure (no webhook configured, network error, non-2xx) and never throws.
  */
-export async function sendDiscordMessage(content: string): Promise<boolean> {
-  return sendTo(await getWebhookUrl(), content);
+export async function sendDiscordMessage(
+  content: string,
+  mentions?: MentionAllowlist,
+): Promise<boolean> {
+  return sendTo(await getWebhookUrl(), content, mentions);
 }
 
 /**
@@ -492,11 +534,32 @@ export async function sendDiscordMessage(content: string): Promise<boolean> {
  */
 export async function sendInhouseDiscordMessage(
   content: string,
+  mentions?: MentionAllowlist,
 ): Promise<boolean> {
-  return sendTo(await getInhouseWebhookUrl(), content);
+  return sendTo(await getInhouseWebhookUrl(), content, mentions);
 }
 
-async function sendTo(url: string | null, content: string): Promise<boolean> {
+/**
+ * Who this ONE message is allowed to notify, by id. Everything else stays
+ * suppressed.
+ *
+ * The blanket `parse: []` on every send exists so that a player-controlled
+ * Steam persona of "@everyone" can never become a mass ping. An ID allowlist
+ * preserves that exactly: `parse: []` still refuses @everyone/@here and any
+ * role or user NOT named here, so untrusted text in the same message stays
+ * inert. Only ids the SERVER chose can ring a phone.
+ *
+ * Note the shape Discord rejects is `parse` CONTAINING "roles"/"users"
+ * alongside a `roles`/`users` array — an empty parse with an allowlist is the
+ * documented way to say "these and nothing else".
+ */
+export type MentionAllowlist = { roles?: string[]; users?: string[] };
+
+async function sendTo(
+  url: string | null,
+  content: string,
+  mentions?: MentionAllowlist,
+): Promise<boolean> {
   if (!url) return false;
   try {
     const res = await fetch(url, {
@@ -505,7 +568,14 @@ async function sendTo(url: string | null, content: string): Promise<boolean> {
       // allowed_mentions: parse:[] means NO mention ever resolves — a player
       // whose Steam persona is "@everyone" (or a team/news title with @here,
       // <@id>, <@&role>) can't turn an announcement into a mass ping.
-      body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+      body: JSON.stringify({
+        content,
+        allowed_mentions: {
+          parse: [],
+          ...(mentions?.roles?.length ? { roles: mentions.roles } : {}),
+          ...(mentions?.users?.length ? { users: mentions.users } : {}),
+        },
+      }),
       signal: AbortSignal.timeout(5000),
     });
     return res.ok;

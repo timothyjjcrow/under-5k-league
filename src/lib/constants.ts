@@ -199,9 +199,17 @@ export const INHOUSE = {
   // that likely caused the cancel never do, so the same lobby can't instantly
   // re-form around them.
   QUEUE_RECONFIRM_SECONDS: 45,
-  // Discord "almost there" ping: fires when a join crosses LOBBY_SIZE-2
-  // present players, at most once per this window (leave/rejoin churn at the
-  // threshold must not spam the channel).
+  // Discord "queue is filling" ping: fires when a join crosses this many
+  // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.
+  //
+  // This was LOBBY_SIZE-2 (eight), which is a threshold the queue can almost
+  // never reach on its own: the first person to queue is invisible to anyone
+  // not already on the site, so nothing pulls the count upward and the ping
+  // that exists to pull people in sits downstream of the problem it solves.
+  // Four is early enough to be a rally and late enough to be real — half a
+  // lobby is genuinely worth interrupting someone for. Raise it if the ping
+  // starts crying wolf; the throttle below is the other tuning knob.
+  QUEUE_PING_AT: 4,
   QUEUE_PING_MIN_MINUTES: 15,
   // Floor between EDITS of the pinned Discord queue board (inhouse-board.ts).
   // Six edits/minute worst case, and only when the rendered state actually

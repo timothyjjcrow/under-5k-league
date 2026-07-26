@@ -6,6 +6,7 @@ import {
 } from "./constants";
 import {
   deleteWebhookMessage,
+  getInhousePingRoleId,
   getInhouseWebhookUrl,
   maskWebhookUrl,
   patchWebhookMessage,
@@ -462,13 +463,18 @@ export type InhouseBoardStatus = {
   separateChannel: boolean;
   /** Masked fingerprint of that webhook — never the credential itself. */
   inhouseMasked: string;
+  /** Role pinged by the two interrupting inhouse messages; null = nothing
+   *  in the integration notifies anyone. Not a secret — a role id is public
+   *  to anyone in the server. */
+  pingRoleId: string | null;
 };
 
 export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
-  const [state, url, own] = await Promise.all([
+  const [state, url, own, pingRoleId] = await Promise.all([
     getSetting(SETTING_KEYS.INHOUSE_BOARD).then(parseState),
     getInhouseWebhookUrl(),
     getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL),
+    getInhousePingRoleId(),
   ]);
   const separateChannel = !!own || !!process.env.DISCORD_INHOUSE_WEBHOOK_URL;
   // The masked form is all the browser is ever allowed to see (the raw URL is
@@ -485,6 +491,7 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
       inSync: true,
       separateChannel,
       inhouseMasked,
+      pingRoleId,
     };
   }
   // Render the live queue so the card can answer the only question that
@@ -504,5 +511,6 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
     inSync: renderBoard(snap).digest === state.digest,
     separateChannel,
     inhouseMasked,
+    pingRoleId,
   };
 }

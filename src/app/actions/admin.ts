@@ -2399,6 +2399,47 @@ export async function clearInhouseWebhook(
   };
 }
 
+/**
+ * Save the Discord ROLE the two interrupting inhouse messages may ping.
+ *
+ * This is the only thing in the whole integration that can reach a phone —
+ * board edits notify nobody by design, and every other send suppresses
+ * mentions. The role must be SELF-ASSIGNABLE in Discord (Server Settings →
+ * Onboarding, or a Channels & Roles picker): a ping people can't opt out of
+ * gets the channel muted, which is permanently worse than silence.
+ */
+export async function setInhousePingRole(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  // Accept a raw snowflake or a pasted <@&id> mention — both are what an admin
+  // actually has to hand (right-click → Copy Role ID, or typing \@role).
+  const raw = str(formData, "inhousePingRoleId").trim();
+  const id = raw.replace(/^<@&(\d+)>$/, "$1");
+  if (!id) {
+    await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, "");
+    refresh();
+    return { message: "Role ping off — inhouse messages won't notify anyone" };
+  }
+  if (!/^\d{15,25}$/.test(id)) {
+    return {
+      error:
+        "That doesn't look like a role id. In Discord: Server Settings → Roles → right-click the role → Copy Role ID (needs Developer Mode).",
+    };
+  }
+  await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, id);
+  refresh();
+  return {
+    message:
+      "Role saved — the queue-filling and match-found messages will ping it. Make sure members can self-assign it.",
+  };
+}
+
 /** Post a test message to whichever channel inhouse currently uses. */
 export async function testInhouseWebhook(
   _prev: ActionResult,

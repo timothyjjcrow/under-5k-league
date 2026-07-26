@@ -34,6 +34,7 @@ import {
   inhouseQueueMessage,
   inhouseResultMessage,
   sendInhouseDiscordMessage,
+  getInhousePingRoleId,
 } from "./discord";
 import { stampResultChange, SETTING_KEYS } from "./settings";
 import { lobbyView, syncInhouseBoard } from "./inhouse-board-service";
@@ -100,7 +101,7 @@ async function loadRecords(
 export async function maybeFormLobby(): Promise<boolean> {
   // Captured in-tx, sent post-commit (draft-sale pattern) — the active-lobby
   // guard means at most one formation, so at most one announcement.
-  let announce: string | null = null;
+  let lobbyPlayers: { name: string; discordId: string | null }[] = [];
   let formed = false;
   try {
     formed = await prisma.$transaction(async (tx) => {
@@ -163,15 +164,18 @@ export async function maybeFormLobby(): Promise<boolean> {
       where: { userId: { in: queue.map((q) => q.userId) } },
     });
 
-    // Player names for the Discord announcement, in queue order.
+    // Player names for the Discord announcement, in queue order. discordId
+    // comes along so the ten can be mentioned by id — the only escalation the
+    // league has that reaches a phone. The site's chime and tab title can't.
     const users = await tx.user.findMany({
       where: { id: { in: queue.map((q) => q.userId) } },
-      select: { id: true, name: true },
+      select: { id: true, name: true, discordId: true },
     });
-    const nameById = new Map(users.map((u) => [u.id, u.name]));
-    announce = inhouseLobbyMessage(
-      queue.map((q) => nameById.get(q.userId) ?? "?"),
-    );
+    const byId = new Map(users.map((u) => [u.id, u]));
+    lobbyPlayers = queue.map((q) => ({
+      name: byId.get(q.userId)?.name ?? "?",
+      discordId: byId.get(q.userId)?.discordId ?? null,
+    }));
     return true;
     },
     // SQLite serializes writers anyway; on Postgres this is what makes the
@@ -184,7 +188,20 @@ export async function maybeFormLobby(): Promise<boolean> {
     if ((e as { code?: string }).code === "P2034") return false;
     throw e;
   }
-  if (formed && announce) await sendInhouseDiscordMessage(announce);
+  if (formed && lobbyPlayers.length > 0) {
+    const roleId = await getInhousePingRoleId();
+    await sendInhouseDiscordMessage(
+      inhouseLobbyMessage(lobbyPlayers, roleId),
+      {
+        // Only these exact ids may ring anyone — a Steam persona in the same
+        // message still can't ping (see MentionAllowlist).
+        roles: roleId ? [roleId] : [],
+        users: lobbyPlayers
+          .map((p) => p.discordId)
+          .filter((id): id is string => !!id),
+      },
+    );
+  }
   return formed;
 }
 
@@ -715,7 +732,7 @@ export async function joinQueue(
   // formed a lobby (that gets its own announcement), and at most once per
   // throttle window so leave/rejoin churn can't spam the channel.
   if (!formed) {
-    const milestone = INHOUSE.LOBBY_SIZE - 2;
+    const milestone = INHOUSE.QUEUE_PING_AT;
     const presentAfter = await prisma.inhouseQueueEntry.count({
       where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
     });
@@ -724,8 +741,10 @@ export async function joinQueue(
       presentAfter >= milestone &&
       (await claimQueuePingThrottle(Date.now()))
     ) {
+      const roleId = await getInhousePingRoleId();
       await sendInhouseDiscordMessage(
-        inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE),
+        inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE, roleId),
+        { roles: roleId ? [roleId] : [] },
       );
     }
   }

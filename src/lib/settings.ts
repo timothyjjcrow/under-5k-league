@@ -34,6 +34,12 @@ export const SETTING_KEYS = {
   INHOUSE_BOARD: "inhouseBoard",
   // ISO timestamp of the last board edit (claimThrottle spam floor).
   INHOUSE_BOARD_AT: "inhouseBoardAt",
+  // Discord role id pinged by the two inhouse messages that are SUPPOSED to
+  // interrupt someone (queue filling, match found). Unset = no ping, which is
+  // the pre-existing behaviour. The role must be SELF-ASSIGNABLE in Discord:
+  // a ping people can't opt out of gets the whole channel muted, which is
+  // permanently worse than silence.
+  INHOUSE_PING_ROLE_ID: "inhousePingRoleId",
 } as const;
 
 /**

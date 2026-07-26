@@ -177,7 +177,10 @@ describe("the board over a real queue", () => {
   /** Every embed the fake Discord has been asked to render, in order. */
   const boards = () =>
     recorded
-      .filter((r) => r.method === "POST" || r.method === "PATCH")
+      .filter(
+        (r) =>
+          (r.method === "POST" || r.method === "PATCH") && !!r.body?.embeds,
+      )
       .map(
         (r) =>
           (r.body?.embeds as { title: string; description: string }[])?.[0],
@@ -198,8 +201,12 @@ describe("the board over a real queue", () => {
     }
 
     const seen = boards();
-    // Exactly one POST, ever. Everything after it is an edit of that message.
-    expect(recorded.filter((r) => r.method === "POST")).toHaveLength(1);
+    // Exactly one BOARD post, ever — everything after it edits that message.
+    // (Plain-content POSTs are the separate queue-filling ping, which is
+    // supposed to be a real, notifying message.)
+    expect(
+      recorded.filter((r) => r.method === "POST" && r.body?.embeds),
+    ).toHaveLength(1);
     expect(
       recorded
         .filter((r) => r.method === "PATCH")
