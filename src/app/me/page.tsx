@@ -11,8 +11,10 @@ import {
   refreshSteamProfile,
   updateDiscordName,
   unlinkDiscord,
+  setInhousePingOptIn,
 } from "@/app/actions/registration";
 import { DiscordTag } from "@/components/discord-tag";
+import { getRoleConfig, hasPingRole } from "@/lib/discord-roles";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import { HARD_MMR_CEILING } from "@/lib/constants";
@@ -119,6 +121,18 @@ export default async function MePage({
   const form = reg ?? previous;
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+
+  // Inhouse ping opt-in. `on: null` = we genuinely don't know (Discord slow,
+  // or the player isn't in the server) — rendered as unknown rather than "off",
+  // because showing an unticked box to someone already opted in makes them
+  // click it and change nothing, which reads as broken.
+  const pingCfg = dbUser?.discordId ? await getRoleConfig() : null;
+  const pingOptIn = {
+    available: !!pingCfg,
+    on: pingCfg && dbUser?.discordId
+      ? await hasPingRole(dbUser.discordId, pingCfg)
+      : false,
+  };
   // The medal's plausible MMR window — signup claims outside it are snapped
   // to its floor by saveRegistration, so tell the player up front. A medal
   // whose EXACT band floor clears the hard ceiling (Divine 3+/Immortal) is
@@ -243,18 +257,64 @@ export default async function MePage({
             </p>
           ) : null}
           {dbUser?.discordId ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <DiscordTag name={dbUser.discordName} verified />
-              <ActionForm action={unlinkDiscord}>
-                <SubmitButton
-                  variant="secondary"
-                  size="sm"
-                  confirm="Unlink Discord? Your handle disappears from rosters until you link or type one again."
-                >
-                  Unlink
-                </SubmitButton>
-              </ActionForm>
-            </div>
+            <>
+              <div className="flex flex-wrap items-center gap-3">
+                <DiscordTag name={dbUser.discordName} verified />
+                <ActionForm action={unlinkDiscord}>
+                  <SubmitButton
+                    variant="secondary"
+                    size="sm"
+                    confirm="Unlink Discord? Your handle disappears from rosters until you link or type one again."
+                  >
+                    Unlink
+                  </SubmitButton>
+                </ActionForm>
+              </div>
+
+              {/* Self-serve opt-in to the inhouse ping role. Only offered when
+                  the league has actually configured one — advertising a
+                  notification that can't fire is worse than not offering it. */}
+              {pingOptIn.available ? (
+                <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-[14rem] flex-1">
+                      <p className="text-sm font-medium">
+                        Ping me for inhouse games
+                      </p>
+                      <p className="text-xs text-muted">
+                        Get a Discord notification when a queue is filling up and
+                        when your match is found. Off by default, and you can
+                        turn it back off here any time.
+                      </p>
+                    </div>
+                    <ActionForm action={setInhousePingOptIn}>
+                      <input
+                        type="hidden"
+                        name="on"
+                        value={pingOptIn.on ? "0" : "1"}
+                      />
+                      <SubmitButton
+                        variant={pingOptIn.on ? "secondary" : "primary"}
+                        size="sm"
+                      >
+                        {pingOptIn.on ? "Turn off" : "Turn on"}
+                      </SubmitButton>
+                    </ActionForm>
+                  </div>
+                  {pingOptIn.on === null ? (
+                    <p className="mt-2 text-xs text-muted">
+                      Couldn&apos;t check your current setting — either Discord is
+                      slow right now, or you&apos;re not in the league&apos;s
+                      server yet.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted">
+                      Currently <b>{pingOptIn.on ? "on" : "off"}</b>.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </>
           ) : (
             <>
               {discordLinkAvailable ? (

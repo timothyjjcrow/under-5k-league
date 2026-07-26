@@ -88,6 +88,10 @@ export type BoardSnapshot = {
   lobby: BoardLobby | null;
   /** Only loaded for the empty render; null everywhere else. */
   stats: BoardStats | null;
+  /** True when the league has a ping role AND the site can grant it, i.e. the
+   *  opt-in on /me actually does something. Gated because advertising a
+   *  notification that can't fire is worse than not mentioning it. */
+  pingOptIn: boolean;
   siteUrl: string;
   nowMs: number;
 };
@@ -451,6 +455,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
       // LOBBY field proves liveness honestly instead, and counts up for free.
       digest: [
         "idle",
+        s.pingOptIn ? "ping" : "-",
         s.awayCount,
         st?.lastLobbyId ?? "",
         st?.lobbiesPlayed ?? 0,
@@ -469,6 +474,11 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
           "",
           `**[Take the first slot →](${url})**`,
           `-# ${RAIL}${played}${away}`,
+          ...(s.pingOptIn
+            ? [
+                `-# Don't want to watch this channel? Turn on **[inhouse pings](${s.siteUrl}/me)** and we'll notify you when one is filling.`,
+              ]
+            : []),
         ].join("\n"),
         fields,
         footer: {

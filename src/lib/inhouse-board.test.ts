@@ -34,6 +34,7 @@ function snap(over: Partial<BoardSnapshot> = {}): BoardSnapshot {
     lobbySize: 10,
     lobby: null,
     stats: null,
+    pingOptIn: false,
     siteUrl: "https://ggd2l.test",
     nowMs: T0,
     ...over,
@@ -259,6 +260,35 @@ describe("lobby states", () => {
       }),
     );
     expect(embed.title).toBe("Searching for Match — 2 / 10");
+  });
+});
+
+describe("the opt-in blurb", () => {
+  it("is absent until the league can actually grant the role", () => {
+    // Advertising a notification that can't fire is worse than not mentioning
+    // it — the board must never point at a dead switch.
+    const { embed } = renderBoard(snap({ stats: stats() }));
+    expect(embed.description).not.toContain("/me");
+    expect(embed.description).not.toMatch(/ping/i);
+  });
+
+  it("points at the profile toggle once it works", () => {
+    const { embed } = renderBoard(snap({ stats: stats(), pingOptIn: true }));
+    expect(embed.description).toContain("https://ggd2l.test/me");
+    expect(embed.description).toContain("inhouse pings");
+  });
+
+  it("only appears on the resting state, not mid-fill", () => {
+    const { embed } = renderBoard(
+      snap({ presentNames: names(6), pingOptIn: true }),
+    );
+    expect(embed.description).not.toContain("/me");
+  });
+
+  it("repaints the board when the league turns it on", () => {
+    expect(renderBoard(snap({ stats: stats() })).digest).not.toBe(
+      renderBoard(snap({ stats: stats(), pingOptIn: true })).digest,
+    );
   });
 });
 

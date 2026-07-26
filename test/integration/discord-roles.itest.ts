@@ -1,0 +1,163 @@
+import { createServer, type Server } from "node:http";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  getRoleConfig,
+  hasPingRole,
+  pingOptInAvailable,
+  setPingRole,
+  type RoleConfig,
+} from "@/lib/discord-roles";
+import { SETTING_KEYS, setSetting } from "@/lib/settings";
+
+// The self-serve inhouse ping opt-in, over REAL HTTP against a stand-in for
+// Discord. What has to hold:
+//   * the feature is OFF unless bot token + guild + role are all configured
+//   * "do they have the role?" answers null (unknown) rather than guessing
+//     false — an unticked box shown to someone already opted in makes them
+//     click it and change nothing, which reads as broken
+//   * a 403 (bot's role sits below the ping role) is reported as its own
+//     outcome, because no amount of retrying fixes it
+
+type Recorded = { method: string; url: string; auth: string | undefined };
+
+let server: Server;
+let base: string;
+let recorded: Recorded[] = [];
+let respond: (r: Recorded) => { status: number; body?: unknown };
+
+const GUILD = "900000000000000001";
+const ROLE = "900000000000000002";
+const MEMBER = "900000000000000003";
+
+beforeAll(async () => {
+  server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      const entry = {
+        method: req.method ?? "",
+        url: req.url ?? "",
+        auth: req.headers.authorization,
+      };
+      recorded.push(entry);
+      const out = respond(entry);
+      res.writeHead(out.status, { "content-type": "application/json" });
+      res.end(JSON.stringify(out.body ?? {}));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address();
+  if (!addr || typeof addr === "string") throw new Error("no address");
+  base = `http://127.0.0.1:${addr.port}`;
+});
+
+afterAll(async () => {
+  await new Promise<void>((r) => server.close(() => r()));
+});
+
+beforeEach(() => {
+  recorded = [];
+  respond = () => ({ status: 204 });
+  process.env.DISCORD_BOT_TOKEN = "test-token";
+  process.env.DISCORD_GUILD_ID = GUILD;
+  delete process.env.DISCORD_INHOUSE_ROLE_ID;
+});
+
+const cfg = (): RoleConfig => ({
+  token: "test-token",
+  guildId: GUILD,
+  roleId: ROLE,
+  apiBase: base,
+});
+
+describe("configuration gate", () => {
+  it("is unavailable with no bot token", async () => {
+    delete process.env.DISCORD_BOT_TOKEN;
+    await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, ROLE);
+    expect(await getRoleConfig()).toBeNull();
+    expect(await pingOptInAvailable()).toBe(false);
+  });
+
+  it("is unavailable with no role chosen — a token alone grants nothing", async () => {
+    expect(await getRoleConfig()).toBeNull();
+    expect(await pingOptInAvailable()).toBe(false);
+  });
+
+  it("is available once token, guild and role all exist", async () => {
+    await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, ROLE);
+    expect(await getRoleConfig()).toEqual({
+      token: "test-token",
+      guildId: GUILD,
+      roleId: ROLE,
+    });
+    expect(await pingOptInAvailable()).toBe(true);
+  });
+});
+
+describe("setPingRole", () => {
+  it("PUTs the role on the right member, authenticated as a bot", async () => {
+    expect(await setPingRole(MEMBER, true, cfg())).toBe("ok");
+    expect(recorded[0].method).toBe("PUT");
+    expect(recorded[0].url).toBe(
+      `/guilds/${GUILD}/members/${MEMBER}/roles/${ROLE}`,
+    );
+    expect(recorded[0].auth).toBe("Bot test-token");
+  });
+
+  it("DELETEs the same path to opt out", async () => {
+    expect(await setPingRole(MEMBER, false, cfg())).toBe("ok");
+    expect(recorded[0].method).toBe("DELETE");
+  });
+
+  it("is idempotent — adding a role twice is not an error", async () => {
+    await setPingRole(MEMBER, true, cfg());
+    expect(await setPingRole(MEMBER, true, cfg())).toBe("ok");
+  });
+
+  it("distinguishes the failure an ADMIN has to fix", async () => {
+    // 403 = the bot's own role sits below the ping role, so Discord refuses.
+    // Retrying never fixes it; the message must say so rather than blaming
+    // the player's click.
+    respond = () => ({ status: 403, body: { code: 50013 } });
+    expect(await setPingRole(MEMBER, true, cfg())).toBe("forbidden");
+  });
+
+  it("distinguishes a player who isn't in the server", async () => {
+    respond = () => ({ status: 404, body: { code: 10007 } });
+    expect(await setPingRole(MEMBER, true, cfg())).toBe("not-a-member");
+  });
+
+  it("degrades to a retryable failure instead of throwing", async () => {
+    respond = () => ({ status: 500 });
+    expect(await setPingRole(MEMBER, true, cfg())).toBe("failed");
+    // and when Discord is simply unreachable:
+    expect(
+      await setPingRole(MEMBER, true, { ...cfg(), apiBase: "http://127.0.0.1:1" }),
+    ).toBe("failed");
+  });
+});
+
+describe("hasPingRole", () => {
+  it("reads the member's live roles rather than a mirrored column", async () => {
+    respond = () => ({ status: 200, body: { roles: [ROLE, "other"] } });
+    expect(await hasPingRole(MEMBER, cfg())).toBe(true);
+    expect(recorded[0].method).toBe("GET");
+    expect(recorded[0].url).toBe(`/guilds/${GUILD}/members/${MEMBER}`);
+  });
+
+  it("is false when they hold other roles but not this one", async () => {
+    respond = () => ({ status: 200, body: { roles: ["other"] } });
+    expect(await hasPingRole(MEMBER, cfg())).toBe(false);
+  });
+
+  it("answers UNKNOWN, never false, when it cannot tell", async () => {
+    // Guessing "off" would show an unticked box to someone already opted in —
+    // they click it, nothing changes, and the feature looks broken.
+    respond = () => ({ status: 404 }); // not in the server
+    expect(await hasPingRole(MEMBER, cfg())).toBeNull();
+    respond = () => ({ status: 500 }); // Discord having a bad day
+    expect(await hasPingRole(MEMBER, cfg())).toBeNull();
+    expect(
+      await hasPingRole(MEMBER, { ...cfg(), apiBase: "http://127.0.0.1:1" }),
+    ).toBeNull();
+  });
+});

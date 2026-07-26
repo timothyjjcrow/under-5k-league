@@ -25,6 +25,7 @@ import { heroById } from "./heroes";
 import { rankInhouse, summarizeInhouse, type FinishedLobby } from "./inhouse-stats";
 import { claimThrottle, getSetting, SETTING_KEYS, setSetting } from "./settings";
 import { resolveSiteUrl } from "./site-url";
+import { pingOptInAvailable } from "./discord-roles";
 
 // The pinned Discord queue board — one message, rewritten in place forever.
 //
@@ -148,7 +149,7 @@ export async function loadBoardSnapshot(
 
 /** The board snapshot minus `stats`, which only the empty render needs and
  *  which syncInhouseBoard loads for itself (see resolveSnapshot). */
-export type BoardSnapshotInput = Omit<BoardSnapshot, "stats">;
+export type BoardSnapshotInput = Omit<BoardSnapshot, "stats" | "pingOptIn">;
 
 type LobbyRow = {
   status: string;
@@ -290,7 +291,13 @@ async function resolveSnapshot(
   base: BoardSnapshotInput,
 ): Promise<BoardSnapshot> {
   const empty = !base.lobby && base.presentNames.length === 0;
-  return { ...base, stats: empty ? await loadBoardStats(base.nowMs) : null };
+  // Both extras are only consulted for the EMPTY render — the state that has
+  // room for them and the one people actually read.
+  const [stats, pingOptIn] = await Promise.all([
+    empty ? loadBoardStats(base.nowMs) : Promise.resolve(null),
+    empty ? pingOptInAvailable() : Promise.resolve(false),
+  ]);
+  return { ...base, stats, pingOptIn };
 }
 
 /**

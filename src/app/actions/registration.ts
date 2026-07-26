@@ -15,6 +15,7 @@ import {
 import { registrationGate, withdrawGateError } from "@/lib/registration";
 import { normalizeDiscordName } from "@/lib/discord-name";
 import { unlinkDiscordAccount } from "@/lib/discord-link-service";
+import { getRoleConfig, setPingRole } from "@/lib/discord-roles";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -515,4 +516,58 @@ export async function unlinkDiscord(
   await unlinkDiscordAccount(prisma, user.id);
   refresh();
   return { message: "Discord unlinked — your handle was removed from the site" };
+}
+
+/**
+ * Self-serve opt-in to the inhouse ping role.
+ *
+ * Discord has no native self-assignable-role toggle — Onboarding is the only
+ * built-in mechanism, and it's a whole server configuration to obtain one
+ * checkbox. So the site grants the role itself, which it can do honestly
+ * because `discordId` is OAuth-PROVEN: we are acting on an account the player
+ * demonstrated they own, never on a typed handle.
+ */
+export async function setInhousePingOptIn(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const user = await requireUser();
+  const on = str(formData, "on") === "1";
+
+  const me = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { discordId: true },
+  });
+  if (!me?.discordId) {
+    return { error: "Link your Discord account first — then you can opt in." };
+  }
+  const cfg = await getRoleConfig();
+  if (!cfg) {
+    return { error: "Inhouse pings aren't set up yet — ask an admin." };
+  }
+
+  const res = await setPingRole(me.discordId, on, cfg);
+  revalidatePath("/me");
+  if (res === "ok") {
+    return {
+      message: on
+        ? "You'll get pinged when an inhouse queue is filling up."
+        : "Pings off — you won't be notified about inhouse queues.",
+    };
+  }
+  if (res === "not-a-member") {
+    return {
+      error:
+        "You're not in the league's Discord server — join it first, then try again.",
+    };
+  }
+  if (res === "forbidden") {
+    // The bot's role sits below the ping role, so Discord refuses. Retrying
+    // never fixes this; say what's actually wrong so an admin can move it.
+    return {
+      error:
+        "Discord wouldn't let us change that role. An admin needs to move the bot's role above the ping role.",
+    };
+  }
+  return { error: "Discord didn't respond — try again in a moment." };
 }

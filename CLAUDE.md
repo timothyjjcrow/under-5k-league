@@ -688,6 +688,21 @@ reached a player who wasn't already looking at it.
   45-second ready check from a standing start). The `act()` call is deferred a
   tick — setting state synchronously in an effect cascades a render.
 
+- **Self-serve ping opt-in** (`src/lib/discord-roles.ts`, integration-tested
+  over real HTTP): Discord has NO native self-assignable-role toggle, so the
+  site grants the role itself — `PUT/DELETE /guilds/{g}/members/{u}/roles/{r}`
+  with a bot token. This is the ONE place a bot token is used and it stays
+  tiny: no gateway, no process, no slash commands. Token + guild are ENV (never
+  the Setting table — an admin page must not be able to read a token back); the
+  role id is a Setting. Missing any piece = the feature is invisible, never
+  half-working. `hasPingRole` returns `boolean | null` and **null means UNKNOWN,
+  never false** — showing an unticked box to someone already opted in makes them
+  click it and change nothing, which reads as broken. State is read LIVE rather
+  than mirrored into a column, which would drift the moment someone removes the
+  role in Discord. A 403 is surfaced as its own outcome: it means the bot's role
+  sits below the ping role, retrying never fixes it, and the message must say so
+  rather than blaming the player's click.
+
 ## Live inhouse queue board (done)
 
 **Inhouse has its OWN optional webhook** (`inhouseWebhookUrl` Setting /

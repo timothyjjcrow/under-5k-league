@@ -92,6 +92,34 @@ handles. Typed handles still work as an unverified fallback.
 2. OAuth2 → add `<APP_URL>/api/auth/discord/callback` as a **Redirect**.
 3. Set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` in `.env`.
 
+### Inhouse ping opt-in (Discord role)
+
+Discord has **no native self-assignable-role toggle** — Community Onboarding is
+the only built-in way, and it is a lot of server configuration for one
+checkbox. So the site grants the role itself: a player ticks "Ping me for
+inhouse games" on `/me` and the site adds the role over the API. It can do this
+honestly because `discordId` is OAuth-proven, so it acts on an account the
+player demonstrated they own.
+
+1. Create a role in Discord (e.g. `Inhouse Ping`). Leave **Allow anyone to
+   @mention this role OFF** — the site pings it through an explicit allowlist
+   regardless, and keeping it off stops members spam-pinging everyone.
+2. Create an application at https://discord.com/developers/applications → Bot →
+   copy the token. Invite it with **Manage Roles only** (not Administrator).
+3. **Drag the bot's role ABOVE the ping role** in Server Settings → Roles.
+   Discord refuses to let a bot grant a role above its own; this is the single
+   most common setup mistake and the site reports it as its own error.
+4. Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID` in the environment, and paste
+   the role id into Admin → Discord notifications → **Ping role**.
+
+With all four done, the toggle appears on `/me` for players who have linked
+Discord, and the queue board mentions it. Miss any one and the feature stays
+invisible rather than half-working.
+
+Two messages ping that role: the queue filling up, and a match being found.
+Nothing else — not results, and never the board, whose edits notify nobody by
+design.
+
 ### Live inhouse queue board (Discord)
 
 A single pinned Discord message that shows how many players are in the inhouse
@@ -241,6 +269,7 @@ serverless.
    | `ADMIN_STEAM_IDS` | your **SteamID64** — 17 digits starting `7656119` (see the warning below) |
    | `OPENDOTA_API_KEY` | optional |
    | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional — enables "Link Discord" account verification |
+   | `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID` | optional — lets players self-assign the inhouse ping role from `/me` |
 
    Leave `ALLOW_DEV_LOGIN` unset — dev login stays disabled in production.
 
