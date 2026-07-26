@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  getPingHealth,
   getRoleConfig,
   hasPingRole,
   pingOptInAvailable,
@@ -60,6 +61,7 @@ beforeEach(() => {
   process.env.DISCORD_BOT_TOKEN = "test-token";
   process.env.DISCORD_GUILD_ID = GUILD;
   delete process.env.DISCORD_INHOUSE_ROLE_ID;
+  delete process.env.DISCORD_API_BASE;
 });
 
 const cfg = (): RoleConfig => ({
@@ -159,5 +161,83 @@ describe("hasPingRole", () => {
     expect(
       await hasPingRole(MEMBER, { ...cfg(), apiBase: "http://127.0.0.1:1" }),
     ).toBeNull();
+  });
+});
+
+describe("getPingHealth — the setup diagnostic", () => {
+  beforeEach(async () => {
+    process.env.DISCORD_API_BASE = base;
+    await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, ROLE);
+  });
+
+  /** Bot holds `botRole` at `botPos`; the ping role sits at `pingPos`. */
+  const guild = (botPos: number, pingPos: number) => (r: Recorded) =>
+    r.url.endsWith("/members/@me")
+      ? {
+          status: 200,
+          body: { roles: ["botrole"], user: { username: "ggd2l" } },
+        }
+      : {
+          status: 200,
+          body: [
+            { id: "botrole", name: "ggd2l", position: botPos },
+            { id: ROLE, name: "Inhouse Ping", position: pingPos },
+          ],
+        };
+
+  it("reports every piece present and grantable", async () => {
+    respond = guild(5, 2);
+    const h = await getPingHealth();
+    expect(h).toMatchObject({
+      hasToken: true,
+      hasGuild: true,
+      hasRole: true,
+      botInGuild: true,
+      roleExists: true,
+      canGrant: true,
+      botName: "ggd2l",
+      roleName: "Inhouse Ping",
+      problem: null,
+    });
+  });
+
+  it("CATCHES the role-hierarchy mistake — the one nothing else warns about", async () => {
+    // Bot below the ping role: Discord silently refuses every grant, and
+    // without this the first symptom is a confused player days later.
+    respond = guild(1, 9);
+    const h = await getPingHealth();
+    expect(h.botInGuild).toBe(true);
+    expect(h.roleExists).toBe(true);
+    expect(h.canGrant).toBe(false);
+  });
+
+  it("spots a role id that doesn't exist in this server", async () => {
+    await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, "111111111111111111");
+    respond = guild(5, 2);
+    const h = await getPingHealth();
+    expect(h.roleExists).toBe(false);
+    expect(h.canGrant).toBeNull();
+  });
+
+  it("spots a bot that was never invited", async () => {
+    respond = () => ({ status: 404 });
+    const h = await getPingHealth();
+    expect(h.botInGuild).toBe(false);
+  });
+
+  it("names a bad token rather than blaming the config", async () => {
+    respond = () => ({ status: 401 });
+    const h = await getPingHealth();
+    expect(h.problem).toMatch(/token/i);
+  });
+
+  it("reports missing env without calling Discord at all", async () => {
+    delete process.env.DISCORD_BOT_TOKEN;
+    recorded = [];
+    const h = await getPingHealth();
+    expect(h.hasToken).toBe(false);
+    expect(h.hasRole).toBe(true); // the role IS chosen; the token isn't set
+    expect(h.botInGuild).toBeNull();
+    expect(recorded).toHaveLength(0);
   });
 });

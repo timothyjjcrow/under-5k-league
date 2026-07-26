@@ -703,6 +703,16 @@ reached a player who wasn't already looking at it.
   sits below the ping role, retrying never fixes it, and the message must say so
   rather than blaming the player's click.
 
+- **`getPingHealth` + the admin checklist** — the opt-in has FOUR independent
+  ways to be half-configured and three are invisible until a player clicks the
+  button and gets an error. The one worth its extra API call is `canGrant`:
+  Discord silently refuses to let a bot assign a role positioned ABOVE its own,
+  the portal never warns you, and the first symptom is otherwise a confused
+  player days later. Computed from `/guilds/{g}/members/@me` (the bot's roles)
+  vs `/guilds/{g}/roles` (positions), bot height = its HIGHEST role. The panel
+  shows the first broken step and its exact fix, in the order they must be
+  fixed. Missing env is reported WITHOUT calling Discord at all.
+
 ## Live inhouse queue board (done)
 
 **Inhouse has its OWN optional webhook** (`inhouseWebhookUrl` Setting /

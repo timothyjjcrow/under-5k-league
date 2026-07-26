@@ -80,6 +80,7 @@ import {
   getInhouseBoardStatus,
   type InhouseBoardStatus,
 } from "@/lib/inhouse-board-service";
+import { getPingHealth, type PingHealth } from "@/lib/discord-roles";
 import {
   pickBracketSize,
   roundName,
@@ -150,6 +151,7 @@ export default async function AdminPage() {
     envManaged: !dbWebhook && !!process.env.DISCORD_WEBHOOK_URL,
   };
   const boardStatus = await getInhouseBoardStatus();
+  const pingHealth = await getPingHealth();
   const newsPosts = sortNews(
     await prisma.newsPost.findMany({
       include: { author: { select: { name: true } } },
@@ -173,7 +175,11 @@ export default async function AdminPage() {
           <StandinControls data={data} />
           <LeagueControls season={season} />
           <AutoSyncHealth season={season} />
-          <DiscordControls status={discordStatus} board={boardStatus} />
+          <DiscordControls
+            status={discordStatus}
+            board={boardStatus}
+            pingHealth={pingHealth}
+          />
         </>
       ) : (
         <Card>
@@ -2128,12 +2134,88 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   );
 }
 
+/**
+ * The opt-in has four independent ways to be half-configured and three are
+ * invisible until a player clicks the button and gets an error. This says
+ * which one, in the order they have to be fixed.
+ */
+function PingHealthLines({ health }: { health: PingHealth }) {
+  const rows: { ok: boolean | null; label: string; fix: string }[] = [
+    {
+      ok: health.hasToken,
+      label: "Bot token",
+      fix: "Set DISCORD_BOT_TOKEN in the host env, then redeploy — env changes only apply to NEW deployments.",
+    },
+    {
+      ok: health.hasGuild,
+      label: "Server id",
+      fix: "Set DISCORD_GUILD_ID (right-click the server → Copy Server ID), then redeploy.",
+    },
+    {
+      ok: health.hasRole,
+      label: "Ping role chosen",
+      fix: "Paste the role id into the field above.",
+    },
+    {
+      ok: health.botInGuild,
+      label: health.botName ? `Bot in server (${health.botName})` : "Bot in server",
+      fix: "Invite the bot: Developer Portal → OAuth2 → URL Generator → scope bot + permission Manage Roles.",
+    },
+    {
+      ok: health.roleExists,
+      label: health.roleName ? `Role found (${health.roleName})` : "Role found",
+      fix: "That role id doesn't exist in this server — re-copy it.",
+    },
+    {
+      ok: health.canGrant,
+      label: "Bot can grant it",
+      fix: "Server Settings → Roles: drag the bot's role ABOVE the ping role. Discord won't let a bot assign a role above its own.",
+    },
+  ];
+  const firstBroken = rows.find((r) => r.ok === false);
+  const allGood = rows.every((r) => r.ok === true);
+
+  return (
+    <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        {rows.map((r) => (
+          <span
+            key={r.label}
+            className={
+              r.ok === true
+                ? "text-success"
+                : r.ok === false
+                  ? "text-danger"
+                  : "text-muted"
+            }
+          >
+            {r.ok === true ? "✓" : r.ok === false ? "✗" : "•"} {r.label}
+          </span>
+        ))}
+      </div>
+      {health.problem ? (
+        <p className="mt-2 text-xs text-danger">{health.problem}</p>
+      ) : firstBroken ? (
+        <p className="mt-2 text-xs text-danger">
+          <b>Next:</b> {firstBroken.fix}
+        </p>
+      ) : allGood ? (
+        <p className="mt-2 text-xs text-success">
+          Players who&apos;ve linked Discord can now opt in from their profile.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function DiscordControls({
   status,
   board,
+  pingHealth,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
   board: InhouseBoardStatus;
+  pingHealth: PingHealth;
 }) {
   const { configured, masked, envManaged } = status;
   return (
@@ -2294,6 +2376,8 @@ function DiscordControls({
               Save role
             </SubmitButton>
           </ActionForm>
+
+          <PingHealthLines health={pingHealth} />
 
           <p className="text-xs text-muted">
             {board.pingRoleId ? (

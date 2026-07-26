@@ -116,6 +116,11 @@ With all four done, the toggle appears on `/me` for players who have linked
 Discord, and the queue board mentions it. Miss any one and the feature stays
 invisible rather than half-working.
 
+**To check it worked**, the admin Discord card shows a live checklist — bot
+token, server id, role chosen, bot in server, role found, and whether the bot
+can actually grant it — naming the first broken step and its fix. Step 3 above
+is the one nothing in Discord warns you about.
+
 Two messages ping that role: the queue filling up, and a match being found.
 Nothing else — not results, and never the board, whose edits notify nobody by
 design.

@@ -132,3 +132,103 @@ export async function setPingRole(
   if (res.status === 403) return "forbidden";
   return "failed";
 }
+
+// ---------------------------------------------------------------------------
+// Setup diagnostics
+// ---------------------------------------------------------------------------
+
+/**
+ * Answers "is this actually working?" for the admin, because the opt-in has
+ * FOUR independent ways to be half-configured and three of them are invisible
+ * until a player clicks the button and gets an error.
+ *
+ * The one worth the extra API call is `canGrant`: Discord refuses to let a bot
+ * assign a role positioned above its own, and nothing in the portal warns you.
+ * Left undetected it looks like a site bug, reported by a confused player, days
+ * later. Here it's a red line with the exact fix.
+ */
+export type PingHealth = {
+  hasToken: boolean;
+  hasGuild: boolean;
+  hasRole: boolean;
+  /** null = not checked (config incomplete) or Discord unreachable. */
+  botInGuild: boolean | null;
+  roleExists: boolean | null;
+  canGrant: boolean | null;
+  botName: string | null;
+  roleName: string | null;
+  /** Set when a check couldn't run at all, e.g. a bad token. */
+  problem: string | null;
+};
+
+export async function getPingHealth(): Promise<PingHealth> {
+  const hasToken = !!process.env.DISCORD_BOT_TOKEN;
+  const hasGuild = !!process.env.DISCORD_GUILD_ID;
+  const roleId =
+    (await getSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID)) ||
+    process.env.DISCORD_INHOUSE_ROLE_ID ||
+    null;
+  const base: PingHealth = {
+    hasToken,
+    hasGuild,
+    hasRole: !!roleId,
+    botInGuild: null,
+    roleExists: null,
+    canGrant: null,
+    botName: null,
+    roleName: null,
+    problem: null,
+  };
+  const cfg = await getRoleConfig();
+  if (!cfg) return base;
+
+  // The bot's own member record (its roles) and the guild's role list, which
+  // together answer the hierarchy question.
+  const [meRes, rolesRes] = await Promise.all([
+    call(cfg, `/guilds/${cfg.guildId}/members/@me`, "GET"),
+    call(cfg, `/guilds/${cfg.guildId}/roles`, "GET"),
+  ]);
+
+  if (!meRes || !rolesRes) {
+    return { ...base, problem: "Couldn't reach Discord." };
+  }
+  if (meRes.status === 401 || rolesRes.status === 401) {
+    return { ...base, problem: "Discord rejected the bot token — reset it and update the env var." };
+  }
+  if (meRes.status === 403 || meRes.status === 404) {
+    // The token is valid but the bot isn't a member of this guild.
+    return { ...base, botInGuild: false };
+  }
+
+  try {
+    const me = (await meRes.json()) as {
+      roles?: string[];
+      user?: { username?: string };
+    };
+    const roles = (await rolesRes.json()) as {
+      id: string;
+      name: string;
+      position: number;
+    }[];
+    if (!Array.isArray(roles)) return { ...base, problem: "Unexpected reply from Discord." };
+
+    const byId = new Map(roles.map((r) => [r.id, r]));
+    const ping = byId.get(cfg.roleId) ?? null;
+    // A bot's effective height is its HIGHEST role; @everyone is position 0.
+    const botTop = (me.roles ?? []).reduce(
+      (top, id) => Math.max(top, byId.get(id)?.position ?? 0),
+      0,
+    );
+    return {
+      ...base,
+      botInGuild: true,
+      roleExists: !!ping,
+      canGrant: ping ? botTop > ping.position : null,
+      botName: me.user?.username ?? null,
+      roleName: ping?.name ?? null,
+      problem: null,
+    };
+  } catch {
+    return { ...base, problem: "Unexpected reply from Discord." };
+  }
+}
