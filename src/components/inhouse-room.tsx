@@ -338,12 +338,10 @@ export function InhouseRoom({
       pushToast("info", "You're already in the queue");
       return;
     }
-    // Never drop someone straight into a live ready check they didn't watch
-    // start — they'd owe an accept inside 45s from a standing start.
-    if (state.lobby) {
-      pushToast("info", "A game is already underway — queue for the next one");
-      return;
-    }
+    // A live lobby is NOT a reason to refuse: only one lobby exists at a time,
+    // so maybeFormLobby can't pull a new joiner into the one already running —
+    // they simply queue for the next game. Refusing here also broke the board's
+    // own "Queue for the next one →" link, which exists for exactly this case.
     // Deferred a tick: act() flips `pending` immediately, and setting state
     // synchronously inside an effect cascades a render.
     const t = setTimeout(() => {

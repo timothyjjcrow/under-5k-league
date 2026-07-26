@@ -242,6 +242,11 @@ const RAIL = "5v5 · captains draft · rated on the GGD2L ladder";
 
 export function renderBoard(s: BoardSnapshot): BoardRender {
   const url = `${s.siteUrl}/inhouse`;
+  // Every explicit "take a slot" CTA deep-links into the queue, so a tap from
+  // a phone is one action instead of four. The TITLE and author deliberately
+  // stay on the plain url: a heading reads as "go look", not "put me in", and
+  // auto-enqueueing someone who tapped a title would be a nasty surprise.
+  const joinUrl = `${url}?join=1`;
   const author = {
     name: "GGD2L Inhouse Matchmaking",
     icon_url: `${s.siteUrl}${AUTHOR_ICON}`,
@@ -362,7 +367,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
             "",
             copy.body,
             "",
-            `**[Queue for the next one →](${url})**`,
+            `**[Queue for the next one →](${joinUrl})**`,
             `-# ${RAIL}`,
           ].join("\n"),
           fields: nextUp,
@@ -395,7 +400,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
           "",
           `${started}The result imports itself and the ladder moves.`,
           "",
-          `**[Queue for the next one →](${url})**`,
+          `**[Queue for the next one →](${joinUrl})**`,
           `-# ${RAIL}`,
         ].join("\n"),
         fields: nextUp,
@@ -472,7 +477,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
           "",
           body,
           "",
-          `**[Take the first slot →](${url})**`,
+          `**[Take the first slot →](${joinUrl})**`,
           `-# ${RAIL}${played}${away}`,
           ...(s.pingOptIn
             ? [
@@ -538,7 +543,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
         "",
         body,
         "",
-        `**[Take ${needed === 1 ? "the last slot" : "a slot"} →](${url})**`,
+        `**[Take ${needed === 1 ? "the last slot" : "a slot"} →](${joinUrl})**`,
         `-# ${RAIL} · queue last moved ${relative(s.nowMs)}`,
       ].join("\n"),
       fields: [

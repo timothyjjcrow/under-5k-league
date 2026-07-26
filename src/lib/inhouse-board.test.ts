@@ -263,6 +263,44 @@ describe("lobby states", () => {
   });
 });
 
+describe("CTAs deep-link into the queue", () => {
+  // The ?join=1 one-tap link has to reach the PINNED BOARD, not just the
+  // transient text ping — the board is the surface that's permanently on
+  // screen, so it's where most taps come from.
+  it("puts ?join=1 on every take-a-slot call to action", () => {
+    for (const s of [
+      snap({ stats: stats() }),
+      snap({ presentNames: names(6) }),
+      snap({ presentNames: names(9) }),
+    ]) {
+      const d = renderBoard(s).embed.description;
+      expect(d).toMatch(/\[Take [^\]]+→\]\(https:\/\/ggd2l\.test\/inhouse\?join=1\)/);
+    }
+  });
+
+  it("deep-links 'queue for the next one' during a live game", () => {
+    const d = renderBoard(
+      snap({
+        lobby: lobby({ status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0 }),
+      }),
+    ).embed.description;
+    expect(d).toContain("[Queue for the next one →](https://ggd2l.test/inhouse?join=1)");
+  });
+
+  it("leaves the TITLE on the plain url — a heading is not a join button", () => {
+    const { embed } = renderBoard(snap({ presentNames: names(3) }));
+    expect(embed.url).toBe("https://ggd2l.test/inhouse");
+    expect(embed.author.url).toBe("https://ggd2l.test/inhouse");
+  });
+
+  it("does not deep-link the accept CTA — that's a different action", () => {
+    const d = renderBoard(
+      snap({ lobby: lobby({ acceptedCount: 3 }) }),
+    ).embed.description;
+    expect(d).toContain("[Accept your match →](https://ggd2l.test/inhouse)");
+  });
+});
+
 describe("the opt-in blurb", () => {
   it("is absent until the league can actually grant the role", () => {
     // Advertising a notification that can't fire is worse than not mentioning
