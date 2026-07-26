@@ -5,6 +5,13 @@ import { prisma } from "./prisma";
 
 export const SETTING_KEYS = {
   DISCORD_WEBHOOK_URL: "discordWebhookUrl",
+  // OPTIONAL second webhook, for the inhouse channel only. A Discord webhook
+  // is locked to the channel it was created in, so one webhook means one
+  // channel for all 27 announcement types — and inhouse traffic (a queue
+  // board that repaints all evening, lobby pings, results) belongs in the
+  // inhouse channel, not wherever league signups and match results go.
+  // Unset = fall back to DISCORD_WEBHOOK_URL, i.e. previous behaviour.
+  INHOUSE_WEBHOOK_URL: "inhouseWebhookUrl",
   // Epoch ms of the last "queue is almost full" Discord ping (spam throttle).
   INHOUSE_QUEUE_PING_AT: "inhouseQueuePingAt",
   // ISO timestamp of the last league-id OpenDota sync (result-sync-service's

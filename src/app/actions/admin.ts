@@ -64,6 +64,8 @@ import {
   testMessage,
   draftScheduledMessage,
   webhookIdOf,
+  getInhouseWebhookUrl,
+  sendInhouseDiscordMessage,
 } from "@/lib/discord";
 import {
   createInhouseBoard,
@@ -2272,8 +2274,15 @@ export async function setDiscordWebhook(
   // showing a frozen count. Tear it down while the old credential is still the
   // configured one, i.e. before the save below. A regenerated token for the
   // SAME webhook keeps its id, so that case correctly leaves the board alone.
-  const prevId = webhookIdOf(await getWebhookUrl());
-  const nextId = webhookIdOf(value);
+  const prevId = webhookIdOf(await getInhouseWebhookUrl());
+  const nextId = webhookIdOf(
+    (await getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL)) ||
+      process.env.DISCORD_INHOUSE_WEBHOOK_URL ||
+      value,
+  );
+  // Only tears the board down when the league webhook IS the effective inhouse
+  // one (i.e. no separate inhouse webhook is set) — otherwise the board lives
+  // in its own channel and this change doesn't touch it.
   const movedChannel = !!prevId && !!nextId && prevId !== nextId;
   // force: the old credential is about to stop being the configured one, so
   // "keep the row and retry later" isn't an option — after the save we could
@@ -2304,7 +2313,13 @@ export async function clearDiscordWebhook(
   // Delete the board FIRST — it needs the credential we're about to remove,
   // and a pinned message frozen at a stale count is the worst thing this
   // feature can leave behind.
-  const torndown = await removeInhouseBoard({ force: true });
+  // Same rule: only our problem if the league webhook is what the board rides.
+  const separate =
+    !!(await getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL)) ||
+    !!process.env.DISCORD_INHOUSE_WEBHOOK_URL;
+  const torndown = separate
+    ? { orphaned: false }
+    : await removeInhouseBoard({ force: true });
   await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
   refresh();
   return {
@@ -2312,6 +2327,93 @@ export async function clearDiscordWebhook(
       ? "Webhook removed — announcements are off. Discord didn't confirm deleting the queue board, so delete that message by hand."
       : "Webhook removed — announcements are off",
   };
+}
+
+/**
+ * Save a SEPARATE webhook for the inhouse channel. A Discord webhook is bound
+ * to the channel it was created in, so this is the only way to keep the queue
+ * board, lobby pings and inhouse results out of the league-announcement
+ * channel. Unset = inhouse keeps riding the league webhook.
+ */
+export async function setInhouseWebhook(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const value = str(formData, "inhouseWebhookUrl").trim();
+  // Same rule as the league field: it renders empty because the saved URL is a
+  // secret we never send back, so a blank submit is a no-op, never a wipe.
+  if (!value) {
+    return {
+      message: "No change — paste a new URL to replace it, or use Remove.",
+    };
+  }
+  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+    return {
+      error:
+        "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
+    };
+  }
+
+  // The board lives in whatever channel the inhouse webhook points at, so a
+  // change of channel strands it. Tear it down while the OLD credential is
+  // still the configured one.
+  const prevId = webhookIdOf(await getInhouseWebhookUrl());
+  const moved = !!prevId && prevId !== webhookIdOf(value);
+  const torndown = moved ? await removeInhouseBoard({ force: true }) : null;
+
+  await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, value);
+  refresh();
+  return {
+    message: !moved
+      ? "Inhouse webhook saved — queue board, lobby pings and inhouse results now post there."
+      : torndown?.orphaned
+        ? "Inhouse webhook saved. The old queue board couldn't be deleted — remove that message by hand, then post a new board below."
+        : "Inhouse webhook saved — the old queue board was removed; post a new one below.",
+  };
+}
+
+/** Send inhouse traffic back to the league webhook. */
+export async function clearInhouseWebhook(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  // Clearing this MOVES the inhouse channel back to the league webhook, so the
+  // board would be stranded in the old channel. Take it down first.
+  const torndown = await removeInhouseBoard({ force: true });
+  await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, "");
+  refresh();
+  return {
+    message: torndown.orphaned
+      ? "Inhouse webhook removed — inhouse posts to the league channel again. Delete the old queue board message by hand."
+      : "Inhouse webhook removed — inhouse posts to the league channel again.",
+  };
+}
+
+/** Post a test message to whichever channel inhouse currently uses. */
+export async function testInhouseWebhook(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  if (!(await getInhouseWebhookUrl())) return { error: "Set a webhook first" };
+  const ok = await sendInhouseDiscordMessage(testMessage());
+  return ok
+    ? { message: "Test message sent — check your inhouse channel" }
+    : { error: "Discord rejected the message — double-check the URL" };
 }
 
 /**

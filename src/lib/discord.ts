@@ -319,6 +319,22 @@ export async function getWebhookUrl(): Promise<string | null> {
 }
 
 /**
+ * Where INHOUSE traffic goes: the queue board, "match found", the two-short
+ * ping and inhouse results. A Discord webhook is bound to the channel it was
+ * created in, so routing these separately is the only way to keep an evening
+ * of pick-up games out of the channel carrying league signups and results.
+ *
+ * FALLS BACK to the league webhook when unset, which is what every league that
+ * never configures this keeps getting — one channel, exactly as before.
+ */
+export async function getInhouseWebhookUrl(): Promise<string | null> {
+  const fromDb = await getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL);
+  return (
+    fromDb || process.env.DISCORD_INHOUSE_WEBHOOK_URL || (await getWebhookUrl())
+  );
+}
+
+/**
  * A safe, display-only fingerprint of a webhook URL. The full URL is a bearer
  * credential (anyone holding it can post to the channel — prime phishing bait),
  * so it must NEVER be sent to the browser. This keeps a short piece of the id
@@ -373,10 +389,9 @@ const NO_MENTIONS = { parse: [] as string[] };
  * through here. Best-effort: null on any failure, never throws.
  */
 export async function postWebhookMessage(
+  url: string,
   payload: WebhookPayload,
 ): Promise<{ id: string } | null> {
-  const url = await getWebhookUrl();
-  if (!url) return null;
   try {
     const res = await fetch(`${webhookApiUrl(url)}?wait=true`, {
       method: "POST",
@@ -413,11 +428,10 @@ export type WebhookEditResult = "ok" | "gone" | "failed";
  * rides the inhouse poll path, so it must never be what makes a room feel slow.
  */
 export async function patchWebhookMessage(
+  url: string,
   messageId: string,
   payload: WebhookPayload,
 ): Promise<WebhookEditResult> {
-  const url = await getWebhookUrl();
-  if (!url) return "failed";
   try {
     const res = await fetch(
       `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
@@ -448,9 +462,10 @@ export async function patchWebhookMessage(
 }
 
 /** Remove a message this webhook sent (admin "Remove board"). Best-effort. */
-export async function deleteWebhookMessage(messageId: string): Promise<boolean> {
-  const url = await getWebhookUrl();
-  if (!url) return false;
+export async function deleteWebhookMessage(
+  url: string,
+  messageId: string,
+): Promise<boolean> {
   try {
     const res = await fetch(
       `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
@@ -467,7 +482,21 @@ export async function deleteWebhookMessage(messageId: string): Promise<boolean> 
  * any failure (no webhook configured, network error, non-2xx) and never throws.
  */
 export async function sendDiscordMessage(content: string): Promise<boolean> {
-  const url = await getWebhookUrl();
+  return sendTo(await getWebhookUrl(), content);
+}
+
+/**
+ * Announce to the INHOUSE channel (see getInhouseWebhookUrl). Everything the
+ * inhouse mode posts goes through here so a league can keep pick-up traffic
+ * out of its league-announcement channel with one setting.
+ */
+export async function sendInhouseDiscordMessage(
+  content: string,
+): Promise<boolean> {
+  return sendTo(await getInhouseWebhookUrl(), content);
+}
+
+async function sendTo(url: string | null, content: string): Promise<boolean> {
   if (!url) return false;
   try {
     const res = await fetch(url, {

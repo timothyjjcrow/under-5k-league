@@ -2,7 +2,8 @@ import { prisma } from "./prisma";
 import { INHOUSE, INHOUSE_ACTIVE_STATUSES } from "./constants";
 import {
   deleteWebhookMessage,
-  getWebhookUrl,
+  getInhouseWebhookUrl,
+  maskWebhookUrl,
   patchWebhookMessage,
   postWebhookMessage,
   webhookIdOf,
@@ -156,7 +157,7 @@ export async function syncInhouseBoard(
   const state = parseState(raw);
   if (!state || !raw) return; // off — the cheap exit, taken on almost every call
 
-  const url = await getWebhookUrl();
+  const url = await getInhouseWebhookUrl();
   // No webhook configured: leave the row alone. The admin may be mid-rotation,
   // and dropping the board here would silently orphan a live message (same
   // rule as never burning an announcement marker when Discord isn't wired up).
@@ -188,7 +189,7 @@ export async function syncInhouseBoard(
     return;
   }
 
-  const res = await patchWebhookMessage(state.messageId, { embeds: [embed] });
+  const res = await patchWebhookMessage(url, state.messageId, { embeds: [embed] });
   if (res === "ok") {
     await swapState(raw, {
       ...state,
@@ -217,7 +218,7 @@ export async function createInhouseBoard(): Promise<{
   ok: boolean;
   error?: string;
 }> {
-  const url = await getWebhookUrl();
+  const url = await getInhouseWebhookUrl();
   if (!url) return { ok: false, error: "Set a Discord webhook first" };
   const webhookId = webhookIdOf(url);
   if (!webhookId) {
@@ -231,7 +232,7 @@ export async function createInhouseBoard(): Promise<{
 
   const snap = await loadBoardSnapshot();
   const { digest, embed } = renderBoard(snap);
-  const posted = await postWebhookMessage({ embeds: [embed] });
+  const posted = await postWebhookMessage(url, { embeds: [embed] });
   if (!posted) {
     return { ok: false, error: "Discord rejected the message — check the webhook" };
   }
@@ -267,10 +268,10 @@ export async function removeInhouseBoard(
   // endpoint is scoped to the webhook that sent the message, so the request
   // would 404, which the transport (rightly) reads as "already gone". Don't
   // pretend: clear the row and say it's still in the old channel.
-  const url = await getWebhookUrl();
+  const url = await getInhouseWebhookUrl();
   const stranded = !url || webhookIdOf(url) !== state.webhookId;
 
-  const deleted = stranded ? false : await deleteWebhookMessage(state.messageId);
+  const deleted = stranded ? false : await deleteWebhookMessage(url, state.messageId);
   if (!deleted && !stranded && !opts.force) {
     return {
       ok: false,
@@ -307,13 +308,22 @@ export type InhouseBoardStatus = {
   /** False when the board is rendering something other than `liveState` —
    *  either an edit is pending its throttle window, or edits are failing. */
   inSync: boolean;
+  /** True when inhouse has its OWN webhook, i.e. its own Discord channel. */
+  separateChannel: boolean;
+  /** Masked fingerprint of that webhook — never the credential itself. */
+  inhouseMasked: string;
 };
 
 export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
-  const [state, url] = await Promise.all([
+  const [state, url, own] = await Promise.all([
     getSetting(SETTING_KEYS.INHOUSE_BOARD).then(parseState),
-    getWebhookUrl(),
+    getInhouseWebhookUrl(),
+    getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL),
   ]);
+  const separateChannel = !!own || !!process.env.DISCORD_INHOUSE_WEBHOOK_URL;
+  // The masked form is all the browser is ever allowed to see (the raw URL is
+  // a bearer credential — anyone holding it can post to the channel).
+  const inhouseMasked = separateChannel ? maskWebhookUrl(url) : "";
   if (!state) {
     return {
       posted: false,
@@ -323,6 +333,8 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
       failures: 0,
       liveState: "",
       inSync: true,
+      separateChannel,
+      inhouseMasked,
     };
   }
   // Render the live queue so the card can answer the only question that
@@ -340,5 +352,7 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
     failures: state.failures ?? 0,
     liveState: boardStateLabel(snap),
     inSync: renderBoard(snap).digest === state.digest,
+    separateChannel,
+    inhouseMasked,
   };
 }

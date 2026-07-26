@@ -22,6 +22,7 @@ import { makeUser } from "./factories";
 
 const HOOK = "https://discord.com/api/webhooks/1111/token-a";
 const OTHER_HOOK = "https://discord.com/api/webhooks/2222/token-b";
+const LEAGUE_HOOK = "https://discord.com/api/webhooks/3333/token-league";
 // A real Discord message id is a 19-digit snowflake — the admin card only ever
 // shows a truncated hint of it, which a 5-character fake would not exercise.
 const MSG_ID = "1379001234567890123";
@@ -30,7 +31,7 @@ vi.mock("@/lib/discord", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/discord")>();
   return {
     ...actual,
-    getWebhookUrl: vi.fn(async () => HOOK),
+    getInhouseWebhookUrl: vi.fn(async () => HOOK),
     postWebhookMessage: vi.fn(async () => ({ id: MSG_ID })),
     patchWebhookMessage: vi.fn(async () => "ok" as const),
     deleteWebhookMessage: vi.fn(async () => true),
@@ -38,12 +39,16 @@ vi.mock("@/lib/discord", async (importOriginal) => {
 });
 import {
   deleteWebhookMessage,
-  getWebhookUrl,
+  getInhouseWebhookUrl,
   patchWebhookMessage,
   postWebhookMessage,
 } from "@/lib/discord";
+// The routing tests assert on the REAL resolvers (the mock above replaces the
+// exported getInhouseWebhookUrl, which is what the service consumes).
+const { getInhouseWebhookUrl: realGetInhouseWebhookUrl, getWebhookUrl: realGetWebhookUrl } =
+  await vi.importActual<typeof import("@/lib/discord")>("@/lib/discord");
 
-const mockHook = vi.mocked(getWebhookUrl);
+const mockHook = vi.mocked(getInhouseWebhookUrl);
 const mockPost = vi.mocked(postWebhookMessage);
 const mockPatch = vi.mocked(patchWebhookMessage);
 const mockDelete = vi.mocked(deleteWebhookMessage);
@@ -168,7 +173,7 @@ describe("inhouse board — the digest gate", () => {
     await prisma.inhouseQueueEntry.deleteMany({});
     await syncInhouseBoard();
     expect(mockPatch).toHaveBeenCalledTimes(1);
-    const [, payload] = mockPatch.mock.calls[0];
+    const [, , payload] = mockPatch.mock.calls[0];
     const embed = (payload.embeds as { title: string }[])[0];
     expect(embed.title).toContain("empty");
   });
@@ -180,7 +185,7 @@ describe("inhouse board — the digest gate", () => {
     await enqueue(1, "x");
     await syncInhouseBoard();
 
-    const [, payload] = mockPatch.mock.calls[0];
+    const [, , payload] = mockPatch.mock.calls[0];
     expect(payload.embeds).toHaveLength(1);
     expect(payload.content).toBeUndefined();
   });
@@ -213,7 +218,7 @@ describe("inhouse board — the throttle", () => {
     await expireThrottle();
     await syncInhouseBoard();
     expect(mockPatch).toHaveBeenCalledTimes(2);
-    const [, payload] = mockPatch.mock.calls[1];
+    const [, , payload] = mockPatch.mock.calls[1];
     const embed = (payload.embeds as { title: string }[])[0];
     expect(embed.title).toContain("4/10"); // the FINAL count, not a stale step
   });
@@ -318,6 +323,46 @@ describe("inhouse board — webhook moved to another channel", () => {
     await syncInhouseBoard();
     expect(mockPatch).toHaveBeenCalledTimes(1);
     expect(await boardRow()).not.toBeNull();
+  });
+});
+
+describe("inhouse routing — which channel gets what", () => {
+  // A Discord webhook is bound to one channel, so with a single webhook the
+  // queue board lands wherever league announcements go (this shipped pointing
+  // at #welcome). An optional second webhook moves inhouse traffic on its own.
+
+  it("falls back to the league channel when no inhouse webhook is set", async () => {
+    await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, LEAGUE_HOOK);
+    expect(await realGetInhouseWebhookUrl()).toBe(LEAGUE_HOOK);
+    expect((await getInhouseBoardStatus()).separateChannel).toBe(false);
+  });
+
+  it("uses the inhouse webhook when one is set, without touching the league one", async () => {
+    await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, LEAGUE_HOOK);
+    await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, HOOK);
+
+    expect(await realGetInhouseWebhookUrl()).toBe(HOOK);
+    expect(await realGetWebhookUrl()).toBe(LEAGUE_HOOK); // league unchanged
+
+    const status = await getInhouseBoardStatus();
+    expect(status.separateChannel).toBe(true);
+    // The card gets a fingerprint, never the credential.
+    expect(status.inhouseMasked).not.toContain("token-a");
+    expect(status.inhouseMasked).toContain("•");
+  });
+
+  it("strands the board when the inhouse channel changes, rather than editing the wrong one", async () => {
+    await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, HOOK);
+    await createInhouseBoard();
+    await expireThrottle();
+
+    // Admin points inhouse at a different channel.
+    mockHook.mockResolvedValue(OTHER_HOOK);
+    await enqueue(1, "z");
+    await syncInhouseBoard();
+
+    expect(mockPatch).not.toHaveBeenCalled();
+    expect(await boardRow()).toBeNull();
   });
 });
 
@@ -469,7 +514,7 @@ describe("inhouse board — wiring into the sitewide sync", () => {
     await runResultSync();
 
     expect(mockPatch).toHaveBeenCalledTimes(1);
-    const [, payload] = mockPatch.mock.calls[0];
+    const [, , payload] = mockPatch.mock.calls[0];
     expect((payload.embeds as { title: string }[])[0].title).toContain("empty");
   });
 
@@ -482,7 +527,7 @@ describe("inhouse board — wiring into the sitewide sync", () => {
     await runResultSync();
 
     expect(mockPatch).toHaveBeenCalledTimes(1);
-    const [, payload] = mockPatch.mock.calls[0];
+    const [, , payload] = mockPatch.mock.calls[0];
     expect((payload.embeds as { title: string }[])[0].title).toContain("5/10");
   });
 
@@ -511,7 +556,7 @@ describe("inhouse board — removal", () => {
   it("deletes the message and turns the feature off", async () => {
     await createInhouseBoard();
     await removeInhouseBoard();
-    expect(mockDelete).toHaveBeenCalledWith(MSG_ID);
+    expect(mockDelete).toHaveBeenCalledWith(HOOK, MSG_ID);
     expect(await boardRow()).toBeNull();
 
     await expireThrottle();

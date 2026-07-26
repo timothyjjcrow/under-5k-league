@@ -33,7 +33,7 @@ import {
   inhouseLobbyMessage,
   inhouseQueueMessage,
   inhouseResultMessage,
-  sendDiscordMessage,
+  sendInhouseDiscordMessage,
 } from "./discord";
 import { stampResultChange, SETTING_KEYS } from "./settings";
 import { syncInhouseBoard } from "./inhouse-board-service";
@@ -184,7 +184,7 @@ export async function maybeFormLobby(): Promise<boolean> {
     if ((e as { code?: string }).code === "P2034") return false;
     throw e;
   }
-  if (formed && announce) await sendDiscordMessage(announce);
+  if (formed && announce) await sendInhouseDiscordMessage(announce);
   return formed;
 }
 
@@ -724,7 +724,7 @@ export async function joinQueue(
       presentAfter >= milestone &&
       (await claimQueuePingThrottle(Date.now()))
     ) {
-      await sendDiscordMessage(
+      await sendInhouseDiscordMessage(
         inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE),
       );
     }
@@ -1001,7 +1001,7 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   const radiantWin = r.winnerTeam === r.radiantTeam;
   const mvpId = gameMvp(r.boxScore, radiantWin);
   const mvp = mvpId ? r.boxScore.find((b) => b.userId === mvpId) : null;
-  await sendDiscordMessage(
+  await sendInhouseDiscordMessage(
     inhouseResultMessage({
       winnerSide: radiantWin ? "Radiant" : "Dire",
       radiantScore: r.radiantScore,

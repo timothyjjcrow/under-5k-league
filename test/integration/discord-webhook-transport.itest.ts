@@ -79,6 +79,11 @@ beforeEach(async () => {
   );
 });
 
+/** The webhook the service would resolve — tests call the transport directly. */
+function hookUrl() {
+  return `${base}/api/webhooks/1111/tok-secret`;
+}
+
 /** Let the board's spam floor lapse without waiting out real seconds. */
 async function expireThrottle() {
   await setSetting(
@@ -89,7 +94,7 @@ async function expireThrottle() {
 
 describe("postWebhookMessage", () => {
   it("asks for the message back with ?wait=true and returns its id", async () => {
-    const res = await postWebhookMessage({ embeds: [{ title: "hi" }] });
+    const res = await postWebhookMessage(hookUrl(), { embeds: [{ title: "hi" }] });
     expect(res).toEqual({ id: "1379001234567890123" });
     expect(recorded).toHaveLength(1);
     expect(recorded[0].method).toBe("POST");
@@ -97,18 +102,18 @@ describe("postWebhookMessage", () => {
   });
 
   it("suppresses every mention on the way in", async () => {
-    await postWebhookMessage({ embeds: [{ title: "@everyone" }] });
+    await postWebhookMessage(hookUrl(), { embeds: [{ title: "@everyone" }] });
     expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
   });
 
   it("returns null when Discord answers without a usable id", async () => {
     respond = () => ({ status: 200, body: {} });
-    expect(await postWebhookMessage({ content: "x" })).toBeNull();
+    expect(await postWebhookMessage(hookUrl(), { content: "x" })).toBeNull();
   });
 
   it("returns null on a rejected post rather than throwing", async () => {
     respond = () => ({ status: 400, body: { message: "nope" } });
-    expect(await postWebhookMessage({ content: "x" })).toBeNull();
+    expect(await postWebhookMessage(hookUrl(), { content: "x" })).toBeNull();
   });
 });
 
@@ -116,7 +121,7 @@ describe("patchWebhookMessage", () => {
   const MSG = "1379001234567890123";
 
   it("edits the right message on the versioned path", async () => {
-    expect(await patchWebhookMessage(MSG, { embeds: [{ title: "n" }] })).toBe(
+    expect(await patchWebhookMessage(hookUrl(), MSG, { embeds: [{ title: "n" }] })).toBe(
       "ok",
     );
     expect(recorded[0].method).toBe("PATCH");
@@ -126,7 +131,7 @@ describe("patchWebhookMessage", () => {
   });
 
   it("RE-suppresses mentions on every edit — Discord re-parses them from scratch", async () => {
-    await patchWebhookMessage(MSG, {
+    await patchWebhookMessage(hookUrl(), MSG, {
       embeds: [{ description: "In queue: @everyone" }],
     });
     expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
@@ -134,33 +139,36 @@ describe("patchWebhookMessage", () => {
 
   it("treats a deleted message as permanent, so it stops trying", async () => {
     respond = () => ({ status: 404, body: { code: 10008 } });
-    expect(await patchWebhookMessage(MSG, { content: "x" })).toBe("gone");
+    expect(await patchWebhookMessage(hookUrl(), MSG, { content: "x" })).toBe("gone");
   });
 
   it("treats a revoked or rotated token as permanent too", async () => {
     respond = () => ({ status: 401, body: { code: 50027 } });
-    expect(await patchWebhookMessage(MSG, { content: "x" })).toBe("gone");
+    expect(await patchWebhookMessage(hookUrl(), MSG, { content: "x" })).toBe("gone");
     respond = () => ({ status: 403, body: {} });
-    expect(await patchWebhookMessage(MSG, { content: "x" })).toBe("gone");
+    expect(await patchWebhookMessage(hookUrl(), MSG, { content: "x" })).toBe("gone");
   });
 
   it("treats rate limits and outages as transient, so the next poll retries", async () => {
     respond = () => ({ status: 429, body: { retry_after: 1.5 } });
-    expect(await patchWebhookMessage(MSG, { content: "x" })).toBe("failed");
+    expect(await patchWebhookMessage(hookUrl(), MSG, { content: "x" })).toBe("failed");
     respond = () => ({ status: 500, body: {} });
-    expect(await patchWebhookMessage(MSG, { content: "x" })).toBe("failed");
+    expect(await patchWebhookMessage(hookUrl(), MSG, { content: "x" })).toBe("failed");
   });
 
   it("gives up quickly instead of hanging the inhouse poll", async () => {
     respond = () => ({ status: 200, delayMs: 4000 });
     const started = Date.now();
-    expect(await patchWebhookMessage(MSG, { content: "x" })).toBe("failed");
+    expect(await patchWebhookMessage(hookUrl(), MSG, { content: "x" })).toBe("failed");
     expect(Date.now() - started).toBeLessThan(3500);
   }, 10_000);
 
-  it("fails cleanly when no webhook is configured at all", async () => {
-    await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
-    expect(await patchWebhookMessage(MSG, { content: "x" })).toBe("failed");
+  it("reports a transient failure when the host is unreachable, never throws", async () => {
+    // The caller resolves the webhook now, so "no webhook" is the service's
+    // guard (inhouse-board.itest) — what the transport still owes us is that a
+    // dead host degrades to "failed" (retry later) instead of blowing up a poll.
+    const dead = "http://127.0.0.1:1/api/webhooks/1111/tok";
+    expect(await patchWebhookMessage(dead, MSG, { content: "x" })).toBe("failed");
     expect(recorded).toHaveLength(0);
   });
 });
@@ -232,18 +240,18 @@ describe("the board over a real queue", () => {
 describe("deleteWebhookMessage", () => {
   it("deletes on the versioned message path", async () => {
     respond = () => ({ status: 204 });
-    expect(await deleteWebhookMessage("42")).toBe(true);
+    expect(await deleteWebhookMessage(hookUrl(), "42")).toBe(true);
     expect(recorded[0].method).toBe("DELETE");
     expect(recorded[0].url).toBe("/api/v10/webhooks/1111/tok-secret/messages/42");
   });
 
   it("counts an already-deleted message as success", async () => {
     respond = () => ({ status: 404, body: { code: 10008 } });
-    expect(await deleteWebhookMessage("42")).toBe(true);
+    expect(await deleteWebhookMessage(hookUrl(), "42")).toBe(true);
   });
 
   it("reports a real failure", async () => {
     respond = () => ({ status: 500 });
-    expect(await deleteWebhookMessage("42")).toBe(false);
+    expect(await deleteWebhookMessage(hookUrl(), "42")).toBe(false);
   });
 });

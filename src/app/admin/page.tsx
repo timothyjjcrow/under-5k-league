@@ -42,6 +42,9 @@ import {
   setDiscordWebhook,
   clearDiscordWebhook,
   testDiscordWebhook,
+  setInhouseWebhook,
+  clearInhouseWebhook,
+  testInhouseWebhook,
   postInhouseBoard,
   deleteInhouseBoard,
   revokeAllSessions,
@@ -2205,6 +2208,74 @@ function DiscordControls({
           here. For security the saved URL is never shown again — paste a new one
           to replace it, or Remove to turn announcements off.
         </p>
+
+        <div className="space-y-3 border-t border-line pt-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-medium">Inhouse channel</span>
+            {board.separateChannel ? (
+              <Badge tone="success">Separate</Badge>
+            ) : (
+              <Badge tone="neutral">Same as above</Badge>
+            )}
+            {board.separateChannel ? (
+              <span className="font-mono text-xs text-muted">
+                {board.inhouseMasked}
+              </span>
+            ) : null}
+            <ActionForm action={testInhouseWebhook}>
+              <SubmitButton variant="ghost" size="sm">
+                Test
+              </SubmitButton>
+            </ActionForm>
+          </div>
+
+          <ActionForm
+            action={setInhouseWebhook}
+            className="flex flex-wrap items-end gap-2"
+          >
+            <div className="min-w-0 flex-1">
+              <label
+                htmlFor="inhouseWebhookUrl"
+                className="mb-1 block text-xs text-muted"
+              >
+                {board.separateChannel
+                  ? "Replace inhouse webhook URL"
+                  : "Inhouse webhook URL (optional)"}
+              </label>
+              <input
+                id="inhouseWebhookUrl"
+                name="inhouseWebhookUrl"
+                type="url"
+                autoComplete="off"
+                placeholder="https://discord.com/api/webhooks/…"
+                className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+              />
+            </div>
+            <SubmitButton variant="secondary" size="sm">
+              Save
+            </SubmitButton>
+          </ActionForm>
+
+          {board.separateChannel ? (
+            <ActionForm action={clearInhouseWebhook}>
+              <SubmitButton
+                variant="ghost"
+                size="sm"
+                confirm="Send inhouse posts back to the league channel? The queue board will be removed."
+              >
+                Use the league channel instead
+              </SubmitButton>
+            </ActionForm>
+          ) : null}
+
+          <p className="text-xs text-muted">
+            A Discord webhook only ever posts to the channel it was made in. Make
+            one in <b>#inhouse</b> and paste it here to send the queue board,
+            &ldquo;match found&rdquo;, the queue ping and inhouse results there —
+            leaving signups, draft night and match results in the channel above.
+            Leave this blank and everything shares one channel.
+          </p>
+        </div>
 
         <div className="space-y-3 border-t border-line pt-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">

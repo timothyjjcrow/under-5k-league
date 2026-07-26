@@ -99,8 +99,12 @@ queue and **rewrites itself in place** as people come and go — a live count
 with no new messages, ever. Editing a message doesn't notify anyone, mark the
 channel unread, or bump it, so the channel stays quiet.
 
-1. Configure the Discord webhook (Admin → Discord notifications) for the
-   channel you want the board in — usually your inhouse channel.
+1. In Discord, make a webhook **in your inhouse channel** (Server Settings →
+   Integrations → Webhooks → New Webhook) and paste it into Admin → Discord
+   notifications → **Inhouse channel**. A webhook only ever posts to the
+   channel it was created in, so this is what keeps the board — plus "match
+   found", the queue ping and inhouse results — out of your league-
+   announcement channel. Leave it blank and everything shares one channel.
 2. Hit **Post queue board**.
 3. In Discord, right-click the message → **Pin Message**. Do not skip this: an
    edited message never moves, so in a chatty channel it scrolls away.

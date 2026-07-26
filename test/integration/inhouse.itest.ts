@@ -43,13 +43,15 @@ import { fetchOpenDotaMatch, fetchRecentMatchIds } from "@/lib/dota";
 // stay real) so tests can assert what would have been announced.
 vi.mock("@/lib/discord", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/discord")>();
-  return { ...actual, sendDiscordMessage: vi.fn(async () => true) };
+  return { ...actual, sendInhouseDiscordMessage: vi.fn(async () => true) };
 });
-import { sendDiscordMessage } from "@/lib/discord";
+// Inhouse posts to its OWN webhook (getInhouseWebhookUrl) so a league can
+// keep pick-up traffic out of the league-announcement channel.
+import { sendInhouseDiscordMessage } from "@/lib/discord";
 
 const mockRecent = vi.mocked(fetchRecentMatchIds);
 const mockMatch = vi.mocked(fetchOpenDotaMatch);
-const mockSend = vi.mocked(sendDiscordMessage);
+const mockSend = vi.mocked(sendInhouseDiscordMessage);
 
 afterEach(() => {
   mockRecent.mockReset();

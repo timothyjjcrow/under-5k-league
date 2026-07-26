@@ -654,6 +654,17 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 ## Live inhouse queue board (done)
 
+**Inhouse has its OWN optional webhook** (`inhouseWebhookUrl` Setting /
+`DISCORD_INHOUSE_WEBHOOK_URL` env, `getInhouseWebhookUrl`, falling back to the
+league webhook when unset). A Discord webhook is bound to the channel it was
+created in, so one webhook meant the queue board landed wherever league
+signups and results go — it shipped into #welcome. Everything inhouse posts
+(`sendInhouseDiscordMessage`: lobby formed, the two-short ping, results, and
+the board) routes through it; the other 27 announcement types keep using
+`sendDiscordMessage`. Changing EITHER webhook tears the board down first when
+that webhook is the one the board rides, so it can't be stranded in an old
+channel.
+
 ONE pinned Discord message showing the live queue count, rewritten IN PLACE —
 a live counter that never posts a second message. Pure render in
 `src/lib/inhouse-board.ts` (tested), service in `inhouse-board-service.ts`
