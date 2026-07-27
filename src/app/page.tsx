@@ -510,6 +510,8 @@ async function MyNextMatch({
   // they were actually playing that night got no check-ins at all. Prefer the
   // earliest fixture that is still plausibly ahead of (or during) tonight, and
   // fall back to the stale one only when there's nothing else left.
+  // async server component (renders once per request); see admin/page.tsx.
+  // eslint-disable-next-line react-hooks/purity
   const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
   const next =
     (await prisma.match.findFirst({
@@ -786,6 +788,7 @@ async function InhouseStrip() {
   const [queued, liveLobby] = await Promise.all([
     // Same presence rule as /inhouse: only recently-seen players count.
     prisma.inhouseQueueEntry.count({
+      // eslint-disable-next-line react-hooks/purity -- async server component
       where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
     }),
     prisma.inhouseLobby.findFirst({

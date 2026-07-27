@@ -110,7 +110,14 @@ export function SiteHeader({
   const headerRef = useRef<HTMLElement>(null);
 
   // Close the mobile menu whenever the route changes (e.g. a link was tapped).
-  useEffect(() => setOpen(false), [pathname]);
+  // Adjusted DURING RENDER rather than in an effect: React's documented way to
+  // reset state when an input changes, and it avoids the extra committed frame
+  // where the menu is still open on the new route.
+  const [menuPath, setMenuPath] = useState(pathname);
+  if (menuPath !== pathname) {
+    setMenuPath(pathname);
+    setOpen(false);
+  }
 
   // While the mobile menu is open, Escape closes it (returning focus to the
   // toggle so keyboard users don't lose their place) and a tap/click outside

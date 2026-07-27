@@ -1737,6 +1737,10 @@ async function AutoSyncHealth({ season }: { season: Season }) {
   ) {
     return null;
   }
+  // async SERVER component: it renders once per request, so there is no
+  // re-render for Date.now() to be non-idempotent across. The rule is written
+  // for client components.
+  // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
   const [inWindow, leagueSyncAt, cursor, skipRaw, privatePlayers] =
     await Promise.all([

@@ -19,6 +19,7 @@ import { DiscordTag } from "@/components/discord-tag";
 import { playChime, unlockAudio } from "@/components/chime";
 import {
   useBannerOffscreen,
+  usePersistedFlag,
   usePollHealth,
   useSecondsLeft,
 } from "@/components/room-clock";
@@ -40,6 +41,35 @@ type FeedEvent = {
   text: string;
   amount: number;
 };
+
+/**
+ * The feed as reconstructed from the FIRST state after a page load (the live
+ * nomination plus recent sales), so joining mid-draft doesn't show an empty
+ * feed. Pure: seeded ids are NEGATIVE, which keeps them clear of the
+ * incrementing counter used for live events without mutating a ref mid-render.
+ */
+function seedFeed(state: DraftState): FeedEvent[] {
+  const nameOf = (id: string | null) =>
+    state.teams.find((t) => t.id === id)?.name ?? "—";
+  const seed: FeedEvent[] = [];
+  if (state.nominatedPlayer) {
+    seed.push({
+      id: -1,
+      kind: "nominate",
+      text: `${nameOf(state.nominatorTeamId)} nominated ${state.nominatedPlayer.name}`,
+      amount: state.currentBid,
+    });
+  }
+  state.recentSales.forEach((s, i) => {
+    seed.push({
+      id: -2 - i,
+      kind: "sold",
+      text: `${s.name} → ${s.teamName}`,
+      amount: s.price,
+    });
+  });
+  return seed.slice(0, 12);
+}
 
 // --- Countdown leaves -------------------------------------------------------
 // These own the 250ms tick via useSecondsLeft, so only the clock text
@@ -143,7 +173,7 @@ export function DraftRoom({
   // Disconnected = every action disabled: a bid against stale state would
   // either fail or, worse, look accepted while the real auction moved on.
   const pending = reqPending || disconnected;
-  const [soundOn, setSoundOn] = useState(true);
+  const [soundOn, setSoundOn] = usePersistedFlag("draftSound");
   // Latched while the viewer's team has lost the high bid on the live
   // nomination — cleared by the poll once it's stale (re-took the bid, the
   // player sold, or bidding closed).
@@ -152,7 +182,15 @@ export function DraftRoom({
     team: string;
     amount: number;
   } | null>(null);
-  const offsetRef = useRef(0); // serverNow - clientNow, to sync the countdown
+  // Clock skew as STATE, not a ref read during render. Reading `ref.current`
+  // while rendering is unsafe under concurrent React (the value can differ
+  // between a render React keeps and one it throws away) and the lint rules
+  // flag it. Storing it only when it MOVES keeps the original reason it was a
+  // ref: `s.now - Date.now()` jitters by a few ms on every poll, and
+  // re-rendering the room + player pool for that would undo the leaf-clock
+  // optimisation. A whole second of drift is the smallest change any countdown
+  // can show.
+  const [offsetMsState, setOffsetMs] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [nomAmount, setNomAmount] = useState(1);
   // Live feed + "SOLD!" flash — derived client-side by diffing successive
@@ -168,10 +206,6 @@ export function DraftRoom({
     isMe: boolean;
   } | null>(null);
 
-  useEffect(() => {
-    setSoundOn(localStorage.getItem("draftSound") !== "off");
-  }, []);
-
   // Spectators and players-on-the-block never call act(), so without this
   // their first chime (you're nominated / you're drafted) would be blocked by
   // the browser's autoplay policy — any first click/tap on the page unlocks.
@@ -182,13 +216,10 @@ export function DraftRoom({
   }, []);
 
   const toggleSound = useCallback(() => {
-    setSoundOn((on) => {
-      const next = !on;
-      localStorage.setItem("draftSound", next ? "on" : "off");
-      if (next) playChime(); // confirm + unlock audio on this gesture
-      return next;
-    });
-  }, []);
+    const next = !soundOn;
+    setSoundOn(next);
+    if (next) playChime(); // confirm + unlock audio on this gesture
+  }, [soundOn, setSoundOn]);
 
   // Order poll and action responses by request START: a slow tick that left
   // before my bid must not overwrite the bid's fresher state when it finally
@@ -199,9 +230,20 @@ export function DraftRoom({
   const apply = useCallback((s: DraftState, seq: number) => {
     if (seq < appliedSeqRef.current) return; // lost the response race — stale
     appliedSeqRef.current = seq;
-    offsetRef.current = s.now - Date.now();
+    const skew = s.now - Date.now();
+    setOffsetMs((prev) => (Math.abs(prev - skew) >= 1000 ? skew : prev));
     setState(s);
   }, []);
+
+  // Seed the feed from the first state DURING RENDER rather than in the diff
+  // effect: setState inside an effect cascades a render, and the feed would
+  // otherwise paint empty for one frame on every page load mid-draft.
+  const [seeded, setSeeded] = useState(false);
+  if (state && !seeded) {
+    setSeeded(true);
+    const seed = seedFeed(state);
+    if (seed.length) setEvents(seed);
+  }
 
   // Does this viewer need alerts even with the tab hidden? Captains and admins
   // act; a player still in the pool can be nominated at any moment and wants
@@ -309,30 +351,9 @@ export function DraftRoom({
     prevRef.current = state;
     const nameOf = (id: string | null) =>
       state.teams.find((t) => t.id === id)?.name ?? "—";
-    if (!prev) {
-      // First state after a page load: seed the feed with the reconstructed
-      // history (current nomination + past sales) so joining mid-draft
-      // doesn't mean an empty feed.
-      const seed: FeedEvent[] = [];
-      if (state.nominatedPlayer) {
-        seed.push({
-          id: eventIdRef.current++,
-          kind: "nominate",
-          text: `${nameOf(state.nominatorTeamId)} nominated ${state.nominatedPlayer.name}`,
-          amount: state.currentBid,
-        });
-      }
-      for (const s of state.recentSales) {
-        seed.push({
-          id: eventIdRef.current++,
-          kind: "sold",
-          text: `${s.name} → ${s.teamName}`,
-          amount: s.price,
-        });
-      }
-      if (seed.length) setEvents(seed.slice(0, 12));
-      return;
-    }
+    // The first state seeds the feed during RENDER (see `seededRef` below);
+    // here we only take the bookkeeping snapshot so the next poll can diff.
+    if (!prev) return;
     const add: FeedEvent[] = [];
 
     // A sale = any new non-captain roster member appearing on a team.
@@ -377,6 +398,12 @@ export function DraftRoom({
       });
     }
 
+    // The feed is an append-only LOG of state transitions; it cannot be
+    // derived from the current state alone, which is what a pure alternative
+    // would require. Deferring it is worse than the cascade: the feed line and
+    // the SOLD! flash must land in the same commit, and this is draft night's
+    // marquee moment. The seed above is pure; only the accumulation needs this.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (add.length) setEvents((e) => [...add, ...e].slice(0, 12));
 
     // Outbid latch: clear stale first, then a fresh detection wins the tick.
@@ -527,7 +554,7 @@ export function DraftRoom({
   const { me } = state;
   // The countdowns tick inside <BidClock>/<NomClock> leaves (see below) so the
   // per-second update doesn't re-render the whole room + player pool.
-  const offsetMs = offsetRef.current;
+  const offsetMs = offsetMsState;
   const nominatorName =
     state.teams.find((t) => t.id === state.nominatorTeamId)?.name ?? "—";
   const highBidderName = state.teams.find(
@@ -878,7 +905,7 @@ export function DraftRoom({
                   <div className="flex flex-wrap items-center gap-2 text-xl font-bold">
                     {state.nominatedPlayer.name}
                     {me.userId === state.nominatedPlayer.userId ? (
-                      <Badge tone="accent">You're on the block!</Badge>
+                      <Badge tone="accent">You&apos;re on the block!</Badge>
                     ) : null}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted">
@@ -1397,7 +1424,7 @@ function AuctionPrimer({
         <li>
           <strong className="text-fg">Captains take turns nominating</strong>{" "}
           a player from the pool — the order rotates until every roster is
-          full. Non-captains: sit back, you're the merchandise.
+          full. Non-captains: sit back, you&apos;re the merchandise.
         </li>
         <li>
           <strong className="text-fg">
@@ -1414,7 +1441,7 @@ function AuctionPrimer({
         </li>
         <li>
           <strong className="text-fg">Your max bid is capped</strong> — the
-          room reserves ${minBid} for each seat you'd still have to fill
+          room reserves ${minBid} for each seat you&apos;d still have to fill
           afterwards, so you can always finish your roster.
         </li>
         <li>

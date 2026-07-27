@@ -7,6 +7,7 @@ import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import {
   useBannerOffscreen,
+  usePersistedFlag,
   usePollHealth,
   useSecondsLeft,
   useElapsedMs,
@@ -68,8 +69,16 @@ export function InhouseRoom({
   const pending = reqPending || disconnected;
   const [selected, setSelected] = useState<string | null>(null);
   const [mmr, setMmr] = useState<number>(defaultMmr);
-  const [soundOn, setSoundOn] = useState(true);
-  const offsetRef = useRef(0); // serverNow - clientNow, to sync the clock
+  const [soundOn, setSoundOn] = usePersistedFlag("inhouseSound");
+  // Clock skew as STATE, not a ref read during render. Reading `ref.current`
+  // while rendering is unsafe under concurrent React (the value can differ
+  // between a render React keeps and one it throws away) and the lint rules
+  // flag it. Storing it only when it MOVES keeps the original reason it was a
+  // ref: `s.now - Date.now()` jitters by a few ms on every poll, and
+  // re-rendering the room + player pool for that would undo the leaf-clock
+  // optimisation. A whole second of drift is the smallest change any countdown
+  // can show.
+  const [offsetMsState, setOffsetMs] = useState(0);
   // Lets an action (join/accept/vote/pick) nudge the adaptive poll loop to
   // re-evaluate its cadence NOW instead of waiting out a stale idle timer —
   // so joining an idle page snaps to fast polling immediately.
@@ -102,19 +111,20 @@ export function InhouseRoom({
   );
 
   useEffect(() => {
-    setSoundOn(localStorage.getItem("inhouseSound") !== "off");
     const dismissed = localStorage.getItem("inhouseDismissedResult");
-    if (dismissed) setDismissedResults(new Set([dismissed]));
+    // Deferred a tick: setting state synchronously inside an effect cascades a
+    // render, and this only has to beat the first result banner.
+    if (dismissed) {
+      const t = setTimeout(() => setDismissedResults(new Set([dismissed])), 0);
+      return () => clearTimeout(t);
+    }
   }, []);
 
   const toggleSound = useCallback(() => {
-    setSoundOn((on) => {
-      const next = !on;
-      localStorage.setItem("inhouseSound", next ? "on" : "off");
-      if (next) playChime(); // confirm + unlock audio on this gesture
-      return next;
-    });
-  }, []);
+    const next = !soundOn;
+    setSoundOn(next);
+    if (next) playChime(); // confirm + unlock audio on this gesture
+  }, [soundOn, setSoundOn]);
 
   // Order poll and action responses by request START (the draft room's guard —
   // this loop needs it just as much). A `state` poll that left BEFORE a pick
@@ -131,7 +141,8 @@ export function InhouseRoom({
   const apply = useCallback((s: InhouseState, seq: number) => {
     if (seq < appliedSeqRef.current) return; // lost the response race — stale
     appliedSeqRef.current = seq;
-    offsetRef.current = s.now - Date.now();
+    const skew = s.now - Date.now();
+    setOffsetMs((prev) => (Math.abs(prev - skew) >= 1000 ? skew : prev));
     setState(s);
   }, []);
 
@@ -432,7 +443,7 @@ export function InhouseRoom({
   }
 
   const { lobby, me } = state;
-  const offset = offsetRef.current; // serverNow - clientNow, for the pick clock
+  const offset = offsetMsState; // serverNow - clientNow, for the pick clock
   // A selection is only meaningful while its player is still in the pool.
   // Derived, not synced through an effect: `selected` is otherwise cleared
   // only on a successful act(), so a captain who tapped the top-MMR player and
@@ -574,6 +585,7 @@ export function InhouseRoom({
           lobby={lobby}
           me={me}
           offset={offset}
+          serverNow={state.now}
           detectMinMinutes={state.detectMinMinutes}
           pending={pending}
           act={act}
@@ -1649,6 +1661,7 @@ function InProgressView({
   lobby,
   me,
   offset,
+  serverNow,
   detectMinMinutes,
   pending,
   act,
@@ -1656,6 +1669,8 @@ function InProgressView({
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
   offset: number;
+  /** The server clock from the last poll — see the scan-window note below. */
+  serverNow: number;
   detectMinMinutes: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
@@ -1663,8 +1678,14 @@ function InProgressView({
   const [matchId, setMatchId] = useState("");
   // Poll-driven (not ticking) — only gates the "auto-scan is live" note, which
   // flips once, minutes in; the visible timer ticks in <ElapsedClock>.
+  // Server clock, not `Date.now() + offset`: calling Date.now() during render
+  // makes the render non-idempotent (React may run it twice and keep either
+  // result). `state.now` is the same figure the offset is derived FROM, so
+  // this is equivalent and, if anything, more honest — the scan window is a
+  // server-side decision. It only lags by one poll, and this flag flips once,
+  // minutes in; the visible timer keeps ticking in <ElapsedClock>.
   const elapsedMs =
-    lobby.startedAt != null ? Date.now() + offset - lobby.startedAt : null;
+    lobby.startedAt != null ? serverNow - lobby.startedAt : null;
   const scanLive =
     elapsedMs != null && elapsedMs >= detectMinMinutes * 60_000;
 

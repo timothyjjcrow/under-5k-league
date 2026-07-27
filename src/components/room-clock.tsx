@@ -14,10 +14,57 @@
 // corrects for clock skew. The rooms only mount these once real state has
 // loaded, so there is no SSR/hydration clock mismatch.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { elapsedSince, secondsUntil } from "@/lib/countdown";
 
 const TICK_MS = 250;
+
+/**
+ * A boolean persisted in localStorage (the rooms' sound toggles).
+ *
+ * `useSyncExternalStore`, not `useState` + a mount effect: reading storage in
+ * an effect and calling setState is a cascading render, and it also duplicates
+ * the truth — the stored string and the state could disagree. Here localStorage
+ * IS the state, the server snapshot is the default (so SSR and the first client
+ * render agree), and a change in another TAB is picked up for free.
+ */
+export function usePersistedFlag(
+  key: string,
+  defaultOn = true,
+): [boolean, (next: boolean) => void] {
+  const subscribe = useCallback((onChange: () => void) => {
+    const relay = (e: StorageEvent) => {
+      if (e.key === key || e.key === null) onChange();
+    };
+    window.addEventListener("storage", relay);
+    LOCAL_LISTENERS.add(onChange);
+    return () => {
+      window.removeEventListener("storage", relay);
+      LOCAL_LISTENERS.delete(onChange);
+    };
+  }, [key]);
+  const value = useSyncExternalStore(
+    subscribe,
+    () => localStorage.getItem(key) !== (defaultOn ? "off" : "on"),
+    () => defaultOn, // SSR + first paint: no storage to read yet
+  );
+  const set = useCallback(
+    (next: boolean) => {
+      localStorage.setItem(key, next ? "on" : "off");
+      // `storage` only fires in OTHER tabs, so nudge this one ourselves.
+      for (const l of LOCAL_LISTENERS) l();
+    },
+    [key],
+  );
+  return [value, set];
+}
+const LOCAL_LISTENERS = new Set<() => void>();
 
 function useClientNow(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -77,11 +124,16 @@ export function usePollHealth(threshold = 3) {
 export function useBannerOffscreen(active: boolean) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [offscreen, setOffscreen] = useState(false);
+  // Reset during render when the banner goes inactive (the draft ended, the
+  // lobby closed) — same reason as site-header: an effect would commit one
+  // frame with a stale sticky bar, and setState inside an effect cascades.
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (!active) setOffscreen(false);
+  }
   useEffect(() => {
-    if (!active) {
-      setOffscreen(false);
-      return;
-    }
+    if (!active) return;
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
     const obs = new IntersectionObserver(
