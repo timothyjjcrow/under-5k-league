@@ -66,9 +66,23 @@ row before the call is caught by the function's own read-time check, so the test
 passes against the broken code — this produced four false-green tests here.
 Use `Promise.all` over competing service calls, loop it, and assert the
 invariant. `npm run test:pg` (`PG_TEST_URL=…`) is the only thing that runs them
-for real. To find unprotected guards, mutation-test: strip a claim's state
-predicate and see whether anything fails. Last measured **8 of 49 claims
-protected** — assume a guard is unprotected until shown otherwise.
+for real.
+
+**The mutation guard is CI's ratchet over all of this**
+(`scripts/mutation-guard.mjs`, baseline in `test/mutation-baseline.json`, run by
+the `integration on postgres` job). It deletes each guard the baseline records
+as protected and requires the suite to fail. It gates on two things: a
+protected claim that stops being caught (its test regressed), and a protected
+claim that has DISAPPEARED (the guard itself was removed or weakened). Claim ids
+are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme let
+a deleted guard silently re-bind to the next claim down, so the ratchet reported
+all-clear on a sabotage; don't reintroduce positional ids.
+
+Currently **8 of 49 claims protected**. The other 41 are reported, never gating —
+assume a guard is unprotected until the baseline says otherwise. To raise the
+ratchet: write a raced test, then `npm run test:mutation:discover` and commit
+the new baseline. Deliberately removing a guard also needs a re-discover, which
+is the point at which someone has to justify it.
 
 ## Conventions / gotchas
 

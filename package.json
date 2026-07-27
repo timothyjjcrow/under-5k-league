@@ -13,6 +13,8 @@
     "db:reset": "node scripts/assert-local-db.mjs \"Resetting the database\" && prisma db push --force-reset --skip-generate && npm run db:seed",
     "db:backup": "node scripts/backup-db.mjs",
     "test:pg": "vitest run --config vitest.pg.config.mts",
+    "test:mutation": "node scripts/mutation-guard.mjs",
+    "test:mutation:discover": "node scripts/mutation-guard.mjs --discover",
     "set-admins": "tsx prisma/set-admins.ts",
     "test": "vitest run",
     "test:watch": "vitest",

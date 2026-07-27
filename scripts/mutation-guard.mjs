@@ -1,0 +1,287 @@
+// Mutation guard — a RATCHET over the repo's guarded claims.
+//
+// A "guarded claim" is an `updateMany({ where: … })` whose WHERE carries a
+// STATE predicate (a status, a null-check, a timestamp) on top of the identity
+// keys. That predicate IS the concurrency guard: strip it and the claim becomes
+// a blind write, which is this codebase's dominant bug class (see CLAUDE.md's
+// "Concurrency: the two rules").
+//
+// The problem it solves: those guards are almost invisible to the test suite.
+// SQLite serializes writers, so most races cannot even be produced there, and a
+// test that merely exercises the happy path passes just as well with the guard
+// deleted. Measured, only a handful of claims had any test that would notice.
+//
+// So this does the only honest check available: DELETE each guard and see
+// whether the suite complains.
+//
+//   node scripts/mutation-guard.mjs --discover   # full sweep, rewrites the baseline
+//   node scripts/mutation-guard.mjs              # verify the baseline (what CI runs)
+//
+// Verify mode re-mutates only the claims the baseline says are PROTECTED, so it
+// costs ~1 suite run each rather than one per claim in the repo. It fails when:
+//   * a protected claim is no longer caught  → a test that protected it regressed
+//   * a protected claim has DISAPPEARED      → the guard itself was removed
+// New claims are reported but never fail the build; raise the ratchet by
+// writing a test and re-running --discover.
+//
+// MUST run against Postgres (PG_TEST_URL). Several of these claims are only
+// caught by RACED tests, and on SQLite those race calls serialize — the mutant
+// survives and the ratchet would silently measure nothing.
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { execSync } from "node:child_process";
+import path from "node:path";
+
+const BASELINE = "test/mutation-baseline.json";
+
+// Every file that holds transactional service logic. Add new ones here.
+const FILES = [
+  "src/lib/draft-service.ts",
+  "src/lib/inhouse-service.ts",
+  "src/lib/match-import.ts",
+  "src/lib/reschedule-service.ts",
+  "src/lib/standin-service.ts",
+  "src/lib/playoff-service.ts",
+  "src/lib/result-sync-service.ts",
+  "src/lib/inhouse-board-service.ts",
+  "src/lib/settings.ts",
+  "src/lib/season.ts",
+  "src/app/actions/admin.ts",
+  "src/app/actions/registration.ts",
+];
+
+// Keys that merely IDENTIFY the row. Everything else in a WHERE is state, and
+// state is what makes the write a claim.
+const IDENTITY = new Set([
+  "id", "seasonId", "lobbyId", "userId", "matchId", "teamId", "key",
+  "draftId", "gameId", "dotaMatchId", "registrationId", "steamId", "discordId",
+]);
+
+/** The balanced {...} beginning at `open`. */
+function block(src, open) {
+  let d = 0, inStr = null, esc = false;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) { if (c === "\\") esc = true; else if (c === inStr) inStr = null; continue; }
+    if (c === '"' || c === "'" || c === "`") { inStr = c; continue; }
+    if (c === "{") d++;
+    else if (c === "}") { d--; if (d === 0) return [open, i + 1]; }
+  }
+  return null;
+}
+
+/** Top-level `key: value` spans inside an object literal. */
+function topKeys(src, s, e) {
+  const out = [];
+  let d = 0, inStr = null, esc = false;
+  for (let i = s + 1; i < e - 1; i++) {
+    const c = src[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) { if (c === "\\") esc = true; else if (c === inStr) inStr = null; continue; }
+    if (c === '"' || c === "'" || c === "`") { inStr = c; continue; }
+    if (c === "{" || c === "[" || c === "(") d++;
+    else if (c === "}" || c === "]" || c === ")") d--;
+    else if (d === 0) {
+      const m = /^([A-Za-z_$][\w$]*)\s*:/.exec(src.slice(i, i + 40));
+      if (m && (i === s + 1 || /[\s,{]/.test(src[i - 1]))) {
+        let j = i + m[0].length, dd = 0, st = null, es = false;
+        for (; j < e - 1; j++) {
+          const cc = src[j];
+          if (es) { es = false; continue; }
+          if (st) { if (cc === "\\") es = true; else if (cc === st) st = null; continue; }
+          if (cc === '"' || cc === "'" || cc === "`") { st = cc; continue; }
+          if (cc === "{" || cc === "[" || cc === "(") dd++;
+          else if (cc === "}" || cc === "]" || cc === ")") { if (dd === 0) break; dd--; }
+          else if (cc === "," && dd === 0) break;
+        }
+        out.push({ key: m[1], start: i, end: j });
+        i = j;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The function a claim sits in. Anchoring IDs to this is load-bearing: a
+ * file-wide ordinal SHIFTS when a claim is removed, so deleting a guard made
+ * its id silently re-bind to a different claim further down and the ratchet
+ * reported all-clear. (Caught by sabotage-testing the ratchet itself.)
+ */
+function enclosingFn(src, offset) {
+  const decl =
+    /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g;
+  let name = "<top>";
+  for (let m; (m = decl.exec(src)); ) {
+    if (m.index > offset) break;
+    name = m[1] ?? m[2] ?? name;
+  }
+  return name;
+}
+
+/**
+ * Claims are identified by file + enclosing function + their state-key
+ * SIGNATURE + an ordinal within that function — never by line number, which
+ * every unrelated edit above them would churn.
+ */
+function discoverFile(file) {
+  const src = readFileSync(file, "utf8");
+  const found = [];
+  const seen = new Map();
+  let from = 0;
+  for (;;) {
+    const at = src.indexOf("updateMany(", from);
+    if (at === -1) break;
+    from = at + 11;
+    const argOpen = src.indexOf("{", at);
+    if (argOpen === -1) continue;
+    const arg = block(src, argOpen);
+    if (!arg) continue;
+    const where = topKeys(src, arg[0], arg[1]).find((p) => p.key === "where");
+    if (!where) continue;
+    const wOpen = src.indexOf("{", where.start + 6);
+    if (wOpen === -1 || wOpen > where.end) continue;
+    const wb = block(src, wOpen);
+    if (!wb) continue;
+    const state = topKeys(src, wb[0], wb[1]).filter((k) => !IDENTITY.has(k.key));
+    if (state.length === 0) continue;
+    const sig = state.map((s) => s.key).sort().join("+");
+    const fn = enclosingFn(src, at);
+    const scope = `${fn}::${sig}`;
+    const ord = (seen.get(scope) ?? 0) + 1;
+    seen.set(scope, ord);
+    found.push({
+      id: `${file}::${fn}::${sig}#${ord}`,
+      file,
+      line: src.slice(0, at).split("\n").length,
+      drop: state.map((s) => [s.start, s.end]),
+    });
+    from = arg[1];
+  }
+  return { src, found };
+}
+
+function discoverAll() {
+  const claims = [];
+  for (const f of FILES) {
+    if (!existsSync(f)) continue;
+    claims.push(...discoverFile(f).found);
+  }
+  return claims;
+}
+
+/** Source with this claim's state predicates deleted — a blind write. */
+function mutate(src, claim) {
+  let out = src;
+  for (const [s, e] of [...claim.drop].sort((a, b) => b[0] - a[0])) {
+    let end = e;
+    while (end < out.length && /[\s,]/.test(out[end]) && out[end] !== "\n") end++;
+    out = out.slice(0, s) + out.slice(end);
+  }
+  return out;
+}
+
+/** True if the suite NOTICED the mutation (i.e. the guard is protected). */
+function suiteCatches(claim) {
+  const original = readFileSync(claim.file, "utf8");
+  const { found } = discoverFile(claim.file);
+  const live = found.find((c) => c.id === claim.id);
+  if (!live) return { caught: false, missing: true };
+  writeFileSync(claim.file, mutate(original, live));
+  try {
+    execSync("npx vitest run --config vitest.pg.config.mts --bail=1 --silent", {
+      stdio: "pipe", timeout: 900_000, env: process.env,
+    });
+    return { caught: false, missing: false };
+  } catch {
+    return { caught: true, missing: false };
+  } finally {
+    writeFileSync(claim.file, original);
+  }
+}
+
+// ---------------------------------------------------------------------------
+if (!process.env.PG_TEST_URL) {
+  console.error(
+    "PG_TEST_URL is required — the ratchet is meaningless on SQLite, where the\n" +
+      "raced tests that protect several claims cannot interleave.",
+  );
+  process.exit(2);
+}
+
+const discover = process.argv.includes("--discover");
+const claims = discoverAll();
+
+if (discover) {
+  console.log(`Sweeping ${claims.length} guarded claims (one suite run each)…\n`);
+  const protectedIds = [];
+  for (const [i, c] of claims.entries()) {
+    const { caught } = suiteCatches(c);
+    console.log(
+      `  [${caught ? "PROTECTED  " : "unprotected"}] (${i + 1}/${claims.length}) ${c.id}  (${c.file}:${c.line})`,
+    );
+    if (caught) protectedIds.push(c.id);
+  }
+  writeFileSync(
+    BASELINE,
+    JSON.stringify(
+      {
+        note:
+          "Guarded claims that a test actually protects. Generated by " +
+          "`node scripts/mutation-guard.mjs --discover` (needs PG_TEST_URL). " +
+          "CI re-mutates exactly these and fails if any stops being caught, or " +
+          "disappears. Raise the ratchet by writing a race test and re-running.",
+        totalClaims: claims.length,
+        protected: protectedIds.sort(),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  console.log(
+    `\n${protectedIds.length}/${claims.length} protected — baseline written to ${BASELINE}`,
+  );
+  process.exit(0);
+}
+
+if (!existsSync(BASELINE)) {
+  console.error(`No ${BASELINE}. Run with --discover first.`);
+  process.exit(2);
+}
+const base = JSON.parse(readFileSync(BASELINE, "utf8"));
+const byId = new Map(claims.map((c) => [c.id, c]));
+const failures = [];
+
+console.log(
+  `Verifying ${base.protected.length} protected claims (of ${claims.length} found; baseline saw ${base.totalClaims})…\n`,
+);
+for (const id of base.protected) {
+  const claim = byId.get(id);
+  if (!claim) {
+    console.log(`  [GONE       ] ${id}`);
+    failures.push(`${id} — the guard no longer exists (removed, or its WHERE was weakened)`);
+    continue;
+  }
+  const { caught } = suiteCatches(claim);
+  console.log(`  [${caught ? "ok         " : "REGRESSED  "}] ${id}  (${claim.file}:${claim.line})`);
+  if (!caught) {
+    failures.push(
+      `${id} (${claim.file}:${claim.line}) — deleting its guard no longer fails any test`,
+    );
+  }
+}
+
+const newly = claims.filter((c) => !base.protected.includes(c.id)).length;
+console.log(`\n${claims.length - newly}/${claims.length} claims protected; ${newly} unprotected (not gating).`);
+
+if (failures.length) {
+  console.error(`\n✖ mutation guard FAILED (${failures.length}):`);
+  for (const f of failures) console.error(`   • ${f}`);
+  console.error(
+    "\nA guard this repo relies on is no longer covered. Either restore the test\n" +
+      "that protected it, or — if the guard was deliberately removed — re-run\n" +
+      "`node scripts/mutation-guard.mjs --discover` and commit the new baseline.",
+  );
+  process.exit(1);
+}
+console.log("\n✔ every protected claim is still protected.");
