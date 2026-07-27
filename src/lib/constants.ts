@@ -81,6 +81,59 @@ export const DEFAULTS = {
 // limit, so ~6 tabs behind one NAT could saturate it and 429 everyone. The
 // room's fast rate stays its `pollMs` prop (default 1200) while the auction is
 // actually live.
+/**
+ * Deadline on a live room's STATE POLL fetch (draft + inhouse share it).
+ *
+ * Both loops latch `inFlight` and clear it only in the awaited call's
+ * `finally`, so a request that connects and never answers — flaky mobile data,
+ * a socket resumed from a suspended tab — stops every later tick, including
+ * the `visibilitychange` wake-up. Nothing settles, so `pollFail()` never runs
+ * and `usePollHealth` never trips: the room sits on stale state with
+ * `disconnected` FALSE and every control live. That is precisely the silent
+ * freeze the health strip exists to prevent — a captain watching a frozen
+ * auction sell their player. The abort throws into each loop's existing
+ * `catch`, which fails the poll and reschedules, so the loop heals itself.
+ *
+ * Well above any healthy response (the routes' own upstream calls cap out
+ * lower) and below the point where a stuck room stops being obvious.
+ */
+export const ROOM_POLL_TIMEOUT_MS = 10_000;
+
+/**
+ * Deadline on a room's ACTION (mutation) fetch — the same freeze as the poll,
+ * from the other side: both rooms flip `pending` on before the call and off in
+ * its `finally`, so a request that never answers leaves EVERY control in the
+ * room disabled until the player reloads.
+ *
+ * Aborting a mutation is not free, though. The server keeps going, so a
+ * request we gave up on may well have committed — the client can only ever say
+ * "I don't know", never "that didn't go through". So the deadline has to clear
+ * the worst LEGITIMATE latency, or we teach players to re-click things that
+ * already landed.
+ *
+ * This is the DB-bound value, used by every draft action and by every inhouse
+ * action except the two below. A healthy one of these is well under a second
+ * (DB work plus at most a best-effort 5s Discord send).
+ */
+export const ROOM_ACTION_TIMEOUT_MS = 15_000;
+
+/**
+ * …and the deadline for the inhouse actions that are OpenDota-bound BY DESIGN:
+ * `detect` fans out ten 8s recent-match lookups and then up to six 12s match
+ * fetches, and `applyResult` adds a 5s Discord send — ~25s worst case, all
+ * bounded (dota.ts never retries). `record` is one 12s fetch plus the same
+ * tail.
+ *
+ * Deliberately NOT applied to every action. Sizing one ceiling to the slowest
+ * action would punish the most time-critical one: a hung ACCEPT would sit
+ * disabled for the WHOLE 45-second ready check, i.e. exactly as broken as
+ * having no deadline at all. Slow paths get slack; second-sensitive ones get
+ * released fast.
+ */
+export const INHOUSE_SCAN_ACTION_TIMEOUT_MS = 45_000;
+/** The inhouse actions that legitimately go to OpenDota (see above). */
+export const INHOUSE_SCAN_ACTIONS = ["detect", "record"] as const;
+
 export const DRAFT_ROOM = {
   /** Waiting room / finished draft — nothing here is second-sensitive. */
   POLL_IDLE_MS: 3000,
@@ -198,7 +251,30 @@ export const INHOUSE = {
   // heartbeat: anyone still polling re-confirms within this window; the ghosts
   // that likely caused the cancel never do, so the same lobby can't instantly
   // re-form around them.
-  QUEUE_RECONFIRM_SECONDS: 45,
+  //
+  // MUST comfortably exceed POLL_KEEPALIVE_MS, and this is the binding case:
+  // during a live game all ten tabs are HIDDEN (everyone is in the Dota
+  // client), so they re-confirm on the 45s keepalive — which Chrome clamps
+  // toward once a minute. At 45s of slack the admin's own 1.5s poll ran
+  // maybeFormLobby's prune (lastSeenAt < now-180s) BEFORE a single player's
+  // keepalive landed, so "Lobby cancelled — players re-queued" silently
+  // emptied the queue instead. 75s leaves room for the clamp; it still
+  // backdates past QUEUE_AWAY_SECONDS (90), so a cancelled lobby can't
+  // instantly re-form around ghosts, and past QUEUE_HEARTBEAT_SECONDS (30),
+  // so a present player's very next poll writes the refresh.
+  QUEUE_RECONFIRM_SECONDS: 75,
+  // A lobby that reaches READY or IN_PROGRESS has no clock — nothing expires
+  // it, and no resolver can move it — so an abandoned one holds the single
+  // active-lobby slot indefinitely: no new lobby can form, and its own ten
+  // players are refused the queue ("You're already in a live inhouse"). Only
+  // an admin could recover it. These are the staleness floors for the lazy
+  // resolveAbandonedLobby teardown, deliberately far past any legitimate use:
+  // a group may sit in READY for a long time hosting the in-client lobby and
+  // waiting on a straggler (Start can be pressed late — even after the game,
+  // which is how a forgotten Start is still recoverable), and IN_PROGRESS must
+  // outlast the longest imaginable game plus OpenDota's indexing lag.
+  ABANDON_READY_HOURS: 3,
+  ABANDON_IN_PROGRESS_HOURS: 6,
   // Discord "queue is filling" ping: fires when a join crosses this many
   // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.
   //

@@ -24,7 +24,12 @@ import {
 } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
 import { maxBid, nextNominatorIndex, wasOutbid } from "@/lib/draft";
-import { DEFAULTS, DRAFT_ROOM } from "@/lib/constants";
+import {
+  DEFAULTS,
+  DRAFT_ROOM,
+  ROOM_ACTION_TIMEOUT_MS,
+  ROOM_POLL_TIMEOUT_MS,
+} from "@/lib/constants";
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 
@@ -242,7 +247,13 @@ export function DraftRoom({
       let live = false;
       let rateLimited = false;
       try {
-        const res = await fetch("/api/draft/tick", { method: "POST" });
+        const res = await fetch("/api/draft/tick", {
+          method: "POST",
+          // See ROOM_POLL_TIMEOUT_MS: without a deadline a request that never
+          // answers freezes this loop for good, with `disconnected` false and
+          // every bid control still live on stale state.
+          signal: AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS),
+        });
         if (res.ok) {
           const next = (await res.json()) as DraftState;
           apply(next, seq);
@@ -451,6 +462,10 @@ export function DraftRoom({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        // `pending` is released in the finally below, so a request that never
+        // answers left every bid control disabled until the captain reloaded —
+        // under a 30s lot clock. See ROOM_ACTION_TIMEOUT_MS.
+        signal: AbortSignal.timeout(ROOM_ACTION_TIMEOUT_MS),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -463,8 +478,17 @@ export function DraftRoom({
         apply(data, seq);
         setSelected(null);
       }
-    } catch {
-      pushToast("error", "Network error — that didn't go through");
+    } catch (e) {
+      // A timeout is NOT proof the bid failed — the server kept going and may
+      // have taken it. Telling a captain it didn't go through would have them
+      // re-bid against themselves. The poll is already running and repaints
+      // the real auction state within `pollMs`.
+      pushToast(
+        "error",
+        (e as Error)?.name === "TimeoutError"
+          ? "That's taking a while — watch the lot to see if it landed"
+          : "Network error — that didn't go through",
+      );
     } finally {
       setPending(false);
     }

@@ -376,6 +376,60 @@ export async function resolveReadyCheck(): Promise<boolean> {
 }
 
 /**
+ * Scrap a lobby that was abandoned in READY or IN_PROGRESS. These are the only
+ * two phases with NO clock — READY_CHECK, CAPTAIN_VOTE and DRAFTING all expire
+ * into a resolver — so before this they could hold the single active-lobby
+ * slot forever: `maybeFormLobby` early-returns on any active lobby, so no new
+ * game could ever form, and the abandoned lobby's own ten players were refused
+ * the queue by joinQueue's inActiveLobby guard. The whole feature was down for
+ * everyone until an admin happened to visit /inhouse and press Cancel.
+ *
+ * Both floors (ABANDON_*_HOURS) are deliberately far past any legitimate use:
+ * Start can be pressed late — even after the game — and the manual result
+ * paths have no time gate, so a group that simply forgot still recovers their
+ * game normally. Idempotent; safe on every poll.
+ *
+ * Unlike cancelLobby this does NOT re-queue anyone: an admin cancels a LIVE
+ * lobby whose players are present and want the next game, whereas by
+ * definition nobody has touched this one for hours. Re-queueing ten ghosts
+ * would just park them on the pinned Discord board until the next prune.
+ */
+export async function resolveAbandonedLobby(): Promise<boolean> {
+  const now = Date.now();
+  const stale = await prisma.inhouseLobby.findFirst({
+    where: {
+      OR: [
+        {
+          status: INHOUSE_STATUS.READY,
+          updatedAt: {
+            lt: new Date(now - INHOUSE.ABANDON_READY_HOURS * 3_600_000),
+          },
+        },
+        {
+          status: INHOUSE_STATUS.IN_PROGRESS,
+          startedAt: {
+            lt: new Date(now - INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000),
+          },
+        },
+      ],
+    },
+    select: { id: true, status: true },
+  });
+  if (!stale) return false;
+  // Guarded claim on the status we read: a Start / result landing between the
+  // read and here must win, and two concurrent pollers must tear down once.
+  const claim = await prisma.inhouseLobby.updateMany({
+    where: { id: stale.id, status: stale.status },
+    data: {
+      status: INHOUSE_STATUS.CANCELLED,
+      pickTeam: null,
+      pickEndsAt: null,
+    },
+  });
+  return claim.count > 0;
+}
+
+/**
  * Resolve the captain-selection vote once everyone has voted or the timer runs
  * out: tally the winning method, rank candidates, install the top two as
  * captains, and drop into the draft. Idempotent; safe on every poll.
@@ -488,11 +542,25 @@ export async function castVote(
   return res;
 }
 
+/**
+ * Thrown by applyPick once it has NULLED `pickTeam` (its turn claim) but can't
+ * finish the pick. It must be a throw, never a `return`: a returned value
+ * RESOLVES the Prisma interactive transaction, which COMMITS it — leaving the
+ * lobby DRAFTING with `pickTeam = null`, a state no resolver can move
+ * (resolveStalledPick filters `pickTeam: { not: null }`, makePick bails on
+ * `!lobby.pickTeam`), so the draft freezes for all ten with an expired clock
+ * and only an admin cancel recovers. Throwing rolls the claim back, which is
+ * what the turn-claim comment below has always promised.
+ */
+class PickRaceError extends Error {}
+
 /** Assign a pool player to the team currently on the clock and advance the draft. */
 async function applyPick(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   lobbyId: string,
   targetUserId: string,
+  /** The team the CALLER authorized against, when it authorized against one. */
+  expectTeam?: number | null,
 ): Promise<ActionResult> {
   const lobby = await tx.inhouseLobby.findUnique({
     where: { id: lobbyId },
@@ -506,6 +574,16 @@ async function applyPick(
   if (target.team !== null) return { ok: false, error: "Player already drafted" };
 
   const team = lobby.pickTeam;
+  // makePick authorized the caller against the pickTeam ITS OWN read saw.
+  // Postgres takes a fresh snapshot per statement even inside one interactive
+  // transaction, so the re-read above can legitimately show a DIFFERENT team
+  // (a poller's resolveStalledPick advanced the turn in between) — and the
+  // guarded claim below would then happily succeed, drafting the caller's
+  // choice onto the OPPOSING captain's roster. Refuse instead; the room
+  // toasts it and the next ~250ms poll shows whose turn it really is.
+  if (expectTeam != null && team !== expectTeam) {
+    return { ok: false, error: "That pick was already made" };
+  }
   const picksMade = lobby.players.filter(
     (p) => p.team !== null && !p.isCaptain,
   ).length;
@@ -516,11 +594,20 @@ async function applyPick(
   // assigned two players and the lobby finished 6v4. Nulling pickTeam is the
   // claim: a concurrent caller's `pickTeam: team` predicate then fails, and a
   // rollback restores it. The real next turn is written at the end.
+  //
+  // `pickEndsAt` is in the predicate because `pickTeam` ALONE is not unique to
+  // a turn: the snake pattern (2,1,1,2,2,1,1,2) repeats a team across
+  // consecutive picks, so at a pair boundary a loser that blocked on the
+  // winner's row lock re-evaluates after the commit, sees the SAME pickTeam
+  // the winner just re-wrote, and claims a turn that was never its own. The
+  // winner always stamps a fresh pickDeadline() when it advances, so the
+  // deadline is what actually identifies the turn.
   const turn = await tx.inhouseLobby.updateMany({
     where: {
       id: lobbyId,
       status: INHOUSE_STATUS.DRAFTING,
       pickTeam: team,
+      pickEndsAt: lobby.pickEndsAt,
     },
     data: { pickTeam: null },
   });
@@ -535,7 +622,9 @@ async function applyPick(
     where: { id: target.id, team: null },
     data: { team, pickIndex: picksMade },
   });
-  if (claim.count === 0) return { ok: false, error: "Player already drafted" };
+  // Past the turn claim: THROW so the nulled pickTeam rolls back (see
+  // PickRaceError) — a return here would commit the frozen draft.
+  if (claim.count === 0) throw new PickRaceError("Player already drafted");
 
   let team1Picks =
     lobby.players.filter((p) => p.team === 1 && !p.isCaptain).length +
@@ -579,9 +668,44 @@ async function applyPick(
         : { pickTeam: next, pickEndsAt: pickDeadline() },
   });
   if (advanced.count === 0) {
-    return { ok: false, error: "That lobby is no longer drafting" };
+    // Also past the turn claim — throw, don't return (see PickRaceError).
+    throw new PickRaceError("That lobby is no longer drafting");
   }
   return { ok: true };
+}
+
+/**
+ * Belt-and-braces: put a DRAFTING lobby that somehow lost its `pickTeam` back
+ * on the clock. `pickTeam` is nulled for a few statements as applyPick's turn
+ * claim, so any path that commits between the claim and the advance strands
+ * the draft in a state NOTHING can move — resolveStalledPick filters
+ * `pickTeam: { not: null }` and makePick bails on `!lobby.pickTeam`, so all
+ * ten watch a dead clock until an admin cancels. applyPick now throws (see
+ * PickRaceError) so the claim rolls back instead, but the recovery is cheap
+ * and the failure mode is severe enough to be worth making unreachable rather
+ * than merely fixed: `nextPickTeam` is pure and the rosters are the source of
+ * truth, so the correct turn can always be recomputed. Idempotent.
+ */
+async function restoreLostPickTurn(): Promise<boolean> {
+  const lobby = await prisma.inhouseLobby.findFirst({
+    where: { status: INHOUSE_STATUS.DRAFTING, pickTeam: null },
+    include: { players: true },
+  });
+  if (!lobby) return false;
+  const next = nextPickTeam(
+    lobby.players.filter((p) => p.team === 1 && !p.isCaptain).length,
+    lobby.players.filter((p) => p.team === 2 && !p.isCaptain).length,
+  );
+  const claim = await prisma.inhouseLobby.updateMany({
+    // Guarded on the null we read, so a real in-flight turn claim (which holds
+    // the null for only a few statements) can never be overwritten by this.
+    where: { id: lobby.id, status: INHOUSE_STATUS.DRAFTING, pickTeam: null },
+    data:
+      next === null
+        ? { status: INHOUSE_STATUS.READY, pickEndsAt: null }
+        : { pickTeam: next, pickEndsAt: pickDeadline() },
+  });
+  return claim.count > 0;
 }
 
 /**
@@ -589,24 +713,37 @@ async function applyPick(
  * player for them so the lobby never stalls. Idempotent; safe on every poll.
  */
 export async function resolveStalledPick(): Promise<boolean> {
-  const res = await prisma.$transaction(async (tx) => {
-    const lobby = await tx.inhouseLobby.findFirst({
-      where: { status: INHOUSE_STATUS.DRAFTING, pickTeam: { not: null } },
-      include: { players: true },
+  await restoreLostPickTurn();
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const lobby = await tx.inhouseLobby.findFirst({
+        where: { status: INHOUSE_STATUS.DRAFTING, pickTeam: { not: null } },
+        include: { players: true },
+      });
+      if (
+        !lobby ||
+        !lobby.pickEndsAt ||
+        lobby.pickEndsAt.getTime() > Date.now()
+      ) {
+        return false;
+      }
+      const pool = lobby.players
+        .filter((p) => p.team === null)
+        .sort(
+          (a, b) =>
+            b.mmr - a.mmr || a.createdAt.getTime() - b.createdAt.getTime(),
+        );
+      if (pool.length === 0) return false;
+      const r = await applyPick(tx, lobby.id, pool[0].userId);
+      return r.ok;
     });
-    if (!lobby || !lobby.pickEndsAt || lobby.pickEndsAt.getTime() > Date.now()) {
-      return false;
-    }
-    const pool = lobby.players
-      .filter((p) => p.team === null)
-      .sort(
-        (a, b) => b.mmr - a.mmr || a.createdAt.getTime() - b.createdAt.getTime(),
-      );
-    if (pool.length === 0) return false;
-    const r = await applyPick(tx, lobby.id, pool[0].userId);
-    return r.ok;
-  });
-  return res;
+  } catch (e) {
+    // The catch MUST be outside the transaction callback so the throw actually
+    // rolls the turn claim back. Losing the race is the normal outcome when
+    // ten pollers hit an expired clock at once — the winner's pick stands.
+    if (e instanceof PickRaceError) return false;
+    throw e;
+  }
 }
 
 /** A captain (or admin, on their behalf) drafts a player from the pool. */
@@ -615,23 +752,33 @@ export async function makePick(
   targetUserId: string,
 ): Promise<ActionResult> {
   await resolveStalledPick();
-  return prisma.$transaction(async (tx) => {
-    const lobby = await tx.inhouseLobby.findFirst({
-      where: { status: INHOUSE_STATUS.DRAFTING },
-      include: { players: true },
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const lobby = await tx.inhouseLobby.findFirst({
+        where: { status: INHOUSE_STATUS.DRAFTING },
+        include: { players: true },
+      });
+      if (!lobby || !lobby.pickTeam) {
+        return { ok: false as const, error: "The draft isn't running" };
+      }
+      const isAdmin = viewer.role === "ADMIN";
+      const captainOnClock = lobby.players.find(
+        (p) => p.team === lobby.pickTeam && p.isCaptain,
+      );
+      if (!isAdmin && captainOnClock?.userId !== viewer.id) {
+        return { ok: false as const, error: "It's not your turn to pick" };
+      }
+      // Pass the team we just authorized against: applyPick re-reads the lobby
+      // and must refuse if the turn moved on underneath us.
+      return applyPick(tx, lobby.id, targetUserId, lobby.pickTeam);
     });
-    if (!lobby || !lobby.pickTeam) {
-      return { ok: false as const, error: "The draft isn't running" };
+  } catch (e) {
+    // Outside the callback on purpose (see resolveStalledPick).
+    if (e instanceof PickRaceError) {
+      return { ok: false as const, error: e.message };
     }
-    const isAdmin = viewer.role === "ADMIN";
-    const captainOnClock = lobby.players.find(
-      (p) => p.team === lobby.pickTeam && p.isCaptain,
-    );
-    if (!isAdmin && captainOnClock?.userId !== viewer.id) {
-      return { ok: false as const, error: "It's not your turn to pick" };
-    }
-    return applyPick(tx, lobby.id, targetUserId);
-  });
+    throw e;
+  }
 }
 
 /** Add the current user to the inhouse queue (or refresh their seed MMR). */
@@ -873,6 +1020,12 @@ type BuiltResult = {
   direScore: number;
   boxScore: BoxScorePlayer[];
   startTime: number;
+  /**
+   * Players whose PLAYED side didn't match the team they were drafted onto —
+   * see the reconciliation note in buildResult. `team` is the side they
+   * actually played; applyResult writes it back before rating the game.
+   */
+  teamFixes: { userId: string; team: number }[];
 };
 
 /**
@@ -912,13 +1065,37 @@ function buildResult(
   );
   if (!cls.ok || !cls.winnerTeamId) return null;
 
+  const radiantTeam = cls.radiantTeamId === "1" ? 1 : 2;
+  const direTeam = radiantTeam === 1 ? 2 : 1;
+
+  // Reconcile the DRAFT against what was actually played. Nothing enforces
+  // sides in the manually hosted Dota lobby — players click their own slots —
+  // and classifyGame's side assignment is a tolerant MAJORITY vote (it exists
+  // for league games, where a standin may be unknown to us). So a 1-for-1 slot
+  // mix-up still classifies fine, and the two players who swapped end up
+  // credited with the opposite of what they did: a win and a positive Elo
+  // swing for the player who actually lost, and vice versa — while the result
+  // card lists them in the other side's column, because it groups by the
+  // game's real `isRadiant`. The PLAYED game is the truth, so we move them
+  // rather than reject the match (rejecting would strand the lobby
+  // IN_PROGRESS and block the single active slot until an admin cancelled).
+  // isCaptain is deliberately left alone — who captained the draft is a fact
+  // about the draft, not about which side they ended up on.
+  const teamFixes: { userId: string; team: number }[] = [];
+
   const boxScore: BoxScorePlayer[] = od.players.map((pl) => {
     const isRadiant = pl.isRadiant ?? pl.player_slot < 128;
     const m = pl.account_id != null ? accountMap.get(pl.account_id) : undefined;
+    const playedTeam = isRadiant ? radiantTeam : direTeam;
+    if (m && m.team !== playedTeam) {
+      teamFixes.push({ userId: m.userId, team: playedTeam });
+    }
     return {
       userId: m?.userId ?? null,
       name: m?.name ?? pl.personaname ?? null,
-      team: m?.team ?? null,
+      // The side they played, not the side they were drafted onto — so the
+      // stored box score can't disagree with the roster it's rendered beside.
+      team: m ? playedTeam : null,
       isRadiant,
       heroId: pl.hero_id,
       kills: pl.kills,
@@ -932,13 +1109,14 @@ function buildResult(
 
   return {
     winnerTeam: cls.winnerTeamId === "1" ? 1 : 2,
-    radiantTeam: cls.radiantTeamId === "1" ? 1 : 2,
+    radiantTeam,
     dotaMatchId: String(od.match_id),
     durationSecs: od.duration,
     radiantScore: od.radiant_score ?? 0,
     direScore: od.dire_score ?? 0,
     boxScore,
     startTime: od.start_time,
+    teamFixes,
   };
 }
 
@@ -965,6 +1143,17 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
     },
   });
   if (claimed.count === 0) return false;
+
+  // Move anyone who played the opposite side onto the side they actually
+  // played (see buildResult). MUST happen before the history scan below —
+  // summarizeInhouse rates the game off InhouseLobbyPlayer.team, so doing it
+  // after would stamp Elo deltas for the wrong five players.
+  for (const fix of r.teamFixes) {
+    await prisma.inhouseLobbyPlayer.updateMany({
+      where: { lobbyId, userId: fix.userId },
+      data: { team: fix.team },
+    });
+  }
 
   // Stamp each participant's Elo swing from THIS game: the lobby is now the
   // newest completed one, so summarizeInhouse's lastChange IS this game's
@@ -1054,7 +1243,20 @@ async function findInhouseGame(
   const lists = await Promise.all(
     accounts.map((acc) => fetchRecentMatchIds(acc, 10)),
   );
-  const unreachable = lists.every((l) => l === null);
+  // A game shared by fewer than this many of our players isn't a candidate.
+  const MIN_SHARED = 4;
+  const reachable = lists.filter((l) => l !== null).length;
+  // "OpenDota was the problem" is not just the all-failed case. Every list is
+  // a vote, and a candidate needs MIN_SHARED of them — so once enough fetches
+  // 429 that the survivors CAN'T reach the threshold, detection is
+  // structurally impossible no matter how public everyone's data is. Reporting
+  // that as "turn on Expose Public Match Data" sends ten players hunting
+  // through Dota settings for a problem they don't have. Both clauses matter:
+  // the second requires a fetch to have actually failed, so a lobby that
+  // simply has too few resolvable accounts isn't blamed on OpenDota either.
+  const unreachable =
+    reachable === 0 ||
+    (reachable < accounts.length && reachable < MIN_SHARED);
   const counts = new Map<number, number>();
   for (const ids of lists) {
     for (const id of ids ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -1062,7 +1264,7 @@ async function findInhouseGame(
   // A game shared by several of our players is a candidate; buildResult does the
   // real validation. Cap the full-match fetches to keep API usage sane.
   const candidateIds = [...counts.entries()]
-    .filter(([, c]) => c >= 4)
+    .filter(([, c]) => c >= MIN_SHARED)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6)
     .map(([id]) => id);
@@ -1397,6 +1599,9 @@ export async function getInhouseState(
 ) {
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
+  // Abandoned first: it frees the single active-lobby slot, so maybeFormLobby
+  // can form the next game on this very poll instead of the one after.
+  await resolveAbandonedLobby();
   await maybeFormLobby();
   await resolveReadyCheck();
   await resolveCaptainVote();

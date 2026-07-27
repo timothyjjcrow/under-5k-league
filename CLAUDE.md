@@ -333,6 +333,39 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   (the one-active-lobby invariant has no DB constraint — this is what holds
   it on Postgres); `joinQueue` wraps guard+upsert in one tx. The queue ping
   throttle is the Setting create/P2002/conditional-update claim.
+- **`applyPick` must THROW, never return, once it has nulled `pickTeam`**
+  (2026-07 audit). Nulling `pickTeam` IS the turn claim, and a `return` from a
+  Prisma interactive-transaction callback RESOLVES it, i.e. COMMITS — so the
+  two post-claim failure paths used to leave the lobby DRAFTING with
+  `pickTeam = null`, which NOTHING can move (`resolveStalledPick` filters
+  `pickTeam: { not: null }`, `makePick` bails on `!lobby.pickTeam`): a dead
+  clock for all ten, admin cancel the only exit. They throw `PickRaceError`
+  now and `makePick`/`resolveStalledPick` catch it OUTSIDE the callback (catch
+  it inside and you're back to committing). Two more parts of the same fix,
+  keep all three: the turn claim's WHERE includes `pickEndsAt` — the snake
+  repeats a team across consecutive picks (2,1,1,2,2,1,1,2), so `pickTeam`
+  alone does NOT identify a turn and a loser that blocked on the winner's row
+  lock re-matches after the commit; `makePick` passes the team it AUTHORIZED
+  against to `applyPick` as `expectTeam`, because Postgres re-snapshots per
+  statement even inside one transaction, so the re-read can show a turn that
+  has since moved to the OPPOSING captain; and `restoreLostPickTurn` (run at
+  the top of `resolveStalledPick`) recomputes the turn from the rosters via
+  pure `nextPickTeam` if a DRAFTING lobby is ever found off the clock, making
+  the frozen state unreachable rather than merely fixed.
+- **`resolveAbandonedLobby` — READY and IN_PROGRESS are the only phases with
+  no clock**, so before it they held the single active-lobby slot forever:
+  `maybeFormLobby` early-returns on any active lobby, so no new game could
+  form, AND the dead lobby's own ten were refused by `joinQueue`'s
+  inActiveLobby guard. The whole feature was down until an admin visited
+  /inhouse. It runs FIRST in both resolver chains (`getInhouseState` and
+  result-sync's `syncInhouse` — the latter is what reaches a lobby nobody is
+  polling, which is how one gets abandoned) and guard-claims on the status it
+  read, so a late Start or a landed result always wins. Floors are
+  deliberately generous (`ABANDON_READY_HOURS` 3, `ABANDON_IN_PROGRESS_HOURS`
+  6 off `startedAt`): Start can be pressed after the game and the manual
+  result paths have no time gate, so a group that simply forgot still records
+  normally. It does NOT re-queue anyone — unlike `cancelLobby`, whose players
+  are present and want the next game, nobody has touched this one for hours.
 - **`InhouseLobby.eloDeltas`** (JSON userId → Elo swing) is stamped once at
   completion; the room's post-game banner reads it — never re-derive the
   ladder on the poll path. **`InhouseLobbyPlayer.wins/losses/games`** are
@@ -382,6 +415,23 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   real browser through queue join/leave (+ mobile no-overflow tripwire) and
   the full lifecycle — vote → UI draft pick → ready → in-progress — with
   nine API-driven players and zero-pageerror assertions.
+- **KNOWN COVERAGE LIMIT**: `vitest.config.mts` is `environment: "node"` with
+  no jsdom/testing-library, so the ~1800-line room's only test artifacts are
+  browser specs — the happy-path lifecycle above and
+  `zz3-room-poll-resilience` (the hung-poll freeze, both rooms). Its other
+  documented behaviours (sequence ordering, the 429 back-off, the disconnect
+  gate, the hidden-tab keepalive, `?join=1` auto-join, the "Match cancelled"
+  toast) are reasoned about in comments, not asserted. Two ways out, in order
+  of preference: move room logic into pure `inhouse.ts` helpers (the
+  `avgKnownMmr` treatment), or add a Playwright spec that drives the real
+  behaviour (`zz3`'s route-interception + attempt-count pattern generalises to
+  the 429 back-off and the disconnect gate). Adding a jsdom environment is the
+  last resort.
+  Separately, the integration suite runs on SQLite, which serializes writers,
+  so the guarded claims are never under real contention there — it stages
+  races by hand-mutating rows. `npm run test:pg` (`PG_TEST_URL=…`) runs the
+  SAME files on Postgres and is the only thing that exercises them for real;
+  run it after touching any claim.
 
 - **Models** (`schema.prisma`): `InhouseQueueEntry` (one global rolling queue,
   `userId` unique), `InhouseLobby` (the game + its state machine:
@@ -419,7 +469,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   flips "(!) Accept your match" until accepted, a chime fires both on the
   ready check AND on the vote opening (a player may accept early and tab away),
   and a failed check that snaps the room back to the queue toasts
-  "Match cancelled" instead of vanishing silently.
+  "Match cancelled" instead of vanishing silently. That toast is gated on
+  MEMBERSHIP (`!me.inLobby`), NOT on a list of statuses, and its wording
+  branches on `me.inQueue` — the status list told the decliner and the
+  timed-out no-shows they were "back in the queue" when `failReadyCheck`
+  deliberately DROPPED them (contradicting the decline dialog they had just
+  confirmed), and it announced a cancellation to a player whose match was very
+  much alive, because ACCEPT_SECONDS + VOTE_SECONDS fit inside one hidden-tab
+  `POLL_KEEPALIVE_MS` gap so their next poll could jump straight to DRAFTING.
 - **Game-setup instructions**: once teams lock, the READY and IN_PROGRESS
   views render a `GameSetupCard` — step 1 hosts the Dota 2 lobby with a shared
   name (`GGD2L #<code>`) + password (`<code>`) all ten derive identically from
@@ -468,6 +525,28 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   via an atomic `detectedAt` claim — one active lobby, so API usage is bounded).
   Needs players' "Expose Public Match Data" on. The page renders the box score as
   a `GameResultCard` (hero icons via `heroById`/`HeroIcon`, names, KDA, winner).
+- **THE PLAYED GAME IS THE TRUTH — `buildResult` reconciles the draft against
+  it** (2026-07 audit). Nothing enforces sides in the manually hosted Dota
+  lobby (players click their own slots) and `classifyGame`'s side assignment is
+  a tolerant MAJORITY vote — it exists for league games, where a standin may be
+  unknown to us — so a 1-for-1 slot mix-up classifies fine and used to credit
+  the two swapped players with the OPPOSITE of what they did: a win and a
+  positive Elo swing for the player who actually lost, listed in the other
+  side's column of the result card (which groups by the game's real
+  `isRadiant`). `buildResult` now emits `teamFixes` and `applyResult` writes
+  them to `InhouseLobbyPlayer.team` post-claim and **before** the
+  `summarizeInhouse` history scan — do that after and the Elo lands on the
+  wrong five. `isCaptain` is deliberately untouched (who captained is a fact
+  about the draft). We move players rather than reject the game: rejecting
+  strands the lobby IN_PROGRESS and blocks the single active slot.
+- **`findInhouseGame`'s `unreachable` flag is not "every fetch failed"**. A
+  candidate needs 4 of the 10 recent-match lists to name it, so once enough
+  lookups 429 that the survivors can't reach the threshold, detection is
+  structurally impossible however public everyone's data is — and reporting
+  that as "turn on Expose Public Match Data" sends ten players hunting through
+  Dota settings for a problem they don't have. Both clauses matter: it also
+  requires a fetch to have ACTUALLY failed, so a lobby that simply has too few
+  resolvable accounts isn't blamed on OpenDota either.
 - **API**: one dispatch endpoint `POST /api/inhouse` (`{ action, ... }`; actions:
   `state`/`join`/`leave`/`accept`/`decline`/`vote`/`pick`/`start`/`detect`/
   `record`/`cancel`), always returns fresh viewer-tailored state. Polled by
@@ -493,6 +572,28 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   (`bumpPollRef`) so joining an idle page snaps to fast polling in ~250ms
   instead of waiting out a stale idle timer. Anyone IN the queue polls fast, so
   a filling queue / forming lobby stays responsive for the players who matter.
+  Three guards on that loop, all load-bearing (2026-07 audit) — the draft room
+  has the same three, keep them in step: responses are SEQUENCE-ORDERED
+  (`seqRef`/`appliedSeqRef`, applied to the poll AND to `act()`) because
+  `/api/inhouse` answers mutations with `syncBoard:false` while the poll behind
+  them can still be blocked on the Discord board edit, so a pre-pick poll
+  landing late put the drafted player back in the pool, re-fired the chime and
+  the "(!) Your pick" title, and the captain re-clicked into an error toast;
+  the poll fetch carries `AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS)` against
+  the never-answering request (see Poll health — the draft room shares the
+  constant and the regression spec); and **429 is
+  NOT a poll failure** — it eases off to `POLL_IDLE_MS` instead. The route's
+  speed bump is per-IP and a queued tab polls 40/min, so one household or NAT
+  crosses 300/min just by having a lobby; counting it as a disconnect greyed
+  out ACCEPT MATCH mid-ready-check, and retrying at 1.5s kept the fixed window
+  saturated so it never cleared.
+- **`avgKnownMmr` (`inhouse.ts`, tested) is the ONLY place a team's average
+  MMR is computed** — 0 means UNKNOWN and is excluded, never averaged in as a
+  zero. The room shows this figure on three screens and each had its own copy;
+  the READY/IN_PROGRESS `MatchupGrid` divided by the whole roster, so one
+  unregistered player made a side the drafting banner had just called 120 MMR
+  stronger render 620 weaker the instant the last pick landed and one view
+  replaced the other. `mmrBalance` is a thin wrapper over it.
 - **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
   players so `/inhouse` isn't empty on a fresh DB (they prune ~3 min after
   seeding once someone polls /inhouse — expected, see queue presence).
@@ -508,6 +609,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   ghosts drop out instead of instantly re-forming the lobby. Pure helpers
   (`queuePresence`/`queuePresentCutoff`/`queueDropCutoff`/`requeueLastSeenAt`)
   in `inhouse.ts`, tested; window invariants asserted in `inhouse.test.ts`.
+  **`QUEUE_RECONFIRM_SECONDS` (the slack that requeue leaves before the prune)
+  must comfortably EXCEED `POLL_KEEPALIVE_MS`, and the binding case is a live
+  game**: all ten tabs are hidden (everyone is in the Dota client), so they
+  re-confirm on the 45s keepalive — which Chrome clamps toward once a minute.
+  At 45s of slack the admin's own 1.5s poll ran `maybeFormLobby`'s prune
+  before a single keepalive landed, so "players re-queued" silently emptied
+  the queue and, with nobody left polling, nothing noticed. It's 75s, pinned
+  by a test against `POLL_KEEPALIVE_MS`; raising the keepalive means raising
+  this too.
 - **Balance meter**: pure `mmrBalance` (`inhouse.ts`, tested — MMR 0 =
   unknown, excluded) drives per-team "avg N" chips on the drafting columns
   and a "⚖️ X ahead by N avg MMR" line in the on-the-clock banner (sm+).
@@ -1420,6 +1530,38 @@ already in the `Setting` table.
   terminal ("no active season" card), not a retry loop. Never swallow poll
   failures silently — that's how captains watched a frozen auction sell
   their player.
+- **Every room poll fetch carries `AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS)`**
+  (`constants.ts`, shared by draft + inhouse — one value on purpose, since the
+  two loops are the same code). Both latch `inFlight` and clear it only in the
+  awaited call's `finally`, so a request that CONNECTS AND NEVER ANSWERS
+  (flaky mobile data, a socket resumed from a suspended tab) used to stop every
+  later tick, the `visibilitychange` wake-up included. Nothing settled, so
+  `pollFail()` never ran and the paragraph above never fired: stale state,
+  `disconnected` FALSE, every control live — the silent freeze the health strip
+  exists to catch, walking straight past it. The abort throws into each loop's
+  existing `catch`, so the loop heals itself. Pinned for BOTH rooms by
+  `e2e/zz3-room-poll-resilience.spec.ts`, which hangs the poll endpoint and
+  asserts a SECOND request is attempted — without the timeout the count stays
+  at exactly 1 forever. Any new client poll loop needs the same signal.
+- **So does every room ACTION fetch** — the same freeze from the other side.
+  Both rooms flip `pending` on before the mutation and off in its `finally`,
+  so a hung action left EVERY control disabled until reload: a captain locked
+  out of bidding under a 30s lot clock, a player locked out of ACCEPT during a
+  45s ready check. Three rules, all deliberate: (1) the deadline must clear the
+  worst LEGITIMATE latency, because aborting a mutation proves nothing — the
+  server kept going and may have committed — so both rooms' catch branches
+  BRANCH ON `TimeoutError` and refuse to claim "that didn't go through"
+  (inhouse also nudges its poll; the honest answer is the next state payload).
+  (2) It is scoped PER ACTION, not one ceiling: `ROOM_ACTION_TIMEOUT_MS` (15s)
+  for DB-bound actions, `INHOUSE_SCAN_ACTION_TIMEOUT_MS` (45s) for the two
+  OpenDota-bound ones (`INHOUSE_SCAN_ACTIONS` = detect/record, ~25s worst case
+  — ten 8s recent-match lookups, six 12s match fetches, a 5s Discord send, no
+  retries). Sizing everything to the slow path would leave ACCEPT disabled for
+  its entire ready check, i.e. exactly as broken as no deadline. (3)
+  `src/components/room-fetch-timeouts.test.ts` parses BOTH room files and
+  fails if any `fetch(` lacks a `signal:` — the browser spec can only reach
+  the call sites that are on screen, and the regression to catch is a deleted
+  line.
 - **DB indexes**: hot filter/join columns are indexed (`Match.seasonId`/home/
   away, `Game.matchId`, `Registration(seasonId,status,type)`, `TeamMember`
   team/user, `Bid.draftId`, `StandinAssignment.matchId`, `Prediction.userId`).

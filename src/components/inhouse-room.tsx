@@ -11,8 +11,19 @@ import {
   useSecondsLeft,
   useElapsedMs,
 } from "@/components/room-clock";
-import { inhouseLobbyCode, inhousePollDelayMs, mmrBalance } from "@/lib/inhouse";
-import { INHOUSE } from "@/lib/constants";
+import {
+  avgKnownMmr,
+  inhouseLobbyCode,
+  inhousePollDelayMs,
+  mmrBalance,
+} from "@/lib/inhouse";
+import {
+  INHOUSE,
+  INHOUSE_SCAN_ACTIONS,
+  INHOUSE_SCAN_ACTION_TIMEOUT_MS,
+  ROOM_ACTION_TIMEOUT_MS,
+  ROOM_POLL_TIMEOUT_MS,
+} from "@/lib/constants";
 import { playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
 
@@ -105,7 +116,21 @@ export function InhouseRoom({
     });
   }, []);
 
-  const apply = useCallback((s: InhouseState) => {
+  // Order poll and action responses by request START (the draft room's guard —
+  // this loop needs it just as much). A `state` poll that left BEFORE a pick
+  // can land after it: /api/inhouse answers mutations with syncBoard:false, so
+  // the mutation returns fast while the poll behind it may still be blocked on
+  // the Discord board edit. Applying the older payload put the drafted player
+  // back in the pool, flipped `isOnClock` true again — re-firing the chime and
+  // the "(!) Your pick" title — and the captain re-clicked into an error toast
+  // while their real 60s clock burned. Never key this off `s.now`: it's
+  // per-instance wall-clock and can skew between serverless instances.
+  const seqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
+
+  const apply = useCallback((s: InhouseState, seq: number) => {
+    if (seq < appliedSeqRef.current) return; // lost the response race — stale
+    appliedSeqRef.current = seq;
     offsetRef.current = s.now - Date.now();
     setState(s);
   }, []);
@@ -148,22 +173,37 @@ export function InhouseRoom({
         return;
       }
       inFlight = true;
+      const seq = ++seqRef.current;
       let next: InhouseState | null = null;
+      let rateLimited = false;
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "state" }),
+          // See ROOM_POLL_TIMEOUT_MS — the draft room's loop shares it, and
+          // both freeze the same way without it.
+          signal: AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS),
         });
         if (res.ok) {
           next = (await res.json()) as InhouseState;
-          apply(next);
+          apply(next, seq);
           pollOk();
+        } else if (res.status === 429) {
+          // Deliberately NOT a poll failure (the draft room's reasoning). This
+          // endpoint's speed bump is per-IP, and a queued/in-lobby tab polls at
+          // 40 req/min — so a household, a LAN party or one NAT'd office can
+          // cross 300/min just by having a lobby. Counting that as a
+          // disconnect greyed out ACCEPT MATCH in the middle of the 45-second
+          // ready check, and retrying at 1.5s kept the fixed window saturated
+          // so it never cleared: the lobby died on a no-show nobody could
+          // prevent. Ease off instead and keep the room live.
+          rateLimited = true;
         } else {
           pollFail();
         }
       } catch {
-        pollFail(); // transient blip; next poll retries
+        pollFail(); // transient blip (or the abort above); next poll retries
       } finally {
         inFlight = false;
       }
@@ -171,8 +211,12 @@ export function InhouseRoom({
       // was refocused mid-fetch this reschedules at the active rate instead of
       // the 45s keepalive, so refocus stays snappy. A failed poll keeps the
       // FAST cadence (retry quickly; sustained failures flip `disconnected`).
-      const delay =
-        document.visibilityState === "hidden"
+      const delay = rateLimited
+        ? // Drops this tab from 40 req/min to 6 while limited, which is what
+          // actually drains the bucket so the next ACCEPT/vote/pick gets
+          // through — the mutations share it.
+          INHOUSE.POLL_IDLE_MS
+        : document.visibilityState === "hidden"
           ? INHOUSE.POLL_KEEPALIVE_MS
           : next
             ? // Membership, not mere existence: five people watching a 45min
@@ -222,20 +266,28 @@ export function InhouseRoom({
     const inLobby = state.me.inLobby;
     const prevStatus = prevStatusRef.current;
 
-    // A ready check the viewer was in vanished without advancing to the vote —
-    // a decline, an expiry, or an admin cancel scrapped it. The lobby query
-    // drops CANCELLED instantly, so without this the room would silently snap
-    // back to the queue with no explanation. (prevInReadyCheckRef, not
-    // prevStatus alone: the same-poll flip READY_CHECK→CAPTAIN_VOTE keeps the
-    // viewer in the lobby and must stay quiet.)
-    if (
-      prevInReadyCheckRef.current &&
-      status !== "READY_CHECK" &&
-      status !== "CAPTAIN_VOTE"
-    ) {
+    // A ready check the viewer was in vanished — a decline, an expiry, or an
+    // admin cancel scrapped it. The lobby query drops CANCELLED instantly, so
+    // without this the room would silently snap back to the queue with no
+    // explanation.
+    //
+    // Gate on MEMBERSHIP, not on a list of statuses. Two things the status
+    // list got wrong: (1) it told the decliner and the timed-out no-shows they
+    // were "back in the queue" when failReadyCheck deliberately DROPPED them —
+    // contradicting the decline dialog they'd just confirmed, and leaving
+    // no-shows sitting on the page believing they were queued for the next
+    // game; (2) a player who accepted early and tabbed away polls on the 45s
+    // keepalive, and ACCEPT_SECONDS + VOTE_SECONDS fit inside one gap, so
+    // their next poll could report DRAFTING and announce that their very much
+    // alive match had been cancelled. `!inLobby` covers both: the same-poll
+    // READY_CHECK→CAPTAIN_VOTE flip keeps inLobby true (still quiet), and a
+    // poll that skips the whole vote also keeps it true.
+    if (prevInReadyCheckRef.current && !state.me.inLobby) {
       pushToast(
         "info",
-        "Match cancelled — someone didn't accept. You're back in the queue.",
+        state.me.inQueue
+          ? "Match cancelled — someone didn't accept. You're back in the queue."
+          : "Match cancelled — you're no longer in the queue.",
       );
     }
 
@@ -292,11 +344,25 @@ export function InhouseRoom({
     async (body: Record<string, unknown>): Promise<boolean> => {
       unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
+      const seq = ++seqRef.current;
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          // `pending` is flipped off in the finally below, so a request that
+          // never answers left every control in the room disabled until the
+          // player reloaded. The abort lands in the catch, which toasts and
+          // releases them. Per-action, not one ceiling: `detect`/`record` go
+          // to OpenDota and legitimately take ~25s, while ACCEPT must never
+          // sit disabled through its own 45s ready check.
+          signal: AbortSignal.timeout(
+            (INHOUSE_SCAN_ACTIONS as readonly string[]).includes(
+              String(body.action),
+            )
+              ? INHOUSE_SCAN_ACTION_TIMEOUT_MS
+              : ROOM_ACTION_TIMEOUT_MS,
+          ),
         });
         const data = await res.json();
         // Toast, not an inline banner — same reasoning as the draft room:
@@ -306,14 +372,23 @@ export function InhouseRoom({
           pushToast("error", data.error || "Action failed");
           return false;
         }
-        apply(data);
+        apply(data, seq);
         setSelected(null);
         // Re-lock the poll cadence now — joining an idle page must not keep
         // idle-polling until a stale 10s timer expires.
         bumpPollRef.current?.();
         return true;
-      } catch {
-        pushToast("error", "Network error — that didn't go through");
+      } catch (e) {
+        // A timeout is NOT a failed action: the server kept going and may well
+        // have committed. Saying "that didn't go through" would send a captain
+        // to re-click a pick that already landed. Nudge the poll instead — the
+        // next state payload is the honest answer either way.
+        if ((e as Error)?.name === "TimeoutError") {
+          pushToast("info", "That's taking a while — checking where things got to");
+          bumpPollRef.current?.();
+        } else {
+          pushToast("error", "Network error — that didn't go through");
+        }
         return false;
       } finally {
         setPending(false);
@@ -358,6 +433,16 @@ export function InhouseRoom({
 
   const { lobby, me } = state;
   const offset = offsetRef.current; // serverNow - clientNow, for the pick clock
+  // A selection is only meaningful while its player is still in the pool.
+  // Derived, not synced through an effect: `selected` is otherwise cleared
+  // only on a successful act(), so a captain who tapped the top-MMR player and
+  // then let the clock run out — resolveStalledPick auto-drafts that exact
+  // player, it sorts the pool the same way — came back on the clock two picks
+  // later holding a dead id. The footer then rendered an ENABLED button
+  // reading "Draft " with no name, and every click was a "Player already
+  // drafted" toast while their real 60s clock burned.
+  const selectedInPool =
+    selected && lobby?.pool.some((p) => p.userId === selected) ? selected : null;
 
   return (
     <div className="space-y-6">
@@ -477,7 +562,7 @@ export function InhouseRoom({
           state={state}
           lobby={lobby}
           offset={offset}
-          selected={selected}
+          selected={selectedInPool}
           setSelected={setSelected}
           pending={pending}
           act={act}
@@ -1379,10 +1464,7 @@ function TeamColumn({
     ...team.players,
   ];
   while (roster.length < teamSize) roster.push(null);
-  const known = roster.filter((p): p is Player => !!p && p.mmr > 0);
-  const avgMmr = known.length
-    ? Math.round(known.reduce((s, p) => s + p.mmr, 0) / known.length)
-    : 0;
+  const avgMmr = avgKnownMmr(roster.map((p) => p?.mmr ?? 0));
 
   return (
     <div
@@ -1794,10 +1876,9 @@ function MatchupGrid({
       {lobby.teams.map((t) => {
         const meta = sideMeta(t.isRadiant);
         const roster = t.captain ? [t.captain, ...t.players] : t.players;
-        const avgMmr =
-          roster.length > 0
-            ? Math.round(roster.reduce((s, p) => s + p.mmr, 0) / roster.length)
-            : 0;
+        // Shared with the drafting columns and the balance banner — this grid
+        // used to average the unknowns in as zeroes and disagree with both.
+        const avgMmr = avgKnownMmr(roster.map((p) => p.mmr));
         return (
           <div
             key={t.team}

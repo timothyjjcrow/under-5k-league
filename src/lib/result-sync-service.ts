@@ -19,6 +19,7 @@ import {
 import {
   maybeAutoDetectResult,
   maybeFormLobby,
+  resolveAbandonedLobby,
   resolveCaptainVote,
   resolveReadyCheck,
   resolveStalledPick,
@@ -220,6 +221,11 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
     return { recorded: false, watch: false };
   }
 
+  // Abandoned READY/IN_PROGRESS teardown runs here too — this is the path
+  // that reaches a lobby NOBODY is polling, which is precisely how one gets
+  // abandoned in the first place. Without it a dead lobby also pinned every
+  // sitewide pinger to the fast `watch` cadence forever (it stays "active").
+  await resolveAbandonedLobby();
   await maybeFormLobby();
   await resolveReadyCheck();
   await resolveCaptainVote();

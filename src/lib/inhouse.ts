@@ -231,17 +231,33 @@ export type MmrBalance = {
 };
 
 /**
+ * A team's average MMR, where 0 means UNKNOWN (a player who never entered one)
+ * and is excluded rather than averaged in as a zero. Returns 0 when nobody on
+ * the side has a known MMR, which every caller renders as "no chip" rather
+ * than "0 MMR".
+ *
+ * Exported because the room shows this figure on three different screens and
+ * each used to compute it inline: the drafting columns and the balance banner
+ * excluded unknowns, while the READY/IN_PROGRESS matchup grid divided by the
+ * whole roster. One unregistered player therefore dropped his side by ~20% at
+ * the exact moment the last pick landed and one view replaced the other — a
+ * team the banner had just called 120 MMR stronger rendered 620 weaker with
+ * nothing changed, on the screen ten people use to decide whether the game
+ * looks worth playing. One definition, one test.
+ */
+export function avgKnownMmr(mmrs: number[]): number {
+  const known = mmrs.filter((m) => m > 0);
+  return known.length
+    ? Math.round(known.reduce((s, m) => s + m, 0) / known.length)
+    : 0;
+}
+
+/**
  * Average-MMR comparison between the two drafting teams. MMR 0 means
  * "unknown" (a player who never entered one) and is excluded from averages.
  */
 export function mmrBalance(team1: number[], team2: number[]): MmrBalance {
-  const avg = (xs: number[]) => {
-    const known = xs.filter((x) => x > 0);
-    return known.length
-      ? Math.round(known.reduce((s, x) => s + x, 0) / known.length)
-      : 0;
-  };
-  const avg1 = avg(team1);
-  const avg2 = avg(team2);
+  const avg1 = avgKnownMmr(team1);
+  const avg2 = avgKnownMmr(team2);
   return { avg1, avg2, diff: avg1 - avg2 };
 }

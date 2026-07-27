@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  avgKnownMmr,
   detectIntervalSeconds,
   inhouseLobbyCode,
   inhousePollDelayMs,
@@ -246,6 +247,29 @@ describe("mmrBalance", () => {
   });
 });
 
+describe("avgKnownMmr", () => {
+  it("ignores unknowns rather than averaging them in as zero", () => {
+    expect(avgKnownMmr([4000, 3800, 3600, 3400, 0])).toBe(3700);
+    expect(avgKnownMmr([])).toBe(0);
+    expect(avgKnownMmr([0, 0])).toBe(0);
+  });
+
+  it("is the same number mmrBalance reports for that side", () => {
+    // The room renders this figure on three screens (drafting columns,
+    // balance banner, READY/IN_PROGRESS matchup grid) and each used its own
+    // copy. The grid's divided by the whole roster, so one unregistered
+    // player made a side that the banner had just called 120 MMR STRONGER
+    // render 620 weaker the instant the last pick landed and the grid
+    // replaced the drafting view — nothing about the teams having changed.
+    const t1 = [4000, 3800, 3600, 3400, 0];
+    const t2 = [3700, 3700, 3600, 3500, 3400];
+    const b = mmrBalance(t1, t2);
+    expect(avgKnownMmr(t1)).toBe(b.avg1);
+    expect(avgKnownMmr(t2)).toBe(b.avg2);
+    expect(b.diff).toBeGreaterThan(0); // team 1 is the STRONGER side here
+  });
+});
+
 describe("queue presence (heartbeat math)", () => {
   const now = 1_700_000_000_000;
   const secsAgo = (s: number) => now - s * 1000;
@@ -290,6 +314,18 @@ describe("queue presence (heartbeat math)", () => {
     );
     // …and is stale enough that the throttled heartbeat fires immediately.
     expect(now - seen).toBeGreaterThan(INHOUSE.QUEUE_HEARTBEAT_SECONDS * 1000);
+  });
+
+  it("leaves enough slack for a HIDDEN tab's keepalive to re-confirm", () => {
+    // The binding case for this window is a live game: all ten tabs are
+    // hidden (everyone is in the Dota client), so they re-confirm on
+    // POLL_KEEPALIVE_MS — which Chrome clamps toward once a minute for
+    // background timers. At 45s of slack the admin's own 1.5s poll ran the
+    // prune before a single keepalive landed, so "Lobby cancelled — players
+    // re-queued" silently emptied the queue and nobody was left polling to
+    // notice. The margin must cover the clamp, not just the nominal period.
+    const slack = requeueLastSeenAt(now).getTime() - queueDropCutoff(now).getTime();
+    expect(slack).toBeGreaterThan(INHOUSE.POLL_KEEPALIVE_MS * 1.5);
   });
 });
 
