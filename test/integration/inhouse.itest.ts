@@ -21,6 +21,7 @@ import {
   maybeAutoDetectResult,
   recordMatch,
   resolveReadyCheck,
+  resolveStalledPick,
   autoDetectResult,
   startGame,
 } from "@/lib/inhouse-service";
@@ -1531,9 +1532,18 @@ describe("inhouse — the draft can't be left off the clock", () => {
       where: { id: drafting.id },
       data: { pickTeam: null, pickEndsAt: new Date(Date.now() - 60_000) },
     });
-    expect((await makePick(admin, drafting.players[0].userId)).ok).toBe(false);
+    // Nothing that looks for a stalled clock can see it in this state — that
+    // is the whole reason it was terminal. (Don't assert this via makePick:
+    // makePick runs resolveStalledPick first, so it now heals the lobby and
+    // legitimately succeeds, and WHICH player id you hand it depends on row
+    // order — an accidentally-passing, order-dependent assertion.)
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: INHOUSE_STATUS.DRAFTING, pickTeam: { not: null } },
+      }),
+    ).toBe(0);
 
-    await getInhouseState(null);
+    await getInhouseState(null); // any poll, by anyone
     const back = await prisma.inhouseLobby.findUniqueOrThrow({
       where: { id: drafting.id },
     });
@@ -1573,37 +1583,61 @@ describe("inhouse — the draft can't be left off the clock", () => {
     ).toBe(INHOUSE_STATUS.READY);
   });
 
-  it("concurrent picks on one turn never freeze the draft or double-assign", async () => {
+  it("survives concurrent auto-picks at a SNAKE PAIR BOUNDARY", async () => {
+    // The one interleaving that actually froze the draft, and it needs the
+    // exact setup below — a generic "fire N picks at once" version passes even
+    // against the broken code, which is how this survived the first audit.
+    //
+    // The snake is 2,1,1,2,2,1,1,2, so picks 1 and 2 are BOTH team 1. When the
+    // clock expires there, every poller calls resolveStalledPick and they all
+    // target the same top-MMR pool player. The winner assigns them and
+    // advances pickTeam back to 1; a loser that was blocked on the winner's
+    // row lock then re-evaluates `pickTeam: 1`, MATCHES, and nulls it — and
+    // before the fix its `return` committed that, leaving the lobby DRAFTING
+    // and off the clock, which nothing in the system can move.
+    //
+    // Verified to reproduce: against the pre-fix service on real Postgres this
+    // ends `status=DRAFTING pickTeam=null` every run. SQLite serializes
+    // writers so it can't interleave — `npm run test:pg` is what makes this
+    // test mean anything.
     const admin = sessionFor(await makeUser("AdminRace", "ADMIN"));
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4500 - i * 100);
     await voteAll(players, "MMR");
     const drafting = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
-    const pool = drafting.players.filter((p) => p.team === null);
 
-    // Four callers hitting the same turn at once. On SQLite (writers are
-    // serialized) this is a sanity check; the real interleaving is exercised
-    // by the same file under `npm run test:pg`, where each statement takes a
-    // fresh snapshot and the losers land past applyPick's turn claim.
-    const results = await Promise.all([
-      makePick(admin, pool[0].userId),
-      makePick(admin, pool[1].userId),
-      makePick(admin, pool[2].userId),
-      makePick(admin, pool[0].userId),
-    ]);
+    // Take pick 0 (the first-pick team's single) so the next two picks — the
+    // pair — both belong to the other team.
+    const pool0 = drafting.players
+      .filter((p) => p.team === null)
+      .sort((a, b) => b.mmr - a.mmr);
+    expect((await makePick(admin, pool0[0].userId)).ok).toBe(true);
+    const onClock = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: drafting.id },
+    });
+    const pairTeam = onClock.pickTeam;
+    expect(pairTeam).not.toBeNull();
+
+    // Run the clock out and let every poller hit it together.
+    await prisma.inhouseLobby.update({
+      where: { id: drafting.id },
+      data: { pickEndsAt: new Date(Date.now() - 5_000) },
+    });
+    await Promise.all(Array.from({ length: 8 }, () => resolveStalledPick()));
 
     const after = await prisma.inhouseLobby.findUniqueOrThrow({
       where: { id: drafting.id },
       include: { players: true },
     });
-    // THE invariant: a DRAFTING lobby is always on the clock. Off it, nothing
-    // in the system can move the draft again.
-    expect(after.status === INHOUSE_STATUS.DRAFTING && after.pickTeam === null)
-      .toBe(false);
-    // Every successful call drafted exactly one player — no turn assigned two.
+    // THE invariant: a DRAFTING lobby is always on the clock. Off it, no
+    // resolver and no captain can ever move the draft again — ten players
+    // watching a dead timer with an admin cancel as the only exit.
+    expect(
+      after.status === INHOUSE_STATUS.DRAFTING && after.pickTeam === null,
+    ).toBe(false);
+    // And the turn was consumed once, not once per racer.
     const drafted = after.players.filter((p) => p.team !== null && !p.isCaptain);
-    expect(drafted).toHaveLength(results.filter((r) => r.ok).length);
-    // Nobody was assigned twice.
     expect(new Set(drafted.map((p) => p.userId)).size).toBe(drafted.length);
+    expect(drafted.length).toBeLessThanOrEqual(3); // pick 0 + at most the pair
   });
 });
 
