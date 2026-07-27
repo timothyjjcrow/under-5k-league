@@ -3,6 +3,7 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { raceHook } from "@/lib/race-hook";
 import { requireAdmin } from "@/lib/auth";
 import { getActiveSeason, reactivateSeason } from "@/lib/season";
 import {
@@ -1278,6 +1279,13 @@ export async function recordResult(
       : awayScore > homeScore
         ? match.awayTeamId
         : null;
+
+  // Seam: an import landing while the admin types. recordResult is NOT
+  // transactional — nothing is written before this point — so a rival on
+  // another connection cannot block. If a future change wraps the swap below
+  // in a $transaction opening ABOVE this line, this hook must move, or the
+  // test that uses it will hang instead of failing.
+  await raceHook("recordResult.beforeSwap");
 
   // COMPARE-AND-SWAP on the snapshot the guards above judged. The playoff
   // "already advanced" / "champion crowned" checks all ran against `match` as

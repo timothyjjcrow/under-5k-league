@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
 import {
   INHOUSE,
@@ -27,7 +28,14 @@ import {
   autoDetectResult,
   startGame,
 } from "@/lib/inhouse-service";
-import { makeSeason, makeUser, raceAll, raceN, sessionFor } from "./factories";
+import {
+  ON_POSTGRES,
+  makeSeason,
+  makeUser,
+  raceAll,
+  raceN,
+  sessionFor,
+} from "./factories";
 import { SETTING_KEYS, setSetting } from "@/lib/settings";
 
 // The inhouse result path only ever touches OpenDota — never a Valve league
@@ -1987,5 +1995,221 @@ describe("inhouse — guarded claims fire exactly once under contention", () => 
     const res = await raceN(4, () => maybeAutoDetectResult());
     expect(res.filter(Boolean)).toHaveLength(0); // nothing found
     expect(mockRecent.mock.calls.length).toBe(INHOUSE.LOBBY_SIZE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FAULT-INJECTED claims. These four need one exact interleaving — the caller
+// READS, a rival COMMITS, the caller WRITES — which Promise.all cannot steer.
+// The service yields at a labelled seam (src/lib/race-hook.ts) and the test
+// commits the rival there, making the ordering deterministic instead of
+// hoped-for. Postgres only: the rival runs on a second connection, and SQLite
+// pins one, so a rival issued inside an open transaction would HANG.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!ON_POSTGRES)("inhouse — claims that need a staged interleaving", () => {
+  afterEach(() => setRaceHook(null));
+
+  /** Ten players, voted through to a live draft. */
+  async function draftingLobby(tag: string) {
+    const admin = sessionFor(await makeUser(`AdminFI${tag}`, "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4500 - i * 100);
+    await voteAll(players, "MMR");
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    return { admin, players, lobby };
+  }
+
+  it("refuses a pick whose TURN moved on, even to the same team", async () => {
+    // The snake repeats a team across consecutive picks, so `pickTeam` alone
+    // does not identify a turn — `pickEndsAt` does. The rival below completes
+    // the previous turn and hands the SAME team the next one with a fresh
+    // deadline; without that clause in the claim, this caller's stale read
+    // wins a turn that was never its own and two players land on one pick.
+    const { admin, lobby } = await draftingLobby("Turn");
+    // One real pick so the next two turns both belong to the same team.
+    const pool0 = lobby.players
+      .filter((p) => p.team === null)
+      .sort((a, b) => b.mmr - a.mmr);
+    expect((await makePick(admin, pool0[0].userId)).ok).toBe(true);
+
+    const live = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: true },
+    });
+    const onClock = live.pickTeam!;
+    const pool = live.players.filter((p) => p.team === null);
+    const [target, rivalPick] = pool;
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.applyPick.beforeTurnClaim", async () => {
+        fired = true;
+        // The rival's pick lands and the turn advances to the SAME team with a
+        // NEW deadline. Two rows, neither written by the open transaction.
+        await prisma.inhouseLobbyPlayer.update({
+          where: { id: rivalPick.id },
+          data: { team: onClock, pickIndex: 1 },
+        });
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { pickTeam: onClock, pickEndsAt: new Date(Date.now() + 60_000) },
+        });
+      }),
+    );
+
+    const res = await makePick(admin, target.userId);
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    expect(res.ok).toBe(false);
+    expect(
+      (await prisma.inhouseLobbyPlayer.findUniqueOrThrow({ where: { id: target.id } }))
+        .team,
+    ).toBeNull();
+    // One turn consumed one player: the first real pick plus the rival's.
+    expect(
+      await prisma.inhouseLobbyPlayer.count({
+        where: { lobbyId: lobby.id, isCaptain: false, team: { not: null } },
+      }),
+    ).toBe(2);
+  });
+
+  it("refuses a pick whose TARGET was drafted between the read and the claim", async () => {
+    const { admin, lobby } = await draftingLobby("Target");
+    const pool = lobby.players.filter((p) => p.team === null);
+    const target = pool[0];
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.applyPick.beforePlayerClaim", async () => {
+        fired = true;
+        // A rival takes the very player being drafted. Player row only — the
+        // open transaction has written the lobby row, not this one.
+        await prisma.inhouseLobbyPlayer.update({
+          where: { id: target.id },
+          data: { team: 1, pickIndex: 0 },
+        });
+      }),
+    );
+
+    const res = await makePick(admin, target.userId);
+    expect(fired).toBe(true);
+    expect(res.ok).toBe(false);
+    // AND the turn claim rolled back — the draft is still on the clock, not
+    // frozen with pickTeam null (the PickRaceError contract).
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(after.status).toBe(INHOUSE_STATUS.DRAFTING);
+    expect(after.pickTeam).not.toBeNull();
+  });
+
+  it("puts a lost pick turn back exactly once when two pollers restore it", async () => {
+    const { lobby } = await draftingLobby("Restore");
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { pickTeam: null, pickEndsAt: new Date(Date.now() - 60_000) },
+    });
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.restoreLostPickTurn.beforeClaim", async () => {
+        fired = true;
+        // Another poller got there first and put the lobby back on the clock.
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { pickTeam: 1, pickEndsAt: new Date(Date.now() + 60_000) },
+        });
+      }),
+    );
+
+    await resolveStalledPick();
+    expect(fired).toBe(true);
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    // The rival's restore stands; ours must not have overwritten its deadline.
+    expect(after.pickTeam).toBe(1);
+    expect(after.pickEndsAt!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("won't auto-assign the last pool player if a rival took them first", async () => {
+    // The last-pick auto-assign skips a pointless 60s clock when one player
+    // remains. Its claim is what stops it assigning someone a rival already
+    // took — which would put a player on BOTH sides of the roster count.
+    const { admin, lobby } = await draftingLobby("Last");
+    // Drive to exactly two pool players, so the NEXT pick triggers the
+    // auto-assign of the final one.
+    for (let guard = 0; guard < 20; guard++) {
+      const live = await prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: lobby.id },
+        include: { players: true },
+      });
+      const pool = live.players
+        .filter((p) => p.team === null)
+        .sort((a, b) => b.mmr - a.mmr);
+      if (pool.length <= 2) break;
+      expect((await makePick(admin, pool[0].userId)).ok).toBe(true);
+    }
+    const live = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: true },
+    });
+    const pool = live.players
+      .filter((p) => p.team === null)
+      .sort((a, b) => b.mmr - a.mmr);
+    expect(pool).toHaveLength(2);
+    const [target, last] = pool;
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.applyPick.beforeLastAssign", async () => {
+        fired = true;
+        // A rival grabs the final player before the auto-assign can.
+        await prisma.inhouseLobbyPlayer.update({
+          where: { id: last.id },
+          data: { team: 1, pickIndex: 99 },
+        });
+      }),
+    );
+
+    const res = await makePick(admin, target.userId);
+    expect(fired).toBe(true);
+    expect(res.ok).toBe(true); // the caller's OWN pick still lands
+
+    // The rival's assignment stands — the auto-assign did not overwrite it,
+    // and nobody was counted onto a side twice.
+    const after = await prisma.inhouseLobbyPlayer.findUniqueOrThrow({
+      where: { id: last.id },
+    });
+    expect(after.team).toBe(1);
+    expect(after.pickIndex).toBe(99);
+  });
+
+  it("an accept lands on nothing when the check is cancelled mid-call", async () => {
+    // The relation filter's whole job: a decline committing between the
+    // accepter's read and their write must not leave acceptedAt stamped on a
+    // dead lobby AND report success to the player.
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.acceptMatch.beforeClaim", async () => {
+        fired = true;
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { status: INHOUSE_STATUS.CANCELLED },
+        });
+      }),
+    );
+
+    const res = await acceptMatch(players[0].session);
+    expect(fired).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.error).toMatch(/cancelled/i);
+    expect(
+      (await prisma.inhouseLobbyPlayer.findFirstOrThrow({
+        where: { lobbyId: lobby.id, userId: players[0].user.id },
+      })).acceptedAt,
+    ).toBeNull();
   });
 });

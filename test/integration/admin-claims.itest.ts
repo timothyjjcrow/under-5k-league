@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 
 // Admin actions are server actions, so auth and cache invalidation are stubbed
 // exactly as abort-draft.itest.ts does.
@@ -177,6 +178,61 @@ describe("admin schedule writes only touch the rows they claim to", () => {
       (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: settled.id } }))
         .status,
     ).toBe("DECLINED");
+  });
+});
+
+describe("recordResult won't stamp over a result that landed while it was typed", () => {
+  afterEach(() => setRaceHook(null));
+
+  it("refuses the typed score when an import lands mid-call", async () => {
+    // Previously left uncovered: the CAS guards the import-lands-FIRST
+    // ordering, and racing real calls reliably produced the opposite one. The
+    // seam stages it exactly — recordResult reads the match, the import
+    // commits, then the swap runs. recordResult is not transactional, so
+    // nothing is locked and the rival cannot block.
+    const { matches } = await seasonWithMatches();
+    const target = matches[0];
+    // LIVE at 1-1 so the rival can change the SCORES without touching status —
+    // the case the source comment exists for: "a bracket can advance in the
+    // gap without this row's status ever changing".
+    await prisma.match.update({
+      where: { id: target.id },
+      data: {
+        bestOf: 3,
+        status: MATCH_STATUS.LIVE,
+        homeScore: 1,
+        awayScore: 1,
+      },
+    });
+
+    let fired = false;
+    setRaceHook(
+      onceAt("recordResult.beforeSwap", async () => {
+        fired = true;
+        await prisma.match.update({
+          where: { id: target.id },
+          data: { homeScore: 1, awayScore: 2, status: MATCH_STATUS.LIVE },
+        });
+      }),
+    );
+
+    const out = await recordResult(
+      { message: "" },
+      fd({ matchId: target.id, homeScore: "2", awayScore: "1" }),
+    );
+
+    expect(fired).toBe(true);
+    expect(out).toMatchObject({
+      error: expect.stringContaining("a game was imported while you were typing"),
+    });
+    expect(out).not.toHaveProperty("message");
+
+    const after = await prisma.match.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    // The import's score stands, and the stale ruling never completed it.
+    expect([after.homeScore, after.awayScore]).toEqual([1, 2]);
+    expect(after.status).toBe(MATCH_STATUS.LIVE);
   });
 });
 

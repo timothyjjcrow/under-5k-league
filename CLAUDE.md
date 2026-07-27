@@ -78,14 +78,30 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
-Currently **32 of 46 claims protected** (three are EQUIVALENT MUTANTS — archive-
+Currently **38 of 46 claims protected** (three are EQUIVALENT MUTANTS — archive-
 then-set pairs, and a `{ gt: 0 }` guarding a write of 0 — predicates that can be
 deleted without changing the end state, so
 no test can ever kill them; they are listed in the guard and excluded from the
 score rather than left looking like gaps). The rest are reported, never gating —
 assume a guard is unprotected until the baseline says otherwise. To raise the
 ratchet: write a raced test, then `npm run test:mutation:discover` and commit
-the new baseline. Deliberately removing a guard also needs a re-discover, which
+the new baseline.
+
+**When racing isn't enough, use the SEAM.** Several claims need one exact
+interleaving — the caller READS, a rival COMMITS, the caller WRITES — and
+`Promise.all` cannot steer that; for those, racing produced the losing ordering
+so rarely that the tests passed against broken code. `src/lib/race-hook.ts` is a
+test-only fault injector: the service `await raceHook("label")`s between the
+read and the guarded write, and a test installs a hook that commits the rival
+right there. One null check in production, and `setRaceHook` THROWS outside
+NODE_ENV=test so it can't be armed by accident.
+Two rules for writing one: (1) the rival runs on a DIFFERENT connection, so it
+must not touch a row the open transaction has already written — it will block on
+that lock while the transaction waits on the hook, which is a hang, not a
+failure; (2) those tests are Postgres-only (`describe.skipIf(!ON_POSTGRES)`),
+because SQLite pins one connection and ANY rival inside an open transaction
+hangs. Assert a `fired` flag too — a seam whose label drifts otherwise degrades
+into a silently vacuous test. Deliberately removing a guard also needs a re-discover, which
 is the point at which someone has to justify it.
 
 ## Conventions / gotchas

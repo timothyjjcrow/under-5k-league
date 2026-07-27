@@ -40,6 +40,7 @@ import { stampResultChange, SETTING_KEYS } from "./settings";
 import { lobbyView, syncInhouseBoard } from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
+import { raceHook } from "./race-hook";
 import type { SessionUser } from "./auth";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -285,6 +286,10 @@ export async function acceptMatch(viewer: SessionUser): Promise<ActionResult> {
       include: { players: true },
     });
     if (!lobby) return { ok: false as const, error: "No match to accept" };
+    // Seam: a decline/expiry CANCELLING the lobby between this read and the
+    // accept claim below — the one interleaving the relation filter exists
+    // for, and the one no amount of racing reliably produces.
+    await raceHook("inhouse.acceptMatch.beforeClaim");
     const mine = lobby.players.find((p) => p.userId === viewer.id);
     if (!mine) {
       return { ok: false as const, error: "You're not in this lobby" };
@@ -588,6 +593,12 @@ async function applyPick(
     (p) => p.team !== null && !p.isCaptain,
   ).length;
 
+  // Seam: everything above is a READ, so a rival on another connection can
+  // commit here without blocking. The interleaving that matters — the turn
+  // moved on with a fresh deadline while this caller was deciding — cannot be
+  // produced by racing real calls (see src/lib/race-hook.ts).
+  await raceHook("inhouse.applyPick.beforeTurnClaim");
+
   // Claim the TURN first. The per-player claim below only stops the same
   // player being taken twice; two DIFFERENT players (a captain clicking X
   // while resolveStalledPick auto-picks Y) both succeeded, so one turn
@@ -618,6 +629,10 @@ async function applyPick(
   // Claim the pick atomically — a captain's double-click or an admin racing
   // them must consume ONE turn, not two (a plain read-then-write pair loses
   // that race silently under Postgres read-committed).
+  // Seam: a rival drafting THIS target between the read and the claim. Safe —
+  // the only row this transaction has written is the lobby, and the rival
+  // touches a player row.
+  await raceHook("inhouse.applyPick.beforePlayerClaim");
   const claim = await tx.inhouseLobbyPlayer.updateMany({
     where: { id: target.id, team: null },
     data: { team, pickIndex: picksMade },
@@ -641,6 +656,8 @@ async function applyPick(
     (p) => p.team === null && p.id !== target.id,
   );
   if (next !== null && remaining.length === 1) {
+    // Seam: the last pool player taken by a rival between the read and here.
+    await raceHook("inhouse.applyPick.beforeLastAssign");
     const lastClaim = await tx.inhouseLobbyPlayer.updateMany({
       where: { id: remaining[0].id, team: null },
       data: { team: next, pickIndex: picksMade + 1 },
@@ -692,6 +709,9 @@ async function restoreLostPickTurn(): Promise<boolean> {
     include: { players: true },
   });
   if (!lobby) return false;
+  // Seam: another poller restoring the same lost turn first. Not inside a
+  // transaction, so nothing is locked.
+  await raceHook("inhouse.restoreLostPickTurn.beforeClaim");
   const next = nextPickTeam(
     lobby.players.filter((p) => p.team === 1 && !p.isCaptain).length,
     lobby.players.filter((p) => p.team === 2 && !p.isCaptain).length,

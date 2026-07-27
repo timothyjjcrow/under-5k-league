@@ -7,6 +7,7 @@
     "src/lib/season.ts::reactivateSeason::isActive#1"
   ],
   "protected": [
+    "src/app/actions/admin.ts::recordResult::awayScore+homeScore+status#1",
     "src/app/actions/admin.ts::setMatchTime::status#1",
     "src/app/actions/admin.ts::setWeekNight::status#1",
     "src/app/actions/admin.ts::setWeekNight::status#2",
@@ -20,6 +21,10 @@
     "src/lib/draft-service.ts::resolveStalledNomination::nominationEndsAt+status#3",
     "src/lib/draft-service.ts::resumeDraft::status#1",
     "src/lib/draft-service.ts::undoLastSale::nominatedUserId+status#1",
+    "src/lib/inhouse-service.ts::acceptMatch::acceptedAt+lobby#1",
+    "src/lib/inhouse-service.ts::applyPick::pickEndsAt+pickTeam+status#1",
+    "src/lib/inhouse-service.ts::applyPick::team#1",
+    "src/lib/inhouse-service.ts::applyPick::team#2",
     "src/lib/inhouse-service.ts::applyResult::status#1",
     "src/lib/inhouse-service.ts::autoDetectResult::OR+status#1",
     "src/lib/inhouse-service.ts::cancelLobby::status#1",
@@ -28,6 +33,7 @@
     "src/lib/inhouse-service.ts::maybeAutoDetectResult::OR+status#1",
     "src/lib/inhouse-service.ts::resolveAbandonedLobby::status#1",
     "src/lib/inhouse-service.ts::resolveCaptainVote::status#1",
+    "src/lib/inhouse-service.ts::restoreLostPickTurn::pickTeam+status#1",
     "src/lib/inhouse-service.ts::startGame::status#1",
     "src/lib/inhouse-service.ts::touchQueueHeartbeat::lastSeenAt#1",
     "src/lib/inhouse-service.ts::voidLastResult::status#1",
