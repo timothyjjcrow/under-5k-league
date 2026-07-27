@@ -32,6 +32,20 @@ import { execSync } from "node:child_process";
 
 const BASELINE = "test/mutation-baseline.json";
 
+/**
+ * EQUIVALENT MUTANTS — claims whose predicate can be deleted without changing
+ * the end state, so no test can ever kill them. Listing them keeps the score
+ * honest: they are not gaps waiting for a test, they are guards that happen to
+ * be redundant. Both below are archive-then-set pairs —
+ * `updateMany({ isActive: true } → false)` followed by activating one row.
+ * Dropping the predicate archives rows that are already archived, which lands
+ * in exactly the same place.
+ */
+const EQUIVALENT = new Set([
+  "src/lib/season.ts::reactivateSeason::isActive#1",
+  "src/app/actions/admin.ts::createSeason::isActive#1",
+]);
+
 // Every file that holds transactional service logic. Add new ones here.
 const FILES = [
   "src/lib/draft-service.ts",
@@ -208,6 +222,22 @@ if (!process.env.PG_TEST_URL) {
   process.exit(2);
 }
 
+// A mutant is "caught" when the suite FAILS — which is also what happens if
+// the suite is broken for any other reason (a syntax error in a test file, a
+// missing DB). That would report every guard as protected: a false green in
+// the very tool built to catch false greens. So prove the baseline is green
+// first, and refuse to measure anything otherwise.
+function suiteIsGreen() {
+  try {
+    execSync("npx vitest run --config vitest.pg.config.mts --silent", {
+      stdio: "pipe", timeout: 900_000, env: process.env,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const discover = process.argv.includes("--discover");
 // `--only <substring>` narrows to matching claim ids — a full sweep is one
 // suite run per claim, which is far too slow a loop while writing the tests
@@ -216,10 +246,23 @@ const onlyArg = process.argv.indexOf("--only");
 const only = onlyArg !== -1 ? process.argv[onlyArg + 1] : null;
 const claims = discoverAll().filter((c) => !only || c.id.includes(only));
 
+if (!suiteIsGreen()) {
+  console.error(
+    "The suite does not pass on UNMUTATED source, so every mutant would look\n" +
+      "caught and the result would be meaningless. Fix the suite first:\n" +
+      "  npm run test:pg",
+  );
+  process.exit(2);
+}
+
 if (discover) {
   console.log(`Sweeping ${claims.length} guarded claims (one suite run each)…\n`);
   const protectedIds = [];
   for (const [i, c] of claims.entries()) {
+    if (EQUIVALENT.has(c.id)) {
+      console.log(`  [equivalent ] (${i + 1}/${claims.length}) ${c.id}`);
+      continue;
+    }
     const { caught } = suiteCatches(c);
     console.log(
       `  [${caught ? "PROTECTED  " : "unprotected"}] (${i + 1}/${claims.length}) ${c.id}  (${c.file}:${c.line})`,
@@ -247,14 +290,18 @@ if (discover) {
           "CI re-mutates exactly these and fails if any stops being caught, or " +
           "disappears. Raise the ratchet by writing a race test and re-running.",
         totalClaims: claims.length,
+        equivalent: [...EQUIVALENT].sort(),
         protected: protectedIds.sort(),
       },
       null,
       2,
     ) + "\n",
   );
+  const gradeable = claims.filter((c) => !EQUIVALENT.has(c.id)).length;
   console.log(
-    `\n${protectedIds.length}/${claims.length} protected — baseline written to ${BASELINE}`,
+    `\n${protectedIds.length}/${gradeable} protected ` +
+      `(${claims.length - gradeable} equivalent mutants excluded) — ` +
+      `baseline written to ${BASELINE}`,
   );
   process.exit(0);
 }
@@ -286,7 +333,9 @@ for (const id of base.protected) {
   }
 }
 
-const newly = claims.filter((c) => !base.protected.includes(c.id)).length;
+const newly = claims.filter(
+  (c) => !base.protected.includes(c.id) && !EQUIVALENT.has(c.id),
+).length;
 console.log(`\n${claims.length - newly}/${claims.length} claims protected; ${newly} unprotected (not gating).`);
 
 if (failures.length) {

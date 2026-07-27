@@ -1,0 +1,222 @@
+import { describe, expect, it, vi } from "vitest";
+
+// Admin actions are server actions, so auth and cache invalidation are stubbed
+// exactly as abort-draft.itest.ts does.
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+  revalidateTag: vi.fn(),
+}));
+vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
+vi.mock("@/lib/discord", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/discord")>()),
+  getWebhookUrl: vi.fn(async () => ""),
+  sendDiscordMessage: vi.fn(async () => true),
+}));
+
+import { prisma } from "@/lib/prisma";
+import { recordResult, setMatchTime, setWeekNight } from "@/app/actions/admin";
+import { proposeReschedule, respondReschedule } from "@/lib/reschedule-service";
+import { MATCH_STATUS } from "@/lib/constants";
+import {
+  generateRegularSchedule,
+  makeSeason,
+  makeTeam,
+  raceAll,
+  recordMatch as recordMatchDirect,
+} from "./factories";
+
+/** The two captains of a specific fixture (a 4-team round robin pairs teams
+ *  differently each week, so never assume matches[0] is Home v Away). */
+async function captainsOf(matchId: string) {
+  const m = await prisma.match.findUniqueOrThrow({
+    where: { id: matchId },
+    include: {
+      homeTeam: { select: { captainId: true } },
+      awayTeam: { select: { captainId: true } },
+    },
+  });
+  return { proposer: m.homeTeam.captainId!, responder: m.awayTeam.captainId! };
+}
+
+/** FormData from a plain object — server actions take nothing else. */
+function fd(values: Record<string, string>): FormData {
+  const f = new FormData();
+  for (const [k, v] of Object.entries(values)) f.set(k, v);
+  return f;
+}
+
+async function seasonWithMatches() {
+  const season = await makeSeason();
+  // FOUR teams, so every week holds two fixtures — a week whose only match is
+  // completed has nothing to move and setWeekNight refuses outright, which
+  // makes any assertion after it vacuous.
+  const home = await makeTeam(season.id, "Home", 0);
+  const away = await makeTeam(season.id, "Away", 1);
+  await makeTeam(season.id, "Third", 2);
+  await makeTeam(season.id, "Fourth", 3);
+  const matches = await generateRegularSchedule(season.id);
+  const when = new Date(Date.now() + 864e5);
+  await prisma.match.updateMany({
+    where: { seasonId: season.id },
+    data: { scheduledAt: when },
+  });
+  const withTimes = await prisma.match.findMany({
+    where: { seasonId: season.id },
+    orderBy: [{ week: "asc" }, { id: "asc" }],
+  });
+  return { season, home, away, matches: withTimes };
+}
+
+// ---------------------------------------------------------------------------
+// These claims are DETERMINISTIC to test — the guard's predicate scopes a bulk
+// write, so removing it visibly touches rows it should not have. No race
+// needed, which makes them the cheapest gaps in the mutation baseline to close.
+// ---------------------------------------------------------------------------
+
+describe("admin schedule writes only touch the rows they claim to", () => {
+  it("setWeekNight leaves a COMPLETED match on the night it was played", async () => {
+    const { matches } = await seasonWithMatches();
+    const week = matches[0].week;
+    const inWeek = matches.filter((m) => m.week === week);
+    expect(inWeek.length).toBeGreaterThan(1); // one to move, one already played
+
+    // One of them has already been played.
+    await recordMatchDirect(inWeek[0].id, 2, 0);
+    const played = await prisma.match.findUniqueOrThrow({
+      where: { id: inWeek[0].id },
+    });
+    expect(played.status).toBe(MATCH_STATUS.COMPLETED);
+    const playedAt = played.scheduledAt;
+
+    const night = new Date(Date.now() + 7 * 864e5);
+    const out = await setWeekNight(
+      { message: "" },
+      fd({
+        week: String(week),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+      }),
+    );
+    // Assert the action SUCCEEDED. Without this the test passes when the form
+    // is rejected outright — which is exactly what happened while the field
+    // names were wrong, and the assertion below still held vacuously.
+    expect(out).not.toHaveProperty("error");
+
+    // The played match keeps its night; moving it would drag a finished series
+    // out of its own auto-sync window and wipe the RSVPs that answered for it.
+    const after = await prisma.match.findUniqueOrThrow({
+      where: { id: inWeek[0].id },
+    });
+    expect(after.scheduledAt?.getTime()).toBe(playedAt?.getTime());
+    // Positive control: the UNPLAYED match in the same week really did move,
+    // so the assertion above is about the guard and not about a no-op.
+    const moved = await prisma.match.findUniqueOrThrow({
+      where: { id: inWeek[1].id },
+    });
+    expect(moved.scheduledAt?.getTime()).toBe(night.getTime());
+  });
+
+  it("setWeekNight cancels only the OPEN proposal, not a settled one", async () => {
+    const { matches } = await seasonWithMatches();
+    const target = matches[0];
+    const { proposer, responder } = await captainsOf(target.id);
+
+    // A settled (DECLINED) proposal, then a fresh open one.
+    await proposeReschedule(proposer, target.id, new Date(Date.now() + 864e5));
+    const settled = await prisma.rescheduleRequest.findFirstOrThrow({
+      where: { matchId: target.id, status: "PENDING" },
+    });
+    await respondReschedule(responder, settled.id, false);
+    await proposeReschedule(proposer, target.id, new Date(Date.now() + 2 * 864e5));
+
+    const night = new Date(Date.now() + 5 * 864e5);
+    await setWeekNight(
+      { message: "" },
+      fd({
+        week: String(target.week),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+      }),
+    );
+
+    // The retime kills the live ask; the answered one stays answered, or the
+    // audit trail stops recording that the opponent ever said no.
+    expect(
+      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: settled.id } }))
+        .status,
+    ).toBe("DECLINED");
+    expect(
+      await prisma.rescheduleRequest.count({
+        where: { matchId: target.id, status: "PENDING" },
+      }),
+    ).toBe(0);
+  });
+
+  it("setMatchTime cancels only the OPEN proposal, not a settled one", async () => {
+    const { matches } = await seasonWithMatches();
+    const target = matches[0];
+    const { proposer, responder } = await captainsOf(target.id);
+
+    await proposeReschedule(proposer, target.id, new Date(Date.now() + 864e5));
+    const settled = await prisma.rescheduleRequest.findFirstOrThrow({
+      where: { matchId: target.id, status: "PENDING" },
+    });
+    await respondReschedule(responder, settled.id, false);
+    await proposeReschedule(proposer, target.id, new Date(Date.now() + 2 * 864e5));
+
+    const when = new Date(Date.now() + 6 * 864e5);
+    await setMatchTime(
+      fd({
+        matchId: target.id,
+        scheduledAt: when.toISOString(),
+        scheduledAtTs: String(when.getTime()),
+      }),
+    );
+
+    expect(
+      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: settled.id } }))
+        .status,
+    ).toBe("DECLINED");
+  });
+});
+
+describe("a manual score and a concurrent import stay self-consistent", () => {
+  it("never leaves the stored score and winner disagreeing", async () => {
+    // HONEST SCOPE: this does NOT cover recordResult's compare-and-swap. The
+    // CAS guards the import-lands-first ordering, and in this harness the
+    // import reliably commits AFTER recordResult, which is a legitimate
+    // supersede rather than the bug. Forcing the other ordering needs an
+    // interleaving no deterministic test can stage, so that claim is left
+    // unprotected on purpose rather than covered by an assertion that passes
+    // either way. What IS worth pinning is that whoever wins, the row is never
+    // internally contradictory — a match page reading 2-1 HOME while the
+    // recorded winner is AWAY.
+    for (let run = 0; run < 6; run++) {
+      const { matches } = await seasonWithMatches();
+      const target = matches[0];
+      await prisma.match.update({ where: { id: target.id }, data: { bestOf: 3 } });
+
+      await raceAll<unknown>([
+        () =>
+          recordResult(
+            { message: "" },
+            fd({ matchId: target.id, homeScore: "2", awayScore: "1" }),
+          ),
+        () => recordMatchDirect(target.id, 0, 2),
+      ]);
+
+      const after = await prisma.match.findUniqueOrThrow({
+        where: { id: target.id },
+      });
+      if (after.homeScore != null && after.awayScore != null) {
+        const expected =
+          after.homeScore > after.awayScore
+            ? target.homeTeamId
+            : after.awayScore > after.homeScore
+              ? target.awayTeamId
+              : null;
+        expect(after.winnerTeamId).toBe(expected);
+      }
+    }
+  });
+});

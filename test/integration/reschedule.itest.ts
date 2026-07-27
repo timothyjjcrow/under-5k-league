@@ -10,6 +10,8 @@ import {
   makeSeason,
   makeTeam,
   makeUser,
+  raceAll,
+  raceN,
   recordMatch,
 } from "./factories";
 
@@ -138,5 +140,164 @@ describe("reschedule service (integration)", () => {
       (await prisma.rescheduleRequest.findUnique({ where: { id: pending!.id } }))
         ?.status,
     ).toBe("CANCELLED");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claim guards. Each deletes to a blind write and only contention notices, so
+// every one races N callers and requires exactly one to win. Real interleaving
+// happens under `npm run test:pg`; the CI mutation guard runs there.
+// ---------------------------------------------------------------------------
+
+describe("reschedule — claims fire exactly once under contention", () => {
+  it("two captains proposing at once leave exactly ONE open proposal", async () => {
+    // There is no unique constraint behind "at most one PENDING per match" —
+    // the supersede-then-insert pair inside a SERIALIZABLE transaction is the
+    // whole enforcement. A second open proposal is a zombie the other captain
+    // can accept days later, retiming the match out from under everyone.
+    const { home, away, match } = await setupMatch();
+    const res = await raceAll([
+      () => proposeReschedule(home.captainId, match.id, NIGHT).catch(() => null),
+      () =>
+        proposeReschedule(
+          away.captainId,
+          match.id,
+          new Date(NIGHT.getTime() + 3_600_000),
+        ).catch(() => null),
+    ]);
+    expect(res.filter(Boolean).length).toBeGreaterThanOrEqual(1);
+    expect(
+      await prisma.rescheduleRequest.count({
+        where: { matchId: match.id, status: "PENDING" },
+      }),
+    ).toBe(1);
+  });
+
+  it("superseding a proposal touches only the OPEN one", async () => {
+    // Deterministic, no race needed: the supersede is scoped to PENDING rows.
+    // Without that predicate it rewrites every request this match ever had, so
+    // a DECLINED answer becomes CANCELLED and the audit trail lies about
+    // whether the opponent ever said no.
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const first = (await pendingFor(match.id))!;
+    await respondReschedule(away.captainId, first.id, false); // DECLINED
+
+    await proposeReschedule(home.captainId, match.id, new Date(NIGHT.getTime() + 864e5));
+
+    expect(
+      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: first.id } }))
+        .status,
+    ).toBe("DECLINED");
+    expect(
+      await prisma.rescheduleRequest.count({
+        where: { matchId: match.id, status: "PENDING" },
+      }),
+    ).toBe(1);
+  });
+
+  it("an accept racing a RESULT never retimes a match that just completed", async () => {
+    // respondReschedule checks "not already played" against a row read before
+    // its transaction opens, and auto-sync completes matches from any
+    // visitor's page view. Stamping a future kickoff on a finished series also
+    // wipes its RSVPs and pushes it outside its own detection window.
+    for (let run = 0; run < 6; run++) {
+      const { home, away, match } = await setupMatch();
+      await proposeReschedule(home.captainId, match.id, NIGHT);
+      const open = (await pendingFor(match.id))!;
+      const before = (
+        await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
+      ).scheduledAt;
+
+      // RESULT FIRST in the list: raceAll is sequential on SQLite, and with the
+      // accept first that is a legitimate retime-then-play rather than the case
+      // under test. This order gives both engines the same scenario — the
+      // series finishes, then a stale accept tries to move it.
+      await raceAll<unknown>([
+        () => recordMatch(match.id, 2, 0),
+        () => respondReschedule(away.captainId, open.id, true).catch(() => null),
+      ]);
+
+      const after = await prisma.match.findUniqueOrThrow({
+        where: { id: match.id },
+      });
+      if (after.status === "COMPLETED") {
+        // A played match keeps the night it was played on.
+        expect(after.scheduledAt?.getTime()).toBe(before?.getTime());
+      }
+    }
+  });
+
+  it("only one of N simultaneous ACCEPTs may retime the match", async () => {
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const open = (await pendingFor(match.id))!;
+
+    const res = await raceN(4, () =>
+      respondReschedule(away.captainId, open.id, true).catch(() => null),
+    );
+    expect(res.filter(Boolean)).toHaveLength(1);
+    expect(
+      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: open.id } }))
+        .status,
+    ).toBe("ACCEPTED");
+    expect(
+      (await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
+        .scheduledAt?.getTime(),
+    ).toBe(NIGHT.getTime());
+  });
+
+  it("only one of N simultaneous DECLINEs may close the proposal", async () => {
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const open = (await pendingFor(match.id))!;
+
+    const res = await raceN(4, () =>
+      respondReschedule(away.captainId, open.id, false)
+        .then(() => true)
+        .catch(() => null),
+    );
+    expect(res.filter(Boolean)).toHaveLength(1);
+    expect(
+      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: open.id } }))
+        .status,
+    ).toBe("DECLINED");
+  });
+
+  it("an accept and a withdraw racing cannot BOTH land", async () => {
+    // The proposer pulling the ask at the same instant the opponent accepts:
+    // one outcome must win outright, or the match is retimed by a proposal its
+    // author had already withdrawn.
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const open = (await pendingFor(match.id))!;
+
+    await raceAll<unknown>([
+      () => respondReschedule(away.captainId, open.id, true).catch(() => null),
+      () => cancelReschedule(home.captainId, open.id, false).catch(() => null),
+    ]);
+
+    const after = await prisma.rescheduleRequest.findUniqueOrThrow({
+      where: { id: open.id },
+    });
+    expect(["ACCEPTED", "CANCELLED"]).toContain(after.status);
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    // The match moved if and only if the accept won.
+    expect(m.scheduledAt?.getTime() === NIGHT.getTime()).toBe(
+      after.status === "ACCEPTED",
+    );
+  });
+
+  it("only one of N simultaneous withdrawals may cancel the proposal", async () => {
+    const { home, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const open = (await pendingFor(match.id))!;
+
+    const res = await raceN(4, () =>
+      cancelReschedule(home.captainId, open.id, false)
+        .then(() => true)
+        .catch(() => null),
+    );
+    expect(res.filter(Boolean)).toHaveLength(1);
   });
 });
