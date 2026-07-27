@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
   steamIdToAccountId,
@@ -368,43 +369,87 @@ export function buildPlayers(
 
 export type PlayerStat = ReturnType<typeof buildPlayers>[number];
 
+/**
+ * Thrown from inside importGameForMatch's write transaction when the series
+ * changed under it during the OpenDota fetch. A throw, not a return: the
+ * callback's resolution would COMMIT, and the point is to roll back.
+ */
+class ImportRaceError extends Error {}
+
+const readMatch = (matchId: string) =>
+  prisma.match.findUnique({ where: { id: matchId }, include: { games: true } });
+
 /** Recompute a league match's series score from its imported games. */
 export async function recomputeSeries(matchId: string) {
-  const match = await prisma.match.findUnique({
-    where: { id: matchId },
-    include: { games: true },
-  });
-  if (!match) return;
+  // COMPARE-AND-SWAP, retried: the score is DERIVED from the game list, so a
+  // caller that read a smaller list must never overwrite a fresher result.
+  // Games 2 and 3 of a Bo3 can be imported by two requests at once (a captain
+  // report and an auto-sync scan, or two /api/sync pings), and with a blind
+  // `update({ where: { id } })` the stale caller wrote LAST: the series
+  // reverted to 1-1 LIVE with three games recorded, having already announced
+  // itself and advanced the bracket. Nothing repaired it either — auto-sync
+  // only rescans for NEW games, and there were none left to find.
+  //
+  // On a lost swap we re-read and recompute rather than skipping, because
+  // "who wrote last" does not tell us who read more games; recomputing from
+  // the current rows converges on the truth whichever caller wins.
+  let match!: NonNullable<Awaited<ReturnType<typeof readMatch>>>;
+  let homeWins = 0;
+  let awayWins = 0;
+  let decided = false;
+  let winnerTeamId: string | null = null;
+  let won = false;
 
-  const homeWins = match.games.filter((g) => g.winnerTeamId === match.homeTeamId).length;
-  const awayWins = match.games.filter((g) => g.winnerTeamId === match.awayTeamId).length;
-  // A series is decided when a team clinches the majority (Bo3 → 2, Bo5 → 3) or
-  // when every game has been played (a Bo2 can end 1-1 = a draw).
-  const clinchAt = Math.floor(match.bestOf / 2) + 1;
-  const clinched = homeWins >= clinchAt || awayWins >= clinchAt;
-  const allPlayed = homeWins + awayWins >= match.bestOf;
-  const decided = clinched || allPlayed;
-  const winnerTeamId = !decided
-    ? null
-    : homeWins > awayWins
-      ? match.homeTeamId
-      : awayWins > homeWins
-        ? match.awayTeamId
-        : null; // drawn series (e.g. a 1-1 best-of-2)
+  for (let attempt = 0; attempt < 3 && !won; attempt++) {
+    const fresh = await readMatch(matchId);
+    if (!fresh) return;
+    match = fresh;
 
-  await prisma.match.update({
-    where: { id: matchId },
-    data: {
-      homeScore: homeWins,
-      awayScore: awayWins,
-      winnerTeamId,
-      status: decided
-        ? MATCH_STATUS.COMPLETED
-        : match.games.length > 0
-          ? MATCH_STATUS.LIVE
-          : MATCH_STATUS.SCHEDULED,
-    },
-  });
+    homeWins = match.games.filter((g) => g.winnerTeamId === match.homeTeamId).length;
+    awayWins = match.games.filter((g) => g.winnerTeamId === match.awayTeamId).length;
+    // A series is decided when a team clinches the majority (Bo3 → 2, Bo5 → 3) or
+    // when every game has been played (a Bo2 can end 1-1 = a draw).
+    const clinchAt = Math.floor(match.bestOf / 2) + 1;
+    const clinched = homeWins >= clinchAt || awayWins >= clinchAt;
+    const allPlayed = homeWins + awayWins >= match.bestOf;
+    decided = clinched || allPlayed;
+    winnerTeamId = !decided
+      ? null
+      : homeWins > awayWins
+        ? match.homeTeamId
+        : awayWins > homeWins
+          ? match.awayTeamId
+          : null; // drawn series (e.g. a 1-1 best-of-2)
+
+    const status = decided
+      ? MATCH_STATUS.COMPLETED
+      : match.games.length > 0
+        ? MATCH_STATUS.LIVE
+        : MATCH_STATUS.SCHEDULED;
+    // Nothing to write and nothing to announce — the row already says this.
+    if (
+      match.homeScore === homeWins &&
+      match.awayScore === awayWins &&
+      match.status === status &&
+      match.winnerTeamId === winnerTeamId
+    ) {
+      return;
+    }
+    const swap = await prisma.match.updateMany({
+      where: {
+        id: matchId,
+        homeScore: match.homeScore,
+        awayScore: match.awayScore,
+        status: match.status,
+      },
+      data: { homeScore: homeWins, awayScore: awayWins, winnerTeamId, status },
+    });
+    won = swap.count > 0;
+  }
+  // Three lost swaps means another caller is actively rewriting this series;
+  // its own recompute carries the announce and the bracket advance, so
+  // dropping out here loses nothing.
+  if (!won) return;
 
   // A freshly decided series announces itself (idempotent claim) — imported
   // results used to reach Discord only when an admin typed the score in.
@@ -492,25 +537,62 @@ export async function importGameForMatch(
   if (!cls.ok) return { ok: false, error: cls.reason ?? "Game does not match these teams" };
 
   try {
-    await prisma.game.create({
-      data: {
-        matchId,
-        dotaMatchId: String(od.match_id),
-        radiantWin: od.radiant_win,
-        durationSecs: od.duration,
-        startTime: od.start_time,
-        radiantScore: od.radiant_score ?? 0,
-        direScore: od.dire_score ?? 0,
-        radiantTeamId: cls.radiantTeamId,
-        direTeamId: cls.direTeamId,
-        winnerTeamId: cls.winnerTeamId,
-        players: JSON.stringify(buildPlayers(od, accountMap)),
+    // The two guards above (not COMPLETED, under bestOf) were evaluated on a
+    // snapshot taken BEFORE an OpenDota round trip of up to 8s — long enough
+    // for an admin forfeit ruling or a rival import to close the series or
+    // fill its last slot. `dotaMatchId` being unique stops the same game
+    // landing twice, but nothing stopped a DIFFERENT game being added to a
+    // series that had since finished, and the recomputeSeries below would then
+    // rewrite the standing result.
+    //
+    // So re-check inside the write, at SERIALIZABLE: both racers read this
+    // match's game rows and both insert into that set, which is the rw-conflict
+    // SSI aborts one of (P2034 below). Throwing rather than returning keeps
+    // the rollback honest, and the errors match the pre-fetch wording.
+    await prisma.$transaction(
+      async (tx) => {
+        const fresh = await tx.match.findUnique({
+          where: { id: matchId },
+          select: { status: true, bestOf: true, _count: { select: { games: true } } },
+        });
+        if (!fresh) throw new ImportRaceError("Unknown league match");
+        if (fresh.status === "COMPLETED") {
+          throw new ImportRaceError(
+            "This series is already final — remove one of its games first if you need to correct it",
+          );
+        }
+        if (fresh._count.games >= fresh.bestOf) {
+          throw new ImportRaceError(
+            `This best-of-${fresh.bestOf} already has all ${fresh.bestOf} of its games`,
+          );
+        }
+        await tx.game.create({
+          data: {
+            matchId,
+            dotaMatchId: String(od.match_id),
+            radiantWin: od.radiant_win,
+            durationSecs: od.duration,
+            startTime: od.start_time,
+            radiantScore: od.radiant_score ?? 0,
+            direScore: od.dire_score ?? 0,
+            radiantTeamId: cls.radiantTeamId,
+            direTeamId: cls.direTeamId,
+            winnerTeamId: cls.winnerTeamId,
+            players: JSON.stringify(buildPlayers(od, accountMap)),
+          },
+        });
       },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   } catch (e) {
+    if (e instanceof ImportRaceError) return { ok: false, error: e.message };
     // The dedupe check above races with concurrent imports (an OpenDota fetch
     // sits between check and create) — the unique index is the real arbiter.
     if ((e as { code?: string }).code === "P2002") {
+      return { ok: false, error: "That game was just recorded by someone else" };
+    }
+    // Lost the serialization race to a concurrent import of a different game.
+    if ((e as { code?: string }).code === "P2034") {
       return { ok: false, error: "That game was just recorded by someone else" };
     }
     throw e;

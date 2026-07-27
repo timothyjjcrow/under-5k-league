@@ -4,6 +4,13 @@ import { MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
 import { getActiveSeason } from "./season";
 import { standinAssignedMessage, standinRemovedMessage } from "./discord";
 
+/**
+ * A precondition re-checked INSIDE the assign transaction stopped holding.
+ * Thrown, never returned — the callback resolving would commit the assignment
+ * it exists to prevent.
+ */
+class StandinRaceError extends Error {}
+
 // Standin assignment, captain-self-serve edition (reschedule-service pattern:
 // the integration-tested guards live here; the thin actions add auth, toasts,
 // and the best-effort Discord send). Previously admin-only — which made
@@ -127,12 +134,50 @@ export async function assignStandinGuarded(opts: {
   try {
     await prisma.$transaction(
       async (tx) => {
-        const fresh = await tx.registration.findUnique({
-          where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
-          select: { status: true },
-        });
+        // EVERY precondition is re-read in here, not just the registration.
+        // Two reasons, both load-bearing:
+        //
+        // (1) Re-assertion. `already`, `seatTaken` and `standinRoster` were
+        // read above, outside this transaction, and StandinAssignment has NO
+        // unique constraint (only @@index([matchId])) — so nothing but these
+        // reads stops two concurrent assigns double-covering one seat, which
+        // inflates the match-night roster to six and double-counts the
+        // standin's box-score lines on import.
+        //
+        // (2) SSI needs them in this transaction's READ SET. Serializable
+        // detects a write-skew cycle only across what each side actually read;
+        // re-reading only the Registration left the assign-vs-signFreeAgent
+        // pair with no cycle to detect, so both could commit and a rostered
+        // player could hold live cover.
+        const [fresh, rostered, already, seatTaken] = await Promise.all([
+          tx.registration.findUnique({
+            where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
+            select: { status: true },
+          }),
+          tx.teamMember.findUnique({
+            where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
+            select: { id: true },
+          }),
+          tx.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
+          tx.standinAssignment.findFirst({
+            where: { matchId, replacingUserId },
+            include: { standin: { select: { name: true } } },
+          }),
+        ]);
         if (!fresh || fresh.status !== REGISTRATION_STATUS.ACTIVE)
-          throw new Error("STANDIN_LEFT");
+          throw new StandinRaceError("That standin has no active signup this season");
+        if (rostered)
+          throw new StandinRaceError(
+            "That player is on a roster — they can't stand in",
+          );
+        if (already)
+          throw new StandinRaceError(
+            "That standin is already assigned to this match",
+          );
+        if (seatTaken)
+          throw new StandinRaceError(
+            `${membership.user.name} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
+          );
         await tx.standinAssignment.create({
           data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
         });
@@ -140,8 +185,7 @@ export async function assignStandinGuarded(opts: {
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
-    if ((e as Error).message === "STANDIN_LEFT")
-      return { ok: false, error: "That standin has no active signup this season" };
+    if (e instanceof StandinRaceError) return { ok: false, error: e.message };
     if ((e as { code?: string }).code === "P2034")
       return {
         ok: false,
@@ -219,7 +263,23 @@ export async function removeStandinGuarded(opts: {
       error:
         "Games are already imported — removing the standin now would strip them from the rest of the series",
     };
-  await prisma.standinAssignment.delete({ where: { id: opts.assignmentId } });
+  // Both preconditions ride in the WHERE, not just in the snapshot read three
+  // queries ago: auto-sync imports games from any visitor's page view, so a
+  // series can acquire its first game (or complete outright) in the gap, and
+  // this delete is exactly the mid-series removal the checks above refuse.
+  const gone = await prisma.standinAssignment.deleteMany({
+    where: {
+      id: opts.assignmentId,
+      match: { status: { not: MATCH_STATUS.COMPLETED }, games: { none: {} } },
+    },
+  });
+  if (gone.count === 0) {
+    return {
+      ok: false,
+      error:
+        "A game was just imported for this match — the assignment has to stay, or the standin drops out of the rest of the series",
+    };
+  }
   return {
     ok: true,
     message: "Standin assignment removed",

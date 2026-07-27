@@ -70,7 +70,14 @@ const claimSyncThrottle = claimThrottle;
 async function syncDueMatches(
   nowMs: number,
 ): Promise<{ imported: number; watch: boolean }> {
-  const season = await prisma.season.findFirst({ where: { isActive: true } });
+  // Same newest-wins tiebreak as getActiveSeason. If a transient two-active
+  // state ever occurs, every reader must at least agree WHICH season that is —
+  // an unordered findFirst could have auto-sync importing into a different
+  // season than the one the whole UI is rendering.
+  const season = await prisma.season.findFirst({
+    where: { isActive: true },
+    orderBy: { createdAt: "desc" },
+  });
   if (
     !season ||
     (season.status !== SEASON_STATUS.REGULAR_SEASON &&

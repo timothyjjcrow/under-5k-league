@@ -116,17 +116,28 @@ describe("captain standin assignment (integration)", () => {
     const { home, homePlayer, awayPlayer, sub, match } = await setup();
     const cap = home.captainId;
 
-    // Rostered player can't stand in.
-    expect(
-      (
-        await assignStandinGuarded({
-          matchId: match.id,
-          standinUserId: awayPlayer.id,
-          replacingUserId: homePlayer.id,
-          actingCaptainId: cap,
-        })
-      ).ok,
-    ).toBe(false);
+    // Rostered player can't stand in. The rostered fixtures are bare Users
+    // with no Registration, so without this row the call is rejected by the
+    // "no active signup" guard and never reaches the roster guard the
+    // assertion names — it passed with the roster check deleted. Give them a
+    // real ACTIVE signup and assert the REASON, not just the refusal.
+    await prisma.registration.create({
+      data: {
+        seasonId: match.seasonId,
+        userId: awayPlayer.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    const rostered = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: awayPlayer.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: cap,
+    });
+    expect(rostered.ok).toBe(false);
+    expect(!rostered.ok && rostered.error).toMatch(/on a roster/i);
 
     // Withdrawn signup can't stand in.
     await prisma.registration.updateMany({

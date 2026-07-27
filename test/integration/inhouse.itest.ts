@@ -836,10 +836,12 @@ describe("inhouse — ready check", () => {
     expect(lobby.players.filter((p) => p.acceptedAt)).toHaveLength(1);
   });
 
-  it("accepting a lobby that was cancelled out from under you reports failure, not success", async () => {
-    // The Postgres race the guard closes: a decline/expiry CANCELS the lobby
-    // between the accepter's read and their write. The claim must see the
-    // status change and refuse, or the player gets a false "accepted".
+  it("accepting a lobby cancelled BEFORE the call is refused at the read", async () => {
+    // Staging the cancel up front only covers the EARLY-OUT: acceptMatch's
+    // opening findFirst({ status: READY_CHECK }) finds nothing and returns
+    // before the claim ever runs. Asserting the exact message keeps this
+    // honest about which branch it covers — it is NOT race coverage, and the
+    // relation-filter guard on the claim has its own test below.
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
     await prisma.inhouseLobby.update({
@@ -847,12 +849,44 @@ describe("inhouse — ready check", () => {
       data: { status: INHOUSE_STATUS.CANCELLED },
     });
     const res = await acceptMatch(players[0].session);
-    expect(res.ok).toBe(false);
+    expect(res).toEqual({ ok: false, error: "No match to accept" });
     // No acceptedAt was stamped on the dead lobby.
     const row = await prisma.inhouseLobbyPlayer.findFirstOrThrow({
       where: { lobbyId: lobby.id, userId: players[0].user.id },
     });
     expect(row.acceptedAt).toBeNull();
+  });
+
+  it("an accept racing a decline never lands on the cancelled lobby", async () => {
+    // THE guard: the accept claim carries `lobby: { status: READY_CHECK }` as
+    // a relation filter, so a decline committing between the accepter's read
+    // and their write cannot leave acceptedAt stamped on a dead lobby (and the
+    // accepter falsely told they're in). Reaching it needs a real race — every
+    // staged version short-circuits at the read above.
+    for (let run = 0; run < 6; run++) {
+      await prisma.inhouseLobbyPlayer.deleteMany();
+      await prisma.inhouseLobby.deleteMany();
+      await prisma.inhouseQueueEntry.deleteMany();
+      const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+      const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+
+      const [accepted] = await Promise.all([
+        acceptMatch(players[0].session),
+        declineMatch(players[9].session),
+      ]);
+
+      const after = await prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: lobby.id },
+        include: { players: true },
+      });
+      // Whatever the interleaving: an accept is never both REPORTED ok and
+      // stamped on a lobby that ended up cancelled.
+      const mine = after.players.find((p) => p.userId === players[0].user.id)!;
+      if (after.status === INHOUSE_STATUS.CANCELLED && accepted.ok) {
+        expect(mine.acceptedAt).not.toBeNull(); // it really did land in time
+      }
+      if (!accepted.ok) expect(mine.acceptedAt).toBeNull();
+    }
   });
 
   it("a decline fails the match NOW: decliner dropped, accepters keep their spot + MMR", async () => {
@@ -973,6 +1007,7 @@ describe("inhouse — ready check", () => {
 
   it("a failed check re-forms and pings again when the queue refills", async () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
     for (const p of players.slice(0, 9)) await acceptMatch(p.session);
     mockSend.mockClear();
 
@@ -990,11 +1025,16 @@ describe("inhouse — ready check", () => {
     expect(
       mockSend.mock.calls.filter(([m]) => m.includes("Inhouse match found")),
     ).toHaveLength(1);
+    // A genuinely NEW lobby, not the cancelled one resurrected. (This used to
+    // compare the lobby's id to a USER's id — two cuids from different tables,
+    // which can never be equal, so the assertion could not fail.)
+    const reformed = await prisma.inhouseLobby.findFirstOrThrow({
+      where: { status: INHOUSE_STATUS.READY_CHECK },
+    });
+    expect(reformed.id).not.toBe(lobby.id);
     expect(
-      (await prisma.inhouseLobby.findFirstOrThrow({
-        where: { status: INHOUSE_STATUS.READY_CHECK },
-      })).id,
-    ).not.toBe(players[0].user.id);
+      await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CANCELLED } }),
+    ).toBe(1);
   });
 
   it("state.lobby.readyCheck reports the count, pending-first order, and clock", async () => {
@@ -1095,6 +1135,52 @@ describe("inhouse — result vs cancel race guards", () => {
     });
     expect(still.status).toBe(INHOUSE_STATUS.CANCELLED);
     expect(still.winnerTeam).toBeNull();
+  });
+
+  it("a cancel landing DURING the OpenDota fetch keeps the lobby cancelled", async () => {
+    // The two tests above never actually reach applyResult's claim: both
+    // cancel FIRST, so the callers' own opening `findFirst({ status:
+    // IN_PROGRESS })` returns nothing and they bail long before the
+    // `updateMany({ where: { id, status: IN_PROGRESS } })` runs. Delete that
+    // predicate and they both still pass — which left the guard that stops a
+    // CANCELLED lobby being resurrected as COMPLETED (with Elo stamped and a
+    // Discord result sent) with no coverage at all.
+    //
+    // Cancelling from INSIDE the mocked fetch puts the cancel exactly where it
+    // happens in life — mid-round-trip, after the status was read — and is
+    // deterministic on both engines.
+    const admin = sessionFor(await makeUser("AdminMidFetch", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+
+    let cancelledDuringFetch = false;
+    mockMatch.mockImplementation(async () => {
+      if (!cancelledDuringFetch) {
+        cancelledDuringFetch = (await cancelLobby(admin)).ok;
+      }
+      return fakeMatch({
+        matchId: 7000000099,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }) as never;
+    });
+
+    const res = await recordMatch(players[0].session, "7000000099");
+    expect(cancelledDuringFetch).toBe(true);
+    expect(res.ok).toBe(false);
+
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(after.winnerTeam).toBeNull();
+    // No Elo stamped and no result announced for a game that was cancelled.
+    expect(after.eloDeltas).toBe("{}");
+    expect(
+      mockSend.mock.calls.filter(([m]) => m.includes("Inhouse result")),
+    ).toHaveLength(0);
   });
 
   it("rejects a pasted match that started before this lobby formed", async () => {

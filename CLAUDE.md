@@ -33,6 +33,43 @@ renders per-phase so unused features stay hidden.
 - **UI kit**: `src/components/ui.tsx` (server-safe presentational components).
   `site-header.tsx` and `draft-room.tsx` are `"use client"`.
 
+## Concurrency: the two rules (2026-07 repo-wide sweep — read before writing a mutation)
+
+Production is **Postgres** (`vercel.json` runs `switch-db-provider.mjs postgresql`);
+local dev, integration tests and e2e are **SQLite**, which serializes writers and
+therefore HIDES every race below. A 50-agent sweep plus mutation testing found
+this class in every subsystem. Two rules, both non-negotiable:
+
+1. **A read-time precondition is not a guard — re-assert it in the WHERE of the
+   write.** Postgres READ COMMITTED re-snapshots per statement, so anything
+   checked before a write can be false by the time the write lands. Turn
+   `update({ where: { id } })` into `updateMany({ where: { id, ...what you
+   checked } })` and handle `count === 0`. Where the precondition lives in
+   another table (a write-skew pair), re-read it INSIDE a `Serializable`
+   transaction — SSI only spots the cycle when BOTH sides have the other's
+   table in their read set, so one-sided fixes do nothing.
+2. **Past the first write, failure must THROW, never return.** A resolved
+   Prisma interactive-transaction callback COMMITS. Every `return { ok: false }`
+   after a write persists the half-done state it was trying to prevent. Throw a
+   typed error and catch it OUTSIDE the callback (catching inside re-resolves
+   it, and on Postgres a query error poisons the transaction anyway).
+
+Worked examples, each with the damage it caused: `applyPick` (frozen draft),
+`undoLastSale` (live lot + nomination clock at once), `advancePlayoffBracket`
+(round built twice ⇒ **no champion, ever**), `recomputeSeries` (stale caller
+reverts a completed series), `recordResult` (manual score over an auto-import),
+`assignStandinGuarded` (double-covered seat), `deleteSeason` / `generateSchedule`
+(destructive work past a stale safety check).
+
+**Testing them: a race test must be RACED, not staged.** Staging the conflicting
+row before the call is caught by the function's own read-time check, so the test
+passes against the broken code — this produced four false-green tests here.
+Use `Promise.all` over competing service calls, loop it, and assert the
+invariant. `npm run test:pg` (`PG_TEST_URL=…`) is the only thing that runs them
+for real. To find unprotected guards, mutation-test: strip a claim's state
+predicate and see whether anything fails. Last measured **8 of 49 claims
+protected** — assume a guard is unprotected until shown otherwise.
+
 ## Conventions / gotchas
 
 - **Node ≥ 20.18, Prisma 5.** Prisma 6/7 requires Node ≥ 20.19; this machine's

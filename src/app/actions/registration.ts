@@ -147,6 +147,36 @@ export async function saveRegistration(
     };
   }
 
+  // The REMOVED moderation check above ran on a row read earlier in this
+  // request; the upsert's `update` branch sets status ACTIVE unconditionally,
+  // so an admin removing the signup in that gap was silently undone — and the
+  // whole point of REMOVED is that the player cannot put themselves back.
+  // Re-assert it in a guarded update first, and only fall through to the
+  // create when there is genuinely no row.
+  const revived = await prisma.registration.updateMany({
+    where: {
+      seasonId: season.id,
+      userId: user.id,
+      status: { not: REGISTRATION_STATUS.REMOVED },
+    },
+    data: {
+      type,
+      mmr: check.mmr,
+      wantsCaptain,
+      roles,
+      favoriteHeroes,
+      statement,
+      captainNote,
+      status: "ACTIVE",
+    },
+  });
+  if (revived.count === 0 && existing) {
+    return {
+      error:
+        "An admin removed your signup for this season — message them if you think that's a mistake.",
+    };
+  }
+  if (revived.count === 0) {
   await prisma.registration.upsert({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
     create: {
@@ -172,6 +202,7 @@ export async function saveRegistration(
       status: "ACTIVE",
     },
   });
+  }
 
   // Announce brand-new full-player signups (not updates or standins) with a
   // countdown to the draft threshold.
@@ -292,6 +323,17 @@ export async function leaveLeague(
           },
         });
         if (live > 0) throw new Error("COVER_APPEARED");
+        // The "you're on a roster — get released first" half of the gate was
+        // judged on reads taken outside this transaction, so a draft sale or a
+        // free-agent signing landing in the gap let a ROSTERED player withdraw:
+        // their seat stays filled by a WITHDRAWN registration, which the
+        // capacity math and the standin pool both then misread. Re-checked in
+        // here so it is both re-asserted and in this transaction's read set.
+        const seat = await tx.teamMember.findUnique({
+          where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+          select: { isCaptain: true },
+        });
+        if (seat) throw new Error(seat.isCaptain ? "IS_CAPTAIN" : "IS_ROSTERED");
         await tx.registration.updateMany({
           where: { seasonId: season.id, userId: user.id, status: "ACTIVE" },
           data: { status: "WITHDRAWN" },
@@ -304,6 +346,16 @@ export async function leaveLeague(
       return {
         error:
           "You've just been assigned to stand in for an unplayed match — that has to be removed first.",
+      };
+    if ((e as Error).message === "IS_CAPTAIN")
+      return {
+        error:
+          "You're a captain this season — an admin has to hand the team over before you can leave.",
+      };
+    if ((e as Error).message === "IS_ROSTERED")
+      return {
+        error:
+          "You've just been drafted or signed to a team — ask an admin to release you first.",
       };
     if ((e as { code?: string }).code === "P2034")
       return { error: "Your signup just changed — reload and try again." };

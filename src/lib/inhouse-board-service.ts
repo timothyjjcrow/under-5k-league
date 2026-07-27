@@ -65,6 +65,11 @@ function parseState(raw: string | null): BoardState | null {
     if (
       typeof v.webhookId === "string" &&
       typeof v.messageId === "string" &&
+      // A row with no message id is a POSTING RESERVATION (see claimBoardRow),
+      // not a board: there is nothing to edit yet. Treating it as live would
+      // send the poll path PATCHing message "", which 404s and is read as
+      // "gone" — deleting the claim out from under the request still posting.
+      v.messageId !== "" &&
       typeof v.digest === "string"
     ) {
       return {
@@ -104,6 +109,40 @@ async function clearStateIf(expected: string): Promise<void> {
  * the request and written after it, so this is the repo's standard guarded
  * claim rather than a read-modify-write.
  */
+/**
+ * Reserve the board row before talking to Discord, so only one concurrent
+ * "Post queue board" can ever send a message. Returns the placeholder value it
+ * wrote (the CAS token for the real write), or null if someone else holds it.
+ * A row with an empty messageId is inert everywhere: syncInhouseBoard's
+ * parseState requires a non-empty messageId to attempt an edit.
+ */
+async function claimBoardRow(webhookId: string): Promise<string | null> {
+  const placeholder = JSON.stringify({
+    webhookId,
+    messageId: "",
+    digest: `posting:${webhookId}`,
+  } satisfies BoardState);
+  try {
+    await prisma.setting.create({
+      data: { key: SETTING_KEYS.INHOUSE_BOARD, value: placeholder },
+    });
+    return placeholder;
+  } catch (e) {
+    if ((e as { code?: string }).code !== "P2002") throw e;
+  }
+  // A row exists. Only take it over if it is a DIFFERENT channel's board (the
+  // legitimate "move the board" case the caller already validated above).
+  const current = await prisma.setting.findUnique({
+    where: { key: SETTING_KEYS.INHOUSE_BOARD },
+  });
+  if (!current) return null;
+  const swapped = await prisma.setting.updateMany({
+    where: { key: SETTING_KEYS.INHOUSE_BOARD, value: current.value },
+    data: { value: placeholder },
+  });
+  return swapped.count > 0 ? placeholder : null;
+}
+
 async function swapState(expected: string, next: BoardState): Promise<void> {
   await prisma.setting.updateMany({
     where: { key: SETTING_KEYS.INHOUSE_BOARD, value: expected },
@@ -391,13 +430,27 @@ export async function createInhouseBoard(): Promise<{
 
   const snap = await resolveSnapshot(await loadBoardSnapshot());
   const { digest, embed } = renderBoard(snap);
+  // CLAIM THE ROW BEFORE POSTING, not after. The "already posted" check above
+  // sits a multi-second Discord round trip away from the write, so a double
+  // submit (or two admins) posted TWO boards and the second setSetting
+  // silently overwrote the first's messageId — orphaning a pinned board that
+  // can never be edited or deleted again, which is the worst end state this
+  // feature has. Claiming first means the loser never reaches Discord.
+  const claimed = await claimBoardRow(webhookId);
+  if (!claimed) {
+    return { ok: false, error: "A board is already being posted — reload to see it" };
+  }
   const posted = await postWebhookMessage(url, { embeds: [embed] });
   if (!posted) {
+    // Release the placeholder so a retry isn't locked out by our own claim.
+    await prisma.setting.deleteMany({
+      where: { key: SETTING_KEYS.INHOUSE_BOARD, value: claimed },
+    });
     return { ok: false, error: "Discord rejected the message — check the webhook" };
   }
-  await setSetting(
-    SETTING_KEYS.INHOUSE_BOARD,
-    JSON.stringify({ webhookId, messageId: posted.id, digest } satisfies BoardState),
+  await swapState(
+    claimed,
+    { webhookId, messageId: posted.id, digest } satisfies BoardState,
   );
   return { ok: true };
 }

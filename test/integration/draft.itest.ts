@@ -192,8 +192,16 @@ describe("draft auction — claim guards", () => {
 
     await nominatePlayer(season.id, sessionFor(capA.user), star.id, 7);
     await expireClock(season.id);
-    expect(await resolveExpiredNomination(season.id)).toBe(true);
-    expect(await resolveExpiredNomination(season.id)).toBe(false); // claim lost
+    // RACED, not sequential. A second SEQUENTIAL call returns false from the
+    // top-of-transaction read (`nominatedUserId` is already null by then), so
+    // the claim's WHERE is never issued twice and the test passed with the
+    // claim reduced to a blind write. Firing them together is the only way the
+    // predicate does any work — and only on Postgres, since SQLite serializes
+    // writers (`npm run test:pg`).
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () => resolveExpiredNomination(season.id)),
+    );
+    expect(results.filter(Boolean)).toHaveLength(1); // exactly one winner
 
     const members = await prisma.teamMember.findMany({
       where: { seasonId: season.id, userId: star.id },
@@ -221,8 +229,13 @@ describe("draft auction — claim guards", () => {
     await startDraftState(season.id);
 
     await expireNominationClock(season.id);
-    expect(await resolveStalledNomination(season.id)).toBe(true);
-    expect(await resolveStalledNomination(season.id)).toBe(false);
+    // Raced for the same reason as the sale resolver above: a sequential
+    // second call bails at the read (`nominatedUserId` is now set), so it
+    // never exercises the auto-nomination claim.
+    const fired = await Promise.all(
+      Array.from({ length: 6 }, () => resolveStalledNomination(season.id)),
+    );
+    expect(fired.filter(Boolean)).toHaveLength(1);
 
     const draft = await prisma.draft.findUniqueOrThrow({
       where: { seasonId: season.id },
@@ -462,8 +475,12 @@ describe("draft auction — bid trail + undo", () => {
     expect((await undoLastSale(season.id, admin)).ok).toBe(false);
 
     await nominatePlayer(season.id, sessionFor(capA.user), only.id, 4);
-    // Live lot → refuse.
-    expect((await undoLastSale(season.id, admin)).ok).toBe(false);
+    // Live lot → refuse. Assert the REASON: with no sale on the books yet this
+    // call also refuses via the "no auction sale to undo" branch, so a bare
+    // `.ok === false` passed even with the live-lot guard deleted.
+    const live = await undoLastSale(season.id, admin);
+    expect(live.ok).toBe(false);
+    expect(!live.ok && live.error).toMatch(/lot is live/i);
 
     await expireClock(season.id);
     expect(await resolveExpiredNomination(season.id)).toBe(true);

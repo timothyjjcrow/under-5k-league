@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import type { Season } from "@prisma/client";
 
@@ -30,16 +31,32 @@ export async function reactivateSeason(
   if (season.isActive) {
     return { ok: false, error: "That season is already the active one" };
   }
-  await prisma.$transaction([
-    prisma.season.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
-    }),
-    prisma.season.update({
-      where: { id: seasonId },
-      data: { isActive: true },
-    }),
-  ]);
+  // SERIALIZABLE: "exactly one active season" has no DB constraint behind it
+  // (Season.isActive is a plain Boolean), so under READ COMMITTED two
+  // concurrent activations each archive what they can see and each activate
+  // their own — leaving TWO active seasons, after which different readers
+  // disagree about which league they are looking at. Both transactions write
+  // every currently-active row, so SSI aborts one of them.
+  try {
+    await prisma.$transaction(
+      [
+        prisma.season.updateMany({
+          where: { isActive: true },
+          data: { isActive: false },
+        }),
+        prisma.season.update({
+          where: { id: seasonId },
+          data: { isActive: true },
+        }),
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if ((e as { code?: string }).code === "P2034") {
+      return { ok: false, error: "Another season was just activated — reload." };
+    }
+    throw e;
+  }
   return { ok: true, name: season.name };
 }
 

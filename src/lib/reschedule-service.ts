@@ -136,8 +136,14 @@ export async function respondReschedule(
     });
     if (accepted.count === 0)
       throw new Error("That proposal is no longer open");
-    await tx.match.update({
-      where: { id: match.id },
+    // The "not already played" check happened against a row read before this
+    // transaction opened, and auto-sync completes matches from any visitor's
+    // page view — so re-assert it at the write. Otherwise accepting a stale
+    // proposal could stamp a FUTURE kickoff onto a match that just finished
+    // (and wipe its RSVPs), putting a completed series outside its own
+    // detection window. Throwing rolls the ACCEPTED flip back with it.
+    const retimed = await tx.match.updateMany({
+      where: { id: match.id, status: { not: MATCH_STATUS.COMPLETED } },
       // New kickoff ⇒ new detection window: clear the backoff accrued
       // against the old one so the moved night is scanned promptly.
       data: {
@@ -146,6 +152,7 @@ export async function respondReschedule(
         autoSyncAttempts: 0,
       },
     });
+    if (retimed.count === 0) throw new Error("This match is already played");
     // The night changed — every RSVP was an answer about the OLD night.
     // Clearing them re-prompts the rosters instead of carrying 8 stale ✓s
     // into a night nobody actually agreed to play.

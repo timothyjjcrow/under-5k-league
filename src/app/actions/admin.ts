@@ -86,6 +86,15 @@ import {
 } from "@/lib/registration";
 import type { ActionResult } from "@/lib/action-result";
 
+/**
+ * Thrown from inside a `$transaction` callback when a precondition that was
+ * checked OUTSIDE it has since stopped holding. These must be throws, never
+ * returns: a resolved callback COMMITS, which would persist exactly the
+ * destructive half the check exists to prevent.
+ */
+class SeasonBecameActiveError extends Error {}
+class ResultsLandedError extends Error {}
+
 function refresh() {
   revalidatePath("/", "layout");
 }
@@ -167,13 +176,29 @@ export async function deleteSeason(
   // Matches must go before teams (Match→Team is RESTRICT); the season delete
   // cascades to everything else. The weekly-honors idempotency markers live
   // in the relationless Setting table, so they need explicit cleanup.
-  await prisma.$transaction([
-    prisma.match.deleteMany({ where: { seasonId } }),
-    prisma.season.delete({ where: { id: seasonId } }),
-    prisma.setting.deleteMany({
-      where: { key: { startsWith: `honorsAnnounced:${seasonId}:` } },
-    }),
-  ]);
+  // The archived-ness that AUTHORIZED this delete is re-asserted at the write.
+  // /seasons offers "Make active again" right beside Delete, so the gap between
+  // the check above and a cascading delete of every team, registration, draft
+  // and roster row is genuinely reachable — and there is no undo.
+  // deleteMany-with-a-predicate, then a count check, then throw so the match
+  // deletion rolls back too (a return would commit it).
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.match.deleteMany({ where: { seasonId } });
+      const gone = await tx.season.deleteMany({
+        where: { id: seasonId, isActive: false },
+      });
+      if (gone.count === 0) throw new SeasonBecameActiveError();
+      await tx.setting.deleteMany({
+        where: { key: { startsWith: `honorsAnnounced:${seasonId}:` } },
+      });
+    });
+  } catch (e) {
+    if (e instanceof SeasonBecameActiveError) {
+      return { error: "That season was just made active again — nothing deleted." };
+    }
+    throw e;
+  }
   refresh();
   return { message: `Deleted ${season.name} and all of its history` };
 }
@@ -1077,16 +1102,42 @@ export async function generateSchedule(
     })),
   );
 
-  await prisma.$transaction([
-    prisma.match.deleteMany({
-      where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
-    }),
-    prisma.match.createMany({ data: rows }),
-    prisma.season.update({
-      where: { id: season.id },
-      data: { firstMatchNight: firstNight },
-    }),
-  ]);
+  // Re-assert the safety counts INSIDE the transaction. They were taken
+  // outside it, and auto-sync imports games from any visitor's page view, so
+  // "no results yet" can stop being true in the gap — after which this
+  // deleteMany cascades away the games, check-ins and predictions the counts
+  // exist to protect. Throwing rolls the delete back; a return would commit it.
+  try {
+    await prisma.$transaction(async (tx) => {
+      const [played, games] = await Promise.all([
+        tx.match.count({
+          where: {
+            seasonId: season.id,
+            phase: MATCH_PHASE.REGULAR,
+            status: MATCH_STATUS.COMPLETED,
+          },
+        }),
+        tx.game.count({ where: { match: { seasonId: season.id } } }),
+      ]);
+      if (played > 0 || games > 0) throw new ResultsLandedError();
+      await tx.match.deleteMany({
+        where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
+      });
+      await tx.match.createMany({ data: rows });
+      await tx.season.update({
+        where: { id: season.id },
+        data: { firstMatchNight: firstNight },
+      });
+    });
+  } catch (e) {
+    if (e instanceof ResultsLandedError) {
+      return {
+        error:
+          "A result landed while you were generating — nothing was changed. Reload and check the schedule.",
+      };
+    }
+    throw e;
+  }
   refresh();
   return {
     // A blank first night isn't just "no times shown": unscheduled matches are
@@ -1228,8 +1279,24 @@ export async function recordResult(
         ? match.awayTeamId
         : null;
 
-  await prisma.match.update({
-    where: { id: matchId },
+  // COMPARE-AND-SWAP on the snapshot the guards above judged. The playoff
+  // "already advanced" / "champion crowned" checks all ran against `match` as
+  // it was read, and auto-sync fires on any visitor's page view — so a Bo3
+  // sitting LIVE at 1-1 (which skips those guards entirely) can be completed
+  // and can advance the bracket in the gap while the admin types a forfeit
+  // ruling. A blind write then left the match page saying HOME won, its
+  // imported games saying AWAY won, and AWAY standing in the next round —
+  // the state this file's own comment calls unrepairable.
+  //
+  // The scores are in the predicate, not just the status: a bracket can
+  // advance in the gap without this row's status ever changing.
+  const applied = await prisma.match.updateMany({
+    where: {
+      id: matchId,
+      status: match.status,
+      homeScore: match.homeScore,
+      awayScore: match.awayScore,
+    },
     data: {
       homeScore,
       awayScore,
@@ -1237,6 +1304,12 @@ export async function recordResult(
       status: MATCH_STATUS.COMPLETED,
     },
   });
+  if (applied.count === 0) {
+    return {
+      error:
+        "That match just changed — a game was imported while you were typing. Reload and check the score before saving.",
+    };
+  }
 
   // Manual results move standings too — bump the sync cursor so parked
   // dashboards repaint on their next /api/sync poll.
@@ -1386,6 +1459,25 @@ export async function signFreeAgent(
       async (tx) => {
         const seats = await tx.teamMember.count({ where: { teamId } });
         if (seats >= season.teamSize) throw new Error("SEAT_TAKEN");
+        // The standin count is re-read HERE, inside the serializable
+        // transaction, for the same reason assignStandinGuarded re-reads its
+        // roster check inside its own: this and an assign are a write-skew
+        // pair (sign reads assignments + writes TeamMember; assign reads the
+        // roster + writes StandinAssignment), and SSI can only spot the cycle
+        // if BOTH sides put the other's table in their read set. Re-checking
+        // outside, as this did, left a single rw-edge and no cycle — so a
+        // player could end up rostered AND holding live cover, which puts one
+        // account in both teams' import sets and fails every classifyGame.
+        const stillCovering = await tx.standinAssignment.count({
+          where: {
+            standinUserId: userId,
+            match: {
+              seasonId: season.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+        });
+        if (stillCovering > 0) throw new Error("STANDIN_COVER");
         await tx.teamMember.create({
           data: {
             seasonId: season.id,
@@ -1404,6 +1496,11 @@ export async function signFreeAgent(
     }
     if ((e as Error).message === "SEAT_TAKEN") {
       return { error: `${team.name} has no open roster seats` };
+    }
+    if ((e as Error).message === "STANDIN_COVER") {
+      return {
+        error: `${registration.user.name} is standing in on an upcoming match — remove that assignment first, then sign them`,
+      };
     }
     if ((e as { code?: string }).code === "P2002") {
       return { error: "That player was just signed elsewhere" };
@@ -1495,10 +1592,20 @@ export async function releasePlayer(
       select: { id: true, match: { select: { games: { select: { id: true }, take: 1 } } } },
     });
     const removable = covering.filter((a) => a.match.games.length === 0);
+    let cancelled = 0;
     if (removable.length) {
-      await tx.standinAssignment.deleteMany({
-        where: { id: { in: removable.map((s) => s.id) } },
-      });
+      // The "no games imported yet" condition rides in the WHERE, not just in
+      // the JS filter above: on Postgres READ COMMITTED a series can acquire
+      // its first game between the findMany and this delete, and dropping
+      // cover mid-series is precisely what removeStandinGuarded refuses.
+      // The toast counts what the DELETE actually matched, so it can never
+      // claim a cancellation the predicate refused.
+      ({ count: cancelled } = await tx.standinAssignment.deleteMany({
+        where: {
+          id: { in: removable.map((s) => s.id) },
+          match: { games: { none: {} } },
+        },
+      }));
     }
     await tx.teamMember.delete({ where: { id: member.id } });
     if (member.price > 0) {
@@ -1508,8 +1615,9 @@ export async function releasePlayer(
       });
     }
     return {
-      cancelled: removable.length,
-      kept: covering.length - removable.length,
+      // What the DELETE actually matched — never what the JS filter hoped.
+      cancelled,
+      kept: covering.length - cancelled,
     };
   });
 
