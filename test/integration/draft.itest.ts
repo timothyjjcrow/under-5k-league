@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
+  abortDraft,
   getDraftState,
   nominatePlayer,
   pauseDraft,
@@ -18,6 +19,7 @@ import {
   makePlayer,
   makeSeason,
   makeUser,
+  raceAll,
   raceN,
   sessionFor,
   startDraftState,
@@ -496,5 +498,145 @@ describe("draft auction — bid trail + undo", () => {
     expect(reopened.nominatorTeamId).toBe(capA.team.id);
     // Non-admin can't touch it.
     expect((await undoLastSale(season.id, sessionFor(capB.user))).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Every remaining draft claim, tested the only way that works: race N callers
+// and require exactly one to win. Delete the guard and all N win — that is the
+// assertion. Real interleaving only happens under `npm run test:pg`.
+// ---------------------------------------------------------------------------
+
+describe("draft auction — claims fire exactly once under contention", () => {
+  /** A live auction with two captains and a pool. */
+  async function liveDraft(tag: string) {
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    const capA = await makeCaptain(season.id, `CapA${tag}`, 100, 0);
+    const capB = await makeCaptain(season.id, `CapB${tag}`, 100, 1);
+    const pool = [];
+    for (let i = 0; i < 4; i++) {
+      pool.push(await makePlayer(season.id, `P${tag}${i}`, 4000 - i * 100));
+    }
+    await startDraftState(season.id);
+    return { season, capA, capB, pool };
+  }
+
+  it("pauseDraft: only one of N simultaneous pauses may park the clocks", async () => {
+    const { season } = await liveDraft("Pause");
+    const admin = sessionFor(await makeUser("AdminPz", "ADMIN"));
+    const res = await raceN(3, () => pauseDraft(season.id, admin));
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+    expect(
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+    ).toBe(DRAFT_STATUS.PAUSED);
+  });
+
+  it("resumeDraft: only one of N simultaneous resumes may restart the clock", async () => {
+    const { season } = await liveDraft("Resume");
+    const admin = sessionFor(await makeUser("AdminRz", "ADMIN"));
+    expect((await pauseDraft(season.id, admin)).ok).toBe(true);
+    const res = await raceN(3, () => resumeDraft(season.id, admin));
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+    expect(
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+    ).toBe(DRAFT_STATUS.IN_PROGRESS);
+  });
+
+  it("nominatePlayer: two captains nominating at once open ONE lot", async () => {
+    const { season, capA, capB, pool } = await liveDraft("Nom");
+    const admin = sessionFor(await makeUser("AdminNm", "ADMIN"));
+    void capA;
+    void capB;
+    // Both go through the admin path so neither is refused for being off the
+    // clock — the nomination CLAIM is what must arbitrate, not the turn check.
+    const res = await raceAll([
+      () => nominatePlayer(season.id, admin, pool[0].id, 1),
+      () => nominatePlayer(season.id, admin, pool[1].id, 1),
+      () => nominatePlayer(season.id, admin, pool[2].id, 1),
+    ]);
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatedUserId).not.toBeNull();
+    // One lot means one opening bid row, not three.
+    expect(await prisma.bid.count({ where: { seasonId: season.id } })).toBe(1);
+  });
+
+  it("the stall resolver ADVANCES the rotation exactly once for a broke nominator", async () => {
+    // The nominator can't afford MIN_BID, so the resolver takes the advance
+    // branch rather than auto-nominating. Its claim is separate from the
+    // auto-nomination one and had no coverage.
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    const capA = await makeCaptain(season.id, "BrokeCap", 0, 0);
+    await makeCaptain(season.id, "RichCap", 100, 1);
+    await makePlayer(season.id, "PoolA", 4000);
+    await makePlayer(season.id, "PoolB", 3900);
+    await startDraftState(season.id);
+    await expireNominationClock(season.id);
+
+    const res = await raceN(4, () => resolveStalledNomination(season.id));
+    expect(res.filter(Boolean)).toHaveLength(1);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    // The clock moved off the broke captain exactly once.
+    expect(draft.nominatorTeamId).not.toBe(capA.team.id);
+  });
+
+  it("the stall resolver completes a draft NO team can afford, exactly once", async () => {
+    // The other completion branch: the nominator can't afford MIN_BID AND
+    // neither can anyone else, so nextNominatorIndex returns -1. Distinct claim
+    // from the pool-dry one below, and separately uncovered.
+    const season = await makeSeason({ teamSize: 3, draftBudget: 0 });
+    await makeCaptain(season.id, "BrokeA", 0, 0);
+    await makeCaptain(season.id, "BrokeB", 0, 1);
+    await makePlayer(season.id, "Unsellable", 4000);
+    await startDraftState(season.id);
+    await expireNominationClock(season.id);
+
+    const res = await raceN(4, () => resolveStalledNomination(season.id));
+    expect(res.filter(Boolean)).toHaveLength(1);
+    expect(
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+    ).toBe(DRAFT_STATUS.COMPLETE);
+  });
+
+  it("abortDraft: only one of N simultaneous aborts may tear the draft down", async () => {
+    const { season, pool } = await liveDraft("Abort");
+    const admin = sessionFor(await makeUser("AdminAb", "ADMIN"));
+    // Land a sale so the teardown has budget to credit back.
+    expect((await nominatePlayer(season.id, admin, pool[0].id, 5)).ok).toBe(true);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+
+    const res = await raceN(4, () => abortDraft(season.id, admin));
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.status).toBe(DRAFT_STATUS.NOT_STARTED);
+    // Credited back ONCE, not once per aborting admin.
+    const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
+    for (const t of teams) expect(t.budget).toBe(100);
+  });
+
+  it("the stall resolver COMPLETES a pool-dry draft exactly once", async () => {
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    await makeCaptain(season.id, "DryA", 100, 0);
+    await makeCaptain(season.id, "DryB", 100, 1);
+    await startDraftState(season.id); // no pool at all
+    await expireNominationClock(season.id);
+
+    const res = await raceN(4, () => resolveStalledNomination(season.id));
+    expect(res.filter(Boolean)).toHaveLength(1);
+    expect(
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+    ).toBe(DRAFT_STATUS.COMPLETE);
+    // One completion means one announcement.
+    expect(
+      mockSend.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("draft")),
+    ).not.toHaveLength(0);
   });
 });

@@ -29,7 +29,6 @@
 // survives and the ratchet would silently measure nothing.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import path from "node:path";
 
 const BASELINE = "test/mutation-baseline.json";
 
@@ -210,7 +209,12 @@ if (!process.env.PG_TEST_URL) {
 }
 
 const discover = process.argv.includes("--discover");
-const claims = discoverAll();
+// `--only <substring>` narrows to matching claim ids — a full sweep is one
+// suite run per claim, which is far too slow a loop while writing the tests
+// that close them.
+const onlyArg = process.argv.indexOf("--only");
+const only = onlyArg !== -1 ? process.argv[onlyArg + 1] : null;
+const claims = discoverAll().filter((c) => !only || c.id.includes(only));
 
 if (discover) {
   console.log(`Sweeping ${claims.length} guarded claims (one suite run each)…\n`);
@@ -221,6 +225,17 @@ if (discover) {
       `  [${caught ? "PROTECTED  " : "unprotected"}] (${i + 1}/${claims.length}) ${c.id}  (${c.file}:${c.line})`,
     );
     if (caught) protectedIds.push(c.id);
+  }
+  if (only) {
+    // A filtered sweep has only seen part of the repo, so writing the baseline
+    // from it would silently DROP every claim it didn't look at — turning the
+    // ratchet off for them. `--only` is a probe; the baseline comes from a
+    // full run.
+    console.log(
+      `\n${protectedIds.length}/${claims.length} protected in this slice — ` +
+        `baseline NOT written (--only is a probe; run a full --discover to update it).`,
+    );
+    process.exit(0);
   }
   writeFileSync(
     BASELINE,

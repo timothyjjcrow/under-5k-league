@@ -20,6 +20,8 @@ import {
   makePick,
   maybeAutoDetectResult,
   recordMatch,
+  resolveAbandonedLobby,
+  resolveCaptainVote,
   resolveReadyCheck,
   resolveStalledPick,
   autoDetectResult,
@@ -1838,5 +1840,152 @@ describe("inhouse — auto-detect blames the right thing", () => {
     const res = await autoDetectResult(players[0].session);
     expect(res.ok).toBe(false);
     expect(res.ok === false && res.error).toMatch(/Expose Public Match Data/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claim guards: each of these deletes to a BLIND write, and the only thing that
+// notices is contention. Every one is "race N callers, exactly one may win" —
+// with the guard removed, all N win, which is the assertion. They interleave
+// only under `npm run test:pg` (raceN is sequential on SQLite, where Prisma's
+// single connection would queue rather than race); the mutation guard in CI
+// runs there, which is what keeps these honest.
+// ---------------------------------------------------------------------------
+
+describe("inhouse — guarded claims fire exactly once under contention", () => {
+  it("startGame: only one of N simultaneous starts may launch the game", async () => {
+    const admin = sessionFor(await makeUser("AdminSG", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4000 - i * 50);
+    await voteAll(players, "MMR");
+    await driveDraftToReady(admin);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY);
+
+    const res = await raceN(4, () => startGame(players[0].session));
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(after.status).toBe(INHOUSE_STATUS.IN_PROGRESS);
+  });
+
+  it("cancelLobby: only one of N simultaneous admin cancels may scrap it", async () => {
+    const admin = sessionFor(await makeUser("AdminCL", "ADMIN"));
+    await voteAll(await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4000 - i * 50), "MMR");
+
+    const res = await raceN(4, () => cancelLobby(admin));
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+    expect(
+      await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CANCELLED } }),
+    ).toBe(1);
+  });
+
+  it("voidLastResult: only one of N simultaneous voids may undo the result", async () => {
+    const admin = sessionFor(await makeUser("AdminVD", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100001,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }) as never,
+    );
+    expect((await recordMatch(players[0].session, "7100001")).ok).toBe(true);
+
+    const res = await raceN(4, () => voidLastResult(admin));
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+  });
+
+  it("resolveAbandonedLobby: only one of N pollers may tear down the dead lobby", async () => {
+    const admin = sessionFor(await makeUser("AdminAB4", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.ABANDON_IN_PROGRESS_HOURS + 1) * 3_600_000,
+        ),
+      },
+    });
+
+    const res = await raceN(4, () => resolveAbandonedLobby());
+    expect(res.filter(Boolean)).toHaveLength(1);
+  });
+
+  it("resolveCaptainVote: only one of N pollers may install captains", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4000 - i * 50);
+    await acceptAll(players);
+    // Everyone votes but the last, so the vote is ripe without having been
+    // resolved inline by castVote.
+    for (const p of players.slice(0, INHOUSE.LOBBY_SIZE - 1)) {
+      await castVote(p.session, "MMR");
+    }
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { voteEndsAt: new Date(Date.now() - 1000) },
+    });
+
+    const res = await raceN(4, () => resolveCaptainVote());
+    expect(res.filter(Boolean)).toHaveLength(1);
+    // Exactly two captains, not two per resolver that ran.
+    const caps = await prisma.inhouseLobbyPlayer.count({
+      where: { lobbyId: lobby.id, isCaptain: true },
+    });
+    expect(caps).toBe(2);
+  });
+
+  it("failReadyCheck: only one of N simultaneous declines may fail the check", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const res = await raceAll([
+      () => declineMatch(players[8].session),
+      () => declineMatch(players[9].session),
+      () => declineMatch(players[7].session),
+    ]);
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+    expect(
+      await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CANCELLED } }),
+    ).toBe(1);
+  });
+
+  it("autoDetectResult: N impatient players cost ONE OpenDota scan, not N", async () => {
+    // The documented API-budget guard: each press is ~16 OpenDota calls, and
+    // ten players hammering the button after a game once drained the shared
+    // budget and took LEAGUE result sync down with it. The throttle claim is
+    // the only thing bounding it.
+    const admin = sessionFor(await makeUser("AdminDT", "ADMIN"));
+    const { players } = await runToInProgress(admin);
+    mockRecent.mockResolvedValue([]); // reachable, but nobody's game is public
+    mockRecent.mockClear();
+
+    const res = await raceN(4, () => autoDetectResult(players[0].session));
+    expect(res.filter((r) => r.ok)).toHaveLength(0); // no game to find
+    // Exactly one caller won the claim, so exactly one fan-out happened.
+    expect(mockRecent.mock.calls.length).toBe(INHOUSE.LOBBY_SIZE);
+  });
+
+  it("maybeAutoDetectResult: N concurrent pollers cost ONE background scan", async () => {
+    // Same budget guard on the POLL path, where the contention is routine
+    // rather than exceptional: every open /inhouse tab and every sitewide
+    // /api/sync ping calls this.
+    const admin = sessionFor(await makeUser("AdminMD", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000,
+        ),
+      },
+    });
+    mockRecent.mockResolvedValue([]);
+    mockRecent.mockClear();
+
+    const res = await raceN(4, () => maybeAutoDetectResult());
+    expect(res.filter(Boolean)).toHaveLength(0); // nothing found
+    expect(mockRecent.mock.calls.length).toBe(INHOUSE.LOBBY_SIZE);
   });
 });

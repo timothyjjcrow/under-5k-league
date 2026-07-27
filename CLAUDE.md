@@ -78,7 +78,7 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
-Currently **8 of 49 claims protected**. The other 41 are reported, never gating —
+Currently **23 of 49 claims protected**. The rest are reported, never gating —
 assume a guard is unprotected until the baseline says otherwise. To raise the
 ratchet: write a raced test, then `npm run test:mutation:discover` and commit
 the new baseline. Deliberately removing a guard also needs a re-discover, which
