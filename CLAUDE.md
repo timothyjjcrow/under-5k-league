@@ -678,6 +678,27 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   re-opening the auction anyway. Because it can therefore skip past newer
   signings, the toast NAMES the purchase it reverted (player → team, price);
   don't reduce that back to a generic "Sale undone".
+- **`undoLastSale` re-asserts "no live lot" AT THE WRITE, and THROWS if it
+  lost** (2026-07 Postgres pass). It checks `nominatedUserId` at its read, then
+  runs four more statements — roster delete, Bid sweep, budget credit, team
+  scan — before writing the draft, and that gap is genuinely reachable: the
+  draft-night sequence is a disputed sale, a minute of captains arguing, the
+  nomination clock expiring, a poller's `resolveStalledNomination` opening a
+  fresh lot, and THEN Undo landing. The blind `update({ where: { seasonId } })`
+  stamped status + nominator + a fresh `nominationEndsAt` over the top while
+  leaving that lot's `nominatedUserId`/`currentBid`/`bidEndsAt` intact, so the
+  draft held a LIVE AUCTION and a RUNNING NOMINATION CLOCK at once — states the
+  engine treats as mutually exclusive. `resolveExpiredNomination` would then
+  sell that player to a team that never nominated them and advance the rotation
+  from the nominator Undo had just repointed. Reproduced 11 times in 12 on
+  Postgres; zero after. It must THROW rather than return, for the same reason
+  the inhouse turn claim does: the refund and the roster delete are already
+  written, and a `return` from a Prisma interactive transaction COMMITS them —
+  money back, player gone, sale never undone. Caught outside the callback.
+  Pinned by a RACED test in `abort-draft.itest.ts` (staging the lot up front
+  passes against the broken code — the read-time check catches it — so the
+  test has to be concurrent, which means `npm run test:pg` is what runs it for
+  real).
 - **`abortDraft` is the way back from a premature "Start draft"** (the draft's
   equivalent of "Reset playoffs"). Nothing else ever writes `Draft.status` back
   to NOT_STARTED, and addCaptain/removeCaptain/randomizeDraftOrder/

@@ -425,12 +425,21 @@ export type UndoSaleSummary = {
  * the draft. Refused while a lot is live — undoing under an active clock
  * would shift budgets mid-auction.
  */
+/**
+ * Thrown once undoLastSale has already deleted the roster row and credited the
+ * budget but can no longer safely re-open the auction. It must be a throw: a
+ * `return` resolves the Prisma interactive transaction, which COMMITS it, so
+ * the refund would stand with the sale never actually undone.
+ */
+class UndoRaceError extends Error {}
+
 export async function undoLastSale(
   seasonId: string,
   viewer: SessionUser,
 ): Promise<UndoSaleSummary | { ok: false; error: string }> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (!draft) return { ok: false as const, error: "No draft" };
     if (
@@ -492,8 +501,21 @@ export async function undoLastSale(
       select: { id: true },
     });
     const nomIdx = order.findIndex((t) => t.id === last.teamId);
-    await tx.draft.update({
-      where: { seasonId },
+    // Re-assert the no-live-lot precondition AT THE WRITE, not just at the read
+    // above. This was a blind update-by-seasonId, and the gap between the two is
+    // wide (a roster delete, a Bid sweep, a budget credit and a team scan). The
+    // realistic sequence: a disputed sale, a minute of captains arguing, the
+    // nomination clock expires, a poller's resolveStalledNomination opens a
+    // fresh lot — and then Undo lands, writing status + nominatorTeamId +
+    // nominationEndsAt over the top while leaving nominatedUserId / currentBid /
+    // bidEndsAt from that lot intact. The draft then held a LIVE AUCTION and a
+    // running NOMINATION CLOCK simultaneously, which the state machine treats as
+    // mutually exclusive: resolveExpiredNomination would go on to sell that
+    // player to a team that never nominated them, and advance the rotation from
+    // the nominator Undo had just repointed. Reproduced 11 times in 12 on
+    // Postgres before this claim.
+    const reopened = await tx.draft.updateMany({
+      where: { seasonId, status: draft.status, nominatedUserId: null },
       data: {
         status: DRAFT_STATUS.IN_PROGRESS,
         nominatorTeamId: last.teamId,
@@ -503,13 +525,31 @@ export async function undoLastSale(
         ),
       },
     });
+    if (reopened.count === 0) {
+      // THROW, never return: the refund and the roster delete above are already
+      // written, and returning from a Prisma interactive transaction COMMITS
+      // them — the player would be gone and the money back with the sale never
+      // undone. Rolling back is the only correct outcome. (Same trap as the
+      // inhouse draft's turn claim; caught outside the callback below.)
+      throw new UndoRaceError(
+        "A lot went live while you were undoing — let it settle and try again.",
+      );
+    }
     return {
       ok: true as const,
       player: last.user.name,
       team: last.team.name,
       price: last.price,
     };
-  });
+    });
+  } catch (e) {
+    // Outside the callback on purpose — catching inside would resolve the
+    // transaction and commit the very writes the throw exists to roll back.
+    if (e instanceof UndoRaceError) {
+      return { ok: false as const, error: e.message };
+    }
+    throw e;
+  }
 }
 
 /** What an abort actually threw away, so the caller can say so out loud. */

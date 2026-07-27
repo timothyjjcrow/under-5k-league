@@ -17,7 +17,11 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
-import { abortDraft, undoLastSale } from "@/lib/draft-service";
+import {
+  abortDraft,
+  resolveStalledNomination,
+  undoLastSale,
+} from "@/lib/draft-service";
 import { addCaptain, startDraft } from "@/app/actions/admin";
 import {
   DRAFT_STATUS,
@@ -495,5 +499,81 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
 
     expect((await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })).budget).toBe(100);
     expect((await prisma.team.findUniqueOrThrow({ where: { id: b.team.id } })).budget).toBe(100);
+  });
+
+  /** A live auction where a sale has landed and the nomination clock has run
+   *  out — i.e. a poller is about to auto-nominate, right as Undo is pressed. */
+  async function saleWithExpiredNominationClock(tag: string) {
+    const season = await makeSeason({ teamSize: 3, status: SEASON_STATUS.DRAFT });
+    const a = await makeCaptain(season.id, `A${tag}`, 43, 0);
+    const b = await makeCaptain(season.id, `B${tag}`, 100, 1);
+    const sold = await makePlayer(season.id, `Sold${tag}`, 4000);
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: a.team.id, userId: sold.id, price: 57 },
+    });
+    // Players left for the auto-nominator to reach for.
+    for (let i = 0; i < 3; i++) await makePlayer(season.id, `Pool${tag}_${i}`, 3500 - i * 10);
+    await prisma.draft.create({
+      data: {
+        seasonId: season.id,
+        status: DRAFT_STATUS.IN_PROGRESS,
+        nominatorTeamId: b.team.id,
+        nominationIndex: 1,
+        nominationEndsAt: new Date(Date.now() - 1000), // expired
+      },
+    });
+    return { season, a, sold };
+  }
+
+  it("stays all-or-nothing when a lot goes live mid-undo", async () => {
+    // undoLastSale checks "no live lot" at its READ, then runs four more
+    // statements (roster delete, Bid sweep, budget credit, team scan) before
+    // writing the draft. That gap is genuinely reachable: the draft-night
+    // sequence is a disputed sale, a minute of captains arguing, the nomination
+    // clock expiring, a poller's resolveStalledNomination opening a fresh lot —
+    // and THEN Undo landing.
+    //
+    // It has to be RACED, not staged: a lot that already exists when undo is
+    // called is caught by the read-time check, so a staged version passes
+    // against the broken code. SQLite serializes writers and can't interleave,
+    // so this only bites under `npm run test:pg` — where the blind write
+    // reproduced 11 times in 12, leaving a LIVE AUCTION and a RUNNING
+    // NOMINATION CLOCK simultaneously (states the engine treats as mutually
+    // exclusive: resolveExpiredNomination would then sell that player to a team
+    // that never nominated them, and advance the rotation from the nominator
+    // undo had just repointed).
+    for (let run = 0; run < 8; run++) {
+      const { season, a, sold } = await saleWithExpiredNominationClock(`R${run}`);
+
+      const [undone] = await Promise.all([
+        undoLastSale(season.id, await admin()),
+        resolveStalledNomination(season.id),
+      ]);
+
+      const draft = await prisma.draft.findUniqueOrThrow({
+        where: { seasonId: season.id },
+      });
+      // THE invariant.
+      expect(
+        draft.nominatedUserId !== null && draft.nominationEndsAt !== null,
+      ).toBe(false);
+
+      // ALL OR NOTHING on the money and the roster. A `return` instead of a
+      // throw would have committed the refund and the delete while the sale
+      // stood — money back, player gone, nothing actually undone.
+      const member = await prisma.teamMember.findUnique({
+        where: { seasonId_userId: { seasonId: season.id, userId: sold.id } },
+      });
+      const budget = (
+        await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })
+      ).budget;
+      if (undone.ok) {
+        expect(member).toBeNull();
+        expect(budget).toBe(100); // 43 + the 57 refunded
+      } else {
+        expect(member).not.toBeNull();
+        expect(budget).toBe(43); // untouched
+      }
+    }
   });
 });

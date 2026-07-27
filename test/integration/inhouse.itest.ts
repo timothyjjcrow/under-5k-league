@@ -1559,7 +1559,6 @@ describe("inhouse — the draft can't be left off the clock", () => {
   });
 
   it("flips to READY if the rosters were already full when the turn was lost", async () => {
-    const admin = sessionFor(await makeUser("AdminLC2", "ADMIN"));
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4500 - i * 100);
     await voteAll(players, "MMR");
     const drafting = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
