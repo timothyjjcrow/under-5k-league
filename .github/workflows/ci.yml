@@ -24,10 +24,16 @@ jobs:
       - run: npx prisma generate
       - name: Type check
         run: npx tsc --noEmit
+      # `github-actions` emits ANNOTATIONS naming the failing test, file, line
+      # and error on the run summary — readable WITHOUT repo auth. Same reason
+      # the e2e job carries Playwright's `github` reporter: a red job whose only
+      # detail is buried in an authenticated log cannot be diagnosed by anyone
+      # looking from outside, which is exactly how this job stayed red for
+      # three commits while passing in a faithful local clean-room run.
       - name: Unit tests
-        run: npm test
+        run: npm test -- --reporter=github-actions --reporter=default
       - name: Integration tests
-        run: npm run test:integration
+        run: npm run test:integration -- --reporter=github-actions --reporter=default
 
   postgres:
     name: integration on postgres
@@ -66,7 +72,7 @@ jobs:
           DATABASE_URL: ${{ env.PG_TEST_URL }}
           DIRECT_URL: ${{ env.PG_TEST_URL }}
       - name: Integration tests on postgres
-        run: npm run test:pg
+        run: npm run test:pg -- --reporter=github-actions --reporter=default
 
       # THE RATCHET. A guarded claim's WHERE predicate is its entire
       # concurrency guard, and almost nothing in the suite notices if one is
