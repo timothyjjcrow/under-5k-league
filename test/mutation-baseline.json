@@ -3,6 +3,7 @@
   "totalClaims": 49,
   "equivalent": [
     "src/app/actions/admin.ts::createSeason::isActive#1",
+    "src/lib/match-import.ts::importGameForMatch::autoSyncAttempts#1",
     "src/lib/season.ts::reactivateSeason::isActive#1"
   ],
   "protected": [
@@ -31,6 +32,7 @@
     "src/lib/inhouse-service.ts::touchQueueHeartbeat::lastSeenAt#1",
     "src/lib/inhouse-service.ts::voidLastResult::status#1",
     "src/lib/match-import.ts::announceSeriesResultOnce::value#1",
+    "src/lib/playoff-service.ts::advancePlayoffBracket::status#1",
     "src/lib/reschedule-service.ts::cancelReschedule::status#1",
     "src/lib/reschedule-service.ts::proposeReschedule::status#1",
     "src/lib/reschedule-service.ts::respondReschedule::status#1",

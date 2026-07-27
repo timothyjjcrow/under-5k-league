@@ -10,7 +10,7 @@ import {
 } from "@/lib/inhouse-board-service";
 import { runResultSync } from "@/lib/result-sync-service";
 import { getInhouseState } from "@/lib/inhouse-service";
-import { makeUser } from "./factories";
+import { makeUser, raceN } from "./factories";
 
 // The pinned Discord queue board: ONE message rewritten in place. What has to
 // hold — a stale board is worse than no board, and a chatty one defeats the
@@ -613,5 +613,28 @@ describe("inhouse board — removal", () => {
   it("is safe to call when no board exists", async () => {
     await expect(removeInhouseBoard()).resolves.toEqual({ ok: true });
     expect(mockDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe("board — posting is claimed BEFORE Discord, not after", () => {
+  it("a double submit posts ONE board, never two", async () => {
+    // The "already posted in that channel" check sits a multi-second Discord
+    // round trip away from the write that records the message id. Without a
+    // reservation taken first, two concurrent posts both send and the second
+    // setSetting overwrites the first's id — orphaning a board that is pinned
+    // in Discord, un-editable and un-deletable, with the next "Post" adding a
+    // THIRD beside it.
+    mockHook.mockResolvedValue(HOOK);
+    mockPost.mockClear();
+
+    const res = await raceN(3, () => createInhouseBoard());
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+    // The decisive assertion: exactly one message reached Discord.
+    expect(mockPost).toHaveBeenCalledTimes(1);
+
+    const row = await prisma.setting.findUnique({
+      where: { key: SETTING_KEYS.INHOUSE_BOARD },
+    });
+    expect(JSON.parse(row!.value).messageId).toBe(MSG_ID);
   });
 });

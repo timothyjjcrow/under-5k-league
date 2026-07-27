@@ -78,8 +78,9 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
-Currently **31 of 47 claims protected** (two are EQUIVALENT MUTANTS — archive-
-then-set pairs whose predicate can be deleted without changing the end state, so
+Currently **32 of 46 claims protected** (three are EQUIVALENT MUTANTS — archive-
+then-set pairs, and a `{ gt: 0 }` guarding a write of 0 — predicates that can be
+deleted without changing the end state, so
 no test can ever kill them; they are listed in the guard and excluded from the
 score rather than left looking like gaps). The rest are reported, never gating —
 assume a guard is unprotected until the baseline says otherwise. To raise the

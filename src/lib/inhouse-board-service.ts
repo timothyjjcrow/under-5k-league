@@ -130,12 +130,29 @@ async function claimBoardRow(webhookId: string): Promise<string | null> {
   } catch (e) {
     if ((e as { code?: string }).code !== "P2002") throw e;
   }
-  // A row exists. Only take it over if it is a DIFFERENT channel's board (the
-  // legitimate "move the board" case the caller already validated above).
+  // A row exists. Taking it over is legitimate ONLY when it is a settled board
+  // in a different channel (the "move the board" case the caller validated
+  // above). If it is another request's RESERVATION — a placeholder with no
+  // message id yet — stand down: taking that over means both of us post, and
+  // the loser's board is orphaned in Discord, pinned and unreachable forever.
+  // That is the worst end state this feature has, and it is precisely what
+  // this function exists to prevent.
   const current = await prisma.setting.findUnique({
     where: { key: SETTING_KEYS.INHOUSE_BOARD },
   });
   if (!current) return null;
+  try {
+    const raw = JSON.parse(current.value) as Partial<BoardState>;
+    if (raw.messageId === "") return null; // someone else is mid-post
+    // RE-ASSERT the caller's "already posted in that channel" check here. It
+    // was evaluated before this request's Discord round trip, so a rival post
+    // that COMPLETED in the gap would otherwise be taken over and posted
+    // again — two boards in one channel, the second overwriting the first's
+    // id and orphaning it.
+    if (raw.webhookId === webhookId) return null;
+  } catch {
+    // Unparseable row — nothing to protect, fall through and take it.
+  }
   const swapped = await prisma.setting.updateMany({
     where: { key: SETTING_KEYS.INHOUSE_BOARD, value: current.value },
     data: { value: placeholder },

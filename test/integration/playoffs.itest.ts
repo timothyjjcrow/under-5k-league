@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   advancePlayoffBracket,
@@ -9,8 +9,17 @@ import {
   generateRegularSchedule,
   makeSeason,
   makeTeam,
+  raceN,
   recordMatch,
 } from "./factories";
+
+// The champion ping is a Discord send — stub the sender so it can be counted.
+vi.mock("@/lib/discord", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/discord")>()),
+  sendDiscordMessage: vi.fn(async () => true),
+}));
+import { sendDiscordMessage } from "@/lib/discord";
+const mockSend = vi.mocked(sendDiscordMessage);
 
 /** Create n teams and play a full regular season so standings are deterministic:
  *  team i beats team j for i < j, making ids[0] the #1 seed. */
@@ -149,5 +158,74 @@ describe("playoffs bracket + champion (integration)", () => {
     const season = await makeSeason();
     await makeTeam(season.id, "Solo", 0);
     await expect(createPlayoffBracket(season.id)).rejects.toThrow(/at least 2/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claim guards. advancePlayoffBracket is called from BOTH recordResult and
+// every game-import path, so concurrent invocation is routine under auto-sync:
+// any visitor's page view can trigger one.
+// ---------------------------------------------------------------------------
+
+describe("playoffs — claims fire exactly once under contention", () => {
+  it("crowns ONE champion however many callers reach the decided final", async () => {
+    mockSend.mockClear();
+    const season = await makeSeason({ teamSize: 3 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+
+    // Play the semis, then the final — but do NOT advance past the final yet.
+    for (let round = 0; round < 2; round++) {
+      const open = await prisma.match.findMany({
+        where: {
+          seasonId: season.id,
+          phase: { in: ["PLAYOFF", "FINAL"] },
+          status: { not: "COMPLETED" },
+        },
+      });
+      if (open.length === 0) break;
+      for (const m of open) await recordMatch(m.id, 2, 0);
+      if (round === 0) await advancePlayoffBracket(season.id);
+    }
+
+    const before = await prisma.season.findUniqueOrThrow({
+      where: { id: season.id },
+    });
+    expect(before.status).toBe("PLAYOFFS");
+    expect(before.championTeamId).toBeNull();
+
+    // Every caller sees a decided final; only the one that flips
+    // PLAYOFFS→COMPLETE may crown and announce.
+    await raceN(4, () => advancePlayoffBracket(season.id));
+
+    const after = await prisma.season.findUniqueOrThrow({
+      where: { id: season.id },
+    });
+    expect(after.status).toBe("COMPLETE");
+    expect(after.championTeamId).not.toBeNull();
+    expect(
+      mockSend.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("champions")),
+    ).toHaveLength(1);
+  });
+
+  it("builds the next round once, so the final stays reachable", async () => {
+    // Two imports deciding the last semi together both see "no next round" —
+    // a findFirst matching zero rows takes no predicate lock. A doubled round
+    // makes current.length 2 forever, so the crowning branch above becomes
+    // unreachable and the season NEVER gets a champion.
+    const season = await makeSeason({ teamSize: 3 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    const semis = await prisma.match.findMany({
+      where: { seasonId: season.id, phase: { in: ["PLAYOFF", "FINAL"] } },
+    });
+    for (const m of semis) await recordMatch(m.id, 2, 0);
+
+    await raceN(4, () => advancePlayoffBracket(season.id));
+
+    const round1 = await prisma.match.findMany({
+      where: { seasonId: season.id, bracketSlot: { startsWith: "R1M" } },
+    });
+    expect(round1).toHaveLength(1); // the final, once
   });
 });

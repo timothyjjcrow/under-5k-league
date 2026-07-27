@@ -44,6 +44,9 @@ const BASELINE = "test/mutation-baseline.json";
 const EQUIVALENT = new Set([
   "src/lib/season.ts::reactivateSeason::isActive#1",
   "src/app/actions/admin.ts::createSeason::isActive#1",
+  // `{ autoSyncAttempts: { gt: 0 } }` guarding `data: { autoSyncAttempts: 0 }`
+  // — dropping it writes 0 over a 0. Same end state, nothing observable.
+  "src/lib/match-import.ts::importGameForMatch::autoSyncAttempts#1",
 ]);
 
 // Every file that holds transactional service logic. Add new ones here.
