@@ -25,7 +25,7 @@ import {
   autoDetectResult,
   startGame,
 } from "@/lib/inhouse-service";
-import { makeSeason, makeUser, sessionFor } from "./factories";
+import { makeSeason, makeUser, raceAll, raceN, sessionFor } from "./factories";
 import { SETTING_KEYS, setSetting } from "@/lib/settings";
 
 // The inhouse result path only ever touches OpenDota — never a Valve league
@@ -870,9 +870,9 @@ describe("inhouse — ready check", () => {
       const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
       const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
 
-      const [accepted] = await Promise.all([
-        acceptMatch(players[0].session),
-        declineMatch(players[9].session),
+      const [accepted] = await raceAll([
+        () => acceptMatch(players[0].session),
+        () => declineMatch(players[9].session),
       ]);
 
       const after = await prisma.inhouseLobby.findUniqueOrThrow({
@@ -1707,7 +1707,7 @@ describe("inhouse — the draft can't be left off the clock", () => {
       where: { id: drafting.id },
       data: { pickEndsAt: new Date(Date.now() - 5_000) },
     });
-    await Promise.all(Array.from({ length: 8 }, () => resolveStalledPick()));
+    await raceN(8, () => resolveStalledPick());
 
     const after = await prisma.inhouseLobby.findUniqueOrThrow({
       where: { id: drafting.id },

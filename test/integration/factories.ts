@@ -15,6 +15,37 @@ import type { SessionUser } from "@/lib/auth";
 // real "@/lib/discord" into those services' graphs and silently defeat any
 // test that mocks the Discord sender to assert announcements.
 
+/** True when the suite is pointed at Postgres (`npm run test:pg`). */
+export const ON_POSTGRES = (process.env.DATABASE_URL ?? "").startsWith(
+  "postgres",
+);
+
+/**
+ * Run competing operations CONCURRENTLY on Postgres, SEQUENTIALLY on SQLite.
+ *
+ * Race tests exist to exercise the guarded claims, and only Postgres can
+ * actually interleave them — Prisma pins SQLite to a single connection, so N
+ * concurrent interactive transactions just queue. That is not merely
+ * pointless there, it is FLAKY: on a slower runner the queue outlives the
+ * pool timeout and the whole suite dies with P1008 (which is exactly how CI
+ * went red while every local run stayed green).
+ *
+ * Sequential is the honest SQLite equivalent — the invariant assertions still
+ * run, they simply have no contention to survive. `npm run test:pg` is what
+ * makes these tests mean something.
+ */
+export async function raceAll<T>(fns: Array<() => Promise<T>>): Promise<T[]> {
+  if (ON_POSTGRES) return Promise.all(fns.map((f) => f()));
+  const out: T[] = [];
+  for (const f of fns) out.push(await f());
+  return out;
+}
+
+/** `raceAll` for N copies of the same call. */
+export async function raceN<T>(n: number, fn: () => Promise<T>): Promise<T[]> {
+  return raceAll(Array.from({ length: n }, () => fn));
+}
+
 /** Wipe every table (children first) so each test starts from empty. */
 export async function resetDb() {
   await prisma.inhouseLobbyPlayer.deleteMany();

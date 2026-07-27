@@ -34,6 +34,7 @@ import {
   makePlayer,
   makeSeason,
   makeUser,
+  raceAll,
   runDraftToCompletion,
   sessionFor,
   startDraftState,
@@ -545,10 +546,12 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
     for (let run = 0; run < 8; run++) {
       const { season, a, sold } = await saleWithExpiredNominationClock(`R${run}`);
 
-      const [undone] = await Promise.all([
-        undoLastSale(season.id, await admin()),
-        resolveStalledNomination(season.id),
+      const adm = await admin();
+      const [undone] = await raceAll<unknown>([
+        () => undoLastSale(season.id, adm),
+        () => resolveStalledNomination(season.id),
       ]);
+      const result = undone as Awaited<ReturnType<typeof undoLastSale>>;
 
       const draft = await prisma.draft.findUniqueOrThrow({
         where: { seasonId: season.id },
@@ -567,7 +570,7 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
       const budget = (
         await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })
       ).budget;
-      if (undone.ok) {
+      if (result.ok) {
         expect(member).toBeNull();
         expect(budget).toBe(100); // 43 + the 57 refunded
       } else {

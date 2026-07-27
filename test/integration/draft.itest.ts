@@ -18,6 +18,7 @@ import {
   makePlayer,
   makeSeason,
   makeUser,
+  raceN,
   sessionFor,
   startDraftState,
 } from "./factories";
@@ -198,9 +199,7 @@ describe("draft auction — claim guards", () => {
     // claim reduced to a blind write. Firing them together is the only way the
     // predicate does any work — and only on Postgres, since SQLite serializes
     // writers (`npm run test:pg`).
-    const results = await Promise.all(
-      Array.from({ length: 6 }, () => resolveExpiredNomination(season.id)),
-    );
+    const results = await raceN(6, () => resolveExpiredNomination(season.id));
     expect(results.filter(Boolean)).toHaveLength(1); // exactly one winner
 
     const members = await prisma.teamMember.findMany({
@@ -232,9 +231,7 @@ describe("draft auction — claim guards", () => {
     // Raced for the same reason as the sale resolver above: a sequential
     // second call bails at the read (`nominatedUserId` is now set), so it
     // never exercises the auto-nomination claim.
-    const fired = await Promise.all(
-      Array.from({ length: 6 }, () => resolveStalledNomination(season.id)),
-    );
+    const fired = await raceN(6, () => resolveStalledNomination(season.id));
     expect(fired.filter(Boolean)).toHaveLength(1);
 
     const draft = await prisma.draft.findUniqueOrThrow({
