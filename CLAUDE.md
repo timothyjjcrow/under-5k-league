@@ -574,12 +574,16 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   proves nothing if the room stops calling the function, so it parses both
   room files and fails on a re-inlined rate, flag string, ordering gate, or a
   sequence minted on the wrong side of its `await`.
+  * `seedDraftFeed` / `draftFeedDiff` (`src/lib/draft-feed.ts`) — the live
+    feed, the SOLD! flash and the draft's chime triggers. The feed is an
+    append-only LOG and genuinely cannot be derived from one payload; what IS
+    pure is the STEP, so the module answers "what did this poll change" and the
+    component keeps the accumulated list and the React keys.
   Prefer this treatment for anything else that comes up; a Playwright spec
   (`zz3`'s route-interception + attempt-count pattern) is the fallback for
   behaviour that genuinely needs a browser, and adding a jsdom environment is
-  still the last resort. What remains comment-only: the draft feed's
-  append-only diff (it cannot be derived from state alone — see the DO-NOT
-  note in that section) and the audio plumbing itself.
+  still the last resort. What is left in the components is React and the DOM:
+  refs, effects, `document.title`, and the audio plumbing.
   Separately, the integration suite runs on SQLite, which serializes writers,
   so the guarded claims are never under real contention there — it stages
   races by hand-mutating rows. `npm run test:pg` (`PG_TEST_URL=…`) runs the
@@ -1374,6 +1378,34 @@ already in the `Setting` table.
   hand-copied duplicate of those two literals for the strip — a lost trailing
   space or an en dash for an em dash would have stacked prefixes in the tab
   forever with nothing anywhere to notice. A round-trip test pins it.
+- **The live feed is `draftFeedDiff` + `seedDraftFeed`** (`draft-feed.ts`,
+  tested). Rules that each have a silent, in-front-of-everyone failure mode:
+  the previous-rosters set includes CAPTAINS (`transferCaptaincy` demotes a
+  member while leaving them rostered, and is legal in both states where this
+  room polls — filter them out and the room announces the outgoing captain as
+  a signing); a bid line only fires while the lot is UNCHANGED, so a sale
+  resolving into the next nomination can't be logged as a bid nobody made; two
+  bids inside one poll collapse to one line at the higher amount (the feed is
+  a highlight reel — the lot's `lotBids` trail is the audit log); and lines
+  come back NEWEST FIRST because the room prepends them whole. That last one
+  is a fix, not just an extraction: one poll routinely carries a sale AND the
+  nomination it resolved into (`getDraftState` runs both resolvers before it
+  reads), and the diff used to emit them oldest-first while the seed emitted
+  newest-first, so the two halves of one feed disagreed on screen. What the
+  component keeps is React: the accumulated list, and the KEYS — live ids count
+  up from 0, seeded ids count down from -1, and a collision would break the
+  list mid-draft. The SOLD! flash takes the last sale in PAYLOAD order when
+  several land at once, which is NOT the newest (teams arrive by draft order,
+  members by price, and no timestamp reaches the client) — stated in the code
+  so nobody reads recency into it.
+- **Both rooms ring ONCE per transition**, from the alerts their diff returned.
+  The draft room used to call `playChime()` from four scattered sites, which
+  double-struck the same AudioContext when two moments coincided; folding them
+  makes that line a single point of failure, so `room-source-guards.test.ts`
+  asserts EXACTLY two call sites per room (the ring + the sound toggle's own
+  confirmation) and that the ring is derived from the alerts list. A room that
+  rings from nowhere is otherwise invisible: tsc is happy, the alerts are still
+  computed and tested, and no browser spec can hear audio.
 - The auction's "Available" list has search, position-filter chips, and
   MMR/rank/name sorting (`AvailableList` in `draft-room.tsx`).
   `filterAndSortPlayers` (`player-pool.ts`) is generic over

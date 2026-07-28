@@ -32,6 +32,12 @@ import {
   outbidLatchAfter,
   stripDraftTitleFlag,
 } from "@/lib/draft";
+import {
+  FEED_MAX,
+  draftFeedDiff,
+  seedDraftFeed,
+  type FeedLine,
+} from "@/lib/draft-feed";
 import { draftPollCadence } from "@/lib/room-poll";
 import { nextClockOffset } from "@/lib/countdown";
 import {
@@ -48,42 +54,9 @@ import {
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 
-// A single line in the live feed, derived purely from state transitions.
-type FeedEvent = {
-  id: number;
-  kind: "nominate" | "bid" | "sold";
-  text: string;
-  amount: number;
-};
-
-/**
- * The feed as reconstructed from the FIRST state after a page load (the live
- * nomination plus recent sales), so joining mid-draft doesn't show an empty
- * feed. Pure: seeded ids are NEGATIVE, which keeps them clear of the
- * incrementing counter used for live events without mutating a ref mid-render.
- */
-function seedFeed(state: DraftState): FeedEvent[] {
-  const nameOf = (id: string | null) =>
-    state.teams.find((t) => t.id === id)?.name ?? "—";
-  const seed: FeedEvent[] = [];
-  if (state.nominatedPlayer) {
-    seed.push({
-      id: -1,
-      kind: "nominate",
-      text: `${nameOf(state.nominatorTeamId)} nominated ${state.nominatedPlayer.name}`,
-      amount: state.currentBid,
-    });
-  }
-  state.recentSales.forEach((s, i) => {
-    seed.push({
-      id: -2 - i,
-      kind: "sold",
-      text: `${s.name} → ${s.teamName}`,
-      amount: s.price,
-    });
-  });
-  return seed.slice(0, 12);
-}
+// A single line in the live feed: the tested content (see @/lib/draft-feed)
+// plus the React key this component hands out.
+type FeedEvent = FeedLine & { id: number };
 
 // --- Countdown leaves -------------------------------------------------------
 // These own the 250ms tick via useSecondsLeft, so only the clock text
@@ -254,7 +227,9 @@ export function DraftRoom({
   const [seeded, setSeeded] = useState(false);
   if (state && !seeded) {
     setSeeded(true);
-    const seed = seedFeed(state);
+    // NEGATIVE ids, descending: the live counter above counts up from 0, so
+    // the two ranges can never collide and break a React key mid-draft.
+    const seed = seedDraftFeed(state).map((line, i) => ({ ...line, id: -1 - i }));
     if (seed.length) setEvents(seed);
   }
 
@@ -367,67 +342,29 @@ export function DraftRoom({
   }, [apply, pollOk, pollFail, pollMs]);
 
   // Diff each new state against the previous one to build the live feed +
-  // trigger the SOLD! flash. Read-only — never mutates draft state.
+  // trigger the SOLD! flash. Read-only — never mutates draft state. What the
+  // diff CONTAINS is decided by the tested `draftFeedDiff`; what stays here is
+  // React: the accumulated list, the ids, and the side effects.
   useEffect(() => {
     if (!state) return;
     const prev = prevRef.current;
     prevRef.current = state;
-    const nameOf = (id: string | null) =>
-      state.teams.find((t) => t.id === id)?.name ?? "—";
-    // The first state seeds the feed during RENDER (see `seededRef` below);
-    // here we only take the bookkeeping snapshot so the next poll can diff.
+    // The first state seeds the feed during RENDER (see `seeded` below); here
+    // we only take the bookkeeping snapshot so the next poll can diff.
     if (!prev) return;
-    const add: FeedEvent[] = [];
 
-    // A sale = any new non-captain roster member appearing on a team.
-    const prevRostered = new Set(
-      prev.teams.flatMap((t) => t.members.map((m) => m.userId)),
-    );
-    for (const t of state.teams) {
-      for (const m of t.members) {
-        if (!m.isCaptain && !prevRostered.has(m.userId)) {
-          add.push({
-            id: eventIdRef.current++,
-            kind: "sold",
-            text: `${m.name} → ${t.name}`,
-            amount: m.price,
-          });
-          const isMe = !!state.me.userId && m.userId === state.me.userId;
-          setSoldFlash({ name: m.name, team: t.name, price: m.price, isMe });
-          if (isMe && soundOn) playChime(); // your personal draft moment
-        }
-      }
-    }
-
-    const prevNom = prev.nominatedPlayer?.userId ?? null;
-    const curNom = state.nominatedPlayer?.userId ?? null;
-    // YOU just went on the block — worth a bell even for non-captains.
-    if (curNom && curNom !== prevNom && curNom === state.me.userId && soundOn) {
-      playChime();
-    }
-    if (curNom && curNom !== prevNom) {
-      add.push({
-        id: eventIdRef.current++,
-        kind: "nominate",
-        text: `${nameOf(state.nominatorTeamId)} nominated ${state.nominatedPlayer!.name}`,
-        amount: state.currentBid,
-      });
-    } else if (curNom && curNom === prevNom && state.currentBid > prev.currentBid) {
-      add.push({
-        id: eventIdRef.current++,
-        kind: "bid",
-        text: `${nameOf(state.currentBidTeamId)} bid`,
-        amount: state.currentBid,
-      });
-    }
+    const { lines, sale, alerts } = draftFeedDiff(prev, state);
+    if (sale) setSoldFlash(sale);
 
     // The feed is an append-only LOG of state transitions; it cannot be
     // derived from the current state alone, which is what a pure alternative
-    // would require. Deferring it is worse than the cascade: the feed line and
-    // the SOLD! flash must land in the same commit, and this is draft night's
-    // marquee moment. The seed above is pure; only the accumulation needs this.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (add.length) setEvents((e) => [...add, ...e].slice(0, 12));
+    // would require, and setting it here rather than deferring is deliberate:
+    // the feed line and the SOLD! flash must land in the same commit, and this
+    // is draft night's marquee moment. Ids are assigned HERE and counted up
+    // from 0, staying clear of the negative ids the seed uses — a collision
+    // would break React keys mid-draft.
+    const fresh = lines.map((line) => ({ ...line, id: eventIdRef.current++ }));
+    if (fresh.length) setEvents((e) => [...fresh, ...e].slice(0, FEED_MAX));
 
     // Outbid latch — set / clear / leave alone, decided by the tested
     // outbidLatchAfter (which deliberately has no budget input: a priced-out
@@ -436,21 +373,23 @@ export function DraftRoom({
       myTeamId: state.me.myTeamId,
       prevBidTeamId: prev.currentBidTeamId,
       curBidTeamId: state.currentBidTeamId,
-      prevNominatedId: prevNom,
-      curNominatedId: curNom,
+      prevNominatedId: prev.nominatedPlayer?.userId ?? null,
+      curNominatedId: state.nominatedPlayer?.userId ?? null,
     });
     if (latch === "clear") setOutbid(null);
     if (latch === "set") {
       setOutbid({
         player: state.nominatedPlayer!.name,
-        team: nameOf(state.currentBidTeamId),
+        team: state.teams.find((t) => t.id === state.currentBidTeamId)?.name ?? "—",
         amount: state.currentBid,
       });
-      if (soundOn) playChime();
     }
 
-    // Your turn to nominate — the moment auto-skip punishes hardest.
-    if (state.me.canNominate && !prev.me.canNominate && soundOn) playChime();
+    // ONE ring for the whole transition — being sold, being nominated, your
+    // turn to nominate, being outbid. These do coincide (an admin nominating
+    // on your behalf as your own lot resolves), and two playChime() calls in
+    // one commit double-strike the same AudioContext.
+    if (soundOn && (alerts.length > 0 || latch === "set")) playChime();
 
     // A selection whose player just sold (or withdrew) must not linger — the
     // sticky bar would offer a nameless Nominate for an undraftable player.

@@ -214,4 +214,56 @@ describe("live rooms delegate their alert triggers", () => {
         `the CLEAR half is how the banner ends up naming a lot that has moved on.`,
     ).toBe(false);
   });
+
+  it("draft-room builds no feed line of its own", () => {
+    const src = code("draft-room.tsx");
+    expect(src).toContain("draftFeedDiff(");
+    expect(src).toContain("seedDraftFeed(");
+    // Constructing a line means deciding what a sale, a nomination or a bid
+    // IS — the part with the silent failure modes (a captain read as a sale, a
+    // bid line credited to the wrong team, the same nomination logged on every
+    // poll). The room may render lines; it may not author them.
+    for (const kind of ['kind: "sold"', 'kind: "nominate"', 'kind: "bid"']) {
+      expect(
+        src.includes(kind),
+        `${kind} is back in draft-room.tsx — feed CONTENT belongs in ` +
+          `draftFeedDiff, where a test can state what each line means.`,
+      ).toBe(false);
+    }
+  });
+
+  for (const file of ROOMS) {
+    it(`${file}: rings the bell from ONE place, and rings from one`, () => {
+      // Both rooms now fold a transition into a list of alerts and ring once.
+      // Scattered call sites double-strike the same AudioContext when two
+      // moments coincide — and, worse, each one is a separate unwritten rule
+      // about when the room should make a noise.
+      //
+      // EXACTLY two, not "at most": collapsing four call sites into one made
+      // that line a single point of failure, and a room that rings from NO
+      // place is invisible to everything else here — tsc is happy, the alerts
+      // list is still computed and tested, and no browser spec can hear audio.
+      const calls = code(file).split("playChime()").length - 1;
+      expect(
+        calls,
+        `${file} has ${calls} playChime() call sites. Expected 2: the sound ` +
+          `toggle's own confirmation, and the single ring for a transition.`,
+      ).toBe(2);
+    });
+
+    it(`${file}: rings from the ALERTS it computed, not from one branch`, () => {
+      // The other half of the same failure: narrowing the condition to a
+      // single trigger (say, only the outbid latch) silences the alerts that
+      // reach a player who is not a captain and has nothing else on screen
+      // telling them to look — sold, on the block, your turn.
+      const src = code(file);
+      // Case-insensitive: the draft room rings off a local `alerts`, the
+      // inhouse room off `inhouseAlerts(prev, snap).length` inline.
+      expect(
+        /alerts[\s\S]{0,120}playChime\(\)/i.test(src),
+        `${file} rings without consulting its alerts list — the ring must be ` +
+          `derived from the tested transition, not from one hand-picked branch.`,
+      ).toBe(true);
+    });
+  }
 });
