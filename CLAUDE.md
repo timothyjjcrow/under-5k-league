@@ -1778,6 +1778,30 @@ row's control however much other text the row carries, and it is the case the
 check exists for. Four pages are pinned; deleting `TAP_SAFE` turns `/leaders`
 and `/players` red, which is how the guard was verified.
 
+**44px (AAA / Apple HIG) is NOT achievable here, and the measurement says why.**
+A hit box can only grow into vertical space no other target owns. Measured at
+390px across 15 pages: of 446 sub-44px targets, 370 could reach 44 by taking
+half the whitespace around them — but only if each took a DIFFERENT amount, and
+a static utility class cannot. Under the honest rule (both neighbours grow, so
+each gap must be ≥2× the padding), a uniform bump big enough to matter puts
+~100 targets into overlap. **An ambiguous target is worse than a small one**:
+two links 6px into each other send the tap wherever paint order decides, and in
+the pool that was a profile page vs Dotabuff. So `TAP_SAFE` stays at 4px/side
+and stacked links get REAL spacing instead (the pool's meta line is `mt-2`, not
+`mt-0.5`, for exactly this reason).
+
+What 44px IS free for: **standalone controls with whitespace round them**.
+`buttonClasses` is mobile-first — `h-11 sm:h-10` for md, `h-10 sm:h-8` for sm,
+so a phone gets the touch size and the desktop keeps its original density — and
+the pool's filter row (search, role chips, toggles, sort, the clear-✕) is `h-11
+sm:h-9`. That took 44×44 coverage from 31 to 46 targets for +41px per page.
+Don't chase the rest by shrinking gaps.
+
+KNOWN, UNVERIFIED: the overlap probe reports ~439 overlapping target pairs that
+PRE-DATE all of this, concentrated in `/admin`'s dense forms. It has not been
+confirmed whether those are genuine mis-tap zones or a limitation of the probe
+(nested/adjacent form controls) — confirm before acting on the number.
+
 **A Dota name can be ONE character**, and the live league has a player called
 "x" — an 8px-wide link. `PlayerLink` carries `min-w-6`, and the five callers
 that pass a truncating row name were moved from `min-w-0` to `min-w-6` (a flex

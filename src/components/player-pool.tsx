@@ -120,14 +120,14 @@ export function PlayerPool({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search players…"
-            className="h-9 w-full rounded-lg border border-line bg-surface-2/50 pl-3 pr-8 text-sm outline-none focus:border-accent/60"
+            className="h-11 w-full rounded-lg border border-line bg-surface-2/50 pl-3 pr-8 text-sm outline-none focus:border-accent/60 sm:h-9"
           />
           {query ? (
             <button
               type="button"
               onClick={() => setQuery("")}
               aria-label="Clear search"
-              className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+              className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-fg"
             >
               ✕
             </button>
@@ -175,7 +175,7 @@ export function PlayerPool({
           aria-pressed={captainOnly}
           className={cn(
             CHIP_BASE,
-            "h-9 px-3",
+            "h-11 px-3 sm:h-9",
             captainOnly
               ? "border-brand/50 bg-brand/10 text-brand"
               : CHIP_OFF,
@@ -210,7 +210,7 @@ export function PlayerPool({
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value as PoolSort)}
-          className="h-9 rounded-lg border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60"
+          className="h-11 rounded-lg border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9"
           aria-label="Sort players"
         >
           <option value="mmr">Sort: MMR</option>
@@ -301,7 +301,13 @@ export function PlayerPool({
                   >
                     {p.name}
                   </PlayerLink>
-                  <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                  {/* mt-2, not mt-0.5: the name and the Dotabuff link are two
+                      separate destinations stacked in one cell, and once both
+                      carry TAP_SAFE their hit boxes were overlapping by 6px —
+                      a band where a tap landed on whichever painted last. A
+                      target that is big enough but ambiguous is worse than a
+                      small one; hit boxes may touch, never overlap. */}
+                  <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
                     {p.accountId ? (
                       <a
                         href={`https://www.dotabuff.com/players/${p.accountId}`}
@@ -448,7 +454,7 @@ function RoleChip({
       aria-pressed={active}
       className={cn(
         CHIP_BASE,
-        "grid h-9 min-w-9 place-items-center px-2.5",
+        "grid h-11 min-w-11 place-items-center px-2.5 sm:h-9 sm:min-w-9",
         active ? CHIP_ON : CHIP_OFF,
       )}
     >
@@ -471,7 +477,7 @@ function StatusChip({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={cn(CHIP_BASE, "h-9 px-3", active ? CHIP_ON : CHIP_OFF)}
+      className={cn(CHIP_BASE, "h-11 px-3 sm:h-9", active ? CHIP_ON : CHIP_OFF)}
     >
       {children}
     </button>

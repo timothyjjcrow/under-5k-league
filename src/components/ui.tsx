@@ -32,9 +32,16 @@ const variantClasses: Record<ButtonVariant, string> = {
   accent: "bg-accent text-black hover:bg-accent/90",
 };
 
+/**
+ * Mobile-first heights. A button is a STANDALONE control with whitespace round
+ * it, so this is the one family where the 44px touch guideline is free — unlike
+ * a link inside a dense data row, where growing the hit box would just overlap
+ * its neighbour's. Phones get 44 (`h-11`) for md, 40 for sm; `sm:` restores the
+ * original desktop heights exactly, where the pointer is a mouse.
+ */
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "h-8 px-3 text-sm",
-  md: "h-10 px-4 text-sm",
+  sm: "h-10 px-3 text-sm sm:h-8",
+  md: "h-11 px-4 text-sm sm:h-10",
   lg: "h-12 px-6 text-base",
 };
 
