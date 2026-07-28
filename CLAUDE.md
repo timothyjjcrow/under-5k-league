@@ -93,8 +93,8 @@ switching the Prisma provider is a footgun if you forget to switch back):
     npm run pg:up            # create the throwaway DB, point Prisma at it, push
     export PG_TEST_URL="postgresql://$USER@localhost:5432/ld2l_pgtest"
     npm run test:pg                          # the suite on the prod engine
-    npm run test:mutation                    # verify the whole baseline (~11 min)
-    npm run test:mutation -- --shard 2/4     # one CI shard (~2 min)
+    npm run test:mutation                    # verify the whole baseline (42 claims)
+    npm run test:mutation -- --shard 2/4     # one CI shard (5-7 min on CI)
     npm run test:mutation -- --discover --only acceptMatch   # probe one claim
     npm run pg:down          # BACK TO SQLITE + drop the DB — do not skip this
 
@@ -105,9 +105,10 @@ baseline (a partial sweep would drop the ratchet for every claim it skipped);
 only a full `--discover` may.
 
 **THE 4 CLAIMS STILL UNPROTECTED**, and why each resisted — start here rather
-than re-running a 25-minute sweep to rediscover them. All four are now
-deliberate stops rather than a backlog; the rest of the list was closed by the
-four tests described under it.
+than re-running a full sweep to rediscover them (~8 min locally for all 49: a
+caught mutant `--bail=1`s out in seconds, so the cost is dominated by the ones
+that survive). All four are now deliberate stops rather than a backlog; the
+rest of the list was closed by the four tests described under it.
 
 * `applyPick::status#1` (the advance claim) — its rival must write the LOBBY
   row the open transaction already locked, so the hook would have to hand the
