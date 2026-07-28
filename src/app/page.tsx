@@ -1124,7 +1124,7 @@ async function PoolComposition({ seasonId }: { seasonId: string }) {
         title="Pool composition"
         subtitle={`Role coverage & MMR spread · avg ${avg} MMR`}
       />
-      <CardBody className="grid gap-x-8 gap-y-6 sm:grid-cols-2">
+      <CardBody className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
         <div className="space-y-2">
           <div className="text-xs font-medium uppercase tracking-wide text-muted">
             Preferred roles

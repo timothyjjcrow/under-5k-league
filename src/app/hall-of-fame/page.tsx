@@ -140,7 +140,11 @@ export default async function HallOfFamePage() {
         }
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {/* items-start: these four boards fill at wildly different rates — on a
+          young league "Titles" and "Oracle record" are a single line of copy
+          next to a five-row list, and stretching the row drew 173px of empty
+          bordered box under each. Same defect class as the dashboard void. */}
+      <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
         {boards.map((b) => (
           <Card key={b.title}>
             <CardHeader title={b.title} subtitle={b.subtitle} />

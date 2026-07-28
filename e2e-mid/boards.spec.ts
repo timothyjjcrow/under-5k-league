@@ -53,6 +53,20 @@ test("team page renders roster, form, and the what-we-need card", async ({
   assertNoErrors();
 });
 
+// /leaders shipped a 188px horizontal page scroll at 390px: its board grid was
+// `grid gap-4 sm:grid-cols-2` with no base column, so below `sm` the implicit
+// track was `auto` and sized itself to a leaderboard row's max-content (560px
+// in a 390px viewport). Exactly the failure CLAUDE.md's grid-cols-1 rule
+// exists to prevent, on a page that had no tripwire pointed at it.
+test("leaders has no horizontal page overflow on a phone", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.goto("/leaders");
+  await expect(page.getByRole("heading", { name: "Leaders" })).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/leaders");
+  assertNoErrors();
+});
+
 // The pool is a column-aligned grid whose tracks change three times between
 // 390px and 1440px — exactly the shape that leaks page width when a track is
 // sized by its content instead of by `minmax(0,1fr)`.

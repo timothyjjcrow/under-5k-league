@@ -254,7 +254,7 @@ export default async function RecapPage({
 
       <div className="space-y-4">
         <SectionTitle>Season awards</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {awards.map((a) => (
             <AwardCard
               key={a.key}

@@ -236,7 +236,7 @@ export default async function SeasonArchivePage({
       {weeks.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Regular season results</SectionTitle>
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {weeks.map((week) => (
               <Card key={week}>
                 <CardHeader title={`Week ${week}`} />

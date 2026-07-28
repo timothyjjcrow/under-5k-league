@@ -160,16 +160,51 @@ export default async function AdminPage() {
         subtitle="Run the league — create seasons, pick captains, run the draft, enter results."
       />
 
+      <AdminJump
+        items={[
+          ...(season && data
+            ? [
+                { id: "adm-season", label: "Phase" },
+                { id: "adm-captains", label: "Captains & draft" },
+                { id: "adm-schedule", label: "Schedule & results" },
+                { id: "adm-playoffs", label: "Playoffs" },
+                { id: "adm-roster", label: "Roster moves" },
+                { id: "adm-standins", label: "Standins" },
+                { id: "adm-sync", label: "Auto-sync" },
+                { id: "adm-league", label: "League id" },
+                { id: "adm-discord", label: "Discord" },
+              ]
+            : []),
+          { id: "adm-news", label: "News" },
+          { id: "adm-security", label: "Security" },
+          { id: "adm-new-season", label: "New season" },
+        ]}
+      />
+
       {season && data ? (
         <>
-          <SeasonControls season={season} data={data} />
-          <CaptainControls season={season} data={data} />
-          <ScheduleControls season={season} data={data} />
-          <PlayoffControls season={season} data={data} />
-          <RosterMoves season={season} data={data} />
-          <StandinControls data={data} />
+          <AdminAnchor id="adm-season">
+            <SeasonControls season={season} data={data} />
+          </AdminAnchor>
+          <AdminAnchor id="adm-captains">
+            <CaptainControls season={season} data={data} />
+          </AdminAnchor>
+          <AdminAnchor id="adm-schedule">
+            <ScheduleControls season={season} data={data} />
+          </AdminAnchor>
+          <AdminAnchor id="adm-playoffs">
+            <PlayoffControls season={season} data={data} />
+          </AdminAnchor>
+          <AdminAnchor id="adm-roster">
+            <RosterMoves season={season} data={data} />
+          </AdminAnchor>
+          <AdminAnchor id="adm-standins">
+            <StandinControls data={data} />
+          </AdminAnchor>
+          <AdminAnchor id="adm-sync">
+            <AutoSyncHealth season={season} />
+          </AdminAnchor>
           <LeagueControls season={season} />
-          <AutoSyncHealth season={season} />
           {/* Streamed, because this card is the ONLY thing on the page that
               talks to Discord: getPingHealth alone is three sequential calls
               at a 4s timeout each, and getInhouseBoardStatus drags a
@@ -193,15 +228,18 @@ export default async function AdminPage() {
 
       <SecurityControls />
 
-      <Card>
-        <CardHeader
-          title="Create a new season"
-          subtitle="This archives the current season and opens fresh signups."
-        />
+      <AdminSection
+        id="adm-new-season"
+        title="Create a new season"
+        subtitle="This archives the current season and opens fresh signups."
+        // Open only when there is nothing to run yet — otherwise this is a
+        // once-a-season form sitting under everything an admin uses weekly.
+        defaultOpen={!season}
+      >
         <CardBody>
           <ActionForm
             action={createSeason}
-            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
           >
             <Field label="Season name" htmlFor="name">
               <input
@@ -280,8 +318,105 @@ export default async function AdminPage() {
             </div>
           </ActionForm>
         </CardBody>
-      </Card>
+      </AdminSection>
     </div>
+  );
+}
+
+/**
+ * The admin page is 13 cards in one column — 6,948px on a desktop and 11,501px
+ * on a phone, the longest page in the app by 36%. Two things fix that without
+ * hiding a single control:
+ *
+ *  - every card is an anchor target, and `AdminJump` puts them one tap away;
+ *  - the cards an admin touches ONCE (wire up Discord, set the league id, write
+ *    news, break glass, open next season) render collapsed.
+ *
+ * `AdminSection` is the collapsed form. The title stays in the `<summary>`, so
+ * it is still a visible heading when shut — which matters for both a scanning
+ * admin and the e2e checks that assert those headings render.
+ */
+function AdminSection({
+  id,
+  title,
+  subtitle,
+  children,
+  defaultOpen = false,
+}: {
+  id: string;
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details
+      id={id}
+      open={defaultOpen}
+      className="group scroll-mt-24 rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
+    >
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0">
+          <h3 className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
+            {title}
+          </h3>
+          {subtitle ? (
+            <p className="mt-0.5 text-sm text-muted [overflow-wrap:anywhere]">
+              {subtitle}
+            </p>
+          ) : null}
+        </div>
+        <span
+          aria-hidden
+          className="shrink-0 text-muted transition-transform group-open:rotate-180"
+        >
+          ▾
+        </span>
+      </summary>
+      <div className="border-t border-line">{children}</div>
+    </details>
+  );
+}
+
+/** Anchor target + header offset for a card that keeps its own frame. */
+function AdminAnchor({
+  id,
+  children,
+}: {
+  id: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div id={id} className="scroll-mt-24">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The jump bar. Sticky under the 80px header (`top-20`, the same offset the
+ * draft room's clock bar uses) so it stays reachable however far down the page
+ * an admin has scrolled — which on match night is the whole point.
+ */
+function AdminJump({ items }: { items: { id: string; label: string }[] }) {
+  return (
+    <nav
+      aria-label="Admin sections"
+      className="sticky top-20 z-20 -mx-4 border-b border-line bg-bg/90 px-4 py-2 backdrop-blur sm:mx-0 sm:rounded-[var(--radius)] sm:border sm:px-3"
+    >
+      <ul className="flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {items.map((i) => (
+          <li key={i.id}>
+            <a
+              href={`#${i.id}`}
+              className="inline-block whitespace-nowrap rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:border-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              {i.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 
@@ -1899,11 +2034,16 @@ async function AutoSyncHealth({ season }: { season: Season }) {
 
 function LeagueControls({ season }: { season: Season }) {
   return (
-    <Card>
-      <CardHeader
-        title="Dota league integration"
-        subtitle="Link a Valve league id to auto-import every league game."
-        action={
+    <AdminSection
+      id="adm-league"
+      title="Dota league integration"
+      subtitle="Link a Valve league id to auto-import every league game."
+    >
+      <CardBody className="space-y-3">
+        {/* The manual sync used to hang off the card header. It can't ride the
+            <summary> — a click on a button in there toggles the disclosure
+            instead of submitting — so it leads the body. */}
+        <div className="flex justify-end">
           <ActionForm action={syncLeagueAction}>
             <SubmitButton
               variant="secondary"
@@ -1913,9 +2053,7 @@ function LeagueControls({ season }: { season: Season }) {
               Sync league games
             </SubmitButton>
           </ActionForm>
-        }
-      />
-      <CardBody className="space-y-3">
+        </div>
         <form action={setLeagueId} className="flex flex-wrap items-end gap-2">
           <div>
             <label
@@ -1994,7 +2132,7 @@ function LeagueControls({ season }: { season: Season }) {
           </ActionForm>
         </div>
       </CardBody>
-    </Card>
+    </AdminSection>
   );
 }
 
@@ -2357,19 +2495,21 @@ function DiscordControls({
 }) {
   const { configured, masked, envManaged } = status;
   return (
-    <Card>
-      <CardHeader
-        title="Discord notifications"
-        subtitle="Announce signups, the draft, results, playoffs, and the champion in your Discord."
-        action={
+    <AdminSection
+      id="adm-discord"
+      title="Discord notifications"
+      subtitle="Announce signups, the draft, results, playoffs, and the champion in your Discord."
+    >
+      <CardBody className="space-y-3">
+        {/* Moved out of the card header: a button inside a <summary> toggles
+            the disclosure instead of submitting. */}
+        <div className="flex justify-end">
           <ActionForm action={testDiscordWebhook}>
             <SubmitButton variant="secondary" size="sm" disabled={!configured}>
               Send test message
             </SubmitButton>
           </ActionForm>
-        }
-      />
-      <CardBody className="space-y-3">
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {configured ? (
             <>
@@ -2713,7 +2853,7 @@ function DiscordControls({
           </p>
         </div>
       </CardBody>
-    </Card>
+    </AdminSection>
   );
 }
 
@@ -2728,11 +2868,11 @@ type NewsPostRow = {
 
 function SecurityControls() {
   return (
-    <Card>
-      <CardHeader
-        title="Security"
-        subtitle="Break-glass session controls."
-      />
+    <AdminSection
+      id="adm-security"
+      title="Security"
+      subtitle="Break-glass session controls."
+    >
       <CardBody>
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
           <p className="min-w-[14rem] flex-1 text-xs text-muted">
@@ -2752,17 +2892,17 @@ function SecurityControls() {
           </ActionForm>
         </div>
       </CardBody>
-    </Card>
+    </AdminSection>
   );
 }
 
 function NewsControls({ posts }: { posts: NewsPostRow[] }) {
   return (
-    <Card>
-      <CardHeader
-        title="League news"
-        subtitle="Announcements shown on the dashboard and /news — also posted to Discord."
-      />
+    <AdminSection
+      id="adm-news"
+      title="League news"
+      subtitle="Announcements shown on the dashboard and /news — also posted to Discord."
+    >
       <CardBody className="space-y-4">
         <ActionForm action={createNewsPost} className="space-y-3">
           <Field label="Title" htmlFor="newsTitle">
@@ -2838,7 +2978,7 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
           </ul>
         )}
       </CardBody>
-    </Card>
+    </AdminSection>
   );
 }
 
