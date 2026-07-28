@@ -1760,20 +1760,17 @@ export async function reopenMatch(
     return { error: "Not authorized" };
   }
   const matchId = str(formData, "matchId");
-  const match = await prisma.match.findUnique({
-    where: { id: matchId },
-    include: { _count: { select: { games: true } } },
-  });
+  const match = await prisma.match.findUnique({ where: { id: matchId } });
   if (!match) return { error: "Unknown match" };
   if (match.status !== MATCH_STATUS.COMPLETED) {
     return { error: "That match isn't marked final" };
   }
-  if (match._count.games > 0) {
-    return {
-      error:
-        "This match has imported games — remove those instead; the series recomputes itself",
-    };
-  }
+  // The "no imported games" rule is NOT checked here on purpose — it is the
+  // WHERE of the write below, and only there. Checking it twice would be
+  // strictly weaker (the read is several statements and one admin decision old
+  // by the time the write lands) and would make the guard untestable: every
+  // test would stop at the read-time `if` and pass just as happily against a
+  // blind update. See CLAUDE.md, "Concurrency: the two rules".
 
   if (match.phase !== MATCH_PHASE.REGULAR) {
     const playoffs = await prisma.match.findMany({
@@ -1799,8 +1796,15 @@ export async function reopenMatch(
     }
   }
 
-  await prisma.match.update({
-    where: { id: matchId },
+  // GUARDED CLAIM, not a blind write. Auto-sync runs from any page view, and
+  // reopen is pressed on exactly the matches it is scanning — so an import can
+  // land between the read above and this write. A blind update then leaves the
+  // match SCHEDULED at 0-0 WITH a Game row attached, and nothing repairs it:
+  // `importGameForMatch` dedupes on the unique `dotaMatchId` so that game is
+  // never imported again, `recomputeSeries` never runs for it, and the result
+  // is gone from the standings with no error anywhere.
+  const claim = await prisma.match.updateMany({
+    where: { id: matchId, status: MATCH_STATUS.COMPLETED, games: { none: {} } },
     data: {
       status: MATCH_STATUS.SCHEDULED,
       homeScore: 0,
@@ -1811,6 +1815,22 @@ export async function reopenMatch(
       autoSyncAttempts: 0,
     },
   });
+  if (claim.count === 0) {
+    // Zero rows means one of the two predicates stopped being true. Re-read to
+    // say WHICH, the way acceptMatch does — "nothing happened" is the one
+    // answer an admin can't act on.
+    const now = await prisma.match.findUnique({
+      where: { id: matchId },
+      select: { status: true, _count: { select: { games: true } } },
+    });
+    if (now && now._count.games > 0) {
+      return {
+        error:
+          "This match has imported games — remove those instead; the series recomputes itself",
+      };
+    }
+    return { error: "That match isn't marked final" };
+  }
   refreshGames();
   return {
     message: "Match reopened — its games can be imported now",

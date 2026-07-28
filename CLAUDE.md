@@ -78,7 +78,7 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
-Currently **42 of 46 claims protected** (three are EQUIVALENT MUTANTS — archive-
+Currently **43 of 47 claims protected** (three are EQUIVALENT MUTANTS — archive-
 then-set pairs, and a `{ gt: 0 }` guarding a write of 0 — predicates that can be
 deleted without changing the end state, so
 no test can ever kill them; they are listed in the guard and excluded from the
@@ -105,10 +105,9 @@ baseline (a partial sweep would drop the ratchet for every claim it skipped);
 only a full `--discover` may.
 
 **THE 4 CLAIMS STILL UNPROTECTED**, and why each resisted — start here rather
-than re-running a full sweep to rediscover them (~8 min locally for all 49: a
+than re-running a full sweep to rediscover them (~8 min locally for all 50: a
 caught mutant `--bail=1`s out in seconds, so the cost is dominated by the ones
-that survive). All four are now deliberate stops rather than a backlog; the
-rest of the list was closed by the four tests described under it.
+that survive). All four are deliberate stops rather than a backlog.
 
 * `applyPick::status#1` (the advance claim) — its rival must write the LOBBY
   row the open transaction already locked, so the hook would have to hand the
@@ -122,7 +121,7 @@ rest of the list was closed by the four tests described under it.
   `Game.dotaMatchId` is unique. The existing "concurrent pings" test passes
   either way for exactly that reason.
 
-**How the last four were closed** (2026-07-27) — the two patterns are worth
+**How the last five were closed** (2026-07-27) — the two patterns are worth
 copying:
 
 * **Delete the redundant read-time check so the claim IS the enforcement
@@ -132,7 +131,17 @@ copying:
   ACTIVE unconditionally) AND it made the claim untestable — every test stopped
   at the `if` and passed just as happily with the WHERE deleted. One
   enforcement point, and the test is deterministic, needs no seam, and runs on
-  SQLite.
+  SQLite. **`reopenMatch` is the same shape** and was the last blind write of
+  this class in the repo: it read `_count.games`, refused if any, then wrote
+  `update({ where: { id } })` — while auto-sync runs from any page view and
+  reopen is pressed on exactly the matches it is scanning. An import landing in
+  that gap left the match SCHEDULED at 0-0 WITH a Game row, and nothing
+  repaired it: `importGameForMatch` dedupes on the unique `dotaMatchId` so the
+  game never re-imports, `recomputeSeries` never runs again, and the result is
+  gone from the standings with no error anywhere. The games check now lives
+  only in the WHERE (`games: { none: {} }`, a relation filter — the
+  `acceptMatch` pattern), and a `count === 0` re-read says WHICH predicate
+  failed, because "nothing happened" is the one answer an admin cannot act on.
 * **Seam the rest.** `recomputeSeries` (rival imports the game that clinches
   the series between this caller's read and its CAS — the stale caller must not
   revert a COMPLETED 2-0 to a LIVE 1-0), `startCaptainVote` (a decline CANCELS

@@ -15,9 +15,15 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
-import { recordResult, setMatchTime, setWeekNight } from "@/app/actions/admin";
+import {
+  recordResult,
+  reopenMatch,
+  setMatchTime,
+  setWeekNight,
+} from "@/app/actions/admin";
 import { proposeReschedule, respondReschedule } from "@/lib/reschedule-service";
 import { MATCH_STATUS } from "@/lib/constants";
+import type { ActionResult } from "@/lib/action-result";
 import {
   generateRegularSchedule,
   makeSeason,
@@ -233,6 +239,110 @@ describe("recordResult won't stamp over a result that landed while it was typed"
     // The import's score stands, and the stale ruling never completed it.
     expect([after.homeScore, after.awayScore]).toEqual([1, 2]);
     expect(after.status).toBe(MATCH_STATUS.LIVE);
+  });
+});
+
+// Reopening a match is the admin's undo for a manual score — and it is pressed
+// on exactly the matches auto-sync is scanning, from any page view in the
+// league. The two preconditions it checks (still COMPLETED, no games) are read
+// several statements and one admin decision before the write lands.
+describe("reopenMatch — the games check is the WHERE, not a read-time if", () => {
+  async function completedMatch() {
+    const { matches } = await seasonWithMatches();
+    const target = matches[0];
+    await prisma.match.update({
+      where: { id: target.id },
+      data: {
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 2,
+        awayScore: 1,
+        winnerTeamId: target.homeTeamId,
+      },
+    });
+    return target;
+  }
+
+  it("reopens a manually-scored match with no games", async () => {
+    // The path this action exists for — and the reason the claim can't simply
+    // refuse everything: an admin fat-fingers a score and needs it back.
+    const target = await completedMatch();
+
+    const res = await reopenMatch({ message: "" }, fd({ matchId: target.id }));
+
+    expect(res?.error).toBeUndefined();
+    const after = await prisma.match.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    expect(after.status).toBe(MATCH_STATUS.SCHEDULED);
+    expect([after.homeScore, after.awayScore]).toEqual([0, 0]);
+    expect(after.winnerTeamId).toBeNull();
+    // The empty-scan backoff is cleared too, or auto-sync would ignore the
+    // match it was just told to look at again.
+    expect(after.autoSyncedAt).toBeNull();
+    expect(after.autoSyncAttempts).toBe(0);
+  });
+
+  it("refuses — and changes NOTHING — when a game has landed", async () => {
+    // The race, made deterministic: an auto-sync import committing between the
+    // read and the write is indistinguishable from a game that was already
+    // there, because the guard is in the WHERE either way. A blind
+    // `update({ where: { id } })` instead leaves the match SCHEDULED at 0-0
+    // with a Game row attached — and nothing repairs that: importGameForMatch
+    // dedupes on the unique dotaMatchId so the game is never re-imported,
+    // recomputeSeries never runs again, and the result is simply gone from the
+    // standings with no error anywhere.
+    const target = await completedMatch();
+    await prisma.game.create({
+      data: {
+        matchId: target.id,
+        dotaMatchId: "7777777777",
+        radiantWin: true,
+        winnerTeamId: target.homeTeamId,
+        players: "[]",
+      },
+    });
+
+    const res = await reopenMatch({ message: "" }, fd({ matchId: target.id }));
+
+    expect(res?.error).toMatch(/imported games/i);
+    const after = await prisma.match.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    expect(after.status).toBe(MATCH_STATUS.COMPLETED);
+    expect([after.homeScore, after.awayScore]).toEqual([2, 1]);
+    expect(after.winnerTeamId).toBe(target.homeTeamId);
+  });
+
+  it("refuses a match that is no longer final, and says which", async () => {
+    // The other predicate in the same WHERE. Zero rows has two causes and an
+    // admin can act on neither unless we say which one it was.
+    const target = await completedMatch();
+    await prisma.match.update({
+      where: { id: target.id },
+      data: { status: MATCH_STATUS.LIVE },
+    });
+
+    const res = await reopenMatch({ message: "" }, fd({ matchId: target.id }));
+
+    expect(res?.error).toMatch(/isn't marked final/i);
+    expect(
+      (await prisma.match.findUniqueOrThrow({ where: { id: target.id } })).status,
+    ).toBe(MATCH_STATUS.LIVE);
+  });
+
+  it("is idempotent under a double submit", async () => {
+    // Two clicks, or a click and a retry: the second must land on nothing
+    // rather than re-zeroing a match someone has since re-scored.
+    const target = await completedMatch();
+    const [first, second] = await raceAll<ActionResult>([
+      () => reopenMatch({ message: "" }, fd({ matchId: target.id })),
+      () => reopenMatch({ message: "" }, fd({ matchId: target.id })),
+    ]);
+    const wins = [first, second].filter((r) => !r?.error).length;
+    expect(wins).toBe(1);
+    expect(
+      (await prisma.match.findUniqueOrThrow({ where: { id: target.id } })).status,
+    ).toBe(MATCH_STATUS.SCHEDULED);
   });
 });
 
