@@ -357,8 +357,12 @@ export function PlayerPool({
  */
 const ROW_GRID =
   "grid-cols-[2.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 " +
-  "md:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_5.5rem_11rem] " +
-  "xl:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_5.5rem_9rem_11rem]";
+  // The roles track is 7.5rem because that is EXACTLY what five position pills
+  // need (5 x 20px + 4 x 4px gap = 120px). At the 5.5rem it started as, 6 of
+  // the 30 real signups wrapped their pills onto a second line, which is the
+  // one thing a column is supposed to stop happening.
+  "md:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_7.5rem_11rem] " +
+  "xl:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_7.5rem_9rem_11rem]";
 
 /** Cells 3+ share one placement rule: stacked under the name until md. */
 const CELL = "col-start-2 col-span-2 md:col-span-1 md:col-start-auto";
