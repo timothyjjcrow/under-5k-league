@@ -322,3 +322,44 @@ export function groupPlayoffRounds<T extends { bracketSlot: string | null }>(
   }));
   return { totalRounds, rounds };
 }
+
+/** The minimum a match needs to be placed on the dashboard's front band. */
+export type SlateMatch = {
+  id: string;
+  week: number;
+  phase: string;
+  status: string;
+};
+
+/**
+ * The slate the dashboard leads with: during PLAYOFFS every open bracket
+ * match, otherwise the EARLIEST week that still has an unplayed regular
+ * fixture — plus the heading that describes it.
+ *
+ * Shared rather than computed twice, and that sharing is the point. The
+ * dashboard used to derive this inside its This-week card while the Upcoming
+ * card independently took "the next four unplayed matches by kickoff" — which
+ * mid-week is the SAME fixtures, so a viewer read tonight's games twice on one
+ * screen (three times with their own team's next-up tile). Upcoming now means
+ * "what comes AFTER the slate", which is only definable against the same
+ * function the slate came from.
+ */
+export function focusSlate<T extends SlateMatch>(
+  seasonStatus: string,
+  matches: T[],
+): { slate: T[]; title: string } {
+  const open = matches.filter((m) => m.status !== "COMPLETED");
+  if (seasonStatus === "PLAYOFFS") {
+    return {
+      slate: open.filter((m) => m.phase !== "REGULAR"),
+      title: "The round in progress",
+    };
+  }
+  const openRegular = open.filter((m) => m.phase === "REGULAR");
+  if (openRegular.length === 0) return { slate: [], title: "This week" };
+  const week = Math.min(...openRegular.map((m) => m.week));
+  return {
+    slate: openRegular.filter((m) => m.week === week),
+    title: `This week · Week ${week}`,
+  };
+}

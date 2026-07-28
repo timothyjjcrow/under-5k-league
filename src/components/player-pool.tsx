@@ -228,7 +228,11 @@ export function PlayerPool({
           Showing <span className="font-medium text-fg">{filtered.length}</span>{" "}
           of {players.length} players
         </span>
-        {filtersActive ? (
+        {/* Exactly ONE "Clear filters" exists at a time. When the filters match
+            nothing the EmptyState below carries it, where the reader is already
+            looking; this line yields rather than offering a second control with
+            the same name two inches above it. */}
+        {filtersActive && filtered.length > 0 ? (
           <button
             type="button"
             onClick={resetFilters}

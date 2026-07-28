@@ -1742,6 +1742,27 @@ setup guide is `open={fhUnavailable}` — closed for everyone EXCEPT the cohort
 OpenDota reports as having public match data switched off. Folding it shut for
 everybody would have hidden it from exactly the people it is written for.
 
+**The dashboard shows a fixture ONCE per job it does.** Mid-week it printed
+tonight's games four times: the hero's check-in panel, the This-week band, the
+Upcoming card, and the your-team next-up tile. `focusSlate` (`schedule.ts`,
+tested) now defines the front band, and "Coming up" is the PARTITION of the
+open matches against it — so the two bands can never hold the same match, and
+the card disappears in the final week instead of restating it. The stake line
+and the next-up tile merged into one block: they were always about the same
+match (the tile is aligned to the scenario engine's `nextMatchId` so "win the
+next series" and the fixture beneath it cannot disagree), and it names the
+OPPONENT, not "us vs them", which was the third printing of the viewer's own
+team name on one card. Measured on the fixture: 14 links over 9 fixtures
+became 13 over 11 — strictly more of the league surfaced, in less space. The
+remaining 3 printings of the viewer's own match each do a different job
+(RSVP / the league's slate with both check-in counts / the stake anchor).
+
+**One control, one name.** `/players` rendered "Clear filters" twice whenever
+a filter matched nothing — a text link in the count line and a button in the
+EmptyState. Two controls with the same accessible name is both a UI wart and
+a strict-mode e2e flake that only fires on the seeds where the filter happens
+to empty the list. The count line now yields when the list is empty.
+
 **`/players` filters live in the URL** (`?q=&pos=&sort=&cap=1&status=free`,
 defaults omitted). They seed from `useSearchParams` on mount — which is why
 `<PlayerPool>` needs its `<Suspense>` boundary — and mirror back via

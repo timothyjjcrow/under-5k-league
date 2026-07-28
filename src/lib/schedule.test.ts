@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  focusSlate,
   roundRobin,
   byeTeamsByWeek,
   remainingSchedule,
@@ -396,5 +397,66 @@ describe("byKickoff", () => {
       "w1b",
       "w2",
     ]);
+  });
+});
+
+describe("focusSlate", () => {
+  const m = (
+    id: string,
+    week: number,
+    status = "SCHEDULED",
+    phase = "REGULAR",
+  ) => ({ id, week, phase, status });
+
+  it("leads with the earliest week that still has an unplayed fixture", () => {
+    const { slate, title } = focusSlate("REGULAR_SEASON", [
+      m("a", 1, "COMPLETED"),
+      m("b", 2),
+      m("c", 2),
+      m("d", 3),
+    ]);
+    expect(slate.map((x) => x.id)).toEqual(["b", "c"]);
+    expect(title).toBe("This week · Week 2");
+  });
+
+  it("keeps a LIVE match in the slate — a partial series is still tonight", () => {
+    const { slate } = focusSlate("REGULAR_SEASON", [
+      m("a", 4, "LIVE"),
+      m("b", 4, "COMPLETED"),
+      m("c", 5),
+    ]);
+    expect(slate.map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("takes every open bracket match during playoffs, whatever the week", () => {
+    const { slate, title } = focusSlate("PLAYOFFS", [
+      m("r1", 9, "COMPLETED", "SEMI"),
+      m("r2", 9, "SCHEDULED", "SEMI"),
+      m("f", 10, "SCHEDULED", "FINAL"),
+      m("reg", 5, "SCHEDULED", "REGULAR"),
+    ]);
+    expect(slate.map((x) => x.id)).toEqual(["r2", "f"]);
+    expect(title).toBe("The round in progress");
+  });
+
+  it("is empty once every regular fixture is played", () => {
+    const { slate } = focusSlate("REGULAR_SEASON", [
+      m("a", 1, "COMPLETED"),
+      m("b", 2, "COMPLETED"),
+    ]);
+    expect(slate).toEqual([]);
+  });
+
+  // The dedupe contract: whatever the slate holds, the "coming up" list is the
+  // rest — so the two bands can never show the same fixture twice.
+  it("partitions the open matches with nothing counted twice", () => {
+    const all = [m("a", 1, "COMPLETED"), m("b", 2), m("c", 2), m("d", 3)];
+    const { slate } = focusSlate("REGULAR_SEASON", all);
+    const slateIds = new Set(slate.map((x) => x.id));
+    const later = all.filter(
+      (x) => x.status !== "COMPLETED" && !slateIds.has(x.id),
+    );
+    expect(later.map((x) => x.id)).toEqual(["d"]);
+    expect(slate.some((s) => later.some((l) => l.id === s.id))).toBe(false);
   });
 });

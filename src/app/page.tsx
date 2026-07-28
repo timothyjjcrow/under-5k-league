@@ -17,6 +17,7 @@ import {
   byKickoff,
   matchPhaseAbbrev,
   matchPhaseLabel,
+  focusSlate,
   pickBracketSize,
   roundName,
   slotRound,
@@ -1485,8 +1486,18 @@ async function SeasonView({
   // Visible to everyone — spectators and unrostered players had no way to
   // see what's coming up without leaving the dashboard. Chronological, not
   // week order — a reschedule can move a match past its week-mates.
+  //
+  // It EXCLUDES the This-week slate. Taking "the next four unplayed matches"
+  // outright meant that mid-week this card listed the exact fixtures the band
+  // above it was already showing in full, with check-in counts and stakes —
+  // the same three games read twice on one screen. What a reader actually
+  // wants here is what comes AFTER tonight, which is only definable against
+  // the same focusSlate the band above used.
+  const slateIds = new Set(
+    focusSlate(season.status, matches).slate.map((m) => m.id),
+  );
   const upcoming = matches
-    .filter((m) => m.status !== "COMPLETED")
+    .filter((m) => m.status !== "COMPLETED" && !slateIds.has(m.id))
     .sort(byKickoff)
     .slice(0, 4);
   const openPickemIds = matches
@@ -1662,23 +1673,38 @@ async function SeasonView({
                     <Stat label="Points" value={myRow.points} />
                   </div>
                 ) : null}
-                {myStakeLine ? (
-                  <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
-                    {myStakeLine}
-                  </div>
-                ) : null}
+                {/* The stake line and the next fixture are ONE block, not two
+                    stacked boxes. They were always about the same match — the
+                    tile is aligned to the scenario engine's `nextMatchId` so
+                    "win the next series" and the fixture named underneath can
+                    never disagree — and the hero's check-in panel is already
+                    showing that fixture with its RSVP a screen above. Naming
+                    the OPPONENT rather than "us vs them" drops the third
+                    printing of the viewer's own team name on one card. */}
                 {myNextMatch ? (
                   <Link
                     href={`/matches/${myNextMatch.id}`}
-                    className="block rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
+                    className={cn(
+                      "block rounded-lg border p-3 text-sm transition-colors",
+                      myStakeLine
+                        ? "border-accent/30 bg-accent/5 hover:border-accent/50"
+                        : "border-line bg-surface-2/40 hover:border-muted/60",
+                    )}
                   >
+                    {myStakeLine ? (
+                      <div className="mb-2">{myStakeLine}</div>
+                    ) : null}
                     <div className="text-xs uppercase text-muted">
                       {matchPhaseLabel(myNextMatch.phase, myNextMatch.week)} ·
                       next up
                     </div>
                     <div className="mt-1 font-medium">
-                      {teamName.get(myNextMatch.homeTeamId)} vs{" "}
-                      {teamName.get(myNextMatch.awayTeamId)}
+                      vs{" "}
+                      {teamName.get(
+                        myNextMatch.homeTeamId === myTeam.id
+                          ? myNextMatch.awayTeamId
+                          : myNextMatch.homeTeamId,
+                      ) ?? "?"}
                     </div>
                     {myNextMatch.scheduledAt ? (
                       <div className="mt-1 text-xs text-muted">
@@ -1690,6 +1716,11 @@ async function SeasonView({
                       </div>
                     ) : null}
                   </Link>
+                ) : myStakeLine ? (
+                  // Done playing, but the table can still decide something.
+                  <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
+                    {myStakeLine}
+                  </div>
                 ) : (
                   <p className="text-sm text-muted">No upcoming matches.</p>
                 )}
@@ -1714,7 +1745,10 @@ async function SeasonView({
       <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
           {upcoming.length > 0 ? (
             <Card className="min-w-0">
-              <CardHeader title="Upcoming" />
+              <CardHeader
+                title="Coming up"
+                subtitle="After this week's slate"
+              />
               <CardBody className="p-0">
                 <ul className="divide-y divide-line/60">
                   {upcoming.map((m) => (
@@ -1860,20 +1894,8 @@ async function ThisWeek({
   teamName: Map<string, string>;
   report: ScenarioReport | null;
 }) {
-  const open = matches.filter((m) => m.status !== "COMPLETED");
-  let focus: Match[] = [];
-  let title = "This week";
-  if (season.status === "PLAYOFFS") {
-    focus = open.filter((m) => m.phase !== "REGULAR");
-    title = "The round in progress";
-  } else {
-    const openRegular = open.filter((m) => m.phase === "REGULAR");
-    if (openRegular.length > 0) {
-      const week = Math.min(...openRegular.map((m) => m.week));
-      focus = openRegular.filter((m) => m.week === week);
-      title = `This week · Week ${week}`;
-    }
-  }
+  // Same helper the "Coming up" card partitions against — see focusSlate.
+  const { slate: focus, title } = focusSlate(season.status, matches);
   if (focus.length === 0) return null;
 
   const [avail, standinRows] = await Promise.all([
