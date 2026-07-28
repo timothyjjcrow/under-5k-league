@@ -74,15 +74,51 @@ jobs:
       - name: Integration tests on postgres
         run: npm run test:pg -- --reporter=github-actions --reporter=default
 
-      # THE RATCHET. A guarded claim's WHERE predicate is its entire
-      # concurrency guard, and almost nothing in the suite notices if one is
-      # deleted — a happy-path test passes just as well against a blind write.
-      # So: delete each protected guard in turn and require the suite to fail.
-      # Only the claims the baseline already records as protected are
-      # re-checked, which keeps this to a few suite runs rather than one per
-      # claim in the repo. New unprotected claims are reported, never gating.
-      - name: Mutation guard (protected claims must stay protected)
-        run: node scripts/mutation-guard.mjs
+  # THE RATCHET, sharded. A guarded claim's WHERE predicate is its entire
+  # concurrency guard, and almost nothing in the suite notices if one is
+  # deleted — a happy-path test passes just as well against a blind write. So:
+  # delete each protected guard in turn and require the suite to fail.
+  #
+  # Every mutant costs a full suite run, so this grows LINEARLY with coverage —
+  # at 38 protected claims it was an 11-minute job on its own. The shards are a
+  # disjoint, complete partition of the baseline, so coverage per push is
+  # unchanged; only the wall clock moves. Raise `shard` if it creeps up again.
+  # New unprotected claims are reported, never gating.
+  mutation:
+    name: mutation guard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one bad shard shouldn't hide the others' results
+      matrix:
+        shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ld2l_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PG_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_test"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18"
+          cache: npm
+      - run: npm ci
+      - name: Point Prisma at postgres
+        run: node scripts/switch-db-provider.mjs postgresql
+      - name: Push the schema + generate the client
+        run: npx prisma db push --skip-generate --accept-data-loss && npx prisma generate
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
+      - name: Verify this shard's protected claims
+        run: node scripts/mutation-guard.mjs --shard ${{ matrix.shard }}/4
 
   e2e:
     name: playwright e2e

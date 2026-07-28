@@ -247,6 +247,21 @@ const discover = process.argv.includes("--discover");
 // that close them.
 const onlyArg = process.argv.indexOf("--only");
 const only = onlyArg !== -1 ? process.argv[onlyArg + 1] : null;
+
+// `--shard i/n` verifies a deterministic slice of the baseline. Every mutant
+// costs a full suite run, so the job grew linearly with coverage — 38 claims
+// was 11 minutes of CI. Shards run as a matrix and the slices are disjoint, so
+// coverage per push is unchanged; only the wall clock moves.
+const shardArg = process.argv.indexOf("--shard");
+let shard = null;
+if (shardArg !== -1) {
+  const m = /^(\d+)\/(\d+)$/.exec(process.argv[shardArg + 1] ?? "");
+  if (!m || Number(m[1]) < 1 || Number(m[1]) > Number(m[2])) {
+    console.error("--shard expects i/n with 1 <= i <= n (e.g. --shard 2/4)");
+    process.exit(2);
+  }
+  shard = { i: Number(m[1]), n: Number(m[2]) };
+}
 const claims = discoverAll().filter((c) => !only || c.id.includes(only));
 
 if (!suiteIsGreen()) {
@@ -317,10 +332,17 @@ const base = JSON.parse(readFileSync(BASELINE, "utf8"));
 const byId = new Map(claims.map((c) => [c.id, c]));
 const failures = [];
 
-console.log(
-  `Verifying ${base.protected.length} protected claims (of ${claims.length} found; baseline saw ${base.totalClaims})…\n`,
+// Round-robin over the SORTED baseline, so a claim's shard is stable between
+// runs and every shard gets a similar mix of fast and slow suites.
+const mine = base.protected.filter(
+  (_, k) => !shard || (k % shard.n) + 1 === shard.i,
 );
-for (const id of base.protected) {
+console.log(
+  shard
+    ? `Verifying shard ${shard.i}/${shard.n}: ${mine.length} of ${base.protected.length} protected claims…\n`
+    : `Verifying ${mine.length} protected claims (of ${claims.length} found; baseline saw ${base.totalClaims})…\n`,
+);
+for (const id of mine) {
   const claim = byId.get(id);
   if (!claim) {
     console.log(`  [GONE       ] ${id}`);
@@ -339,7 +361,11 @@ for (const id of base.protected) {
 const newly = claims.filter(
   (c) => !base.protected.includes(c.id) && !EQUIVALENT.has(c.id),
 ).length;
-console.log(`\n${claims.length - newly}/${claims.length} claims protected; ${newly} unprotected (not gating).`);
+console.log(
+  `\n${claims.length - newly}/${claims.length} claims protected; ` +
+    `${newly} unprotected (not gating)` +
+    (shard ? ` — this shard verified ${mine.length}.` : "."),
+);
 
 if (failures.length) {
   console.error(`\n✖ mutation guard FAILED (${failures.length}):`);
@@ -351,4 +377,8 @@ if (failures.length) {
   );
   process.exit(1);
 }
-console.log("\n✔ every protected claim is still protected.");
+console.log(
+  shard
+    ? `\n✔ shard ${shard.i}/${shard.n}: every claim in this slice is still protected.`
+    : "\n✔ every protected claim is still protected.",
+);
