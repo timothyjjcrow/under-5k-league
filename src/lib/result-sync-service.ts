@@ -26,6 +26,7 @@ import {
 } from "./inhouse-service";
 import { claimThrottle, getSetting, SETTING_KEYS } from "./settings";
 import { syncInhouseBoard } from "./inhouse-board-service";
+import { raceHook } from "./race-hook";
 
 // Automatic result sync — the league updates itself instead of waiting on a
 // captain or admin to press a button. Driven lazily (no cron/websocket, same
@@ -156,6 +157,16 @@ async function syncDueMatches(
   for (const m of claimable) {
     // Claim before scanning — concurrent pollers race here, one wins. The
     // increment counts this scan as empty until proven otherwise.
+    //
+    // Seam: `status: { not: COMPLETED }` was last checked in the `due` query
+    // above, and TWO round trips sit between that read and this write (the
+    // claimable filter, then the global throttle claim). A rival that DECIDES
+    // the series in that gap — an admin forfeit ruling, a captain's manual
+    // import, the league feed — is exactly what the predicate exists to catch,
+    // and racing real calls cannot steer it (the throttle serializes runs, so
+    // the two never overlap here). Nothing is inside a transaction at this
+    // point, so the rival cannot deadlock. See src/lib/race-hook.ts.
+    await raceHook("resultSync.syncDueMatches.beforeMatchClaim");
     const claim = await prisma.match.updateMany({
       where: {
         id: m.id,

@@ -677,10 +677,19 @@ async function applyPick(
     }
   }
 
-  // Re-assert DRAFTING on the way out: an admin cancel landing mid-pick would
-  // otherwise be silently undone by a blind write-by-id, resurrecting a
-  // CANCELLED lobby whose ten players cancelLobby has already re-queued (so
-  // they'd be in a live lobby AND in the queue).
+  // Re-assert DRAFTING on the way out. Unlike every other claim in this file
+  // this one CANNOT currently be falsified, and the reason is worth writing
+  // down rather than rediscovering: the turn claim above UPDATEd this same row,
+  // so the transaction holds its row lock until commit and an admin cancel
+  // landing "mid-pick" does not land at all — it blocks, then re-evaluates its
+  // own guard against the committed result. That makes deleting this predicate
+  // an EQUIVALENT MUTANT (mutation-guard.mjs lists it as one, with no test able
+  // to kill it) rather than an untested gap. It stays because it is the
+  // property we want enforced at the write if the turn claim is ever moved,
+  // narrowed or removed — and the lock itself is pinned by
+  // "the DRAFTING re-assert cannot be falsified" in inhouse.itest.ts, which
+  // fails the moment that stops being true.
+  await raceHook("inhouse.applyPick.beforeAdvance");
   const advanced = await tx.inhouseLobby.updateMany({
     where: { id: lobby.id, status: INHOUSE_STATUS.DRAFTING },
     data:

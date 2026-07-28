@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { SETTING_KEYS, getSetting, setSetting } from "@/lib/settings";
 import {
   createInhouseBoard,
@@ -636,5 +637,84 @@ describe("board — posting is claimed BEFORE Discord, not after", () => {
       where: { key: SETTING_KEYS.INHOUSE_BOARD },
     });
     expect(JSON.parse(row!.value).messageId).toBe(MSG_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two COMPARE-AND-SWAPs on the board row. Both re-assert, at the write,
+// something read before a Discord round trip — and both are invisible to a
+// staged test, because the read-time checks in front of them catch anything
+// that landed EARLIER. What has to be produced is the rival landing in the gap:
+// after the check, before the write. One of them has no natural gap at all (two
+// adjacent queries), so the service yields at a labelled seam instead
+// (src/lib/race-hook.ts); the other's gap is the PATCH itself, which the
+// transport mock already stands in for.
+//
+// Both run on SQLite too: no transaction is open at either point, so the
+// rival has no lock to block on.
+// ---------------------------------------------------------------------------
+describe("board — the row is claimed by compare-and-swap, not by a stale read", () => {
+  afterEach(() => setRaceHook(null));
+
+  it("an edit in flight never clobbers a board that was removed AND re-posted", async () => {
+    await enqueue(3);
+    await createInhouseBoard(); // board #1
+    await expireThrottle();
+    await enqueue(1, "z"); // the digest moves, so this poll will PATCH
+
+    const NEW_MSG = "1379009876543210987";
+    // The admin removes the board and posts a fresh one during the (up to
+    // 2.5s) round trip. The row that comes back is a DIFFERENT board — not the
+    // empty row a plain Remove leaves, which an updateMany cannot resurrect
+    // anyway. This is the shape that actually needs the guard.
+    mockPatch.mockImplementation(async () => {
+      await removeInhouseBoard();
+      mockPost.mockResolvedValueOnce({ id: NEW_MSG });
+      await createInhouseBoard();
+      return "ok";
+    });
+
+    await syncInhouseBoard();
+
+    // Still describing the message that is actually pinned in Discord. Writing
+    // the old state back would point the row at a DELETED message — the next
+    // poll 404s, reads that as "gone", and turns the feature off — while the
+    // board the admin just posted is left pinned with nothing tracking it.
+    const row = JSON.parse((await boardRow())!);
+    expect(row.messageId).toBe(NEW_MSG);
+  });
+
+  it("stands down when a rival claims the row first, instead of posting a second board", async () => {
+    // A settled board in the OLD channel. The webhook has since been pointed
+    // somewhere else, so taking that row over is legitimate — this is the one
+    // case the read-time checks let through.
+    await enqueue(3);
+    mockHook.mockResolvedValue(OTHER_HOOK);
+    await createInhouseBoard();
+    mockHook.mockResolvedValue(HOOK);
+    mockPost.mockClear();
+
+    const RIVAL_MSG = "1379005555555555555";
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseBoard.claimBoardRow.beforeTakeover", async () => {
+        fired = true;
+        // A second admin's "Post queue board" gets there first and COMPLETES —
+        // so the row this caller read a moment ago is now a live board in the
+        // channel it was about to post into.
+        mockPost.mockResolvedValueOnce({ id: RIVAL_MSG });
+        await createInhouseBoard();
+      }),
+    );
+
+    const res = await createInhouseBoard();
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    expect(res.ok).toBe(false);
+    // The decisive assertion: exactly ONE message reached Discord. Taking the
+    // rival's row over sends a second one, and the row can only ever track one
+    // of them — the other is pinned forever, un-editable and un-deletable.
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    const row = JSON.parse((await boardRow())!);
+    expect(row.messageId).toBe(RIVAL_MSG);
   });
 });

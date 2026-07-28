@@ -36,10 +36,13 @@ const BASELINE = "test/mutation-baseline.json";
  * EQUIVALENT MUTANTS — claims whose predicate can be deleted without changing
  * the end state, so no test can ever kill them. Listing them keeps the score
  * honest: they are not gaps waiting for a test, they are guards that happen to
- * be redundant. Both below are archive-then-set pairs —
- * `updateMany({ isActive: true } → false)` followed by activating one row.
- * Dropping the predicate archives rows that are already archived, which lands
- * in exactly the same place.
+ * be redundant.
+ *
+ * Every entry needs a REASON that someone can re-check, because "equivalent"
+ * is also what an untested gap looks like from here. The first two are
+ * archive-then-set pairs — `updateMany({ isActive: true } → false)` followed by
+ * activating one row. Dropping the predicate archives rows that are already
+ * archived, which lands in exactly the same place.
  */
 const EQUIVALENT = new Set([
   "src/lib/season.ts::reactivateSeason::isActive#1",
@@ -47,6 +50,19 @@ const EQUIVALENT = new Set([
   // `{ autoSyncAttempts: { gt: 0 } }` guarding `data: { autoSyncAttempts: 0 }`
   // — dropping it writes 0 over a 0. Same end state, nothing observable.
   "src/lib/match-import.ts::importGameForMatch::autoSyncAttempts#1",
+  // applyPick's ADVANCE claim re-asserts `status: DRAFTING`. It cannot be
+  // falsified: the TURN claim a few statements earlier UPDATEs the same lobby
+  // row inside the same interactive transaction, so Postgres holds that row's
+  // lock until commit and no rival can move the status before the advance —
+  // an admin cancel BLOCKS there and re-evaluates its own guard against the
+  // committed result. Deleting the predicate therefore writes the same data to
+  // the same row and returns the same value. The lock is not taken on trust:
+  // "the DRAFTING re-assert cannot be falsified" in inhouse.itest.ts holds the
+  // seam open and shows a second connection refused the row (FOR UPDATE
+  // NOWAIT), with a positive control so a malformed query can't fake it. If
+  // that test ever goes red this entry has expired — the claim is a real gap
+  // again and needs a real test.
+  "src/lib/inhouse-service.ts::applyPick::status#1",
 ]);
 
 // Every file that holds transactional service logic. Add new ones here.

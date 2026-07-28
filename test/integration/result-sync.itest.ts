@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
   AUTO_SYNC,
   INHOUSE,
@@ -550,5 +551,75 @@ describe("result sync — inhouse (integration)", () => {
       }),
     ).toBe(0);
     expect(await prisma.inhouseQueueEntry.count()).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FAULT-INJECTED claim. The per-match claim re-asserts `status: not COMPLETED`
+// at the WRITE, and racing real calls cannot exercise it: the global
+// ROSTER_AUTO_SYNC_AT throttle serializes runs, so two pings never overlap
+// inside the loop, and the "concurrent pings" test above therefore passes just
+// as happily with the predicate deleted. The rival that matters comes from a
+// DIFFERENT path entirely — whatever decides the series while this run is
+// between its read and its write. The service yields at a labelled seam
+// (src/lib/race-hook.ts) so that ordering is deterministic.
+//
+// Runs on SQLite too: the seam is between two plain queries, with no open
+// transaction for the rival's connection to block on.
+// ---------------------------------------------------------------------------
+describe("result sync — a claim that needs a staged interleaving", () => {
+  afterEach(() => setRaceHook(null));
+
+  it("never scans a series DECIDED between the due read and the claim", async () => {
+    const { home, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -2 * HOUR,
+    });
+    // A game IS out there on OpenDota — so if this run scans at all, it will
+    // import it, over the top of a series somebody has already settled.
+    const G = 8881234;
+    mockRecent.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue(
+      odGame(G, homeAccts, awayAccts, Date.now() - HOUR),
+    );
+
+    let fired = false;
+    setRaceHook(
+      onceAt("resultSync.syncDueMatches.beforeMatchClaim", async () => {
+        fired = true;
+        // An admin's forfeit ruling lands (a captain's manual import or the
+        // league feed would land the same way). The match row is the only one
+        // touched and nothing holds a lock on it.
+        await prisma.match.update({
+          where: { id: match.id },
+          data: {
+            status: MATCH_STATUS.COMPLETED,
+            homeScore: 2,
+            awayScore: 0,
+            winnerTeamId: home.id,
+          },
+        });
+      }),
+    );
+
+    const out = await runResultSync();
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    expect(out.imported).toBe(0);
+    // The decisive assertion: OpenDota was never asked. A decided series is
+    // amended by an admin, never rewritten by a late roster scan.
+    expect(mockRecent).not.toHaveBeenCalled();
+
+    const m = await prisma.match.findUniqueOrThrow({
+      where: { id: match.id },
+      include: { games: true },
+    });
+    expect(m.games).toHaveLength(0);
+    expect(m.status).toBe(MATCH_STATUS.COMPLETED);
+    expect(m.homeScore).toBe(2); // the ruling stands, unreverted
+    expect(m.awayScore).toBe(0);
+    // Not even stamped: a COMPLETED match that carries a fresh scan time and a
+    // backoff count reads, on the admin's auto-sync health card, as a fixture
+    // still being worked — the one thing that card exists to rule out.
+    expect(m.autoSyncedAt).toBeNull();
+    expect(m.autoSyncAttempts).toBe(0);
   });
 });

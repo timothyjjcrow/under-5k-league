@@ -25,6 +25,7 @@ import { gameMvp } from "./achievements";
 import { heroById } from "./heroes";
 import { rankInhouse, summarizeInhouse, type FinishedLobby } from "./inhouse-stats";
 import { claimThrottle, getSetting, SETTING_KEYS, setSetting } from "./settings";
+import { raceHook } from "./race-hook";
 import { resolveSiteUrl } from "./site-url";
 import { pingOptInAvailable } from "./discord-roles";
 
@@ -153,6 +154,14 @@ async function claimBoardRow(webhookId: string): Promise<string | null> {
   } catch {
     // Unparseable row — nothing to protect, fall through and take it.
   }
+  // Seam: both checks above judge a row read one round trip ago, so the CAS
+  // below is what actually decides the takeover. The rival that matters is
+  // another admin's post COMPLETING in this gap: the row it leaves behind is
+  // either its reservation or its finished board, and taking either over means
+  // BOTH of us send a message — the loser's pinned in Discord, un-editable and
+  // un-deletable forever, which is the worst end state this feature has.
+  // Nothing here is inside a transaction. See src/lib/race-hook.ts.
+  await raceHook("inhouseBoard.claimBoardRow.beforeTakeover");
   const swapped = await prisma.setting.updateMany({
     where: { key: SETTING_KEYS.INHOUSE_BOARD, value: current.value },
     data: { value: placeholder },

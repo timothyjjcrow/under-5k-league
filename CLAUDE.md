@@ -78,14 +78,18 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
-Currently **43 of 47 claims protected** (three are EQUIVALENT MUTANTS — archive-
-then-set pairs, and a `{ gt: 0 }` guarding a write of 0 — predicates that can be
-deleted without changing the end state, so
-no test can ever kill them; they are listed in the guard and excluded from the
-score rather than left looking like gaps). The rest are reported, never gating —
-assume a guard is unprotected until the baseline says otherwise. To raise the
-ratchet: write a raced test, then `npm run test:mutation:discover` and commit
-the new baseline.
+Currently **46 of 46 gradeable claims protected** (2026-07-28) — every guarded
+claim in the repo now fails the suite when its predicate is deleted. The other
+four of the 50 are EQUIVALENT MUTANTS: predicates that can be deleted without
+changing the end state, so no test can ever kill them. They are listed in the
+guard and excluded from the score rather than left looking like gaps — two
+archive-then-set pairs, a `{ gt: 0 }` guarding a write of 0, and `applyPick`'s
+advance claim (unfalsifiable behind the turn claim's row lock; see below). Each
+carries its REASON in `EQUIVALENT`, because "equivalent" is also exactly what an
+untested gap looks like from here. A NEW claim is still reported and never
+gating — assume a guard is unprotected until the baseline says otherwise. To
+raise the ratchet: write a raced test, then `npm run test:mutation:discover` and
+commit the new baseline.
 
 **Running any of this locally** (the guard and the pg suite need Postgres, and
 switching the Prisma provider is a footgun if you forget to switch back):
@@ -93,7 +97,7 @@ switching the Prisma provider is a footgun if you forget to switch back):
     npm run pg:up            # create the throwaway DB, point Prisma at it, push
     export PG_TEST_URL="postgresql://$USER@localhost:5432/ld2l_pgtest"
     npm run test:pg                          # the suite on the prod engine
-    npm run test:mutation                    # verify the whole baseline (42 claims)
+    npm run test:mutation                    # verify the whole baseline (46 claims)
     npm run test:mutation -- --shard 2/4     # one CI shard (5-7 min on CI)
     npm run test:mutation -- --discover --only acceptMatch   # probe one claim
     npm run pg:down          # BACK TO SQLITE + drop the DB — do not skip this
@@ -104,22 +108,61 @@ switched provider. `--discover --only` deliberately refuses to write the
 baseline (a partial sweep would drop the ratchet for every claim it skipped);
 only a full `--discover` may.
 
-**THE 4 CLAIMS STILL UNPROTECTED**, and why each resisted — start here rather
-than re-running a full sweep to rediscover them (~8 min locally for all 50: a
-caught mutant `--bail=1`s out in seconds, so the cost is dominated by the ones
-that survive). All four are deliberate stops rather than a backlog.
+A full sweep is ~8 min of suite time for all 50 (a caught mutant `--bail=1`s out
+in seconds, so the cost is dominated by the survivors) but ~25 min wall clock,
+because the guard proves the suite green ONCE before measuring anything and each
+mutant is a fresh `vitest run`. `npm run test:mutation` (verify all 46) is the
+longer one; shard it.
 
-* `applyPick::status#1` (the advance claim) — its rival must write the LOBBY
-  row the open transaction already locked, so the hook would have to hand the
-  test the transaction client. Rejected: that API invites tests that corrupt the
-  transaction they are injected into.
-* `inhouse-board-service::exists` + `::swapState` — now belt-and-braces behind
-  explicit checks in `claimBoardRow`, so mutating them changes nothing
-  observable. Near-equivalent rather than untested.
-* `result-sync-service::dueMinutes` — defended twice over already: a global
-  Setting throttle serializes scans before this claim is reached, and
-  `Game.dotaMatchId` is unique. The existing "concurrent pings" test passes
-  either way for exactly that reason.
+**How the last four were closed** (2026-07-28). This section used to list them
+as deliberate stops, each with a reason it "couldn't" be tested. Three of those
+reasons were wrong in the same way — **"something upstream serializes this" only
+covers rivals from the SAME path**, and every one of these claims had a rival
+from a different path. Keep that in mind before writing another such excuse.
+
+* `result-sync-service::dueMinutes` — the excuse was the global
+  `rosterAutoSyncAt` throttle. It does serialize runs, which is why the `OR`
+  half is genuinely belt-and-braces (nothing else writes `autoSyncedAt`, so no
+  test can reach it — and it need not, since the ratchet deletes both halves at
+  once). But `status: { not: COMPLETED }` has rivals the throttle has no say
+  over: THREE round trips separate the `due` read from the write, and an admin
+  forfeit ruling, a captain's manual import or the league feed all land in that
+  gap. Blind, the run then roster-scans a DECIDED series —
+  `autoDetectGamesForMatch` has no completed check of its own (that is why
+  `syncLeagueGames` grew one) — and imports a late game over an admin's ruling.
+  Seam `resultSync.syncDueMatches.beforeMatchClaim`; the decisive assertion is
+  that OpenDota was never called at all.
+* `inhouse-board-service::exists` + `::swapState` — the excuse was "belt-and-
+  braces behind explicit checks in `claimBoardRow`", which had it backwards: the
+  checks are READ-time and both CASes span a Discord round trip, so the checks
+  are the thing that goes stale and the CAS is the only write-time re-assertion.
+  What hid `swapState` for so long is subtler and worth remembering: the
+  existing "does not resurrect a board removed while an edit was in flight" test
+  removes the board with `setSetting(key, "")`, which **DELETES the row**
+  (settings.ts) — and an `updateMany` cannot resurrect a row that isn't there,
+  so a plain Remove is the one rival the blind write survives. Remove AND
+  re-post is the one it doesn't: the row then holds a DIFFERENT board, and the
+  blind write points it at the message Discord has already deleted while the
+  freshly-posted one is left pinned with nothing tracking it. For the takeover
+  CAS the rival is a second admin's post COMPLETING in the gap (seam
+  `inhouseBoard.claimBoardRow.beforeTakeover`) — blind, both post. Both tests
+  assert the POST COUNT, because an orphan is made of exactly one extra post.
+* `applyPick::status#1` — this one was genuinely unkillable, and is now listed
+  as an EQUIVALENT MUTANT instead of a gap. The turn claim a few statements
+  earlier UPDATEs the same lobby row inside the same transaction, so Postgres
+  holds that row's lock until commit: the admin cancel the old comment
+  described as "landing mid-pick" cannot land at all — it blocks, then
+  re-evaluates its own guard against the committed result. `advanced.count === 0`
+  is therefore unreachable. That is an ARGUMENT, not a fact, so it is pinned:
+  "the DRAFTING re-assert cannot be falsified" (inhouse.itest.ts) holds the seam
+  open and shows a second connection REFUSED the row. Two details make that test
+  worth copying for any future equivalence claim: `FOR UPDATE NOWAIT` turns
+  "would block" into an instant `55P03` — the ordinary rival UPDATE that
+  race-hook.ts warns about would HANG the suite instead of failing it — and a
+  POSITIVE CONTROL runs the same statement outside the seam first, because
+  otherwise a typo'd table name throws inside the seam and is read as proof of a
+  lock, passing while measuring nothing. If it goes red, the equivalence has
+  expired and the claim is a real gap again.
 
 **How the last five were closed** (2026-07-27) — the two patterns are worth
 copying:

@@ -3,6 +3,7 @@
   "totalClaims": 50,
   "equivalent": [
     "src/app/actions/admin.ts::createSeason::isActive#1",
+    "src/lib/inhouse-service.ts::applyPick::status#1",
     "src/lib/match-import.ts::importGameForMatch::autoSyncAttempts#1",
     "src/lib/season.ts::reactivateSeason::isActive#1"
   ],
@@ -24,6 +25,8 @@
     "src/lib/draft-service.ts::resolveStalledNomination::nominationEndsAt+status#3",
     "src/lib/draft-service.ts::resumeDraft::status#1",
     "src/lib/draft-service.ts::undoLastSale::nominatedUserId+status#1",
+    "src/lib/inhouse-board-service.ts::exists::value#1",
+    "src/lib/inhouse-board-service.ts::swapState::value#1",
     "src/lib/inhouse-service.ts::acceptMatch::acceptedAt+lobby#1",
     "src/lib/inhouse-service.ts::applyPick::pickEndsAt+pickTeam+status#1",
     "src/lib/inhouse-service.ts::applyPick::team#1",
@@ -49,6 +52,7 @@
     "src/lib/reschedule-service.ts::respondReschedule::status#1",
     "src/lib/reschedule-service.ts::respondReschedule::status#2",
     "src/lib/reschedule-service.ts::respondReschedule::status#3",
+    "src/lib/result-sync-service.ts::dueMinutes::OR+status#1",
     "src/lib/settings.ts::claimThrottle::value#1"
   ]
 }

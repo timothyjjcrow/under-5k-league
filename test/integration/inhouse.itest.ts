@@ -2259,4 +2259,56 @@ describe.skipIf(!ON_POSTGRES)("inhouse — claims that need a staged interleavin
       }),
     ).toBe(0);
   });
+
+  it("the DRAFTING re-assert cannot be falsified — the turn claim holds the row", async () => {
+    // applyPick's LAST write re-asserts `status: DRAFTING`, and the mutation
+    // guard reports that predicate as an equivalent mutant: no test kills it.
+    // That is a claim about the code, so pin it rather than trust it. The turn
+    // claim a few statements earlier UPDATEs this very row, so from that moment
+    // the transaction holds its row lock and nothing — not an admin cancel, not
+    // a landed result — can move the status before the advance.
+    //
+    // NOWAIT is what makes this safe to assert: an ordinary rival UPDATE here
+    // would BLOCK on the lock while the transaction waits on the seam, which is
+    // a hung suite rather than a failing test. NOWAIT turns "would block" into
+    // an immediate error, so the two outcomes are one statement apart.
+    //
+    // If this goes red, the equivalence justification in
+    // scripts/mutation-guard.mjs has expired and the claim needs a real test.
+    const { admin, lobby } = await draftingLobby("Lock");
+    const target = lobby.players.find((p) => p.team === null)!;
+    const takeTheRow = () =>
+      prisma.$queryRawUnsafe(
+        `SELECT id FROM "InhouseLobby" WHERE id = $1 FOR UPDATE NOWAIT`,
+        lobby.id,
+      );
+
+    // Positive control FIRST: with no transaction open the same statement
+    // succeeds. Without it, a typo'd table name would throw inside the seam and
+    // be read as proof of a lock — the test would "pass" having measured
+    // nothing, which is the exact failure mode this whole ratchet exists for.
+    await takeTheRow();
+
+    let fired = false;
+    let rivalCouldTakeTheRow: boolean | null = null;
+    let rivalError = "";
+    setRaceHook(
+      onceAt("inhouse.applyPick.beforeAdvance", async () => {
+        fired = true;
+        try {
+          await takeTheRow();
+          rivalCouldTakeTheRow = true;
+        } catch (e) {
+          rivalCouldTakeTheRow = false;
+          rivalError = String((e as Error).message);
+        }
+      }),
+    );
+
+    expect((await makePick(admin, target.userId)).ok).toBe(true);
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    expect(rivalCouldTakeTheRow).toBe(false);
+    // …and refused for the RIGHT reason (55P03 lock_not_available).
+    expect(rivalError).toMatch(/could not obtain lock/i);
+  });
 });
