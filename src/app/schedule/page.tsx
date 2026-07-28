@@ -727,7 +727,7 @@ function PlayoffPicture({
             <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
               The race{report?.exact ? "" : " (points bounds)"}
             </div>
-            <ul className="space-y-1">
+            <ul className="space-y-2">
               {raceNotes.map((n) => (
                 <li
                   key={n.teamId}

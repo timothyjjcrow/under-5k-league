@@ -1797,10 +1797,34 @@ the pool's filter row (search, role chips, toggles, sort, the clear-✕) is `h-1
 sm:h-9`. That took 44×44 coverage from 31 to 46 targets for +41px per page.
 Don't chase the rest by shrinking gaps.
 
-KNOWN, UNVERIFIED: the overlap probe reports ~439 overlapping target pairs that
-PRE-DATE all of this, concentrated in `/admin`'s dense forms. It has not been
-confirmed whether those are genuine mis-tap zones or a limitation of the probe
-(nested/adjacent form controls) — confirm before acting on the number.
+**RESOLVED — those 439 "overlapping targets" on /admin were the probe, not the
+page.** `getBoundingClientRect()` is not a test of whether something is on
+screen, and two things on this site prove it:
+
+* **A closed `<details>` LAYS ITS CONTENTS OUT.** Non-zero box, `display:block`,
+  `visibility:visible` — Chrome simply never paints or hit-tests them. Every
+  collapsed disclosure was contributing phantom controls that "overlapped"
+  whatever sat near them; on /admin, which now has five collapsed
+  `AdminSection`s plus a `✎ Rename team` disclosure per team, that alone was
+  439 of 442 findings.
+* **A clipping ancestor does not move the rect.** A row scrolled below the fold
+  of `admin/page.tsx`'s `max-h-80 overflow-y-auto` captain list still reports
+  coordinates hundreds of pixels down the page, landing on the Schedule card's
+  controls. That was the other 3-4.
+
+So `expectTapTargets` checks `closest("details:not([open])")`, `checkVisibility
+({contentVisibilityAuto, opacityProperty, visibilityProperty})`, AND intersects
+the rect with every non-`visible` ancestor before believing it. With all three,
+real overlapping pairs across 15 pages: **0**. Any future probe over rendered
+geometry needs the same three, or it will report the same ghosts.
+
+The hunt did turn up two REAL defects, which is the argument for doing it:
+`CardHeader` crushed its title when the `action` slot held a whole form (the
+admin Schedule card read "Schedul / e & / results" in a ~60px column on a
+phone — fixed with `flex-wrap` + `basis-48` on the title, so a link-sized
+action still sits inline), and six genuine sliver overlaps on /leaders and
+/schedule where two `TAP_SAFE` links stacked 4px apart. Rows whose links carry
+TAP_SAFE need ≥8px between them.
 
 **A Dota name can be ONE character**, and the live league has a player called
 "x" — an 8px-wide link. `PlayerLink` carries `min-w-6`, and the five callers

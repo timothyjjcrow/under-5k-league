@@ -114,13 +114,19 @@ export function CardHeader({
   className?: string;
 }) {
   return (
+    // flex-wrap + a basis on the title: a header whose `action` is a link
+    // ("Full schedule →") keeps it inline as before, but one whose action is a
+    // whole FORM wraps it to its own line instead of crushing the title. The
+    // admin's Schedule & results card carries a label + datetime field + button
+    // in that slot, which on a 390px phone squeezed the title into a ~60px
+    // column and broke it mid-word: "Schedul / e & / results".
     <div
       className={cn(
-        "flex items-start justify-between gap-4 border-b border-line px-5 py-4",
+        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-line px-5 py-4",
         className,
       )}
     >
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1 basis-48">
         <h3 className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
           {title}
         </h3>

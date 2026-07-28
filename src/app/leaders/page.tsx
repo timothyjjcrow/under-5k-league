@@ -320,7 +320,7 @@ export default async function LeadersPage({
                   </span>
                 ) : null}
                 {honors.team ? (
-                  <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
                     <span aria-hidden>🛡️</span>
                     <Link
                       href={`/teams/${honors.team.teamId}`}

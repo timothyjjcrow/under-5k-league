@@ -102,6 +102,33 @@ export async function expectTapTargets(page: Page, label: string) {
       if (r.width < 1 || r.height < 1) return;
       const cs = getComputedStyle(el);
       if (cs.visibility === "hidden") return;
+      // A CLOSED <details> LAYS ITS CONTENTS OUT — non-zero box, display:block,
+      // visibility:visible — but does not paint or hit-test them. Trusting the
+      // rect alone counted every control inside every collapsed disclosure as
+      // real, which on /admin was 439 phantom findings out of 442.
+      if (el.closest("details:not([open])")) return;
+      if (
+        typeof el.checkVisibility === "function" &&
+        !el.checkVisibility({
+          contentVisibilityAuto: true,
+          opacityProperty: true,
+          visibilityProperty: true,
+        })
+      )
+        return;
+      // Scrolled out of a clipping ancestor. getBoundingClientRect reports the
+      // UNCLIPPED position, so a row below the fold of a `max-h-80
+      // overflow-y-auto` list (admin's captain picker) claims coordinates
+      // hundreds of pixels down the page, on top of whatever really lives
+      // there. Intersect with every scroll clip before believing the rect.
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const po = getComputedStyle(p).overflow;
+        if (po === "visible") continue;
+        const pr = p.getBoundingClientRect();
+        const iw = Math.min(r.right, pr.right) - Math.max(r.left, pr.left);
+        const ih = Math.min(r.bottom, pr.bottom) - Math.max(r.top, pr.top);
+        if (iw < 2 || ih < 2) return;
+      }
       const own = (el.textContent || "").trim();
       if (!own) return;
       // No length exemption. The first cut of this skipped one-character
