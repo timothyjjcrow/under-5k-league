@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoJoinDecision,
   avgKnownMmr,
   detectIntervalSeconds,
   inhouseLobbyCode,
-  inhousePollDelayMs,
+  inhousePollCadence,
   mmrBalance,
+  readyCheckEndedToast,
   nextPickTeam,
   orderCaptains,
   playersNeeded,
@@ -201,30 +203,182 @@ describe("inhouseLobbyCode", () => {
   });
 });
 
-describe("inhousePollDelayMs", () => {
+// The room's poll loop is ~1800 lines of client component with no unit-testable
+// surface (this project's vitest env is `node` — no jsdom), so its cadence
+// rules used to be asserted only by whatever a browser spec happened to reach.
+// They're the difference between a queue spot held and a lobby lost, so they
+// live out here now.
+describe("inhousePollCadence", () => {
   const FAST = 1500;
   const IDLE = 10000;
+  const base = { activeMs: FAST, idleMs: IDLE, reached: true };
 
-  it("polls FAST while the viewer is in a lobby (any phase)", () => {
-    expect(inhousePollDelayMs(true, false, FAST, IDLE)).toBe(FAST);
+  it("polls FAST for anyone with a stake — in a lobby OR in the queue", () => {
+    // The people a filling queue / forming lobby matter to are in it. Seconds
+    // decide accepts, votes and picks.
+    const c = inhousePollCadence({ ...base, hidden: false, hasStake: true });
+    expect(c).toEqual({ skip: false, delayMs: FAST });
   });
 
-  it("polls FAST while the viewer is waiting in the queue", () => {
-    // The people the filling queue / forming lobby matter to are in it — they
-    // stay responsive; a spectator does not gate their game.
-    expect(inhousePollDelayMs(false, true, FAST, IDLE)).toBe(FAST);
+  it("polls IDLE-slow for a spectator, however busy the lobby is", () => {
+    // Membership, not existence: five people watching a 45-minute game were
+    // each firing 40 req/min because a lobby existed.
+    expect(
+      inhousePollCadence({ ...base, hidden: false, hasStake: false }),
+    ).toEqual({ skip: false, delayMs: IDLE });
   });
 
-  it("polls IDLE-slow when just spectating (no lobby, not queued)", () => {
-    expect(inhousePollDelayMs(false, false, FAST, IDLE)).toBe(IDLE);
+  it("keeps a HIDDEN tab with a stake on the keepalive", () => {
+    // That poll IS the presence heartbeat, and it carries the ready check's
+    // chime + tab title. Stop it and the spot is dropped as "away".
+    expect(
+      inhousePollCadence({ ...base, hidden: true, hasStake: true }),
+    ).toEqual({ skip: false, delayMs: INHOUSE.POLL_KEEPALIVE_MS });
   });
 
-  it("a lobby always wins even if somehow also flagged in-queue", () => {
-    expect(inhousePollDelayMs(true, true, FAST, IDLE)).toBe(FAST);
+  it("the keepalive stays comfortably under the away cutoff", () => {
+    // The binding case is a live game: all ten tabs are hidden (everyone is in
+    // the Dota client), so the keepalive is the ONLY thing holding ten queue
+    // spots — and Chrome clamps hidden timers toward once a minute.
+    expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThan(
+      INHOUSE.QUEUE_AWAY_SECONDS * 1000,
+    );
+  });
+
+  it("stops fetching entirely in a HIDDEN tab with nothing at stake", () => {
+    // Browsers throttle background timers anyway, and the sitewide /api/sync
+    // ping advances lobbies without this tab's help.
+    expect(
+      inhousePollCadence({ ...base, hidden: true, hasStake: false }),
+    ).toEqual({ skip: true, delayMs: IDLE });
+  });
+
+  it("eases OFF after a 429 instead of hammering — even mid-lobby", () => {
+    // The 429 back-off, in one line. The route's speed bump is per-IP and a
+    // queued tab polls 40/min, so one household or NAT crosses it just by
+    // having a lobby. Retrying at the fast rate kept the fixed window
+    // saturated so it never cleared, and ACCEPT (which shares the bucket)
+    // stayed unreachable for the whole 45-second ready check.
+    expect(
+      inhousePollCadence({
+        ...base,
+        hidden: false,
+        hasStake: true,
+        rateLimited: true,
+      }),
+    ).toEqual({ skip: false, delayMs: IDLE });
+  });
+
+  it("a 429 outranks even the hidden-tab rules", () => {
+    // Both hidden branches would otherwise keep fetching (or skip at the wrong
+    // rate) while the bucket is empty; the limit is per-IP, not per-tab.
+    for (const hasStake of [true, false]) {
+      expect(
+        inhousePollCadence({
+          ...base,
+          hidden: true,
+          hasStake,
+          rateLimited: true,
+        }),
+      ).toEqual({ skip: false, delayMs: IDLE });
+    }
+  });
+
+  it("retries at the FAST rate when a poll didn't land", () => {
+    // Sustained failures are what flip `disconnected` (pollHealthAfter);
+    // backing off would delay both the recovery and the diagnosis.
+    expect(
+      inhousePollCadence({
+        ...base,
+        hidden: false,
+        hasStake: false,
+        reached: false,
+      }),
+    ).toEqual({ skip: false, delayMs: FAST });
   });
 
   it("defaults the idle rate to the INHOUSE constant", () => {
-    expect(inhousePollDelayMs(false, false, FAST)).toBe(INHOUSE.POLL_IDLE_MS);
+    expect(
+      inhousePollCadence({ hidden: false, hasStake: false, activeMs: FAST })
+        .delayMs,
+    ).toBe(INHOUSE.POLL_IDLE_MS);
+  });
+});
+
+// Every Discord ping deep-links to /inhouse?join=1, so this decides what
+// happens to someone arriving from a notification.
+describe("autoJoinDecision", () => {
+  const me = (over: Partial<Parameters<typeof autoJoinDecision>[0]> = {}) => ({
+    isLoggedIn: true,
+    inQueue: false,
+    inLobby: false,
+    ...over,
+  });
+
+  it("joins a signed-in player who isn't in yet", () => {
+    expect(autoJoinDecision(me())).toBe("join");
+  });
+
+  it("does nothing for a signed-out visitor", () => {
+    // Silently, too: the page's own sign-in CTA is the right thing to see.
+    expect(autoJoinDecision(me({ isLoggedIn: false }))).toBe("signed-out");
+  });
+
+  it("says so instead of re-queuing someone already in the queue", () => {
+    expect(autoJoinDecision(me({ inQueue: true }))).toBe("already-in");
+  });
+
+  it("refuses to touch the queue for someone already IN the lobby", () => {
+    // The teeth: queue membership can drag you into a 45-second ready check.
+    // Never do that to someone from a link they may have tapped by accident.
+    expect(autoJoinDecision(me({ inLobby: true }))).toBe("already-in");
+  });
+
+  it("still joins while a lobby is running — that's the next game", () => {
+    // Only one lobby exists at a time, so a new joiner can't be pulled into
+    // the running one. Refusing here also broke the board's own
+    // "Queue for the next one →" link, which exists for exactly this case.
+    expect(autoJoinDecision(me())).toBe("join");
+  });
+});
+
+// The toast a player gets when the ready check they were in disappears.
+describe("readyCheckEndedToast", () => {
+  const t = (over: Partial<Parameters<typeof readyCheckEndedToast>[0]>) =>
+    readyCheckEndedToast({
+      wasInReadyCheck: true,
+      inLobby: false,
+      inQueue: false,
+      ...over,
+    });
+
+  it("tells a re-queued player they're back in line", () => {
+    expect(t({ inQueue: true })).toMatch(/back in the queue/i);
+  });
+
+  it("does NOT claim a dropped player is still queued", () => {
+    // failReadyCheck deliberately drops the decliner and the timed-out
+    // no-shows. Telling them they were "back in the queue" contradicted the
+    // decline dialog they had just confirmed, and left no-shows sitting on the
+    // page believing they were in line for the next game.
+    const msg = t({ inQueue: false });
+    expect(msg).toMatch(/no longer in the queue/i);
+    expect(msg).not.toMatch(/back in the queue/i);
+  });
+
+  it("stays SILENT while the viewer is still in the lobby", () => {
+    // The gate is membership, not a status list. ACCEPT_SECONDS +
+    // VOTE_SECONDS fit inside one hidden-tab keepalive gap, so a player who
+    // accepted early and tabbed away can poll straight from READY_CHECK to
+    // DRAFTING — and was told their very much alive match had been cancelled.
+    expect(t({ inLobby: true })).toBeNull();
+    expect(t({ inLobby: true, inQueue: true })).toBeNull();
+  });
+
+  it("says nothing to someone who was never in the check", () => {
+    expect(t({ wasInReadyCheck: false })).toBeNull();
+    // Including a spectator who watched it happen from the queue.
+    expect(t({ wasInReadyCheck: false, inQueue: true })).toBeNull();
   });
 });
 

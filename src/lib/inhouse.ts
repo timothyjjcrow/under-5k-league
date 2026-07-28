@@ -149,22 +149,116 @@ export function inhouseLobbyCode(lobbyId: string): string {
   return String(1000 + (h % 9000)); // 1000–9999, always four digits
 }
 
+export type PollCadenceInput = {
+  /** document.visibilityState === "hidden". */
+  hidden: boolean;
+  /** The VIEWER's own stake: queued, or a member of the live lobby. */
+  hasStake: boolean;
+  /** The response was a 429 from the route's per-IP speed bump. */
+  rateLimited?: boolean;
+  /** A state payload came back (false = failed, aborted, or not attempted). */
+  reached?: boolean;
+  /** The room's fast cadence (its `pollMs` prop, default 1500). */
+  activeMs: number;
+  /** Overridable for tests; the room always takes the constant. */
+  idleMs?: number;
+};
+
+export type PollCadence = {
+  /** Don't fetch at all this tick — just wait `delayMs` and re-check. */
+  skip: boolean;
+  delayMs: number;
+};
+
 /**
- * How long the inhouse room should wait before its next state poll. Fast while
- * the viewer has skin in the game — in a lobby (ready check / vote / draft /
- * live) or waiting in the queue, where seconds decide accepts, votes and picks
- * — and slow when just spectating a page that only changes lazily. Anyone IN
- * the queue polls fast, so a filling queue and a forming lobby stay snappy for
- * the players who matter; a pure spectator drops to the idle rate. (Hidden-tab
- * pausing lives in the component — it needs the DOM visibility API.)
+ * The inhouse room's whole poll cadence, in one place: the loop asks before it
+ * fetches (is this tick worth a request?) and again after the response settles
+ * (how long until the next one?). It is the ~1800-line room's most consequential
+ * logic and lived entirely inside a `useEffect`, where the only thing that could
+ * assert it was a browser spec.
+ *
+ * The four rules, in the order they take precedence:
+ *
+ * 1. **429 is not a failure — it's a signal to ease off.** The route's speed
+ *    bump is per-IP and a queued tab polls 40/min, so one household or one
+ *    NAT'd office crosses it just by having a lobby. Treating it as a
+ *    disconnect greyed out ACCEPT MATCH mid-ready-check, and retrying at 1.5s
+ *    kept the fixed window saturated so it never cleared. Dropping to the idle
+ *    rate is what actually drains the bucket — and the bucket is shared with
+ *    the mutations, so this is how the next ACCEPT gets through.
+ * 2. **A hidden tab WITH a stake keepalives; without one it doesn't fetch.**
+ *    Queued or in a lobby, the poll IS the presence heartbeat (and carries the
+ *    ready-check chime + tab title), so it must outrun QUEUE_AWAY_SECONDS even
+ *    after Chrome clamps background timers. A hidden spectator is pure cost:
+ *    the sitewide /api/sync ping advances lobbies without them.
+ * 3. **A poll that didn't land retries at the FAST rate** — sustained failures
+ *    are what flip `disconnected` (see pollHealthAfter), and backing off would
+ *    delay the recovery as much as the diagnosis.
+ * 4. Otherwise it turns on MEMBERSHIP, not on a lobby merely existing: five
+ *    people watching a 45-minute game were each firing 40 req/min because one
+ *    did. Anyone IN it (or in the queue) still polls fast — a filling queue is
+ *    exactly when responsiveness decides whether a game happens.
  */
-export function inhousePollDelayMs(
-  hasLobby: boolean,
-  inQueue: boolean,
-  activeMs: number,
-  idleMs: number = INHOUSE.POLL_IDLE_MS,
-): number {
-  return hasLobby || inQueue ? activeMs : idleMs;
+export function inhousePollCadence(o: PollCadenceInput): PollCadence {
+  const idleMs = o.idleMs ?? INHOUSE.POLL_IDLE_MS;
+  if (o.rateLimited) return { skip: false, delayMs: idleMs };
+  // Visibility is whatever the CALLER sees at the moment it asks, so a tab
+  // refocused mid-fetch reschedules at the active rate, not the keepalive.
+  if (o.hidden) {
+    return o.hasStake
+      ? { skip: false, delayMs: INHOUSE.POLL_KEEPALIVE_MS }
+      : { skip: true, delayMs: idleMs };
+  }
+  if (o.reached === false) return { skip: false, delayMs: o.activeMs };
+  return { skip: false, delayMs: o.hasStake ? o.activeMs : idleMs };
+}
+
+/**
+ * What the `?join=1` deep link (every Discord ping carries one) should do once
+ * the first state payload lands.
+ *
+ * Queue membership has teeth — a filled queue drags you into a 45-second ready
+ * check whose failure DROPS you — so the room fires this at most once per page
+ * load and scrubs the param. A live lobby is deliberately NOT a refusal: only
+ * one lobby exists at a time, so a new joiner simply queues for the next game,
+ * and refusing here broke the board's own "Queue for the next one →" link,
+ * which exists for precisely that case.
+ */
+export type AutoJoinDecision = "join" | "already-in" | "signed-out";
+
+export function autoJoinDecision(me: {
+  isLoggedIn: boolean;
+  inQueue: boolean;
+  inLobby: boolean;
+}): AutoJoinDecision {
+  if (!me.isLoggedIn) return "signed-out"; // the page's own CTA takes over
+  if (me.inQueue || me.inLobby) return "already-in";
+  return "join";
+}
+
+/**
+ * The toast for a ready check that ended under the viewer, or null.
+ *
+ * Gated on MEMBERSHIP, never on a list of lobby statuses. The status list got
+ * two things wrong, both of which told a player the opposite of the truth:
+ * (1) it said the decliner and the timed-out no-shows were "back in the queue"
+ * when failReadyCheck deliberately DROPPED them, contradicting the dialog they
+ * had just confirmed; (2) ACCEPT_SECONDS + VOTE_SECONDS fit inside one hidden-
+ * tab POLL_KEEPALIVE_MS gap, so a player who accepted early and tabbed away
+ * could come back to "match cancelled" about a match that was already
+ * DRAFTING. Membership survives both: the same-poll READY_CHECK→CAPTAIN_VOTE
+ * flip keeps `inLobby` true, and so does a poll that skips the vote entirely.
+ */
+export function readyCheckEndedToast(o: {
+  /** The viewer was in a READY_CHECK lobby as of the previous poll. */
+  wasInReadyCheck: boolean;
+  inLobby: boolean;
+  inQueue: boolean;
+}): string | null {
+  if (!o.wasInReadyCheck || o.inLobby) return null;
+  return o.inQueue
+    ? "Match cancelled — someone didn't accept. You're back in the queue."
+    : "Match cancelled — you're no longer in the queue.";
 }
 
 // ---- Queue presence (heartbeat math) ----------------------------------------

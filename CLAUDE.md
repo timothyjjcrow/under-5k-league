@@ -551,18 +551,24 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   real browser through queue join/leave (+ mobile no-overflow tripwire) and
   the full lifecycle — vote → UI draft pick → ready → in-progress — with
   nine API-driven players and zero-pageerror assertions.
-- **KNOWN COVERAGE LIMIT**: `vitest.config.mts` is `environment: "node"` with
-  no jsdom/testing-library, so the ~1800-line room's only test artifacts are
-  browser specs — the happy-path lifecycle above and
-  `zz3-room-poll-resilience` (the hung-poll freeze, both rooms). Its other
-  documented behaviours (sequence ordering, the 429 back-off, the disconnect
-  gate, the hidden-tab keepalive, `?join=1` auto-join, the "Match cancelled"
-  toast) are reasoned about in comments, not asserted. Two ways out, in order
-  of preference: move room logic into pure `inhouse.ts` helpers (the
-  `avgKnownMmr` treatment), or add a Playwright spec that drives the real
-  behaviour (`zz3`'s route-interception + attempt-count pattern generalises to
-  the 429 back-off and the disconnect gate). Adding a jsdom environment is the
-  last resort.
+- **KNOWN COVERAGE LIMIT** (`vitest.config.mts` is `environment: "node"` with
+  no jsdom/testing-library, so nothing in the ~1800-line room can be rendered
+  in a unit test) — **the way out is extraction, and most of it is done**. Four
+  documented behaviours that were previously comments-only are now pure and
+  tested, with the room reduced to calling them:
+  `inhousePollCadence` (the 429 back-off + the hidden-tab keepalive + the
+  spectator idle rate + the fast retry), `pollHealthAfter`
+  (`src/lib/poll-health.ts` — the disconnect gate's CONSECUTIVE-failure rule,
+  which `usePollHealth` now folds into a ref), `autoJoinDecision` (`?join=1`)
+  and `readyCheckEndedToast` (the "Match cancelled" wording, both of whose
+  rules once told players the opposite of the truth). Prefer this treatment for
+  anything else that comes up; a Playwright spec (`zz3`'s route-interception +
+  attempt-count pattern) is the fallback for behaviour that genuinely needs a
+  browser, and adding a jsdom environment is still the last resort.
+  What remains comment-only: the sequence ordering (`seqRef`/`appliedSeqRef`)
+  and the chime/tab-title triggers. The browser specs still cover the
+  happy-path lifecycle and `zz3-room-poll-resilience` (the hung-poll freeze,
+  both rooms).
   Separately, the integration suite runs on SQLite, which serializes writers,
   so the guarded claims are never under real contention there — it stages
   races by hand-mutating rows. `npm run test:pg` (`PG_TEST_URL=…`) runs the
@@ -694,8 +700,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - **Adaptive poll loop** (not a fixed `setInterval`): a self-scheduling
   `setTimeout` that polls FAST (`pollMs`, 1500) while the viewer is in a lobby
   or the queue — where accepts/votes/picks are second-sensitive — and IDLE-slow
-  (`INHOUSE.POLL_IDLE_MS`, 10s) when just spectating (pure `inhousePollDelayMs`
-  in `inhouse.ts`, tested). Hidden-tab handling splits on stake: a hidden tab
+  (`INHOUSE.POLL_IDLE_MS`, 10s) when just spectating. **Every cadence rule below
+  lives in pure `inhousePollCadence` (`inhouse.ts`, tested) — the loop only
+  schedules what it returns**, and a source-level guard
+  (`room-fetch-timeouts.test.ts`) fails if `INHOUSE.POLL_IDLE_MS`/
+  `POLL_KEEPALIVE_MS` reappear in the component, because a policy re-inlined
+  into a room is how `avgKnownMmr` ended up with three drifting copies. It
+  answers twice per tick: before the fetch (`skip`) and after the response
+  settles (`delayMs`). Hidden-tab handling splits on stake: a hidden tab
   with NO stake fully pauses (no fetch — browsers throttle background timers
   anyway; the sitewide `/api/sync` ping still advances lobbies), while a hidden
   tab that's QUEUED or in a lobby keeps a slow keepalive (`POLL_KEEPALIVE_MS`,
@@ -1680,7 +1692,12 @@ already in the `Setting` table.
   Don't reintroduce a room-level `forceTick`; keep new countdowns in a leaf.
 - **Poll health**: both rooms wire `usePollHealth` (`room-clock.tsx`) into
   their poll loops — failures counted in refs, one `disconnected` boolean
-  flips at ≥3 consecutive failures (never a per-poll re-render). While
+  flips at ≥`ROOM_POLL_FAIL_THRESHOLD` (3) consecutive failures (never a
+  per-poll re-render). The rule itself is pure `pollHealthAfter`
+  (`src/lib/poll-health.ts`, tested); the hook only decides where the counter
+  lives. CONSECUTIVE is the load-bearing word: a flaky-but-alive connection
+  alternating ok/fail must never lock the room, and any single success clears
+  the count outright. While
   disconnected: aria-live danger strip, ALL actions disabled (each room
   derives `pending = reqPending || disconnected`), draft clock banner dimmed
   + "reconnecting" in the sticky bar. A 404 from `/api/draft/tick` is

@@ -13,10 +13,12 @@ import {
   useElapsedMs,
 } from "@/components/room-clock";
 import {
+  autoJoinDecision,
   avgKnownMmr,
   inhouseLobbyCode,
-  inhousePollDelayMs,
+  inhousePollCadence,
   mmrBalance,
+  readyCheckEndedToast,
 } from "@/lib/inhouse";
 import {
   INHOUSE,
@@ -177,10 +179,16 @@ export function InhouseRoom({
       // inFlight also guards a visibilitychange firing mid-request — the active
       // call reschedules when it settles.
       if (!alive || inFlight) return;
-      if (document.visibilityState === "hidden" && !hasStakeRef.current) {
-        // Hidden with nothing at stake: don't fetch (browsers throttle
-        // background timers anyway); the visibility listener wakes us on focus.
-        schedule(INHOUSE.POLL_IDLE_MS);
+      // Hidden with nothing at stake: don't fetch (browsers throttle background
+      // timers anyway); the visibility listener wakes us on focus. Rules +
+      // reasoning in inhousePollCadence, where they're unit-tested.
+      const pre = inhousePollCadence({
+        hidden: document.visibilityState === "hidden",
+        hasStake: hasStakeRef.current,
+        activeMs: pollMs,
+      });
+      if (pre.skip) {
+        schedule(pre.delayMs);
         return;
       }
       inFlight = true;
@@ -201,14 +209,9 @@ export function InhouseRoom({
           apply(next, seq);
           pollOk();
         } else if (res.status === 429) {
-          // Deliberately NOT a poll failure (the draft room's reasoning). This
-          // endpoint's speed bump is per-IP, and a queued/in-lobby tab polls at
-          // 40 req/min — so a household, a LAN party or one NAT'd office can
-          // cross 300/min just by having a lobby. Counting that as a
-          // disconnect greyed out ACCEPT MATCH in the middle of the 45-second
-          // ready check, and retrying at 1.5s kept the fixed window saturated
-          // so it never cleared: the lobby died on a no-show nobody could
-          // prevent. Ease off instead and keep the room live.
+          // Deliberately NOT a poll failure — it must not count toward
+          // `disconnected`, and it must slow us down rather than speed us up
+          // (inhousePollCadence rule 1 has the whole story).
           rateLimited = true;
         } else {
           pollFail();
@@ -220,21 +223,18 @@ export function InhouseRoom({
       }
       // Recompute visibility HERE (not from the pre-fetch snapshot): if the tab
       // was refocused mid-fetch this reschedules at the active rate instead of
-      // the 45s keepalive, so refocus stays snappy. A failed poll keeps the
-      // FAST cadence (retry quickly; sustained failures flip `disconnected`).
-      const delay = rateLimited
-        ? // Drops this tab from 40 req/min to 6 while limited, which is what
-          // actually drains the bucket so the next ACCEPT/vote/pick gets
-          // through — the mutations share it.
-          INHOUSE.POLL_IDLE_MS
-        : document.visibilityState === "hidden"
-          ? INHOUSE.POLL_KEEPALIVE_MS
-          : next
-            ? // Membership, not mere existence: five people watching a 45min
-              // game were each firing 40 req/min because a lobby existed.
-              inhousePollDelayMs(next.me.inLobby, next.me.inQueue, pollMs)
-            : pollMs;
-      schedule(delay);
+      // the 45s keepalive, so refocus stays snappy. Stake is MEMBERSHIP, not
+      // mere existence of a lobby — five people watching a 45min game were each
+      // firing 40 req/min because one existed.
+      schedule(
+        inhousePollCadence({
+          hidden: document.visibilityState === "hidden",
+          hasStake: !!next && (next.me.inLobby || next.me.inQueue),
+          rateLimited,
+          reached: !!next,
+          activeMs: pollMs,
+        }).delayMs,
+      );
     };
 
     const onVisibility = () => {
@@ -280,27 +280,15 @@ export function InhouseRoom({
     // A ready check the viewer was in vanished — a decline, an expiry, or an
     // admin cancel scrapped it. The lobby query drops CANCELLED instantly, so
     // without this the room would silently snap back to the queue with no
-    // explanation.
-    //
-    // Gate on MEMBERSHIP, not on a list of statuses. Two things the status
-    // list got wrong: (1) it told the decliner and the timed-out no-shows they
-    // were "back in the queue" when failReadyCheck deliberately DROPPED them —
-    // contradicting the decline dialog they'd just confirmed, and leaving
-    // no-shows sitting on the page believing they were queued for the next
-    // game; (2) a player who accepted early and tabbed away polls on the 45s
-    // keepalive, and ACCEPT_SECONDS + VOTE_SECONDS fit inside one gap, so
-    // their next poll could report DRAFTING and announce that their very much
-    // alive match had been cancelled. `!inLobby` covers both: the same-poll
-    // READY_CHECK→CAPTAIN_VOTE flip keeps inLobby true (still quiet), and a
-    // poll that skips the whole vote also keeps it true.
-    if (prevInReadyCheckRef.current && !state.me.inLobby) {
-      pushToast(
-        "info",
-        state.me.inQueue
-          ? "Match cancelled — someone didn't accept. You're back in the queue."
-          : "Match cancelled — you're no longer in the queue.",
-      );
-    }
+    // explanation. Which message (and whether there is one at all) is decided
+    // by the tested `readyCheckEndedToast` — both of its wording rules were
+    // once wrong in ways that told the player the opposite of the truth.
+    const cancelled = readyCheckEndedToast({
+      wasInReadyCheck: prevInReadyCheckRef.current,
+      inLobby: state.me.inLobby,
+      inQueue: state.me.inQueue,
+    });
+    if (cancelled) pushToast("info", cancelled);
 
     const resultId = state.lastResult?.lobbyId ?? null;
     if (soundInitRef.current && soundOn) {
@@ -419,15 +407,15 @@ export function InhouseRoom({
     url.searchParams.delete("join");
     window.history.replaceState(null, "", url);
 
-    if (!state.me.isLoggedIn) return; // signed-out: the page's own CTA takes over
-    if (state.me.inQueue || state.me.inLobby) {
+    // Signed out → the page's own CTA takes over; already queued or in the
+    // lobby → say so and stop. A live lobby is NOT a reason to refuse (see
+    // autoJoinDecision, where the rules are tested).
+    const decision = autoJoinDecision(state.me);
+    if (decision === "signed-out") return;
+    if (decision === "already-in") {
       pushToast("info", "You're already in the queue");
       return;
     }
-    // A live lobby is NOT a reason to refuse: only one lobby exists at a time,
-    // so maybeFormLobby can't pull a new joiner into the one already running —
-    // they simply queue for the next game. Refusing here also broke the board's
-    // own "Queue for the next one →" link, which exists for exactly this case.
     // Deferred a tick: act() flips `pending` immediately, and setting state
     // synchronously inside an effect cascades a render.
     const t = setTimeout(() => {

@@ -134,6 +134,15 @@ export const INHOUSE_SCAN_ACTION_TIMEOUT_MS = 45_000;
 /** The inhouse actions that legitimately go to OpenDota (see above). */
 export const INHOUSE_SCAN_ACTIONS = ["detect", "record"] as const;
 
+/**
+ * Consecutive failed polls before a room declares itself disconnected (see
+ * `pollHealthAfter` / `usePollHealth`). Three, not one: a single blip on mobile
+ * data is normal and disabling every control for it would be its own outage —
+ * but three in a row at the fast cadence is ~5 seconds of silence, which is
+ * long enough that a live auction or ready check has moved without the viewer.
+ */
+export const ROOM_POLL_FAIL_THRESHOLD = 3;
+
 export const DRAFT_ROOM = {
   /** Waiting room / finished draft — nothing here is second-sensitive. */
   POLL_IDLE_MS: 3000,

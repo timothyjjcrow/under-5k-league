@@ -22,6 +22,8 @@ import {
   useSyncExternalStore,
 } from "react";
 import { elapsedSince, secondsUntil } from "@/lib/countdown";
+import { POLL_HEALTH_OK, pollHealthAfter } from "@/lib/poll-health";
+import { ROOM_POLL_FAIL_THRESHOLD } from "@/lib/constants";
 
 const TICK_MS = 250;
 
@@ -101,17 +103,25 @@ export function useElapsedMs(
  * dead wifi watched a frozen auction that looked live while the server sold
  * their player.
  */
-export function usePollHealth(threshold = 3) {
-  const failsRef = useRef(0);
+export function usePollHealth(threshold = ROOM_POLL_FAIL_THRESHOLD) {
+  // The RULE (consecutive failures, cleared by any success) is pure and lives
+  // in @/lib/poll-health, where a unit test can state it — this vitest project
+  // is `environment: node`, so nothing here can be rendered in a test. All the
+  // hook adds is where the counter is kept: a ref, so a healthy room never
+  // re-renders for health tracking, with the boolean promoted to state.
+  const healthRef = useRef(POLL_HEALTH_OK);
   const [disconnected, setDisconnected] = useState(false);
-  const ok = useCallback(() => {
-    failsRef.current = 0;
-    setDisconnected(false); // same-value setState bails out of re-rendering
-  }, []);
-  const fail = useCallback(() => {
-    failsRef.current += 1;
-    if (failsRef.current >= threshold) setDisconnected(true);
-  }, [threshold]);
+  const step = useCallback(
+    (outcome: "ok" | "fail") => {
+      healthRef.current = pollHealthAfter(healthRef.current, outcome, threshold);
+      // Same-value setState bails out of re-rendering, so this is a no-op on
+      // every poll that doesn't cross the line.
+      setDisconnected(healthRef.current.disconnected);
+    },
+    [threshold],
+  );
+  const ok = useCallback(() => step("ok"), [step]);
+  const fail = useCallback(() => step("fail"), [step]);
   return { disconnected, ok, fail };
 }
 

@@ -49,13 +49,13 @@ function fetchCalls(src: string): string[] {
   return calls;
 }
 
+const read = (file: string) =>
+  readFileSync(path.join(process.cwd(), "src/components", file), "utf8");
+
 describe("live-room fetch deadlines", () => {
   for (const file of ROOMS) {
     it(`${file}: every fetch carries an AbortSignal`, () => {
-      const src = readFileSync(
-        path.join(process.cwd(), "src/components", file),
-        "utf8",
-      );
+      const src = read(file);
       const calls = fetchCalls(src);
       // Both rooms poll and act, so anything less means the parser missed one.
       expect(calls.length).toBeGreaterThanOrEqual(2);
@@ -69,4 +69,30 @@ describe("live-room fetch deadlines", () => {
       }
     });
   }
+});
+
+// Same kind of guard, for the same reason: the rule is now unit-tested
+// (inhousePollCadence, in inhouse.test.ts), but a test of a pure function
+// proves nothing if the room stops calling it. The failure mode this repo has
+// actually hit is a policy re-inlined into a component and then drifting from
+// its twin — avgKnownMmr had three copies, and one of them made a side render
+// 620 MMR weaker the instant one view replaced another.
+describe("inhouse-room delegates its poll policy", () => {
+  it("computes the cadence only through inhousePollCadence", () => {
+    const src = read("inhouse-room.tsx");
+    expect(src).toContain("inhousePollCadence(");
+    // The room legitimately names other INHOUSE constants (the lobby prefix,
+    // the voice channels); the poll rates are the ones that must live in the
+    // helper, where the 429 back-off and the hidden-tab keepalive are pinned.
+    for (const rate of [
+      "INHOUSE.POLL_IDLE_MS",
+      "INHOUSE.POLL_KEEPALIVE_MS",
+    ]) {
+      expect(
+        src.includes(rate),
+        `${rate} is back in inhouse-room.tsx — schedule() must take its delay ` +
+          `from inhousePollCadence so the rules stay in one tested place.`,
+      ).toBe(false);
+    }
+  });
 });
