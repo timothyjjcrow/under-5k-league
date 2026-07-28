@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Avatar, Badge, PlayerLink, RankBadge, buttonClasses } from "@/components/ui";
+import {
+  Avatar,
+  Badge,
+  PlayerLink,
+  RankBadge,
+  buttonClasses,
+  textLink,
+} from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import {
@@ -527,7 +534,7 @@ export function InhouseRoom({
             .{" "}
             <a
               href={`#result-${state.lastResult.lobbyId}`}
-              className="text-info hover:underline"
+              className={textLink()}
             >
               Box score ↓
             </a>

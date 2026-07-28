@@ -37,8 +37,8 @@ import {
   Card,
   CardBody,
   CardHeader,
-  DiscordButton,
   CardSkeleton,
+  DiscordButton,
   EmptyState,
   FormStrip,
   HeroIcon,
@@ -53,6 +53,7 @@ import {
   SteamSafetyNote,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
 import { queuePresentCutoff } from "@/lib/inhouse";
@@ -450,7 +451,7 @@ async function LeagueNews() {
         title="League news"
         subtitle="The latest from the admins"
         action={
-          <Link href="/news" className="text-sm text-info hover:underline">
+          <Link href="/news" className={textLink("text-sm")}>
             All news →
           </Link>
         }
@@ -623,7 +624,7 @@ async function MyNextMatch({
           </span>
           <Link
             href={`/matches/${next.id}`}
-            className="shrink-0 text-info hover:underline"
+            className={textLink("shrink-0")}
           >
             Respond →
           </Link>
@@ -1054,7 +1055,7 @@ async function SignupsView({
           title="Who's in"
           subtitle="Latest players to sign up"
           action={
-            <Link href="/players" className="text-sm text-info hover:underline">
+            <Link href="/players" className={textLink("text-sm")}>
               View all →
             </Link>
           }
@@ -1571,7 +1572,7 @@ async function SeasonView({
             action={
               <Link
                 href="/schedule"
-                className="text-sm text-info hover:underline"
+                className={textLink("text-sm")}
               >
                 Full bracket →
               </Link>
@@ -1618,7 +1619,7 @@ async function SeasonView({
               action={
                 <Link
                   href="/schedule#this-week"
-                  className="text-sm text-info hover:underline"
+                  className={textLink("text-sm")}
                 >
                   Full schedule →
                 </Link>
@@ -1726,7 +1727,7 @@ async function SeasonView({
                 )}
                 <Link
                   href={`/teams/${myTeam.id}`}
-                  className="inline-block text-sm font-medium text-info hover:underline"
+                  className={textLink("inline-block text-sm font-medium")}
                 >
                   Team page →
                 </Link>
@@ -1941,7 +1942,7 @@ async function ThisWeek({
         action={
           <Link
             href="/schedule#this-week"
-            className="text-sm text-info hover:underline"
+            className={textLink("text-sm")}
           >
             Full schedule →
           </Link>
@@ -2112,7 +2113,7 @@ async function LeaguePulse({
       <CardHeader
         title="League pulse"
         action={
-          <Link href="/leaders" className="text-sm text-info hover:underline">
+          <Link href="/leaders" className={textLink("text-sm")}>
             Leaders →
           </Link>
         }
@@ -2401,7 +2402,7 @@ async function CompleteView({
               action={
                 <Link
                   href="/schedule#this-week"
-                  className="text-sm text-info hover:underline"
+                  className={textLink("text-sm")}
                 >
                   Full schedule →
                 </Link>

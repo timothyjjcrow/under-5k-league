@@ -36,6 +36,7 @@ import {
   Stat,
   TeamCrest,
   teamHue,
+  textLink,
 } from "@/components/ui";
 
 export async function generateMetadata({
@@ -196,7 +197,7 @@ export default async function TeamPage({
               /schedule only know the ACTIVE season. */}
           <Link
             href={team.season.isActive ? "/teams" : `/seasons/${team.seasonId}`}
-            className="text-sm text-info hover:underline"
+            className={textLink("text-sm")}
           >
             {team.season.isActive ? "← All teams" : "← Season archive"}
           </Link>
@@ -213,20 +214,20 @@ export default async function TeamPage({
               </a>
             ) : null}
             {team.season.isActive && team.season.status === "DRAFT" ? (
-              <Link href="/draft" className="text-sm text-info hover:underline">
+              <Link href="/draft" className={textLink("text-sm")}>
                 Draft room →
               </Link>
             ) : team.season.isActive ? (
               <Link
                 href="/schedule"
-                className="text-sm text-info hover:underline"
+                className={textLink("text-sm")}
               >
                 Standings →
               </Link>
             ) : (
               <Link
                 href={`/seasons/${team.seasonId}`}
-                className="text-sm text-info hover:underline"
+                className={textLink("text-sm")}
               >
                 Final standings →
               </Link>

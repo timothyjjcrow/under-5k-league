@@ -1757,6 +1757,27 @@ became 13 over 11 — strictly more of the league surfaced, in less space. The
 remaining 3 printings of the viewer's own match each do a different job
 (RSVP / the league's slate with both check-in counts / the stake anchor).
 
+**Tap targets: size the PRIMITIVES, not the call sites.** A bare text link is
+exactly its line-height tall — 20px at `text-sm`, 16px at `text-xs` — and WCAG
+2.5.8 (AA) wants 24×24. An audit of 533 targets found **208 real failures**, and
+`PlayerLink` alone was 81 of them. Two shared things fixed 195: `TAP_SAFE`
+(`py-1 -my-1` — padding grows the border box, which is what hit-testing and
+`getBoundingClientRect` follow, and the negative margin hands the space back to
+the layout, so nothing moves; on an inline element neither value affects the
+line box at all) and `textLink()`, which is `buttonClasses`' sibling for the
+"Full schedule →" idiom that had been hand-written at 44 call sites with no
+focus ring. Use them; don't hand-roll `text-info hover:underline` again.
+
+**The audit only means anything because it applies the spec's EXCEPTIONS.** A
+naive "flag everything under 44px" reports every page and is worth nothing —
+the first pass here did exactly that and had to be thrown away. `expectTapTargets`
+(`e2e-mid/helpers.ts`) exempts a target that sits in a run of text (2.5.8's
+inline exception) and one with no neighbour inside 24px (the spacing exception),
+but does NOT exempt a link that is the sole control of a list row — that is the
+row's control however much other text the row carries, and it is the case the
+check exists for. Four pages are pinned; deleting `TAP_SAFE` turns `/leaders`
+and `/players` red, which is how the guard was verified.
+
 **One control, one name.** `/players` rendered "Clear filters" twice whenever
 a filter matched nothing — a text link in the count line and a button in the
 EmptyState. Two controls with the same accessible name is both a UI wart and

@@ -26,6 +26,7 @@ import {
   PageTitle,
   PlayerLink,
   SectionTitle,
+  textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -255,7 +256,7 @@ export default async function FantasyPage() {
             title="Sign in to play fantasy"
             description="Anyone with a Steam login can manage a fantasy five — you don't need to be on a team."
             action={
-              <Link href="/login?next=/fantasy" className="text-info hover:underline">
+              <Link href="/login?next=/fantasy" className={textLink()}>
                 Sign in →
               </Link>
             }

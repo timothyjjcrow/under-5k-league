@@ -35,7 +35,6 @@ import { HeroPicker } from "@/components/hero-picker";
 import {
   Avatar,
   Badge,
-  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -44,6 +43,8 @@ import {
   RankBadge,
   ScheduleCallout,
   TeamCrest,
+  buttonClasses,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "Your profile" };
@@ -236,7 +237,7 @@ export default async function MePage({
             </ActionForm>
             <Link
               href={`/players/${user.id}`}
-              className="whitespace-nowrap text-sm text-info hover:underline"
+              className={textLink("whitespace-nowrap text-sm")}
             >
               View public profile →
             </Link>
@@ -685,7 +686,7 @@ export default async function MePage({
                   Pick the heroes you&apos;re known for —{" "}
                   <Link
                     href={`/players/${user.id}`}
-                    className="text-info hover:underline"
+                    className={textLink()}
                   >
                     captains see these
                   </Link>{" "}
@@ -849,7 +850,7 @@ function DotaAccountCard({
                 href={`https://www.dotabuff.com/players/${effectiveId}`}
                 target="_blank"
                 rel="noreferrer"
-                className="text-info hover:underline"
+                className={textLink()}
               >
                 Dotabuff ↗
               </a>
@@ -857,7 +858,7 @@ function DotaAccountCard({
                 href={`https://www.opendota.com/players/${effectiveId}`}
                 target="_blank"
                 rel="noreferrer"
-                className="text-info hover:underline"
+                className={textLink()}
               >
                 OpenDota ↗
               </a>

@@ -12,6 +12,7 @@ import {
   KDA,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { SeasonStatus } from "@/lib/constants";
@@ -542,7 +543,7 @@ export default async function FeaturesPage() {
                   <Link
                     key={l.href}
                     href={l.href}
-                    className="font-medium text-info hover:underline"
+                    className={textLink("font-medium")}
                   >
                     {l.label} →
                   </Link>
@@ -602,7 +603,7 @@ function ShowcaseFrame({
       </div>
       <p className="text-sm text-muted">
         {caption}{" "}
-        <Link href={href} className="whitespace-nowrap font-medium text-info hover:underline">
+        <Link href={href} className={textLink("whitespace-nowrap font-medium")}>
           See yours →
         </Link>
       </p>

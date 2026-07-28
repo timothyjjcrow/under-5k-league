@@ -287,6 +287,34 @@ export function RoleBadges({
 // ---------- Player link ----------
 
 /**
+ * Grows a target's hit box by 4px on each side without moving anything: the
+ * padding expands the border box (which is what hit-testing and
+ * getBoundingClientRect follow) and the negative margin gives the space back to
+ * the layout. On an inline element neither vertical value affects the line box
+ * at all, so it is free there too.
+ *
+ * The reason it exists: a bare text link is exactly its line-height tall — 20px
+ * at text-sm, 16px at text-xs — and WCAG 2.5.8 (AA) wants 24. An audit of 533
+ * targets found 208 real failures, and 81 of them were `PlayerLink` alone.
+ * Sizing the shared primitives beats sizing 200 call sites.
+ */
+export const TAP_SAFE = "py-1 -my-1";
+
+/**
+ * The app's inline navigation link — "Full schedule →", "details →", "All
+ * results →". `buttonClasses`' sibling, and it exists for the same reason: the
+ * idiom was hand-written as `text-info hover:underline` at 44 call sites, so
+ * every one of them was a 16-20px tall target with no focus ring.
+ */
+export function textLink(className?: string) {
+  return cn(
+    "rounded text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+    TAP_SAFE,
+    className,
+  );
+}
+
+/**
  * Wraps a player's name/avatar in a link to their season profile. Server-safe,
  * so it works in both server pages and the client player-pool.
  */
@@ -302,7 +330,7 @@ export function PlayerLink({
   return (
     <Link
       href={`/players/${userId}`}
-      className={cn("hover:text-info hover:underline", className)}
+      className={cn("hover:text-info hover:underline", TAP_SAFE, className)}
     >
       {children}
     </Link>

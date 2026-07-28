@@ -10,6 +10,7 @@ import {
   EmptyState,
   PageTitle,
   TeamCrest,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "Season history" };
@@ -43,7 +44,7 @@ export default async function SeasonsPage() {
         action={
           <Link
             href="/hall-of-fame"
-            className="text-sm text-info hover:underline"
+            className={textLink("text-sm")}
           >
             Hall of Fame →
           </Link>

@@ -19,6 +19,7 @@ import {
   PlayerLink,
   SectionTitle,
   TeamCrest,
+  textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -85,7 +86,7 @@ export default async function PickemPage() {
         subtitle={`${season.name} · call every match, top the oracle board`}
         action={
           viewer ? null : (
-            <Link href="/login?next=/pickem" className="text-sm text-info hover:underline">
+            <Link href="/login?next=/pickem" className={textLink("text-sm")}>
               Sign in to play →
             </Link>
           )
@@ -240,7 +241,7 @@ export default async function PickemPage() {
                         )}
                         <Link
                           href={`/matches/${m.id}`}
-                          className="text-info hover:underline"
+                          className={textLink()}
                         >
                           preview →
                         </Link>

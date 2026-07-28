@@ -13,6 +13,7 @@ import {
   EmptyState,
   PageTitle,
   PlayerLink,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "Hall of Fame" };
@@ -130,10 +131,10 @@ export default async function HallOfFamePage() {
         subtitle={`Careers across ${seasons.length} season${seasons.length === 1 ? "" : "s"} — titles, wins, production, prophecy`}
         action={
           <span className="flex items-center gap-3">
-            <Link href="/records" className="text-sm text-info hover:underline">
+            <Link href="/records" className={textLink("text-sm")}>
               Record book →
             </Link>
-            <Link href="/seasons" className="text-sm text-info hover:underline">
+            <Link href="/seasons" className={textLink("text-sm")}>
               Season history →
             </Link>
           </span>

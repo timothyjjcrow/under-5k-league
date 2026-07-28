@@ -338,13 +338,13 @@ export default async function SchedulePage() {
         action={
           <div className="flex items-center gap-3">
             {currentWeek != null ? (
-              <a href="#this-week" className="text-xs text-muted hover:text-info">
+              <a href="#this-week" className="py-1 -my-1 text-xs text-muted hover:text-info">
                 This week ↓
               </a>
             ) : null}
             <a
               href="/api/calendar"
-              className="text-xs text-muted hover:text-info"
+              className="py-1 -my-1 text-xs text-muted hover:text-info"
               title="Subscribe to scheduled matches from your calendar app"
             >
               📅 Calendar (.ics)
@@ -531,7 +531,7 @@ function SeasonGrid({
         aria-label={label}
         title={label}
         className={cn(
-          "block rounded px-1 py-0.5 font-mono text-[11px] tabular-nums transition-colors",
+          "block rounded px-1 py-1.5 font-mono text-[11px] tabular-nums transition-colors",
           cell.result === "W" && "bg-success/15 text-success hover:bg-success/25",
           cell.result === "L" && "bg-danger/10 text-danger/90 hover:bg-danger/20",
           cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
@@ -568,7 +568,7 @@ function SeasonGrid({
                   <Link
                     href={`/teams/${colId}`}
                     title={teamName.get(colId) ?? "?"}
-                    className="inline-flex flex-col items-center gap-0.5"
+                    className="inline-flex min-w-6 flex-col items-center gap-0.5 py-1 -my-1"
                   >
                     <TeamCrest
                       name={teamName.get(colId) ?? "?"}
@@ -597,7 +597,7 @@ function SeasonGrid({
                 >
                   <Link
                     href={`/teams/${rowId}`}
-                    className="flex min-w-0 max-w-[11rem] items-center gap-2 hover:text-info"
+                    className="flex min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
                   >
                     <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
                       {rankOf.get(rowId)}
@@ -741,7 +741,7 @@ function PlayoffPicture({
                   />
                   <Link
                     href={`/teams/${n.teamId}`}
-                    className="max-w-[10rem] truncate hover:text-info"
+                    className="max-w-[10rem] truncate py-1 -my-1 hover:text-info"
                   >
                     {teamName.get(n.teamId) ?? "?"}
                   </Link>
@@ -820,7 +820,7 @@ function RunIn({
           >
             <Link
               href={`/teams/${s.teamId}`}
-              className="flex w-32 min-w-0 shrink-0 items-center gap-2 hover:text-info sm:w-44"
+              className="flex w-32 min-w-0 shrink-0 items-center gap-2 py-1 -my-1 hover:text-info sm:w-44"
             >
               <TeamCrest
                 name={teamName.get(s.teamId) ?? "?"}
@@ -844,7 +844,7 @@ function RunIn({
                       // remaining row width must truncate, not push the page
                       // wider (CLAUDE.md mobile rules — a long team name once
                       // gave /schedule a 26px horizontal scroll on phones).
-                      "flex min-w-0 max-w-[11rem] items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-muted/70",
+                      "flex min-w-0 max-w-[11rem] items-center gap-1 rounded-full border px-2 py-1 text-xs transition-colors hover:border-muted/70",
                       tough
                         ? "border-accent/40 text-fg"
                         : "border-line text-muted",

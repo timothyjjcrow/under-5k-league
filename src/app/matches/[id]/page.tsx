@@ -70,6 +70,7 @@ import {
   TeamCrest,
   buttonClasses,
   teamHue,
+  textLink,
 } from "@/components/ui";
 
 export async function generateMetadata({
@@ -269,7 +270,7 @@ export default async function MatchDetailPage({
                       href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-xs text-info hover:underline"
+                      className={textLink("text-xs")}
                     >
                       OpenDota ↗
                     </a>

@@ -10,7 +10,6 @@ import { averageMmr } from "@/lib/pool-stats";
 import {
   Avatar,
   Badge,
-  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -24,6 +23,8 @@ import {
   StatCell,
   StatStrip,
   TeamCrest,
+  buttonClasses,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "Players" };
@@ -124,7 +125,7 @@ export default async function PlayersPage() {
             ) : null}
             <Link
               href="/players/compare"
-              className="rounded text-sm text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              className={textLink("text-sm")}
             >
               Compare players →
             </Link>
@@ -228,7 +229,7 @@ export default async function PlayersPage() {
                             href={`https://www.dotabuff.com/players/${accountId}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-info hover:underline"
+                            className={textLink()}
                           >
                             Dotabuff ↗
                           </a>
@@ -254,7 +255,7 @@ export default async function PlayersPage() {
             <SectionTitle aside={`· ${teams.length} teams`}>Rosters</SectionTitle>
             <Link
               href="/teams"
-              className="shrink-0 rounded text-sm text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              className={textLink("shrink-0 text-sm")}
             >
               Full team pages →
             </Link>

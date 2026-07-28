@@ -37,6 +37,7 @@ import {
   SectionTitle,
   StatCell,
   StatStrip,
+  textLink,
 } from "@/components/ui";
 import { cn, formatNetWorth } from "@/lib/utils";
 
@@ -239,7 +240,7 @@ async function RecentResults() {
         </SectionTitle>
         <Link
           href="/inhouse/history"
-          className="shrink-0 rounded text-sm text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          className={textLink("shrink-0 text-sm")}
         >
           All results →
         </Link>
@@ -438,7 +439,7 @@ function OpenDotaGuide({ open }: { open: boolean }) {
             <GuideStep n={2} />
             <span>
               Link your Dota account on your{" "}
-              <Link href="/me" className="text-info hover:underline">
+              <Link href="/me" className={textLink()}>
                 profile
               </Link>{" "}
               so we can match you in games — or we derive it from your Steam ID.
@@ -531,7 +532,7 @@ function GameResultCard({
             href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
             target="_blank"
             rel="noreferrer"
-            className="rounded text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            className={textLink()}
           >
             Full match on OpenDota ↗
           </a>

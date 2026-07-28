@@ -324,7 +324,7 @@ export default async function LeadersPage({
                     <span aria-hidden>🛡️</span>
                     <Link
                       href={`/teams/${honors.team.teamId}`}
-                      className="font-medium hover:text-info"
+                      className="py-1 -my-1 font-medium hover:text-info"
                     >
                       {teamNameOf.get(honors.team.teamId) ?? "?"}
                     </Link>

@@ -118,6 +118,7 @@ import {
   PlayerLink,
   Stat,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "Admin" };
@@ -1059,7 +1060,7 @@ function CaptainControls({
           ) : data.draft?.status === "COMPLETE" ? (
             <p className="mt-3 text-xs text-muted">
               ✅ Draft complete — rosters are locked. See{" "}
-              <Link href="/teams" className="text-info hover:underline">
+              <Link href="/teams" className={textLink()}>
                 the teams
               </Link>
               ; top up short rosters with the free-agent tools below.
@@ -1350,7 +1351,7 @@ function ScheduleControls({
                         label={
                           <Link
                             href={`/matches/${m.id}`}
-                            className="w-14 shrink-0 text-xs text-info hover:underline"
+                            className={textLink("w-14 shrink-0 text-xs")}
                           >
                             Wk {m.week}
                           </Link>
@@ -1393,7 +1394,7 @@ function ScheduleControls({
                         label={
                           <Link
                             href={`/matches/${m.id}`}
-                            className="shrink-0 text-xs text-info hover:underline"
+                            className={textLink("shrink-0 text-xs")}
                           >
                             {roundName(slotRound(m.bracketSlot), totalRounds)}
                           </Link>
@@ -1509,7 +1510,7 @@ function MatchResultRow({
                   href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-info hover:underline"
+                  className={textLink()}
                 >
                   Game {g.dotaMatchId} ·{" "}
                   {winner ? `${winner.name} won` : "tie"} ·{" "}
@@ -1674,7 +1675,7 @@ function StandinControls({ data }: { data: AdminData }) {
                         label={
                           <Link
                             href={`/matches/${m.id}`}
-                            className="text-info hover:underline"
+                            className={textLink()}
                           >
                             Week {m.week}
                           </Link>
@@ -1708,7 +1709,7 @@ function StandinControls({ data }: { data: AdminData }) {
                       label={
                         <Link
                           href={`/matches/${m.id}`}
-                          className="text-info hover:underline"
+                          className={textLink()}
                         >
                           {roundName(slotRound(m.bracketSlot), totalRounds)}
                         </Link>
@@ -2085,7 +2086,7 @@ function LeagueControls({ season }: { season: Season }) {
                 href="https://www.dota2.com/league"
                 target="_blank"
                 rel="noreferrer"
-                className="text-info hover:underline"
+                className={textLink()}
               >
                 dota2.com/league
               </a>{" "}
@@ -3071,7 +3072,7 @@ async function PendingReschedules({
           <span className="min-w-0 flex-1">
             <Link
               href={`/matches/${r.matchId}`}
-              className="text-info hover:underline"
+              className={textLink()}
             >
               Wk {r.match.week}
             </Link>

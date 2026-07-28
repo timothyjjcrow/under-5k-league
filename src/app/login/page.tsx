@@ -8,6 +8,7 @@ import {
   DiscordButton,
   ShieldCheckIcon,
   SteamSafetyNote,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "Sign in" };
@@ -119,7 +120,7 @@ export default async function LoginPage({
 
       <p className="mt-6 text-center text-sm text-muted">
         Just looking? You can{" "}
-        <Link href="/players" className="text-info hover:underline">
+        <Link href="/players" className={textLink()}>
           browse the league
         </Link>{" "}
         without signing in — you only need Steam to join.

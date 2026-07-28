@@ -21,6 +21,7 @@ import {
   Stat,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = shareMetadata(
@@ -328,7 +329,7 @@ function AwardCard({
         ) : award.matchId ? (
           <Link
             href={`/matches/${award.matchId}`}
-            className="text-sm text-info hover:underline"
+            className={textLink("text-sm")}
           >
             View the match →
           </Link>

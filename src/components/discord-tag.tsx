@@ -31,7 +31,7 @@ export function DiscordTag({
         }
       }}
       className={cn(
-        "inline-flex max-w-full items-center gap-1 rounded-full border border-info/30 bg-info/10 px-2 py-0.5 text-[11px] text-info transition-colors hover:bg-info/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+        "inline-flex max-w-full items-center gap-1 rounded-full border border-info/30 bg-info/10 px-2 py-1 text-[11px] text-info transition-colors hover:bg-info/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
         className,
       )}
     >

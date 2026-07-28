@@ -76,3 +76,62 @@ export async function expectNoHorizontalOverflow(page: Page, label: string) {
   );
   expect(overflow, `${label} horizontal overflow`).toBeLessThanOrEqual(1);
 }
+
+/**
+ * Tap targets must clear WCAG 2.5.8 Target Size (Minimum), AA — 24x24 CSS px —
+ * with the spec's own exceptions applied rather than ignored, because applying
+ * them is the difference between a real defect and a link in a sentence:
+ *
+ *   INLINE   the target sits in a run of other text (explicitly exempt);
+ *   SPACING  an undersized target with no other target within 24px conforms.
+ *
+ * A link that is the SOLE control of a list row is NOT inline prose, whatever
+ * else that row contains — it is the row's control, and that is the case this
+ * check exists for. A first audit found 208 failures across 533 targets; the
+ * fix was `TAP_SAFE` on the shared primitives (see ui.tsx), not 200 call sites.
+ */
+export async function expectTapTargets(page: Page, label: string) {
+  const bad = await page.evaluate(() => {
+    const SEL =
+      'a[href], button, [role="button"], summary, select, input:not([type="hidden"]), textarea';
+    const els = [...document.querySelectorAll(`#main ${SEL}`)];
+    const rects = els.map((e) => e.getBoundingClientRect());
+    const out: string[] = [];
+    els.forEach((el, i) => {
+      const r = rects[i];
+      if (r.width < 1 || r.height < 1) return;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === "hidden") return;
+      const own = (el.textContent || "").trim();
+      // A one-character name makes a legitimately narrow link; the seed has
+      // them and they are data, not layout.
+      if (own.length < 2) return;
+      const parentText = (el.parentElement?.textContent || "").trim();
+      const inProse =
+        cs.display.startsWith("inline") && parentText.length > own.length + 3;
+      const row = el.closest("li, tr");
+      const soleRowAction = row ? row.querySelectorAll(SEL).length === 1 : false;
+      if (inProse && !soleRowAction) return;
+      let crowded = false;
+      for (let j = 0; j < els.length; j++) {
+        if (j === i) continue;
+        const o = rects[j];
+        if (o.width < 1 || o.height < 1) continue;
+        if (els[j].contains(el) || el.contains(els[j])) continue;
+        const dx = Math.max(o.left - r.right, r.left - o.right, 0);
+        const dy = Math.max(o.top - r.bottom, r.top - o.bottom, 0);
+        if (Math.hypot(dx, dy) < 24) {
+          crowded = true;
+          break;
+        }
+      }
+      if (Math.min(r.width, r.height) < 24 && crowded) {
+        out.push(
+          `${Math.round(r.height)}x${Math.round(r.width)}px <${el.tagName.toLowerCase()}> "${own.slice(0, 28)}"`,
+        );
+      }
+    });
+    return out.slice(0, 8);
+  });
+  expect(bad, `${label} has tap targets under WCAG 2.5.8 (24px)`).toEqual([]);
+}

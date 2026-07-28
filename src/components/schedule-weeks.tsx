@@ -156,7 +156,7 @@ export function ScheduleWeeks({
                         [w.week]: !collapsed,
                       }))
                     }
-                    className="flex items-center gap-2 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+                    className="flex items-center gap-2 rounded py-1 -my-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
                   >
                     <span
                       aria-hidden
@@ -283,7 +283,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           <Link
             href={`/teams/${m.homeTeamId}`}
             className={cn(
-              "truncate hover:text-info",
+              "truncate py-1 -my-1 hover:text-info",
               m.done && (m.homeWin ? "font-semibold text-fg" : "text-muted"),
             )}
           >
@@ -355,7 +355,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           <Link
             href={`/teams/${m.awayTeamId}`}
             className={cn(
-              "truncate hover:text-info",
+              "truncate py-1 -my-1 hover:text-info",
               m.done && (m.awayWin ? "font-semibold text-fg" : "text-muted"),
             )}
           >
@@ -373,7 +373,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
         ) : null}
         <Link
           href={`/matches/${m.id}`}
-          className="shrink-0 text-xs text-muted hover:text-info"
+          className="shrink-0 py-1 -my-1 text-xs text-muted hover:text-info"
         >
           details →
         </Link>

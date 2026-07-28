@@ -14,6 +14,7 @@ import {
   EmptyState,
   PageTitle,
   PlayerLink,
+  textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -60,7 +61,7 @@ export default async function InhouseHistoryPage() {
           lobbies.length === HISTORY_LIMIT ? ` (latest ${HISTORY_LIMIT})` : ""
         } — the ladder's paper trail.`}
         action={
-          <Link href="/inhouse" className="text-sm text-info hover:underline">
+          <Link href="/inhouse" className={textLink("text-sm")}>
             ← Back to the inhouse
           </Link>
         }
@@ -166,7 +167,7 @@ export default async function InhouseHistoryPage() {
                               href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-info hover:underline"
+                              className={textLink()}
                             >
                               OpenDota ↗
                             </a>

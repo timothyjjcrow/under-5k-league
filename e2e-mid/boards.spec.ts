@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
-import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import {
+  expectNoHorizontalOverflow,
+  expectTapTargets,
+  trackPageErrors,
+} from "./helpers";
 
 // The stat roll-up pages — all recompute from every stored Game and all were
 // previously untested in a browser. Each check: key cards render, the
@@ -95,3 +99,21 @@ test("a player profile renders career stats and the report card", async ({
   await expect(page.getByText("Seasons").first()).toBeVisible();
   assertNoErrors();
 });
+
+// The pages carrying the most links per pixel — leaderboards, the pool, the
+// cross-table — are where a 16px text link hides most easily.
+for (const [label, path] of [
+  ["/leaders", "/leaders"],
+  ["/players", "/players"],
+  ["/schedule", "/schedule"],
+  ["/", "/"],
+] as const) {
+  test(`${label} tap targets clear WCAG 2.5.8`, async ({ page }) => {
+    const assertNoErrors = trackPageErrors(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(path);
+    await page.waitForTimeout(1200);
+    await expectTapTargets(page, label);
+    assertNoErrors();
+  });
+}

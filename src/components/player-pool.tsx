@@ -13,6 +13,7 @@ import {
   RoleBadges,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
@@ -236,7 +237,7 @@ export function PlayerPool({
           <button
             type="button"
             onClick={resetFilters}
-            className="rounded text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            className={textLink()}
           >
             Clear filters
           </button>
@@ -306,7 +307,7 @@ export function PlayerPool({
                         href={`https://www.dotabuff.com/players/${p.accountId}`}
                         target="_blank"
                         rel="noreferrer"
-                        className="rounded text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                        className={textLink()}
                       >
                         Dotabuff ↗
                       </a>
@@ -487,7 +488,7 @@ function TeamChip({
   return (
     <Link
       href={`/teams/${info.teamId}`}
-      className="flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2 text-xs hover:border-muted/60 hover:no-underline"
+      className="flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-1 pl-0.5 pr-2 text-xs hover:border-muted/60 hover:no-underline"
     >
       <TeamCrest
         name={info.teamName}

@@ -18,6 +18,7 @@ import {
   PlayerLink,
   RankBadge,
   TeamCrest,
+  textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "Teams" };
@@ -122,14 +123,14 @@ export default async function TeamsPage() {
           isDraft ? (
             <Link
               href="/draft"
-              className="text-sm text-info hover:underline"
+              className={textLink("text-sm")}
             >
               Draft room →
             </Link>
           ) : (
             <Link
               href="/schedule"
-              className="text-sm text-info hover:underline"
+              className={textLink("text-sm")}
             >
               Standings →
             </Link>

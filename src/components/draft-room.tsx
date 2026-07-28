@@ -11,6 +11,7 @@ import {
   RoleBadges,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { cn, hasText } from "@/lib/utils";
 import { pushToast } from "@/components/toaster";
@@ -876,7 +877,7 @@ export function DraftRoom({
                     <Link
                       href={`/players/${state.nominatedPlayer.userId}`}
                       target="_blank"
-                      className="text-info hover:underline"
+                      className={textLink()}
                     >
                       Profile ↗
                     </Link>
@@ -885,7 +886,7 @@ export function DraftRoom({
                         href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-info hover:underline"
+                        className={textLink()}
                       >
                         Dotabuff ↗
                       </a>

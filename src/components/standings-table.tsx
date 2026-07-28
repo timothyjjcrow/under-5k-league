@@ -117,7 +117,7 @@ export function StandingsTableClient({
         onClick={() => onSort(key)}
         title={`Sort by ${spoken ?? label}`}
         className={cn(
-          "rounded font-medium uppercase transition-colors hover:text-fg",
+          "inline-block min-w-6 rounded px-1 py-1.5 -my-1.5 font-medium uppercase transition-colors hover:text-fg",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60",
           key === sortKey && "text-fg",
         )}
@@ -210,7 +210,7 @@ export function StandingsTableClient({
                 <td className="px-2 py-2.5 font-medium">
                   <Link
                     href={`/teams/${row.teamId}`}
-                    className="flex min-w-0 items-center gap-2 hover:text-info"
+                    className="flex min-w-0 items-center gap-2 py-1 -my-1 hover:text-info"
                   >
                     <TeamCrest
                       name={row.name}

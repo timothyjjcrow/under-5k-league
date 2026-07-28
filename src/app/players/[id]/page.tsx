@@ -39,6 +39,7 @@ import {
   Sparkline,
   Stat,
   TeamCrest,
+  textLink,
 } from "@/components/ui";
 import { INHOUSE_STATUS } from "@/lib/constants";
 import {
@@ -343,12 +344,12 @@ export default async function PlayerProfilePage({
     <div className="space-y-6">
       <div>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <Link href="/players" className="text-sm text-info hover:underline">
+          <Link href="/players" className={textLink("text-sm")}>
             ← All players
           </Link>
           <Link
             href={`/players/compare?a=${user.id}`}
-            className="text-sm text-info hover:underline"
+            className={textLink("text-sm")}
           >
             Compare vs… →
           </Link>
@@ -406,7 +407,7 @@ export default async function PlayerProfilePage({
                   {isSelf ? (
                     <>
                       {" · "}
-                      <Link href="/me" className="text-info hover:underline">
+                      <Link href="/me" className={textLink()}>
                         Edit your signup →
                       </Link>
                     </>
@@ -430,7 +431,7 @@ export default async function PlayerProfilePage({
                     href={user.profileUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-info hover:underline"
+                    className={textLink()}
                   >
                     Steam ↗
                   </a>
@@ -441,7 +442,7 @@ export default async function PlayerProfilePage({
                       href={`https://www.dotabuff.com/players/${accountId}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-info hover:underline"
+                      className={textLink()}
                     >
                       Dotabuff ↗
                     </a>
@@ -449,7 +450,7 @@ export default async function PlayerProfilePage({
                       href={`https://www.opendota.com/players/${accountId}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-info hover:underline"
+                      className={textLink()}
                     >
                       OpenDota ↗
                     </a>
@@ -971,7 +972,7 @@ async function InhouseCareerCard({ userId }: { userId: string }) {
         title="Inhouse"
         subtitle="Pick-up ladder across every inhouse game"
         action={
-          <Link href="/inhouse" className="text-sm text-info hover:underline">
+          <Link href="/inhouse" className={textLink("text-sm")}>
             Ladder →
           </Link>
         }
