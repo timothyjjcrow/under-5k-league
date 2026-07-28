@@ -1598,6 +1598,13 @@ type VoteCandidate = PlayerView & {
   winRate: number;
   games: number;
   nominations: number;
+  /**
+   * When this player joined the LOBBY (epoch ms). Carried so the room can rank
+   * the vote previews with `orderCaptains`, the same function resolveCaptainVote
+   * installs captains with — its final tiebreak is earliest-queued, and without
+   * this field the client could only approximate it.
+   */
+  joinedAt: number;
 };
 
 type VoteBlock = {
@@ -1732,6 +1739,7 @@ export async function getInhouseState(
           winRate: p.games > 0 ? p.wins / p.games : 0,
           games: p.games,
           nominations: nominations.get(p.userId) ?? 0,
+          joinedAt: p.createdAt.getTime(),
         }))
         .sort((a, b) => b.mmr - a.mmr || a.name.localeCompare(b.name));
       vote = {

@@ -59,3 +59,31 @@ export function elapsedSince(
   if (startedAtMs == null) return null;
   return nowMs + offsetMs - startedAtMs;
 }
+
+/** A whole second — the smallest change any of these countdowns can render. */
+export const CLOCK_OFFSET_STEP_MS = 1000;
+
+/**
+ * The offset above, folded across polls: adopt a newly measured skew only when
+ * it MOVES by at least a whole second, otherwise keep the previous value
+ * IDENTICALLY.
+ *
+ * Both halves matter and both are load-bearing. `serverNow - clientNow` jitters
+ * by a few milliseconds on every poll, and the offset is React state feeding
+ * every clock in the room — so adopting each measurement would re-render the
+ * room and its player pool on every poll, undoing the leaf-clock optimisation
+ * these functions exist for. Returning the SAME number (not a recomputed equal
+ * one) is what lets React's same-value setState bail out.
+ *
+ * The floor is a whole second because nothing here can render finer: no
+ * sub-second change is observable, so adopting one buys nothing.
+ */
+export function nextClockOffset(
+  prev: number,
+  serverNowMs: number,
+  clientNowMs: number,
+  stepMs: number = CLOCK_OFFSET_STEP_MS,
+): number {
+  const skew = serverNowMs - clientNowMs;
+  return Math.abs(prev - skew) >= stepMs ? skew : prev;
+}

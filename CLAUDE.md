@@ -552,24 +552,34 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   real browser through queue join/leave (+ mobile no-overflow tripwire) and
   the full lifecycle — vote → UI draft pick → ready → in-progress — with
   nine API-driven players and zero-pageerror assertions.
-- **KNOWN COVERAGE LIMIT** (`vitest.config.mts` is `environment: "node"` with
-  no jsdom/testing-library, so nothing in the ~1800-line room can be rendered
-  in a unit test) — **the way out is extraction, and most of it is done**. Four
-  documented behaviours that were previously comments-only are now pure and
-  tested, with the room reduced to calling them:
-  `inhousePollCadence` (the 429 back-off + the hidden-tab keepalive + the
-  spectator idle rate + the fast retry), `pollHealthAfter`
-  (`src/lib/poll-health.ts` — the disconnect gate's CONSECUTIVE-failure rule,
-  which `usePollHealth` now folds into a ref), `autoJoinDecision` (`?join=1`)
-  and `readyCheckEndedToast` (the "Match cancelled" wording, both of whose
-  rules once told players the opposite of the truth). Prefer this treatment for
-  anything else that comes up; a Playwright spec (`zz3`'s route-interception +
-  attempt-count pattern) is the fallback for behaviour that genuinely needs a
-  browser, and adding a jsdom environment is still the last resort.
-  What remains comment-only: the sequence ordering (`seqRef`/`appliedSeqRef`)
-  and the chime/tab-title triggers. The browser specs still cover the
-  happy-path lifecycle and `zz3-room-poll-resilience` (the hung-poll freeze,
-  both rooms).
+- **KNOWN COVERAGE LIMIT — now largely closed by EXTRACTION** (`vitest.config
+  .mts` is `environment: "node"` with no jsdom/testing-library, so nothing in
+  either ~1800-line room can be rendered in a unit test). Every rule below was
+  once comments-only inside a `useEffect`; each is now pure, tested, and called
+  by BOTH rooms where the rule is shared:
+  * `roomPollCadence` + `inhousePollCadence` / `draftPollCadence`
+    (`src/lib/room-poll.ts`) — the 429 back-off, the hidden-tab keepalive vs
+    full pause, the fast retry, the idle rate, and `coldStart`.
+  * `issueSequence` / `acceptSequence` / `isColdStart`
+    (`src/lib/room-sequence.ts`) — payload ordering by request START.
+  * `pollHealthAfter` (`src/lib/poll-health.ts`) — the disconnect gate's
+    CONSECUTIVE-failure rule; `usePollHealth` now only owns the ref.
+  * `nextClockOffset` (`countdown.ts`) — the 1s-hysteresis skew fold, the other
+    half of each room's `apply()`.
+  * `inhouseAlerts` / `wasInReadyCheck` / `inhouseTitleFlag` /
+    `readyCheckEndedToast` / `autoJoinDecision` / `queueSlots` (`inhouse.ts`).
+  * `outbidLatchAfter` / `draftTitleFlag` + `stripDraftTitleFlag` /
+    `draftViewerStake` (`draft.ts`), beside the older `wasOutbid`.
+  `src/components/room-source-guards.test.ts` backs all of it: a pure test
+  proves nothing if the room stops calling the function, so it parses both
+  room files and fails on a re-inlined rate, flag string, ordering gate, or a
+  sequence minted on the wrong side of its `await`.
+  Prefer this treatment for anything else that comes up; a Playwright spec
+  (`zz3`'s route-interception + attempt-count pattern) is the fallback for
+  behaviour that genuinely needs a browser, and adding a jsdom environment is
+  still the last resort. What remains comment-only: the draft feed's
+  append-only diff (it cannot be derived from state alone — see the DO-NOT
+  note in that section) and the audio plumbing itself.
   Separately, the integration suite runs on SQLite, which serializes writers,
   so the guarded claims are never under real contention there — it stages
   races by hand-mutating rows. `npm run test:pg` (`PG_TEST_URL=…`) runs the
@@ -702,19 +712,31 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `setTimeout` that polls FAST (`pollMs`, 1500) while the viewer is in a lobby
   or the queue — where accepts/votes/picks are second-sensitive — and IDLE-slow
   (`INHOUSE.POLL_IDLE_MS`, 10s) when just spectating. **Every cadence rule below
-  lives in pure `inhousePollCadence` (`inhouse.ts`, tested) — the loop only
-  schedules what it returns**, and a source-level guard
-  (`room-fetch-timeouts.test.ts`) fails if `INHOUSE.POLL_IDLE_MS`/
+  lives in pure `inhousePollCadence` (`src/lib/room-poll.ts`, tested) — the loop
+  only schedules what it returns**, and a source-level guard
+  (`room-source-guards.test.ts`) fails if `INHOUSE.POLL_IDLE_MS`/
   `POLL_KEEPALIVE_MS` reappear in the component, because a policy re-inlined
   into a room is how `avgKnownMmr` ended up with three drifting copies. It
   answers twice per tick: before the fetch (`skip`) and after the response
-  settles (`delayMs`). Hidden-tab handling splits on stake: a hidden tab
-  with NO stake fully pauses (no fetch — browsers throttle background timers
-  anyway; the sitewide `/api/sync` ping still advances lobbies), while a hidden
-  tab that's QUEUED or in a lobby keeps a slow keepalive (`POLL_KEEPALIVE_MS`,
-  45s — under `QUEUE_AWAY_SECONDS` 90 even after Chrome clamps hidden timers)
-  so its presence heartbeat holds the spot and a forming ready check's
-  chime/title still reaches it (`hasStakeRef`, kept current by an effect). The
+  settles (`delayMs`). **The draft room shares the machine** — one
+  `roomPollCadence` with two bindings, because the two rooms want the same four
+  rules in the same precedence order but differ in their rates and in what
+  counts as "active": inhouse fast = the VIEWER's membership, draft fast = the
+  AUCTION's phase (a spectator watching a live lot needs 1.2s polling; a
+  captain staring at a finished draft does not). Hidden-tab handling splits on
+  stake: a hidden tab with NO stake fully pauses (no fetch — browsers throttle
+  background timers anyway; the sitewide `/api/sync` ping still advances
+  lobbies), while a hidden tab that's QUEUED or in a lobby keeps a slow
+  keepalive (`POLL_KEEPALIVE_MS`, 45s — under `QUEUE_AWAY_SECONDS` 90 even
+  after Chrome clamps hidden timers) so its presence heartbeat holds the spot
+  and a forming ready check's chime/title still reaches it (`hasStakeRef`, kept
+  current by an effect). **`coldStart` is the exception to that pause**: stake
+  is learned FROM a payload, so before the first one it is `false` for
+  everybody, and a tab that is HIDDEN at load (cmd-clicked, restored with the
+  session) used to skip forever — no keepalive, no title flag, no chime, until
+  someone looked at it. `isColdStart` allows a few attempts before the first
+  paint: bounded, because "until a payload lands" would leave an offline hidden
+  tab retrying forever and "one attempt" is spent by a single 429. The
   reschedule re-checks visibility so a mid-fetch refocus snaps back to the
   active rate; `visibilitychange → visible` re-syncs immediately (the
   `<ResultSyncPing>` pattern). A successful `act()` nudges the loop
@@ -722,20 +744,45 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   instead of waiting out a stale idle timer. Anyone IN the queue polls fast, so
   a filling queue / forming lobby stays responsive for the players who matter.
   Three guards on that loop, all load-bearing (2026-07 audit) — the draft room
-  has the same three, keep them in step: responses are SEQUENCE-ORDERED
-  (`seqRef`/`appliedSeqRef`, applied to the poll AND to `act()`) because
-  `/api/inhouse` answers mutations with `syncBoard:false` while the poll behind
-  them can still be blocked on the Discord board edit, so a pre-pick poll
-  landing late put the drafted player back in the pool, re-fired the chime and
-  the "(!) Your pick" title, and the captain re-clicked into an error toast;
-  the poll fetch carries `AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS)` against
-  the never-answering request (see Poll health — the draft room shares the
-  constant and the regression spec); and **429 is
-  NOT a poll failure** — it eases off to `POLL_IDLE_MS` instead. The route's
-  speed bump is per-IP and a queued tab polls 40/min, so one household or NAT
-  crosses 300/min just by having a lobby; counting it as a disconnect greyed
-  out ACCEPT MATCH mid-ready-check, and retrying at 1.5s kept the fixed window
-  saturated so it never cleared.
+  has the same three, and they are SHARED code now rather than a promise to
+  keep them in step: responses are SEQUENCE-ORDERED (`issueSequence` /
+  `acceptSequence`, `src/lib/room-sequence.ts`, applied to the poll AND to
+  `act()`) because `/api/inhouse` answers mutations with `syncBoard:false`
+  while the poll behind them can still be blocked on the Discord board edit, so
+  a pre-pick poll landing late put the drafted player back in the pool,
+  re-fired the chime and the "(!) Your pick" title, and the captain re-clicked
+  into an error toast. Two things about that gate no unit test can see, so the
+  source guard checks them: the sequence must be minted BEFORE the `await`
+  (order by request START — mint it after and the gate rejects nothing, in
+  silence), and `apply()` must stay the only writer of room state. The poll
+  fetch carries `AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS)` against the
+  never-answering request (see Poll health — the draft room shares the constant
+  and the regression spec); and **429 is NOT a poll failure** — it eases off to
+  `POLL_IDLE_MS` instead. The route's speed bump is per-IP and a queued tab
+  polls 40/min, so one household or NAT crosses 300/min just by having a lobby;
+  counting it as a disconnect greyed out ACCEPT MATCH mid-ready-check, and
+  retrying at 1.5s kept the fixed window saturated so it never cleared.
+- **The bell and the tab title are pure and tested** (`inhouseAlerts`,
+  `inhouseTitleFlag`). The room keeps ONE snapshot ref of the previous poll,
+  which feeds both the chime and the "Match cancelled" toast, so they can never
+  disagree about what changed; `prev === null` IS "first payload", which is
+  what stops a mid-lobby reload ringing for things that happened before the
+  player arrived. Rules worth knowing before touching them: the five triggers
+  are OR'd into ONE `playChime()` (two calls in a commit double-strike the same
+  AudioContext); `lobby-formed` keys on the lobby APPEARING, not on
+  READY_CHECK, because a hidden tab's first sight of it may be CAPTAIN_VOTE —
+  and `vote-opened` requiring the previous status to be exactly READY_CHECK is
+  what stops that case ringing twice; `game-ended` keys off `lastResult.lobbyId`
+  because the active-lobby query drops COMPLETED and CANCELLED identically, so
+  an admin cancel would otherwise ring a victory bell. The title is
+  STATE-derived and ungated by the sound toggle (a backgrounded tab shows "(!)"
+  without ever needing a gesture) — and each nag stops once the player has done
+  the thing: accepted, or voted. The room now also primes the AudioContext on
+  the first `pointerdown` anywhere, as the draft room always has: the people
+  who most need "match found" are the ones who arrived from a Discord ping
+  (`?join=1` auto-joins programmatically) or reloaded a page they had queued
+  from — neither has clicked anything, so the alert was computed correctly and
+  played into a suspended context.
 - **`avgKnownMmr` (`inhouse.ts`, tested) is the ONLY place a team's average
   MMR is computed** — 0 means UNKNOWN and is excluded, never averaged in as a
   zero. The room shows this figure on three screens and each had its own copy;
@@ -770,6 +817,26 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - **Balance meter**: pure `mmrBalance` (`inhouse.ts`, tested — MMR 0 =
   unknown, excluded) drives per-team "avg N" chips on the drafting columns
   and a "⚖️ X ahead by N avg MMR" line in the on-the-clock banner (sm+).
+- **PRESENT players claim the ten visible slots** (pure `queueSlots`, tested).
+  The grid used to index the raw queue, so away entries took slots that the
+  headline count, `needed` and lobby formation itself all ignore — and on a
+  fresh DB that is the DEFAULT state, because the seed enqueues six demo
+  players born away: five real players rendered "5 / 10" above six dimmed demos
+  with a real, counted player relegated to "In line for the next game". The
+  pinned Discord board has always listed present names, so the two surfaces
+  contradicted each other on the one screen that exists to convert a browser
+  into a tenth player. Away entries keep their rows in whatever slots are left.
+- **The vote previews rank with `orderCaptains`** — the same function
+  `resolveCaptainVote` installs captains with, not a hand-copy of it. That
+  needs two things, and both are load-bearing: `VoteCandidate` carries
+  `joinedAt`, and the ordering is TOTAL (userId as determinism's last resort).
+  All ten lobby players share one `createdAt` — they are written by a single
+  `createMany` — so the earliest-queued tiebreak cannot separate them, and
+  without the final key the server ranks Prisma's row order while the room
+  ranks a name-sorted payload: same function, same inputs, different captains.
+  Ties are the NORMAL case on a young ladder (everyone 0-0, unregistered
+  players at MMR 0), and the vote's whole premise is that the card tells you
+  what you are voting for.
 
 ## Draft edge cases (done)
 
@@ -1292,12 +1359,21 @@ already in the `Setting` table.
 ## Draft room QoL (done)
 
 - Draft-night alerts: the room chimes (shared `src/components/chime.ts`, also
-  used by inhouse; persisted `draftSound` toggle, gesture unlock in `act()`)
-  on your-turn-to-nominate and on being outbid; an OUTBID flash (with one-tap
-  re-bid via `quickBid`) latches until the poll sees it stale, and the tab
-  title flips "⏰ Your pick — "/"💸 Outbid — ". The outbid predicate is pure
-  `wasOutbid` (`draft.ts`, tested) — its same-player guard prevents a false
-  flash when a winning bid resolves into a fresh nomination within one poll.
+  used by inhouse; persisted `draftSound` toggle, gesture unlock in `act()` and
+  on the first `pointerdown`) on your-turn-to-nominate and on being outbid; an
+  OUTBID flash (with one-tap re-bid via `quickBid`) latches until the poll sees
+  it stale, and the tab title flips "⏰ Your pick — "/"💸 Outbid — ".
+  **Both halves of the latch are pure and tested** (`draft.ts`): `wasOutbid`
+  raises it — its same-player guard prevents a false flash when a winning bid
+  resolves into a fresh nomination within one poll — and `outbidLatchAfter`
+  decides set/clear/KEEP. It takes no budget or `canBid` input on purpose, and
+  the signature is the guard: a captain who has been priced out is exactly who
+  most needs to see they lost the player (the re-bid button disables itself).
+  The title flag is `draftTitleFlag`, and `stripDraftTitleFlag` +
+  `DRAFT_TITLE_PREFIXES` live beside it because the room used to keep its own
+  hand-copied duplicate of those two literals for the strip — a lost trailing
+  space or an en dash for an em dash would have stacked prefixes in the tab
+  forever with nothing anywhere to notice. A round-trip test pins it.
 - The auction's "Available" list has search, position-filter chips, and
   MMR/rank/name sorting (`AvailableList` in `draft-room.tsx`).
   `filterAndSortPlayers` (`player-pool.ts`) is generic over
@@ -1733,7 +1809,7 @@ already in the `Setting` table.
   — ten 8s recent-match lookups, six 12s match fetches, a 5s Discord send, no
   retries). Sizing everything to the slow path would leave ACCEPT disabled for
   its entire ready check, i.e. exactly as broken as no deadline. (3)
-  `src/components/room-fetch-timeouts.test.ts` parses BOTH room files and
+  `src/components/room-source-guards.test.ts` parses BOTH room files and
   fails if any `fetch(` lacks a `signal:` — the browser spec can only reach
   the call sites that are on screen, and the regression to catch is a deleted
   line.

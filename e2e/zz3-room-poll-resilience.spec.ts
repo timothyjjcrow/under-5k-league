@@ -119,6 +119,6 @@ test("inhouse room re-enables its controls when an action never answers", async 
 // The draft room's act() is the same code and the same freeze, but its
 // controls only exist during a live auction, which makes a UI-driven version
 // of the test above depend on where the earlier draft specs left the season.
-// It's covered instead by src/components/room-fetch-timeouts.test.ts, which
+// It's covered instead by src/components/room-source-guards.test.ts, which
 // asserts EVERY fetch in both rooms carries a signal — cheap, non-flaky, and
 // it catches the actual regression (someone deleting the `signal:` line).

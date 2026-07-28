@@ -24,10 +24,24 @@ import {
   useSecondsLeft,
 } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
-import { maxBid, nextNominatorIndex, wasOutbid } from "@/lib/draft";
+import {
+  draftTitleFlag,
+  draftViewerStake,
+  maxBid,
+  nextNominatorIndex,
+  outbidLatchAfter,
+  stripDraftTitleFlag,
+} from "@/lib/draft";
+import { draftPollCadence } from "@/lib/room-poll";
+import { nextClockOffset } from "@/lib/countdown";
+import {
+  ROOM_SEQUENCE_START,
+  acceptSequence,
+  isColdStart,
+  issueSequence,
+} from "@/lib/room-sequence";
 import {
   DEFAULTS,
-  DRAFT_ROOM,
   ROOM_ACTION_TIMEOUT_MS,
   ROOM_POLL_TIMEOUT_MS,
 } from "@/lib/constants";
@@ -224,14 +238,13 @@ export function DraftRoom({
   // Order poll and action responses by request START: a slow tick that left
   // before my bid must not overwrite the bid's fresher state when it finally
   // lands (the flash of stale auction mid-bid confused captains).
-  const seqRef = useRef(0);
-  const appliedSeqRef = useRef(0);
+  const seqRef = useRef(ROOM_SEQUENCE_START);
 
   const apply = useCallback((s: DraftState, seq: number) => {
-    if (seq < appliedSeqRef.current) return; // lost the response race — stale
-    appliedSeqRef.current = seq;
-    const skew = s.now - Date.now();
-    setOffsetMs((prev) => (Math.abs(prev - skew) >= 1000 ? skew : prev));
+    const { accept, next } = acceptSequence(seqRef.current, seq);
+    seqRef.current = next;
+    if (!accept) return; // lost the response race — stale
+    setOffsetMs((prev) => nextClockOffset(prev, s.now, Date.now()));
     setState(s);
   }, []);
 
@@ -252,12 +265,7 @@ export function DraftRoom({
   // In an effect, not during render — writing a ref while rendering is exactly
   // what <InhouseRoom> avoids, and React's lint rules flag it.
   useEffect(() => {
-    hasStakeRef.current = !!(
-      state &&
-      (state.me.myTeamId ||
-        state.me.isAdmin ||
-        state.available.some((p) => p.userId === state.me.userId))
-    );
+    hasStakeRef.current = !!state && draftViewerStake(state);
   }, [state]);
 
   // Self-scheduling poll (not setInterval): the cadence has to react to the
@@ -278,15 +286,27 @@ export function DraftRoom({
       // inFlight also guards a visibilitychange firing mid-request — the active
       // call reschedules when it settles.
       if (!alive || inFlight) return;
-      if (document.visibilityState === "hidden" && !hasStakeRef.current) {
-        // Hidden with nothing at stake: don't fetch at all. The visibility
-        // listener wakes us the instant it's refocused.
-        schedule(DRAFT_ROOM.POLL_IDLE_MS);
+      // Hidden with nothing at stake: don't fetch at all. The visibility
+      // listener wakes us the instant it's refocused. Rules + reasoning in
+      // draftPollCadence, where they're unit-tested.
+      const pre = draftPollCadence({
+        hidden: document.visibilityState === "hidden",
+        hasStake: hasStakeRef.current,
+        live: false, // irrelevant to the skip decision
+        coldStart: isColdStart(seqRef.current),
+        activeMs: pollMs,
+      });
+      if (pre.skip) {
+        schedule(pre.delayMs);
         return;
       }
       inFlight = true;
-      const seq = ++seqRef.current;
+      // Minted HERE, before the await — ordering is by request START (see
+      // room-sequence.ts).
+      const { seq, next: seqNext } = issueSequence(seqRef.current);
+      seqRef.current = seqNext;
       let live = false;
+      let reached = false;
       let rateLimited = false;
       try {
         const res = await fetch("/api/draft/tick", {
@@ -300,6 +320,7 @@ export function DraftRoom({
           const next = (await res.json()) as DraftState;
           apply(next, seq);
           pollOk();
+          reached = true;
           live = next.status === "IN_PROGRESS" || next.status === "PAUSED";
         } else if (res.status === 404) {
           setNoSeason(true); // season deactivated under us — stop pretending
@@ -320,14 +341,16 @@ export function DraftRoom({
       }
       // Recompute visibility HERE, not from a pre-fetch snapshot: a tab
       // refocused mid-request reschedules at the active rate straight away.
-      const delay = rateLimited
-        ? DRAFT_ROOM.POLL_RATE_LIMITED_MS
-        : document.visibilityState === "hidden"
-          ? DRAFT_ROOM.POLL_KEEPALIVE_MS
-          : live
-            ? pollMs
-            : DRAFT_ROOM.POLL_IDLE_MS;
-      schedule(delay);
+      schedule(
+        draftPollCadence({
+          hidden: document.visibilityState === "hidden",
+          hasStake: hasStakeRef.current,
+          live,
+          reached,
+          rateLimited,
+          activeMs: pollMs,
+        }).delayMs,
+      );
     };
 
     const onVisibility = () => {
@@ -406,26 +429,18 @@ export function DraftRoom({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (add.length) setEvents((e) => [...add, ...e].slice(0, 12));
 
-    // Outbid latch: clear stale first, then a fresh detection wins the tick.
-    // NOT cleared on !canBid — a priced-out captain is exactly who most needs
-    // to see they lost the player (the re-bid button disables on its own).
-    const myTeamId = state.me.myTeamId;
-    if (
-      (myTeamId && state.currentBidTeamId === myTeamId) ||
-      curNom !== prevNom ||
-      !curNom
-    ) {
-      setOutbid(null);
-    }
-    if (
-      wasOutbid({
-        myTeamId,
-        prevBidTeamId: prev.currentBidTeamId,
-        curBidTeamId: state.currentBidTeamId,
-        prevNominatedId: prevNom,
-        curNominatedId: curNom,
-      })
-    ) {
+    // Outbid latch — set / clear / leave alone, decided by the tested
+    // outbidLatchAfter (which deliberately has no budget input: a priced-out
+    // captain is exactly who most needs to see they lost the player).
+    const latch = outbidLatchAfter({
+      myTeamId: state.me.myTeamId,
+      prevBidTeamId: prev.currentBidTeamId,
+      curBidTeamId: state.currentBidTeamId,
+      prevNominatedId: prevNom,
+      curNominatedId: curNom,
+    });
+    if (latch === "clear") setOutbid(null);
+    if (latch === "set") {
       setOutbid({
         player: state.nominatedPlayer!.name,
         team: nameOf(state.currentBidTeamId),
@@ -455,22 +470,20 @@ export function DraftRoom({
   // title. The outbid prefix is latched on the actual outbid event, never on
   // merely "not holding the high bid" (that would mislabel every nomination
   // the captain never bid on).
-  const myPick = !!state && state.status !== "COMPLETE" && state.me.canNominate;
-  const titleFlag = myPick
-    ? "⏰ Your pick — "
-    : outbid
-      ? "💸 Outbid — "
-      : null;
+  const titleFlag = draftTitleFlag({
+    loaded: !!state,
+    status: state?.status ?? null,
+    canNominate: !!state?.me.canNominate,
+    outbid: !!outbid,
+  });
   useEffect(() => {
-    const PREFIXES = ["⏰ Your pick — ", "💸 Outbid — "];
-    const strip = (t: string) => {
-      for (const p of PREFIXES) if (t.startsWith(p)) return t.slice(p.length);
-      return t;
-    };
-    const base = strip(document.title);
+    // Strip before writing, so a re-render can never stack two prefixes. The
+    // strip must know exactly the strings the flag can be — which is why both
+    // live in draft.ts and the round trip is pinned by a test.
+    const base = stripDraftTitleFlag(document.title);
     document.title = titleFlag ? titleFlag + base : base;
     return () => {
-      document.title = strip(document.title);
+      document.title = stripDraftTitleFlag(document.title);
     };
   }, [titleFlag]);
 
@@ -482,7 +495,8 @@ export function DraftRoom({
 
   async function act(url: string, body: Record<string, unknown>) {
     unlockAudio(); // this click is a user gesture — prime audio for later
-    const seq = ++seqRef.current;
+    const { seq, next: seqNext } = issueSequence(seqRef.current);
+    seqRef.current = seqNext;
     setPending(true);
     try {
       const res = await fetch(url, {

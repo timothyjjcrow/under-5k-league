@@ -4,11 +4,16 @@ import {
   maxBid,
   canBid,
   canNominate,
+  draftTitleFlag,
+  draftViewerStake,
   nextNominatorIndex,
   mmrWeightedBudgets,
+  outbidLatchAfter,
+  stripDraftTitleFlag,
   type DraftTeam,
   wasOutbid,
   shuffle,
+  DRAFT_TITLE_PREFIXES,
 } from "./draft";
 
 const team = (rosterCount: number, budget = 100): DraftTeam => ({
@@ -211,6 +216,172 @@ describe("wasOutbid", () => {
 
   it("spectators (no team) are never outbid", () => {
     expect(wasOutbid({ ...base, myTeamId: null })).toBe(false);
+  });
+});
+
+// The other half of the 💸 Outbid! banner: when to DROP it. It was two
+// sequential `if`s in the room, and their mutual exclusivity was assumed
+// rather than stated — which matters now that one call returns one decision.
+describe("outbidLatchAfter", () => {
+  const base = {
+    myTeamId: "me",
+    prevBidTeamId: "me",
+    curBidTeamId: "them",
+    prevNominatedId: "p1",
+    curNominatedId: "p1",
+  };
+
+  it("raises the latch the moment another team takes the lot", () => {
+    expect(outbidLatchAfter(base)).toBe("set");
+  });
+
+  it("drops it when the viewer's team takes the high bid back", () => {
+    expect(outbidLatchAfter({ ...base, curBidTeamId: "me" })).toBe("clear");
+  });
+
+  it("drops it when the lot moves on, or bidding closes", () => {
+    expect(outbidLatchAfter({ ...base, curNominatedId: "p2" })).toBe("clear");
+    expect(outbidLatchAfter({ ...base, curNominatedId: null })).toBe("clear");
+  });
+
+  it("KEEPS it while the same lot runs on above the viewer", () => {
+    // The rule the signature exists to protect: no budget or `canBid` input,
+    // because a captain who has been priced out is exactly the person who most
+    // needs to see that they lost the player. Their re-bid button disables
+    // itself; the banner is the news.
+    expect(
+      outbidLatchAfter({ ...base, prevBidTeamId: "them", curBidTeamId: "them" }),
+    ).toBe("keep");
+  });
+
+  it("never both sets and clears — the decisions are exclusive by construction", () => {
+    // Exhaustive over every combination the room can hand it. The old code ran
+    // a clear `if` and then a set `if` and depended on this without saying so.
+    const ids = [null, "me", "them"];
+    const noms = [null, "p1", "p2"];
+    for (const myTeamId of ids)
+      for (const prevBidTeamId of ids)
+        for (const curBidTeamId of ids)
+          for (const prevNominatedId of noms)
+            for (const curNominatedId of noms) {
+              const args = {
+                myTeamId,
+                prevBidTeamId,
+                curBidTeamId,
+                prevNominatedId,
+                curNominatedId,
+              };
+              const d = outbidLatchAfter(args);
+              expect(["set", "clear", "keep"]).toContain(d);
+              // "set" and wasOutbid must agree, exactly.
+              expect(d === "set").toBe(wasOutbid(args));
+            }
+  });
+
+  it("never sets for a spectator", () => {
+    expect(outbidLatchAfter({ ...base, myTeamId: null })).not.toBe("set");
+  });
+});
+
+describe("draftTitleFlag", () => {
+  const base = {
+    loaded: true,
+    status: "IN_PROGRESS" as string | null,
+    canNominate: false,
+    outbid: false,
+  };
+
+  it("writes nothing before the first payload", () => {
+    expect(draftTitleFlag({ ...base, loaded: false, canNominate: true })).toBeNull();
+  });
+
+  it("flags YOUR PICK while the nomination is the viewer's to make", () => {
+    // The moment auto-skip punishes hardest: a captain tabbed away loses the
+    // nomination to the resolver, which picks for them.
+    expect(draftTitleFlag({ ...base, canNominate: true })).toBe("⏰ Your pick — ");
+  });
+
+  it("prefers YOUR PICK over OUTBID when both hold", () => {
+    // Losing a lot costs one player; missing your nomination costs the pick.
+    expect(draftTitleFlag({ ...base, canNominate: true, outbid: true })).toBe(
+      "⏰ Your pick — ",
+    );
+  });
+
+  it("flags OUTBID only from the latch, never from 'not holding the high bid'", () => {
+    // Deriving it from the state instead would mislabel every nomination the
+    // captain never bid on.
+    expect(draftTitleFlag({ ...base, outbid: true })).toBe("💸 Outbid — ");
+    expect(draftTitleFlag(base)).toBeNull();
+  });
+
+  it("goes quiet once the draft is COMPLETE, even on a stale canNominate", () => {
+    // Belt-and-braces against a payload that arrived seconds late; invisible
+    // until it isn't.
+    expect(
+      draftTitleFlag({ ...base, status: "COMPLETE", canNominate: true }),
+    ).toBeNull();
+  });
+});
+
+describe("stripDraftTitleFlag", () => {
+  it("round-trips every flag the room can write", () => {
+    // The room used to keep its own hand-copied array of these two literals
+    // five lines below where they were defined. A one-character drift — an en
+    // dash for an em dash, a lost trailing space — would have stacked prefixes
+    // in the tab forever, with nothing anywhere to notice.
+    const base = "LD2L — draft";
+    for (const flag of DRAFT_TITLE_PREFIXES) {
+      expect(stripDraftTitleFlag(flag + base)).toBe(base);
+    }
+  });
+
+  it("leaves an unflagged title alone", () => {
+    expect(stripDraftTitleFlag("LD2L — draft")).toBe("LD2L — draft");
+    expect(stripDraftTitleFlag("")).toBe("");
+  });
+
+  it("removes at most ONE prefix", () => {
+    // It never has to remove two, because the effect always strips before it
+    // writes — this pins that invariant rather than papering over it.
+    const doubled = DRAFT_TITLE_PREFIXES[0] + DRAFT_TITLE_PREFIXES[1] + "LD2L";
+    expect(stripDraftTitleFlag(doubled)).toBe(DRAFT_TITLE_PREFIXES[1] + "LD2L");
+  });
+});
+
+describe("draftViewerStake", () => {
+  const state = (over: Partial<Parameters<typeof draftViewerStake>[0]> = {}) => ({
+    me: { userId: "u1", myTeamId: null, isAdmin: false },
+    available: [] as { userId: string }[],
+    ...over,
+  });
+
+  it("captains and admins always have one", () => {
+    expect(draftViewerStake(state({ me: { userId: "u1", myTeamId: "t1", isAdmin: false } }))).toBe(true);
+    expect(draftViewerStake(state({ me: { userId: "u1", myTeamId: null, isAdmin: true } }))).toBe(true);
+  });
+
+  it("so does a player still in the pool — they can be nominated at any moment", () => {
+    expect(draftViewerStake(state({ available: [{ userId: "u1" }] }))).toBe(true);
+  });
+
+  it("goes false the moment the viewer is SOLD", () => {
+    // Correct — and it means their "you were drafted" chime has to arrive on
+    // the very poll that removes them from the pool.
+    expect(draftViewerStake(state({ available: [{ userId: "someone-else" }] }))).toBe(
+      false,
+    );
+  });
+
+  it("a signed-out spectator never has one", () => {
+    // Explicit rather than accidental: without the userId guard this would
+    // depend on no pool entry ever carrying a null id.
+    expect(
+      draftViewerStake({
+        me: { userId: null, myTeamId: null, isAdmin: false },
+        available: [{ userId: "u1" }],
+      }),
+    ).toBe(false);
   });
 });
 

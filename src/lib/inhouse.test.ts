@@ -3,8 +3,9 @@ import {
   autoJoinDecision,
   avgKnownMmr,
   detectIntervalSeconds,
+  inhouseAlerts,
   inhouseLobbyCode,
-  inhousePollCadence,
+  inhouseTitleFlag,
   mmrBalance,
   readyCheckEndedToast,
   nextPickTeam,
@@ -13,10 +14,13 @@ import {
   queueDropCutoff,
   queuePresence,
   queuePresentCutoff,
+  queueSlots,
   requeueLastSeenAt,
   seedOrder,
   tallyMethod,
+  wasInReadyCheck,
   type CaptainCandidate,
+  type InhouseAlertSnapshot,
 } from "./inhouse";
 import { INHOUSE } from "./constants";
 
@@ -102,6 +106,40 @@ describe("orderCaptains", () => {
     // b (4 votes), then c & a tie at 1 vote → c's higher MMR wins.
     expect(ordered.map((x) => x.userId)).toEqual(["b", "c", "a"]);
   });
+
+  it("is TOTAL: an exact tie falls back to userId, not to input order", () => {
+    // This is what lets the room's vote PREVIEW and the server's captain
+    // INSTALLATION agree. Both call this function on the same ten players, but
+    // from differently-ordered arrays — Prisma's row order on the server, a
+    // name-sorted payload in the room — and every lobby player shares one
+    // `createdAt` (they are written by a single createMany), so the
+    // earliest-queued tiebreak above can never separate them. Without a total
+    // order the two sides silently name different captains on any tie, which
+    // on a young ladder (everyone 0-0, unregistered players at MMR 0) is the
+    // normal case rather than a corner one.
+    const tied = [cand("zeta"), cand("alpha"), cand("mid")];
+    for (const method of ["MMR", "RECORD", "VOTE"] as const) {
+      expect(orderCaptains(method, tied).map((x) => x.userId)).toEqual([
+        "alpha",
+        "mid",
+        "zeta",
+      ]);
+      // …and from any starting arrangement, the same answer.
+      expect(orderCaptains(method, [...tied].reverse()).map((x) => x.userId)).toEqual(
+        ["alpha", "mid", "zeta"],
+      );
+    }
+  });
+
+  it("keeps the real keys ahead of the tiebreak", () => {
+    // The fallback must never outrank something that actually distinguishes
+    // two players.
+    const ordered = orderCaptains("MMR", [
+      cand("aaa", { mmr: 1000 }),
+      cand("zzz", { mmr: 9000 }),
+    ]);
+    expect(ordered.map((x) => x.userId)).toEqual(["zzz", "aaa"]);
+  });
 });
 
 describe("nextPickTeam", () => {
@@ -186,6 +224,70 @@ describe("playersNeeded", () => {
   });
 });
 
+// Which queue entries occupy the ten visible slots. The room used to index the
+// raw queue, which put "away" entries in slots that the headline count,
+// `needed` and lobby formation itself all ignore.
+describe("queueSlots", () => {
+  const q = (name: string, away = false) => ({ name, away });
+
+  it("gives present players the slots and pushes nobody else ahead of them", () => {
+    // The default state of a fresh database: the seed enqueues six demo
+    // players born AWAY, so five real players rendered "5 / 10" above a grid
+    // of six dimmed demos with a real, counted player listed under "In line
+    // for the next game" — while the pinned Discord board, which lists present
+    // names, showed the opposite.
+    const queue = [
+      q("demo1", true),
+      q("demo2", true),
+      q("real1"),
+      q("real2"),
+      q("real3"),
+    ];
+    const { slots, overflow } = queueSlots(queue, 3);
+    expect(slots.map((s) => s?.name)).toEqual(["real1", "real2", "real3"]);
+    expect(overflow.map((s) => s.name)).toEqual(["demo1", "demo2"]);
+  });
+
+  it("keeps away players visible in the leftover slots", () => {
+    // They are still queued — the grace window is the point. They just can't
+    // displace someone who is here.
+    const { slots } = queueSlots([q("away1", true), q("here")], 4);
+    expect(slots.map((s) => s?.name)).toEqual(["here", "away1", undefined, undefined]);
+  });
+
+  it("pads out to the lobby size with empty slots", () => {
+    const { slots, overflow } = queueSlots([q("a")], 10);
+    expect(slots).toHaveLength(10);
+    expect(slots.filter(Boolean)).toHaveLength(1);
+    expect(overflow).toEqual([]);
+  });
+
+  it("preserves join order within each group, and in the overflow", () => {
+    const queue = [q("a"), q("b"), q("c"), q("d")];
+    const { slots, overflow } = queueSlots(queue, 2);
+    expect(slots.map((s) => s?.name)).toEqual(["a", "b"]);
+    // The overflow is a waiting LINE; its order is who queued when.
+    expect(overflow.map((s) => s.name)).toEqual(["c", "d"]);
+  });
+
+  it("never drops or duplicates an entry", () => {
+    const queue = [q("a", true), q("b"), q("c", true), q("d"), q("e")];
+    for (const size of [0, 1, 3, 5, 9]) {
+      const { slots, overflow } = queueSlots(queue, size);
+      const seen = [...slots.filter(Boolean), ...overflow];
+      expect(new Set(seen).size).toBe(seen.length);
+      expect(seen).toHaveLength(queue.length);
+    }
+  });
+
+  it("survives a zero lobby size instead of dividing by it", () => {
+    expect(queueSlots([q("a")], 0)).toEqual({
+      slots: [],
+      overflow: [{ name: "a", away: false }],
+    });
+  });
+});
+
 describe("inhouseLobbyCode", () => {
   it("is a stable four-digit code for a given lobby id", () => {
     const a = inhouseLobbyCode("clz9k1abc0000xyz");
@@ -200,108 +302,6 @@ describe("inhouseLobbyCode", () => {
     expect(inhouseLobbyCode("lobby-aaaaaaaa")).not.toBe(
       inhouseLobbyCode("lobby-bbbbbbbb"),
     );
-  });
-});
-
-// The room's poll loop is ~1800 lines of client component with no unit-testable
-// surface (this project's vitest env is `node` — no jsdom), so its cadence
-// rules used to be asserted only by whatever a browser spec happened to reach.
-// They're the difference between a queue spot held and a lobby lost, so they
-// live out here now.
-describe("inhousePollCadence", () => {
-  const FAST = 1500;
-  const IDLE = 10000;
-  const base = { activeMs: FAST, idleMs: IDLE, reached: true };
-
-  it("polls FAST for anyone with a stake — in a lobby OR in the queue", () => {
-    // The people a filling queue / forming lobby matter to are in it. Seconds
-    // decide accepts, votes and picks.
-    const c = inhousePollCadence({ ...base, hidden: false, hasStake: true });
-    expect(c).toEqual({ skip: false, delayMs: FAST });
-  });
-
-  it("polls IDLE-slow for a spectator, however busy the lobby is", () => {
-    // Membership, not existence: five people watching a 45-minute game were
-    // each firing 40 req/min because a lobby existed.
-    expect(
-      inhousePollCadence({ ...base, hidden: false, hasStake: false }),
-    ).toEqual({ skip: false, delayMs: IDLE });
-  });
-
-  it("keeps a HIDDEN tab with a stake on the keepalive", () => {
-    // That poll IS the presence heartbeat, and it carries the ready check's
-    // chime + tab title. Stop it and the spot is dropped as "away".
-    expect(
-      inhousePollCadence({ ...base, hidden: true, hasStake: true }),
-    ).toEqual({ skip: false, delayMs: INHOUSE.POLL_KEEPALIVE_MS });
-  });
-
-  it("the keepalive stays comfortably under the away cutoff", () => {
-    // The binding case is a live game: all ten tabs are hidden (everyone is in
-    // the Dota client), so the keepalive is the ONLY thing holding ten queue
-    // spots — and Chrome clamps hidden timers toward once a minute.
-    expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThan(
-      INHOUSE.QUEUE_AWAY_SECONDS * 1000,
-    );
-  });
-
-  it("stops fetching entirely in a HIDDEN tab with nothing at stake", () => {
-    // Browsers throttle background timers anyway, and the sitewide /api/sync
-    // ping advances lobbies without this tab's help.
-    expect(
-      inhousePollCadence({ ...base, hidden: true, hasStake: false }),
-    ).toEqual({ skip: true, delayMs: IDLE });
-  });
-
-  it("eases OFF after a 429 instead of hammering — even mid-lobby", () => {
-    // The 429 back-off, in one line. The route's speed bump is per-IP and a
-    // queued tab polls 40/min, so one household or NAT crosses it just by
-    // having a lobby. Retrying at the fast rate kept the fixed window
-    // saturated so it never cleared, and ACCEPT (which shares the bucket)
-    // stayed unreachable for the whole 45-second ready check.
-    expect(
-      inhousePollCadence({
-        ...base,
-        hidden: false,
-        hasStake: true,
-        rateLimited: true,
-      }),
-    ).toEqual({ skip: false, delayMs: IDLE });
-  });
-
-  it("a 429 outranks even the hidden-tab rules", () => {
-    // Both hidden branches would otherwise keep fetching (or skip at the wrong
-    // rate) while the bucket is empty; the limit is per-IP, not per-tab.
-    for (const hasStake of [true, false]) {
-      expect(
-        inhousePollCadence({
-          ...base,
-          hidden: true,
-          hasStake,
-          rateLimited: true,
-        }),
-      ).toEqual({ skip: false, delayMs: IDLE });
-    }
-  });
-
-  it("retries at the FAST rate when a poll didn't land", () => {
-    // Sustained failures are what flip `disconnected` (pollHealthAfter);
-    // backing off would delay both the recovery and the diagnosis.
-    expect(
-      inhousePollCadence({
-        ...base,
-        hidden: false,
-        hasStake: false,
-        reached: false,
-      }),
-    ).toEqual({ skip: false, delayMs: FAST });
-  });
-
-  it("defaults the idle rate to the INHOUSE constant", () => {
-    expect(
-      inhousePollCadence({ hidden: false, hasStake: false, activeMs: FAST })
-        .delayMs,
-    ).toBe(INHOUSE.POLL_IDLE_MS);
   });
 });
 
@@ -339,6 +339,208 @@ describe("autoJoinDecision", () => {
     // the running one. Refusing here also broke the board's own
     // "Queue for the next one →" link, which exists for exactly this case.
     expect(autoJoinDecision(me())).toBe("join");
+  });
+});
+
+// The bell. Five transitions, diffed against the previous poll, OR'd by the
+// room into ONE playChime() — so coinciding transitions never double-strike
+// the same AudioContext. Nothing asserted any of this before: no unit test can
+// render the room, and no browser spec listens for audio.
+describe("inhouseAlerts", () => {
+  const snap = (
+    over: Partial<InhouseAlertSnapshot> = {},
+  ): InhouseAlertSnapshot => ({
+    status: null,
+    inLobby: false,
+    isOnClock: false,
+    resultId: null,
+    ...over,
+  });
+  const inCheck = snap({ status: "READY_CHECK", inLobby: true });
+  const inVote = snap({ status: "CAPTAIN_VOTE", inLobby: true });
+
+  it("says NOTHING on the first payload after mount", () => {
+    // A player who reloads mid-lobby — or inside the 10-minute lastResult
+    // window — must not be rung for things that happened before they arrived.
+    expect(inhouseAlerts(null, inCheck)).toEqual([]);
+    expect(inhouseAlerts(null, snap({ resultId: "g1" }))).toEqual([]);
+    expect(
+      inhouseAlerts(null, snap({ status: "DRAFTING", inLobby: true, isOnClock: true })),
+    ).toEqual([]);
+  });
+
+  it("rings when the lobby forms under the viewer", () => {
+    expect(inhouseAlerts(snap(), inCheck)).toEqual(["lobby-formed"]);
+  });
+
+  it("rings for a hidden tab that first SEES the lobby already past the check", () => {
+    // The keyed-on-prevStatus-null rule. A hidden tab polls on the 45s
+    // keepalive, so its first sight of the lobby can be CAPTAIN_VOTE or
+    // DRAFTING — and that player still needs the bell. Exactly once, though:
+    // "vote-opened" requires the PREVIOUS status to have been READY_CHECK,
+    // which is what stops this case ringing twice.
+    expect(inhouseAlerts(snap(), inVote)).toEqual(["lobby-formed"]);
+  });
+
+  it("rings AGAIN when the vote opens after the ready check", () => {
+    // Deliberate second bell: a player may have accepted early and tabbed
+    // away, which is precisely what the 45s ACCEPT_SECONDS anticipates.
+    expect(inhouseAlerts(inCheck, inVote)).toEqual(["vote-opened"]);
+  });
+
+  it("rings when the viewer's pick turn starts, and only on the edge", () => {
+    const off = snap({ status: "DRAFTING", inLobby: true });
+    const on = snap({ status: "DRAFTING", inLobby: true, isOnClock: true });
+    expect(inhouseAlerts(off, on)).toEqual(["my-turn"]);
+    expect(inhouseAlerts(on, on)).toEqual([]);
+  });
+
+  it("rings when teams lock in", () => {
+    const drafting = snap({ status: "DRAFTING", inLobby: true });
+    const ready = snap({ status: "READY", inLobby: true });
+    expect(inhouseAlerts(drafting, ready)).toEqual(["teams-ready"]);
+    expect(inhouseAlerts(ready, ready)).toEqual([]);
+  });
+
+  it("rings on a RESULT, never on the lobby merely vanishing", () => {
+    // The active-lobby query drops COMPLETED and CANCELLED identically, so an
+    // admin cancel is indistinguishable by status alone — and would ring a
+    // victory bell for a game nobody played.
+    const live = snap({ status: "IN_PROGRESS", inLobby: true });
+    expect(inhouseAlerts(live, snap())).toEqual([]); // cancelled: silent
+    expect(inhouseAlerts(live, snap({ resultId: "g1" }))).toEqual(["game-ended"]);
+  });
+
+  it("rings for a SECOND result inside the same lastResult window", () => {
+    // Compared by id, not by "was null": back-to-back games in one evening
+    // both land inside the 10-minute window.
+    const first = snap({ resultId: "g1" });
+    expect(inhouseAlerts(first, snap({ resultId: "g2" }))).toEqual(["game-ended"]);
+    expect(inhouseAlerts(first, first)).toEqual([]);
+    // …and the window expiring is not an event.
+    expect(inhouseAlerts(first, snap())).toEqual([]);
+  });
+
+  it("ignores a spectator watching someone else's lobby", () => {
+    // Every alert but the result requires MEMBERSHIP.
+    expect(inhouseAlerts(snap(), snap({ status: "READY_CHECK" }))).toEqual([]);
+    expect(
+      inhouseAlerts(snap({ status: "DRAFTING" }), snap({ status: "READY" })),
+    ).toEqual([]);
+  });
+
+  it("reports BOTH when two transitions coincide (the room still rings once)", () => {
+    // A hidden tab whose first sight of the lobby is READY satisfies
+    // lobby-formed AND teams-ready. The OR in the room is what keeps that one
+    // bell; returning the list is what let a test see it at all.
+    expect(inhouseAlerts(snap(), snap({ status: "READY", inLobby: true }))).toEqual([
+      "lobby-formed",
+      "teams-ready",
+    ]);
+  });
+
+  it("is silent when nothing changed — including a sound toggle re-render", () => {
+    // The room's effect re-runs on [state, soundOn], so muting and unmuting
+    // hands it the same payload twice. Every predicate must compare false, or
+    // unmuting rings a bell for a lobby you've been staring at for minutes.
+    for (const s of [snap(), inCheck, inVote, snap({ resultId: "g1" })]) {
+      expect(inhouseAlerts(s, s)).toEqual([]);
+    }
+  });
+
+  it("is edge-triggered, so it DEPENDS on the caller ordering payloads", () => {
+    // Not a flaw — the reason room-sequence.ts exists. A stale payload applied
+    // after a fresher one presents a regression as a fresh edge, which is
+    // exactly the re-fired chime in the reported bug.
+    const beforePick = snap({ status: "DRAFTING", inLobby: true, isOnClock: true });
+    const afterPick = snap({ status: "DRAFTING", inLobby: true });
+    expect(inhouseAlerts(afterPick, beforePick)).toEqual(["my-turn"]);
+  });
+});
+
+describe("wasInReadyCheck", () => {
+  it("reads the previous poll's membership, not the lobby's mere existence", () => {
+    // Derived from the same snapshot the chime diffs, so the toast and the
+    // bell can never disagree about what the last poll said.
+    expect(wasInReadyCheck(null)).toBe(false);
+    expect(
+      wasInReadyCheck({
+        status: "READY_CHECK",
+        inLobby: false,
+        isOnClock: false,
+        resultId: null,
+      }),
+    ).toBe(false);
+    expect(
+      wasInReadyCheck({
+        status: "READY_CHECK",
+        inLobby: true,
+        isOnClock: false,
+        resultId: null,
+      }),
+    ).toBe(true);
+  });
+});
+
+// The tab title. Unlike the chime it is STATE-derived and ungated by the sound
+// toggle, so it reaches a backgrounded tab that has never had a user gesture.
+describe("inhouseTitleFlag", () => {
+  const s = (over: Partial<Parameters<typeof inhouseTitleFlag>[0]> = {}) => ({
+    status: null as string | null,
+    inLobby: true,
+    isOnClock: false,
+    hasAccepted: false,
+    hasVoted: false,
+    ...over,
+  });
+
+  it("writes nothing before the first payload", () => {
+    expect(inhouseTitleFlag(null)).toBeNull();
+  });
+
+  it("puts YOUR PICK above everything else", () => {
+    // A captain on the clock during DRAFTING must never read "Teams locked".
+    expect(inhouseTitleFlag(s({ status: "DRAFTING", isOnClock: true }))).toBe(
+      "(!) Your pick",
+    );
+    expect(inhouseTitleFlag(s({ status: "READY", isOnClock: true }))).toBe(
+      "(!) Your pick",
+    );
+  });
+
+  it("nags for an accept only until the player has accepted", () => {
+    expect(inhouseTitleFlag(s({ status: "READY_CHECK" }))).toBe(
+      "(!) Accept your match",
+    );
+    expect(inhouseTitleFlag(s({ status: "READY_CHECK", hasAccepted: true }))).toBeNull();
+  });
+
+  it("nags for a vote only until the player has voted", () => {
+    // A CHANGE from the shipped behaviour, and the point of the whole flag:
+    // the accept nag has always dropped once you accept, while the vote nag
+    // kept a "(!)" in the tab for the rest of the 25s whatever you did. A "(!)"
+    // that survives the action it asks for teaches people to ignore "(!)".
+    expect(inhouseTitleFlag(s({ status: "CAPTAIN_VOTE" }))).toBe(
+      "(!) Lobby up — vote",
+    );
+    expect(inhouseTitleFlag(s({ status: "CAPTAIN_VOTE", hasVoted: true }))).toBeNull();
+  });
+
+  it("announces locked teams (the cue to go host the Dota lobby)", () => {
+    expect(inhouseTitleFlag(s({ status: "READY" }))).toBe("(!) Teams locked");
+  });
+
+  it("says nothing to a spectator, whatever the lobby is doing", () => {
+    for (const status of ["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "READY"]) {
+      expect(inhouseTitleFlag(s({ status, inLobby: false }))).toBeNull();
+    }
+  });
+
+  it("says nothing once the game is under way or over", () => {
+    // Nothing is being asked of the player any more; the tab goes quiet.
+    expect(inhouseTitleFlag(s({ status: "IN_PROGRESS" }))).toBeNull();
+    expect(inhouseTitleFlag(s({ status: "COMPLETED" }))).toBeNull();
+    expect(inhouseTitleFlag(s({ status: null }))).toBeNull();
   });
 });
 

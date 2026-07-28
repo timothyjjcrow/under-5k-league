@@ -175,3 +175,102 @@ export function wasOutbid(args: {
     args.curNominatedId === args.prevNominatedId
   );
 }
+
+/** What to do with the 💸 Outbid! latch this poll. */
+export type OutbidDecision = "set" | "clear" | "keep";
+
+/**
+ * The other half of the outbid banner: `wasOutbid` says when to RAISE it, this
+ * says when to drop it — and, just as importantly, when to leave it alone.
+ *
+ * It takes no budget or `canBid` input ON PURPOSE, and the signature is the
+ * guard: a captain who has been priced out of the lot is exactly the person
+ * who most needs to see that they lost the player. (Their re-bid button
+ * disables itself.) The latch drops only when the fact it asserts stops being
+ * true: the viewer's team retook the high bid, the lot moved on, or bidding
+ * closed.
+ *
+ * The two rules were separate `if`s in the room and their mutual exclusivity
+ * was assumed, never stated — which matters now that one function returns a
+ * single decision.
+ */
+export function outbidLatchAfter(args: {
+  myTeamId: string | null;
+  prevBidTeamId: string | null;
+  curBidTeamId: string | null;
+  prevNominatedId: string | null;
+  curNominatedId: string | null;
+}): OutbidDecision {
+  if (wasOutbid(args)) return "set";
+  if (
+    (args.myTeamId && args.curBidTeamId === args.myTeamId) ||
+    args.curNominatedId !== args.prevNominatedId ||
+    !args.curNominatedId
+  ) {
+    return "clear";
+  }
+  return "keep";
+}
+
+/**
+ * The draft room's tab-title flag, in priority order, or null.
+ *
+ * "Outbid" is latched on the actual outbid EVENT (see above), never on merely
+ * "not holding the high bid" — that would mislabel every nomination the
+ * captain never bid on. "Your pick" outranks it: an expiring nomination clock
+ * auto-skips your turn, which costs more than a lost lot.
+ */
+export const DRAFT_TITLE_PREFIXES = [
+  "⏰ Your pick — ",
+  "💸 Outbid — ",
+] as const;
+
+export function draftTitleFlag(o: {
+  /** False before the first payload — nothing to say yet. */
+  loaded: boolean;
+  status: string | null;
+  canNominate: boolean;
+  /** The outbid latch is currently raised. */
+  outbid: boolean;
+}): string | null {
+  if (!o.loaded) return null;
+  // `canNominate` already implies IN_PROGRESS server-side; the status guard is
+  // belt-and-braces against a stale payload, and invisible until it isn't.
+  if (o.status !== "COMPLETE" && o.canNominate) return DRAFT_TITLE_PREFIXES[0];
+  if (o.outbid) return DRAFT_TITLE_PREFIXES[1];
+  return null;
+}
+
+/**
+ * Remove a flag this module added, so the room can prepend the current one
+ * against a title it may have already written to.
+ *
+ * Exported beside the prefixes deliberately: the room used to carry its own
+ * hand-copied array of the same two literals five lines below where they were
+ * defined, and a one-character drift (an en dash for an em dash, a lost
+ * trailing space) would have stacked prefixes in the tab forever with nothing
+ * to notice it.
+ */
+export function stripDraftTitleFlag(title: string): string {
+  for (const p of DRAFT_TITLE_PREFIXES) {
+    if (title.startsWith(p)) return title.slice(p.length);
+  }
+  return title;
+}
+
+/**
+ * Does this viewer need the draft room to keep polling in a hidden tab?
+ *
+ * A captain, an admin, or anyone still in the pool: all three can have the
+ * auction turn to them while they are looking at something else. Note it goes
+ * FALSE the moment the viewer is sold — which is correct, and means their
+ * "you were drafted" chime has to arrive on the very poll that removes them.
+ */
+export function draftViewerStake(s: {
+  me: { userId: string | null; myTeamId: string | null; isAdmin: boolean };
+  available: { userId: string }[];
+}): boolean {
+  if (s.me.myTeamId || s.me.isAdmin) return true;
+  const id = s.me.userId;
+  return !!id && s.available.some((p) => p.userId === id);
+}

@@ -15,11 +15,24 @@ import {
 import {
   autoJoinDecision,
   avgKnownMmr,
+  inhouseAlerts,
   inhouseLobbyCode,
-  inhousePollCadence,
+  inhouseTitleFlag,
   mmrBalance,
+  orderCaptains,
+  queueSlots,
   readyCheckEndedToast,
+  wasInReadyCheck,
+  type InhouseAlertSnapshot,
 } from "@/lib/inhouse";
+import { inhousePollCadence } from "@/lib/room-poll";
+import { nextClockOffset } from "@/lib/countdown";
+import {
+  ROOM_SEQUENCE_START,
+  acceptSequence,
+  isColdStart,
+  issueSequence,
+} from "@/lib/room-sequence";
 import {
   INHOUSE,
   INHOUSE_SCAN_ACTIONS,
@@ -96,14 +109,11 @@ export function InhouseRoom({
   // re-enqueue on a re-render would be a real cost, not a cosmetic one.
   const autoJoinedRef = useRef(false);
   const prevLobbyId = useRef<string | null>(null);
-  // For the bell notification: remember what we saw last poll.
-  const soundInitRef = useRef(false);
-  const prevStatusRef = useRef<string | null>(null);
-  // Was the viewer sitting in a READY_CHECK last poll? Drives the
-  // "match cancelled" toast when the check fails out from under them.
-  const prevInReadyCheckRef = useRef(false);
-  const prevOnClockRef = useRef(false);
-  const prevResultIdRef = useRef<string | null>(null);
+  // What the LAST poll said about this viewer — the one input to both the
+  // chime (inhouseAlerts) and the "match cancelled" toast, so the two can
+  // never disagree about what just changed. null = nothing seen yet, which is
+  // what suppresses alerts for a mid-lobby page load.
+  const prevAlertRef = useRef<InhouseAlertSnapshot | null>(null);
   const originalTitleRef = useRef<string | null>(null);
   // Result banners the viewer closed — stays dismissed across the polls of
   // the 10-minute lastResult window AND across reloads (localStorage), so a
@@ -122,6 +132,20 @@ export function InhouseRoom({
     }
   }, []);
 
+  // Browsers block the AudioContext until a user gesture, and the people who
+  // most need the bell never click anything in this room: someone who arrived
+  // from a Discord ping auto-joins programmatically (?join=1), and someone who
+  // queued on a previous page load and reloaded has touched nothing at all. So
+  // the first tap ANYWHERE on the page primes it — otherwise "match found",
+  // the alert gating a 45-second ACCEPT window, is computed correctly and
+  // played into a suspended context. The draft room has had this since it
+  // shipped; this room did not.
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    document.addEventListener("pointerdown", unlock, { once: true });
+    return () => document.removeEventListener("pointerdown", unlock);
+  }, []);
+
   const toggleSound = useCallback(() => {
     const next = !soundOn;
     setSoundOn(next);
@@ -137,14 +161,13 @@ export function InhouseRoom({
   // the "(!) Your pick" title — and the captain re-clicked into an error toast
   // while their real 60s clock burned. Never key this off `s.now`: it's
   // per-instance wall-clock and can skew between serverless instances.
-  const seqRef = useRef(0);
-  const appliedSeqRef = useRef(0);
+  const seqRef = useRef(ROOM_SEQUENCE_START);
 
   const apply = useCallback((s: InhouseState, seq: number) => {
-    if (seq < appliedSeqRef.current) return; // lost the response race — stale
-    appliedSeqRef.current = seq;
-    const skew = s.now - Date.now();
-    setOffsetMs((prev) => (Math.abs(prev - skew) >= 1000 ? skew : prev));
+    const { accept, next } = acceptSequence(seqRef.current, seq);
+    seqRef.current = next;
+    if (!accept) return; // lost the response race — stale
+    setOffsetMs((prev) => nextClockOffset(prev, s.now, Date.now()));
     setState(s);
   }, []);
 
@@ -185,6 +208,10 @@ export function InhouseRoom({
       const pre = inhousePollCadence({
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
+        // Nothing has left yet, so `hasStake` is still the pre-payload `false`
+        // for everyone — fetch once rather than skipping forever (a tab that is
+        // HIDDEN at load would otherwise never learn it had a stake).
+        coldStart: isColdStart(seqRef.current),
         activeMs: pollMs,
       });
       if (pre.skip) {
@@ -192,7 +219,11 @@ export function InhouseRoom({
         return;
       }
       inFlight = true;
-      const seq = ++seqRef.current;
+      // Minted HERE, before the await — ordering is by request START. Move it
+      // below the fetch and the gate silently becomes a no-op that rejects
+      // nothing (see room-sequence.ts; the source guard is what catches that).
+      const { seq, next: seqNext } = issueSequence(seqRef.current);
+      seqRef.current = seqNext;
       let next: InhouseState | null = null;
       let rateLimited = false;
       try {
@@ -268,51 +299,41 @@ export function InhouseRoom({
   }, [state?.lobby?.id, router]);
 
   // Ring a bell on the moments that matter to this viewer: their match found
-  // (ready check), the captain vote opening, their turn to pick, and teams
-  // locking in. Skips the initial page load.
+  // (ready check), the captain vote opening, their turn to pick, teams locking
+  // in, the result landing. Which of those a poll earned — and the fact that
+  // the first payload after mount earns none of them — is decided by the
+  // tested `inhouseAlerts`.
   useEffect(() => {
     if (!state) return;
-    const status = state.lobby?.status ?? null;
-    const isOnClock = state.me.isOnClock;
-    const inLobby = state.me.inLobby;
-    const prevStatus = prevStatusRef.current;
+    const snap: InhouseAlertSnapshot = {
+      status: state.lobby?.status ?? null,
+      inLobby: state.me.inLobby,
+      isOnClock: state.me.isOnClock,
+      resultId: state.lastResult?.lobbyId ?? null,
+    };
+    const prev = prevAlertRef.current;
 
     // A ready check the viewer was in vanished — a decline, an expiry, or an
     // admin cancel scrapped it. The lobby query drops CANCELLED instantly, so
     // without this the room would silently snap back to the queue with no
     // explanation. Which message (and whether there is one at all) is decided
     // by the tested `readyCheckEndedToast` — both of its wording rules were
-    // once wrong in ways that told the player the opposite of the truth.
+    // once wrong in ways that told the player the opposite of the truth. NOT
+    // sound-gated: it is information, not an alert.
     const cancelled = readyCheckEndedToast({
-      wasInReadyCheck: prevInReadyCheckRef.current,
+      wasInReadyCheck: wasInReadyCheck(prev),
       inLobby: state.me.inLobby,
       inQueue: state.me.inQueue,
     });
     if (cancelled) pushToast("info", cancelled);
 
-    const resultId = state.lastResult?.lobbyId ?? null;
-    if (soundInitRef.current && soundOn) {
-      const lobbyFormed = status !== null && prevStatus === null && inLobby;
-      // The vote opening is its own alert: a player may have accepted early
-      // and tabbed away during the 45s check (exactly what ACCEPT_SECONDS
-      // anticipates), so the READY_CHECK→CAPTAIN_VOTE flip must re-ring.
-      const voteOpened =
-        status === "CAPTAIN_VOTE" && prevStatus === "READY_CHECK" && inLobby;
-      const myTurn = isOnClock && !prevOnClockRef.current;
-      const teamsReady =
-        status === "READY" && prevStatus !== "READY" && inLobby;
-      // Keyed off lastResult, NOT the lobby vanishing — an admin cancel also
-      // drops the lobby and must not ring a victory bell.
-      const gameEnded = !!resultId && prevResultIdRef.current !== resultId;
-      if (lobbyFormed || voteOpened || myTurn || teamsReady || gameEnded) {
-        playChime();
-      }
-    }
-    prevStatusRef.current = status;
-    prevInReadyCheckRef.current = inLobby && status === "READY_CHECK";
-    prevOnClockRef.current = isOnClock;
-    prevResultIdRef.current = resultId;
-    soundInitRef.current = true;
+    // One ring however many transitions coincided — two playChime() calls in
+    // one commit double-strike the same AudioContext.
+    if (soundOn && inhouseAlerts(prev, snap).length) playChime();
+    // ALWAYS advanced, outside the sound gate: a muted viewer who unmutes
+    // mid-lobby must not be rung for a lobby they have been watching for five
+    // minutes.
+    prevAlertRef.current = snap;
   }, [state, soundOn]);
 
   // Flip the tab title while something needs this viewer's attention. Unlike
@@ -323,16 +344,15 @@ export function InhouseRoom({
       originalTitleRef.current = document.title;
     }
     const original = originalTitleRef.current;
-    const status = state?.lobby?.status ?? null;
-    const flag = state?.me.isOnClock
-      ? "(!) Your pick"
-      : state?.me.inLobby && status === "READY_CHECK" && !state.me.hasAccepted
-        ? "(!) Accept your match"
-        : state?.me.inLobby && status === "CAPTAIN_VOTE"
-          ? "(!) Lobby up — vote"
-          : state?.me.inLobby && status === "READY"
-            ? "(!) Teams locked"
-            : null;
+    const flag = inhouseTitleFlag(
+      state && {
+        status: state.lobby?.status ?? null,
+        inLobby: state.me.inLobby,
+        isOnClock: state.me.isOnClock,
+        hasAccepted: state.me.hasAccepted,
+        hasVoted: !!state.me.myVote?.method,
+      },
+    );
     document.title = flag ? `${flag} · ${original}` : original;
     return () => {
       document.title = original;
@@ -343,7 +363,8 @@ export function InhouseRoom({
     async (body: Record<string, unknown>): Promise<boolean> => {
       unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
-      const seq = ++seqRef.current;
+      const { seq, next: seqNext } = issueSequence(seqRef.current);
+      seqRef.current = seqNext;
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
@@ -651,15 +672,19 @@ function QueueView({
 }) {
   const { queue, lobbySize, needed, me } = state;
   // "Away" players (heartbeat gone quiet) keep their row for a grace window
-  // but don't count toward forming — the headline number stays honest.
+  // but don't count toward forming — the headline number stays honest, and
+  // (via queueSlots below) they can't take a visible slot off someone who is
+  // actually here.
   const present = queue.filter((q) => !q.away);
-  const pct = Math.min(100, Math.round((present.length / lobbySize) * 100));
-  // Rough lobby strength while it fills (0 = unknown MMR, excluded).
+  const pct = lobbySize
+    ? Math.min(100, Math.round((present.length / lobbySize) * 100))
+    : 0;
+  // Rough lobby strength while it fills. avgKnownMmr owns the "0 = unknown,
+  // excluded" rule — this only adds the sample floor, so one lone known MMR
+  // isn't presented as the room's calibre.
   const knownMmrs = present.map((q) => q.mmr).filter((m) => m > 0);
-  const queueAvg =
-    knownMmrs.length >= 2
-      ? Math.round(knownMmrs.reduce((s, m) => s + m, 0) / knownMmrs.length)
-      : 0;
+  const queueAvg = knownMmrs.length >= 2 ? avgKnownMmr(knownMmrs) : 0;
+  const { slots, overflow } = queueSlots(queue, lobbySize);
 
   return (
     <div className="space-y-6">
@@ -739,10 +764,12 @@ function QueueView({
 
         <div className="border-t border-line bg-surface/40 px-4 py-4">
           {/* All lobby slots — filled players + open placeholders, so the
-              lobby visibly fills up as people queue. */}
+              lobby visibly fills up as people queue. Present players claim the
+              slots first (see queueSlots): the headline count, `needed` and
+              lobby formation all ignore away entries, so letting one hold a
+              visible slot made this grid contradict the number above it. */}
           <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {Array.from({ length: lobbySize }).map((_, i) => {
-              const q = queue[i];
+            {slots.map((q, i) => {
               if (!q) {
                 return (
                   <li
@@ -795,13 +822,13 @@ function QueueView({
 
           {/* Players beyond the ten slots (queued while a lobby was live, or
               an overflow crowd) — never silently hidden. */}
-          {queue.length > lobbySize ? (
+          {overflow.length > 0 ? (
             <div className="mt-3 border-t border-line/60 pt-3">
               <div className="mb-1.5 text-xs text-muted">
-                In line for the next game · {queue.length - lobbySize}
+                In line for the next game · {overflow.length}
               </div>
               <ul className="flex flex-wrap gap-2">
-                {queue.slice(lobbySize).map((q) => (
+                {overflow.map((q) => (
                   <li
                     key={q.userId}
                     className={cn(
@@ -1013,14 +1040,15 @@ function VoteView({
   const myMethod = me.myVote?.method ?? null;
   const myNominee = me.myVote?.nomineeId ?? null;
 
-  const byMmr = [...vote.candidates].sort((a, b) => b.mmr - a.mmr);
-  const byRecord = [...vote.candidates].sort(
-    (a, b) =>
-      b.wins - a.wins || b.winRate - a.winRate || b.games - a.games || b.mmr - a.mmr,
-  );
-  const byVotes = [...vote.candidates].sort(
-    (a, b) => b.nominations - a.nominations || b.mmr - a.mmr,
-  );
+  // The SAME ranking the server will install, not a hand-copy of it: these
+  // three previews are what the ten players are voting on, and the local sorts
+  // they used to run dropped orderCaptains' final earliest-queued tiebreak. On
+  // a young ladder ties are the normal case — everyone 0-0, unregistered
+  // players at MMR 0 — so the cards routinely named a different second captain
+  // than the vote would actually produce.
+  const byMmr = orderCaptains("MMR", vote.candidates);
+  const byRecord = orderCaptains("RECORD", vote.candidates);
+  const byVotes = orderCaptains("VOTE", vote.candidates);
   const hasRecords = vote.candidates.some((c) => c.games > 0);
   const hasNominations = vote.candidates.some((c) => c.nominations > 0);
 

@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  CLOCK_OFFSET_STEP_MS,
   countdownLabel,
   elapsedSince,
   LIVE_WINDOW_MS,
+  nextClockOffset,
   secondsUntil,
 } from "./countdown";
 
@@ -72,5 +74,52 @@ describe("elapsedSince (inhouse game timer)", () => {
     expect(elapsedSince(T - 90_000, 0, T)).toBe(90_000);
     // Client 2s ahead of server (offset −2000): started 60s ago on the server.
     expect(elapsedSince(T - 60_000, -2000, T)).toBe(58_000);
+  });
+});
+
+// The other half of each room's apply(): how the offset above is maintained
+// across polls. It lived inline in both rooms, byte-identical, untested.
+describe("nextClockOffset", () => {
+  it("IGNORES sub-second jitter, returning the previous value identically", () => {
+    // `serverNow - clientNow` moves a few ms on every poll, and this feeds
+    // React state read by every clock in the room. Adopting each measurement
+    // would re-render the room + player pool ~40 times a minute, undoing the
+    // leaf-clock optimisation. Identity is what triggers React's bail-out, so
+    // a recomputed equal number would not be good enough.
+    const prev = 3000;
+    expect(nextClockOffset(prev, T + 3040, T)).toBe(prev);
+    expect(nextClockOffset(prev, T + 2999, T)).toBe(prev);
+  });
+
+  it("adopts a skew that has moved a WHOLE second, outright", () => {
+    // No smoothing: the clocks re-base in one step. A whole second is the
+    // smallest change any of these countdowns can actually render.
+    expect(nextClockOffset(3000, T + 4000, T)).toBe(4000);
+    expect(nextClockOffset(0, T - 1000, T)).toBe(-1000);
+  });
+
+  it("treats the threshold as inclusive at exactly one second", () => {
+    expect(nextClockOffset(0, T + CLOCK_OFFSET_STEP_MS, T)).toBe(
+      CLOCK_OFFSET_STEP_MS,
+    );
+    expect(nextClockOffset(0, T + CLOCK_OFFSET_STEP_MS - 1, T)).toBe(0);
+  });
+
+  it("is symmetric — a client that runs FAST re-bases the same way", () => {
+    // The comparison is on the absolute move, so a device whose clock drifts
+    // ahead is corrected as readily as one that drifts behind.
+    expect(nextClockOffset(0, T - 5000, T)).toBe(-5000);
+    expect(nextClockOffset(-5000, T, T)).toBe(0);
+  });
+
+  it("lets slow drift accumulate until it crosses, then takes it whole", () => {
+    // Each measurement is compared against the last ADOPTED value, not the
+    // last seen one — so 40 polls of +25ms drift are ignored until the total
+    // reaches a second, at which point the full correction lands at once.
+    let offset = 0;
+    for (let i = 1; i <= 39; i++) offset = nextClockOffset(offset, T + i * 25, T);
+    expect(offset).toBe(0);
+    offset = nextClockOffset(offset, T + 40 * 25, T);
+    expect(offset).toBe(1000);
   });
 });

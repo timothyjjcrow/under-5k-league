@@ -15,12 +15,28 @@ function joinMs(v: Date | number): number {
 }
 
 /**
+ * Determinism's last resort, after every meaningful key has tied.
+ *
+ * It is not decoration. The ten `InhouseLobbyPlayer` rows are written by ONE
+ * `createMany`, so every player in a lobby shares a single `createdAt` — the
+ * "earliest queued" tiebreak below simply cannot separate them. Without a
+ * total order the result then falls out of whatever order the caller's array
+ * happened to be in, and the two callers do NOT agree: the server ranks the
+ * rows as Prisma returns them, while the room ranks a payload pre-sorted by
+ * name. Same function, same inputs, different captains — with the vote's whole
+ * premise being that the preview tells you what you are voting for.
+ */
+const byUserId = (a: Seedable, b: Seedable) => a.userId.localeCompare(b.userId);
+
+/**
  * Order players the way we seed a lobby: highest MMR first, ties broken by who
- * queued earliest (rewards waiting). Stable + deterministic so it's testable.
+ * queued earliest (rewards waiting). Total + deterministic so it's testable —
+ * and so every caller gets the same answer.
  */
 export function seedOrder<T extends Seedable>(players: T[]): T[] {
   return [...players].sort(
-    (a, b) => b.mmr - a.mmr || joinMs(a.joinedAt) - joinMs(b.joinedAt),
+    (a, b) =>
+      b.mmr - a.mmr || joinMs(a.joinedAt) - joinMs(b.joinedAt) || byUserId(a, b),
   );
 }
 
@@ -61,10 +77,10 @@ export function tallyMethod(votes: CaptainMethod[]): CaptainMethod {
  * captains (index 0 = team 1 / Radiant, index 1 = team 2 / Dire). Every method
  * falls back to MMR then earliest-queued so the order is always total.
  */
-export function orderCaptains(
+export function orderCaptains<T extends CaptainCandidate>(
   method: CaptainMethod,
-  candidates: CaptainCandidate[],
-): CaptainCandidate[] {
+  candidates: T[],
+): T[] {
   const arr = [...candidates];
   if (method === "RECORD") {
     return arr.sort(
@@ -73,7 +89,8 @@ export function orderCaptains(
         b.winRate - a.winRate ||
         b.games - a.games ||
         b.mmr - a.mmr ||
-        joinMs(a.joinedAt) - joinMs(b.joinedAt),
+        joinMs(a.joinedAt) - joinMs(b.joinedAt) ||
+        byUserId(a, b),
     );
   }
   if (method === "VOTE") {
@@ -81,7 +98,8 @@ export function orderCaptains(
       (a, b) =>
         b.nominations - a.nominations ||
         b.mmr - a.mmr ||
-        joinMs(a.joinedAt) - joinMs(b.joinedAt),
+        joinMs(a.joinedAt) - joinMs(b.joinedAt) ||
+        byUserId(a, b),
     );
   }
   return seedOrder(arr); // MMR
@@ -135,6 +153,41 @@ export function playersNeeded(
 }
 
 /**
+ * Split the queue into the lobby's visible slots and the overflow behind them.
+ *
+ * PRESENT ENTRIES CLAIM SLOTS FIRST. The room used to index the raw queue, so
+ * the ten slots were filled in join order with "away" players (heartbeat gone
+ * quiet) included — while the headline count above them, `needed`, and lobby
+ * formation itself all count present players only. On a fresh database that is
+ * the DEFAULT state: the seed enqueues six demo players born away, so a real
+ * five-player queue rendered "5 / 10" over a grid of six dimmed demos with a
+ * real, counted player relegated to "In line for the next game". The pinned
+ * Discord board has always got this right (it lists present names), so the two
+ * surfaces contradicted each other on the one screen that exists to persuade
+ * someone to queue.
+ *
+ * Away entries keep their rows — they are still queued, and the grace window
+ * is the point — they simply cannot displace someone who is here.
+ */
+export function queueSlots<T extends { away: boolean }>(
+  queue: T[],
+  lobbySize: number = INHOUSE.LOBBY_SIZE,
+): { slots: (T | null)[]; overflow: T[] } {
+  if (lobbySize <= 0) return { slots: [], overflow: [...queue] };
+  const ordered = [
+    ...queue.filter((q) => !q.away),
+    ...queue.filter((q) => q.away),
+  ];
+  const taken = ordered.slice(0, lobbySize);
+  return {
+    slots: Array.from({ length: lobbySize }, (_, i) => taken[i] ?? null),
+    // Back to queue order for the overflow chips: it is a waiting LINE, and
+    // its order is who queued when.
+    overflow: queue.filter((q) => !taken.includes(q)),
+  };
+}
+
+/**
  * A stable 4-digit code for a lobby, derived from its id — so all ten players
  * see the SAME suggested Dota 2 lobby name (`GGD2L #4821`) and password (`4821`)
  * with no server round-trip or stored field. The host types them; everyone else
@@ -147,70 +200,6 @@ export function inhouseLobbyCode(lobbyId: string): string {
     h = (h * 31 + lobbyId.charCodeAt(i)) >>> 0;
   }
   return String(1000 + (h % 9000)); // 1000–9999, always four digits
-}
-
-export type PollCadenceInput = {
-  /** document.visibilityState === "hidden". */
-  hidden: boolean;
-  /** The VIEWER's own stake: queued, or a member of the live lobby. */
-  hasStake: boolean;
-  /** The response was a 429 from the route's per-IP speed bump. */
-  rateLimited?: boolean;
-  /** A state payload came back (false = failed, aborted, or not attempted). */
-  reached?: boolean;
-  /** The room's fast cadence (its `pollMs` prop, default 1500). */
-  activeMs: number;
-  /** Overridable for tests; the room always takes the constant. */
-  idleMs?: number;
-};
-
-export type PollCadence = {
-  /** Don't fetch at all this tick — just wait `delayMs` and re-check. */
-  skip: boolean;
-  delayMs: number;
-};
-
-/**
- * The inhouse room's whole poll cadence, in one place: the loop asks before it
- * fetches (is this tick worth a request?) and again after the response settles
- * (how long until the next one?). It is the ~1800-line room's most consequential
- * logic and lived entirely inside a `useEffect`, where the only thing that could
- * assert it was a browser spec.
- *
- * The four rules, in the order they take precedence:
- *
- * 1. **429 is not a failure — it's a signal to ease off.** The route's speed
- *    bump is per-IP and a queued tab polls 40/min, so one household or one
- *    NAT'd office crosses it just by having a lobby. Treating it as a
- *    disconnect greyed out ACCEPT MATCH mid-ready-check, and retrying at 1.5s
- *    kept the fixed window saturated so it never cleared. Dropping to the idle
- *    rate is what actually drains the bucket — and the bucket is shared with
- *    the mutations, so this is how the next ACCEPT gets through.
- * 2. **A hidden tab WITH a stake keepalives; without one it doesn't fetch.**
- *    Queued or in a lobby, the poll IS the presence heartbeat (and carries the
- *    ready-check chime + tab title), so it must outrun QUEUE_AWAY_SECONDS even
- *    after Chrome clamps background timers. A hidden spectator is pure cost:
- *    the sitewide /api/sync ping advances lobbies without them.
- * 3. **A poll that didn't land retries at the FAST rate** — sustained failures
- *    are what flip `disconnected` (see pollHealthAfter), and backing off would
- *    delay the recovery as much as the diagnosis.
- * 4. Otherwise it turns on MEMBERSHIP, not on a lobby merely existing: five
- *    people watching a 45-minute game were each firing 40 req/min because one
- *    did. Anyone IN it (or in the queue) still polls fast — a filling queue is
- *    exactly when responsiveness decides whether a game happens.
- */
-export function inhousePollCadence(o: PollCadenceInput): PollCadence {
-  const idleMs = o.idleMs ?? INHOUSE.POLL_IDLE_MS;
-  if (o.rateLimited) return { skip: false, delayMs: idleMs };
-  // Visibility is whatever the CALLER sees at the moment it asks, so a tab
-  // refocused mid-fetch reschedules at the active rate, not the keepalive.
-  if (o.hidden) {
-    return o.hasStake
-      ? { skip: false, delayMs: INHOUSE.POLL_KEEPALIVE_MS }
-      : { skip: true, delayMs: idleMs };
-  }
-  if (o.reached === false) return { skip: false, delayMs: o.activeMs };
-  return { skip: false, delayMs: o.hasStake ? o.activeMs : idleMs };
 }
 
 /**
@@ -249,6 +238,123 @@ export function autoJoinDecision(me: {
  * DRAFTING. Membership survives both: the same-poll READY_CHECK→CAPTAIN_VOTE
  * flip keeps `inLobby` true, and so does a poll that skips the vote entirely.
  */
+export type InhouseAlert =
+  | "lobby-formed"
+  | "vote-opened"
+  | "my-turn"
+  | "teams-ready"
+  | "game-ended";
+
+/**
+ * What the room knows about the viewer, per poll. The room keeps ONE ref
+ * holding the previous one of these, which is also where `wasInReadyCheck`
+ * below comes from — so the chime and the cancelled-toast can never disagree
+ * about what the last poll said.
+ */
+export type InhouseAlertSnapshot = {
+  /** `lobby?.status ?? null` — null means no active lobby at all. */
+  status: string | null;
+  /** MEMBERSHIP (`me.inLobby`), never "a lobby exists". */
+  inLobby: boolean;
+  isOnClock: boolean;
+  /** `lastResult?.lobbyId ?? null`. */
+  resultId: string | null;
+};
+
+/**
+ * The moments worth a bell, given the previous poll and this one.
+ *
+ * `prev === null` means the first payload since mount and ALWAYS returns
+ * nothing: a player who reloads mid-lobby, or inside the 10-minute lastResult
+ * window, must not be rung for things that happened before they arrived.
+ *
+ * Edge-triggered, so it depends on its caller having ordered the payloads —
+ * `inhouseAlerts(afterPick, beforePick)` correctly reports "my-turn" again.
+ * That is not a flaw in this function; it is why the sequence gate exists (see
+ * room-sequence.ts), and the re-fired chime was one of the reported symptoms.
+ *
+ * The room ORs the result into one `playChime()`: coinciding transitions ring
+ * once, never twice on the same AudioContext.
+ */
+export function inhouseAlerts(
+  prev: InhouseAlertSnapshot | null,
+  next: InhouseAlertSnapshot,
+): InhouseAlert[] {
+  if (!prev) return [];
+  const alerts: InhouseAlert[] = [];
+  // Keyed on the lobby appearing, NOT on status === READY_CHECK: a hidden tab
+  // on the 45s keepalive can first SEE the lobby already in CAPTAIN_VOTE or
+  // DRAFTING, and that player still needs the bell.
+  if (next.status !== null && prev.status === null && next.inLobby) {
+    alerts.push("lobby-formed");
+  }
+  // Its own alert, and the matched pair to the rule above: requiring the
+  // previous status to be exactly READY_CHECK is what stops the keepalive case
+  // ringing twice. A player may have accepted early and tabbed away — which is
+  // precisely what ACCEPT_SECONDS anticipates — so the flip must re-ring.
+  if (
+    next.status === "CAPTAIN_VOTE" &&
+    prev.status === "READY_CHECK" &&
+    next.inLobby
+  ) {
+    alerts.push("vote-opened");
+  }
+  if (next.isOnClock && !prev.isOnClock) alerts.push("my-turn");
+  if (next.status === "READY" && prev.status !== "READY" && next.inLobby) {
+    alerts.push("teams-ready");
+  }
+  // Keyed off lastResult, NOT the lobby vanishing — the active-lobby query
+  // drops COMPLETED and CANCELLED identically, so an admin cancel would
+  // otherwise ring a victory bell. Compared by id rather than "was null", so
+  // back-to-back games inside the 10-minute window each ring.
+  if (next.resultId && prev.resultId !== next.resultId) {
+    alerts.push("game-ended");
+  }
+  return alerts;
+}
+
+/** Was the viewer sitting in a ready check as of the previous poll? */
+export function wasInReadyCheck(prev: InhouseAlertSnapshot | null): boolean {
+  return !!prev && prev.inLobby && prev.status === "READY_CHECK";
+}
+
+/**
+ * The tab-title flag, in strict priority order, or null.
+ *
+ * Unlike the chime this is STATE-derived, not edge-derived, and carries no
+ * sound gate: a player who loads /inhouse mid-ready-check sees "(!) Accept
+ * your match" immediately with no bell, and a backgrounded tab shows the "(!)"
+ * without ever needing a gesture to unlock audio. That asymmetry is the
+ * design, not an oversight.
+ *
+ * `null` in (no payload yet) means no flag — the pre-payload render must not
+ * write one.
+ */
+export type InhouseTitleSnapshot = {
+  status: string | null;
+  inLobby: boolean;
+  isOnClock: boolean;
+  hasAccepted: boolean;
+  /** The viewer has cast their captain-selection ballot. */
+  hasVoted: boolean;
+};
+
+export function inhouseTitleFlag(s: InhouseTitleSnapshot | null): string | null {
+  if (!s) return null;
+  // isOnClock is safe without an inLobby guard because the server derives it as
+  // DRAFTING && isCaptain && myTeam === pickTeam — all of which imply
+  // membership. Recompute it client-side and the guard has to come back.
+  if (s.isOnClock) return "(!) Your pick";
+  if (!s.inLobby) return null;
+  if (s.status === "READY_CHECK" && !s.hasAccepted) return "(!) Accept your match";
+  // Dropped once they have voted, the same way the accept nag is dropped once
+  // they have accepted: a "(!)" that survives the action it is asking for
+  // teaches people to ignore the "(!)".
+  if (s.status === "CAPTAIN_VOTE" && !s.hasVoted) return "(!) Lobby up — vote";
+  if (s.status === "READY") return "(!) Teams locked";
+  return null;
+}
+
 export function readyCheckEndedToast(o: {
   /** The viewer was in a READY_CHECK lobby as of the previous poll. */
   wasInReadyCheck: boolean;
