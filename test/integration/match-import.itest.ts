@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
 import { steamIdToAccountId } from "@/lib/dota";
 import { MATCH_PHASE } from "@/lib/constants";
@@ -49,6 +50,10 @@ async function addMember(seasonId: string, teamId: string, name: string) {
 }
 
 describe("recomputeSeries", () => {
+  // The seam is global state — a hook left armed would fire inside an
+  // unrelated test's recompute.
+  afterEach(() => setRaceHook(null));
+
   it("rolls games up into the match series score + winner", async () => {
     const season = await makeSeason();
     const home = await makeTeam(season.id, "Home", 0);
@@ -133,6 +138,99 @@ describe("recomputeSeries", () => {
     expect(m.winnerTeamId).toBeNull();
     expect(m.homeScore).toBe(1);
     expect(m.awayScore).toBe(1);
+  });
+
+  // THE STALE-CALLER RACE. The series score is DERIVED from the game list, so
+  // two callers holding different lists are not interchangeable: the one that
+  // read fewer games must never write last. Games 2 and 3 of a Bo3 genuinely
+  // do arrive together (a captain report next to an auto-sync scan, or two
+  // /api/sync pings), and with a blind `update({ where: { id } })` the stale
+  // caller reverted a COMPLETED 2-0 to a LIVE 1-0 that had already announced
+  // itself and advanced the bracket — with no repair path, since auto-sync only
+  // ever looks for NEW games and there were none left to find.
+  //
+  // Racing two real calls cannot produce this: whoever reads second reads the
+  // full list, and the losing order showed up too rarely to test on. So the
+  // rival commits AT the seam, between this caller's read and its swap.
+  it("does not let a stale caller revert a series the rival just completed", async () => {
+    const season = await makeSeason();
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+        bestOf: 3,
+      },
+    });
+    await addGame(match.id, "g1", home.id); // 1-0, not yet rolled up
+
+    let fired = false;
+    setRaceHook(
+      onceAt("match-import.recomputeSeries.beforeSwap", async () => {
+        fired = true;
+        // The rival's import of game 2 lands and clinches the Bo3. onceAt
+        // keeps this from re-firing inside the rival's own recompute — or on
+        // the outer caller's retry, which must see the real row.
+        await addGame(match.id, "g2", home.id);
+        await recomputeSeries(match.id);
+      }),
+    );
+
+    // This caller read ONE game and is about to write 1-0 LIVE over 2-0.
+    await recomputeSeries(match.id);
+
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.status).toBe("COMPLETED");
+    expect(m.homeScore).toBe(2);
+    expect(m.awayScore).toBe(0);
+    expect(m.winnerTeamId).toBe(home.id);
+  });
+
+  // The other half of the CAS contract: a lost swap RETRIES rather than
+  // giving up, because "who wrote last" says nothing about who read more.
+  // Here the rival writes a score no game list supports, so only a recompute
+  // from the current rows converges on the truth.
+  it("recomputes from fresh rows after losing the swap", async () => {
+    const season = await makeSeason();
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+        bestOf: 3,
+      },
+    });
+    await addGame(match.id, "g1", home.id);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("match-import.recomputeSeries.beforeSwap", async () => {
+        fired = true;
+        // A rival moved the row off the values this caller read, but left the
+        // game list alone — the first swap must lose and the retry must win.
+        await prisma.match.update({
+          where: { id: match.id },
+          data: { homeScore: 9, awayScore: 9, status: "LIVE" },
+        });
+      }),
+    );
+
+    await recomputeSeries(match.id);
+
+    expect(fired).toBe(true);
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.homeScore).toBe(1);
+    expect(m.awayScore).toBe(0);
+    expect(m.status).toBe("LIVE");
   });
 });
 

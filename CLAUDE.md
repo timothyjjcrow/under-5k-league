@@ -78,7 +78,7 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
-Currently **38 of 46 claims protected** (three are EQUIVALENT MUTANTS — archive-
+Currently **42 of 46 claims protected** (three are EQUIVALENT MUTANTS — archive-
 then-set pairs, and a `{ gt: 0 }` guarding a write of 0 — predicates that can be
 deleted without changing the end state, so
 no test can ever kill them; they are listed in the guard and excluded from the
@@ -104,8 +104,10 @@ switched provider. `--discover --only` deliberately refuses to write the
 baseline (a partial sweep would drop the ratchet for every claim it skipped);
 only a full `--discover` may.
 
-**THE 8 CLAIMS STILL UNPROTECTED**, and why each resisted — start here rather
-than re-running a 25-minute sweep to rediscover them:
+**THE 4 CLAIMS STILL UNPROTECTED**, and why each resisted — start here rather
+than re-running a 25-minute sweep to rediscover them. All four are now
+deliberate stops rather than a backlog; the rest of the list was closed by the
+four tests described under it.
 
 * `applyPick::status#1` (the advance claim) — its rival must write the LOBBY
   row the open transaction already locked, so the hook would have to hand the
@@ -118,13 +120,34 @@ than re-running a 25-minute sweep to rediscover them:
   Setting throttle serializes scans before this claim is reached, and
   `Game.dotaMatchId` is unique. The existing "concurrent pings" test passes
   either way for exactly that reason.
-* `startCaptainVote` — only reached from the last `acceptMatch`; a second flip
-  writes the same status and merely resets `voteEndsAt`. Needs a seam.
-* `recomputeSeries` — needs two callers holding DIFFERENT game sets. Seam-able:
-  hook between the read and the CAS, rival imports a game.
-* `saveRegistration` / `leaveLeague` — reachable only past their own read-time
-  checks. `saveRegistration`'s check is REDUNDANT with the claim; deleting it
-  makes the claim load-bearing and the test deterministic. **Best next move.**
+
+**How the last four were closed** (2026-07-27) — the two patterns are worth
+copying:
+
+* **Delete the redundant read-time check so the claim IS the enforcement
+  point.** `saveRegistration` refused a REMOVED signup twice: an `if` on a row
+  read at the top of the request, and the `status: { not: REMOVED }` on the
+  update claim. The `if` was strictly weaker (the upsert under it still wrote
+  ACTIVE unconditionally) AND it made the claim untestable — every test stopped
+  at the `if` and passed just as happily with the WHERE deleted. One
+  enforcement point, and the test is deterministic, needs no seam, and runs on
+  SQLite.
+* **Seam the rest.** `recomputeSeries` (rival imports the game that clinches
+  the series between this caller's read and its CAS — the stale caller must not
+  revert a COMPLETED 2-0 to a LIVE 1-0), `startCaptainVote` (a decline CANCELS
+  the check between the pending count and the flip — a blind flip resurrects a
+  dead lobby, with ten players in a live lobby AND the queue at once), and
+  `leaveLeague` (an admin REMOVAL lands between the gate and the write —
+  overwriting it with WITHDRAWN hands the player back the one state they can't
+  clear themselves). Note where each hook goes: `leaveLeague`'s fires BEFORE
+  its `$transaction`, because under Serializable a rival that writes the same
+  row after the snapshot makes both the guarded and the blind version fail with
+  P2034 — the predicate only becomes observable if the rival commits before the
+  snapshot is taken. That also makes it the one seam test that runs on SQLite.
+
+`leaveLeague` gained a `count === 0 → throw` on that claim at the same time:
+without it a player whose signup was removed mid-withdrawal was told
+"Withdrawn from this season" while nothing had moved.
 
 **When racing isn't enough, use the SEAM.** Several claims need one exact
 interleaving — the caller READS, a rival COMMITS, the caller WRITES — and
@@ -133,7 +156,10 @@ so rarely that the tests passed against broken code. `src/lib/race-hook.ts` is a
 test-only fault injector: the service `await raceHook("label")`s between the
 read and the guarded write, and a test installs a hook that commits the rival
 right there. One null check in production, and `setRaceHook` THROWS outside
-NODE_ENV=test so it can't be armed by accident.
+NODE_ENV=test so it can't be armed by accident (all three of its guarantees —
+the production refusal, the no-hook no-op, and `onceAt` firing once for exactly
+its label — are pinned in `src/lib/race-hook.test.ts`; a seam that silently
+stopped firing would quietly hollow out every test built on it).
 Two rules for writing one: (1) the rival runs on a DIFFERENT connection, so it
 must not touch a row the open transaction has already written — it will block on
 that lock while the transaction waits on the hook, which is a hang, not a

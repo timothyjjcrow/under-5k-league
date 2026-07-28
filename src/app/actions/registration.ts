@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
+import { raceHook } from "@/lib/race-hook";
 import { getActiveSeason } from "@/lib/season";
 import {
   DRAFT_STATUS,
@@ -137,22 +138,17 @@ export async function saveRegistration(
   }
 
   // An admin removed this signup. The upsert below sets status ACTIVE
-  // unconditionally, so without this the player just reloaded /me and put
+  // unconditionally, so without a check the player just reloaded /me and put
   // themselves straight back in the pool — there was no way to keep anyone out.
   // A self-withdrawal (status WITHDRAWN) stays freely reversible.
-  if (existing?.status === REGISTRATION_STATUS.REMOVED) {
-    return {
-      error:
-        "An admin removed your signup for this season — message them if you think that's a mistake.",
-    };
-  }
-
-  // The REMOVED moderation check above ran on a row read earlier in this
-  // request; the upsert's `update` branch sets status ACTIVE unconditionally,
-  // so an admin removing the signup in that gap was silently undone — and the
-  // whole point of REMOVED is that the player cannot put themselves back.
-  // Re-assert it in a guarded update first, and only fall through to the
-  // create when there is genuinely no row.
+  //
+  // That check is THIS `where`, and deliberately nothing else: it used to be
+  // duplicated as an `if` on the row read at the top of the request, which read
+  // as belt-and-braces but was strictly weaker — the upsert's `update` branch
+  // still wrote ACTIVE unconditionally, so an admin removing the signup in the
+  // gap was silently undone. Keeping the read-time copy would also have made
+  // the guard untestable: every test would stop at the `if` and pass just as
+  // happily with the WHERE deleted. One enforcement point, at the write.
   const revived = await prisma.registration.updateMany({
     where: {
       seasonId: season.id,
@@ -170,6 +166,9 @@ export async function saveRegistration(
       status: "ACTIVE",
     },
   });
+  // Zero rows with a row on file means the claim refused it — the signup is
+  // REMOVED. (A row that appeared in the gap is ACTIVE or WITHDRAWN, so it
+  // matches and updates normally.)
   if (revived.count === 0 && existing) {
     return {
       error:
@@ -177,31 +176,34 @@ export async function saveRegistration(
     };
   }
   if (revived.count === 0) {
-  await prisma.registration.upsert({
-    where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
-    create: {
-      seasonId: season.id,
-      userId: user.id,
-      type,
-      mmr: check.mmr,
-      wantsCaptain,
-      roles,
-      favoriteHeroes,
-      statement,
-      captainNote,
-      status: "ACTIVE",
-    },
-    update: {
-      type,
-      mmr: check.mmr,
-      wantsCaptain,
-      roles,
-      favoriteHeroes,
-      statement,
-      captainNote,
-      status: "ACTIVE",
-    },
-  });
+    // Genuinely no row yet: create it. Still an upsert, because a concurrent
+    // first signup from the same player (double-submit) would otherwise hit
+    // the seasonId_userId unique index.
+    await prisma.registration.upsert({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+      create: {
+        seasonId: season.id,
+        userId: user.id,
+        type,
+        mmr: check.mmr,
+        wantsCaptain,
+        roles,
+        favoriteHeroes,
+        statement,
+        captainNote,
+        status: "ACTIVE",
+      },
+      update: {
+        type,
+        mmr: check.mmr,
+        wantsCaptain,
+        roles,
+        favoriteHeroes,
+        statement,
+        captainNote,
+        status: "ACTIVE",
+      },
+    });
   }
 
   // Announce brand-new full-player signups (not updates or standins) with a
@@ -306,6 +308,12 @@ export async function leaveLeague(
   });
   if (gateError) return { error: gateError };
 
+  // Seam: an admin REMOVING this signup in the gap between the gate's reads and
+  // the write below. Everything above ran on rows read several statements ago,
+  // and this is the one rival whose result must NOT be overwritten — see the
+  // claim's own note.
+  await raceHook("registration.leaveLeague.beforeWithdraw");
+
   // SERIALIZABLE, not a plain write: the cover count above and the status write
   // here are a write-skew pair with assignStandinGuarded, which reads this
   // registration and writes a StandinAssignment. Under read-committed a captain
@@ -334,10 +342,19 @@ export async function leaveLeague(
           select: { isCaptain: true },
         });
         if (seat) throw new Error(seat.isCaptain ? "IS_CAPTAIN" : "IS_ROSTERED");
-        await tx.registration.updateMany({
+        // `status: "ACTIVE"` is the whole reason this is an updateMany. The
+        // gate above judged a row read before several more round trips, and an
+        // admin REMOVAL landing in that gap must survive: without the
+        // predicate this writes WITHDRAWN straight over REMOVED, which is the
+        // one signup state the player can't clear themselves — they would
+        // simply re-register and be back in the pool. Zero rows means we lost
+        // that race; THROW rather than return, so the transaction rolls back
+        // and the caller can't be told they withdrew when nothing moved.
+        const withdrawn = await tx.registration.updateMany({
           where: { seasonId: season.id, userId: user.id, status: "ACTIVE" },
           data: { status: "WITHDRAWN" },
         });
+        if (withdrawn.count === 0) throw new Error("NOT_ACTIVE");
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -356,6 +373,11 @@ export async function leaveLeague(
       return {
         error:
           "You've just been drafted or signed to a team — ask an admin to release you first.",
+      };
+    if ((e as Error).message === "NOT_ACTIVE")
+      return {
+        error:
+          "Your signup isn't active any more — reload to see where it stands.",
       };
     if ((e as { code?: string }).code === "P2034")
       return { error: "Your signup just changed — reload and try again." };

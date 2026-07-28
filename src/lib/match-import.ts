@@ -9,6 +9,7 @@ import {
   type OpenDotaPlayer,
 } from "./dota";
 import { advancePlayoffBracket } from "./playoff-service";
+import { raceHook } from "./race-hook";
 import { maybeAnnounceWeekHonors } from "./honors-service";
 import { getWebhookUrl, matchResultMessage, sendDiscordMessage } from "./discord";
 import { getSetting, setSetting, stampResultChange } from "./settings";
@@ -404,6 +405,11 @@ export async function recomputeSeries(matchId: string) {
     const fresh = await readMatch(matchId);
     if (!fresh) return;
     match = fresh;
+    // Seam: a rival import landing between this read and the swap below — the
+    // interleaving the CAS exists for, and one `Promise.all` cannot steer,
+    // because both racers have to read a DIFFERENT game list and the loser has
+    // to write second. Fires once per attempt; the retry re-reads.
+    await raceHook("match-import.recomputeSeries.beforeSwap");
 
     homeWins = match.games.filter((g) => g.winnerTeamId === match.homeTeamId).length;
     awayWins = match.games.filter((g) => g.winnerTeamId === match.awayTeamId).length;

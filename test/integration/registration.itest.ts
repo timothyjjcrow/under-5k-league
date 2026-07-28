@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
 // The action calls revalidatePath (Next request scope), requireUser (cookies),
 // and — for new signups — fetchPlayerRankTier (network). Stub all three so we
@@ -11,8 +11,9 @@ vi.mock("@/lib/dota", async (importOriginal) => ({
 }));
 
 import { leaveLeague, saveRegistration } from "@/app/actions/registration";
-import { setRegistrationMmr } from "@/app/actions/admin";
+import { setRegistrationMmr, withdrawSignup } from "@/app/actions/admin";
 import { requireAdmin, requireUser } from "@/lib/auth";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { fetchPlayerRankTier } from "@/lib/dota";
 import { prisma } from "@/lib/prisma";
 import { makeUser, makeSeason, sessionFor } from "./factories";
@@ -266,6 +267,84 @@ describe("saveRegistration — medal MMR validation", () => {
   });
 });
 
+// REMOVED is the only irreversible signup state — the moderation one. Its
+// entire enforcement is the `status: { not: REMOVED }` predicate on the update
+// claim; the upsert underneath writes ACTIVE unconditionally, so a removed
+// player who reloads /me and resubmits the form must be refused BY THAT WHERE.
+// (There used to be a read-time `if` above it saying the same thing, which
+// meant no test could ever reach the guard that actually matters.)
+describe("saveRegistration — an admin REMOVAL is not self-reversible", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  async function removedPlayer() {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Shown The Door");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "REMOVED",
+        mmr: 3000,
+        roles: "carry",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    return { season, user };
+  }
+
+  it("refuses the resubmit and leaves the signup REMOVED", async () => {
+    const { season, user } = await removedPlayer();
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 4200 }));
+
+    expect(res?.error).toMatch(/admin removed your signup/i);
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.status).toBe("REMOVED");
+    // Nothing from the form landed either — a refused write that still stored
+    // the new MMR/roles would let a removed player edit their pool entry.
+    expect(reg?.mmr).toBe(3000);
+    expect(reg?.roles).toBe("carry");
+  });
+
+  it("does not let them slip back in as a STANDIN either", async () => {
+    // Standins are accepted in every phase, so this is the open door if the
+    // refusal were keyed off anything but the row's own status.
+    const { season, user } = await removedPlayer();
+
+    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 2000 }));
+
+    expect(res?.error).toMatch(/admin removed your signup/i);
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.status).toBe("REMOVED");
+    expect(reg?.type).toBe("PLAYER");
+  });
+
+  it("still lets a SELF-withdrawn player come back", async () => {
+    // The other half of the contract: WITHDRAWN is a change of mind, not a
+    // sanction, so the same claim must let it through.
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Changed My Mind");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "WITHDRAWN",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3100 }));
+
+    expect(res?.error).toBeUndefined();
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.status).toBe("ACTIVE");
+    expect(reg?.mmr).toBe(3100);
+  });
+});
+
 // The admin override is the escape hatch when the medal check is wrong
 // (stale medal, recalibration): it stores the raw value, never clamps, and
 // only FLAGS a medal mismatch in its message.
@@ -398,5 +477,81 @@ describe("leaveLeague — a standin can't walk out on cover they owe", () => {
       where: { seasonId_userId: { seasonId: season.id, userId: standin.id } },
     });
     expect(reg.status).not.toBe("ACTIVE");
+  });
+});
+
+// Everything leaveLeague checks — cover owed, captaincy, a roster seat, the
+// signup being active at all — is judged on rows read several statements before
+// the write. The write re-asserts only ONE of them, and this is why: an admin
+// REMOVAL landing in that gap is the single rival whose result must not be
+// overwritten, because REMOVED is the only signup state a player cannot clear
+// themselves. Turn it into WITHDRAWN and they just re-register.
+//
+// The gate can't be the thing that catches it (it ran before the removal
+// existed) and racing can't steer it, so the rival commits at the seam.
+describe("leaveLeague — an admin removal in the gap is not overwritten", () => {
+  beforeEach(() => {
+    vi.mocked(requireUser).mockReset();
+    vi.mocked(requireAdmin).mockReset();
+  });
+  afterEach(() => setRaceHook(null));
+
+  it("loses to the removal and leaves the signup REMOVED", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const admin = await makeUser("Admin", "ADMIN");
+    const user = await makeUser("Leaving Anyway");
+    const reg = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+
+    let fired = false;
+    setRaceHook(
+      onceAt("registration.leaveLeague.beforeWithdraw", async () => {
+        fired = true;
+        // The admin's removal commits between the gate and the write. Nothing
+        // is open here — the withdrawal's transaction starts after this
+        // returns — so the rival is a plain committed write, on either engine.
+        const res = await withdrawSignup({}, form({ registrationId: reg.id }));
+        expect(res?.error).toBeUndefined();
+      }),
+    );
+
+    const res = await leaveLeague({}, new FormData());
+
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    expect(res?.error).toBeTruthy();
+    expect(res?.message).toBeUndefined();
+    const after = await regFor(season.id, user.id);
+    expect(after?.status).toBe("REMOVED");
+  });
+
+  it("still withdraws normally when nothing races it", async () => {
+    // The claim must not be so tight that the ordinary path stops working —
+    // the same assertion the seam test would pass vacuously without.
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Just Leaving");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await leaveLeague({}, new FormData());
+
+    expect(res?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id))?.status).toBe("WITHDRAWN");
   });
 });

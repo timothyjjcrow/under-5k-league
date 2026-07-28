@@ -2212,4 +2212,51 @@ describe.skipIf(!ON_POSTGRES)("inhouse — claims that need a staged interleavin
       })).acceptedAt,
     ).toBeNull();
   });
+
+  it("does not resurrect a cancelled check when the last accept opens the vote", async () => {
+    // The accept path counts pending players and, on zero, flips the lobby to
+    // CAPTAIN_VOTE. Both happen inside one transaction but on a per-statement
+    // snapshot, so a decline can CANCEL the lobby in between — and a blind
+    // flip then reopens a dead match: ten players pulled back into a vote they
+    // were already told was off, while their queue entries (written by the
+    // decline) sit alongside a live lobby, which is the one thing
+    // joinQueue/maybeFormLobby assume can never happen.
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    // Nine accepts, so the tenth is the one that trips the flip.
+    for (const p of players.slice(0, INHOUSE.LOBBY_SIZE - 1)) {
+      expect((await acceptMatch(p.session)).ok).toBe(true);
+    }
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.startCaptainVote.beforeFlip", async () => {
+        fired = true;
+        // A tenth-second too late, one of the nine changes their mind. The
+        // decline writes the lobby row and the queue rows — neither touched
+        // yet by the open transaction, which has written only its own
+        // acceptedAt (so this cannot deadlock).
+        expect((await declineMatch(players[0].session)).ok).toBe(true);
+      }),
+    );
+
+    await acceptMatch(players[INHOUSE.LOBBY_SIZE - 1].session);
+
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
+    // No vote was ever started, so no vote clock: a resurrected lobby would
+    // carry one, and resolveCaptainVote would go on to install captains.
+    expect(after.voteEndsAt).toBeNull();
+    // The decline's requeue stands, and it is NOT shadowed by a live lobby:
+    // the decliner dropped, the other nine back in line.
+    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE - 1);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
+  });
 });

@@ -208,9 +208,17 @@ export async function maybeFormLobby(): Promise<boolean> {
 
 /**
  * Claim the READY_CHECK → CAPTAIN_VOTE flip (all ten accepted) and start the
- * vote clock. updateMany-guarded: two concurrent resolvers flip it once.
+ * vote clock. updateMany-guarded: two concurrent resolvers flip it once, and —
+ * the case that actually bites — a check CANCELLED under the last accept is
+ * never flipped back to life. The caller counted pending players on a snapshot
+ * and this write lands after it, so "everyone accepted" can be several seconds
+ * stale by the time we get here.
  */
 async function startCaptainVote(tx: Tx, lobbyId: string): Promise<boolean> {
+  // Seam: the decline/cancel that lands in exactly that gap. Racing can't
+  // steer it — the rival has to commit between the pending count and this
+  // write, a window measured in milliseconds.
+  await raceHook("inhouse.startCaptainVote.beforeFlip");
   const flip = await tx.inhouseLobby.updateMany({
     where: { id: lobbyId, status: INHOUSE_STATUS.READY_CHECK },
     data: {
