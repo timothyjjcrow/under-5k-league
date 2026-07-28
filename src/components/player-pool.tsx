@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import {
   Avatar,
   Badge,
@@ -31,6 +32,9 @@ export type PoolDraftInfo = Record<
 
 type PoolStatus = "all" | "drafted" | "free";
 
+const SORTS: PoolSort[] = ["mmr", "rank", "name"];
+const ROLE_KEYS: string[] = DOTA_ROLES.map((r) => r.key);
+
 export function PlayerPool({
   players,
   showDraftStatus,
@@ -40,11 +44,52 @@ export function PlayerPool({
   showDraftStatus: boolean;
   draftInfo?: PoolDraftInfo;
 }) {
-  const [query, setQuery] = useState("");
-  const [role, setRole] = useState<string | null>(null);
-  const [sort, setSort] = useState<PoolSort>("mmr");
-  const [captainOnly, setCaptainOnly] = useState(false);
-  const [status, setStatus] = useState<PoolStatus>("all");
+  // Filter state seeds from the URL so a captain can SEND someone "the pos-1
+  // free agents" — and so a reload, or a trip to a player's profile and back,
+  // doesn't silently drop the filter they were reading. Read once on mount:
+  // React stays the source of truth, the URL is a mirror (see the effect
+  // below), which keeps chip clicks instant instead of round-tripping to the
+  // server for a filter that is entirely client-side.
+  const params = useSearchParams();
+  const [query, setQuery] = useState(() => params.get("q") ?? "");
+  const [role, setRole] = useState<string | null>(() => {
+    const p = params.get("pos");
+    return p && ROLE_KEYS.includes(p) ? p : null;
+  });
+  const [sort, setSort] = useState<PoolSort>(() => {
+    const s = params.get("sort") as PoolSort | null;
+    return s && SORTS.includes(s) ? s : "mmr";
+  });
+  const [captainOnly, setCaptainOnly] = useState(() => params.get("cap") === "1");
+  const [status, setStatus] = useState<PoolStatus>(() => {
+    const s = params.get("status");
+    return s === "drafted" || s === "free" ? s : "all";
+  });
+
+  // Mirror the filters into the address bar. `history.replaceState` rather than
+  // router.replace: this is a purely client-side filter, and a router call
+  // would re-run the page's four Prisma queries on every chip tap. Debounced
+  // because browsers rate-limit replaceState (Safari: 100 per 30s) and the
+  // search box would otherwise fire once per keystroke. Defaults are omitted
+  // so an unfiltered pool has a clean /players URL.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const sp = new URLSearchParams();
+      if (query) sp.set("q", query);
+      if (role) sp.set("pos", role);
+      if (sort !== "mmr") sp.set("sort", sort);
+      if (captainOnly) sp.set("cap", "1");
+      if (status !== "all") sp.set("status", status);
+      const qs = sp.toString();
+      const next = qs
+        ? `${window.location.pathname}?${qs}`
+        : window.location.pathname;
+      if (next !== window.location.pathname + window.location.search) {
+        window.history.replaceState(null, "", next);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query, role, sort, captainOnly, status]);
 
   // The draft-status filter only makes sense once someone's been drafted
   // (post-draft phases) — during SIGNUPS/an empty DRAFT the pool is all free.
@@ -57,6 +102,8 @@ export function PlayerPool({
   );
   const filtersActive =
     query !== "" || role !== null || captainOnly || status !== "all";
+  // Sort is deliberately NOT reset: it's an ordering preference, not a filter,
+  // and `filtersActive` doesn't count it either.
   const resetFilters = () => {
     setQuery("");
     setRole(null);

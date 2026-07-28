@@ -11,6 +11,31 @@ test("players page renders the pool scouting tools", async ({ page }) => {
   await expect(page.getByRole("group", { name: "Filter by role" })).toBeVisible();
 });
 
+// The pool's filters live in the URL, so a captain can send someone "the pos-1
+// free agents" and a reload doesn't silently drop what they were reading. The
+// reload is the assertion that matters — mirroring TO the URL is easy to get
+// right and seeding FROM it on mount is the half that rots.
+test("pool filters survive a reload and a shared link", async ({ page }) => {
+  await page.goto("/players");
+  await page.getByRole("button", { name: "Position 1 — Carry" }).click();
+  await page.getByRole("button", { name: "Wants captain" }).click();
+  await expect(page).toHaveURL(/[?&]pos=1/);
+  await expect(page).toHaveURL(/[?&]cap=1/);
+
+  // Re-open the URL cold, as a recipient of the link would.
+  await page.goto(page.url());
+  await expect(
+    page.getByRole("button", { name: "Position 1 — Carry" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("button", { name: "Wants captain" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  // Clearing returns to a bare /players rather than leaving dead params.
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page).toHaveURL(/\/players$/);
+});
+
 test("season history lists every season with the current one badged", async ({
   page,
 }) => {

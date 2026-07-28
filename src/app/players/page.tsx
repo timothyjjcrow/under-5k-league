@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { hasText } from "@/lib/utils";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
@@ -19,6 +20,7 @@ import {
   RankBadge,
   RoleBadges,
   SectionTitle,
+  Skeleton,
   StatCell,
   StatStrip,
   TeamCrest,
@@ -179,11 +181,17 @@ export default async function PlayersPage() {
             description="Signups will appear here."
           />
         ) : (
-          <PlayerPool
-            players={poolPlayers}
-            showDraftStatus={season.status !== "SIGNUPS"}
-            draftInfo={draftInfo}
-          />
+          // Suspense: PlayerPool seeds its filters from useSearchParams, which
+          // Next requires a boundary around.
+          <Suspense
+            fallback={<Skeleton className="h-96 w-full rounded-[var(--radius)]" />}
+          >
+            <PlayerPool
+              players={poolPlayers}
+              showDraftStatus={season.status !== "SIGNUPS"}
+              draftInfo={draftInfo}
+            />
+          </Suspense>
         )}
       </section>
 
