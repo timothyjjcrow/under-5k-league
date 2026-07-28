@@ -1674,6 +1674,16 @@ review because both halves are individually correct. Two replacements, both in
   of matches per week, and the old `sm:grid-cols-2` left a permanently empty
   cell.
 
+  **The inverse rule still stands for ORDINARY responsive grids**, and it had
+  six live violations. A `grid gap-4 sm:grid-cols-2` with no base column has an
+  implicit `auto` track below `sm`, which sizes to its content's max-content —
+  on `/leaders` that was a 560px leaderboard row inside a 390px viewport, i.e. a
+  188px horizontal page scroll, shipped to production. The other five (recap
+  awards, admin's create-season form, the season archive's weekly results,
+  `/me`'s participation tiles, the dashboard's pool composition) were latent
+  only because their content happened to be narrow. A sweep of all 20 pages
+  reports zero horizontal overflow at 390px; keep it that way.
+
 **The hero is a two-column marquee with ONE control slot.** Mid-season
 `heroAction` is null — there is no league-wide CTA once the season runs — which
 is exactly when a signed-in player has the most personal thing to do. So the
@@ -1732,7 +1742,30 @@ setup guide is `open={fhUnavailable}` — closed for everyone EXCEPT the cohort
 OpenDota reports as having public match data switched off. Folding it shut for
 everybody would have hidden it from exactly the people it is written for.
 
-**Tripwires.** `/` and `/players` now have `expectNoHorizontalOverflow` tests
+**`/players` filters live in the URL** (`?q=&pos=&sort=&cap=1&status=free`,
+defaults omitted). They seed from `useSearchParams` on mount — which is why
+`<PlayerPool>` needs its `<Suspense>` boundary — and mirror back via
+`history.replaceState`, NOT `router.replace`: the filter is entirely
+client-side, and a router call re-runs the page's four Prisma queries on every
+chip tap. Debounced 250ms because browsers rate-limit `replaceState` (Safari:
+100 per 30s). React is the source of truth, the URL is a mirror. `sort` is
+excluded from `resetFilters` and `filtersActive` — an ordering preference is
+not a filter. The e2e reloads the URL COLD, because seeding from it is the half
+that rots while mirroring to it keeps looking fine.
+
+**`/admin` is anchors + disclosure, and both halves matter.** It was 6,948px /
+11,501px — the longest page in the app by 36%, and the tool the league is run
+from on match night. `AdminJump` is sticky at `top-20` (the header offset the
+draft room's clock bar uses) and every card is an `AdminAnchor`; the five cards
+touched ONCE — Discord, the Valve league id, news, security, next season —
+are `AdminSection`, a `<details>` whose `<summary>` keeps the title as a real
+visible heading (so a scanning admin AND the e2e assertions still find it).
+2,415px of set-once forms folds to 420px. **A `<button>` inside a `<summary>`
+toggles the disclosure instead of submitting** — that is why the Discord test
+send and the league sync moved into their card bodies.
+
+**Tripwires.** `/`, `/players` and `/leaders` now have
+`expectNoHorizontalOverflow` tests
 (`e2e-mid/dashboard.spec.ts`, `e2e-mid/boards.spec.ts`) — they were the two
 pages with none, and both carry wide content. All four `<Card>`s wrapping
 `<Bracket>` gained `overflow-hidden`: `Bracket`'s root is `overflow-x-auto` over
