@@ -1504,7 +1504,7 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <Avatar name={m.name} src={m.avatar} size={20} />
-                      <PlayerLink userId={m.userId} className="min-w-0 truncate">
+                      <PlayerLink userId={m.userId} className="min-w-6 truncate">
                         {m.name}
                       </PlayerLink>
                       {m.isCaptain ? (

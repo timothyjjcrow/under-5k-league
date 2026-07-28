@@ -1778,6 +1778,14 @@ row's control however much other text the row carries, and it is the case the
 check exists for. Four pages are pinned; deleting `TAP_SAFE` turns `/leaders`
 and `/players` red, which is how the guard was verified.
 
+**A Dota name can be ONE character**, and the live league has a player called
+"x" — an 8px-wide link. `PlayerLink` carries `min-w-6`, and the five callers
+that pass a truncating row name were moved from `min-w-0` to `min-w-6` (a flex
+child can still shrink to 24px, which truncates fine). The guard has NO
+length exemption: the first cut skipped one-character labels as "data, not
+layout" and was thereby hiding the only real failure left on production. If a
+guard's exemption is what makes it pass, the exemption is the bug.
+
 **One control, one name.** `/players` rendered "Clear filters" twice whenever
 a filter matched nothing — a text link in the count line and a button in the
 EmptyState. Two controls with the same accessible name is both a UI wart and

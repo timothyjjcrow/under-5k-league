@@ -103,9 +103,12 @@ export async function expectTapTargets(page: Page, label: string) {
       const cs = getComputedStyle(el);
       if (cs.visibility === "hidden") return;
       const own = (el.textContent || "").trim();
-      // A one-character name makes a legitimately narrow link; the seed has
-      // them and they are data, not layout.
-      if (own.length < 2) return;
+      if (!own) return;
+      // No length exemption. The first cut of this skipped one-character
+      // labels as "data, not layout" — and the live league turned out to have
+      // a player called "x" whose link was an 8px target, i.e. the exemption
+      // was hiding the only real failure left. `min-w-6` on PlayerLink is the
+      // fix; the guard's job is to keep saying so.
       const parentText = (el.parentElement?.textContent || "").trim();
       const inProse =
         cs.display.startsWith("inline") && parentText.length > own.length + 3;

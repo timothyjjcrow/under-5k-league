@@ -1546,7 +1546,7 @@ function TeamColumn({
             {p ? (
               <>
                 <Avatar name={p.name} src={p.avatar} size={24} />
-                <PlayerLink userId={p.userId} className="min-w-0 flex-1 truncate">
+                <PlayerLink userId={p.userId} className="min-w-6 flex-1 truncate">
                   {p.name}
                 </PlayerLink>
                 {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}
@@ -1949,7 +1949,7 @@ function MatchupGrid({
               {roster.map((p, i) => (
                 <div key={p.userId} className="flex items-center gap-2 text-sm">
                   <Avatar name={p.name} src={p.avatar} size={24} />
-                  <PlayerLink userId={p.userId} className="min-w-0 flex-1 truncate">
+                  <PlayerLink userId={p.userId} className="min-w-6 flex-1 truncate">
                     {p.name}
                   </PlayerLink>
                   {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}

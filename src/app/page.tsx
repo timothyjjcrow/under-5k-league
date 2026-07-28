@@ -1283,7 +1283,7 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
             <ul className="mt-2 space-y-1 text-sm">
               {sales.map((s) => (
                 <li key={s.id} className="flex items-center justify-between gap-2">
-                  <PlayerLink userId={s.userId} className="min-w-0 truncate">
+                  <PlayerLink userId={s.userId} className="min-w-6 truncate">
                     {s.user.name}
                   </PlayerLink>
                   {/* Price always shows; only the free-text team name gives

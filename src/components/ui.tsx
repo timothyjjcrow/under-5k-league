@@ -330,7 +330,14 @@ export function PlayerLink({
   return (
     <Link
       href={`/players/${userId}`}
-      className={cn("hover:text-info hover:underline", TAP_SAFE, className)}
+      // min-w-6 because a Dota name can be ONE character — the live league has
+      // a player called "x", whose link was an 8px-wide target. Callers that
+      // pass their own min-w (rows that must truncate) still win via cn.
+      className={cn(
+        "inline-block min-w-6 hover:text-info hover:underline",
+        TAP_SAFE,
+        className,
+      )}
     >
       {children}
     </Link>

@@ -892,7 +892,7 @@ function Leaderboard({
             <td className="px-2 py-2.5">
               <span className="flex min-w-0 items-center gap-2">
                 <Avatar name={r.name} src={r.avatar} size={24} />
-                <PlayerLink userId={r.userId} className="min-w-0 truncate font-medium">
+                <PlayerLink userId={r.userId} className="min-w-6 truncate font-medium">
                   {r.name}
                 </PlayerLink>
               </span>
