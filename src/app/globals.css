@@ -4,7 +4,16 @@
   --color-bg: #0b0f17;
   --color-surface: #121a29;
   --color-surface-2: #1a2437;
+  /* A third elevation step. Needed for two jobs the first two can't do: an
+     OPAQUE table-header background (a translucent one lets scrolled rows show
+     through), and letting one card on a page read as louder without inventing
+     a new border colour. */
+  --color-surface-3: #212d44;
   --color-line: #26324c;
+  /* A quieter hairline for rules INSIDE a dense table or list. `--color-line`
+     at full strength draws a box around every row; this reads as a rule. Was
+     hand-written as `divide-line/60` in half a dozen places. */
+  --color-line-soft: #1e2840;
   --color-fg: #e8edf5;
   --color-muted: #8b98af;
   --color-brand: #e23b3b;

@@ -322,6 +322,17 @@ export default async function Home() {
     );
   }
 
+  // The hero's control slot. Mid-season heroAction is null — there is no
+  // league-wide CTA once the season is running — and that is exactly when a
+  // signed-in player has the most personal thing to do: check in for their next
+  // match. Everything else falls through to the phase's own CTA buttons.
+  const heroAside =
+    showsMatches && user && !heroAction ? (
+      <Suspense fallback={<Skeleton className="h-32 w-full rounded-[var(--radius)]" />}>
+        <MyNextMatch seasonId={season.id} userId={user.id} />
+      </Suspense>
+    ) : null;
+
   return (
     <div className="space-y-8">
       <Hero
@@ -330,8 +341,9 @@ export default async function Home() {
         subtitle={phaseSubtitle(season.status)}
         action={heroAction}
         meta={heroMeta}
+        aside={heroAside}
+        rail={<SeasonTimeline phase={season.status} />}
       />
-      <SeasonTimeline phase={season.status} />
       {/* Signed up but unreachable — the one cohort every Discord notification
           in the app silently skips. Renders nothing for everyone else, and is
           phase-independent on purpose: a player who signs up during SIGNUPS and
@@ -366,11 +378,9 @@ export default async function Home() {
           <Suspense fallback={null}>
             <WeekReminderPing season={season} />
           </Suspense>
-          {user ? (
-            <Suspense fallback={null}>
-              <MyNextMatch seasonId={season.id} userId={user.id} />
-            </Suspense>
-          ) : null}
+          {/* MyNextMatch is NOT rendered here any more — it lives in the hero's
+              control slot, which is the whole point: the RSVP a captain depends
+              on used to be the lowest-contrast strip on the page. */}
           <Suspense fallback={<SeasonViewSkeleton />}>
             <SeasonView snapshot={snapshot} userId={user?.id} matches={matches} />
           </Suspense>
@@ -385,24 +395,30 @@ export default async function Home() {
   );
 }
 
-// Fallback for the mid-season dashboard: the side-game row + a two-column
-// standings/aside layout, so the streamed content lands where the skeleton sat.
+// Fallback for the mid-season dashboard. It MUST mirror the real bands — This
+// week, the standings/your-team split, the three-up deck, then the side games —
+// or the page paints one layout and then visibly rearranges into another.
 function SeasonViewSkeleton() {
   return (
     <div className="space-y-6">
+      <CardSkeleton rows={4} />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="min-w-0 lg:col-span-2">
+          <CardSkeleton rows={6} />
+        </div>
+        <div className="min-w-0">
+          <CardSkeleton rows={4} />
+        </div>
+      </div>
+      <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <CardSkeleton key={i} rows={3} className="min-w-0" />
+        ))}
+      </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
         ))}
-      </div>
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <CardSkeleton rows={6} />
-        </div>
-        <div className="space-y-6">
-          <CardSkeleton rows={3} />
-          <CardSkeleton rows={3} />
-        </div>
       </div>
     </div>
   );
@@ -539,7 +555,26 @@ async function MyNextMatch({
       orderBy: order,
       include: { homeTeam: true, awayTeam: true },
     }));
-  if (!next) return null;
+  // The hero's control slot must never be an empty 23rem column, so an
+  // unrostered viewer (or a player whose season is done) gets the spectator
+  // form of the same thing rather than nothing at all.
+  if (!next) {
+    return (
+      <Card className="p-4 text-sm">
+        <div className="font-medium">No match of your own coming up</div>
+        <p className="mt-1 text-muted">
+          You&apos;re not on a roster for an upcoming fixture — the week&apos;s
+          games are still worth watching.
+        </p>
+        <Link
+          href="/schedule#this-week"
+          className={buttonClasses("secondary", "sm", "mt-3 w-full")}
+        >
+          See this week&apos;s schedule →
+        </Link>
+      </Card>
+    );
+  }
 
   const [myRsvp, pendingReschedule] = await Promise.all([
     prisma.matchAvailability.findUnique({
@@ -562,8 +597,10 @@ async function MyNextMatch({
   return (
     <div className="space-y-2">
       <CheckinBanner
+        variant="panel"
+        eyebrow={`Your next match · ${matchPhaseLabel(next.phase, next.week)}`}
         matchId={next.id}
-        heading={`Your next match — ${matchPhaseLabel(next.phase, next.week)}: ${next.homeTeam.name} vs ${next.awayTeam.name}`}
+        heading={`${next.homeTeam.name} vs ${next.awayTeam.name}`}
         when={fmtWhen(next.scheduledAt)}
         whenTs={next.scheduledAt?.getTime()}
         myRsvp={myRsvp?.status ?? null}
@@ -643,22 +680,43 @@ function HeroStat({
   );
 }
 
+/**
+ * The hero is a two-column marquee: the season's identity on the left, and ONE
+ * control slot on the right holding whatever this viewer, in this phase, is
+ * actually meant to do — the signup CTA, the draft-room door, or (mid-season,
+ * where there used to be no call to action at all) their own match check-in.
+ *
+ * Three things it deliberately keeps from the old centred version: every
+ * ambient layer, the phase Badge's exact text node, and the season name as the
+ * page's only <h1>. What it drops is 60px of vertical padding and the
+ * centre-alignment, which is what made ~250px of prime space carry no action.
+ *
+ * `aside` is optional — a signed-out visitor mid-season has nothing to act on,
+ * and an empty 24rem column would be worse than none, so the identity column
+ * simply takes the full width. Anything passed as `aside` MUST render
+ * something; that is why MyNextMatch has a no-match branch.
+ */
 function Hero({
   phase,
   title,
   subtitle,
   action,
   meta,
+  aside,
+  rail,
 }: {
   phase: string | null;
   title: string;
   subtitle: string;
   action?: ReactNode;
   meta?: ReactNode;
+  aside?: ReactNode;
+  rail?: ReactNode;
 }) {
   const live = !!phase && phase !== "COMPLETE";
+  const control = aside ?? (action ? <HeroActions>{action}</HeroActions> : null);
   return (
-    <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-14 text-center sm:px-10 sm:py-16">
+    <section className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40">
       {/* Looping background video — fades in/out at the loop seam to hide the jump. */}
       <HeroVideo />
       {/* Themed tint over the video for contrast + palette cohesion. */}
@@ -666,54 +724,92 @@ function Hero({
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-gradient-to-b from-surface/40 via-bg/45 to-surface/75"
       />
-      {/* Layered ambient background: masked grid + dual neon glows. */}
+      {/* Layered ambient background: masked grid + dual neon glows. Cropping
+          them into a shorter box makes them read MORE, not less. */}
       <div
         aria-hidden
         className="hero-grid pointer-events-none absolute inset-0 opacity-60"
       />
       <div
         aria-hidden
-        className="animate-hero-glow pointer-events-none absolute left-1/2 top-0 h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/25 blur-3xl"
+        className="animate-hero-glow pointer-events-none absolute left-1/3 top-0 h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/25 blur-3xl"
       />
       <div
         aria-hidden
         className="animate-hero-glow-alt pointer-events-none absolute -right-12 bottom-0 h-48 w-48 translate-y-1/3 rounded-full bg-accent/20 blur-3xl"
       />
-      <div className="relative">
-        {phase ? (
-          <Badge tone={PHASE_TONE[phase] ?? "neutral"} className="mb-4">
-            {live ? (
-              <span
-                aria-hidden
-                className="animate-live-pulse mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-current"
-              />
+      <div
+        className={cn(
+          "relative grid gap-6 p-5 sm:p-8",
+          control
+            ? "lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-center lg:gap-10"
+            : "text-center",
+        )}
+      >
+        <div className={cn("min-w-0", control ? "" : "mx-auto max-w-2xl")}>
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-2",
+              control ? "" : "justify-center",
+            )}
+          >
+            {phase ? (
+              <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+                {live ? (
+                  <span
+                    aria-hidden
+                    className="animate-live-pulse mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-current"
+                  />
+                ) : null}
+                {PHASE_LABEL[phase] ?? phase}
+              </Badge>
             ) : null}
-            {PHASE_LABEL[phase] ?? phase}
-          </Badge>
-        ) : null}
-        <h1 className="font-display text-5xl font-bold tracking-tight sm:text-6xl">
-          {title}
-        </h1>
-        <p className="mx-auto mt-3 max-w-xl text-muted sm:text-lg">{subtitle}</p>
-        {/* Persistent league fact: the Dota region every game is played on. */}
-        <div className="mt-4 flex justify-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/60 px-3 py-1 text-xs font-medium text-muted">
-            <span aria-hidden>🌐</span>
-            Game servers:{" "}
-            <span className="font-semibold text-fg">{GAME_SERVER_REGION}</span>
-          </span>
+            {/* Persistent league fact: the Dota region every game is played on.
+                It rode its own centred row before, costing a whole line for a
+                value that never changes. */}
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/60 px-3 py-1 text-xs font-medium text-muted">
+              <span aria-hidden>🌐</span>
+              Game servers:{" "}
+              <span className="font-semibold text-fg">
+                {GAME_SERVER_REGION}
+              </span>
+            </span>
+          </div>
+          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
+            {title}
+          </h1>
+          <p className="mt-2 max-w-xl text-muted sm:text-lg">{subtitle}</p>
+          {meta ? (
+            <div
+              className={cn(
+                "mt-5 flex flex-wrap items-center gap-x-6 gap-y-2",
+                control ? "" : "justify-center",
+              )}
+            >
+              {meta}
+            </div>
+          ) : null}
         </div>
-        {meta ? (
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
-            {meta}
-          </div>
-        ) : null}
-        {action ? (
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
-            {action}
-          </div>
-        ) : null}
+        {control ? <div className="min-w-0">{control}</div> : null}
       </div>
+      {/* The season stepper used to be its own full-width band restating the
+          phase badge two rows above it. As the hero's footer rail it costs no
+          extra band and reads as part of the same object. */}
+      {rail ? (
+        <div className="relative border-t border-line/70 bg-bg/30 px-4 py-3 sm:px-8">
+          {rail}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** CTA buttons in the control slot: full-width and stacked, so a two-button
+ *  phase reads as a primary + a secondary rather than two equal halves. */
+function HeroActions({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2.5 [&>a]:w-full [&>a]:justify-center">
+      {children}
     </div>
   );
 }
@@ -725,7 +821,9 @@ function Hero({
 function SeasonTimeline({ phase }: { phase: string }) {
   const current = PHASE_ORDER.findIndex((p) => p === phase);
   return (
-    <div className="rounded-[var(--radius)] border border-line bg-surface/60 px-3 py-4 sm:px-6">
+    // No frame of its own: it renders inside the hero's footer rail, which owns
+    // the border and the background.
+    <div>
       <ol aria-label="Season progress" className="flex items-start">
         {PHASE_ORDER.map((p, i) => {
           const done = current >= 0 && i < current;
@@ -749,7 +847,7 @@ function SeasonTimeline({ phase }: { phase: string }) {
                 />
                 <div
                   className={cn(
-                    "grid h-8 w-8 shrink-0 place-items-center rounded-full border text-xs font-semibold",
+                    "grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[11px] font-semibold",
                     isCurrent
                       ? "border-accent bg-accent/15 text-accent"
                       : done
@@ -1406,48 +1504,57 @@ async function SeasonView({
   const fantasyLocked = seasonGames > 0;
   const picksMissing = pickemOpen - picksMade;
 
+  // The side-game band renders BELOW the table now. It used to sit above both
+  // the standings and This-week, so the secondary loop (pick'em, fantasy) got
+  // the first full-width band on the page while the primary one — your match,
+  // your team, the table — started below it.
+  const sideGames = (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <SideGameLink
+        href="/pickem"
+        icon="🔮"
+        title="Pick'em"
+        hint={
+          pickemOpen > 0
+            ? userId
+              ? picksMissing > 0
+                ? `${picksMissing} pick${picksMissing === 1 ? "" : "s"} to make — call it`
+                : "All picks in — oracle board"
+              : `${pickemOpen} ${pickemOpen === 1 ? "match" : "matches"} open — call it`
+            : "See the oracle board"
+        }
+      />
+      <SideGameLink
+        href="/fantasy"
+        icon="🧙"
+        title="Fantasy"
+        hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
+      />
+      <SideGameLink
+        href="/leaders"
+        icon="🥇"
+        title="Leaders"
+        hint="Stat boards & weekly honors"
+      />
+      <SideGameLink
+        href="/meta"
+        icon="🧪"
+        title="Hero meta"
+        hint="What the league picks & wins with"
+      />
+    </div>
+  );
+
   return (
     <div className="space-y-6">
-      {/* Side games — one tap from the dashboard into the engagement loop. */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <SideGameLink
-          href="/pickem"
-          icon="🔮"
-          title="Pick'em"
-          hint={
-            pickemOpen > 0
-              ? userId
-                ? picksMissing > 0
-                  ? `${picksMissing} pick${picksMissing === 1 ? "" : "s"} to make — call it`
-                  : "All picks in — oracle board"
-                : `${pickemOpen} ${pickemOpen === 1 ? "match" : "matches"} open — call it`
-              : "See the oracle board"
-          }
-        />
-        <SideGameLink
-          href="/fantasy"
-          icon="🧙"
-          title="Fantasy"
-          hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
-        />
-        <SideGameLink
-          href="/leaders"
-          icon="🥇"
-          title="Leaders"
-          hint="Stat boards & weekly honors"
-        />
-        <SideGameLink
-          href="/meta"
-          icon="🧪"
-          title="Hero meta"
-          hint="What the league picks & wins with"
-        />
-      </div>
-
       {/* During playoffs the bracket IS the story — it leads, and the
           regular-season standings drop below as context. */}
       {showBracket ? (
-        <Card>
+        // overflow-hidden on the CARD: Bracket's root is `overflow-x-auto` over
+        // a `min-w-max` row, and Chrome propagates that inner width into the
+        // page scroll area through the card (CLAUDE.md's SeasonGrid rule). All
+        // four <Bracket> call sites were missing it.
+        <Card className="overflow-hidden">
           <CardHeader
             title="Playoff bracket"
             action={
@@ -1478,10 +1585,22 @@ async function SeasonView({
         />
       </Suspense>
 
-      {/* min-w-0: grid items otherwise refuse to shrink below their content,
-          letting a long team name widen the page on mobile. */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="min-w-0 space-y-6 lg:col-span-2">
+      {/* THE DASHBOARD BAND. Two grids, not one 2/3 + 1/3 split.
+          The old layout put the standings alone in a col-span-2 column and
+          stacked four cards in the 1/3 rail; CSS grid stretched the row to the
+          taller side, so the lower-left of the page was a measured 728×790px of
+          nothing. Splitting it means each band is sized by its own contents.
+          min-w-0 on every item: grid items otherwise refuse to shrink below
+          their content, letting a long team name widen the page on mobile. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div
+          className={cn(
+            "min-w-0",
+            // No personal card to sit beside it? Then the table takes the
+            // whole band rather than leaving a third of it empty.
+            myTeam ? "lg:col-span-2" : "lg:col-span-3",
+          )}
+        >
           <Card>
             <CardHeader
               title="Standings"
@@ -1515,9 +1634,11 @@ async function SeasonView({
             </CardBody>
           </Card>
         </div>
-        <div className="min-w-0 space-y-6">
-          {myTeam ? (
-            <Card>
+        {myTeam ? (
+          // order-first on phones: a rostered player's own team used to land
+          // ~2,500px down the mobile page, below the full standings table.
+          <div className="order-first min-w-0 lg:order-none">
+            <Card tone="feature">
               <CardHeader
                 title="Your team"
                 subtitle={myTeam.name}
@@ -1531,16 +1652,12 @@ async function SeasonView({
                 {myRow && myRow.played > 0 ? (
                   <div className="grid grid-cols-3 gap-2">
                     <Stat label="Rank" value={`#${myRank}`} hint={`of ${teams.length}`} />
-                    {/* W–L–D at Stat's default text-3xl wraps mid-number in
-                        this narrow column — render it a size down. */}
                     <Stat
                       label="Record"
-                      value={
-                        <span className="text-xl leading-9">
-                          {myRow.wins}–{myRow.losses}
-                          {myRow.draws > 0 ? `–${myRow.draws}` : ""}
-                        </span>
-                      }
+                      size="md"
+                      value={`${myRow.wins}–${myRow.losses}${
+                        myRow.draws > 0 ? `–${myRow.draws}` : ""
+                      }`}
                     />
                     <Stat label="Points" value={myRow.points} />
                   </div>
@@ -1584,10 +1701,19 @@ async function SeasonView({
                 </Link>
               </CardBody>
             </Card>
-          ) : null}
+          </div>
+        ) : null}
+      </div>
 
+      {/* Band two. auto-fit rather than a fixed column count: League pulse
+          renders nothing until the league has games, and Upcoming/Recent each
+          disappear at the ends of a season — a fixed lg:grid-cols-3 would leave
+          a visible hole every time one of them opted out. auto-fit collapses
+          the empty track instead, so two cards share the width and three split
+          it, with no conditional spans to keep in sync. */}
+      <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
           {upcoming.length > 0 ? (
-            <Card>
+            <Card className="min-w-0">
               <CardHeader title="Upcoming" />
               <CardBody className="p-0">
                 <ul className="divide-y divide-line/60">
@@ -1624,7 +1750,7 @@ async function SeasonView({
           ) : null}
 
           {recentResults.length > 0 ? (
-            <Card>
+            <Card className="min-w-0">
               <CardHeader title="Recent results" />
               <CardBody className="p-0">
                 <ul className="divide-y divide-line/60">
@@ -1689,9 +1815,9 @@ async function SeasonView({
           <Suspense fallback={null}>
             <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
           </Suspense>
-        </div>
       </div>
 
+      {sideGames}
     </div>
   );
 }
@@ -1799,7 +1925,10 @@ async function ThisWeek({
           </Link>
         }
       />
-      <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {/* auto-fit, not sm:grid-cols-2: a league plays an ODD number of matches
+          per week whenever it has a bye, and a fixed two-up left a permanently
+          empty cell next to the last fixture. */}
+      <CardBody className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))]">
         {focus.map((m) => {
           const headline = report
             ? stakesHeadline(
@@ -1957,7 +2086,7 @@ async function LeaguePulse({
   const topHero = topPick ? heroById(topPick.heroId) : null;
 
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader
         title="League pulse"
         action={
@@ -2238,7 +2367,11 @@ async function CompleteView({
         championTeamId={season.championTeamId}
       />
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      {/* items-start, not the default stretch: the "season lives on" card is a
+          short list of links and the final table is the full league, so
+          stretching the row drew a 1/3-width box of empty border beside it —
+          the COMPLETE twin of the void the mid-season deck used to have. */}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
         <div className="min-w-0 lg:col-span-2">
           <Card>
             <CardHeader
@@ -2314,7 +2447,7 @@ function CompleteBracket({
   );
   if (rounds.length === 0) return null;
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <CardHeader title="How it was won" />
       <CardBody className="p-0 pt-4">
         <Bracket rounds={rounds} championTeamId={championTeamId} />

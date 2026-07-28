@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { steamIdToAccountId } from "@/lib/dota";
 import { PlayerPool, type PoolDraftInfo } from "@/components/player-pool";
+import { averageMmr } from "@/lib/pool-stats";
 import {
   Avatar,
   Badge,
@@ -18,6 +19,8 @@ import {
   RankBadge,
   RoleBadges,
   SectionTitle,
+  StatCell,
+  StatStrip,
   TeamCrest,
 } from "@/components/ui";
 
@@ -102,12 +105,14 @@ export default async function PlayersPage() {
   }));
   const captainHopefuls = players.filter((p) => p.wantsCaptain);
   const preDraft = season.status === "SIGNUPS" || season.status === "DRAFT";
+  const freeAgents = players.filter((p) => !draftedUserIds.has(p.userId));
+  const avgMmr = averageMmr(players);
 
   return (
     <div className="space-y-8">
       <PageTitle
         title="Players"
-        subtitle={`${season.name} · ${players.length} players, ${standins.length} standins`}
+        subtitle={`${season.name} · every signup, standin and roster in one place`}
         action={
           <span className="flex flex-wrap items-center gap-3">
             {canSignUp ? (
@@ -117,7 +122,7 @@ export default async function PlayersPage() {
             ) : null}
             <Link
               href="/players/compare"
-              className="text-sm text-info hover:underline"
+              className="rounded text-sm text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
             >
               Compare players →
             </Link>
@@ -125,57 +130,62 @@ export default async function PlayersPage() {
         }
       />
 
-      {teams.length > 0 ? (
-        <section className="space-y-4">
-          <SectionTitle>Teams</SectionTitle>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {teams.map((t) => (
-              <Card key={t.id} interactive>
-                <CardHeader
-                  title={
-                    <Link
-                      href={`/teams/${t.id}`}
-                      className="flex items-center gap-2 hover:text-info"
-                    >
-                      <TeamCrest
-                        name={t.name}
-                        seed={t.id}
-                        size={24}
-                        className="rounded-md"
-                      />
-                      {t.name}
-                    </Link>
-                  }
-                  subtitle={`${t.members.length}/${season.teamSize} players`}
-                  action={
-                    season.status === "DRAFT" ? (
-                      <Badge tone="accent">${t.budget} left</Badge>
-                    ) : null
-                  }
-                />
-                <CardBody className="space-y-1.5">
-                  {t.members.map((m) => (
-                    <div
-                      key={m.id}
-                      className="flex items-center justify-between text-sm"
-                    >
-                      <span className="flex items-center gap-2">
-                        <Avatar name={m.user.name} src={m.user.avatar} size={24} />
-                        <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
-                        {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
-                        <RankBadge rankTier={m.user.rankTier} />
-                      </span>
-                      <span className="text-muted">
-                        {m.isCaptain ? "—" : `$${m.price}`}
-                      </span>
-                    </div>
-                  ))}
-                </CardBody>
-              </Card>
-            ))}
-          </div>
-        </section>
+      {/* The shape of the pool in one line. Every figure here was already on
+          the page, but only as something you could count by hand. */}
+      {players.length > 0 || standins.length > 0 ? (
+        <StatStrip>
+          <StatCell label="Signed up" value={players.length} hint="players" />
+          {avgMmr > 0 ? (
+            <StatCell label="Average MMR" value={avgMmr} />
+          ) : null}
+          {draftDone ? (
+            <StatCell
+              label="Free agents"
+              value={freeAgents.length}
+              tone={freeAgents.length > 0 ? "accent" : "muted"}
+              hint="undrafted"
+            />
+          ) : (
+            <StatCell
+              label="Want to captain"
+              value={captainHopefuls.length}
+              tone={captainHopefuls.length > 0 ? "accent" : "muted"}
+            />
+          )}
+          <StatCell
+            label="Standins"
+            value={standins.length}
+            tone={standins.length > 0 ? "default" : "muted"}
+            hint="on call"
+          />
+          {teams.length > 0 ? (
+            <StatCell label="Teams" value={teams.length} />
+          ) : null}
+        </StatStrip>
       ) : null}
+
+      {/* The pool leads: this page is named Players, and post-draft "who is
+          still available" is the question that brings a captain here. The
+          rosters below are the reference copy — /teams is their real home. */}
+      <section className="space-y-4">
+        <SectionTitle
+          aside={draftDone ? "· sort, filter and scout the field" : undefined}
+        >
+          {draftDone ? "Player pool" : "Signed up to play"}
+        </SectionTitle>
+        {players.length === 0 ? (
+          <EmptyState
+            title="No players yet"
+            description="Signups will appear here."
+          />
+        ) : (
+          <PlayerPool
+            players={poolPlayers}
+            showDraftStatus={season.status !== "SIGNUPS"}
+            draftInfo={draftInfo}
+          />
+        )}
+      </section>
 
       {preDraft && captainHopefuls.length > 0 ? (
         <section className="space-y-4">
@@ -184,7 +194,7 @@ export default async function PlayersPage() {
           >
             Captain hopefuls
           </SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {captainHopefuls.map((p) => {
               const accountId =
                 p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
@@ -230,45 +240,119 @@ export default async function PlayersPage() {
         </section>
       ) : null}
 
-      <section className="space-y-4">
-        <SectionTitle>
-          {draftDone ? "Player pool" : "Signed up to play"}
-        </SectionTitle>
-        {players.length === 0 ? (
-          <EmptyState
-            title="No players yet"
-            description="Signups will appear here."
-          />
-        ) : (
-          <PlayerPool
-            players={poolPlayers}
-            showDraftStatus={season.status !== "SIGNUPS"}
-            draftInfo={draftInfo}
-          />
-        )}
-      </section>
+      {teams.length > 0 ? (
+        <section className="space-y-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <SectionTitle aside={`· ${teams.length} teams`}>Rosters</SectionTitle>
+            <Link
+              href="/teams"
+              className="shrink-0 rounded text-sm text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              Full team pages →
+            </Link>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {teams.map((t) => (
+              <Card key={t.id} interactive className="flex flex-col">
+                <CardHeader
+                  className="px-4 py-3"
+                  title={
+                    <Link
+                      href={`/teams/${t.id}`}
+                      className="flex min-w-0 items-center gap-2 text-base hover:text-info"
+                    >
+                      <TeamCrest
+                        name={t.name}
+                        seed={t.id}
+                        size={22}
+                        className="rounded-md"
+                      />
+                      <span className="truncate">{t.name}</span>
+                    </Link>
+                  }
+                  subtitle={`${t.members.length}/${season.teamSize} players`}
+                  action={
+                    season.status === "DRAFT" ? (
+                      <Badge tone="accent">${t.budget} left</Badge>
+                    ) : null
+                  }
+                />
+                <CardBody className="space-y-1 px-4 py-3">
+                  {t.members.map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <Avatar name={m.user.name} src={m.user.avatar} size={22} />
+                      <PlayerLink
+                        userId={m.userId}
+                        className="min-w-0 flex-1 truncate"
+                      >
+                        {m.user.name}
+                      </PlayerLink>
+                      {m.isCaptain ? (
+                        <Badge tone="accent" title="Captain">
+                          C
+                        </Badge>
+                      ) : null}
+                      <RankBadge rankTier={m.user.rankTier} />
+                      <span className="w-8 shrink-0 text-right tabular-nums text-muted">
+                        {m.isCaptain ? "—" : `$${m.price}`}
+                      </span>
+                    </div>
+                  ))}
+                </CardBody>
+              </Card>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="space-y-4">
-        <SectionTitle>Standins</SectionTitle>
+        <SectionTitle
+          aside={
+            standins.length > 0
+              ? `· ${standins.length} on call for match night`
+              : undefined
+          }
+        >
+          Standins
+        </SectionTitle>
         {standins.length === 0 ? (
+          // Compact: this section is empty for most of a season and is not
+          // what anyone came for — a full 240px dashed box below a populated
+          // pool made the page look like it had failed to load.
           <EmptyState
+            compact
             title="No standins yet"
             description="Standins fill in when a rostered player can't make a match."
           />
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {standins.map((s) => (
               <PlayerLink
                 key={s.id}
                 userId={s.userId}
-                className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
+                className="flex min-w-0 items-center gap-2.5 rounded-lg border border-line bg-surface/80 px-3 py-2 hover:border-muted/60 hover:no-underline"
               >
-                <Avatar name={s.user.name} src={s.user.avatar} size={26} />
-                <span className="text-sm">{s.user.name}</span>
-                <RankBadge rankTier={s.user.rankTier} />
-                {s.mmr > 0 ? (
-                  <span className="text-xs text-muted">{s.mmr}</span>
-                ) : null}
+                <Avatar name={s.user.name} src={s.user.avatar} size={28} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">
+                    {s.user.name}
+                  </span>
+                  {/* Standins are the people a captain has to find at 7pm on a
+                      match night — they get the same roles/MMR legibility as
+                      the pool, not a bare name in a pill. */}
+                  <span className="mt-0.5 flex items-center gap-1.5">
+                    <RoleBadges roles={s.roles} />
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <RankBadge rankTier={s.user.rankTier} />
+                  <span className="text-sm tabular-nums text-muted">
+                    {s.mmr > 0 ? s.mmr : "—"}
+                  </span>
+                </span>
               </PlayerLink>
             ))}
           </div>

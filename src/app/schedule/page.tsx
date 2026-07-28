@@ -452,7 +452,9 @@ export default async function SchedulePage() {
       {playoff.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Playoff bracket</SectionTitle>
-          <Card>
+          {/* overflow-hidden: Bracket scrolls horizontally inside itself, and
+              without this the card leaks that width into the page scroll. */}
+          <Card className="overflow-hidden">
             <CardBody className="p-0 pt-4">
               <Bracket
                 rounds={bracketRoundsView}

@@ -1642,6 +1642,102 @@ already in the `Setting` table.
   on the clock need it now; `lg:order-*` restores teams-left/feed-above-pool
   on desktop). Keep the `#player-pool` anchor + NominateBar's ↓ link working.
 
+## Page layout & the UI kit (2026-07-28 pass — read before laying out a page)
+
+**A fixed two-column split sizes its row to the TALLER column, so the shorter
+one becomes a hole.** The dashboard's `lg:grid-cols-3` with the standings alone
+in a `col-span-2` and four cards in the 1/3 rail measured a **728 × 790px void**
+in the lower-left — the single worst thing on the site, and invisible in code
+review because both halves are individually correct. Two replacements, both in
+`src/app/page.tsx`, and neither is optional decoration:
+
+* **A band whose card count is KNOWN** gets an explicit grid whose spans adapt:
+  Standings is `lg:col-span-2` when a "Your team" card sits beside it and
+  `lg:col-span-3` when the viewer has none. The `COMPLETE` view's twin split
+  instead uses `items-start`, because there the short card genuinely should not
+  stretch.
+* **A band whose card count is UNKNOWN at render time** (League pulse renders
+  `null` until the league has games; Upcoming and Recent each vanish at the ends
+  of a season) uses auto-fit:
+  `grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]`.
+  auto-fit COLLAPSES the empty track, so two cards share the width and three
+  split it with no conditional spans to keep in sync.
+
+  **Do NOT add `grid-cols-1` to an auto-fit grid.** It is the reflex that the
+  mobile rule above trains, and it silently wins the cascade — Tailwind's
+  `grid-cols-1` emits the same `grid-template-columns` property, so the whole
+  band collapses to one column at every width and the page just gets taller.
+  This cost a debugging round the first time. The `min(16rem,100%)` in the
+  minmax is what makes `grid-cols-1` unnecessary: the track can never exceed the
+  container, so a long team name cannot widen the page.
+  `ThisWeek`'s body uses the same form — a league with a bye plays an ODD number
+  of matches per week, and the old `sm:grid-cols-2` left a permanently empty
+  cell.
+
+**The hero is a two-column marquee with ONE control slot.** Mid-season
+`heroAction` is null — there is no league-wide CTA once the season runs — which
+is exactly when a signed-in player has the most personal thing to do. So the
+slot holds, in order of preference: the phase's CTA buttons, or (mid-season)
+`MyNextMatch` rendering `<CheckinBanner variant="panel">`. Two rules: `aside` is
+optional and the identity column takes the full width without it (an empty 23rem
+column is worse than none), and **anything passed as `aside` MUST render
+something** — that is why `MyNextMatch` has a no-match branch instead of
+returning `null`. `SeasonTimeline` is the hero's footer rail now, not its own
+band; it kept `<ol aria-label="Season progress">`, the per-`<li>`
+`aria-current="step"` and the sr-only `(done)`/`(current)` text.
+`SeasonViewSkeleton` mirrors these bands — if you change one, change both or the
+page visibly rearranges after streaming.
+
+**Additive-only changes to the shared kit.** `Stat`, `EmptyState`, `PageTitle`,
+`SectionTitle`, `CardHeader` and `Card` have 15-22 call sites each, so every new
+capability is an optional prop whose default is byte-identical to what shipped:
+`Card tone` (`default` | `feature` | `quiet` — `feature` is the ONE card on a
+page the viewer should act on; if two are `feature`, neither is), `Stat size`
+(`md` drops the figure to text-xl, replacing a hand-rolled inline override in
+the dashboard's narrow rail), `EmptyState compact` (a section that is routinely
+empty and is not the point of the page — two full 240px dashed boxes made a
+populated `/players` read as broken), and `CheckinBanner variant`
+(`strip` is byte-for-byte what `/schedule` and `/matches/[id]` render, including
+the seven `details →` assertions; `panel` stacks for a narrow column). New:
+`StatStrip`/`StatCell` — the "shape of this thing in one line" band under a page
+title. Tokens `--color-surface-3` (an OPAQUE elevation step; a translucent one
+lets scrolled rows show through a table header) and `--color-line-soft` (a rule
+INSIDE a dense list, where `--color-line` draws a box around every row).
+
+**`/players` — the pool is a table, and one string is why.** `ROW_GRID` in
+`player-pool.tsx` is shared by the column header and every row; two copies would
+drift within a week and the header would start lying about which column is
+which. Below `md` there are no columns — the avatar keeps the left gutter and
+everything else stacks in the second track. That is not a nicety: the old
+`justify-between` row gave its right-hand chips `shrink-0`, so at 390px real
+players rendered as `P…`, `R.` and `Dir…`. Two placement details are
+load-bearing: the status chip spans BOTH phone tracks rather than sitting in
+track 3 (an `auto` track sized by a "Techies Anonymous $4" chip stole ~170px
+back off the name), and heroes ride with the roles below `md`, drop out between
+`md` and `xl`, and take their own track at `xl` — `xl:order-*` swaps them ahead
+of status for the wide layout only. The pool leads the page and the rosters
+follow it; `/teams` is the rosters' real home.
+
+**`/inhouse` — order is the product.** The page was room → guide → four ~500px
+box scores → ladder, which put the Elo ladder (the reason anyone comes back)
+past 4,000px AND paid the page's most expensive query for its least reachable
+content. It is now room → `SceneStats` → ladder → results → guide. `SceneStats`
+calls the SAME memoised `loadBoardStats` the pinned Discord board uses, so the
+channel and the site can never disagree about when the last game was — and the
+empty queue, which is ~95% of views, stops reading as a dead league. Recent
+results keep all four box scores but fold the older three into `<details>` whose
+summary IS the scoreline; the anchor id lives on the `<details>` element so a
+`#result-<id>` jump from the room's "Box score ↓" always lands. The OpenDota
+setup guide is `open={fhUnavailable}` — closed for everyone EXCEPT the cohort
+OpenDota reports as having public match data switched off. Folding it shut for
+everybody would have hidden it from exactly the people it is written for.
+
+**Tripwires.** `/` and `/players` now have `expectNoHorizontalOverflow` tests
+(`e2e-mid/dashboard.spec.ts`, `e2e-mid/boards.spec.ts`) — they were the two
+pages with none, and both carry wide content. All four `<Card>`s wrapping
+`<Bracket>` gained `overflow-hidden`: `Bracket`'s root is `overflow-x-auto` over
+a `min-w-max` row, and every one of them was violating the SeasonGrid rule.
+
 ## Fantasy league (done, branch: bigger-features)
 
 - Anyone signed in picks a **fantasy five** from the drafted rosters under an

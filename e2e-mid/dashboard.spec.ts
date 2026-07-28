@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // The mid-season dashboard: standings, the This-week strip (with the staged
 // LIVE match), and the sortable standings table's client behavior.
@@ -20,6 +20,19 @@ test("dashboard shows the regular-season hero, standings, and a LIVE chip", asyn
     page.getByRole("img", { name: /Live — series at 1–0/ }).first(),
   ).toBeVisible();
 
+  assertNoErrors();
+});
+
+// The dashboard is the widest page in the app — standings table, bracket, the
+// This-week grid — and it was the one page with no overflow tripwire at all.
+test("dashboard has no horizontal page overflow on a phone", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.goto("/");
+  await expect(page.locator("#main")).toContainText(/of \d+ weeks/);
+  await expectNoHorizontalOverflow(page, "/");
   assertNoErrors();
 });
 

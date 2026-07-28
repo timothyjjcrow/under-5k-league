@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // The stat roll-up pages — all recompute from every stored Game and all were
 // previously untested in a browser. Each check: key cards render, the
@@ -50,6 +50,20 @@ test("team page renders roster, form, and the what-we-need card", async ({
   await expect(page).toHaveURL(/\/teams\/.+/);
   await expect(page.getByText("Roster").first()).toBeVisible();
   await expect(page.getByText("Head-to-head")).toBeVisible();
+  assertNoErrors();
+});
+
+// The pool is a column-aligned grid whose tracks change three times between
+// 390px and 1440px — exactly the shape that leaks page width when a track is
+// sized by its content instead of by `minmax(0,1fr)`.
+test("players page has no horizontal page overflow on a phone", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.goto("/players");
+  await expect(page.getByRole("heading", { name: "Players" })).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/players");
   assertNoErrors();
 });
 

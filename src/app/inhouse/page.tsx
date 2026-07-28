@@ -17,6 +17,7 @@ import { heroById } from "@/lib/heroes";
 import { gameMvp } from "@/lib/achievements";
 import { formatMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
+import { loadBoardStats } from "@/lib/inhouse-board-service";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { HeroVideo } from "@/components/hero-video";
 import { LocalTime } from "@/components/local-time";
@@ -34,6 +35,8 @@ import {
   PageTitle,
   PlayerLink,
   SectionTitle,
+  StatCell,
+  StatStrip,
 } from "@/components/ui";
 import { cn, formatNetWorth } from "@/lib/utils";
 
@@ -58,7 +61,11 @@ export default async function InhousePage() {
         }),
         prisma.user.findUnique({
           where: { id: user.id },
-          select: { rankTier: true },
+          // fhUnavailable is OpenDota's `profile.fh_unavailable` — true means
+          // "Expose Public Match Data" is OFF, the #1 reason auto-import can't
+          // see a player. It is the one signal that says who the setup guide is
+          // actually for; we already capture it and were not using it here.
+          select: { rankTier: true, fhUnavailable: true },
         }),
       ])
     : [null, null];
@@ -97,18 +104,89 @@ export default async function InhousePage() {
 
         <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} mmrHint={mmrHint} />
 
-        <OpenDotaGuide />
-
         {/* The room above paints immediately; the history-scanning sections
-            stream in behind it (CLAUDE.md in-page streaming convention). */}
-        <Suspense fallback={<CardSkeleton rows={5} />}>
-          <RecentResults />
+            stream in behind it (CLAUDE.md in-page streaming convention).
+
+            ORDER IS THE POINT. The ladder used to sit last, behind ~2,000px of
+            box scores — so the page paid its highest query cost for its least
+            reachable content, and a returning player's own standing was the
+            hardest thing on it to find. Scene stats → ladder → results → guide
+            is the order of how often someone wants each. */}
+        <Suspense fallback={null}>
+          <SceneStats />
         </Suspense>
         <Suspense fallback={<CardSkeleton rows={6} />}>
           <LadderCard meId={user?.id ?? null} />
         </Suspense>
+        <Suspense fallback={<CardSkeleton rows={5} />}>
+          <RecentResults />
+        </Suspense>
+
+        {/* Open ONLY for the cohort it is about: a player OpenDota reports as
+            having public match data switched off. Folding it shut for everyone
+            would have hidden it from exactly the people who need it. */}
+        <OpenDotaGuide open={dbUser?.fhUnavailable ?? false} />
       </div>
     </>
+  );
+}
+
+/**
+ * Proof of life for the ~95% of visits that land on an empty queue.
+ *
+ * A bare "0 / 10" over ten dashed rows reads as a dead league, which is exactly
+ * why the pinned Discord board leads its empty state with these same figures
+ * (CLAUDE.md: "The EMPTY state is the product"). This calls the SAME memoised
+ * loader the board uses, so the channel and the site can never disagree about
+ * when the last game was — and every figure is monotonic or
+ * completes-with-a-state-change, never a trailing window that rots in a quiet
+ * stretch. Renders nothing at all before the first game: an empty stat row is
+ * worse than none.
+ */
+async function SceneStats() {
+  const stats = await loadBoardStats();
+  if (stats.lobbiesPlayed === 0) return null;
+
+  return (
+    <StatStrip>
+      <StatCell
+        label="Games played"
+        value={stats.lobbiesPlayed}
+        hint="all time"
+      />
+      {stats.lastEndedAtMs != null ? (
+        <StatCell
+          label="Last game"
+          value={
+            <LocalTime
+              ts={stats.lastEndedAtMs}
+              variant="short"
+              initial={formatMatchTime(new Date(stats.lastEndedAtMs), "short")}
+            />
+          }
+          hint={
+            stats.lastWinnerSide && stats.lastRadiantScore != null
+              ? `${stats.lastWinnerSide} ${stats.lastRadiantScore}–${stats.lastDireScore}`
+              : undefined
+          }
+        />
+      ) : null}
+      {stats.mvpName ? (
+        <StatCell
+          label="Last MVP"
+          value={<span className="truncate">{stats.mvpName}</span>}
+          hint={stats.mvpHero ?? undefined}
+        />
+      ) : null}
+      {stats.ladderName ? (
+        <StatCell
+          label="Top of the ladder"
+          tone="accent"
+          value={<span className="truncate">{stats.ladderName}</span>}
+          hint={stats.ladderRating != null ? `${stats.ladderRating} Elo` : undefined}
+        />
+      ) : null}
+    </StatStrip>
   );
 }
 
@@ -154,28 +232,113 @@ async function RecentResults() {
   const avatarMap = new Map(avatarUsers.map((u) => [u.id, u.avatar]));
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-baseline justify-between gap-3">
-        <SectionTitle>Recent results</SectionTitle>
+        <SectionTitle aside="· newest game in full, the rest one tap away">
+          Recent results
+        </SectionTitle>
         <Link
           href="/inhouse/history"
-          className="text-sm text-info hover:underline"
+          className="shrink-0 rounded text-sm text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           All results →
         </Link>
       </div>
-      {results.map((r) => (
-        // Anchor target for the room's result banner ("Box score ↓");
-        // scroll-mt clears the sticky header.
-        <div key={r.lobby.id} id={`result-${r.lobby.id}`} className="scroll-mt-24">
-          <GameResultCard
-            lobby={r.lobby}
-            players={r.players}
-            avatarMap={avatarMap}
-          />
-        </div>
+      {results.map((r, i) => (
+        // Four full box scores were ~2,000px — 45% of the page — for an
+        // archive that already exists at /inhouse/history. The newest stays
+        // open (it is the one the room's "Box score ↓" banner points at, and
+        // the one anyone actually just played); the rest fold down to their
+        // scoreline and expand in place, so nothing becomes unreachable.
+        //
+        // The anchor id lives on the <details> itself so a #result-<id> jump
+        // always lands, open or closed.
+        <details
+          key={r.lobby.id}
+          id={`result-${r.lobby.id}`}
+          open={i === 0}
+          className="group scroll-mt-24 overflow-hidden rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm"
+        >
+          <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+            <ResultSummaryLine lobby={r.lobby} players={r.players} />
+            <span
+              aria-hidden
+              className="shrink-0 text-muted transition-transform group-open:rotate-180"
+            >
+              ▾
+            </span>
+          </summary>
+          <div className="border-t border-line">
+            <GameResultCard
+              lobby={r.lobby}
+              players={r.players}
+              avatarMap={avatarMap}
+            />
+          </div>
+        </details>
       ))}
     </div>
+  );
+}
+
+/** The folded form of a game: who won, by how much, how long, and when. */
+function ResultSummaryLine({
+  lobby,
+  players,
+}: {
+  lobby: {
+    winnerTeam: number | null;
+    radiantTeam: number;
+    radiantScore: number | null;
+    direScore: number | null;
+    durationSecs: number | null;
+    createdAt: Date;
+  };
+  players: BoxPlayer[];
+}) {
+  const radiantWin =
+    lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
+  const mvpId = gameMvp(players, radiantWin);
+  const mvp = players.find((p) => p.userId === mvpId);
+  const dur = lobby.durationSecs ?? 0;
+  return (
+    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+      <span className="flex shrink-0 items-center gap-2">
+        <span
+          aria-hidden
+          className={cn(
+            "h-2.5 w-2.5 rounded-full",
+            radiantWin ? "bg-success" : "bg-danger",
+          )}
+        />
+        <span className="font-mono text-base font-bold tabular-nums">
+          {lobby.radiantScore ?? 0}
+          <span className="px-1 text-muted">–</span>
+          {lobby.direScore ?? 0}
+        </span>
+      </span>
+      <Badge tone={radiantWin ? "success" : "danger"}>
+        {radiantWin ? "Radiant" : "Dire"} victory
+      </Badge>
+      {mvp?.name ? (
+        <span className="min-w-0 truncate text-xs text-muted">
+          <span aria-hidden>🏅</span> {mvp.name}
+          {mvp.heroId ? ` · ${heroById(mvp.heroId)?.name ?? ""}` : ""}
+        </span>
+      ) : null}
+      <span className="ml-auto flex shrink-0 items-center gap-3 text-xs text-muted">
+        {dur > 0 ? (
+          <span className="tabular-nums">
+            {Math.floor(dur / 60)}:{String(dur % 60).padStart(2, "0")}
+          </span>
+        ) : null}
+        <LocalTime
+          ts={lobby.createdAt.getTime()}
+          variant="short"
+          initial={formatMatchTime(lobby.createdAt, "short")}
+        />
+      </span>
+    </span>
   );
 }
 
@@ -228,11 +391,19 @@ async function LadderCard({ meId }: { meId: string | null }) {
 
 // ---------- OpenDota "be findable" guide ----------
 
-function OpenDotaGuide() {
+function OpenDotaGuide({ open }: { open: boolean }) {
   return (
+    // Not unconditionally `open` any more. This is read-once setup copy, and it
+    // was costing ~200px on every visit forever — including for signed-out
+    // visitors who cannot act on it and veterans who did it two years ago. It
+    // still opens by itself for the one cohort it is written for (see the call
+    // site), and the summary states what it is, so nothing is hidden.
     <details
-      open
-      className="group rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
+      open={open}
+      className={cn(
+        "group rounded-[var(--radius)] border bg-surface/80 shadow-sm backdrop-blur",
+        open ? "border-accent/40" : "border-line",
+      )}
     >
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
         <div className="flex items-center gap-3">
@@ -332,63 +503,41 @@ function GameResultCard({
   const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
 
   return (
-    <Card>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
-        <div className="flex items-center gap-3">
-          <span className={cn("text-sm font-semibold", radiantWin ? "text-success" : "text-muted")}>
-            Radiant
-          </span>
-          <span className="font-mono text-xl font-bold tabular-nums">
-            {lobby.radiantScore ?? 0}
-            <span className="px-1.5 text-muted">–</span>
-            {lobby.direScore ?? 0}
-          </span>
-          <span className={cn("text-sm font-semibold", !radiantWin ? "text-danger" : "text-muted")}>
-            Dire
-          </span>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-muted">
-          <Badge tone={radiantWin ? "success" : "danger"}>
-            {radiantWin ? "Radiant" : "Dire"} victory
-          </Badge>
-          <LocalTime
-            ts={lobby.createdAt.getTime()}
-            variant="short"
-            initial={formatMatchTime(lobby.createdAt, "short")}
-          />
-          <span className="tabular-nums">{durStr}</span>
-          {lobby.dotaMatchId ? (
-            <a
-              href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-info hover:underline"
-            >
-              OpenDota ↗
-            </a>
-          ) : null}
-        </div>
+    // No <Card> here: the scoreline, winner, MVP, duration and time all live in
+    // the <details> summary above, and the <details> carries the border. A card
+    // inside it would double the frame and repeat the header.
+    <div className="grid grid-cols-1 gap-x-4 gap-y-4 p-4 sm:p-5 md:grid-cols-2">
+      <InhouseNetWorthBar radiantNet={radiantNet} direNet={direNet} />
+      <SideBox
+        label="Radiant"
+        win={radiantWin}
+        players={radiant}
+        avatarMap={avatarMap}
+        maxNet={maxNet}
+        mvpId={mvpId}
+      />
+      <SideBox
+        label="Dire"
+        win={!radiantWin}
+        players={dire}
+        avatarMap={avatarMap}
+        maxNet={maxNet}
+        mvpId={mvpId}
+      />
+      <div className="flex items-center justify-end gap-3 text-xs text-muted md:col-span-2">
+        <span className="tabular-nums">Duration {durStr}</span>
+        {lobby.dotaMatchId ? (
+          <a
+            href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          >
+            Full match on OpenDota ↗
+          </a>
+        ) : null}
       </div>
-      <CardBody className="grid grid-cols-1 gap-x-4 gap-y-4 md:grid-cols-2">
-        <InhouseNetWorthBar radiantNet={radiantNet} direNet={direNet} />
-        <SideBox
-          label="Radiant"
-          win={radiantWin}
-          players={radiant}
-          avatarMap={avatarMap}
-          maxNet={maxNet}
-          mvpId={mvpId}
-        />
-        <SideBox
-          label="Dire"
-          win={!radiantWin}
-          players={dire}
-          avatarMap={avatarMap}
-          maxNet={maxNet}
-          mvpId={mvpId}
-        />
-      </CardBody>
-    </Card>
+    </div>
   );
 }
 
@@ -580,41 +729,68 @@ function YourStanding({
   // Rank only counts among established players — provisionals are unranked.
   const { ranked } = rankInhouse(rows);
   const idx = ranked.findIndex((r) => r.userId === meId);
+  const toRank = PROVISIONAL_GAMES - me.games;
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-line bg-accent/5 px-5 py-3 text-sm">
-      <span className="font-semibold">Your standing</span>
-      <span className="text-muted tabular-nums">
-        {idx >= 0 ? `#${idx + 1} of ${ranked.length}` : "unranked"}
-      </span>
-      <span className="tabular-nums">
-        <span className="font-semibold">{me.rating}</span>
-        <span className="text-muted"> Elo</span>
-        {me.lastChange !== 0 ? (
-          <span
-            className={cn(
-              "ml-1 text-xs font-medium",
-              me.lastChange > 0 ? "text-success" : "text-danger",
-            )}
-            title="Elo change from your last game"
-          >
-            {me.lastChange > 0 ? `+${me.lastChange}` : me.lastChange}
+    // This is the only thing on the page addressed to the signed-in viewer, and
+    // it used to be six equal-weight text spans in a flex row — six semantic
+    // units separated by nothing but word order, ragged-wrapping to four lines
+    // on a phone. Same figures, now as discrete labelled cells.
+    <div className="flex flex-wrap items-center gap-x-7 gap-y-3 border-b border-line bg-accent/5 px-4 py-3.5 sm:px-5">
+      <div className="min-w-0">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-accent/90">
+          Your standing
+        </div>
+        <div className="mt-0.5 font-display text-xl font-bold leading-none tabular-nums">
+          {idx >= 0 ? `#${idx + 1}` : "—"}
+          <span className="ml-1 font-sans text-xs font-normal text-muted">
+            {idx >= 0 ? `of ${ranked.length}` : "unranked"}
           </span>
-        ) : null}
-        <span className="ml-1 text-xs text-muted">(peak {me.peak})</span>
-      </span>
-      <span className="tabular-nums">
-        <span className="text-success">{me.wins}W</span>
-        <span className="text-muted">–</span>
-        <span className="text-danger">{me.losses}L</span>
-        <span className="ml-1 text-xs text-muted">
-          {Math.round(me.winRate * 100)}%
-        </span>
-      </span>
-      <FormStrip form={me.form} size={4} />
-      {me.games < PROVISIONAL_GAMES ? (
-        <Badge tone="neutral">
-          provisional · {PROVISIONAL_GAMES - me.games} more{" "}
-          {PROVISIONAL_GAMES - me.games === 1 ? "game" : "games"} to rank
+        </div>
+      </div>
+      <StatCell
+        label="Elo"
+        value={
+          <>
+            {me.rating}
+            {me.lastChange !== 0 ? (
+              <span
+                className={cn(
+                  "font-sans text-xs font-medium",
+                  me.lastChange > 0 ? "text-success" : "text-danger",
+                )}
+                title="Elo change from your last game"
+              >
+                {me.lastChange > 0 ? `+${me.lastChange}` : me.lastChange}
+              </span>
+            ) : null}
+          </>
+        }
+        hint={`peak ${me.peak}`}
+      />
+      <StatCell
+        label="Record"
+        value={
+          <>
+            <span className="text-success">{me.wins}</span>
+            <span className="text-muted">–</span>
+            <span className="text-danger">{me.losses}</span>
+          </>
+        }
+        hint={`${Math.round(me.winRate * 100)}%`}
+      />
+      {me.form.length > 0 ? (
+        <div className="min-w-0">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
+            Form
+          </div>
+          <div className="mt-1">
+            <FormStrip form={me.form} size={5} />
+          </div>
+        </div>
+      ) : null}
+      {toRank > 0 ? (
+        <Badge tone="neutral" className="self-center">
+          provisional · {toRank} more {toRank === 1 ? "game" : "games"} to rank
         </Badge>
       ) : null}
     </div>
@@ -644,24 +820,43 @@ function Leaderboard({
   const ordered = [...ranked, ...provisional];
   return (
     <div className="overflow-x-auto">
-    <table className="w-full text-sm">
+    {/* table-fixed + widths on <col>, per CLAUDE.md's StandingsTable rule: with
+        fixed layout a `hidden` column STILL takes an equal share of the leftover
+        width unless its <col> is w-0 until the breakpoint that shows it. Without
+        this the nine mostly-1-character columns starved the Player name. */}
+    <table className="w-full table-fixed text-sm">
+      <colgroup>
+        <col className="w-11" />
+        <col />
+        {/* Wide enough for "1045" plus its "+18" delta on ONE line — at 4.5rem
+            the delta wrapped and every top row rendered two lines tall. */}
+        <col className="w-[5.75rem]" />
+        <col className="w-9" />
+        <col className="w-9" />
+        {/* Form moved ahead of Win%/Streak/GP: it is the one at-a-glance signal
+            in the table, so it is the first extra column a wider screen buys. */}
+        <col className="w-0 sm:w-[6.5rem]" />
+        <col className="w-0 md:w-14" />
+        <col className="w-0 md:w-16" />
+        <col className="w-0 lg:w-14" />
+      </colgroup>
       <thead>
         <tr className="border-b border-line text-left text-xs uppercase text-muted">
-          <th className="px-5 py-2.5 font-medium">#</th>
+          <th className="px-4 py-2.5 font-medium sm:px-5">#</th>
           <th className="px-2 py-2.5 font-medium">Player</th>
-          <th className="px-2 py-2.5 text-center font-medium">Elo</th>
+          <th className="px-2 py-2.5 text-right font-medium">Elo</th>
           <th className="px-2 py-2.5 text-center font-medium">W</th>
           <th className="px-2 py-2.5 text-center font-medium">L</th>
           <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+            Form
+          </th>
+          <th className="hidden px-2 py-2.5 text-center font-medium md:table-cell">
             Win%
           </th>
           <th className="hidden px-2 py-2.5 text-center font-medium md:table-cell">
-            Form
-          </th>
-          <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
             Streak
           </th>
-          <th className="hidden px-5 py-2.5 text-right font-medium sm:table-cell">
+          <th className="hidden px-4 py-2.5 text-right font-medium lg:table-cell sm:px-5">
             GP
           </th>
         </tr>
@@ -675,7 +870,7 @@ function Leaderboard({
               r.userId === meId ? "bg-accent/5" : "",
             )}
           >
-            <td className="px-5 py-2.5 text-muted tabular-nums">
+            <td className="px-4 py-2.5 text-muted tabular-nums sm:px-5">
               {i < ranked.length ? (
                 i < 3 ? (
                   <span role="img" aria-label={`Rank ${i + 1}`}>
@@ -701,7 +896,7 @@ function Leaderboard({
                 </PlayerLink>
               </span>
             </td>
-            <td className="px-2 py-2.5 text-center">
+            <td className="whitespace-nowrap px-2 py-2.5 text-right">
               <span
                 className={cn(
                   "font-semibold tabular-nums",
@@ -729,15 +924,15 @@ function Leaderboard({
             </td>
             <td className="px-2 py-2.5 text-center text-success">{r.wins}</td>
             <td className="px-2 py-2.5 text-center text-muted">{r.losses}</td>
-            <td className="hidden px-2 py-2.5 text-center tabular-nums sm:table-cell">
-              {Math.round(r.winRate * 100)}%
-            </td>
-            <td className="hidden px-2 py-2.5 md:table-cell">
+            <td className="hidden px-2 py-2.5 sm:table-cell">
               <span className="flex justify-center">
                 <FormStrip form={r.form} size={4} />
               </span>
             </td>
-            <td className="hidden px-2 py-2.5 text-center sm:table-cell">
+            <td className="hidden px-2 py-2.5 text-center tabular-nums md:table-cell">
+              {Math.round(r.winRate * 100)}%
+            </td>
+            <td className="hidden px-2 py-2.5 text-center md:table-cell">
               {r.streak !== 0 ? (
                 <span
                   className={cn(
@@ -751,7 +946,7 @@ function Leaderboard({
                 <span className="text-muted">—</span>
               )}
             </td>
-            <td className="hidden px-5 py-2.5 text-right tabular-nums sm:table-cell">
+            <td className="hidden px-4 py-2.5 text-right tabular-nums lg:table-cell sm:px-5">
               {r.games}
             </td>
           </tr>

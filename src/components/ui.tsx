@@ -60,15 +60,32 @@ export function Button({
 
 // ---------- Card ----------
 
+const cardTones = {
+  /** Byte-for-byte what every existing call site already renders. */
+  default: "border-line bg-surface/80 shadow-sm",
+  /**
+   * The one card on a page that the viewer is meant to act on. Used sparingly —
+   * if two cards on a screen are `feature`, neither is.
+   */
+  feature: "border-accent/35 bg-surface-3/70 shadow-lg shadow-black/25",
+  /** Context that should recede: archives, reference copy, empty-ish sections. */
+  quiet: "border-line/60 bg-surface/40",
+} as const;
+
 export function Card({
   className,
   interactive,
+  tone = "default",
   ...props
-}: React.HTMLAttributes<HTMLDivElement> & { interactive?: boolean }) {
+}: React.HTMLAttributes<HTMLDivElement> & {
+  interactive?: boolean;
+  tone?: keyof typeof cardTones;
+}) {
   return (
     <div
       className={cn(
-        "rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur",
+        "rounded-[var(--radius)] border backdrop-blur",
+        cardTones[tone],
         interactive &&
           "transition duration-200 hover:-translate-y-0.5 hover:border-muted/60 hover:shadow-lg hover:shadow-black/30 motion-reduce:transform-none motion-reduce:transition-none",
         className,
@@ -587,21 +604,51 @@ export function EmptyState({
   description,
   icon,
   action,
+  compact,
 }: {
   title: string;
   description?: string;
   icon?: React.ReactNode;
   action?: React.ReactNode;
+  /**
+   * Half-height variant for sections that are routinely empty and are NOT the
+   * point of the page (a standins list before anyone has signed up as one). The
+   * full-size box is a 240px dashed rectangle; stacking two of them makes a
+   * populated page read as a broken one.
+   */
+  compact?: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-dashed border-line bg-surface-2/20 px-6 py-12 text-center">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl border border-line bg-surface-2/60 text-muted">
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-dashed border-line bg-surface-2/20 text-center",
+        compact ? "gap-2 px-5 py-6" : "px-6 py-12",
+      )}
+    >
+      <div
+        className={cn(
+          "grid place-items-center rounded-2xl border border-line bg-surface-2/60 text-muted",
+          compact ? "h-9 w-9" : "h-14 w-14",
+        )}
+      >
         {icon ?? <EmptyGlyph />}
       </div>
       <div>
-        <p className="font-display text-base font-semibold text-fg">{title}</p>
+        <p
+          className={cn(
+            "font-display font-semibold text-fg",
+            compact ? "text-sm" : "text-base",
+          )}
+        >
+          {title}
+        </p>
         {description ? (
-          <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
+          <p
+            className={cn(
+              "mx-auto mt-1 max-w-sm text-muted",
+              compact ? "text-xs" : "text-sm",
+            )}
+          >
             {description}
           </p>
         ) : null}
@@ -662,18 +709,98 @@ export function Stat({
   label,
   value,
   hint,
+  size = "lg",
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
+  /**
+   * `md` drops the figure from text-3xl to text-xl. Needed wherever a Stat sits
+   * in a narrow column: a W–L–D record at text-3xl wraps mid-number in the
+   * dashboard's 1/3-width rail, which the caller used to patch with an inline
+   * span. One knob here beats a hand-tuned override per call site.
+   */
+  size?: "md" | "lg";
 }) {
   return (
     <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
       <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-1 font-display text-3xl font-bold tabular-nums text-fg">
+      <div
+        className={cn(
+          "mt-1 font-display font-bold tabular-nums text-fg",
+          size === "md" ? "text-xl" : "text-3xl",
+        )}
+      >
         {typeof value === "number" ? <CountUp value={value} /> : value}
       </div>
       {hint ? <div className="mt-0.5 text-xs text-muted">{hint}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * A horizontal band of small label/value pairs — the "here is the shape of this
+ * thing in one line" summary that sits under a page title or above a table.
+ * Cells wrap as whole units on phones rather than each cell ragged-wrapping its
+ * own label away from its figure.
+ *
+ * Deliberately lighter than a row of `<Stat>` boxes: a Stat is a figure you are
+ * meant to stop and read, a StatCell is context you absorb on the way past.
+ */
+export function StatStrip({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-6 gap-y-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 sm:px-5",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function StatCell({
+  label,
+  value,
+  tone = "default",
+  hint,
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: "default" | "accent" | "success" | "muted";
+  hint?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 flex items-baseline gap-1.5 font-display text-lg font-semibold tabular-nums leading-none",
+          tone === "accent"
+            ? "text-accent"
+            : tone === "success"
+              ? "text-success"
+              : tone === "muted"
+                ? "text-muted"
+                : "text-fg",
+        )}
+      >
+        {value}
+        {hint ? (
+          <span className="font-sans text-xs font-normal text-muted">
+            {hint}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }

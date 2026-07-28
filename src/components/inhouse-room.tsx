@@ -687,17 +687,17 @@ function QueueView({
   const { slots, overflow } = queueSlots(queue, lobbySize);
 
   return (
-    <div className="space-y-6">
-      <div className="overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/60 to-surface/40">
-        <div className="px-6 py-6 text-center">
-          <div className="text-sm uppercase tracking-wide text-muted">
+    <div className="space-y-4">
+      <div className="overflow-hidden rounded-[var(--radius)] border border-accent/30 bg-gradient-to-b from-surface-3/70 to-surface/40 shadow-lg shadow-black/25">
+        <div className="px-5 py-6 text-center sm:px-6">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-accent/90">
             Inhouse queue
           </div>
-          <div className="mt-1 text-4xl font-bold tabular-nums">
+          <div className="mt-1.5 font-display text-6xl font-bold leading-none tabular-nums">
             {present.length}
-            <span className="text-muted"> / {lobbySize}</span>
+            <span className="text-muted/70"> / {lobbySize}</span>
           </div>
-          <div className="mt-1 text-sm text-muted">
+          <div className="mt-2 text-sm text-muted">
             {needed > 0
               ? `${needed} more ${needed === 1 ? "player" : "players"} to fire up a game`
               : "Lobby full — starting the ready check…"}
@@ -706,7 +706,7 @@ function QueueView({
             ) : null}
           </div>
 
-          <div className="mx-auto mt-4 h-3 w-full max-w-md overflow-hidden rounded-full bg-surface-2">
+          <div className="mx-auto mt-4 h-2 w-full max-w-md overflow-hidden rounded-full bg-surface-2">
             <div
               className="h-full rounded-full bg-brand transition-all duration-500"
               style={{ width: `${pct}%` }}
@@ -762,24 +762,29 @@ function QueueView({
           </p>
         </div>
 
-        <div className="border-t border-line bg-surface/40 px-4 py-4">
+        <div className="border-t border-line bg-surface/40 px-3 py-3 sm:px-4">
           {/* All lobby slots — filled players + open placeholders, so the
               lobby visibly fills up as people queue. Present players claim the
               slots first (see queueSlots): the headline count, `needed` and
               lobby formation all ignore away entries, so letting one hold a
-              visible slot made this grid contradict the number above it. */}
-          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              visible slot made this grid contradict the number above it.
+
+              The trailing open rows ARE the call to action (the same reasoning
+              as the pinned Discord board), so they stay — but at 56px each an
+              empty queue rendered 560px of identical dashes, which is the state
+              ~95% of visits land on. Same ten rows, half the height. */}
+          <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
             {slots.map((q, i) => {
               if (!q) {
                 return (
                   <li
                     key={`open-${i}`}
-                    className="flex items-center gap-3 rounded-lg border border-dashed border-line/60 px-3 py-2"
+                    className="flex items-center gap-2.5 rounded-lg border border-dashed border-line/50 px-2.5 py-1.5"
                   >
-                    <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full border border-dashed border-line/60 text-xs tabular-nums text-muted/60">
+                    <span className="w-5 shrink-0 text-center text-xs tabular-nums text-muted/50">
                       {i + 1}
                     </span>
-                    <span className="text-sm text-muted/60">Open slot</span>
+                    <span className="text-sm text-muted/50">Open slot</span>
                   </li>
                 );
               }
@@ -788,7 +793,7 @@ function QueueView({
                 <li
                   key={q.userId}
                   className={cn(
-                    "flex items-center gap-3 rounded-lg border px-3 py-2",
+                    "flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5",
                     isMe
                       ? "border-accent/50 bg-accent/10"
                       : "border-line bg-surface-2/40",
@@ -798,8 +803,11 @@ function QueueView({
                   <span className="w-5 shrink-0 text-center text-xs text-muted tabular-nums">
                     {i + 1}
                   </span>
-                  <Avatar name={q.name} src={q.avatar} size={30} />
-                  <PlayerLink userId={q.userId} className="truncate text-sm font-medium">
+                  <Avatar name={q.name} src={q.avatar} size={26} />
+                  <PlayerLink
+                    userId={q.userId}
+                    className="min-w-0 truncate text-sm font-medium"
+                  >
                     {q.name}
                   </PlayerLink>
                   {q.away ? (
@@ -811,9 +819,9 @@ function QueueView({
                       away
                     </span>
                   ) : null}
-                  <span className="ml-auto flex items-center gap-2 text-xs text-muted">
+                  <span className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted">
                     <RankBadge rankTier={q.rankTier} />
-                    {q.mmr > 0 ? <span>{q.mmr}</span> : null}
+                    {q.mmr > 0 ? <span className="tabular-nums">{q.mmr}</span> : null}
                   </span>
                 </li>
               );
