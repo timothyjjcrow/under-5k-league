@@ -34,8 +34,45 @@ describe("buildDiscordAuthUrl", () => {
     expect(parsed.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
-  it("asks ONLY for identify — scope creep here is a privacy regression", () => {
+  // The scope is the consent screen, so it stays pinned in both directions.
+  // `guilds.join` is the ONE addition ever made here and it is conditional:
+  // anything else appearing, or the join scope appearing by default, is a
+  // privacy regression.
+  it("asks ONLY for identify by default", () => {
     expect(parsed.searchParams.get("scope")).toBe("identify");
+  });
+
+  it("adds guilds.join — and nothing else — when the league can actually join them", () => {
+    const withJoin = new URL(
+      buildDiscordAuthUrl({
+        clientId: "1234567890",
+        redirectUri: "https://ld2l.example/api/auth/discord/callback",
+        state: "st4te-value",
+        codeChallenge: "chall3nge",
+        withGuildJoin: true,
+      }),
+    );
+    expect(withJoin.searchParams.get("scope")).toBe("identify guilds.join");
+  });
+
+  it("never asks to READ anything beyond identify", () => {
+    for (const withGuildJoin of [false, true]) {
+      const scope = new URL(
+        buildDiscordAuthUrl({
+          clientId: "1234567890",
+          redirectUri: "https://ld2l.example/api/auth/discord/callback",
+          state: "st4te-value",
+          codeChallenge: "chall3nge",
+          withGuildJoin,
+        }),
+      ).searchParams.get("scope");
+      const scopes = (scope ?? "").split(" ").filter(Boolean);
+      // guilds.join is write-only; `guilds`, `email`, `messages.read` etc. are
+      // reads we have never needed and must not acquire by accident.
+      expect(scopes.every((s) => s === "identify" || s === "guilds.join")).toBe(
+        true,
+      );
+    }
   });
 });
 

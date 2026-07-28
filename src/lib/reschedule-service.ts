@@ -12,6 +12,10 @@ export type AcceptedReschedule = {
   week: number;
   isPlayoff: boolean;
   newTime: Date;
+  /** The captain who PROPOSED it — they asked and have been waiting. */
+  notifyUserId: string | null;
+  /** RSVPs the retime invalidated. Announced, never swallowed. */
+  clearedRsvps: number;
 };
 
 // Announcement data for a fresh proposal (mirrors AcceptedReschedule) — the
@@ -23,6 +27,13 @@ export type ProposedReschedule = {
   week: number;
   isPlayoff: boolean;
   proposedTime: Date;
+  /**
+   * The captain who owes an answer (the OTHER one). A proposal is a question
+   * addressed to exactly one person; the action resolves this to a mention so
+   * it doesn't sit unread in a channel until kickoff. User id, not a snowflake
+   * — the service stays free of Discord concerns.
+   */
+  notifyUserId: string | null;
 };
 
 // Sanity bounds for a proposed time: a datetime-local typo (year 0002 from
@@ -83,6 +94,12 @@ export async function proposeReschedule(
     week: match.week,
     isPlayoff: match.phase !== "REGULAR",
     proposedTime,
+    // The proposer is one of the two captains (asserted above), so the
+    // counterpart is simply the other one.
+    notifyUserId:
+      match.homeTeam.captainId === userId
+        ? match.awayTeam.captainId
+        : match.homeTeam.captainId,
   };
 }
 
@@ -127,6 +144,7 @@ export async function respondReschedule(
   // (which also drops it outside its own auto-sync window).
   assertSaneProposedTime(request.proposedTime);
 
+  let clearedRsvps = 0;
   await prisma.$transaction(async (tx) => {
     // Same conditional-write rule for accept: only a still-PENDING request
     // may retime the match.
@@ -156,7 +174,24 @@ export async function respondReschedule(
     // The night changed — every RSVP was an answer about the OLD night.
     // Clearing them re-prompts the rosters instead of carrying 8 stale ✓s
     // into a night nobody actually agreed to play.
-    await tx.matchAvailability.deleteMany({ where: { matchId: match.id } });
+    //
+    // The COUNT rides out to the announcement: silently deleting ten players'
+    // check-ins produces a match that looks unstaffed to its own captain and
+    // an eight-to-ten-person roster who each believe they already answered.
+    // Nothing else on the site tells them.
+    const cleared = await tx.matchAvailability.deleteMany({
+      where: { matchId: match.id },
+    });
+    clearedRsvps = cleared.count;
+
+    // The week's reminder has already gone out quoting the OLD kickoff, and a
+    // Discord edit wouldn't notify anyone even if we edited it. Dropping the
+    // idempotency marker lets maybeAnnounceUpcomingWeek re-fire for this week
+    // once the NEW time comes inside its window — with correct times and a
+    // fresh (now empty) check-in count.
+    await tx.setting.deleteMany({
+      where: { key: `weekReminder:${match.seasonId}:${match.week}` },
+    });
   });
   return {
     homeName: match.homeTeam.name,
@@ -164,6 +199,8 @@ export async function respondReschedule(
     week: match.week,
     isPlayoff: match.phase !== "REGULAR",
     newTime: request.proposedTime,
+    notifyUserId: request.proposedById,
+    clearedRsvps,
   };
 }
 

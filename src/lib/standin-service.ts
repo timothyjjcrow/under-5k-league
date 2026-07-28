@@ -2,7 +2,13 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
 import { getActiveSeason } from "./season";
-import { standinAssignedMessage, standinRemovedMessage } from "./discord";
+import {
+  standinAssignedMessage,
+  standinRemovedMessage,
+  type MentionAllowlist,
+} from "./discord";
+import { mentionsOf } from "./discord-mentions";
+import { standinConflict } from "./standin";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -19,8 +25,49 @@ class StandinRaceError extends Error {}
 // `actingCaptainId: null` is the admin override (any team, same guards).
 
 export type StandinServiceResult =
-  | { ok: true; message: string; announcement: string }
+  | {
+      ok: true;
+      message: string;
+      announcement: string;
+      /** Who the announcement is FOR — the action passes it to the send. */
+      mentions?: MentionAllowlist;
+    }
   | { ok: false; error: string };
+
+/** Cover this standin already owes on OTHER unplayed matches this season. */
+async function findClashingCover(
+  db: Pick<typeof prisma, "standinAssignment">,
+  opts: { matchId: string; standinUserId: string; seasonId: string },
+) {
+  return db.standinAssignment.findMany({
+    where: {
+      standinUserId: opts.standinUserId,
+      matchId: { not: opts.matchId },
+      match: {
+        seasonId: opts.seasonId,
+        status: { not: MATCH_STATUS.COMPLETED },
+      },
+    },
+    include: {
+      match: {
+        select: {
+          scheduledAt: true,
+          week: true,
+          homeTeam: { select: { name: true } },
+          awayTeam: { select: { name: true } },
+        },
+      },
+    },
+  });
+}
+
+function clashError(
+  standinName: string | undefined,
+  clash: { match: { homeTeam: { name: string }; awayTeam: { name: string } } },
+): string {
+  const who = standinName ?? "That standin";
+  return `${who} is already covering ${clash.match.homeTeam.name} vs ${clash.match.awayTeam.name} that night — they can't play both. Remove that assignment first.`;
+}
 
 export async function assignStandinGuarded(opts: {
   matchId: string;
@@ -70,7 +117,9 @@ export async function assignStandinGuarded(opts: {
     }),
     prisma.user.findUnique({
       where: { id: standinUserId },
-      select: { name: true },
+      // discordId rides along so the announcement can mention the standin
+      // without a second query — see the mentions on the return below.
+      select: { name: true, discordId: true },
     }),
   ]);
   if (!standinReg || standinReg.status !== REGISTRATION_STATUS.ACTIVE)
@@ -106,12 +155,13 @@ export async function assignStandinGuarded(opts: {
   // SEAT takes one standin: a second cover for the same player would inflate
   // the match-night roster (6-player check-in counts) and the import account
   // sets — remove the first assignment to swap standins.
-  const [already, seatTaken] = await Promise.all([
+  const [already, seatTaken, otherNights] = await Promise.all([
     prisma.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
     prisma.standinAssignment.findFirst({
       where: { matchId, replacingUserId },
       include: { standin: { select: { name: true } } },
     }),
+    findClashingCover(prisma, { matchId, standinUserId, seasonId: season.id }),
   ]);
   if (already)
     return { ok: false, error: "That standin is already assigned to this match" };
@@ -120,6 +170,9 @@ export async function assignStandinGuarded(opts: {
       ok: false,
       error: `${membership.user.name} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
     };
+  const clash = otherNights.find((o) => standinConflict(match, o.match));
+  if (clash)
+    return { ok: false, error: clashError(standinUser?.name, clash) };
 
   // SERIALIZABLE, not a plain create: this and a WITHDRAWAL of the same standin
   // are a write-skew pair. Assign reads the standin's Registration and writes a
@@ -149,7 +202,7 @@ export async function assignStandinGuarded(opts: {
         // re-reading only the Registration left the assign-vs-signFreeAgent
         // pair with no cycle to detect, so both could commit and a rostered
         // player could hold live cover.
-        const [fresh, rostered, already, seatTaken] = await Promise.all([
+        const [fresh, rostered, already, seatTaken, otherNights] = await Promise.all([
           tx.registration.findUnique({
             where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
             select: { status: true },
@@ -163,6 +216,10 @@ export async function assignStandinGuarded(opts: {
             where: { matchId, replacingUserId },
             include: { standin: { select: { name: true } } },
           }),
+          // Same reasoning as the other re-reads: two concurrent assigns for
+          // the same standin on two fixtures the same night would each see a
+          // clear field outside the transaction.
+          findClashingCover(tx, { matchId, standinUserId, seasonId: season.id }),
         ]);
         if (!fresh || fresh.status !== REGISTRATION_STATUS.ACTIVE)
           throw new StandinRaceError("That standin has no active signup this season");
@@ -178,6 +235,9 @@ export async function assignStandinGuarded(opts: {
           throw new StandinRaceError(
             `${membership.user.name} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
           );
+        const clash = otherNights.find((o) => standinConflict(match, o.match));
+        if (clash)
+          throw new StandinRaceError(clashError(standinUser?.name, clash));
         await tx.standinAssignment.create({
           data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
         });
@@ -203,7 +263,10 @@ export async function assignStandinGuarded(opts: {
         : ""),
     // Being assigned is the single most action-demanding event a standin can
     // get — the action layer posts this so they hear about it without
-    // happening to visit the site.
+    // happening to visit the site. Which is why it MENTIONS them: a plain
+    // channel line about a game they're now expected at is exactly the
+    // message that must not depend on them scrolling back.
+    mentions: mentionsOf([standinUser?.discordId]),
     announcement: standinAssignedMessage({
       standinName: standinUser?.name ?? "A standin",
       replacedName: membership.user.name,
@@ -232,7 +295,7 @@ export async function removeStandinGuarded(opts: {
           awayTeam: { select: { name: true } },
         },
       },
-      standin: { select: { name: true } },
+      standin: { select: { name: true, discordId: true } },
     },
   });
   if (!assignment) return { ok: false, error: "That assignment is already gone" };
@@ -283,6 +346,8 @@ export async function removeStandinGuarded(opts: {
   return {
     ok: true,
     message: "Standin assignment removed",
+    // They were told to show up; they need to hear that they no longer are.
+    mentions: mentionsOf([assignment.standin.discordId]),
     announcement: standinRemovedMessage({
       standinName: assignment.standin.name,
       teamName: team.name,

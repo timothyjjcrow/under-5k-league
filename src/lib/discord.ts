@@ -1,6 +1,16 @@
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
 import { splitLinks } from "./linkify";
+import { escapeDiscordText } from "./discord-escape";
+
+/**
+ * Player and team names are user-controlled (Steam personas, captain-chosen
+ * team names) and Discord renders markdown in webhook messages — including
+ * masked links, which it suppresses for user-typed messages but NOT for ours.
+ * Every interpolation of one goes through here. Admin-authored text (news
+ * bodies, season names) deliberately does not — see discord-escape.ts.
+ */
+const name = escapeDiscordText;
 
 // Push league moments to the community's Discord via an incoming webhook.
 // The webhook URL lives in the Setting table (admin panel) with the
@@ -35,7 +45,7 @@ export function signupMessage(
   const when = draftAtMs
     ? ` Draft night: <t:${Math.floor(draftAtMs / 1000)}:F>.`
     : "";
-  return `📝 **${playerName}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when}`;
+  return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when}`;
 }
 
 export function draftScheduledMessage(
@@ -63,17 +73,17 @@ export function draftRecapMessage(r: {
   const lines = [`📊 **Draft night in numbers** — $${r.totalSpent} changed hands.`];
   if (r.biggestSpend) {
     lines.push(
-      `💰 Biggest buy: **${r.biggestSpend.name}** to ${r.biggestSpend.teamName} for $${r.biggestSpend.price}`,
+      `💰 Biggest buy: **${name(r.biggestSpend.name)}** to ${name(r.biggestSpend.teamName)} for $${r.biggestSpend.price}`,
     );
   }
   if (r.bestValue) {
     lines.push(
-      `🕵️ Steal of the night: **${r.bestValue.name}** to ${r.bestValue.teamName} at $${r.bestValue.price}`,
+      `🕵️ Steal of the night: **${name(r.bestValue.name)}** to ${name(r.bestValue.teamName)} at $${r.bestValue.price}`,
     );
   }
   if (r.topSpender) {
     lines.push(
-      `🏦 Deepest pockets: **${r.topSpender.teamName}** ($${r.topSpender.spent} spent)`,
+      `🏦 Deepest pockets: **${name(r.topSpender.teamName)}** ($${r.topSpender.spent} spent)`,
     );
   }
   return lines.join("\n");
@@ -86,7 +96,7 @@ export function playerSoldMessage(
 ): string {
   const tag =
     price >= 50 ? " 💸 big spender!" : price <= 1 ? " — a steal!" : "";
-  return `💰 **${playerName}** → **${teamName}** for **$${price}**${tag}`;
+  return `💰 **${name(playerName)}** → **${name(teamName)}** for **$${price}**${tag}`;
 }
 
 export function matchResultMessage(m: {
@@ -98,13 +108,15 @@ export function matchResultMessage(m: {
   isPlayoff: boolean;
 }): string {
   const label = m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
+  const home = name(m.homeName);
+  const away = name(m.awayName);
   const winner =
     m.homeScore > m.awayScore
-      ? m.homeName
+      ? home
       : m.awayScore > m.homeScore
-        ? m.awayName
+        ? away
         : null;
-  const line = `⚔️ **${label}:** ${m.homeName} ${m.homeScore}–${m.awayScore} ${m.awayName}`;
+  const line = `⚔️ **${label}:** ${home} ${m.homeScore}–${m.awayScore} ${away}`;
   return winner ? `${line} — **${winner}** take the series!` : `${line} — a draw!`;
 }
 
@@ -112,7 +124,7 @@ export function playoffsStartedMessage(
   seasonName: string,
   pairings: { home: string; away: string }[],
 ): string {
-  const lines = pairings.map((p) => `• ${p.home} vs ${p.away}`).join("\n");
+  const lines = pairings.map((p) => `• ${name(p.home)} vs ${name(p.away)}`).join("\n");
   return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
 }
 
@@ -120,21 +132,21 @@ export function championMessage(
   seasonName: string,
   teamName: string,
 ): string {
-  return `👑 **${teamName}** are the **${seasonName}** champions! GG everyone — recap at <${resolveSiteUrl()}/recap>`;
+  return `👑 **${name(teamName)}** are the **${seasonName}** champions! GG everyone — recap at <${resolveSiteUrl()}/recap>`;
 }
 
 export function freeAgentSignedMessage(
   playerName: string,
   teamName: string,
 ): string {
-  return `🖊️ **${playerName}** signs with **${teamName}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>`;
+  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>`;
 }
 
 export function playerReleasedMessage(
   playerName: string,
   teamName: string,
 ): string {
-  return `📤 **${playerName}** released from **${teamName}** — they're a free agent again.`;
+  return `📤 **${name(playerName)}** released from **${name(teamName)}** — they're a free agent again.`;
 }
 
 /** `<@&id>` prefix, or nothing when the league hasn't set a ping role. */
@@ -168,7 +180,7 @@ export function inhouseLobbyMessage(
   roleId?: string | null,
 ): string {
   const who = players
-    .map((p) => (p.discordId ? `<@${p.discordId}>` : p.name))
+    .map((p) => (p.discordId ? `<@${p.discordId}>` : name(p.name)))
     .join(", ");
   return `${rolePrefix(roleId)}🚨 **Inhouse match found!** Accept your game before the clock runs out — <${resolveSiteUrl()}/inhouse>\n${who}`;
 }
@@ -186,7 +198,7 @@ export function inhouseResultMessage(m: {
   const mins = Math.floor(m.durationSecs / 60);
   const secs = String(m.durationSecs % 60).padStart(2, "0");
   const mvp = m.mvpName
-    ? ` MVP: **${m.mvpName}**${m.mvpHero ? ` (${m.mvpHero})` : ""}.`
+    ? ` MVP: **${name(m.mvpName)}**${m.mvpHero ? ` (${m.mvpHero})` : ""}.`
     : "";
   return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: <${resolveSiteUrl()}/inhouse> · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
 }
@@ -203,7 +215,7 @@ export function playerOutMessage(m: {
   const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
-  return `🚑 **${m.playerName}** can't make the ${label} — **${m.homeName}** vs **${m.awayName}**${when}. Captains/admin: time to line up a standin.`;
+  return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.`;
 }
 
 export function standinAssignedMessage(m: {
@@ -220,7 +232,8 @@ export function standinAssignedMessage(m: {
   const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
-  return `🧩 **${m.standinName}** stands in for **${m.replacedName}** on **${m.teamName}** — ${label} **${m.homeName}** vs **${m.awayName}**${when}. ${m.standinName}: that's your game night now, check in on the match page.`;
+  const standin = name(m.standinName);
+  return `🧩 **${standin}** stands in for **${name(m.replacedName)}** on **${name(m.teamName)}** — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page.`;
 }
 
 export function standinRemovedMessage(m: {
@@ -232,7 +245,7 @@ export function standinRemovedMessage(m: {
   isPlayoff: boolean;
 }): string {
   const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
-  return `🧩 **${m.standinName}** is no longer standing in for **${m.teamName}** (${label} **${m.homeName}** vs **${m.awayName}**) — stand down.`;
+  return `🧩 **${name(m.standinName)}** is no longer standing in for **${name(m.teamName)}** (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) — stand down.`;
 }
 
 export function rescheduleProposedMessage(m: {
@@ -244,7 +257,7 @@ export function rescheduleProposedMessage(m: {
   whenMs: number;
 }): string {
   const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
-  return `⏳ **${m.proposerName}** proposed moving the ${label} **${m.homeName}** vs **${m.awayName}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
+  return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
 }
 
 /** Cap the ping list so one badly-organised team can't produce a wall of
@@ -277,13 +290,13 @@ export function weekReminderMessage(m: {
   for (const f of m.fixtures) {
     const t = Math.floor(f.scheduledAt / 1000);
     lines.push(
-      `🆚 **${f.homeName}** vs **${f.awayName}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
+      `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
     );
     if (f.waitingOn.length > 0) {
       const shown = f.waitingOn.slice(0, WAITING_SHOWN);
       const extra = f.waitingOn.length - shown.length;
       const who = shown
-        .map((p) => (p.discordId ? `<@${p.discordId}>` : p.name))
+        .map((p) => (p.discordId ? `<@${p.discordId}>` : name(p.name)))
         .join(", ");
       lines.push(
         `　Still waiting on: ${who}${extra > 0 ? ` +${extra} more` : ""}`,
@@ -305,12 +318,12 @@ export function weeklyHonorsMessage(honors: {
   const lines = [`🏅 **Week ${honors.week} honors are in!**`];
   if (honors.playerName) {
     lines.push(
-      `⭐ Player of the Week: **${honors.playerName}** — ${honors.playerPoints} fantasy pts${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+      `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} fantasy pts${honors.heroName ? ` on ${honors.heroName}` : ""}`,
     );
   }
   if (honors.teamName) {
     lines.push(
-      `🛡️ Team of the Week: **${honors.teamName}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
+      `🛡️ Team of the Week: **${name(honors.teamName)}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
     );
   }
   lines.push(`Full leaderboards: <${resolveSiteUrl()}/leaders>`);
@@ -327,10 +340,18 @@ export function rescheduleMessage(m: {
    *  markup so every reader sees it in their own timezone (a server-formatted
    *  string would be UTC wall-time in prod, wrong hour and often wrong day). */
   whenMs: number;
+  /** RSVPs the retime invalidated — the rosters have to hear about this. */
+  clearedRsvps?: number;
 }): string {
   const label = m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
   const t = `<t:${Math.floor(m.whenMs / 1000)}:F>`;
-  return `🗓️ **Rescheduled** — ${label}: **${m.homeName}** vs **${m.awayName}** now plays ${t} (both captains agreed).`;
+  // Retiming clears every check-in (an old answer about a night nobody is
+  // playing). Saying so is the only notice the roster gets — the site shows
+  // them an empty banner with no explanation of why their ✓ vanished.
+  const reset = m.clearedRsvps
+    ? ` Check-ins were reset (${m.clearedRsvps} cleared) — everyone please RSVP again.`
+    : "";
+  return `🗓️ **Rescheduled** — ${label}: **${name(m.homeName)}** vs **${name(m.awayName)}** now plays ${t} (both captains agreed).${reset}`;
 }
 
 export function testMessage(): string {
@@ -607,7 +628,11 @@ async function sendTo(
 ): Promise<boolean> {
   if (!url) return false;
   try {
-    const res = await fetch(url, {
+    // webhookApiUrl, not the raw URL: an unversioned /api/webhooks/… routes to
+    // Discord's DEFAULT version, still v6 and deprecated. The board's transport
+    // has always pinned v10 and these ~28 announcements silently didn't — the
+    // same webhook string reaching Discord two different ways.
+    const res = await fetch(webhookApiUrl(url), {
       method: "POST",
       headers: { "content-type": "application/json" },
       // allowed_mentions: parse:[] means NO mention ever resolves — a player

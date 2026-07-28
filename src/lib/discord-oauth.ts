@@ -1,5 +1,7 @@
 // Discord account linking uses OAuth2 (authorization-code + PKCE) with the
-// minimal `identify` scope. The flow:
+// minimal `identify` scope — plus `guilds.join` when the league has a bot and
+// a server configured, so one click both links the account and puts the player
+// in the server (see buildDiscordAuthUrl). The flow:
 //   1. /api/auth/discord (signed-in only) generates a state + PKCE verifier,
 //      stashes them in a short-lived httpOnly cookie, and redirects to Discord.
 //   2. Discord sends the user back to our callback with ?code&state.
@@ -7,8 +9,9 @@
 //      attacker could splice THEIR Discord onto YOUR account), exchanges the
 //      code server-side (client secret + verifier), and reads /users/@me.
 //   4. We persist ONLY the snowflake id + username. Tokens are dropped on the
-//      floor — with `identify` there is nothing worth keeping, so a DB leak
-//      leaks a public id, not credentials.
+//      floor — neither scope grants anything worth keeping, so a DB leak leaks
+//      a public id, not credentials. The guild join happens INSIDE the callback
+//      precisely so the token never has to outlive the request.
 // DISCORD_CLIENT_SECRET is a server-only credential (webhook-URL rule): it is
 // never rendered to the client and never logged.
 
@@ -57,18 +60,31 @@ export function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-/** The discord.com/oauth2/authorize redirect. Pure — unit-tested. */
+/**
+ * The discord.com/oauth2/authorize redirect. Pure — unit-tested.
+ *
+ * `withGuildJoin` adds the ONE extra scope this app ever asks for, and it is
+ * conditional on purpose: it lets the callback drop the player straight into
+ * the league's server instead of making them find the invite separately. It
+ * changes what the consent screen promises ("Join servers for you"), so it is
+ * requested ONLY when DISCORD_BOT_TOKEN + DISCORD_GUILD_ID are set and the
+ * join can really happen. Asking for a permission we can't exercise would be
+ * the worst of both — the scarier screen and none of the payoff.
+ *
+ * Still no email, no guild LIST, no messages: `guilds.join` is write-only.
+ */
 export function buildDiscordAuthUrl(opts: {
   clientId: string;
   redirectUri: string;
   state: string;
   codeChallenge: string;
+  withGuildJoin?: boolean;
 }): string {
   const params = new URLSearchParams({
     client_id: opts.clientId,
     response_type: "code",
     redirect_uri: opts.redirectUri,
-    scope: "identify", // minimal scope: no email, no guilds, no messages
+    scope: opts.withGuildJoin ? "identify guilds.join" : "identify",
     state: opts.state,
     code_challenge: opts.codeChallenge,
     code_challenge_method: "S256",

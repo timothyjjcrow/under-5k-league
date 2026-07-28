@@ -79,6 +79,59 @@ describe("captain standin assignment (integration)", () => {
     expect(row.standinUserId).toBe(sub.id);
   });
 
+  // Being told to turn up for a game is the most action-demanding message the
+  // league sends. It has to MENTION the standin, not describe them in the
+  // third person to a channel they may not be reading.
+  it("mentions the standin — and nobody at all when they haven't linked", async () => {
+    const { home, homePlayer, sub, match } = await setup();
+    const unlinked = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(unlinked.ok && unlinked.mentions).toBeUndefined();
+
+    await prisma.standinAssignment.deleteMany({ where: { matchId: match.id } });
+    await prisma.user.update({
+      where: { id: sub.id },
+      data: { discordId: "700000000000000001" },
+    });
+
+    const linked = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(linked.ok && linked.mentions).toEqual({
+      users: ["700000000000000001"],
+    });
+  });
+
+  it("stand-down mentions them too — they were told to show up", async () => {
+    const { home, homePlayer, sub, match } = await setup();
+    await prisma.user.update({
+      where: { id: sub.id },
+      data: { discordId: "700000000000000002" },
+    });
+    await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    const assignment = await prisma.standinAssignment.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+
+    const res = await removeStandinGuarded({
+      assignmentId: assignment.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok && res.mentions).toEqual({ users: ["700000000000000002"] });
+  });
+
   it("a captain cannot arrange cover for the OTHER team (admins can)", async () => {
     const { home, awayPlayer, sub, match } = await setup();
     const wrong = await assignStandinGuarded({
@@ -331,5 +384,105 @@ describe("standin guard hardening (review findings)", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain("archived season");
+  });
+});
+
+// One person cannot play two lobbies at once. The per-MATCH duplicate check
+// only ever asked "is this standin already in THIS match", so the same person
+// could be booked for two fixtures kicking off at the same minute — which is
+// what happens the first time a captain and an admin both go looking for cover
+// on the same league night.
+describe("a standin can't cover two matches the same night", () => {
+  async function twoNights() {
+    const base = await setup();
+    const other = await prisma.match.create({
+      data: {
+        seasonId: base.season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        // Reversed fixture, same kickoff — a real double round-robin week.
+        homeTeamId: base.away.id,
+        awayTeamId: base.home.id,
+        scheduledAt: base.match.scheduledAt,
+      },
+    });
+    return { ...base, other };
+  }
+
+  it("refuses the second booking and names the clash", async () => {
+    const { home, away, homePlayer, awayPlayer, sub, match, other } =
+      await twoNights();
+
+    const first = await assignStandinGuarded({
+      matchId: other.id,
+      standinUserId: sub.id,
+      replacingUserId: awayPlayer.id,
+      actingCaptainId: away.captainId,
+    });
+    expect(first.ok).toBe(true);
+
+    const second = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(second.ok).toBe(false);
+    if (second.ok) return;
+    expect(second.error).toContain("Sub Sam");
+    expect(second.error).toMatch(/can't play both/);
+    // And nothing was written.
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+  });
+
+  it("allows cover on a genuinely different night", async () => {
+    const { home, away, homePlayer, awayPlayer, sub, match, other } =
+      await twoNights();
+    await prisma.match.update({
+      where: { id: other.id },
+      data: {
+        week: 2,
+        scheduledAt: new Date(match.scheduledAt!.getTime() + 7 * 86_400_000),
+      },
+    });
+
+    await assignStandinGuarded({
+      matchId: other.id,
+      standinUserId: sub.id,
+      replacingUserId: awayPlayer.id,
+      actingCaptainId: away.captainId,
+    });
+    const second = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(second.ok).toBe(true);
+  });
+
+  it("ignores cover on a match that's already been played", async () => {
+    const { home, away, homePlayer, awayPlayer, sub, match, other } =
+      await twoNights();
+    await assignStandinGuarded({
+      matchId: other.id,
+      standinUserId: sub.id,
+      replacingUserId: awayPlayer.id,
+      actingCaptainId: away.captainId,
+    });
+    await prisma.match.update({
+      where: { id: other.id },
+      data: { status: MATCH_STATUS.COMPLETED },
+    });
+
+    const second = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(second.ok).toBe(true);
   });
 });

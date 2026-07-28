@@ -296,6 +296,19 @@ is the point at which someone has to justify it.
   plain transaction. Proved with a forced schedule on Postgres (two connections,
   barriered reads): at read-committed both commit and a WITHDRAWN standin keeps
   live cover; at Serializable the assign fails P2034. Belt-and-braces,
+- **A standin can't cover two matches the same night.** Pure `standinConflict`
+  (`src/lib/standin.ts`, tested): kickoffs within `STANDIN_CONFLICT_HOURS` (4)
+  clash, falling back to the same WEEK when either time is unset. The old
+  duplicate check asked only "is this standin already in THIS match", so the
+  same person could be booked for two fixtures at the same minute — not a
+  corner case, since the league plays every team on one night and it happens
+  the first time a captain and an admin both go looking for cover. Checked in
+  BOTH places, like every other precondition here: once up front and again
+  inside the SERIALIZABLE transaction (outside it, two concurrent assigns each
+  see a clear field). Completed matches are ignored — that cover is history.
+  The error names the clashing fixture, because "remove that assignment first"
+  is useless without saying which.
+- Belt-and-braces,
   `matchNightRoster` DROPS an assignment whose non-null `replacingUserId` isn't
   on the base roster — a NULL replacingUserId is kept (that's a standin filling
   an empty seat, which adds a player without replacing one).
@@ -381,7 +394,8 @@ is the point at which someone has to justify it.
   `<DiscordTag verified>` shows a ✓ wherever `!!discordId`. Flow mirrors
   Steam: `/api/auth/discord` (session required — this is linking, not login;
   state+PKCE verifier in a one-shot httpOnly cookie scoped to the callback
-  path) → Discord (`identify` scope ONLY — no email/guilds) →
+  path) → Discord (`identify`, plus `guilds.join` when a bot is configured —
+  see below; never email, never the guild LIST) →
   `/api/auth/discord/callback`, a thin shell over `handleDiscordCallback`
   (`src/lib/discord-link-service.ts`, reschedule-service pattern,
   integration-tested in `test/integration/discord-link.itest.ts`): state
@@ -398,6 +412,49 @@ is the point at which someone has to justify it.
   typed handle would wear the verified ✓; `unlinkDiscord` clears both
   fields. The client secret follows the webhook rule: server-only, never
   rendered or logged.
+- **One click links AND joins the server (`guilds.join`)**: the scope is
+  CONDITIONAL — `buildDiscordAuthUrl({withGuildJoin})`, passed
+  `!!getGuildConfig()` by `/api/auth/discord`. Without a bot the consent
+  screen is identify-only exactly as before; asking to "join servers for you"
+  when the callback can't deliver it would be the scarier screen with none of
+  the payoff. `getGuildConfig` (token+guild, NO role id) is deliberately
+  separate from `getRoleConfig` — gating the join on the latter would silently
+  disable it on any server that just hasn't picked a ping role.
+  `joinGuild` (`discord-roles.ts`) PUTs `/guilds/{g}/members/{userId}` with the
+  BOT token in the header and the user's access token in the body — both are
+  required, which is why it can only run inside the callback while the token
+  is still in hand (it is still discarded immediately; nothing is stored).
+  **A failed join must NEVER fail the link** — the link is already committed
+  when it runs, and the whole thing is wrapped in a try/catch that degrades to
+  `?discord=join_failed`; pinned by `discord-link.itest.ts`. 201 with
+  `pending: true` means Membership Screening has them behind the rules — in
+  the guild but unpingable, so it reports `joined_pending` rather than
+  claiming success. Two silent 403 causes, both on the admin card's
+  "Auto-join on link" line: the bot lacks CREATE_INSTANT_INVITE, or
+  `DISCORD_BOT_TOKEN` and `DISCORD_CLIENT_ID` are DIFFERENT applications
+  (a bot user's id IS its app id, so `getPingHealth` compares them free).
+  `discord-oauth.test.ts` pins the scope in BOTH directions — identify-only by
+  default, and never a READ scope beyond identify in either mode. `joinGuild`
+  itself is exercised over REAL HTTP in `discord-roles.itest.ts` (its stand-in
+  server BUFFERS the request body, since the whole contract is bot-token-in-
+  header + user-token-in-body): a mocked dep can't catch the bug class this
+  file has already met once — branching on a status whose meaning is
+  counter-intuitive, here `204` = "already a member" = success.
+- **The signed-up-but-unlinked prompt** (`src/components/discord-setup.tsx`):
+  linking used to be offered in exactly ONE place — a card partway down `/me`
+  — while the invite had six. `DiscordSetupPrompt` renders on the dashboard
+  (and `DiscordSetupCard` at the top of `/me`) for a viewer who is ACTIVE in
+  the season and has no `discordId`, and is phase-independent on purpose: a
+  player who signs up during SIGNUPS is still unreachable in week 4. It is
+  DERIVED state, never a dismissible flag — a nag that can be dismissed
+  permanently stops working, and one that outlives what it asks for is worse.
+  Copy branches on `autoJoins` so it never promises the one-click version on a
+  league with no bot. KNOWN EDGE (not fixed): `/api/auth/discord` is a
+  full-page redirect and the callback always lands on `/me`, so clicking Link
+  with a half-filled signup form loses it — the card sits ABOVE the form and
+  warns when you aren't registered yet, but the real fix needs a return path
+  packed into the OAuth cookie (`unpackOauthCookie` hard-rejects anything that
+  isn't exactly 2 dot-separated parts, so base64url it).
 - **Player questionnaire**: `Registration.roles` (comma-sep position keys,
   helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
   `captainNote` — captured on `/me`, surfaced in the player pool and draft room
@@ -1152,6 +1209,61 @@ reached a player who wasn't already looking at it.
   per-team Discord roles" — same targeting, no mirrored Discord state, none of
   the reconcile debt. Don't build the roles version; the argument against it is
   already written at the top of `discord-roles.ts`.
+- **Every announcement that ENDS BY NAMING AN ACTION now mentions the person
+  who has to take it** (`src/lib/discord-mentions.ts`). `sendDiscordMessage`
+  had accepted a `MentionAllowlist` since the mention work landed, but only the
+  queue ping and the week reminder ever passed one — so the four messages that
+  literally say "captains: line up a standin" / "the other captain can respond"
+  notified NOBODY. They were the largest remaining seam in the integration.
+  Targets, and the reasoning behind each: a player's OUT → **their captain**
+  (who finds the cover; never the captain about their own withdrawal); standin
+  assigned/removed → **the standin** (being told to turn up for a game is the
+  most action-demanding message the league sends); reschedule proposed → **the
+  opposing captain**; reschedule accepted → **the proposer**, who asked and has
+  been waiting. Never a broadcast: a withdrawal is not the rest of the league's
+  problem, and a notification people can't act on is what gets a channel muted.
+  `mentionsOf` (pure, tested) exists so no call site hand-rolls the null
+  filtering and builds `{users:[undefined]}`, which Discord rejects silently
+  because every send is best-effort; it returns `undefined` rather than
+  `{users:[]}` so a league where nobody has linked sends byte-for-byte what it
+  sent before. Only `discordId` is mentionable — the typed `discordName` is a
+  string a captain copies by hand and no amount of it makes someone pingable.
+  Services return `mentions`/`notifyUserId` and the ACTION does the send, so a
+  webhook failure still can't touch the write. NOTE the standin announcement
+  has FOUR call sites (`standins.ts` ×2 AND `admin.ts` ×2) — miss one and the
+  admin path silently stops notifying.
+- **Every player/team name in an announcement goes through
+  `escapeDiscordText`** (`src/lib/discord-escape.ts`, tested; `discord.ts`
+  aliases it to `name`). Discord renders markdown in WEBHOOK messages and,
+  unlike user-typed messages, does NOT suppress masked links there — so a
+  Steam persona of `[free mmr](https://evil.test)` arrived as a live link that
+  read as league-authored. This lived only in `inhouse-board.ts` because that
+  message is pinned; correct about the board, wrong about everything else. The
+  board keeps its own wrapper, since the TRUNCATION is board-specific (fixed
+  height rack) while the escaping isn't. NOT applied to admin-authored text
+  (news bodies, season names) — an admin writing `**bold**` means it, and
+  `newsMessage` emits a bare media URL on purpose so the GIF embeds. `<@id>`
+  MENTION markup is never escaped, only the plain-name fallback beside it;
+  `discord.test.ts` sweeps every formatter for `](` and pins both.
+- **`sendTo` pins v10 via `webhookApiUrl`.** It fetched the raw webhook URL,
+  so all ~28 announcements rode Discord's unversioned default (v6, deprecated)
+  while the board's transport had always pinned v10 — the same webhook string
+  reaching Discord two different ways.
+- **`RSVP_OUT_PING_THROTTLE_SECONDS` backs up the was-it-already-OUT check.**
+  `prior?.status !== "OUT"` misses OUT→IN→OUT while a player decides. That was
+  a duplicate line in a channel; now that the message mentions the captain it's
+  a repeat phone buzz, so `setAvailability` also claims
+  `outPing:<matchId>:<userId>` via `claimThrottle`.
+- **Unlinking Discord strips the inhouse ping role** (`unlinkDiscord` reads the
+  snowflake BEFORE clearing it, then best-effort `setPingRole(…, false)`).
+  Leaving it behind was the worst outcome that action had: the player keeps
+  getting pinged AND the toggle that turns it off renders only inside the
+  `discordId` branch, so they'd just thrown away their own off switch — exactly
+  the un-opt-out-able ping the design refuses to ship. `failed`/`forbidden`
+  says so in the toast rather than claiming success. KNOWN GAP: re-linking a
+  DIFFERENT account leaves the role on the old one (rare, and deliberate — the
+  fix needs `linkDiscordAccount` to return the previous id plus another
+  injected dep in the callback).
 
 ## Live inhouse queue board (done)
 
@@ -1797,6 +1909,17 @@ already in the `Setting` table.
   data, action sends `rescheduleProposedMessage`). The dashboard's
   `MyNextMatch` also shows a "⏳ … Respond →" strip to the opposing captain
   while a proposal is pending.
+- **Accepting a reschedule WIPES every RSVP, and now says so.** The delete is
+  deliberate (an old answer about a night nobody is playing), but it used to
+  be silent: eight to ten players each believed they had checked in, and the
+  captain saw an unstaffed match with no explanation — the site shows an empty
+  banner and never mentions why. `respondReschedule` returns `clearedRsvps`
+  from the deleteMany count and `rescheduleMessage` reports it. The same
+  transaction also DELETES the `weekReminder:<season>:<week>` marker: that
+  reminder already went out quoting the OLD kickoff, Discord edits notify
+  nobody, so releasing the marker is what lets it re-fire with the right time
+  and a fresh (empty) check-in count. Both pinned in `reschedule.itest.ts`,
+  including that a DECLINE touches neither.
 - **Admin week mover**: `setWeekNight` action — retimes a week's unplayed
   matches from one input; optional cascade shifts later scheduled weeks by
   the same delta. Form lives in the admin Schedule & results card.
@@ -1832,6 +1955,12 @@ already in the `Setting` table.
 
 ## Performance (done — keep following these)
 
+- **The admin page's Discord card is streamed** (`DiscordSection`). It is the
+  only thing on `/admin` that talks to Discord — `getPingHealth` alone is
+  three sequential calls at a 4s timeout, and `getInhouseBoardStatus` drags a
+  full-history Elo scan behind it. Awaited inline they blocked the whole page,
+  Pause draft and Record result included, and did it worst exactly when
+  Discord was down, which is when an admin opens that page.
 - **In-page streaming**: the dashboard (`page.tsx`) and the match preview wrap
   their slower async sub-sections in `<Suspense fallback={<CardSkeleton/>}>` so
   the hero/shell paints before the heavy queries resolve. When adding a new

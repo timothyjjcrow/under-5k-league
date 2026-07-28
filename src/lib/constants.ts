@@ -314,6 +314,13 @@ export const WEEK_REMINDER = {
   BEHIND_HOURS: 3, // still worth announcing shortly after kickoff
 } as const;
 
+// A player declaring OUT pings their captain. The "was it already OUT?" check
+// alone doesn't cover a player flipping OUT→IN→OUT while they decide, and that
+// used to be a harmless duplicate channel post — now it's a repeat phone buzz
+// for the one person who has to find cover. Long enough to absorb the
+// deciding, short enough that a genuine second withdrawal still gets through.
+export const RSVP_OUT_PING_THROTTLE_SECONDS = 6 * 60 * 60;
+
 // Automatic result sync: league games are pulled from OpenDota without anyone
 // pressing a button. Driven lazily by the sitewide <ResultSyncPing> hitting
 // POST /api/sync (no cron/websocket — same philosophy as the draft clock).

@@ -56,6 +56,7 @@ import {
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import { WeekReminderPing } from "@/components/week-reminder-ping";
+import { DiscordSetupPrompt } from "@/components/discord-setup";
 import {
   AUTO_SYNC,
   DRAFT_STATUS,
@@ -331,6 +332,15 @@ export default async function Home() {
         meta={heroMeta}
       />
       <SeasonTimeline phase={season.status} />
+      {/* Signed up but unreachable — the one cohort every Discord notification
+          in the app silently skips. Renders nothing for everyone else, and is
+          phase-independent on purpose: a player who signs up during SIGNUPS and
+          links nothing is still unreachable in week 4. */}
+      {user ? (
+        <Suspense fallback={null}>
+          <DiscordSetupPrompt userId={user.id} seasonId={season.id} />
+        </Suspense>
+      ) : null}
       {/* Below the hero everything streams: the shell (hero + timeline) paints
           immediately while each section resolves its own queries behind a
           Suspense boundary, instead of the whole page blocking on the slowest.

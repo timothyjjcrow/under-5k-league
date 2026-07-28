@@ -14,7 +14,8 @@ import {
   setInhousePingOptIn,
 } from "@/app/actions/registration";
 import { DiscordTag } from "@/components/discord-tag";
-import { getRoleConfig, hasPingRole } from "@/lib/discord-roles";
+import { getGuildConfig, getRoleConfig, hasPingRole } from "@/lib/discord-roles";
+import { DiscordSetupCard } from "@/components/discord-setup";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import { HARD_MMR_CEILING } from "@/lib/constants";
@@ -38,6 +39,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  DiscordButton,
   PageTitle,
   RankBadge,
   ScheduleCallout,
@@ -56,6 +58,18 @@ const DISCORD_LINK_NOTES: Record<
   linked: {
     tone: "success",
     text: "Discord linked — your handle is now verified.",
+  },
+  joined: {
+    tone: "success",
+    text: "Discord linked and you're in the league server — that's everything.",
+  },
+  joined_pending: {
+    tone: "muted",
+    text: "Discord linked and you've been added to the server — open it and accept the rules, otherwise nobody can ping you.",
+  },
+  join_failed: {
+    tone: "muted",
+    text: "Discord linked. We couldn't add you to the server automatically — join it with the button below.",
   },
   denied: {
     tone: "muted",
@@ -100,6 +114,10 @@ export default async function MePage({
   const discordLinkAvailable = !!(
     process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
   );
+  // With a bot + server configured the OAuth consent also carries
+  // `guilds.join`, so linking adds them to the server in the same click. The
+  // copy has to match what the consent screen actually asks for.
+  const discordAutoJoins = !!getGuildConfig();
 
   const season = await getActiveSeason();
   const reg = season
@@ -177,6 +195,16 @@ export default async function MePage({
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <PageTitle title="Your profile" />
+
+      {/* Signed up but unreachable. Above the fold rather than in the Discord
+          card below, because that card is what everyone has already scrolled
+          past. Gone the moment discordId exists. */}
+      {isRegistered && !dbUser?.discordId ? (
+        <DiscordSetupCard
+          linkAvailable={discordLinkAvailable}
+          autoJoins={discordAutoJoins}
+        />
+      ) : null}
 
       <Card>
         <CardBody className="flex items-center gap-4">
@@ -256,6 +284,18 @@ export default async function MePage({
               {discordNote.text}
             </p>
           ) : null}
+          {/* Both of these leave the player linked but not actually reachable,
+              so the note must come with the way out of it. */}
+          {discordParam === "join_failed" || discordParam === "joined_pending" ? (
+            <DiscordButton
+              size="sm"
+              label={
+                discordParam === "joined_pending"
+                  ? "Open the server"
+                  : "Join the server"
+              }
+            />
+          ) : null}
           {dbUser?.discordId ? (
             <>
               <div className="flex flex-wrap items-center gap-3">
@@ -323,12 +363,26 @@ export default async function MePage({
                     href="/api/auth/discord"
                     className={buttonClasses("primary", "sm")}
                   >
-                    Link Discord
+                    {discordAutoJoins
+                      ? "Link Discord & join the server"
+                      : "Link Discord"}
                   </a>
                   <span className="text-xs text-muted">
-                    Sign in with Discord once — proves the handle is really
-                    yours. We only ever see your username, nothing else.
+                    {/* This has to describe the real consent screen. With
+                        guilds.join in the scope, "we only see your username"
+                        is still true of what we READ — but it stops being the
+                        whole story, and a player who spots the gap has every
+                        reason to distrust the rest. */}
+                    {discordAutoJoins
+                      ? "Sign in with Discord once — proves the handle is really yours and adds you to the league server. We only ever read your username; the join is the only thing we ask to do."
+                      : "Sign in with Discord once — proves the handle is really yours. We only ever see your username, nothing else."}
                   </span>
+                  {!isRegistered && signupsOpen ? (
+                    <span className="text-xs text-muted">
+                      This leaves the page — if you&apos;ve started filling in
+                      the signup below, save it first.
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
               <ActionForm

@@ -587,9 +587,38 @@ export async function unlinkDiscord(
   } catch {
     return { error: "Sign in required" };
   }
+  // Read the snowflake BEFORE clearing it — unlinking has to take the ping
+  // role with it. Leaving the role behind is the worst outcome this action
+  // has: the player still gets pinged, and the toggle that turns it off is
+  // rendered only for LINKED players, so they've just thrown away their own
+  // off switch. That is precisely the un-opt-out-able ping the whole ping
+  // design refuses to ship.
+  const before = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { discordId: true },
+  });
   await unlinkDiscordAccount(prisma, user.id);
+
+  let roleLeft = false;
+  if (before?.discordId) {
+    const cfg = await getRoleConfig();
+    if (cfg) {
+      // Best-effort, and it must not fail the unlink — the site half is done
+      // either way. "not-a-member" means they'd already left the server, which
+      // is a success for our purposes: nothing left to strip.
+      const res = await setPingRole(before.discordId, false, cfg);
+      roleLeft = res === "failed" || res === "forbidden";
+    }
+  }
+
   refresh();
-  return { message: "Discord unlinked — your handle was removed from the site" };
+  return {
+    message:
+      "Discord unlinked — your handle was removed from the site" +
+      (roleLeft
+        ? ". We couldn't remove your inhouse ping role in Discord — take it off there, or the pings continue."
+        : ""),
+  };
 }
 
 /**

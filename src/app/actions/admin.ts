@@ -1669,7 +1669,7 @@ export async function assignStandin(
   });
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
-  await sendDiscordMessage(res.announcement);
+  await sendDiscordMessage(res.announcement, res.mentions);
   refresh();
   return { message: res.message };
 }
@@ -1689,7 +1689,7 @@ export async function removeStandin(
     actingCaptainId: null,
   });
   if (!res.ok) return { error: res.error };
-  await sendDiscordMessage(res.announcement);
+  await sendDiscordMessage(res.announcement, res.mentions);
   refresh();
   return { message: res.message };
 }

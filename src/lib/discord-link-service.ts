@@ -11,6 +11,7 @@ import {
   unpackOauthCookie,
   type DiscordProfile,
 } from "./discord-oauth";
+import { getGuildConfig, joinGuild, type GuildJoin } from "./discord-roles";
 
 type Db = Pick<PrismaClient, "user">;
 
@@ -79,11 +80,39 @@ export type CallbackInput = {
 export type CallbackDeps = {
   exchange: typeof exchangeDiscordCode;
   fetchIdentity: typeof fetchDiscordIdentity;
+  /**
+   * Put the freshly-linked player in the league's server. Returns null when
+   * the league has no bot configured — the identify-only world, where linking
+   * is the whole outcome.
+   */
+  joinGuild: (
+    discordId: string,
+    accessToken: string,
+  ) => Promise<GuildJoin | null>;
 };
 
 const DEFAULT_DEPS: CallbackDeps = {
   exchange: exchangeDiscordCode,
   fetchIdentity: fetchDiscordIdentity,
+  joinGuild: async (discordId, accessToken) => {
+    const cfg = getGuildConfig();
+    if (!cfg) return null;
+    return joinGuild(discordId, accessToken, cfg);
+  },
+};
+
+/**
+ * Join outcome → the ?discord= code /me renders. `linked` stays the plain
+ * "it worked" for the no-bot case, so nothing about the identify-only flow
+ * changes. A failed join NEVER fails the link: the account is already tied to
+ * the site, and the player just needs the invite instead.
+ */
+const JOIN_CODES: Record<GuildJoin, string> = {
+  joined: "joined",
+  "joined-pending": "joined_pending",
+  already: "linked",
+  forbidden: "join_failed",
+  failed: "join_failed",
 };
 
 /**
@@ -125,7 +154,17 @@ export async function handleDiscordCallback(
 
   const linked = await linkDiscordAccount(db, input.userId, profile);
   if (!linked.ok) return { redirect: "/me?discord=taken" };
-  return { redirect: "/me?discord=linked" };
+
+  // The link is committed. Everything past here is a bonus that must not be
+  // able to undo it — hence the swallow: a bot outage, a missing permission or
+  // a mismatched application costs the player the auto-join, never the link.
+  let join: GuildJoin | null = null;
+  try {
+    join = await deps.joinGuild(profile.discordId, token);
+  } catch {
+    join = "failed";
+  }
+  return { redirect: `/me?discord=${join ? JOIN_CODES[join] : "linked"}` };
 }
 
 // Re-exported so the itest can build valid payload shapes the same way the

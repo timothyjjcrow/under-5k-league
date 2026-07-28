@@ -20,13 +20,32 @@ import { getSetting, SETTING_KEYS } from "./settings";
 
 const API = "https://discord.com/api/v10";
 
-export type RoleConfig = {
+/** Bot credentials for guild-scoped work that needs no particular role. */
+export type GuildConfig = {
   token: string;
   guildId: string;
-  roleId: string;
   /** Test seam only — production always uses Discord. */
   apiBase?: string;
 };
+
+export type RoleConfig = GuildConfig & { roleId: string };
+
+/**
+ * Token + guild, with no ping role required.
+ *
+ * Deliberately separate from getRoleConfig: that one returns null when no ping
+ * role is chosen, which is correct for the opt-in and WRONG for anything else
+ * the bot does. Gating the OAuth guild-join on getRoleConfig would silently
+ * disable joining on any server that simply hasn't picked a ping role.
+ */
+export function getGuildConfig(): GuildConfig | null {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  const guildId = process.env.DISCORD_GUILD_ID;
+  if (!token || !guildId) return null;
+  // DISCORD_API_BASE exists so the whole flow can be exercised against a
+  // stand-in locally; unset (i.e. always, in production) it is Discord.
+  return { token, guildId, apiBase: process.env.DISCORD_API_BASE };
+}
 
 /**
  * All three pieces, or null. The role id lives in the Setting table (an admin
@@ -34,17 +53,14 @@ export type RoleConfig = {
  * never sit anywhere an admin page could read it back.
  */
 export async function getRoleConfig(): Promise<RoleConfig | null> {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  const guildId = process.env.DISCORD_GUILD_ID;
-  if (!token || !guildId) return null;
+  const guild = getGuildConfig();
+  if (!guild) return null;
   const roleId =
     (await getSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID)) ||
     process.env.DISCORD_INHOUSE_ROLE_ID ||
     null;
   if (!roleId) return null;
-  // DISCORD_API_BASE exists so the whole flow can be exercised against a
-  // stand-in locally; unset (i.e. always, in production) it is Discord.
-  return { token, guildId, roleId, apiBase: process.env.DISCORD_API_BASE };
+  return { ...guild, roleId };
 }
 
 /** True when the site can offer the opt-in at all (bot token + guild + role). */
@@ -53,9 +69,10 @@ export async function pingOptInAvailable(): Promise<boolean> {
 }
 
 async function call(
-  cfg: RoleConfig,
+  cfg: GuildConfig,
   path: string,
   method: "GET" | "PUT" | "DELETE",
+  body?: unknown,
 ): Promise<Response | null> {
   try {
     return await fetch(`${cfg.apiBase ?? API}${path}`, {
@@ -64,11 +81,12 @@ async function call(
         Authorization: `Bot ${cfg.token}`,
         "content-type": "application/json",
       },
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(4000),
     });
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] role call failed:", err);
+      console.warn("[discord] bot call failed:", err);
     }
     return null;
   }
@@ -136,6 +154,64 @@ export async function setPingRole(
 }
 
 // ---------------------------------------------------------------------------
+// Guild join (OAuth `guilds.join`)
+// ---------------------------------------------------------------------------
+
+export type GuildJoin =
+  | "joined"
+  /** In the guild, but Membership Screening still has them behind the rules. */
+  | "joined-pending"
+  | "already"
+  | "forbidden"
+  | "failed";
+
+/**
+ * Add a player to the league's server using the access token they just granted.
+ *
+ * Discord's "Add Guild Member" wants BOTH credentials at once: the bot token in
+ * the Authorization header (the bot is the one doing the adding, and must hold
+ * CREATE_INSTANT_INVITE) and the user's own `guilds.join` access token in the
+ * body (their consent). Neither alone works, which is why this can only run
+ * inside the OAuth callback while the token is still in hand — see
+ * handleDiscordCallback, which discards it immediately afterwards.
+ *
+ * 403 is the one an admin must act on and never resolves by retrying: either
+ * the bot lacks CREATE_INSTANT_INVITE, or the token belongs to a DIFFERENT
+ * application than the OAuth client the player just authorised. getPingHealth
+ * checks both so it doesn't have to be diagnosed from a player's bug report.
+ */
+export async function joinGuild(
+  discordId: string,
+  accessToken: string,
+  cfg: GuildConfig,
+): Promise<GuildJoin> {
+  const res = await call(
+    cfg,
+    `/guilds/${cfg.guildId}/members/${discordId}`,
+    "PUT",
+    { access_token: accessToken },
+  );
+  if (!res) return "failed";
+  // 204 = already a member. Discord changes nothing and sends no body, so this
+  // is the normal outcome for anyone who joined via the invite link first.
+  if (res.status === 204) return "already";
+  if (res.status === 201) {
+    // Membership Screening / Onboarding lands new members as `pending`: they
+    // are in the server but can't read, talk, or be pinged until they accept
+    // the rules. Reporting that as a clean success would leave them thinking
+    // they're reachable when no notification can arrive.
+    try {
+      const body = (await res.json()) as { pending?: unknown };
+      return body?.pending === true ? "joined-pending" : "joined";
+    } catch {
+      return "joined";
+    }
+  }
+  if (res.status === 403) return "forbidden";
+  return "failed";
+}
+
+// ---------------------------------------------------------------------------
 // Setup diagnostics
 // ---------------------------------------------------------------------------
 
@@ -165,6 +241,19 @@ export type PingHealth = {
   botTopPosition: number | null;
   rolePosition: number | null;
   hasManageRoles: boolean | null;
+  /**
+   * CREATE_INSTANT_INVITE — what the OAuth guild-join needs. Separate from
+   * Manage Roles: a bot invited only for the ping role has one and not the
+   * other, and the join then 403s on every player forever.
+   */
+  canInvite: boolean | null;
+  /**
+   * Is the bot token from the SAME application as DISCORD_CLIENT_ID? Discord
+   * only honours a `guilds.join` token for the application that issued it, so
+   * a mismatched pair fails permanently while every other check stays green.
+   * null = DISCORD_CLIENT_ID unset, so there's nothing to compare against.
+   */
+  appMatchesOauth: boolean | null;
   /** Set when a check couldn't run at all, e.g. a bad token. */
   problem: string | null;
 };
@@ -190,9 +279,10 @@ async function getJson(cfg: RoleConfig, path: string): Promise<Fetched | null> {
 }
 
 // tsconfig targets ES2017, so BigInt LITERALS (8n) don't compile — see the
-// same gotcha in CLAUDE.md for match ids. 1<<3 and 1<<28.
+// same gotcha in CLAUDE.md for match ids. 1<<3, 1<<28 and 1<<0.
 const ADMINISTRATOR = BigInt("8");
 const MANAGE_ROLES = BigInt("268435456");
+const CREATE_INSTANT_INVITE = BigInt("1");
 
 export async function getPingHealth(): Promise<PingHealth> {
   const hasToken = !!process.env.DISCORD_BOT_TOKEN;
@@ -213,6 +303,8 @@ export async function getPingHealth(): Promise<PingHealth> {
     botTopPosition: null,
     rolePosition: null,
     hasManageRoles: null,
+    canInvite: null,
+    appMatchesOauth: null,
     problem: null,
   };
   const cfg = await getRoleConfig();
@@ -235,21 +327,27 @@ export async function getPingHealth(): Promise<PingHealth> {
   const botName = (meUser.data as { username?: string })?.username ?? null;
   if (!botId) return { ...base, problem: "Unexpected reply from Discord." };
 
+  // A bot user's id IS its application id, so this is a free check — and the
+  // only way to catch a bot token paired with a different app's OAuth client,
+  // which breaks the guild-join permanently while looking fine everywhere else.
+  const oauthClientId = process.env.DISCORD_CLIENT_ID || null;
+  const appMatchesOauth = oauthClientId ? botId === oauthClientId : null;
+  const known = { ...base, botName, appMatchesOauth };
+
   // 2. Our own member row, by REAL snowflake.
   const [member, rolesRes] = await Promise.all([
     getJson(cfg, `/guilds/${cfg.guildId}/members/${botId}`),
     getJson(cfg, `/guilds/${cfg.guildId}/roles`),
   ]);
   if (!member || !rolesRes) {
-    return { ...base, botName, problem: "Couldn't reach Discord." };
+    return { ...known, problem: "Couldn't reach Discord." };
   }
   if (member.status === 404 || member.status === 403) {
-    return { ...base, botName, botInGuild: false };
+    return { ...known, botInGuild: false };
   }
   if (!member.ok || !rolesRes.ok) {
     return {
-      ...base,
-      botName,
+      ...known,
       problem: `Discord refused the guild lookup (${member.ok ? rolesRes.status : member.status}).`,
     };
   }
@@ -259,7 +357,7 @@ export async function getPingHealth(): Promise<PingHealth> {
     | undefined;
   const myRoleIds = (member.data as { roles?: string[] })?.roles;
   if (!Array.isArray(roles) || !Array.isArray(myRoleIds)) {
-    return { ...base, botName, botInGuild: true, problem: "Unexpected reply from Discord." };
+    return { ...known, botInGuild: true, problem: "Unexpected reply from Discord." };
   }
 
   const byId = new Map(roles.map((r) => [r.id, r]));
@@ -275,19 +373,20 @@ export async function getPingHealth(): Promise<PingHealth> {
     const r = byId.get(id);
     return r ? acc | BigInt(r.permissions ?? "0") : acc;
   }, BigInt(byId.get(cfg.guildId)?.permissions ?? "0"));
-  const hasManageRoles =
-    (perms & ADMINISTRATOR) === ADMINISTRATOR ||
-    (perms & MANAGE_ROLES) === MANAGE_ROLES;
+  const isAdmin = (perms & ADMINISTRATOR) === ADMINISTRATOR;
+  const hasManageRoles = isAdmin || (perms & MANAGE_ROLES) === MANAGE_ROLES;
+  const canInvite =
+    isAdmin || (perms & CREATE_INSTANT_INVITE) === CREATE_INSTANT_INVITE;
 
   return {
-    ...base,
-    botName,
+    ...known,
     botInGuild: true,
     roleExists: !!target,
     roleName: target?.name ?? null,
     botTopPosition: botTop,
     rolePosition: target?.position ?? null,
     hasManageRoles,
+    canInvite,
     // STRICTLY greater: an equal position is not "lower" and Discord refuses
     // it. A managed (integration-owned) role can never be assigned by anyone.
     canGrant: target

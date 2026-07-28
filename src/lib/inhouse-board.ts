@@ -1,4 +1,5 @@
 import { INHOUSE_STATUS } from "./constants";
+import { escapeDiscordText } from "./discord-escape";
 
 // The live inhouse queue board: ONE Discord message the site rewrites in place
 // instead of posting a new "6/10 queued" line every time somebody joins.
@@ -139,34 +140,19 @@ const NAMES_SHOWN = 12;
 const AUTHOR_ICON = "/brand/ggd2l-logo.png";
 
 /**
- * Neutralise Discord markdown in player-supplied text (Steam personas, which
- * the player controls). Higher stakes here than in a transient announcement:
- * this message is pinned and never scrolls away, so a persona of `**` or a
- * `[label](evil.link)` would deface the channel permanently.
+ * Board-flavoured escaping: the shared escape, plus the board's fixed-width
+ * truncation. Higher stakes here than in a transient announcement — this
+ * message is PINNED and never scrolls away, so a persona of `**` or a
+ * `[label](evil.link)` would deface the channel permanently — but the escaping
+ * itself is the same problem everywhere, so it lives in discord-escape.ts and
+ * the league formatters use it too.
  *
- * NEWLINES ARE STRIPPED FIRST, before truncation, and that ordering is
- * load-bearing: the slot rack renders one player per LINE, so a persona
- * containing a newline would forge phantom rows and make the rack lie about
- * its own count. Escaping `<`/`>` likewise stops a persona forging a fake
- * <t:…> timestamp or a <@id> that LOOKS like a mention (allowed_mentions
- * already stops it resolving).
+ * The truncation is what stays board-specific: the slot rack is a fixed-height
+ * column, and one player per LINE is also why newline stripping has to happen
+ * before it (a persona with a newline would forge phantom rows).
  */
 export function escapeMarkdown(raw: string): string {
-  const flat = raw.replace(/[\r\n\t]+/g, " ").trim();
-  const trimmed =
-    flat.length > NAME_MAX ? `${flat.slice(0, NAME_MAX - 1)}…` : flat;
-  return (
-    trimmed
-      .replace(/[\\*_~`|<>[\]()@#-]/g, (c) => `\\${c}`)
-      // Escaping brackets kills `[label](evil)`, but Discord ALSO auto-links a
-      // BARE url, and none of the characters that make one (`:` `/` `.`) can be
-      // escaped without mangling ordinary names. A zero-width space after the
-      // scheme breaks the match while leaving the text visually identical — so
-      // a persona of "evil.test/free-mmr" can't become a live link in a message
-      // the league is told to pin forever.
-      .replace(/(https?):\/\//gi, "$1:​//")
-      .replace(/\bwww\./gi, "www​.")
-  );
+  return escapeDiscordText(raw, NAME_MAX);
 }
 
 /** Horizontal rack — used where there are no names to show. */

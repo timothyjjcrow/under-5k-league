@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
@@ -112,6 +113,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  CardSkeleton,
   PageTitle,
   PlayerLink,
   Stat,
@@ -145,20 +147,6 @@ export default async function AdminPage() {
   const data = season
     ? await loadSeasonAdminData(season.id)
     : null;
-  // Never hand the raw webhook URL to the client — it's a bearer credential.
-  // Resolve it server-side only to derive a boolean + a masked fingerprint.
-  const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
-  const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
-  const discordStatus = {
-    configured: !!activeWebhook,
-    masked: maskWebhookUrl(activeWebhook),
-    // Set only via env, not the DB — Remove (which clears the DB key) can't
-    // touch it, so we hide that button and say where it lives.
-    envManaged: !dbWebhook && !!process.env.DISCORD_WEBHOOK_URL,
-  };
-  const boardStatus = await getInhouseBoardStatus();
-  const pingHealth = await getPingHealth();
-  const discordReach = await getDiscordReach(season?.id ?? null);
   const newsPosts = sortNews(
     await prisma.newsPost.findMany({
       include: { author: { select: { name: true } } },
@@ -182,12 +170,16 @@ export default async function AdminPage() {
           <StandinControls data={data} />
           <LeagueControls season={season} />
           <AutoSyncHealth season={season} />
-          <DiscordControls
-            status={discordStatus}
-            board={boardStatus}
-            pingHealth={pingHealth}
-            discordReach={discordReach}
-          />
+          {/* Streamed, because this card is the ONLY thing on the page that
+              talks to Discord: getPingHealth alone is three sequential calls
+              at a 4s timeout each, and getInhouseBoardStatus drags a
+              full-history Elo scan behind it. Awaited inline they held up the
+              whole admin page — Pause draft and Record result included — and
+              did it worst exactly when Discord was broken, which is when an
+              admin opens this page. */}
+          <Suspense fallback={<CardSkeleton rows={6} />}>
+            <DiscordSection seasonId={season.id} />
+          </Suspense>
         </>
       ) : (
         <Card>
@@ -2234,6 +2226,25 @@ function PingHealthLines({ health }: { health: PingHealth }) {
   const firstBroken = rows.find((r) => r.ok === false);
   const allGood = rows.every((r) => r.ok === true);
 
+  // The OAuth guild-join rides the same bot but fails for its OWN two reasons,
+  // both of them silent: Discord 403s a join from a bot without
+  // CREATE_INSTANT_INVITE, and it 403s a `guilds.join` token issued by a
+  // different application. Kept as a separate verdict so a join problem can't
+  // mask a ping-role problem (or be masked by one) in the single "Next:" line.
+  const joinRows: { ok: boolean | null; label: string; fix: string }[] = [
+    {
+      ok: health.appMatchesOauth,
+      label: "Bot is the OAuth app",
+      fix: "DISCORD_BOT_TOKEN and DISCORD_CLIENT_ID come from DIFFERENT Discord applications — Discord only honours a join token from the app that issued it. Use the bot token from the same application as the OAuth client.",
+    },
+    {
+      ok: health.canInvite,
+      label: "Bot can add members",
+      fix: "Re-invite the bot with the Create Invite permission (Developer Portal → OAuth2 → URL Generator → bot + Create Instant Invite).",
+    },
+  ];
+  const firstBrokenJoin = joinRows.find((r) => r.ok === false);
+
   return (
     <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -2262,6 +2273,32 @@ function PingHealthLines({ health }: { health: PingHealth }) {
           {health.canGrant ? " Higher, so it can assign it." : ""}
         </p>
       ) : null}
+      {/* Only meaningful once a bot exists at all — without one the site never
+          asks for guilds.join in the first place. */}
+      {health.hasToken && health.hasGuild ? (
+        <div className="mt-2 border-t border-line pt-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span className="text-muted">Auto-join on link:</span>
+            {joinRows.map((r) => (
+              <span
+                key={r.label}
+                className={
+                  r.ok === true
+                    ? "text-success"
+                    : r.ok === false
+                      ? "text-danger"
+                      : "text-muted"
+                }
+              >
+                {r.ok === true ? "✓" : r.ok === false ? "✗" : "•"} {r.label}
+              </span>
+            ))}
+          </div>
+          {firstBrokenJoin ? (
+            <p className="mt-1 text-xs text-danger">{firstBrokenJoin.fix}</p>
+          ) : null}
+        </div>
+      ) : null}
       {health.problem ? (
         <p className="mt-2 text-xs text-danger">{health.problem}</p>
       ) : firstBroken ? (
@@ -2274,6 +2311,36 @@ function PingHealthLines({ health }: { health: PingHealth }) {
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Loads everything the Discord card needs. Its own component so the page can
+ * put it behind <Suspense> — see the render site for why that matters.
+ */
+async function DiscordSection({ seasonId }: { seasonId: string }) {
+  // Never hand the raw webhook URL to the client — it's a bearer credential.
+  // Resolve it server-side only to derive a boolean + a masked fingerprint.
+  const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
+  const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
+  const [board, pingHealth, discordReach] = await Promise.all([
+    getInhouseBoardStatus(),
+    getPingHealth(),
+    getDiscordReach(seasonId),
+  ]);
+  return (
+    <DiscordControls
+      status={{
+        configured: !!activeWebhook,
+        masked: maskWebhookUrl(activeWebhook),
+        // Set only via env, not the DB — Remove (which clears the DB key)
+        // can't touch it, so we hide that button and say where it lives.
+        envManaged: !dbWebhook && !!process.env.DISCORD_WEBHOOK_URL,
+      }}
+      board={board}
+      pingHealth={pingHealth}
+      discordReach={discordReach}
+    />
   );
 }
 

@@ -9,6 +9,7 @@ import {
   packOauthCookie,
   randomOauthValue,
 } from "@/lib/discord-oauth";
+import { getGuildConfig } from "@/lib/discord-roles";
 
 // Kicks off Discord account LINKING (not login — a session is required, so
 // the callback knows exactly which site account the proven Discord identity
@@ -35,6 +36,9 @@ export async function GET(req: NextRequest) {
       redirectUri: `${base}/api/auth/discord/callback`,
       state,
       codeChallenge: codeChallengeS256(verifier),
+      // Only ask to join servers on a league that HAS one wired up — otherwise
+      // the consent screen promises something the callback can't deliver.
+      withGuildJoin: !!getGuildConfig(),
     }),
   );
   res.cookies.set(DISCORD_OAUTH_COOKIE, packOauthCookie(state, verifier), {

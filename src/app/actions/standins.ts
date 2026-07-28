@@ -38,7 +38,7 @@ export async function captainAssignStandin(
     actingCaptainId: user.role === "ADMIN" ? null : user.id,
   });
   if (!res.ok) return { error: res.error };
-  await sendDiscordMessage(res.announcement);
+  await sendDiscordMessage(res.announcement, res.mentions);
   refresh();
   return { message: res.message };
 }
@@ -59,7 +59,7 @@ export async function captainRemoveStandin(
     actingCaptainId: user.role === "ADMIN" ? null : user.id,
   });
   if (!res.ok) return { error: res.error };
-  await sendDiscordMessage(res.announcement);
+  await sendDiscordMessage(res.announcement, res.mentions);
   refresh();
   return { message: res.message };
 }

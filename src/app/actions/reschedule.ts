@@ -17,6 +17,7 @@ import {
   rescheduleProposedMessage,
   sendDiscordMessage,
 } from "@/lib/discord";
+import { mentionUsers } from "@/lib/discord-mentions";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -65,6 +66,9 @@ export async function proposeReschedule(
       proposerName: user.name,
       whenMs: proposed.proposedTime.getTime(),
     }),
+    // Addressed to the opposing captain — the message literally asks them to
+    // respond, so it should reach them rather than wait to be noticed.
+    await mentionUsers([proposed.notifyUserId]),
   );
   refresh();
   return {
@@ -104,7 +108,10 @@ export async function respondReschedule(
         week: accepted.week,
         isPlayoff: accepted.isPlayoff,
         whenMs: accepted.newTime.getTime(),
+        clearedRsvps: accepted.clearedRsvps,
       }),
+      // The proposer asked a question and has been waiting for the answer.
+      await mentionUsers([accepted.notifyUserId]),
     );
   }
   refresh();

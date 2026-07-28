@@ -2,8 +2,10 @@ import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   getDiscordReach,
+  getGuildConfig,
   getPingHealth,
   getRoleConfig,
+  joinGuild,
   hasPingRole,
   pingOptInAvailable,
   setPingRole,
@@ -22,7 +24,13 @@ import { makeSeason, makeUser } from "./factories";
 //   * a 403 (bot's role sits below the ping role) is reported as its own
 //     outcome, because no amount of retrying fixes it
 
-type Recorded = { method: string; url: string; auth: string | undefined };
+type Recorded = {
+  method: string;
+  url: string;
+  auth: string | undefined;
+  /** Raw request body — joinGuild sends the user's token in it. */
+  body: string;
+};
 
 let server: Server;
 let base: string;
@@ -35,12 +43,20 @@ const MEMBER = "900000000000000003";
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    req.resume();
+    // Buffer rather than drain: joinGuild's whole contract is that the user's
+    // OAuth token rides in the BODY while the bot token is in the header, and
+    // a test that can't see the body can't tell those apart.
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
     req.on("end", () => {
       const entry = {
         method: req.method ?? "",
         url: req.url ?? "",
         auth: req.headers.authorization,
+        body: raw,
       };
       recorded.push(entry);
       const out = respond(entry);
@@ -361,5 +377,89 @@ describe("getDiscordReach — the denominator", () => {
     expect(reach.registered).toBe(15);
     expect(reach.linked).toBe(0);
     expect(reach.unlinkedNames).toHaveLength(12);
+  });
+});
+
+// The OAuth guild-join. Shipped with only a mocked dep in discord-link.itest,
+// which cannot catch the class of bug that has already bitten this file once:
+// branching on a STATUS whose meaning is counter-intuitive. Here 204 means
+// "already a member" (success), not failure, and 201 has to be read for
+// `pending` before it can be called success either.
+describe("joinGuild (OAuth guilds.join)", () => {
+  const guildCfg = () => ({ token: "test-token", guildId: GUILD, apiBase: base });
+
+  it("PUTs the member with the BOT token in the header and the USER token in the body", async () => {
+    respond = () => ({ status: 201, body: { pending: false } });
+    const out = await joinGuild(MEMBER, "user-access-token", guildCfg());
+
+    expect(out).toBe("joined");
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].method).toBe("PUT");
+    expect(recorded[0].url).toBe(`/guilds/${GUILD}/members/${MEMBER}`);
+    // Bot token authenticates the ADDER; the user's token is their consent.
+    // Neither alone works, so both must be on the wire.
+    expect(recorded[0].auth).toBe("Bot test-token");
+    expect(JSON.parse(recorded[0].body)).toEqual({
+      access_token: "user-access-token",
+    });
+  });
+
+  // Membership Screening leaves them in the guild but unable to read, talk or
+  // be pinged. Reporting that as a clean success is how a player ends up
+  // believing they're reachable while no notification can arrive.
+  it("reports membership screening rather than claiming success", async () => {
+    respond = () => ({ status: 201, body: { pending: true } });
+    expect(await joinGuild(MEMBER, "tok", guildCfg())).toBe("joined-pending");
+  });
+
+  it("treats 204 as ALREADY a member — the normal case for anyone who used the invite", async () => {
+    respond = () => ({ status: 204 });
+    expect(await joinGuild(MEMBER, "tok", guildCfg())).toBe("already");
+  });
+
+  it("survives a 201 with no parseable body", async () => {
+    respond = () => ({ status: 201, body: null });
+    expect(await joinGuild(MEMBER, "tok", guildCfg())).toBe("joined");
+  });
+
+  // 403 is the admin's problem and never resolves by retrying: the bot lacks
+  // CREATE_INSTANT_INVITE, or the token is from a different application than
+  // the OAuth client. It has to stay distinguishable from a transient failure.
+  it("distinguishes a permanent 403 from a transient failure", async () => {
+    respond = () => ({ status: 403, body: { message: "Missing Permissions" } });
+    expect(await joinGuild(MEMBER, "tok", guildCfg())).toBe("forbidden");
+
+    respond = () => ({ status: 500 });
+    expect(await joinGuild(MEMBER, "tok", guildCfg())).toBe("failed");
+  });
+
+  it("never throws when Discord is unreachable", async () => {
+    expect(
+      await joinGuild(MEMBER, "tok", {
+        token: "test-token",
+        guildId: GUILD,
+        apiBase: "http://127.0.0.1:1",
+      }),
+    ).toBe("failed");
+  });
+});
+
+describe("getGuildConfig", () => {
+  // The distinction that matters: getRoleConfig returns null without a ping
+  // role, and gating the guild-join on THAT would silently disable joining on
+  // any league that simply hasn't picked one.
+  it("needs only token + guild, unlike getRoleConfig", async () => {
+    expect(await getRoleConfig()).toBeNull(); // no role set in this test
+    expect(getGuildConfig()).toEqual({ token: "test-token", guildId: GUILD });
+  });
+
+  it("is null without a bot token", async () => {
+    delete process.env.DISCORD_BOT_TOKEN;
+    expect(getGuildConfig()).toBeNull();
+  });
+
+  it("is null without a guild", async () => {
+    delete process.env.DISCORD_GUILD_ID;
+    expect(getGuildConfig()).toBeNull();
   });
 });

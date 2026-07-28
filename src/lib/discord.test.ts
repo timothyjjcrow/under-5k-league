@@ -665,3 +665,108 @@ describe("no message unfurls a link preview", () => {
     expect(msg).toContain("More: <"); // ...but the site link does not
   });
 });
+
+describe("no player-supplied name can inject markdown", () => {
+  // Discord renders markdown in webhook messages and, unlike user-typed
+  // messages, does NOT suppress masked links there. A Steam persona is chosen
+  // by the player, so every formatter that interpolates one is an injection
+  // point — this is the sweep that says they all go through escapeDiscordText.
+  const EVIL = "[free mmr](https://evil.test)";
+
+  const messages = () => [
+    signupMessage(EVIL, 3, 10),
+    playerSoldMessage(EVIL, EVIL, 5),
+    matchResultMessage({
+      homeName: EVIL, awayName: EVIL, homeScore: 2, awayScore: 0,
+      week: 1, isPlayoff: false,
+    }),
+    championMessage("Season 1", EVIL),
+    freeAgentSignedMessage(EVIL, EVIL),
+    playerReleasedMessage(EVIL, EVIL),
+    playerOutMessage({
+      playerName: EVIL, homeName: EVIL, awayName: EVIL,
+      week: 1, isPlayoff: false, whenMs: null,
+    }),
+    standinAssignedMessage({
+      standinName: EVIL, replacedName: EVIL, teamName: EVIL,
+      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: null,
+    }),
+    standinRemovedMessage({
+      standinName: EVIL, teamName: EVIL, homeName: EVIL, awayName: EVIL,
+      week: 1, isPlayoff: false,
+    }),
+    rescheduleProposedMessage({
+      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false,
+      proposerName: EVIL, whenMs: 1_800_000_000_000,
+    }),
+    rescheduleMessage({
+      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+    }),
+    weeklyHonorsMessage({
+      week: 1, playerName: EVIL, playerPoints: 40,
+      heroName: "Pudge", teamName: EVIL, teamGameWins: 2,
+    }),
+    inhouseLobbyMessage([{ name: EVIL, discordId: null }]),
+    inhouseResultMessage({
+      winnerSide: "Radiant", radiantScore: 30, direScore: 10,
+      durationSecs: 2000, mvpName: EVIL, mvpHero: "Pudge",
+      dotaMatchId: "123",
+    }),
+    weekReminderMessage({
+      week: 1, isPlayoff: false,
+      fixtures: [{
+        matchId: "m1", homeName: EVIL, awayName: EVIL,
+        scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
+        awayIn: 5, awaySize: 5,
+        waitingOn: [{ name: EVIL, discordId: null }],
+      }],
+    }),
+  ];
+
+  it("never emits a live masked link", () => {
+    for (const m of messages()) {
+      expect(m, `injectable: ${m.slice(0, 80)}`).not.toContain("](");
+    }
+  });
+
+  it("never lets a name forge an extra line", () => {
+    const nl = "evil\nplayer";
+    expect(playerSoldMessage(nl, nl, 1)).not.toContain("\n");
+    // The reminder is genuinely multi-line — assert the COUNT is unchanged
+    // rather than that there are none.
+    const reminder = weekReminderMessage({
+      week: 1, isPlayoff: false,
+      fixtures: [{
+        matchId: "m1", homeName: nl, awayName: nl,
+        scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
+        awayIn: 5, awaySize: 5, waitingOn: [{ name: nl, discordId: null }],
+      }],
+    });
+    expect(reminder.split("\n")).toHaveLength(4); // header, fixture, waiting, footer
+  });
+
+  // Escaping must not eat the one thing these messages exist to do.
+  it("leaves real mention markup intact", () => {
+    expect(inhouseLobbyMessage([{ name: "x", discordId: "123" }])).toContain(
+      "<@123>",
+    );
+    expect(
+      weekReminderMessage({
+        week: 1, isPlayoff: false,
+        fixtures: [{
+          matchId: "m1", homeName: "H", awayName: "A",
+          scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
+          awayIn: 5, awaySize: 5,
+          waitingOn: [{ name: "x", discordId: "456" }],
+        }],
+      }),
+    ).toContain("<@456>");
+  });
+
+  it("leaves ordinary names alone", () => {
+    expect(playerSoldMessage("Puppey", "Team Liquid", 40)).toContain(
+      "**Puppey** → **Team Liquid**",
+    );
+  });
+});

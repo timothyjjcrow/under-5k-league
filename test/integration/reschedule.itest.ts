@@ -34,7 +34,7 @@ async function pendingFor(matchId: string) {
 
 describe("reschedule service (integration)", () => {
   it("captain proposes; a newer proposal supersedes the old one", async () => {
-    const { home, match } = await setupMatch();
+    const { home, away, match } = await setupMatch();
     // The service returns announcement data (the action's Discord ping).
     const proposed = await proposeReschedule(home.captainId, match.id, NIGHT);
     expect(proposed).toMatchObject({
@@ -42,6 +42,9 @@ describe("reschedule service (integration)", () => {
       awayName: "Away",
       isPlayoff: false,
       proposedTime: NIGHT,
+      // A proposal is a question addressed to the OTHER captain — never to the
+      // one who just asked it.
+      notifyUserId: away.captainId,
     });
     const first = await pendingFor(match.id);
     expect(first?.proposedTime.getTime()).toBe(NIGHT.getTime());
@@ -87,6 +90,8 @@ describe("reschedule service (integration)", () => {
     );
     expect(accepted).not.toBeNull();
     expect(accepted!.newTime.getTime()).toBe(NIGHT.getTime());
+    // The answer goes back to whoever asked the question.
+    expect(accepted!.notifyUserId).toBe(home.captainId);
 
     const updated = await prisma.match.findUnique({
       where: { id: match.id },
@@ -299,5 +304,73 @@ describe("reschedule — claims fire exactly once under contention", () => {
         .catch(() => null),
     );
     expect(res.filter(Boolean)).toHaveLength(1);
+  });
+});
+
+// Accepting a reschedule DELETES every RSVP for the match (they were answers
+// about a night nobody is now playing). That part is deliberate; doing it
+// silently was not — eight to ten players each believe they already checked in,
+// and the captain sees an unstaffed match with no explanation.
+describe("accepting a reschedule reports what it invalidated", () => {
+  async function withRsvps(count: number) {
+    const { home, away, match, season } = await setupMatch();
+    for (let i = 0; i < count; i++) {
+      const u = await makeUser(`RSVP ${i}`);
+      await prisma.matchAvailability.create({
+        data: { matchId: match.id, userId: u.id, status: "IN" },
+      });
+    }
+    return { home, away, match, season };
+  }
+
+  it("counts the check-ins it cleared", async () => {
+    const { home, away, match } = await withRsvps(3);
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+
+    const accepted = await respondReschedule(away.captainId, pending!.id, true);
+
+    expect(accepted!.clearedRsvps).toBe(3);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+  });
+
+  it("reports zero rather than null when there was nothing to clear", async () => {
+    const { home, away, match } = await withRsvps(0);
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    const accepted = await respondReschedule(away.captainId, pending!.id, true);
+    expect(accepted!.clearedRsvps).toBe(0);
+  });
+
+  // The week's reminder already went out quoting the OLD kickoff, and a Discord
+  // edit notifies nobody. Dropping the marker lets it re-fire with the new time.
+  it("releases the week-reminder marker so it can re-announce the new time", async () => {
+    const { home, away, match, season } = await withRsvps(1);
+    const key = `weekReminder:${season.id}:${match.week}`;
+    await prisma.setting.create({ data: { key, value: "already-sent" } });
+
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await respondReschedule(away.captainId, pending!.id, true);
+
+    expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
+  });
+
+  it("leaves the marker alone when the proposal is DECLINED", async () => {
+    const { home, away, match, season } = await withRsvps(2);
+    const key = `weekReminder:${season.id}:${match.week}`;
+    await prisma.setting.create({ data: { key, value: "already-sent" } });
+
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await respondReschedule(away.captainId, pending!.id, false);
+
+    expect(await prisma.setting.findUnique({ where: { key } })).not.toBeNull();
+    // ...and the RSVPs survive a decline: nothing about the night changed.
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(2);
   });
 });

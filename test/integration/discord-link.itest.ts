@@ -25,11 +25,16 @@ const mockRequireUser = vi.mocked(requireUser);
 
 const PROFILE = { discordId: "80351110224678912", discordName: "dendi_official" };
 
-/** Deps whose exchange/identity calls succeed unless overridden. */
+/**
+ * Deps whose exchange/identity calls succeed unless overridden. joinGuild
+ * defaults to null — "no bot configured", i.e. the identify-only league, so
+ * every pre-existing expectation of `?discord=linked` still describes it.
+ */
 function happyDeps(overrides: Partial<CallbackDeps> = {}): CallbackDeps {
   return {
     exchange: vi.fn().mockResolvedValue("tok-123"),
     fetchIdentity: vi.fn().mockResolvedValue(PROFILE),
+    joinGuild: vi.fn().mockResolvedValue(null),
     ...overrides,
   };
 }
@@ -245,6 +250,78 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
 
     expect(res.redirect).toBe("/me?discord=taken");
     expect(await discordOf(late.id)).toEqual({ discordId: null, discordName: "" });
+  });
+});
+
+describe("handleDiscordCallback — the guilds.join half", () => {
+  it("hands the JUST-EXCHANGED token to the join, not a stored one", async () => {
+    const user = await makeUser("Joiner");
+    const deps = happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined") });
+
+    const res = await handleDiscordCallback(prisma, callbackInput(user.id), deps);
+
+    expect(res.redirect).toBe("/me?discord=joined");
+    expect(deps.joinGuild).toHaveBeenCalledWith(PROFILE.discordId, "tok-123");
+  });
+
+  it("an existing member reads as a plain link, not a second welcome", async () => {
+    const user = await makeUser("Already");
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({ joinGuild: vi.fn().mockResolvedValue("already") }),
+    );
+    expect(res.redirect).toBe("/me?discord=linked");
+  });
+
+  it("membership screening is reported, never counted as done", async () => {
+    const user = await makeUser("Pending");
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined-pending") }),
+    );
+    expect(res.redirect).toBe("/me?discord=joined_pending");
+  });
+
+  // The link is already committed when the join runs. Every failure mode below
+  // must leave it that way — losing a proven identity because a bot permission
+  // is wrong would be a far worse bug than not auto-joining.
+  it.each(["forbidden", "failed"] as const)(
+    "a %s join still keeps the link",
+    async (outcome) => {
+      const user = await makeUser(`Join_${outcome}`);
+      const res = await handleDiscordCallback(
+        prisma,
+        callbackInput(user.id),
+        happyDeps({ joinGuild: vi.fn().mockResolvedValue(outcome) }),
+      );
+      expect(res.redirect).toBe("/me?discord=join_failed");
+      expect(await discordOf(user.id)).toEqual(PROFILE);
+    },
+  );
+
+  it("a THROWN join still keeps the link", async () => {
+    const user = await makeUser("JoinThrew");
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({ joinGuild: vi.fn().mockRejectedValue(new Error("boom")) }),
+    );
+    expect(res.redirect).toBe("/me?discord=join_failed");
+    expect(await discordOf(user.id)).toEqual(PROFILE);
+  });
+
+  it("never attempts a join when the link itself was refused", async () => {
+    const holder = await makeUser("JoinHolder");
+    await linkDiscordAccount(prisma, holder.id, PROFILE);
+    const late = await makeUser("JoinLate");
+    const deps = happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined") });
+
+    const res = await handleDiscordCallback(prisma, callbackInput(late.id), deps);
+
+    expect(res.redirect).toBe("/me?discord=taken");
+    expect(deps.joinGuild).not.toHaveBeenCalled();
   });
 });
 
