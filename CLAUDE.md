@@ -87,6 +87,45 @@ assume a guard is unprotected until the baseline says otherwise. To raise the
 ratchet: write a raced test, then `npm run test:mutation:discover` and commit
 the new baseline.
 
+**Running any of this locally** (the guard and the pg suite need Postgres, and
+switching the Prisma provider is a footgun if you forget to switch back):
+
+    npm run pg:up            # create the throwaway DB, point Prisma at it, push
+    export PG_TEST_URL="postgresql://$USER@localhost:5432/ld2l_pgtest"
+    npm run test:pg                          # the suite on the prod engine
+    npm run test:mutation                    # verify the whole baseline (~11 min)
+    npm run test:mutation -- --shard 2/4     # one CI shard (~2 min)
+    npm run test:mutation -- --discover --only acceptMatch   # probe one claim
+    npm run pg:down          # BACK TO SQLITE + drop the DB — do not skip this
+
+`pg:down` is the step that matters: without it `prisma/schema.prisma` stays on
+the postgresql provider, the SQLite suites break, and a `git add -A` commits the
+switched provider. `--discover --only` deliberately refuses to write the
+baseline (a partial sweep would drop the ratchet for every claim it skipped);
+only a full `--discover` may.
+
+**THE 8 CLAIMS STILL UNPROTECTED**, and why each resisted — start here rather
+than re-running a 25-minute sweep to rediscover them:
+
+* `applyPick::status#1` (the advance claim) — its rival must write the LOBBY
+  row the open transaction already locked, so the hook would have to hand the
+  test the transaction client. Rejected: that API invites tests that corrupt the
+  transaction they are injected into.
+* `inhouse-board-service::exists` + `::swapState` — now belt-and-braces behind
+  explicit checks in `claimBoardRow`, so mutating them changes nothing
+  observable. Near-equivalent rather than untested.
+* `result-sync-service::dueMinutes` — defended twice over already: a global
+  Setting throttle serializes scans before this claim is reached, and
+  `Game.dotaMatchId` is unique. The existing "concurrent pings" test passes
+  either way for exactly that reason.
+* `startCaptainVote` — only reached from the last `acceptMatch`; a second flip
+  writes the same status and merely resets `voteEndsAt`. Needs a seam.
+* `recomputeSeries` — needs two callers holding DIFFERENT game sets. Seam-able:
+  hook between the read and the CAS, rival imports a game.
+* `saveRegistration` / `leaveLeague` — reachable only past their own read-time
+  checks. `saveRegistration`'s check is REDUNDANT with the claim; deleting it
+  makes the claim load-bearing and the test deterministic. **Best next move.**
+
 **When racing isn't enough, use the SEAM.** Several claims need one exact
 interleaving — the caller READS, a rival COMMITS, the caller WRITES — and
 `Promise.all` cannot steer that; for those, racing produced the losing ordering
