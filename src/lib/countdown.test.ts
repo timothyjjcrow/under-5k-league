@@ -3,6 +3,7 @@ import {
   CLOCK_OFFSET_STEP_MS,
   countdownLabel,
   elapsedSince,
+  hasPassed,
   LIVE_WINDOW_MS,
   nextClockOffset,
   secondsUntil,
@@ -33,6 +34,27 @@ describe("countdownLabel", () => {
     expect(countdownLabel(T, T)).toBe("happening now");
     expect(countdownLabel(T - LIVE_WINDOW_MS + 1, T)).toBe("happening now");
     expect(countdownLabel(T - LIVE_WINDOW_MS, T)).toBeNull();
+  });
+});
+
+describe("hasPassed", () => {
+  it("flips exactly where the label goes quiet", () => {
+    expect(hasPassed(T + DAY, T)).toBe(false);
+    expect(hasPassed(T, T)).toBe(false);
+    expect(hasPassed(T - LIVE_WINDOW_MS + 1, T)).toBe(false);
+    expect(hasPassed(T - LIVE_WINDOW_MS, T)).toBe(true);
+    expect(hasPassed(T - DAY, T)).toBe(true);
+  });
+
+  // The two are the same boundary, and a caller renders "this date has been and
+  // gone" off one while the countdown vanishes off the other. If they ever
+  // disagree, a passed draft night renders as an upcoming plan again — the
+  // exact bug this pair exists to close.
+  it("agrees with countdownLabel at every offset", () => {
+    for (let m = -600; m <= 600; m += 3) {
+      const target = T + m * MIN;
+      expect(hasPassed(target, T)).toBe(countdownLabel(target, T) === null);
+    }
   });
 });
 

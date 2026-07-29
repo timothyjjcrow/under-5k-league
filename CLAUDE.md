@@ -2094,6 +2094,52 @@ a `min-w-max` row, and every one of them was violating the SeasonGrid rule.
   games count never judged), top-5 hero lists per player. Linked from
   `/players` (action) and each profile ("Compare vs… →" prefills `?a=`).
 
+## Dashboard: the SIGNUPS view (2026-07-29 audit — read before editing it)
+
+The whole view assumed a league that hadn't filled yet and a visitor who
+hadn't joined. Both are wrong for most of signup week (`minTeams` is a FLOOR —
+see the capacity entry above), and the page had no control anywhere behind the
+ask it made twice. What that turned into:
+
+- **A scheduled date the page PRINTS must say when it has gone by.**
+  `countdownLabel` returns null 3h past its target, so a slipped draft night
+  rendered "🗓️ Draft night: Sun, Jul 26" as a plan, under "Ready to draft",
+  days later — and a bare "🗓️ Draft" in the hero, a label with nothing after
+  it. `<Countdown passedLabel>` renders an amber chip instead of vanishing;
+  pure `hasPassed` (`countdown.ts`) is the same boundary as the label's null
+  and `countdown.test.ts` sweeps every offset to pin that they agree. The
+  season does NOT advance its own phase, so this state lasts until an admin
+  acts. Copy is `DRAFT_PASSED_LABEL` (`season-copy.ts`) because THREE surfaces
+  print that date — and the third, added in the same change that fixed the
+  first two, was written without a chip at all. `dashboard-guards.test.ts`
+  parses page.tsx and fails on a draft-night `<Countdown>` with no
+  `passedLabel`; verified by deleting one.
+- **Decide "has passed" on the CLIENT.** The boundary is 3h wide and a parked
+  tab crosses it with no re-render, so a server-computed chip would contradict
+  the countdown that just vanished beside it.
+- **The hero's control slot must address who is actually looking.** A
+  signed-up player got `heroAction`'s fallback — "See what you're joining" —
+  in the biggest slot on the page. `SignupsAside` replaces it with the current
+  ask (`needed` below the minimum, `toNextTeam` above) and `<InviteLink>`, the
+  only share control on the site; it copies `window.location.origin`, never a
+  server prop, so previews and custom domains copy themselves. Like
+  `MyNextMatch` it MUST always render something — `aside` suppresses the
+  action column entirely.
+- **`phaseSubtitle` moved to `src/lib/season-copy.ts` and takes `canDraft`.**
+  As a static string it told a full league "the draft begins once enough
+  players have joined" directly under a "Ready to draft" badge. Tested in both
+  directions.
+- **One Discord CTA in `<main>` at a time.** `DiscordSetupPrompt` sequences the
+  invite as "1. Join the server"; the signup card's own button made three
+  identical `discord.gg` links on one screen (the footer is the third), so it
+  now renders only for viewers that prompt can't cover.
+- Headings: the signup card's count line is an `<h2>` and the Discord prompt's
+  title is too — the outline was h1 then straight to the h3s of cards further
+  down, so heading navigation skipped both things the page exists for.
+- `snapshot.teams` is fetched on every dashboard render and was thrown away
+  during SIGNUPS; "Captains so far" renders it. "Who's in" names its cap
+  ("Latest 12 of 30") rather than silently hiding 18 people.
+
 ## Dashboard (done)
 
 - `src/app/page.tsx` renders per phase. Matches are fetched ONCE in `Home()`

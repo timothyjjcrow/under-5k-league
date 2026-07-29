@@ -34,13 +34,17 @@ export function DiscordSetupCard({
     <Card>
       <CardBody className="space-y-3">
         <div>
-          <p className="font-display text-lg font-semibold">
+          {/* A real heading: this card asks the single most consequential
+              thing on the dashboard, and as a <p> it was invisible to heading
+              navigation — the page's outline jumped h1 straight to the h3s of
+              cards further down, skipping both this and the signup card. */}
+          <h2 className="font-display text-lg font-semibold">
             {oneClick
               ? "You're signed up — one step left"
               : linkAvailable
                 ? "You're signed up — two things left"
                 : "You're signed up — one step left"}
-          </p>
+          </h2>
           <p className="mt-1 text-sm text-muted">
             The league runs on Discord: scheduling, match-night check-ins and
             standin scrambles all happen there. Right now your captain has no

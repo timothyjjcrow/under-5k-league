@@ -80,6 +80,8 @@ import {
 } from "@/components/standings-table";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
+import { InviteLink } from "@/components/invite-link";
+import { DRAFT_PASSED_LABEL, phaseSubtitle } from "@/lib/season-copy";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
 import { firstMedia } from "@/lib/linkify";
@@ -252,7 +254,16 @@ export default async function Home() {
         {season.draftAt ? (
           <span className="flex items-center text-sm text-muted">
             🗓️ Draft{" "}
-            <Countdown targetMs={season.draftAt.getTime()} eventLabel="Draft" />
+            {/* passedLabel, because this chip is the ONLY thing here carrying a
+                date. Without it a slipped draft night rendered a bare
+                "🗓️ Draft" — a label with nothing after it — since the countdown
+                goes quiet 3h past. The season being in SIGNUPS is what makes
+                the state reachable at all: the phase does not advance itself. */}
+            <Countdown
+              targetMs={season.draftAt.getTime()}
+              eventLabel="Draft"
+              passedLabel={DRAFT_PASSED_LABEL}
+            />
           </span>
         ) : null}
       </>
@@ -348,11 +359,19 @@ export default async function Home() {
   // league-wide CTA once the season is running — and that is exactly when a
   // signed-in player has the most personal thing to do: check in for their next
   // match. Everything else falls through to the phase's own CTA buttons.
+  // During SIGNUPS the same reasoning applies to a player who has ALREADY
+  // signed up: heroAction falls through to the feature tour, so the biggest
+  // slot on the page greeted 30 registered players with "See what you're
+  // joining". They have joined. What they uniquely can do is fill the rest of
+  // the league — and the ask this page makes twice ("5 more for another team")
+  // had no control behind it anywhere on the site.
   const heroAside =
     showsMatches && user && !heroAction ? (
       <Suspense fallback={<Skeleton className="h-32 w-full rounded-[var(--radius)]" />}>
         <MyNextMatch seasonId={season.id} userId={user.id} />
       </Suspense>
+    ) : season.status === "SIGNUPS" && isActiveReg ? (
+      <SignupsAside snapshot={snapshot} />
     ) : null;
 
   return (
@@ -360,7 +379,9 @@ export default async function Home() {
       <Hero
         phase={season.status}
         title={season.name}
-        subtitle={phaseSubtitle(season.status)}
+        subtitle={phaseSubtitle(season.status, {
+          canDraft: snapshot.capacity.canDraft,
+        })}
         action={heroAction}
         meta={heroMeta}
         aside={heroAside}
@@ -654,23 +675,6 @@ async function MyNextMatch({
   );
 }
 
-function phaseSubtitle(status: string) {
-  switch (status) {
-    case "SIGNUPS":
-      return "Sign up now — the draft begins once enough players have joined.";
-    case "DRAFT":
-      return "Captains are bidding on players to build their rosters.";
-    case "REGULAR_SEASON":
-      return "Weekly round-robin matches are underway.";
-    case "PLAYOFFS":
-      return "The top teams battle it out in the playoff bracket.";
-    case "COMPLETE":
-      return "That's a wrap. Congratulations to our champions!";
-    default:
-      return "";
-  }
-}
-
 // ---------- Hero ----------
 
 // A single animated hero figure — big count-up number + a muted label, with
@@ -958,6 +962,53 @@ async function InhouseStrip() {
 
 // ---------- SIGNUPS ----------
 
+/**
+ * The hero's control slot for a player who has already signed up.
+ *
+ * MUST always render something — the Hero drops its identity column to full
+ * width without an `aside`, so a branch that returns null here would leave a
+ * 23rem hole (the rule `MyNextMatch`'s no-match branch exists for).
+ *
+ * The ask is the whole point, so it states the CURRENT one rather than a fixed
+ * slogan: short of the minimum that's what still blocks the draft, past it
+ * (where the league sits for most of signup week, since minTeams is a floor)
+ * it's the next whole team.
+ */
+function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
+  const { season, capacity, playerCount } = snapshot;
+  const short = !capacity.canDraft;
+  const n = short ? capacity.needed : capacity.toNextTeam;
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/70 p-4 backdrop-blur-sm sm:p-5">
+      <p className="font-display text-lg font-semibold">You&apos;re in</p>
+      <p className="mt-1 text-sm text-muted">
+        {playerCount} signed up.{" "}
+        <strong className="text-fg">
+          {n} more {n === 1 ? "player" : "players"}
+        </strong>{" "}
+        {short
+          ? `and the draft can run.`
+          : `makes it ${capacity.teamsFormable + 1} full teams.`}{" "}
+        Know anyone who&apos;d fit?
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <InviteLink />
+        <Link href="/features" className={textLink("text-sm")}>
+          What&apos;s coming →
+        </Link>
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        Copies this season&apos;s link — it unfurls with the details in Discord.
+      </p>
+      {/* No draft-night line here. It was the page's THIRD printing of that
+          date — the hero's own chip sits directly above this panel and the
+          signup card repeats it in full below, which on a phone stacked two
+          identical countdowns 400px apart. This panel does one job: the ask,
+          and the control to act on it. */}
+    </div>
+  );
+}
+
 async function SignupsView({
   snapshot,
   loggedIn,
@@ -995,8 +1046,13 @@ async function SignupsView({
               the universal shape of "sold out", shown to exactly the person
               deciding whether to bother signing up. Past the minimum it counts
               UP instead, and the bar retargets on the next whole team. */}
+          {/* A real <h2>, not a styled span: this card is what the page exists
+              for, and the whole outline was h1 "Season 7" then straight to the
+              h3s of "Pool composition" and "Who's in" — so heading navigation
+              skipped the signup card and the count entirely. No visual change;
+              the line already looked and read like the card's title. */}
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
-            <span className="min-w-0 font-medium">
+            <h2 className="min-w-0 font-medium">
               {capacity.canDraft
                 ? `${playerCount} player${playerCount === 1 ? "" : "s"} signed up`
                 : `${playerCount} / ${capacity.minPlayers} players to start`}
@@ -1007,7 +1063,7 @@ async function SignupsView({
                   ? ` · ${season.maxMmr} MMR soft limit`
                   : ""}
               </span>
-            </span>
+            </h2>
             <span className="shrink-0 text-muted">
               {capacity.canDraft
                 ? "Ready to draft — still open"
@@ -1024,7 +1080,15 @@ async function SignupsView({
                   initial={formatMatchTime(season.draftAt, "full")}
                 />
               </strong>
-              <Countdown targetMs={season.draftAt.getTime()} eventLabel="Draft" />
+              {/* This line PRINTS the date, so it owns saying the date has
+                  gone. Before, a slipped draft night read "🗓️ Draft night:
+                  Sun, Jul 26" with no chip — a past date rendered as a plan,
+                  under "Ready to draft". */}
+              <Countdown
+                targetMs={season.draftAt.getTime()}
+                eventLabel="Draft"
+                passedLabel={DRAFT_PASSED_LABEL}
+              />
             </p>
           ) : null}
           {capacity.canDraft ? (
@@ -1097,12 +1161,48 @@ async function SignupsView({
                 Join the season →
               </Link>
             )}
-            <DiscordButton size="lg" />
+            {/* One Discord CTA in <main> at a time. A signed-up player who
+                hasn't linked already gets <DiscordSetupPrompt> above, which
+                sequences the SAME invite as "1. Join the server" and a link
+                step after it — so this button competed with its own
+                instructions, three identical discord.gg links on one screen
+                (the footer has the third). Registered viewers are exactly the
+                cohort that prompt covers; everyone else still needs this. */}
+            {!isActivePlayer && !isStandin ? <DiscordButton size="lg" /> : null}
           </div>
 
           {!loggedIn ? <SteamSafetyNote /> : null}
         </CardBody>
       </Card>
+
+      {/* Captains are designated DURING signups and `getSeasonSnapshot`
+          already fetches them for every dashboard render — the page just threw
+          them away until now, so a season with six captains picked said
+          nothing about it. Who is captaining is one of the few things a
+          prospect can weigh before committing a season of Wednesdays. */}
+      {snapshot.teams.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="Captains so far"
+            subtitle={`${snapshot.teams.length} team${snapshot.teams.length === 1 ? "" : "s"} lined up — more captains can still be named before the draft`}
+          />
+          <CardBody>
+            <div className="flex flex-wrap gap-2">
+              {snapshot.teams.map((t) => (
+                <PlayerLink
+                  key={t.id}
+                  userId={t.captain.id}
+                  className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
+                >
+                  <Avatar name={t.captain.name} src={t.captain.avatar} size={26} />
+                  <span className="text-sm">{t.captain.name}</span>
+                  <RankBadge rankTier={t.captain.rankTier} />
+                </PlayerLink>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
 
       <Suspense fallback={null}>
         <PoolComposition seasonId={season.id} />
@@ -1111,7 +1211,14 @@ async function SignupsView({
       <Card>
         <CardHeader
           title="Who's in"
-          subtitle="Latest players to sign up"
+          /* Named the count: the chip list is capped at 12, so a 30-player
+             season silently hid 18 people behind a "View all →" that gave no
+             reason to click. */
+          subtitle={
+            playerCount > 12
+              ? `Latest 12 of ${playerCount} players`
+              : "Latest players to sign up"
+          }
           action={
             <Link href="/players" className={textLink("text-sm")}>
               View all →

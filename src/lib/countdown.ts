@@ -27,6 +27,21 @@ export function countdownLabel(targetMs: number, nowMs: number): string | null {
   return hours > 0 ? `in ${days}d ${hours}h` : `in ${days}d`;
 }
 
+/**
+ * Has `targetMs` gone by — i.e. is it far enough past that `countdownLabel`
+ * goes quiet? The two are the SAME boundary and `countdown.test.ts` pins that
+ * they agree at every offset, because a caller that renders a "this has passed"
+ * state needs to know WHY the label vanished.
+ *
+ * Nothing else returns null, so inferring "passed" from `countdownLabel() ===
+ * null` works today — and would quietly start lying the first time the label
+ * gains another quiet case. A scheduled date that has been and gone is the one
+ * state that must never render as an upcoming plan.
+ */
+export function hasPassed(targetMs: number, nowMs: number): boolean {
+  return targetMs - nowMs <= -LIVE_WINDOW_MS;
+}
+
 // --- Live-room clocks (auction bid/nomination, inhouse vote/pick/elapsed) ----
 // The draft & inhouse rooms drive their countdowns off a SERVER deadline
 // (epoch ms) corrected by `offsetMs` (= serverNow − clientNow, captured on each
