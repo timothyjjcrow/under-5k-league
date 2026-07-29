@@ -224,8 +224,24 @@ export default async function Home() {
           value={playerCount}
           label={playerCount === 1 ? "player signed up" : "players signed up"}
         />
+        {/* Both states carry an ASK, because signups never close on a count —
+            minTeams is a floor (see capacity.ts). Past it the badge alone was
+            the whole story, and "Ready to draft" is a full stop: it answers
+            "can the league run?" and says nothing to the person still deciding
+            whether to be in it. The ask keeps the same HeroStat shape as the
+            under-minimum one so the marquee reads identically either side of
+            the threshold — only what it's counting toward changes. Which team
+            number it would be is left to the card below; up here it just has to
+            be true forever, and "another team" can't go stale. */}
         {capacity.canDraft ? (
-          <Badge tone="success">Ready to draft</Badge>
+          <>
+            <Badge tone="success">Ready to draft</Badge>
+            <HeroStat
+              value={capacity.toNextTeam}
+              label="more for another team"
+              tone="accent"
+            />
+          </>
         ) : (
           <HeroStat
             value={capacity.needed}
