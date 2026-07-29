@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
   assignStandinGuarded,
+  clashesAfterRetime,
   removeStandinGuarded,
 } from "@/lib/standin-service";
 import { makeSeason, makeTeam, makeUser } from "./factories";
@@ -484,5 +485,249 @@ describe("a standin can't cover two matches the same night", () => {
       actingCaptainId: home.captainId,
     });
     expect(second.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EMPTY-SEAT COVER. `matchNightRoster` has always kept a null-replacement
+// assignment (it adds a player without removing one) and CLAUDE.md documented
+// it as working — but nothing could ever CREATE one, because replacingUserId
+// was typed `string` and refused empty. So the roster state that most needs
+// cover, a team a player short, was the one state with no way to arrange it.
+// ---------------------------------------------------------------------------
+describe("a standin can fill an EMPTY seat on a short roster", () => {
+  it("assigns with no replaced player and stores a null replacingUserId", async () => {
+    // teamSize 3, Home has 1 rostered player → 2 open seats.
+    const { season, home, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { teamSize: 3 },
+    });
+
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: null,
+    });
+
+    expect(res.ok).toBe(true);
+    const row = await prisma.standinAssignment.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+    expect(row.replacingUserId).toBeNull();
+    expect(row.teamId).toBe(home.id);
+    // The announcement must not read "stands in for nobody".
+    expect(res.ok && res.announcement).toMatch(/fills an open roster seat/i);
+  });
+
+  it("refuses when the roster is already full — that seat is imaginary", async () => {
+    // Nobody is removed to make room for an empty-seat standin, so filling a
+    // full roster's seat puts SIX players on the side and feeds straight into
+    // /schedule, the dashboard strip and the import account sets.
+    const { season, home, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { teamSize: 1 },
+    });
+
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: null,
+    });
+
+    expect(res).toMatchObject({ ok: false });
+    expect(!res.ok && res.error).toMatch(/full roster/i);
+  });
+
+  it("allows only as many empty-seat standins as there are open seats", async () => {
+    const { season, home, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { teamSize: 2 }, // Home has 1 → exactly 1 open seat
+    });
+    const second = await makeUser("Sub Two");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: second.id,
+        type: "STANDIN",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+
+    const first = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: null,
+    });
+    const overflow = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: second.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: null,
+    });
+
+    expect(first.ok).toBe(true);
+    expect(overflow).toMatchObject({ ok: false });
+    expect(!overflow.ok && overflow.error).toMatch(/already covered/i);
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: match.id } }),
+    ).toBe(1);
+  });
+
+  it("refuses a team that isn't in this match", async () => {
+    const { season, sub, match } = await setup();
+    const stranger = await makeTeam(season.id, "Stranger", 2);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { teamSize: 5 },
+    });
+
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: stranger.id,
+      actingCaptainId: null,
+    });
+
+    expect(res).toMatchObject({ ok: false });
+    expect(!res.ok && res.error).toMatch(/isn't in this match/i);
+  });
+
+  it("still enforces the captain-owns-the-team rule with no replaced player", async () => {
+    // With no replaced player there is no roster to infer ownership from, so
+    // the teamId is caller-supplied — the check has to hold on it directly.
+    const { season, home, away, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { teamSize: 3 },
+    });
+    const awayTeam = await prisma.team.findUniqueOrThrow({
+      where: { id: away.id },
+    });
+
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: awayTeam.captainId, // the OTHER team's captain
+    });
+
+    expect(res).toMatchObject({ ok: false });
+    expect(!res.ok && res.error).toMatch(/captain/i);
+  });
+
+  it("needs either a covered player or a team — not neither", async () => {
+    const { sub, match } = await setup();
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      actingCaptainId: null,
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(!res.ok && res.error).toMatch(/team whose seat/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RETIME CLASHES. standinConflict was consulted only when cover was arranged.
+// Every retime path then moved a fixture onto a night the standin was already
+// booked for, and nothing re-checked or displayed it — so the same person was
+// silently booked for two games at the same minute, invisible on every surface
+// right up to kickoff. Reported rather than refused: the retime is legitimate.
+// ---------------------------------------------------------------------------
+describe("clashesAfterRetime", () => {
+  /** Two matches on different nights, the same standin covering both. */
+  async function doubleBooked() {
+    const { season, home, away, homePlayer, awayPlayer, sub, match } =
+      await setup();
+    const other = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 2,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: away.id,
+        awayTeamId: home.id,
+        // A week later — no clash at assign time.
+        scheduledAt: new Date(Date.now() + 7 * 864e5),
+      },
+    });
+    await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: home.id,
+        standinUserId: sub.id,
+        replacingUserId: homePlayer.id,
+      },
+    });
+    await prisma.standinAssignment.create({
+      data: {
+        matchId: other.id,
+        teamId: away.id,
+        standinUserId: sub.id,
+        replacingUserId: awayPlayer.id,
+      },
+    });
+    return { season, match, other };
+  }
+
+  it("reports nothing while the two matches are on different nights", async () => {
+    const { season, other } = await doubleBooked();
+    expect(await clashesAfterRetime(season.id, [other.id])).toEqual([]);
+  });
+
+  it("names the standin once the retime puts both games the same night", async () => {
+    const { season, match, other } = await doubleBooked();
+    // Move the second match onto the first one's night — the exact thing no
+    // path re-checked.
+    await prisma.match.update({
+      where: { id: other.id },
+      data: { scheduledAt: match.scheduledAt },
+    });
+
+    const clashes = await clashesAfterRetime(season.id, [other.id]);
+
+    expect(clashes).toHaveLength(1);
+    expect(clashes[0]).toContain("Sub Sam");
+    expect(clashes[0]).toMatch(/covers both/i);
+  });
+
+  it("reports one line per clashing pair, not one per direction", async () => {
+    // Passing BOTH retimed matches must not double-report the same conflict.
+    const { season, match, other } = await doubleBooked();
+    await prisma.match.update({
+      where: { id: other.id },
+      data: { scheduledAt: match.scheduledAt },
+    });
+
+    expect(await clashesAfterRetime(season.id, [match.id, other.id])).toHaveLength(1);
+  });
+
+  it("ignores cover on a match that has already been played", async () => {
+    // That cover is history — findClashingCover excludes COMPLETED.
+    const { season, match, other } = await doubleBooked();
+    await prisma.match.update({
+      where: { id: other.id },
+      data: { scheduledAt: match.scheduledAt, status: MATCH_STATUS.COMPLETED },
+    });
+
+    expect(await clashesAfterRetime(season.id, [match.id])).toEqual([]);
+  });
+
+  it("is a no-op for an empty match list", async () => {
+    const { season } = await doubleBooked();
+    expect(await clashesAfterRetime(season.id, [])).toEqual([]);
   });
 });

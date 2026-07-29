@@ -462,6 +462,71 @@ describe("draft auction — bid trail + undo", () => {
     expect(state?.available.some((p) => p.userId === star.id)).toBe(true);
   });
 
+  // Pause -> Undo is the single most likely draft-night sequence there is: a lot
+  // sells, the captains dispute it, the admin parks the clocks to settle it, and
+  // THEN reaches for Undo. Flattening the status to IN_PROGRESS here silently
+  // resumed the auction with a live 90-second nomination clock — while the room
+  // showed nothing but the Pause button having swapped to Resume.
+  it("undoLastSale leaves a PAUSED auction paused, with no clock running", async () => {
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    // Keep the pool stocked: a one-player pool goes dry on the first sale and
+    // the draft completes, which is a different undo path (and one pauseDraft
+    // rightly refuses). Draft night pauses happen mid-auction.
+    for (const n of ["Spare A", "Spare B", "Spare C"]) {
+      await makePlayer(season.id, n, 3000);
+    }
+    const admin = sessionFor(await makeUser("Boss", "ADMIN"));
+    await startDraftState(season.id);
+
+    await nominatePlayer(season.id, sessionFor(capA.user), star.id, 12);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+
+    expect((await pauseDraft(season.id, admin)).ok).toBe(true);
+    const res = await undoLastSale(season.id, admin);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.paused).toBe(true); // the toast has to be able to say so
+
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.status).toBe(DRAFT_STATUS.PAUSED);
+    expect(draft.nominationEndsAt).toBeNull();
+    // The undo itself still happened — this is a status fix, not a refusal.
+    expect(draft.nominatorTeamId).toBe(capA.team.id);
+    const teamA = await prisma.team.findUniqueOrThrow({
+      where: { id: capA.team.id },
+    });
+    expect(teamA.budget).toBe(100);
+  });
+
+  it("undoLastSale still reopens a LIVE auction with a fresh clock", async () => {
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    for (const n of ["Spare A", "Spare B", "Spare C"]) {
+      await makePlayer(season.id, n, 3000);
+    }
+    const admin = sessionFor(await makeUser("Boss", "ADMIN"));
+    await startDraftState(season.id);
+
+    await nominatePlayer(season.id, sessionFor(capA.user), star.id, 12);
+    await expireClock(season.id);
+    await resolveExpiredNomination(season.id);
+
+    const res = await undoLastSale(season.id, admin);
+    expect(res.ok && res.paused).toBe(false);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.status).toBe(DRAFT_STATUS.IN_PROGRESS);
+    expect(draft.nominationEndsAt).not.toBeNull();
+  });
+
   it("undoLastSale re-opens a COMPLETE draft, and refuses during a live lot / with nothing to undo", async () => {
     const season = await makeSeason({ teamSize: 2, draftBudget: 50 });
     const capA = await makeCaptain(season.id, "Captain A", 100, 0);

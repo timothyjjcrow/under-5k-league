@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MATCH_STATUS } from "@/lib/constants";
+import { clashesAfterRetime } from "./standin-service";
 
 export type AcceptedReschedule = {
   homeName: string;
@@ -16,6 +17,8 @@ export type AcceptedReschedule = {
   notifyUserId: string | null;
   /** RSVPs the retime invalidated. Announced, never swallowed. */
   clearedRsvps: number;
+  /** Standins now double-booked because this match moved — surfaced in the toast. */
+  standinClashes: string[];
 };
 
 // Announcement data for a fresh proposal (mirrors AcceptedReschedule) — the
@@ -193,6 +196,11 @@ export async function respondReschedule(
       where: { key: `weekReminder:${match.seasonId}:${match.week}` },
     });
   });
+  // Accepting a reschedule moves the fixture, which can put a standin on two
+  // games the same night — standinConflict is only checked when cover is
+  // arranged, never when a match later moves onto that night. Reported, not
+  // refused: the reschedule is the legitimate act.
+  const standinClashes = await clashesAfterRetime(match.seasonId, [match.id]);
   return {
     homeName: match.homeTeam.name,
     awayName: match.awayTeam.name,
@@ -201,6 +209,7 @@ export async function respondReschedule(
     newTime: request.proposedTime,
     notifyUserId: request.proposedById,
     clearedRsvps,
+    standinClashes,
   };
 }
 

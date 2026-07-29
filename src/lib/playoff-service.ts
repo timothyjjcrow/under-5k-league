@@ -61,6 +61,30 @@ export async function createPlayoffBracket(seasonId: string) {
   // a doubled bracket. Both copies unconditionally update the same Season row
   // below, so that write-write pair is what SSI aborts one of; the loser gets
   // P2034 and is caught as "someone else already built it".
+  // ARCHIVE the playoff games before the clear-and-reseed throws them away.
+  //
+  // "Recreate the bracket" is the ONLY correction path once a round has
+  // advanced — recordResult, reopenMatch and removeGame all refuse and all
+  // three point here — and Game cascades with Match (schema.prisma), so
+  // correcting one mis-attributed game cost every playoff box score, MVP,
+  // fantasy point, hero-meta pick, record-book entry and per-game Elo of the
+  // whole postseason. The MATCHES are cheap to replay; the imported games were
+  // not recoverable at all, because `importGameForMatch` needs a dotaMatchId
+  // and nothing anywhere still held one. Keeping just the ids makes the reset
+  // reversible by re-import, which is the part that actually mattered.
+  const doomedGames = await prisma.game.findMany({
+    where: {
+      match: {
+        seasonId,
+        phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+      },
+    },
+    select: {
+      dotaMatchId: true,
+      match: { select: { bracketSlot: true, week: true } },
+    },
+  });
+
   try {
     await prisma.$transaction([
     // Round markers are per-round exactly-once claims (see playoffRoundKey);
@@ -68,6 +92,34 @@ export async function createPlayoffBracket(seasonId: string) {
     prisma.setting.deleteMany({
       where: { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
     }),
+    // Written inside the SAME transaction as the delete, so the archive can
+    // never claim games that are still live, nor be lost if the reset aborts.
+    ...(doomedGames.length
+      ? [
+          prisma.setting.upsert({
+            where: { key: `playoffGamesArchive:${seasonId}` },
+            create: {
+              key: `playoffGamesArchive:${seasonId}`,
+              value: JSON.stringify(
+                doomedGames.map((g) => ({
+                  dotaMatchId: g.dotaMatchId,
+                  slot: g.match.bracketSlot,
+                  week: g.match.week,
+                })),
+              ),
+            },
+            update: {
+              value: JSON.stringify(
+                doomedGames.map((g) => ({
+                  dotaMatchId: g.dotaMatchId,
+                  slot: g.match.bracketSlot,
+                  week: g.match.week,
+                })),
+              ),
+            },
+          }),
+        ]
+      : []),
     prisma.match.deleteMany({
       where: {
         seasonId,

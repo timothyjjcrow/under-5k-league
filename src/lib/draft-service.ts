@@ -415,6 +415,8 @@ export type UndoSaleSummary = {
   player: string;
   team: string;
   price: number;
+  /** The auction was PAUSED and has been left that way — say so in the toast. */
+  paused: boolean;
 };
 
 /**
@@ -514,15 +516,26 @@ export async function undoLastSale(
     // player to a team that never nominated them, and advance the rotation from
     // the nominator Undo had just repointed. Reproduced 11 times in 12 on
     // Postgres before this claim.
+    //
+    // A PAUSED draft stays PAUSED. Pause → Undo is the single most likely
+    // draft-night sequence there is (a lot sells, the captains dispute it, the
+    // admin parks the clocks to settle it), and flattening the status to
+    // IN_PROGRESS here silently resumed the auction with a fresh 90-second
+    // nomination clock running — while the room still showed nothing but the
+    // Pause button having swapped to Resume, and the toast said only that the
+    // sale was reverted. The admin's own "Resume auction" already grants a full
+    // clock to whatever `nominatorTeamId` holds (resumeDraft's no-lot branch),
+    // so parking it here costs nothing and keeps the pause meaning what it says.
+    const wasPaused = draft.status === DRAFT_STATUS.PAUSED;
     const reopened = await tx.draft.updateMany({
       where: { seasonId, status: draft.status, nominatedUserId: null },
       data: {
-        status: DRAFT_STATUS.IN_PROGRESS,
+        status: wasPaused ? DRAFT_STATUS.PAUSED : DRAFT_STATUS.IN_PROGRESS,
         nominatorTeamId: last.teamId,
         nominationIndex: nomIdx < 0 ? draft.nominationIndex : nomIdx,
-        nominationEndsAt: new Date(
-          Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
-        ),
+        nominationEndsAt: wasPaused
+          ? null
+          : new Date(Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000),
       },
     });
     if (reopened.count === 0) {
@@ -540,6 +553,7 @@ export async function undoLastSale(
       player: last.user.name,
       team: last.team.name,
       price: last.price,
+      paused: wasPaused,
     };
     });
   } catch (e) {

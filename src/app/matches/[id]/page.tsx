@@ -492,7 +492,9 @@ async function MatchPreview({
                           {sub.standin.name}
                         </PlayerLink>
                         <span className="truncate text-xs text-muted">
-                          in for {sub.replaced?.name ?? "?"}
+                          {sub.replaced
+                            ? `in for ${sub.replaced.name}`
+                            : "filling an open seat"}
                         </span>
                       </span>
                       <span className="shrink-0 text-xs">
@@ -1204,7 +1206,7 @@ async function StandinSection({
   // active season) — don't render a form that can only error.
   const season = await prisma.season.findUnique({
     where: { id: match.seasonId },
-    select: { isActive: true },
+    select: { isActive: true, teamSize: true },
   });
   if (!season?.isActive) return null;
 
@@ -1238,6 +1240,17 @@ async function StandinSection({
     assignments.map((a) => a.replaced?.id).filter(Boolean),
   );
   const coverable = roster.filter((m) => !coveredIds.has(m.userId));
+  // OPEN SEATS on this captain's own roster. A team that lost a player
+  // mid-season is short, and a standin filling that seat replaces nobody — the
+  // case that previously had no UI anywhere, so a 4-of-5 side could not be
+  // covered at all. Already-filled open seats are subtracted.
+  const openSeatsFilled = assignments.filter(
+    (a) => a.teamId === myTeamId && a.replaced == null,
+  ).length;
+  const openSeats = Math.max(
+    0,
+    season.teamSize - roster.length - openSeatsFilled,
+  );
   const teamNameOf = (teamId: string) =>
     teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
 
@@ -1257,8 +1270,16 @@ async function StandinSection({
               >
                 <span className="min-w-0">
                   <strong>{a.standin.name}</strong>{" "}
-                  <span className="text-muted">in for</span>{" "}
-                  {a.replaced?.name ?? "?"}{" "}
+                  {/* A null `replaced` is an EMPTY-SEAT cover on a short
+                      roster, not missing data — it rendered as "in for ?". */}
+                  {a.replaced ? (
+                    <>
+                      <span className="text-muted">in for</span>{" "}
+                      {a.replaced.name}{" "}
+                    </>
+                  ) : (
+                    <span className="text-muted">filling an open seat </span>
+                  )}
                   <span className="text-muted">· {teamNameOf(a.teamId)}</span>
                 </span>
                 {a.teamId === myTeamId ? (
@@ -1320,6 +1341,11 @@ async function StandinSection({
               <option value="" disabled>
                 Covers…
               </option>
+              {openSeats > 0 ? (
+                <option value={`seat:${myTeamId}`}>
+                  an empty roster seat ({openSeats} unfilled)
+                </option>
+              ) : null}
               {coverable.map((m) => (
                 <option key={m.userId} value={m.userId}>
                   {m.user.name}

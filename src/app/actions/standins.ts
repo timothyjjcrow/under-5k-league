@@ -31,10 +31,16 @@ export async function captainAssignStandin(
   } catch {
     return { error: "Sign in required" };
   }
+  // Same encoding as the admin form: a plain userId covers that player,
+  // `seat:<teamId>` fills an EMPTY seat on a short roster. The service still
+  // checks that the acting captain owns the team either way.
+  const target = str(formData, "replacingUserId");
+  const seat = target.startsWith("seat:") ? target.slice(5) : null;
   const res = await assignStandinGuarded({
     matchId: str(formData, "matchId"),
     standinUserId: str(formData, "standinUserId"),
-    replacingUserId: str(formData, "replacingUserId"),
+    replacingUserId: seat ? null : target,
+    teamId: seat ?? undefined,
     actingCaptainId: user.role === "ADMIN" ? null : user.id,
   });
   if (!res.ok) return { error: res.error };

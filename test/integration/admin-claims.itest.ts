@@ -173,6 +173,7 @@ describe("admin schedule writes only touch the rows they claim to", () => {
 
     const when = new Date(Date.now() + 6 * 864e5);
     await setMatchTime(
+      {},
       fd({
         matchId: target.id,
         scheduledAt: when.toISOString(),

@@ -57,6 +57,25 @@ export function matchNightRoster(
   ];
 }
 
+/**
+ * The number a check-in count should be shown OUT OF.
+ *
+ * Always the season's side size — never the roster we happen to have. A team
+ * that lost a player mid-season sits at 4 of 5, and rendering
+ * `confirmed / roster.length` made that side read "4/4": complete, in success
+ * green, on the dashboard This-week strip and in the Discord week reminder,
+ * while the team was a player short and nobody had been told. Being a player
+ * down is exactly the thing a check-in exists to surface, so the denominator
+ * has to be what the league expects, not what it has.
+ *
+ * `Math.max` rather than a bare teamSize: a standin filling an EMPTY seat adds
+ * a player without replacing one, so a roster can legitimately reach teamSize
+ * from below, and anything above it should be shown rather than hidden.
+ */
+export function expectedSideSize(teamSize: number, rosterSize: number): number {
+  return Math.max(teamSize, rosterSize);
+}
+
 /** Summarize one team's RSVPs. Rows from non-roster users are ignored. */
 export function teamAvailability(
   rosterUserIds: string[],

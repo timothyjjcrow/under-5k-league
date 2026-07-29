@@ -116,7 +116,17 @@ export async function respondReschedule(
   }
   refresh();
   return accepted
-    ? { ok: true, message: "Accepted — match retimed for both teams." }
+    ? {
+        ok: true,
+        // Name a standin the move has just double-booked. The captain who
+        // accepted is the one who arranged that cover, so they are the right
+        // person to hear it — and until now nothing anywhere said it.
+        message:
+          "Accepted — match retimed for both teams." +
+          (accepted.standinClashes.length
+            ? ` ⚠ Standin clash: ${accepted.standinClashes.join("; ")} — remove one of those assignments.`
+            : ""),
+      }
     : { ok: true, message: "Declined — the current time stands." };
 }
 

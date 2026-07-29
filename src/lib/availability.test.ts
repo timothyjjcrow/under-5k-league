@@ -3,6 +3,7 @@ import {
   matchNightRoster,
   parseAvailabilityStatus,
   teamAvailability,
+  expectedSideSize,
 } from "./availability";
 
 describe("teamAvailability", () => {
@@ -178,5 +179,26 @@ describe("unansweredUserIds — who the week reminder pings", () => {
   it("ignores rows for people who aren't on this roster", () => {
     const s = teamAvailability(["a"], [{ userId: "stranger", status: "IN" }]);
     expect(s.unansweredUserIds).toEqual(["a"]);
+  });
+});
+
+describe("expectedSideSize", () => {
+  // A check-in count rendered `confirmed / roster.length`, so a team that lost
+  // a player mid-season read "4/4" — complete, in success green, on the
+  // dashboard strip AND in the Discord week reminder — while the side was a
+  // player short. Being short is the thing a check-in exists to surface.
+  it("reports the season's side size, not the roster we happen to have", () => {
+    expect(expectedSideSize(5, 4)).toBe(5);
+    expect(expectedSideSize(5, 5)).toBe(5);
+  });
+
+  it("never hides an oversized side", () => {
+    // A standin filling an EMPTY seat adds a player without replacing one, so
+    // a roster can legitimately reach or exceed teamSize from below.
+    expect(expectedSideSize(5, 6)).toBe(6);
+  });
+
+  it("handles an empty roster without inventing a denominator of 0", () => {
+    expect(expectedSideSize(5, 0)).toBe(5);
   });
 });

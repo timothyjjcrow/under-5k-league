@@ -4,6 +4,7 @@ import {
   accountIdToSteamId64,
   parseAccountId,
   parseMatchId,
+  parseLeagueId,
   fetchRankTier,
 } from "./dota";
 
@@ -31,6 +32,30 @@ describe("parseMatchId", () => {
   });
   it("returns null when there's no id", () => {
     expect(parseMatchId("garbage")).toBeNull();
+  });
+});
+
+describe("parseLeagueId", () => {
+  it("extracts the id from raw values and URLs", () => {
+    expect(parseLeagueId("17119")).toBe("17119");
+    expect(parseLeagueId("  17119 ")).toBe("17119");
+    expect(parseLeagueId("https://www.dota2.com/leagues/17119")).toBe("17119");
+  });
+
+  // THE regression: a bare /(\d+)/ took the first digit run, so the domain the
+  // admin card itself points at parsed to "2" — and a truthy-but-wrong league id
+  // silently switches auto-sync to league-feed-only, disabling all result
+  // import. The digit floor is what makes the URL safe to paste.
+  it("skips the '2' in dota2.com rather than storing it as the league id", () => {
+    expect(parseLeagueId("https://www.dota2.com/leagues/17119")).not.toBe("2");
+    expect(parseLeagueId("dota2.com")).toBeNull();
+    expect(parseLeagueId("Dota 2 league 17119")).toBe("17119");
+  });
+
+  it("returns null when there's no plausible id", () => {
+    expect(parseLeagueId("garbage")).toBeNull();
+    expect(parseLeagueId("")).toBeNull();
+    expect(parseLeagueId("123")).toBeNull(); // under the floor
   });
 });
 

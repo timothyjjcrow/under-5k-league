@@ -8,6 +8,7 @@ import {
   AUTO_SYNC,
   DRAFT_STATUS,
   REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
   SEASON_PHASE_ORDER,
   SEASON_STATUS,
 } from "@/lib/constants";
@@ -78,6 +79,8 @@ import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
+import { adminNextStep } from "@/lib/admin-next-step";
+import { cn } from "@/lib/utils";
 import { maskWebhookUrl } from "@/lib/discord";
 import {
   getInhouseBoardStatus,
@@ -169,9 +172,13 @@ export default async function AdminPage() {
                 { id: "adm-captains", label: "Captains & draft" },
                 { id: "adm-schedule", label: "Schedule & results" },
                 { id: "adm-playoffs", label: "Playoffs" },
-                { id: "adm-roster", label: "Roster moves" },
+                ...(rosterMovesVisible(season, data)
+                  ? [{ id: "adm-roster", label: "Roster moves" }]
+                  : []),
                 { id: "adm-standins", label: "Standins" },
-                { id: "adm-sync", label: "Auto-sync" },
+                ...(autoSyncVisible(season)
+                  ? [{ id: "adm-sync", label: "Auto-sync" }]
+                  : []),
                 { id: "adm-league", label: "League id" },
                 { id: "adm-discord", label: "Discord" },
               ]
@@ -200,7 +207,7 @@ export default async function AdminPage() {
             <RosterMoves season={season} data={data} />
           </AdminAnchor>
           <AdminAnchor id="adm-standins">
-            <StandinControls data={data} />
+            <StandinControls season={season} data={data} />
           </AdminAnchor>
           <AdminAnchor id="adm-sync">
             <AutoSyncHealth season={season} />
@@ -233,9 +240,12 @@ export default async function AdminPage() {
         id="adm-new-season"
         title="Create a new season"
         subtitle="This archives the current season and opens fresh signups."
-        // Open only when there is nothing to run yet — otherwise this is a
-        // once-a-season form sitting under everything an admin uses weekly.
-        defaultOpen={!season}
+        // Open when there is nothing to run yet, AND once the season is over —
+        // COMPLETE is the one phase where this IS the next action, and leaving
+        // it collapsed at the bottom of the longest page in the app made the
+        // end of a season a dead end. Otherwise it stays folded: a once-a-season
+        // form should not sit open above everything an admin uses weekly.
+        defaultOpen={!season || season.status === SEASON_STATUS.COMPLETE}
       >
         <CardBody>
           <ActionForm
@@ -421,6 +431,65 @@ function AdminJump({ items }: { items: { id: string; label: string }[] }) {
   );
 }
 
+/**
+ * Which optional cards actually render, so the jump bar and the cards can never
+ * disagree.
+ *
+ * `AdminJump` listed every anchor unconditionally, but two cards return null in
+ * some phases — Roster moves (wrong phase, live auction, or nothing to move) and
+ * Auto-sync (only REGULAR_SEASON/PLAYOFFS). A chip that scrolls nowhere reads as
+ * a broken page, and on a sticky nav the admin is using to find a control under
+ * time pressure it is worse than that: it looks like the tool is gone. One
+ * predicate, two consumers — the ROW_GRID discipline.
+ */
+function rosterMovesVisible(season: Season, data: AdminData): boolean {
+  if (season.status === "SIGNUPS" || season.status === "COMPLETE") return false;
+  // `?.status !== COMPLETE`, so a MISSING Draft row counts as "the auction
+  // hasn't run" — matching the actions. In the DRAFT phase with no draft row
+  // (reachable by clicking the Draft phase button before Start draft) the forms
+  // must stay hidden, or the $0 free-agent path bypasses the auction entirely.
+  if (
+    season.status === "DRAFT" &&
+    data.draft?.status !== DRAFT_STATUS.COMPLETE
+  ) {
+    return false;
+  }
+  const rosteredIds = new Set(
+    data.teams.flatMap((t) => t.members.map((m) => m.userId)),
+  );
+  const canSign =
+    data.players.some((p) => !rosteredIds.has(p.userId)) &&
+    data.teams.some((t) => t.members.length < season.teamSize);
+  const releasable = data.teams.some((t) =>
+    t.members.some((m) => !m.isCaptain),
+  );
+  const promotable = data.standins.some(
+    (s) => s.type === REGISTRATION_TYPE.STANDIN && !rosteredIds.has(s.userId),
+  );
+  // A SHORT team keeps the card open even when nothing can be done about it
+  // yet: "this team is a player down" is the thing the admin most needs to
+  // know, and it used to disappear precisely when no free agent existed.
+  const short = data.teams.some((t) => t.members.length < season.teamSize);
+  return canSign || releasable || promotable || short;
+}
+
+function autoSyncVisible(season: Season): boolean {
+  return season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS";
+}
+
+type ArchivedPlayoffGame = { dotaMatchId: string; slot: string; week: number };
+
+/** Tolerate a corrupt archive rather than 500 the whole admin page over it. */
+function parsePlayoffArchive(raw: string | null): ArchivedPlayoffGame[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ArchivedPlayoffGame[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 async function loadSeasonAdminData(seasonId: string) {
   const [players, standins, removed, teams, matches, draft, assignments] =
     await Promise.all([
@@ -474,7 +543,22 @@ async function loadSeasonAdminData(seasonId: string) {
     where: { match: { seasonId }, status: "OUT" },
     include: { user: true },
   });
-  return { players, standins, removed, teams, matches, draft, assignments, outRsvps };
+  // OpenDota ids of playoff games a bracket reset deleted. Archived by
+  // createPlayoffBracket so the postseason can be re-imported by hand — without
+  // them the ids were simply gone, which is what made "recreate the bracket"
+  // (the only correction path past an advanced round) irreversible.
+  const playoffArchive = await getSetting(`playoffGamesArchive:${seasonId}`);
+  return {
+    players,
+    standins,
+    removed,
+    teams,
+    matches,
+    draft,
+    assignments,
+    outRsvps,
+    playoffArchive: parsePlayoffArchive(playoffArchive),
+  };
 }
 
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
@@ -490,6 +574,23 @@ function SeasonControls({
   const configLocked =
     !!data.draft && data.draft.status !== DRAFT_STATUS.NOT_STARTED;
   const cap = capacityInfo(season, data.players.length);
+  const regular = data.matches.filter((m) => m.phase === "REGULAR");
+  const playoff = data.matches.filter((m) => m.phase !== "REGULAR");
+  const nextStep = adminNextStep({
+    seasonStatus: season.status,
+    draftStatus: data.draft?.status ?? null,
+    playerCount: data.players.length,
+    minPlayers: cap.minPlayers,
+    teamCount: data.teams.length,
+    regularMatchCount: regular.length,
+    scheduledRegularCount: regular.filter((m) => m.scheduledAt).length,
+    pendingRegularResults: regular.filter((m) => m.status !== "COMPLETED")
+      .length,
+    playoffMatchCount: playoff.length,
+    unfinishedPlayoffCount: playoff.filter((m) => m.status !== "COMPLETED")
+      .length,
+    hasChampion: !!season.championTeamId,
+  });
   return (
     <Card>
       <CardHeader
@@ -527,26 +628,29 @@ function SeasonControls({
             </ActionForm>
           ))}
         </div>
-        {/* The auction finishing does NOT advance the phase — nothing writes
-            REGULAR_SEASON, so the season sits in DRAFT until the admin clicks it.
-            Everything that gate silently disables (automatic result sync, the
-            player-facing nav, week reminders, match-night check-in) fails QUIETLY,
-            so the panel has to say the next step out loud rather than leave it to
-            the generic tip below. */}
-        {season.status === SEASON_STATUS.DRAFT &&
-        data.draft?.status === DRAFT_STATUS.COMPLETE ? (
-          <p className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-fg">
-            <b>Next step: move the season to Regular season.</b> The auction is
-            finished, but until you do, automatic result sync, match-night
-            check-in, the weekly Discord reminder and the Schedule/Leaders nav
-            links all stay switched off.
-          </p>
-        ) : null}
-        <p className="text-xs text-muted">
-          Tip: gather players in <b>Signups</b>, assign captains, then{" "}
-          <b>Start draft</b> below. After the draft, generate the schedule and
-          enter results each week.
-        </p>
+        {/* THE ROADMAP. Several league transitions are silent and fail quietly
+            — the auction finishing does NOT advance the phase, a schedule with
+            no kickoff times disables auto-sync/reminders/pick'em locks for the
+            season, nothing prompts "start the playoffs" or "record the final",
+            and COMPLETE used to be a dead end whose only exit was inside a
+            collapsed section at the bottom of the page. This banner is the
+            page's answer to "what do I do next?" in EVERY phase; the logic is
+            pure and tested in src/lib/admin-next-step.ts. */}
+        <div
+          className={cn(
+            "rounded-lg border px-3 py-2 text-sm",
+            nextStep.tone === "action"
+              ? "border-accent/30 bg-accent/10 text-fg"
+              : nextStep.tone === "warning"
+                ? "border-danger/40 bg-danger/10 text-fg"
+                : nextStep.tone === "done"
+                  ? "border-success/40 bg-success/10 text-fg"
+                  : "border-line bg-surface-2/40 text-muted",
+          )}
+        >
+          <b className="text-fg">{nextStep.title}</b>
+          {nextStep.detail ? <> {nextStep.detail}</> : null}
+        </div>
         <form
           action={renameSeason}
           className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
@@ -590,7 +694,7 @@ function SeasonControls({
           </SubmitButton>
           <span className="text-xs text-muted">
             {season.maxMmr > 0
-              ? `players over ${season.maxMmr} are reviewed before joining · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`
+              ? `soft limit — signups over ${season.maxMmr} MMR still join the pool; review them here before the draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
               : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
           </span>
         </form>
@@ -701,8 +805,18 @@ function SeasonControls({
           <SubmitButton variant="secondary" size="sm">
             Save series lengths
           </SubmitButton>
+          {/* These are copied onto each Match row when it is CREATED, so they
+              are read-once per phase, not live. Saving after the fact still
+              writes the Season and re-renders with the new value — a perfect
+              false confirmation — while every existing fixture keeps its old
+              length. Say which ones are already locked in rather than letting
+              an admin "fix" a Bo1 into a Bo3 that never happens. */}
           <span className="text-xs text-muted">
-            games per match; set before generating the schedule / bracket
+            games per match — copied onto each fixture when it is created, so
+            these only affect matches made from now on.
+            {data.matches.some((m) => m.phase === "REGULAR")
+              ? " The regular-season schedule already exists: change its length per match, or regenerate."
+              : ""}
           </span>
         </form>
       </CardBody>
@@ -727,13 +841,21 @@ function CaptainControls({
   const nonCaptains = data.players.filter(
     (p) => !captainUserIds.has(p.userId),
   );
+  // Captains are ACTIVE PLAYER registrations too (addCaptain requires it), so
+  // their row is in `data.players` — it is only filtered out of the list above.
+  const captainReg = new Map(data.players.map((p) => [p.userId, p]));
 
-  // Starting the draft is a ONE-WAY DOOR: nothing ever sets a draft back to
-  // NOT_STARTED, so addCaptain/removeCaptain are locked from here on and the
-  // season's team count is final (startDraft's own re-run error says the escape
-  // is "create a new season"). On draft night with players waiting that is the
-  // worst possible surprise, so the confirm names the count being locked in and
-  // calls out a shortfall against the season's own team target.
+  // Starting the draft locks addCaptain/removeCaptain, but it is NOT a one-way
+  // door — this comment used to say it was, and the confirm below repeated it.
+  // `abortDraft` (draft-service.ts) writes Draft.status back to NOT_STARTED,
+  // drops the season to SIGNUPS, refunds every purchase and deliberately KEEPS
+  // the captains and their teams, precisely so captain management reopens. The
+  // team count is final only once a RESULT exists, which is the line abort
+  // itself guards on. Saying "this can't be undone" on draft night pointed a
+  // mis-clicking admin at "create a new season" — which archives every
+  // registration made so far — while the real recovery sat in the same header.
+  // The confirm still names the count being locked in and calls out a shortfall
+  // against the season's own team target.
   // Abort is only offered while nothing has been played — the same line the
   // action guards on, so the button never appears where it would be refused.
   const anyResultRecorded =
@@ -756,8 +878,9 @@ function CaptainControls({
     (captainCount < season.minTeams
       ? ` That is fewer than this season's ${season.minTeams}-team target.`
       : "") +
-    " This can't be undone — captains are locked from now on, and adding another" +
-    " team would mean starting a new season.";
+    " Captains are locked once the auction begins — the way back is Abort draft," +
+    " which returns every drafted player and refund and keeps the captains, but" +
+    " is refused once any result has been recorded.";
 
   return (
     <Card>
@@ -777,8 +900,14 @@ function CaptainControls({
               </SubmitButton>
             </ActionForm>
             <ActionForm action={syncSteamProfiles}>
-              <SubmitButton variant="secondary" size="sm">
-                Sync avatars
+              <SubmitButton
+                variant="secondary"
+                size="sm"
+                /* It refreshes the Steam persona too, not just the picture —
+                   a rename shows up across the whole site after this. */
+                confirm="Refresh every player's Steam name and avatar?"
+              >
+                Sync names &amp; avatars
               </SubmitButton>
             </ActionForm>
             {!draftStarted ? (
@@ -827,7 +956,21 @@ function CaptainControls({
                 <SubmitButton
                   variant="secondary"
                   size="sm"
-                  confirm="Undo the most recent sale? The player returns to the pool and the buyer gets the money back and the next nomination."
+                  /* The COMPLETE case is the one the old copy hid. This button
+                     renders whenever the draft has started and the season is
+                     still in DRAFT — which includes a FINISHED auction, i.e.
+                     exactly where the panel's own "Draft complete — rosters are
+                     locked" banner parks the admin. undoLastSale accepts
+                     COMPLETE and writes IN_PROGRESS with a 90s nomination
+                     clock, so one click on a card that says the draft is over
+                     puts ten captains back into a live auction and
+                     resolveStalledNomination will auto-sell the top remaining
+                     player on the next poll from any visitor. Say so. */
+                  confirm={
+                    data.draft?.status === DRAFT_STATUS.COMPLETE
+                      ? "Undo the most recent sale? This REOPENS the finished auction as a live draft with a fresh nomination clock — the player returns to the pool and the buyer gets the money back and the next nomination. Finish or re-complete the draft afterwards."
+                      : "Undo the most recent auction sale? The player returns to the pool and the buyer gets the money back and the next nomination."
+                  }
                 >
                   Undo last sale
                 </SubmitButton>
@@ -988,6 +1131,45 @@ function CaptainControls({
                         </SubmitButton>
                       </ActionForm>
                     </details>
+                    {/* A captain's MMR is the ONE number that has to be right
+                        before the auction: mmrWeightedBudgets interpolates
+                        across the whole captain pool, so a single typo moves the
+                        pool's min/max and skews EVERY team's budget, not just
+                        this one's. This control lived only in the non-captain
+                        list below, so designating someone captain — the natural
+                        FIRST step — put their MMR permanently out of reach, and
+                        setRegistrationMmr never refused captains: it was a
+                        missing render, not a rule. */}
+                    {season.status === "SIGNUPS" && captainReg.get(t.captainId) ? (
+                      <details className="mt-1.5">
+                        <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                          ✎ Edit captain MMR
+                        </summary>
+                        <ActionForm
+                          action={setRegistrationMmr}
+                          className="mt-1.5 flex flex-wrap items-center gap-2"
+                          hidden={{
+                            registrationId: captainReg.get(t.captainId)!.id,
+                          }}
+                        >
+                          <input
+                            name="mmr"
+                            type="number"
+                            min={0}
+                            max={12000}
+                            defaultValue={captainReg.get(t.captainId)!.mmr}
+                            aria-label={`MMR for ${t.captain.name}`}
+                            className="h-8 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                          />
+                          <SubmitButton variant="secondary" size="sm">
+                            Save MMR
+                          </SubmitButton>
+                          <span className="text-xs text-muted">
+                            sets every team&rsquo;s starting budget
+                          </span>
+                        </ActionForm>
+                      </details>
+                    ) : null}
                     {/* Post-draft only: before the auction runs, removeCaptain
                         (which deletes the empty team) is the right tool. After
                         it, this is the ONLY way to move captaincy off an
@@ -1120,21 +1302,35 @@ function CaptainControls({
                           </button>
                         </ActionForm>
                       ) : null}
-                      {season.status === "SIGNUPS" ? (
-                        <ActionForm
-                          action={withdrawSignup}
-                          hidden={{ registrationId: p.id }}
+                      {/* NOT phase-gated. This used to render only during
+                          SIGNUPS and was the action's only control anywhere, so
+                          from the moment the draft started an admin could not
+                          remove a signup at all — while the action itself has no
+                          phase gate and carries an explicit "player is on the
+                          block" guard, i.e. it was written to be used mid-draft.
+                          A player who ghosts after signing up stayed in the
+                          auction pool (where the stall resolver can sell them),
+                          and afterwards in the free-agent and standin dropdowns
+                          for the rest of the season. `withdrawGateError` is the
+                          real gate — it refuses a captain, a rostered player, a
+                          standin who still owes cover, and a non-ACTIVE row. */}
+                      <ActionForm
+                        action={withdrawSignup}
+                        hidden={{ registrationId: p.id }}
+                      >
+                        <SubmitButton
+                          variant="ghost"
+                          size="sm"
+                          className="text-danger hover:underline"
+                          confirm={
+                            season.status === "SIGNUPS"
+                              ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
+                              : `Remove ${p.user.name}'s signup? They leave the draft pool and the free-agent and standin lists. Rostered players must be released first — you can reinstate them below.`
+                          }
                         >
-                          <SubmitButton
-                            variant="ghost"
-                            size="sm"
-                            className="text-danger hover:underline"
-                            confirm={`Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`}
-                          >
-                            remove
-                          </SubmitButton>
-                        </ActionForm>
-                      ) : null}
+                          remove
+                        </SubmitButton>
+                      </ActionForm>
                     </span>
                   </div>
                   {season.status === "SIGNUPS" ? (
@@ -1237,9 +1433,22 @@ function ScheduleControls({
               variant="secondary"
               size="sm"
               disabled={data.teams.length < 2}
-              confirm="Regenerate the schedule? Existing regular-season matches are replaced."
+              /* The confirm is the last chance to stop, so it has to name the
+                 collateral the toast only reports afterwards. Regenerating
+                 recreates the same pairings with NEW ids, so every check-in,
+                 pick'em pick, standin booking and open reschedule proposal
+                 cascades away with the old fixtures. Mid-season that is every
+                 captain's arranged cover. A first-ever generate has nothing to
+                 replace, so it keeps a plain confirm. */
+              confirm={
+                data.matches.some((m) => m.phase === "REGULAR")
+                  ? "Replace the regular-season schedule? Every regular-season fixture is deleted and recreated with new ids, so all check-ins, pick'em picks, standin bookings and open reschedule proposals on them are cleared. Playoff matches are untouched."
+                  : "Generate the regular-season schedule?"
+              }
             >
-              Generate schedule
+              {data.matches.some((m) => m.phase === "REGULAR")
+                ? "Regenerate schedule"
+                : "Generate schedule"}
             </SubmitButton>
           </ActionForm>
         }
@@ -1259,9 +1468,18 @@ function ScheduleControls({
                     : "border-success/40 bg-success/10 text-success"
                 }`}
               >
+                {/* `status` counts REGULAR matches only, so once the last one
+                    is in this line was true forever — it kept telling the admin
+                    to "start the playoffs" all through the postseason and next
+                    to a crowned champion, pointing at a button that by then says
+                    RESET and deletes the whole bracket. Branch on the phase. */}
                 {status.pending > 0
                   ? `⏳ ${pendingResultsMessage(status)} Enter them to keep standings & seeding correct.`
-                  : `✓ All ${status.total} results in — ready to start the playoffs.`}
+                  : season.status === SEASON_STATUS.PLAYOFFS
+                    ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores below.`
+                    : season.status === SEASON_STATUS.COMPLETE
+                      ? `✓ Season complete — all ${status.total} regular-season results recorded.`
+                      : `✓ All ${status.total} results in — ready to start the playoffs.`}
               </div>
             ) : null}
             <p className="text-xs text-muted">
@@ -1483,7 +1701,7 @@ function MatchResultRow({
         </ActionForm>
       ) : null}
 
-      <form
+      <ActionForm
         action={setMatchTime}
         className="flex flex-wrap items-center gap-2 text-xs text-muted"
       >
@@ -1498,7 +1716,7 @@ function MatchResultRow({
         <SubmitButton variant="secondary" size="sm">
           Set time
         </SubmitButton>
-      </form>
+      </ActionForm>
 
       {m.games.length > 0 ? (
         <ul className="space-y-1 border-t border-line/60 pt-2 text-xs">
@@ -1555,6 +1773,13 @@ function PlayoffControls({
   const champion = season.championTeamId
     ? data.teams.find((t) => t.id === season.championTeamId)
     : null;
+  // Reset is the only correction path once a round has advanced, and Game
+  // cascades with Match — so name what it actually costs rather than the old
+  // "Existing playoff games are removed", which reads like housekeeping.
+  const playoffGameCount = playoffMatches.reduce(
+    (n, m) => n + m.games.length,
+    0,
+  );
 
   return (
     <Card>
@@ -1569,7 +1794,19 @@ function PlayoffControls({
               disabled={data.teams.length < 2}
               confirm={
                 playoffMatches.length > 0
-                  ? "Reset the playoff bracket? Existing playoff games are removed."
+                  ? `${
+                      season.status === SEASON_STATUS.COMPLETE
+                        ? "Reset the playoff bracket? This UN-CROWNS the champion and reopens the season into Playoffs. "
+                        : "Reset the playoff bracket? "
+                    }All ${playoffMatches.length} playoff match(es)${
+                      playoffGameCount
+                        ? ` and their ${playoffGameCount} imported game(s)`
+                        : ""
+                    } are deleted and reseeded from the current standings.${
+                      playoffGameCount
+                        ? " Postseason box scores, MVPs and fantasy points go with them — the OpenDota match IDs are archived below so you can re-import."
+                        : ""
+                    }`
                   : "Seed and start the playoff bracket?"
               }
             >
@@ -1600,10 +1837,32 @@ function PlayoffControls({
           </p>
         ) : (
           <p className="text-muted">
-            Will seed the top {bracketSize} of {data.teams.length} team(s) by
-            standings. Start this after the regular season is finished.
+            {data.teams.length < 2
+              ? "Add at least two captains before a bracket can be seeded."
+              : `Will seed the top ${bracketSize} of ${data.teams.length} team(s) by standings. Start this after the regular season is finished.`}
           </p>
         )}
+        {data.playoffArchive.length > 0 ? (
+          <details className="rounded-lg border border-line px-3 py-2">
+            <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+              {data.playoffArchive.length} playoff game(s) removed by a bracket
+              reset — OpenDota IDs kept for re-import
+            </summary>
+            <p className="mt-2 text-xs text-muted">
+              Paste these into the &ldquo;Match ID or URL&rdquo; box on the matching
+              fixture in Schedule &amp; results and press &ldquo;Add game&rdquo; to
+              restore its box score.
+            </p>
+            <ul className="mt-2 space-y-1 text-xs">
+              {data.playoffArchive.map((g) => (
+                <li key={g.dotaMatchId} className="tabular-nums text-muted">
+                  <span className="text-fg">{g.dotaMatchId}</span> · {g.slot} ·
+                  week {g.week}
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
         <p className="text-xs text-muted">
           Series lengths (regular / playoffs / final) are set in the phase-control
           panel above.
@@ -1613,7 +1872,13 @@ function PlayoffControls({
   );
 }
 
-function StandinControls({ data }: { data: AdminData }) {
+function StandinControls({
+  season,
+  data,
+}: {
+  season: Season;
+  data: AdminData;
+}) {
   const upcoming = data.matches.filter((m) => m.status !== "COMPLETED");
   const teamName = new Map(data.teams.map((t) => [t.id, t.name]));
   const byMatch = new Map<string, AdminData["assignments"]>();
@@ -1643,9 +1908,19 @@ function StandinControls({ data }: { data: AdminData }) {
         subtitle="Slot a standin in for a player who can't make a match."
       />
       <CardBody className="space-y-3">
-        {data.standins.length === 0 ? (
-          <p className="text-sm text-muted">No standins have registered yet.</p>
-        ) : upcoming.length === 0 ? (
+        {/* The "no standins registered" branch used to swallow the WHOLE card,
+            which hid the uncovered-OUT alerts inside it — the diagnostic was
+            behind the cure. An admin with players declaring OUT and nobody
+            registered as cover saw a blank card saying nothing was wrong, which
+            is exactly the night they most needed the list. The note now rides
+            ABOVE the match blocks instead of replacing them. */}
+        {data.standins.length === 0 && upcoming.length > 0 ? (
+          <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm text-muted">
+            No standins have registered yet — players can sign up as a standin
+            on their profile. Anyone registered but undrafted can cover too.
+          </p>
+        ) : null}
+        {upcoming.length === 0 ? (
           <p className="text-sm text-muted">No upcoming matches to fill.</p>
         ) : (
           <>
@@ -1672,6 +1947,7 @@ function StandinControls({ data }: { data: AdminData }) {
                         data={data}
                         assignments={byMatch.get(m.id) ?? []}
                         teamName={teamName}
+                        teamSize={season.teamSize}
                         label={
                           <Link
                             href={`/matches/${m.id}`}
@@ -1706,6 +1982,7 @@ function StandinControls({ data }: { data: AdminData }) {
                       data={data}
                       assignments={byMatch.get(m.id) ?? []}
                       teamName={teamName}
+                      teamSize={season.teamSize}
                       label={
                         <Link
                           href={`/matches/${m.id}`}
@@ -1734,16 +2011,36 @@ function StandinMatchBlock({
   assignments,
   teamName,
   label,
+  teamSize,
 }: {
   m: AdminData["matches"][number];
   data: AdminData;
   assignments: AdminData["assignments"];
   teamName: Map<string, string>;
   label: React.ReactNode;
+  teamSize: number;
 }) {
   const home = data.teams.find((t) => t.id === m.homeTeamId);
   const away = data.teams.find((t) => t.id === m.awayTeamId);
   const asg = assignments;
+  // A player already covered can't be covered again (the service refuses a
+  // second cover for one seat), so don't offer them — the captain-facing card
+  // has always filtered these and the admin one didn't.
+  const coveredIds = new Set(
+    asg.map((a) => a.replacingUserId).filter(Boolean) as string[],
+  );
+  // OPEN SEATS. A short roster is filled by a standin who replaces NOBODY, so
+  // it needs its own option — this is the case that had no UI at all, which is
+  // why a 4-of-5 team simply could not be covered. One entry per still-open
+  // seat, already-filled ones subtracted.
+  const openSeats = [home, away].flatMap((t) => {
+    if (!t) return [];
+    const filled = asg.filter(
+      (a) => a.teamId === t.id && a.replacingUserId == null,
+    ).length;
+    const open = teamSize - t.members.length - filled;
+    return open > 0 ? [{ team: t, open }] : [];
+  });
   return (
     <div className="space-y-2 rounded-lg border border-line p-3">
       <div className="text-sm font-medium">
@@ -1781,8 +2078,12 @@ function StandinMatchBlock({
               className="flex items-center justify-between text-xs text-muted"
             >
               <span>
-                {a.standin.name} in for {a.replaced?.name ?? "?"} ·{" "}
-                {teamName.get(a.teamId)}
+                {/* A null `replaced` is an EMPTY-SEAT cover, not missing data —
+                    it used to render as "in for ?". */}
+                {a.replaced
+                  ? `${a.standin.name} in for ${a.replaced.name}`
+                  : `${a.standin.name} filling an open seat`}{" "}
+                · {teamName.get(a.teamId)}
               </span>
               <ActionForm action={removeStandin}>
                 <input type="hidden" name="assignmentId" value={a.id} />
@@ -1829,19 +2130,35 @@ function StandinMatchBlock({
           <option value="" disabled>
             Player…
           </option>
+          {/* Open seats first: on a short roster this is the thing the admin
+              came here to do, and it used to be impossible. The `seat:` prefix
+              is unpacked by the action into a null replacingUserId + teamId. */}
+          {openSeats.length > 0 ? (
+            <optgroup label="Open roster seat">
+              {openSeats.map(({ team, open }) => (
+                <option key={`seat-${team.id}`} value={`seat:${team.id}`}>
+                  {team.name} — empty seat ({open} of {teamSize} unfilled)
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
           <optgroup label={home?.name ?? "Home"}>
-            {home?.members.map((mm) => (
-              <option key={mm.userId} value={mm.userId}>
-                {mm.user.name}
-              </option>
-            ))}
+            {home?.members
+              .filter((mm) => !coveredIds.has(mm.userId))
+              .map((mm) => (
+                <option key={mm.userId} value={mm.userId}>
+                  {mm.user.name}
+                </option>
+              ))}
           </optgroup>
           <optgroup label={away?.name ?? "Away"}>
-            {away?.members.map((mm) => (
-              <option key={mm.userId} value={mm.userId}>
-                {mm.user.name}
-              </option>
-            ))}
+            {away?.members
+              .filter((mm) => !coveredIds.has(mm.userId))
+              .map((mm) => (
+                <option key={mm.userId} value={mm.userId}>
+                  {mm.user.name}
+                </option>
+              ))}
           </optgroup>
         </select>
         <Button type="submit" variant="secondary" size="sm">
@@ -2055,7 +2372,10 @@ function LeagueControls({ season }: { season: Season }) {
             </SubmitButton>
           </ActionForm>
         </div>
-        <form action={setLeagueId} className="flex flex-wrap items-end gap-2">
+        <ActionForm
+          action={setLeagueId}
+          className="flex flex-wrap items-end gap-2"
+        >
           <div>
             <label
               htmlFor="dotaLeagueId"
@@ -2074,7 +2394,7 @@ function LeagueControls({ season }: { season: Season }) {
           <SubmitButton variant="secondary" size="sm">
             Save league id
           </SubmitButton>
-        </form>
+        </ActionForm>
         <div className="rounded-lg border border-line bg-surface-2/40 p-3 text-xs text-muted">
           <p className="mb-1 font-medium text-fg">
             Make league games show in the Dota client:
@@ -2140,7 +2460,14 @@ function LeagueControls({ season }: { season: Season }) {
 // Post-draft roster management: sign free agents onto short teams, release
 // players who've left the league (they return to the free-agent pool).
 function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
-  if (season.status === "SIGNUPS" || season.status === "COMPLETE") return null;
+  // Visibility lives in `rosterMovesVisible` so the jump bar can ask the same
+  // question. All three actions refuse until the auction has FINISHED
+  // (signFreeAgent and releasePlayer check `draftRow.status !== COMPLETE`;
+  // promoteGateError blocks a LIVE/PAUSED draft), and the card used to be gated
+  // on the season phase alone — so from the first sale of draft night it sat
+  // there fully populated with three forms that could only produce errors, with
+  // "Release player" listing every player just bought.
+  if (!rosterMovesVisible(season, data)) return null;
 
   const rosteredIds = new Set(
     data.teams.flatMap((t) => t.members.map((m) => m.userId)),
@@ -2157,11 +2484,16 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   );
   // Late joiners register as standins once signups close — promoting one is
   // the first step of the mid-season roster refill (promote → sign above).
+  // `data.standins` deliberately unions registered STANDINs with undrafted full
+  // PLAYERs (both are valid cover), but promoteStandinToPlayer only accepts a
+  // STANDIN — promoteGateError refuses everyone else. Without this filter the
+  // dropdown was mostly names whose promotion always errors.
   const promotableStandins = data.standins.filter(
-    (s) => !rosteredIds.has(s.userId),
+    (s) => s.type === REGISTRATION_TYPE.STANDIN && !rosteredIds.has(s.userId),
   );
-  if (!canSign && releasable.length === 0 && promotableStandins.length === 0)
-    return null;
+  // (The "nothing to move" early return that used to live here is part of
+  // rosterMovesVisible now — one predicate, so the jump chip can't outlive the
+  // card it points at.)
 
   return (
     <Card>
@@ -2170,6 +2502,29 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
         subtitle="Sign free agents onto short teams; release players who've left; promote late-joining standins to full players."
       />
       <CardBody className="space-y-3">
+        {/* A SHORT ROSTER stated outright. The only place /admin printed a
+            team's size against teamSize was inside the sign form's own team
+            select — which is gated on a free agent existing, so the single
+            indicator that a team is a player down vanished in exactly the case
+            where nobody is available to fix it. Everywhere else the league
+            reports a 4-of-5 side as fully staffed, so this line is the admin's
+            only warning before match night. */}
+        {shortTeams.length > 0 ? (
+          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
+            <b>
+              {shortTeams.length} team
+              {shortTeams.length === 1 ? " is" : "s are"} short of{" "}
+              {season.teamSize}:
+            </b>{" "}
+            {shortTeams
+              .map((t) => `${t.name} (${t.members.length})`)
+              .join(", ")}
+            .{" "}
+            {freeAgents.length === 0
+              ? "No free agents are available — promote a standin below, or arrange cover per match in Standin assignments."
+              : "Sign a free agent below to fill the seat."}
+          </p>
+        ) : null}
         {canSign ? (
           <ActionForm
             action={signFreeAgent}
@@ -2232,7 +2587,8 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               Promote to player
             </SubmitButton>
             <span className="text-xs text-muted">
-              then sign them above — the refill path for late joiners
+              then sign them with the form above — it appears once a team is
+              short and a free agent exists
             </span>
           </ActionForm>
         ) : null}
@@ -2261,16 +2617,18 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               variant="secondary"
               size="sm"
               className="text-danger"
-              confirm="Release this player from their roster? They go back to the free-agent pool."
+              confirm="Release this player from their roster? They go back to the free-agent pool, their fee is refunded to the team, and any standin booked to cover them on an unplayed match is cancelled (that standin is told to stand down in Discord)."
             >
               Release player
             </SubmitButton>
           </ActionForm>
         ) : null}
         <p className="text-xs text-muted">
-          Signings and releases are permanent for the season (unlike standins,
-          which cover a single match) and are announced in Discord. Captains
-          can&apos;t be released.
+          Signings and releases last the rest of the season (unlike standins,
+          which cover a single match) and are announced in Discord. Both are
+          reversible from this card — release undoes a signing and refunds it,
+          and a released player goes back to the free-agent list. Captains
+          can&apos;t be released; hand over captaincy first.
         </p>
       </CardBody>
     </Card>
@@ -2849,8 +3207,8 @@ function DiscordControls({
             rewrites it in place as players come and go — a live count with no
             new messages, ever. Editing a message doesn&apos;t notify anyone, so{" "}
             <b>pin it</b> (right-click → Pin Message) or it will scroll away.
-            The separate &ldquo;queue is almost full&rdquo; ping is what actually
-            alerts people; this board just shows the state.
+            The separate queue ping (fired once the queue reaches 4 players)
+            is what actually alerts people; this board just shows the state.
           </p>
         </div>
       </CardBody>

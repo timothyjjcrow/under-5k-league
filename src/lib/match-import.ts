@@ -457,6 +457,21 @@ export async function recomputeSeries(matchId: string) {
   // dropping out here loses nothing.
   if (!won) return;
 
+  // UN-DECIDED means un-announced. `announceSeriesResultOnce` is idempotent
+  // through the `resultAnnounced:<matchId>` marker, and the result-sync retry
+  // sweep only re-claims markers whose value starts with `failed:` — so once a
+  // wrong score had been posted to Discord, correcting it could NEVER reach the
+  // channel: the admin removes the bad game, the real ones import, the series
+  // decides the other way, and the marker silently swallows the announcement.
+  // Discord's permanent record stayed wrong with nothing to fix it. Releasing
+  // the marker here covers every un-deciding caller (removeGame today, anything
+  // future), so the corrected result announces exactly once when it lands.
+  if (!decided) {
+    await prisma.setting.deleteMany({
+      where: { key: `resultAnnounced:${matchId}` },
+    });
+  }
+
   // A freshly decided series announces itself (idempotent claim) — imported
   // results used to reach Discord only when an admin typed the score in.
   if (decided && match.status !== MATCH_STATUS.COMPLETED) {
@@ -635,8 +650,56 @@ export type AutoDetectResult = {
  * importing any that validate as a game between the two teams. Needs players to
  * have "Expose Public Match Data" enabled in Dota.
  */
+/**
+ * Games an admin explicitly REMOVED, remembered so the background importers
+ * stop re-adding them.
+ *
+ * `removeGame` is the panel's own repair path for a mis-attributed import, and
+ * without this memory it did not work at all during the window it exists for.
+ * BOTH import paths decide "already recorded" from the Game rows themselves —
+ * `autoDetectGamesForMatch`'s `recorded` set and `syncLeagueGames`' unique-id
+ * check — so deleting the row simply made the game a fresh candidate again, and
+ * the next `/api/sync` ping re-imported it. That ping comes from any page view,
+ * including the admin's own tab, so the correction was typically undone inside a
+ * minute — silently, because the removal had already toasted success.
+ *
+ * Bounded like the league skip list. The admin's MANUAL detect / league-sync
+ * buttons pass `ignoreSkips`, so a deliberate re-import is still one click: this
+ * only ever stops the AUTOMATIC paths from reversing a deliberate removal.
+ */
+const importSkipKey = (seasonId: string) => `importSkip:${seasonId}`;
+
+export async function loadImportSkips(seasonId: string): Promise<Set<string>> {
+  try {
+    const parsed = JSON.parse(
+      (await getSetting(importSkipKey(seasonId))) ?? "[]",
+    );
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    // corrupt skip memory — start fresh rather than fail the caller
+    return new Set();
+  }
+}
+
+/**
+ * Record a removal. Callers must do this BEFORE deleting the Game row, not
+ * after: the unique `dotaMatchId` is what makes the gap safe. With the row still
+ * present a racing import is refused by the constraint, so writing the skip
+ * first leaves no window in which the game is both importable and unremembered.
+ */
+export async function rememberImportSkip(seasonId: string, dotaMatchId: string) {
+  const skips = await loadImportSkips(seasonId);
+  if (skips.has(dotaMatchId)) return;
+  skips.add(dotaMatchId);
+  await setSetting(
+    importSkipKey(seasonId),
+    JSON.stringify([...skips].slice(-AUTO_SYNC.LEAGUE_SKIP_MEMORY)),
+  );
+}
+
 export async function autoDetectGamesForMatch(
   matchId: string,
+  opts: { ignoreSkips?: boolean } = {},
 ): Promise<AutoDetectResult> {
   const match = await prisma.match.findUnique({ where: { id: matchId } });
   if (!match) return { imported: 0, scanned: 0, error: "Unknown league match" };
@@ -666,15 +729,17 @@ export async function autoDetectGamesForMatch(
 
   // Already-recorded games must not occupy candidate slots — otherwise a
   // recorded rematch (e.g. the playoff meeting) starves the older unrecorded
-  // game out of the bestOf cap below.
-  const recorded = new Set(
-    (
+  // game out of the bestOf cap below. Admin-removed games are treated the same
+  // way: a deliberate removal is a decision this scan must not overturn.
+  const recorded = new Set([
+    ...(
       await prisma.game.findMany({
         where: { dotaMatchId: { in: candidateIds.map(String) } },
         select: { dotaMatchId: true },
       })
     ).map((g) => g.dotaMatchId),
-  );
+    ...(opts.ignoreSkips ? [] : await loadImportSkips(match.seasonId)),
+  ]);
 
   const minPerSide = Math.min(3, teamSize);
   const valid: SeriesCandidate[] = [];
@@ -887,6 +952,12 @@ export async function syncLeagueGames(
     }
   }
   const skip = new Set(skipList);
+  // Admin removals are honoured by the automatic feed too, but kept OUT of
+  // `skipList` so the write-back below can't fold them into the league's own
+  // rolling memory (they have separate lifetimes and separate override buttons).
+  if (opts.auto) {
+    for (const id of await loadImportSkips(seasonId)) skip.add(id);
+  }
   const newlySkipped: string[] = [];
 
   // Building account sets is O(matches × roster queries) — do it only once a

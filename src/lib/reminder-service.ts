@@ -5,7 +5,11 @@ import {
   sendDiscordMessage,
   weekReminderMessage,
 } from "./discord";
-import { matchNightRoster, teamAvailability } from "./availability";
+import {
+  expectedSideSize,
+  matchNightRoster,
+  teamAvailability,
+} from "./availability";
 
 /**
  * Lazy match-night reminder: the first page load after a league night enters
@@ -29,6 +33,9 @@ import { matchNightRoster, teamAvailability } from "./availability";
 export async function maybeAnnounceUpcomingWeek(season: {
   id: string;
   status: string;
+  /** The expected side size — the denominator the check-in counts render out
+   *  of, so a short roster can't report itself as fully checked in. */
+  teamSize: number;
 }): Promise<boolean> {
   if (
     season.status !== SEASON_STATUS.REGULAR_SEASON &&
@@ -130,9 +137,11 @@ export async function maybeAnnounceUpcomingWeek(season: {
       awayName: m.awayTeam.name,
       scheduledAt: m.scheduledAt!.getTime(),
       homeIn: homeAv.confirmed,
-      homeSize: home.length,
+      // Out of the season's side size — a short roster used to report itself
+      // as fully checked in ("4/4") in the channel.
+      homeSize: expectedSideSize(season.teamSize, home.length),
       awayIn: awayAv.confirmed,
-      awaySize: away.length,
+      awaySize: expectedSideSize(season.teamSize, away.length),
       waitingIds: [...homeAv.unansweredUserIds, ...awayAv.unansweredUserIds],
     };
   });

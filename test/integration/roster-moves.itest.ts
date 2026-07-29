@@ -14,6 +14,8 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
+import { sendDiscordMessage } from "@/lib/discord";
+const mockSend = vi.mocked(sendDiscordMessage);
 import { releasePlayer, signFreeAgent, withdrawSignup } from "@/app/actions/admin";
 import {
   MATCH_PHASE,
@@ -225,6 +227,77 @@ describe("releasePlayer — refunds the fee and cancels cover for the seat", () 
     expect(res?.error).toBeUndefined();
     expect(res?.message).toMatch(/\$57 refunded/);
     expect((await prisma.team.findUniqueOrThrow({ where: { id: alpha.id } })).budget).toBe(100);
+  });
+
+  // Being told to turn up for a game is the most action-demanding message this
+  // league sends. Both removeStandin paths announce the stand-down; release
+  // cancelled the booking in SILENCE, so the standin kept a live @mention
+  // telling them to play a match they had been dropped from.
+  it("announces the stand-down to the standin it just cancelled", async () => {
+    const { season, alpha, p, match } = await rosteredWithMatch(20);
+    const standin = await makePlayer(season.id, "Cover Caller", 2500);
+    await prisma.user.update({
+      where: { id: standin.id },
+      data: { discordId: "111222333444555666" },
+    });
+    await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: alpha.id,
+        standinUserId: standin.id,
+        replacingUserId: p.id,
+      },
+    });
+    const member = await prisma.teamMember.findFirstOrThrow({
+      where: { userId: p.id },
+    });
+    mockSend.mockClear();
+
+    await releasePlayer({}, fd({ memberId: member.id }));
+
+    const standDown = mockSend.mock.calls.find(([msg]) =>
+      String(msg).includes("no longer standing in"),
+    );
+    expect(standDown, "release must send a stand-down").toBeTruthy();
+    expect(String(standDown![0])).toContain("Cover Caller");
+    // …and it must PING them, not just state it into the channel.
+    expect(standDown![1]).toEqual({ users: ["111222333444555666"] });
+  });
+
+  // The counterpart guard: cover on a series that already has a game is
+  // deliberately LEFT in place, so no stand-down may be claimed for it.
+  it("sends no stand-down for cover it deliberately left alone", async () => {
+    const { season, alpha, bravo, p, match } = await rosteredWithMatch(20);
+    const standin = await makePlayer(season.id, "Mid Series", 2500);
+    await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: alpha.id,
+        standinUserId: standin.id,
+        replacingUserId: p.id,
+      },
+    });
+    await prisma.game.create({
+      data: {
+        matchId: match.id,
+        dotaMatchId: "990001",
+        radiantWin: true,
+        winnerTeamId: bravo.id,
+        players: "[]",
+      },
+    });
+    const member = await prisma.teamMember.findFirstOrThrow({
+      where: { userId: p.id },
+    });
+    mockSend.mockClear();
+
+    await releasePlayer({}, fd({ memberId: member.id }));
+
+    expect(
+      mockSend.mock.calls.some(([msg]) =>
+        String(msg).includes("no longer standing in"),
+      ),
+    ).toBe(false);
   });
 
   it("cancels standin assignments covering the released player", async () => {

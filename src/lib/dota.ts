@@ -27,6 +27,26 @@ export function parseMatchId(input: string): string | null {
 }
 
 /**
+ * Parse a Valve league id from user input: a raw id or a pasted league URL.
+ *
+ * The digit floor is the whole point, exactly as in `parseMatchId` above. A bare
+ * `/(\d+)/` takes the FIRST digit run, and the admin card's own instructions
+ * send the reader to the dota2.com league page — so pasting that URL stored a
+ * league id of "2". That is not merely a wrong value: any truthy `dotaLeagueId`
+ * puts
+ * automatic result sync into league-feed-only mode, so the per-match roster scan
+ * that had been working is switched off and NOTHING imports, with no error and
+ * nothing to clear the field.
+ *
+ * Returns null for "no id here" so the caller can refuse rather than store junk;
+ * an empty input is the caller's business (that means "clear it").
+ */
+export function parseLeagueId(input: string): string | null {
+  const m = String(input).trim().match(/(\d{4,})/);
+  return m ? m[1] : null;
+}
+
+/**
  * Parse a Dota account id from user input: a raw account id, a SteamID64, an
  * OpenDota/Dotabuff player URL, or a Steam profile URL. Returns the 32-bit id.
  */

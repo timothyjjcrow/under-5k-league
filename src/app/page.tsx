@@ -25,7 +25,11 @@ import {
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam, type FormResult } from "@/lib/team-matches";
-import { matchNightRoster, teamAvailability } from "@/lib/availability";
+import {
+  expectedSideSize,
+  matchNightRoster,
+  teamAvailability,
+} from "@/lib/availability";
 import { weeklyHonors } from "@/lib/honors";
 import { heroMeta } from "@/lib/hero-meta";
 import { heroById } from "@/lib/heroes";
@@ -1931,7 +1935,13 @@ async function ThisWeek({
       roster,
       avail.filter((r) => r.matchId === matchId),
     );
-    return { confirmed: a.confirmed, size: roster.length };
+    // Out of the SEASON's side size, not the roster we happen to have — a
+    // 4-of-5 team used to render "4/4" in success green.
+    return {
+      confirmed: a.confirmed,
+      size: expectedSideSize(season.teamSize, roster.length),
+      short: Math.max(0, season.teamSize - roster.length),
+    };
   };
 
   return (
@@ -2020,14 +2030,24 @@ async function ThisWeek({
                       {c ? (
                         <span
                           role="img"
-                          aria-label={`${c.confirmed} of ${c.size} checked in`}
+                          aria-label={
+                            c.short
+                              ? `${c.confirmed} of ${c.size} checked in — ${c.short} seat(s) unfilled`
+                              : `${c.confirmed} of ${c.size} checked in`
+                          }
                           className={cn(
                             "shrink-0 text-xs tabular-nums",
                             c.confirmed === c.size
                               ? "text-success"
-                              : "text-muted",
+                              : c.short
+                                ? "text-danger"
+                                : "text-muted",
                           )}
-                          title={`${c.confirmed} of ${c.size} checked in`}
+                          title={
+                            c.short
+                              ? `${c.confirmed} of ${c.size} checked in — ${c.short} roster seat(s) unfilled`
+                              : `${c.confirmed} of ${c.size} checked in`
+                          }
                         >
                           <span aria-hidden>
                             ✓ {c.confirmed}/{c.size}

@@ -34,6 +34,63 @@ export type StandinServiceResult =
     }
   | { ok: false; error: string };
 
+/**
+ * Standins whose cover now CLASHES because a match moved.
+ *
+ * `standinConflict` was only ever consulted at assign time, and every retime
+ * path (`setWeekNight`, `setMatchTime`, and a captain accepting a reschedule)
+ * moves a fixture onto a night the assign-time check already approved. Nothing
+ * re-checked, and nothing displayed it: a standin silently ended up booked for
+ * two games at the same minute, invisible on every surface right up to kickoff.
+ *
+ * Refusing the retime would be the wrong fix — the retime is the legitimate
+ * act and the cover is the stale thing — so this REPORTS instead, the same
+ * shape `releasePlayer` uses for cover it declines to cancel by the back door.
+ * Returns one line per clash, ready to append to a toast.
+ */
+export async function clashesAfterRetime(
+  seasonId: string,
+  matchIds: string[],
+): Promise<string[]> {
+  if (matchIds.length === 0) return [];
+  const moved = await prisma.match.findMany({
+    where: { id: { in: matchIds } },
+    select: {
+      id: true,
+      scheduledAt: true,
+      week: true,
+      homeTeam: { select: { name: true } },
+      awayTeam: { select: { name: true } },
+      standins: { select: { standinUserId: true } },
+    },
+  });
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of moved) {
+    for (const a of m.standins) {
+      const others = await findClashingCover(prisma, {
+        matchId: m.id,
+        standinUserId: a.standinUserId,
+        seasonId,
+      });
+      const clash = others.find((o) => standinConflict(m, o.match));
+      if (!clash) continue;
+      // One line per standin per pair, whichever direction we meet it from.
+      const key = [a.standinUserId, ...[m.id, clash.matchId].sort()].join(":");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const who = await prisma.user.findUnique({
+        where: { id: a.standinUserId },
+        select: { name: true },
+      });
+      out.push(
+        `${who?.name ?? "A standin"} now covers both ${m.homeTeam.name} v ${m.awayTeam.name} and ${clash.match.homeTeam.name} v ${clash.match.awayTeam.name}`,
+      );
+    }
+  }
+  return out;
+}
+
 /** Cover this standin already owes on OTHER unplayed matches this season. */
 async function findClashingCover(
   db: Pick<typeof prisma, "standinAssignment">,
@@ -72,13 +129,32 @@ function clashError(
 export async function assignStandinGuarded(opts: {
   matchId: string;
   standinUserId: string;
-  replacingUserId: string;
+  /**
+   * The rostered player being covered, or NULL to fill an EMPTY SEAT on a short
+   * roster — in which case `teamId` says which side.
+   *
+   * The empty-seat case is why a 4-of-5 team could not be covered at all.
+   * `matchNightRoster` has always kept a null-replacement assignment (it adds a
+   * player without removing one) and CLAUDE.md documented it as working, but
+   * nothing could ever CREATE one: this parameter was typed `string` and the
+   * guard below refused empty. So the one roster state that most needs cover —
+   * a team that lost a player mid-season — was the one state with no way to
+   * arrange it.
+   */
+  replacingUserId: string | null;
+  /** Required when `replacingUserId` is null: which team's seat is being filled. */
+  teamId?: string;
   /** null = admin (either team); a userId must captain the covered team. */
   actingCaptainId: string | null;
 }): Promise<StandinServiceResult> {
   const { matchId, standinUserId, replacingUserId, actingCaptainId } = opts;
-  if (!matchId || !standinUserId || !replacingUserId)
-    return { ok: false, error: "Pick a standin and the player they cover" };
+  if (!matchId || !standinUserId)
+    return { ok: false, error: "Pick a standin" };
+  if (!replacingUserId && !opts.teamId)
+    return {
+      ok: false,
+      error: "Pick the player they cover, or the team whose seat they fill",
+    };
   if (standinUserId === replacingUserId)
     return { ok: false, error: "A player can't stand in for themselves" };
 
@@ -127,23 +203,79 @@ export async function assignStandinGuarded(opts: {
   if (standinRoster)
     return { ok: false, error: "That player is on a roster — they can't stand in" };
 
-  // The replaced player's roster tells us which team the standin fills for.
-  const membership = await prisma.teamMember.findUnique({
-    where: { seasonId_userId: { seasonId: season.id, userId: replacingUserId } },
-    include: {
-      team: { select: { captainId: true, name: true } },
-      user: { select: { name: true } },
-    },
-  });
-  if (!membership) return { ok: false, error: "Replaced player is not on a team" };
-  if (
-    membership.teamId !== match.homeTeamId &&
-    membership.teamId !== match.awayTeamId
-  ) {
-    return { ok: false, error: "That player's team isn't in this match" };
+  // WHICH TEAM is the standin filling for? Normally the replaced player's own
+  // roster answers it. For an empty seat there is no replaced player, so the
+  // caller names the team and we validate it the same way.
+  let coverTeamId: string;
+  let coverTeamName: string;
+  let coverTeamCaptainId: string;
+  let replacedName: string | null = null;
+
+  if (replacingUserId) {
+    const membership = await prisma.teamMember.findUnique({
+      where: {
+        seasonId_userId: { seasonId: season.id, userId: replacingUserId },
+      },
+      include: {
+        team: { select: { captainId: true, name: true } },
+        user: { select: { name: true } },
+      },
+    });
+    if (!membership)
+      return { ok: false, error: "Replaced player is not on a team" };
+    if (
+      membership.teamId !== match.homeTeamId &&
+      membership.teamId !== match.awayTeamId
+    ) {
+      return { ok: false, error: "That player's team isn't in this match" };
+    }
+    coverTeamId = membership.teamId;
+    coverTeamName = membership.team.name;
+    coverTeamCaptainId = membership.team.captainId;
+    replacedName = membership.user.name;
+  } else {
+    const teamId = opts.teamId as string;
+    if (teamId !== match.homeTeamId && teamId !== match.awayTeamId) {
+      return { ok: false, error: "That team isn't in this match" };
+    }
+    const team = await prisma.team.findFirst({
+      where: { id: teamId, seasonId: season.id },
+      select: {
+        name: true,
+        captainId: true,
+        _count: { select: { members: true } },
+      },
+    });
+    if (!team) return { ok: false, error: "Unknown team" };
+    // An "empty seat" has to actually BE empty. Without this, filling a full
+    // roster's imaginary seat would put SIX players on the side: unlike the
+    // replacement case, nobody is removed to make room, so the count feeds
+    // straight through matchNightRoster into /schedule, the dashboard strip,
+    // the Discord week reminder and the import account sets.
+    const emptySeats = season.teamSize - team._count.members;
+    if (emptySeats <= 0) {
+      return {
+        ok: false,
+        error: `${team.name} has a full roster — pick the player being covered instead`,
+      };
+    }
+    // …and one standin per empty seat, no more.
+    const filled = await prisma.standinAssignment.count({
+      where: { matchId, teamId, replacingUserId: null },
+    });
+    if (filled >= emptySeats) {
+      return {
+        ok: false,
+        error: `${team.name}'s ${emptySeats} open seat(s) are already covered for this match`,
+      };
+    }
+    coverTeamId = teamId;
+    coverTeamName = team.name;
+    coverTeamCaptainId = team.captainId;
   }
+
   // Captains manage their OWN roster's cover; the other side is not theirs.
-  if (actingCaptainId && membership.team.captainId !== actingCaptainId) {
+  if (actingCaptainId && coverTeamCaptainId !== actingCaptainId) {
     return {
       ok: false,
       error: "Only that team's captain (or an admin) can assign this standin",
@@ -157,10 +289,16 @@ export async function assignStandinGuarded(opts: {
   // sets — remove the first assignment to swap standins.
   const [already, seatTaken, otherNights] = await Promise.all([
     prisma.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
-    prisma.standinAssignment.findFirst({
-      where: { matchId, replacingUserId },
-      include: { standin: { select: { name: true } } },
-    }),
+    // Only meaningful when a NAMED player is being covered. With a null
+    // replacingUserId this query would match every other empty-seat assignment
+    // in the match and refuse the second one wrongly — the open-seat budget
+    // above is what limits those.
+    replacingUserId
+      ? prisma.standinAssignment.findFirst({
+          where: { matchId, replacingUserId },
+          include: { standin: { select: { name: true } } },
+        })
+      : Promise.resolve(null),
     findClashingCover(prisma, { matchId, standinUserId, seasonId: season.id }),
   ]);
   if (already)
@@ -168,7 +306,7 @@ export async function assignStandinGuarded(opts: {
   if (seatTaken)
     return {
       ok: false,
-      error: `${membership.user.name} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
+      error: `${replacedName} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
     };
   const clash = otherNights.find((o) => standinConflict(match, o.match));
   if (clash)
@@ -212,10 +350,30 @@ export async function assignStandinGuarded(opts: {
             select: { id: true },
           }),
           tx.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
-          tx.standinAssignment.findFirst({
-            where: { matchId, replacingUserId },
-            include: { standin: { select: { name: true } } },
-          }),
+          replacingUserId
+            ? tx.standinAssignment.findFirst({
+                where: { matchId, replacingUserId },
+                include: { standin: { select: { name: true } } },
+              })
+            : // The empty-seat equivalent: re-assert the OPEN SEAT BUDGET in the
+              // read set, so two concurrent assigns can't both fill the last one
+              // and put six players on the side. Shaped as a findFirst-style
+              // result so the branch below stays one check.
+              tx.standinAssignment
+                .count({
+                  where: { matchId, teamId: coverTeamId, replacingUserId: null },
+                })
+                .then(async (filled) => {
+                  const seats = await tx.team.findUnique({
+                    where: { id: coverTeamId },
+                    select: { _count: { select: { members: true } } },
+                  });
+                  const open =
+                    season.teamSize - (seats?._count.members ?? season.teamSize);
+                  return filled >= open
+                    ? { standin: { name: "another standin" } }
+                    : null;
+                }),
           // Same reasoning as the other re-reads: two concurrent assigns for
           // the same standin on two fixtures the same night would each see a
           // clear field outside the transaction.
@@ -233,13 +391,20 @@ export async function assignStandinGuarded(opts: {
           );
         if (seatTaken)
           throw new StandinRaceError(
-            `${membership.user.name} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
+            replacingUserId
+              ? `${replacedName} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`
+              : `${coverTeamName}'s open seat(s) are already covered for this match`,
           );
         const clash = otherNights.find((o) => standinConflict(match, o.match));
         if (clash)
           throw new StandinRaceError(clashError(standinUser?.name, clash));
         await tx.standinAssignment.create({
-          data: { matchId, teamId: membership.teamId, standinUserId, replacingUserId },
+          data: {
+            matchId,
+            teamId: coverTeamId,
+            standinUserId,
+            replacingUserId,
+          },
         });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -269,8 +434,8 @@ export async function assignStandinGuarded(opts: {
     mentions: mentionsOf([standinUser?.discordId]),
     announcement: standinAssignedMessage({
       standinName: standinUser?.name ?? "A standin",
-      replacedName: membership.user.name,
-      teamName: membership.team.name,
+      replacedName,
+      teamName: coverTeamName,
       homeName: match.homeTeam.name,
       awayName: match.awayTeam.name,
       week: match.week,

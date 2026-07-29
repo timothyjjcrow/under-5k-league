@@ -220,7 +220,8 @@ export function playerOutMessage(m: {
 
 export function standinAssignedMessage(m: {
   standinName: string;
-  replacedName: string;
+  /** null = filling an EMPTY seat on a short roster, replacing nobody. */
+  replacedName: string | null;
   teamName: string;
   homeName: string;
   awayName: string;
@@ -233,7 +234,13 @@ export function standinAssignedMessage(m: {
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const standin = name(m.standinName);
-  return `🧩 **${standin}** stands in for **${name(m.replacedName)}** on **${name(m.teamName)}** — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page.`;
+  // "stands in for nobody" would be nonsense — a short roster is filling a seat
+  // that has no player behind it, which is a different (and more urgent) thing
+  // to tell a standin than covering for a named team-mate.
+  const forWhom = m.replacedName
+    ? `stands in for **${name(m.replacedName)}** on **${name(m.teamName)}**`
+    : `fills an open roster seat for **${name(m.teamName)}**`;
+  return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page.`;
 }
 
 export function standinRemovedMessage(m: {

@@ -6,7 +6,7 @@ import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 export async function WeekReminderPing({
   season,
 }: {
-  season: { id: string; status: string };
+  season: { id: string; status: string; teamSize: number };
 }) {
   await maybeAnnounceUpcomingWeek(season);
   return null;
