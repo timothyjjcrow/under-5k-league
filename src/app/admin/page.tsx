@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import {
   AUTO_SYNC,
   DRAFT_STATUS,
+  MATCH_PHASE,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_PHASE_ORDER,
@@ -80,6 +81,8 @@ import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { adminNextStep } from "@/lib/admin-next-step";
+import { recentAdminActions } from "@/lib/admin-log";
+import { DangerSubmit } from "@/components/danger-submit";
 import { cn } from "@/lib/utils";
 import { maskWebhookUrl } from "@/lib/discord";
 import {
@@ -183,6 +186,7 @@ export default async function AdminPage() {
                 { id: "adm-discord", label: "Discord" },
               ]
             : []),
+          { id: "adm-activity", label: "Activity" },
           { id: "adm-news", label: "News" },
           { id: "adm-security", label: "Security" },
           { id: "adm-new-season", label: "New season" },
@@ -231,6 +235,12 @@ export default async function AdminPage() {
           </CardBody>
         </Card>
       )}
+
+      <AdminAnchor id="adm-activity">
+        <Suspense fallback={<CardSkeleton rows={4} />}>
+          <AdminActivity />
+        </Suspense>
+      </AdminAnchor>
 
       <NewsControls posts={newsPosts} />
 
@@ -548,6 +558,18 @@ async function loadSeasonAdminData(seasonId: string) {
   // them the ids were simply gone, which is what made "recreate the bracket"
   // (the only correction path past an advanced round) irreversible.
   const playoffArchive = await getSetting(`playoffGamesArchive:${seasonId}`);
+  // What a schedule REGENERATE would destroy. These rows hang off a fixture id
+  // and cascade with it, and none of them is archived anywhere — so the confirm
+  // has to be able to state them BEFORE the click, not just the toast after.
+  const regularWhere = { match: { seasonId, phase: MATCH_PHASE.REGULAR } };
+  const [rsvps, picks, covers, proposals] = await Promise.all([
+    prisma.matchAvailability.count({ where: regularWhere }),
+    prisma.prediction.count({ where: regularWhere }),
+    prisma.standinAssignment.count({ where: regularWhere }),
+    prisma.rescheduleRequest.count({
+      where: { ...regularWhere, status: "PENDING" },
+    }),
+  ]);
   return {
     players,
     standins,
@@ -558,6 +580,7 @@ async function loadSeasonAdminData(seasonId: string) {
     assignments,
     outRsvps,
     playoffArchive: parsePlayoffArchive(playoffArchive),
+    collateral: { rsvps, picks, covers, proposals },
   };
 }
 
@@ -844,6 +867,8 @@ function CaptainControls({
   // Captains are ACTIVE PLAYER registrations too (addCaptain requires it), so
   // their row is in `data.players` — it is only filtered out of the list above.
   const captainReg = new Map(data.players.map((p) => [p.userId, p]));
+  const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
+  const collateral = data.collateral;
 
   // Starting the draft locks addCaptain/removeCaptain, but it is NOT a one-way
   // door — this comment used to say it was, and the confirm below repeated it.
@@ -865,13 +890,6 @@ function CaptainControls({
     (n, t) => n + t.members.filter((m) => !m.isCaptain).length,
     0,
   );
-  const abortConfirm =
-    `Abort the draft and go back to Signups?` +
-    (boughtCount > 0
-      ? ` ${boughtCount} drafted player(s) will be returned to the pool and every team refunded.`
-      : "") +
-    ` The ${data.teams.length} captain(s) and their teams are KEPT, so you can add or remove captains and start again.`;
-
   const captainCount = data.teams.length;
   const startConfirm =
     `Start the draft with ${captainCount} captain${captainCount === 1 ? "" : "s"}?` +
@@ -984,13 +1002,28 @@ function CaptainControls({
                 match is completed or any game is imported. */}
             {draftStarted && !anyResultRecorded ? (
               <ActionForm action={abortDraftAction}>
-                <SubmitButton
-                  variant="danger"
-                  size="sm"
-                  confirm={abortConfirm}
+                {/* TYPE-TO-CONFIRM: an auction is three hours of ten to sixteen
+                    people's evening, and NOTHING records what was bought for
+                    how much once this runs — re-running it produces different
+                    rosters at different prices, so the outcome is gone even
+                    though the structure is recoverable. It also sits in the
+                    same header strip as the routine Pause / Undo last sale
+                    controls, which is exactly where a mis-click lands on
+                    draft night. */}
+                <DangerSubmit
+                  token={season.name}
+                  title="Abort the draft and return to Signups?"
+                  consequences={[
+                    boughtCount > 0
+                      ? `All ${boughtCount} drafted player(s) go back to the pool and every team is refunded — the rosters and prices from this auction are not recorded anywhere and cannot be restored.`
+                      : "The auction is reset to not-started.",
+                    "The season drops back to Signups, so players can register again.",
+                    "You will have to re-run the whole auction with everyone present.",
+                  ]}
+                  recovery={`The ${data.teams.length} captain(s) and their teams are KEPT, so captain management reopens and you can start again.`}
                 >
                   Abort draft
-                </SubmitButton>
+                </DangerSubmit>
               </ActionForm>
             ) : null}
           </div>
@@ -1098,14 +1131,43 @@ function CaptainControls({
                       {!draftStarted ? (
                         <ActionForm action={removeCaptain}>
                           <input type="hidden" name="teamId" value={t.id} />
-                          <SubmitButton
-                            variant="ghost"
-                            size="sm"
-                            className="shrink-0 text-xs text-danger hover:underline"
-                            confirm={`Remove ${t.captain.name} as captain? ${t.name} is deleted. Any generated schedule is cleared too — regenerate it once captains are final.`}
+                          {/* This deletes the team AND, if any fixture exists,
+                              every match in the SEASON — taking all check-ins,
+                              pick'em picks, standin bookings and open proposals
+                              with it by cascade. It is the twin of Regenerate
+                              schedule and needs the same barrier; it was a bare
+                              `remove` link 12px from "✎ Rename team". */}
+                          <DangerSubmit
+                            token={t.name}
+                            className="shrink-0"
+                            title={`Remove ${t.captain.name} as captain and delete ${t.name}?`}
+                            consequences={[
+                              `${t.name} and its ${t.members.length} roster place(s) are deleted.`,
+                              ...(regularCount > 0
+                                ? [
+                                    `All ${regularCount} fixture(s) in the season are cleared — not just this team's — because the round robin no longer fits.`,
+                                  ]
+                                : []),
+                              ...(regularCount > 0 && collateral.rsvps
+                                ? [`${collateral.rsvps} check-in(s) go with them.`]
+                                : []),
+                              ...(regularCount > 0 && collateral.picks
+                                ? [`${collateral.picks} pick'em pick(s) go with them.`]
+                                : []),
+                              ...(regularCount > 0 && collateral.covers
+                                ? [
+                                    `${collateral.covers} standin booking(s) go with them.`,
+                                  ]
+                                : []),
+                            ]}
+                            recovery={
+                              regularCount > 0
+                                ? "Regenerate the schedule once the captains are final. The check-ins, picks and bookings cannot be restored."
+                                : "No schedule exists yet, so nothing else is affected."
+                            }
                           >
                             remove
-                          </SubmitButton>
+                          </DangerSubmit>
                         </ActionForm>
                       ) : null}
                     </div>
@@ -1405,6 +1467,8 @@ function ScheduleControls({
   data: AdminData;
 }) {
   const status = regularSeasonStatus(data.matches);
+  const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
+  const collateral = data.collateral;
   return (
     <Card>
       <CardHeader
@@ -1429,27 +1493,50 @@ function ScheduleControls({
               defaultTs={season.firstMatchNight?.getTime()}
               className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
             />
-            <SubmitButton
-              variant="secondary"
-              size="sm"
-              disabled={data.teams.length < 2}
-              /* The confirm is the last chance to stop, so it has to name the
-                 collateral the toast only reports afterwards. Regenerating
-                 recreates the same pairings with NEW ids, so every check-in,
-                 pick'em pick, standin booking and open reschedule proposal
-                 cascades away with the old fixtures. Mid-season that is every
-                 captain's arranged cover. A first-ever generate has nothing to
-                 replace, so it keeps a plain confirm. */
-              confirm={
-                data.matches.some((m) => m.phase === "REGULAR")
-                  ? "Replace the regular-season schedule? Every regular-season fixture is deleted and recreated with new ids, so all check-ins, pick'em picks, standin bookings and open reschedule proposals on them are cleared. Playoff matches are untouched."
-                  : "Generate the regular-season schedule?"
-              }
-            >
-              {data.matches.some((m) => m.phase === "REGULAR")
-                ? "Regenerate schedule"
-                : "Generate schedule"}
-            </SubmitButton>
+            {/* GENERATE and REGENERATE are the same action and were the same
+                button. The first is routine; the second deletes every regular
+                fixture and recreates the identical pairings with NEW ids, so
+                every check-in, pick'em pick, arranged standin booking and open
+                reschedule proposal cascades away — none of which is archived
+                anywhere, and mid-season that is cover captains spent days
+                arranging. Different controls, so the routine one can stay
+                cheap. */}
+            {regularCount > 0 ? (
+              <DangerSubmit
+                token={season.name}
+                disabled={data.teams.length < 2}
+                title="Replace the regular-season schedule?"
+                consequences={[
+                  `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
+                  ...(collateral.rsvps
+                    ? [`${collateral.rsvps} player check-in(s) are cleared.`]
+                    : []),
+                  ...(collateral.picks
+                    ? [`${collateral.picks} pick'em pick(s) are deleted.`]
+                    : []),
+                  ...(collateral.covers
+                    ? [
+                        `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
+                      ]
+                    : []),
+                  ...(collateral.proposals
+                    ? [`${collateral.proposals} open reschedule proposal(s) are cancelled.`]
+                    : []),
+                ]}
+                recovery="Playoff matches are untouched, and the fixtures themselves regenerate identically. None of the check-ins, picks or bookings can be restored."
+              >
+                Regenerate schedule
+              </DangerSubmit>
+            ) : (
+              <SubmitButton
+                variant="secondary"
+                size="sm"
+                disabled={data.teams.length < 2}
+                confirm="Generate the regular-season schedule?"
+              >
+                Generate schedule
+              </SubmitButton>
+            )}
           </ActionForm>
         }
       />
@@ -1673,8 +1760,27 @@ function MatchResultRow({
         {m.status === "COMPLETED" ? (
           <Badge tone="success">final</Badge>
         ) : null}
-        <SubmitButton variant="secondary" size="sm">
-          Save
+        {/* This button had NO confirm, and the score boxes default to the
+            current score — 0–0 on an unplayed match — with Enter submitting
+            from either field. Every match row on the page carries one, so a
+            stray Enter while reading marked a series FINAL at 0–0: it stops
+            auto-sync for that fixture, posts the wrong score to Discord, and
+            on a PLAYOFF row feeds advancePlayoffBracket, which is how a wrong
+            team reaches the next round. Name the teams and the score so the
+            dialog is about THIS row, and say what marking it final does. */}
+        <SubmitButton
+          variant="secondary"
+          size="sm"
+          /* Deliberately does NOT quote the score: these inputs are
+             uncontrolled, so a server-rendered string would state the STORED
+             score while the admin has typed a different one — a confirm that
+             lies about its own effect is worse than none. Name the fixture,
+             point at the boxes, and state what "final" costs. */
+          confirm={`Record the score in the boxes as the FINAL result for ${home?.name ?? "home"} v ${away?.name ?? "away"}?\n\nCheck the two score boxes first. Marking a match final stops automatic result import for it${
+            m.phase !== "REGULAR" ? " and advances the playoff bracket" : ""
+          }, and "Reopen for import" only undoes it while no games are attached.`}
+        >
+          Save as final
         </SubmitButton>
       </ActionForm>
 
@@ -1787,32 +1893,52 @@ function PlayoffControls({
         title="Playoffs"
         subtitle="Seed the top teams into a single-elimination bracket."
         action={
-          <ActionForm action={startPlayoffs}>
-            <SubmitButton
-              variant="secondary"
-              size="sm"
-              disabled={data.teams.length < 2}
-              confirm={
-                playoffMatches.length > 0
-                  ? `${
-                      season.status === SEASON_STATUS.COMPLETE
-                        ? "Reset the playoff bracket? This UN-CROWNS the champion and reopens the season into Playoffs. "
-                        : "Reset the playoff bracket? "
-                    }All ${playoffMatches.length} playoff match(es)${
-                      playoffGameCount
-                        ? ` and their ${playoffGameCount} imported game(s)`
-                        : ""
-                    } are deleted and reseeded from the current standings.${
-                      playoffGameCount
-                        ? " Postseason box scores, MVPs and fantasy points go with them — the OpenDota match IDs are archived below so you can re-import."
-                        : ""
-                    }`
-                  : "Seed and start the playoff bracket?"
-              }
-            >
-              {playoffMatches.length > 0 ? "Reset playoffs" : "Start playoffs"}
-            </SubmitButton>
-          </ActionForm>
+          /* START and RESET are the same action, and used to be the same
+             button in the same pixel of the card header — so muscle memory
+             aimed at "Start playoffs" hits "Reset playoffs" once a bracket
+             exists. They are now different controls: Start stays an ordinary
+             button, Reset is type-to-confirm, because it deletes the whole
+             postseason and the playoff RSVPs, standin bookings and pick'em
+             picks are not archived by anything. */
+          playoffMatches.length > 0 ? (
+            <ActionForm action={startPlayoffs}>
+              <DangerSubmit
+                token={season.name}
+                disabled={data.teams.length < 2}
+                title="Reset the playoff bracket?"
+                consequences={[
+                  `All ${playoffMatches.length} playoff match(es) are deleted and reseeded from the current standings.`,
+                  ...(playoffGameCount
+                    ? [
+                        `Their ${playoffGameCount} imported game(s) go too — postseason box scores, MVPs, fantasy points and record-book entries with them.`,
+                      ]
+                    : []),
+                  "Playoff check-ins, standin bookings and pick'em picks on those matches are deleted and are NOT archived.",
+                  ...(season.status === SEASON_STATUS.COMPLETE
+                    ? ["The champion is un-crowned and the season reopens into Playoffs."]
+                    : []),
+                ]}
+                recovery={
+                  playoffGameCount
+                    ? "The OpenDota match IDs of the deleted games are archived in this card, so their box scores can be re-imported one at a time."
+                    : "The bracket itself reseeds from the standings, so nothing is lost if no games have been imported yet."
+                }
+              >
+                Reset playoffs
+              </DangerSubmit>
+            </ActionForm>
+          ) : (
+            <ActionForm action={startPlayoffs}>
+              <SubmitButton
+                variant="secondary"
+                size="sm"
+                disabled={data.teams.length < 2}
+                confirm="Seed and start the playoff bracket?"
+              >
+                Start playoffs
+              </SubmitButton>
+            </ActionForm>
+          )
         }
       />
       <CardBody className="space-y-2 text-sm">
@@ -3224,6 +3350,50 @@ type NewsPostRow = {
   createdAt: Date;
   author: { name: string } | null;
 };
+
+/**
+ * WHAT DID I PRESS? Until now nothing in the app could answer that: no model
+ * carried an actor column, and Discord announces signups, sales and results but
+ * is silent on every destructive action. Streamed behind Suspense like the
+ * Discord card — it is a diagnostic, and must never delay the controls above it.
+ */
+async function AdminActivity() {
+  const rows = await recentAdminActions(40);
+  return (
+    <AdminSection
+      id="adm-activity"
+      title="Recent admin activity"
+      subtitle="Who changed what, newest first — the record of destructive actions."
+    >
+      <CardBody>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted">
+            Nothing recorded yet. Season, draft, schedule, playoff and result
+            changes are logged here from now on.
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {rows.map((r) => (
+              <li
+                key={r.id}
+                className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-line px-3 py-1.5 text-sm"
+              >
+                <span className="font-medium">{r.actorName}</span>
+                <span className="min-w-0 flex-1 text-muted">{r.summary}</span>
+                <LocalTime
+                  ts={r.createdAt.getTime()}
+                  variant="short"
+                  initial={formatMatchTime(r.createdAt, "short")}
+                  className="shrink-0 text-xs text-muted tabular-nums"
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </AdminSection>
+  );
+}
 
 function SecurityControls() {
   return (

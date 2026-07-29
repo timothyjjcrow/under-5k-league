@@ -37,7 +37,11 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await page.goto(
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
   );
-  await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
+  // exact: the panel also has a "Recent admin activity" heading, and a loose
+  // match resolves to both under strict mode.
+  await expect(
+    page.getByRole("heading", { name: "Admin", exact: true }),
+  ).toBeVisible();
 
   // Promote exactly OUR two players to captains (Cap One first → they get
   // draft order 0 and the opening nomination). Rows are divs in the

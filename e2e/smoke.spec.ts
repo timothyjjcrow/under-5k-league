@@ -53,7 +53,11 @@ test("admin sees the league control panel", async ({ page }) => {
   await page.goto(
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
   );
-  await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
+  // exact: the panel also has a "Recent admin activity" heading, and a loose
+  // match resolves to both under strict mode.
+  await expect(
+    page.getByRole("heading", { name: "Admin", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("phase control")).toBeVisible();
   await expect(page.getByText("Create a new season")).toBeVisible();
 });

@@ -73,6 +73,7 @@ import {
   sendInhouseDiscordMessage,
 } from "@/lib/discord";
 import { mentionsOf } from "@/lib/discord-mentions";
+import { logAdminAction } from "@/lib/admin-log";
 import {
   createInhouseBoard,
   removeInhouseBoard,
@@ -182,6 +183,10 @@ export async function createSeason(
     ],
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
+  await logAdminAction({
+    action: "createSeason",
+    summary: `Created "${name}" and archived the previously active season`,
+  });
   refresh();
   return { message: `Created ${name}` };
 }
@@ -236,6 +241,15 @@ export async function deleteSeason(
     }
     throw e;
   }
+  // Logged AFTER the delete but the row survives it — AdminAction has no
+  // relation to Season (seasonId is a bare string), precisely so the record of
+  // a deletion outlives the thing deleted. A cascading FK here would erase the
+  // one line explaining where the season went.
+  await logAdminAction({
+    action: "deleteSeason",
+    summary: `PERMANENTLY DELETED season "${season.name}" and all of its matches, games, rosters and registrations`,
+    seasonId,
+  });
   refresh();
   return { message: `Deleted ${season.name} and all of its history` };
 }
@@ -252,6 +266,10 @@ export async function reactivateSeasonAction(
   }
   const res = await reactivateSeason(str(formData, "seasonId"));
   if (!res.ok) return { error: res.error };
+  await logAdminAction({
+    action: "reactivateSeason",
+    summary: `Made "${res.name}" the active season again`,
+  });
   refresh();
   return { message: `${res.name} is the active season again` };
 }
@@ -360,6 +378,11 @@ export async function setSeasonPhase(
   // built and no champion is ever crowned. Say it here, with the way back,
   // rather than leaving the admin to discover a finished season with an empty
   // trophy. Only fires on the one transition that can do it.
+  await logAdminAction({
+    action: "setSeasonPhase",
+    summary: `Season phase ${PHASE_LABELS[season.status as SeasonStatus]} → ${PHASE_LABELS[target]}`,
+    seasonId: season.id,
+  });
   if (target === SEASON_STATUS.COMPLETE && unfinishedBracket > 0) {
     return {
       message: `Season moved to Complete — but ${unfinishedBracket} bracket match(es) are unplayed, so no champion will be crowned and playoff results won't advance. Move back to Playoffs to finish it.`,
@@ -561,6 +584,13 @@ export async function removeCaptain(
       error: `Couldn't remove ${team.name}: ${(e as Error).message}`,
     };
   }
+  await logAdminAction({
+    action: "removeCaptain",
+    summary:
+      `Removed ${team.captain.name} as captain and deleted team "${team.name}"` +
+      (fixtures ? " — the season's whole schedule was cleared with it" : ""),
+    seasonId: season.id,
+  });
   refresh();
   return {
     message: fixtures
@@ -1064,6 +1094,11 @@ export async function undoLastSaleAction(
   // Name the purchase. Undo targets the newest AUCTION sale, so when free-agent
   // signings sit on top of it the row reverted is not the newest roster addition
   // — saying who and for how much is what stops that being a surprise.
+  await logAdminAction({
+    action: "undoLastSale",
+    summary: `Undid the sale of ${res.player} to ${res.team} ($${res.price})`,
+    seasonId: season.id,
+  });
   return {
     message: `Undid ${res.player} → ${res.team} ($${res.price}) — they're back in the pool, ${res.team} has the money and the next nomination.${
       res.paused ? " The auction is still paused; press Resume when ready." : ""
@@ -1094,6 +1129,11 @@ export async function abortDraftAction(
   if (!season) return { error: "No active season" };
   const res = await abortDraft(season.id, admin);
   if (!res.ok) return { error: res.error };
+  await logAdminAction({
+    action: "abortDraft",
+    summary: `Aborted the draft — ${res.playersReturned} drafted player(s) returned to the pool, $${res.budgetRestored} refunded, ${res.teams} captain(s) kept, season back to Signups`,
+    seasonId: season.id,
+  });
   refresh();
   const bits = [
     `Draft aborted — season back to Signups with ${res.teams} captain(s) intact`,
@@ -1275,6 +1315,15 @@ export async function generateSchedule(
     }
     throw e;
   }
+  await logAdminAction({
+    action: "generateSchedule",
+    summary:
+      `Generated ${rows.length} regular-season fixture(s)` +
+      (cleared.rsvps || cleared.picks || cleared.covers || cleared.proposals
+        ? ` — replaced the previous schedule, clearing ${cleared.rsvps} check-in(s), ${cleared.picks} pick'em pick(s), ${cleared.covers} standin booking(s) and ${cleared.proposals} open proposal(s)`
+        : ""),
+    seasonId: season.id,
+  });
   refresh();
   // Name the collateral. Zeros are omitted, so a first-ever generate reads
   // exactly as it always did.
@@ -1355,6 +1404,11 @@ export async function startPlayoffs(
     ),
   );
 
+  await logAdminAction({
+    action: "startPlayoffs",
+    summary: `Seeded the playoff bracket (${bracket.length} first-round match(es))`,
+    seasonId: season.id,
+  });
   refresh();
   return { message: "Playoff bracket created" };
 }
@@ -2065,6 +2119,11 @@ export async function reopenMatch(
   await prisma.setting.deleteMany({
     where: { key: `resultAnnounced:${matchId}` },
   });
+  await logAdminAction({
+    action: "reopenMatch",
+    summary: `Reopened a week ${match.week} match that had been marked final`,
+    seasonId: match.seasonId,
+  });
   refreshGames();
   return {
     message: "Match reopened — its games can be imported now",
@@ -2130,6 +2189,11 @@ export async function removeGame(
   await rememberImportSkip(game.match.seasonId, game.dotaMatchId);
   await prisma.game.deleteMany({ where: { id: gameId } });
   await recomputeSeries(game.matchId);
+  await logAdminAction({
+    action: "removeGame",
+    summary: `Removed imported game ${game.dotaMatchId} from a week ${game.match.week} match`,
+    seasonId: game.match.seasonId,
+  });
   refreshGames();
   return {
     message:

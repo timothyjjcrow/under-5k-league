@@ -316,6 +316,32 @@ model Setting {
   value String
 }
 
+// What an admin did, so "the schedule is gone and I don't know what I pressed"
+// has an answer. Nineteen other models carry no actor column at all, and
+// Discord — the de-facto audit trail — is silent on exactly the destructive
+// half of the panel (nothing announces a delete, a regenerate, an abort or a
+// bracket reset). Append-only and best-effort: a failed write must never fail
+// the mutation it describes, because a missing log line is a smaller problem
+// than a half-applied league change.
+//
+// actorName is DENORMALISED on purpose. The whole point is to stay readable
+// after the fact, and a User row can be renamed by the Steam profile sync (or,
+// for a deleted season's admin, vanish) — a join would then rewrite history.
+model AdminAction {
+  id         String   @id @default(cuid())
+  actorId    String
+  actorName  String
+  /// Stable machine key, e.g. "generateSchedule" — grep-able, never localised.
+  action     String
+  /// One human sentence, already including the counts that made it destructive.
+  summary    String
+  /// Null for season-independent work (webhooks, security, news).
+  seasonId   String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 // ---------------------------------------------------------------------------
 // Inhouse — a casual pick-up-game mode, entirely separate from the league. A
 // rolling queue: once INHOUSE.LOBBY_SIZE players are waiting a lobby forms, the

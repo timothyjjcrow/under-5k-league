@@ -229,3 +229,114 @@ describe("playoffs — claims fire exactly once under contention", () => {
     expect(round1).toHaveLength(1); // the final, once
   });
 });
+
+// ---------------------------------------------------------------------------
+// The playoff-games archive is the ONLY record of a deleted postseason: "Reset
+// playoffs" is the sole correction path once a round has advanced, and Game
+// cascades with Match. It must only ever GROW — an overwrite destroyed it in
+// the most likely repair sequence there is.
+// ---------------------------------------------------------------------------
+describe("playoffGamesArchive survives repeated resets", () => {
+  const archiveOf = async (seasonId: string) => {
+    const row = await prisma.setting.findUnique({
+      where: { key: `playoffGamesArchive:${seasonId}` },
+    });
+    return row ? (JSON.parse(row.value) as { dotaMatchId: string }[]) : [];
+  };
+
+  async function bracketWithGames(seasonId: string, ids: string[]) {
+    const open = await playoffMatches(seasonId);
+    for (const [i, m] of open.entries()) {
+      await prisma.game.create({
+        data: {
+          matchId: m.id,
+          dotaMatchId: `arch${i}`,
+          radiantWin: true,
+          winnerTeamId: m.homeTeamId,
+          players: "[]",
+        },
+      });
+    }
+    return open.length;
+  }
+
+  it("archives the ids a reset deletes", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    const ids = await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    const n = await bracketWithGames(season.id, ids);
+    expect(n).toBeGreaterThan(0);
+
+    await createPlayoffBracket(season.id); // reset
+
+    expect(await archiveOf(season.id)).toHaveLength(n);
+  });
+
+  // THE REGRESSION: reset (n archived) → re-import ONE game → reset again.
+  // With an overwriting upsert the second reset saw doomedGames.length === 1
+  // and wiped the rest, so the postseason became unrecoverable at exactly the
+  // moment the admin was trying to repair it.
+  it("a second reset with fewer games MERGES rather than replacing", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    const ids = await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    const n = await bracketWithGames(season.id, ids);
+    await createPlayoffBracket(season.id); // first reset — n ids archived
+    expect(await archiveOf(season.id)).toHaveLength(n);
+
+    // The admin re-imports a single game to check something, then resets again.
+    const [one] = await playoffMatches(season.id);
+    await prisma.game.create({
+      data: {
+        matchId: one.id,
+        dotaMatchId: "arch-late",
+        radiantWin: true,
+        winnerTeamId: one.homeTeamId,
+        players: "[]",
+      },
+    });
+    await createPlayoffBracket(season.id); // second reset
+
+    const after = await archiveOf(season.id);
+    expect(after).toHaveLength(n + 1);
+    expect(after.map((g) => g.dotaMatchId)).toContain("arch-late");
+    expect(after.map((g) => g.dotaMatchId)).toContain("arch0");
+  });
+
+  it("never duplicates an id that is archived twice", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    const ids = await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    const n = await bracketWithGames(season.id, ids);
+    await createPlayoffBracket(season.id);
+    // Re-import the SAME ids, then reset again.
+    const open = await playoffMatches(season.id);
+    for (const [i, m] of open.entries()) {
+      await prisma.game.create({
+        data: {
+          matchId: m.id,
+          dotaMatchId: `arch${i}`,
+          radiantWin: true,
+          winnerTeamId: m.homeTeamId,
+          players: "[]",
+        },
+      });
+    }
+    await createPlayoffBracket(season.id);
+
+    expect(await archiveOf(season.id)).toHaveLength(n);
+  });
+
+  it("tolerates a corrupt archive rather than failing the reset", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    const ids = await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    await bracketWithGames(season.id, ids);
+    await prisma.setting.create({
+      data: { key: `playoffGamesArchive:${season.id}`, value: "{not json" },
+    });
+
+    await expect(createPlayoffBracket(season.id)).resolves.not.toThrow();
+    expect((await archiveOf(season.id)).length).toBeGreaterThan(0);
+  });
+});

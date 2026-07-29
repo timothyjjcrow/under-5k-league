@@ -3,8 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { deleteSeason, reactivateSeasonAction } from "@/app/actions/admin";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { DangerSubmit } from "@/components/danger-submit";
 import {
   Badge,
+  buttonClasses,
   Card,
   CardBody,
   EmptyState,
@@ -108,7 +110,7 @@ export default async function SeasonsPage() {
                 </Card>
                 </Link>
                 {isAdmin && !s.isActive ? (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-col gap-2">
                     <ActionForm
                       action={reactivateSeasonAction}
                       hidden={{ seasonId: s.id }}
@@ -121,15 +123,44 @@ export default async function SeasonsPage() {
                         ↩ Make active again
                       </SubmitButton>
                     </ActionForm>
+                    {/* TYPE-TO-CONFIRM, not window.confirm. This is the only
+                        truly unrecoverable action in the app — a hard cascade
+                        delete of every match, game, box score, registration,
+                        roster, draft price, fantasy roster and pick'em pick in
+                        the season, which also silently rewrites the
+                        cross-season boards (/records, /hall-of-fame, /meta,
+                        career stats) because they scan all Game rows. And it
+                        sat 8px from "Make active again" as a same-sized
+                        sibling, behind a dialog whose OK button is focused by
+                        default. One stray Enter is not an acceptable barrier
+                        for that. Its own row, danger styling, and the admin
+                        has to type the season's name. */}
+                    {/* The BACKUP, offered right where the risk is. Delete is
+                        the only unrecoverable action in the app and the only
+                        safeguard was a CLI script the panel never mentions, so
+                        the export sits directly above it and the delete dialog
+                        points at it by name. */}
+                    <a
+                      href={`/api/admin/season-export?seasonId=${s.id}`}
+                      className={buttonClasses("secondary", "sm")}
+                      download
+                    >
+                      ⤓ Download archive (JSON)
+                    </a>
                     <ActionForm action={deleteSeason} hidden={{ seasonId: s.id }}>
-                      <SubmitButton
-                        variant="secondary"
-                        size="sm"
-                        className="text-danger"
-                        confirm={`Permanently delete ${s.name}? Its teams, matches, and draft history are erased. This cannot be undone.`}
+                      <DangerSubmit
+                        token={s.name}
+                        title={`Permanently delete ${s.name}?`}
+                        consequences={[
+                          `All ${s._count.matches} match(es) and every imported game, box score and MVP in them.`,
+                          `All ${s._count.registrations} signup(s), every team and roster, and every draft price paid.`,
+                          "Fantasy rosters and pick'em picks for this season.",
+                          "Its results disappear from the all-time record book, hall of fame, hero meta and every player's career stats.",
+                        ]}
+                        recovery="There is no undo for this. Download the archive first (the button above this one) — it is the only copy you will have. If you only want the season out of the way, it is already archived; leave it."
                       >
-                        🗑 Remove from history
-                      </SubmitButton>
+                        🗑 Delete permanently
+                      </DangerSubmit>
                     </ActionForm>
                   </div>
                 ) : null}

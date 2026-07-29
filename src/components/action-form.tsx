@@ -20,7 +20,9 @@ export type { ActionResult };
 // ActionForm dispatches manually (see onSubmit below), which bypasses the
 // native form-action flow — useFormStatus() can't see pending anymore, so the
 // form provides useActionState's isPending via context for SubmitButton.
-const PendingContext = createContext(false);
+// Exported so DangerSubmit (a separate client component, rendered inside the
+// same <ActionForm>) can show the same pending state as SubmitButton.
+export const PendingContext = createContext(false);
 
 /**
  * A <form> bound to a server action that returns an ActionResult. Results are

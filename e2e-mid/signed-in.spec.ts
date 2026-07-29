@@ -54,7 +54,11 @@ test("mobile admin panel has no horizontal page overflow", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/api/auth/dev?name=Overflow%20Admin&admin=1");
   await page.goto("/admin");
-  await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
+  // exact: the page also has a "Recent admin activity" heading, and a loose
+  // match resolves to both under strict mode.
+  await expect(
+    page.getByRole("heading", { name: "Admin", exact: true }),
+  ).toBeVisible();
   // The Discord card loads behind its own <Suspense> (it makes several calls
   // to Discord, and awaiting them inline blocked the whole page). A streamed
   // section that throws renders nothing and leaves the rest of the page

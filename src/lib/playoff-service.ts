@@ -10,6 +10,9 @@ import {
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { championMessage, sendDiscordMessage } from "./discord";
 
+/** One deleted playoff game, kept so the postseason can be re-imported. */
+type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
+
 /**
  * Exactly-once marker for "round N of this season's bracket has been built".
  * Cleared by createPlayoffBracket so Reset playoffs can rebuild from scratch —
@@ -72,18 +75,49 @@ export async function createPlayoffBracket(seasonId: string) {
   // not recoverable at all, because `importGameForMatch` needs a dotaMatchId
   // and nothing anywhere still held one. Keeping just the ids makes the reset
   // reversible by re-import, which is the part that actually mattered.
-  const doomedGames = await prisma.game.findMany({
-    where: {
-      match: {
-        seasonId,
-        phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+  const archiveKey = `playoffGamesArchive:${seasonId}`;
+  const [doomedGames, priorRaw] = await Promise.all([
+    prisma.game.findMany({
+      where: {
+        match: {
+          seasonId,
+          phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+        },
       },
-    },
-    select: {
-      dotaMatchId: true,
-      match: { select: { bracketSlot: true, week: true } },
-    },
-  });
+      select: {
+        dotaMatchId: true,
+        match: { select: { bracketSlot: true, week: true } },
+      },
+    }),
+    prisma.setting.findUnique({ where: { key: archiveKey } }),
+  ]);
+
+  // MERGE, never replace. The archive is the only record of a deleted
+  // postseason, and a plain overwrite quietly destroyed it in the most likely
+  // repair sequence there is: reset (12 ids archived) → re-import one game to
+  // check something → reset again, where `doomedGames` is now length 1 and the
+  // other 11 ids are gone for good. Union by dotaMatchId so the archive only
+  // ever grows. Reading outside the transaction is safe because the reset runs
+  // SERIALIZABLE and both copies write this same row, so SSI aborts one (P2034,
+  // already handled below).
+  let prior: ArchivedGame[] = [];
+  try {
+    const parsed = JSON.parse(priorRaw?.value ?? "[]");
+    if (Array.isArray(parsed)) prior = parsed as ArchivedGame[];
+  } catch {
+    // corrupt archive — better to start fresh than to lose this reset's ids
+  }
+  const merged = [
+    ...prior,
+    ...doomedGames.map((g) => ({
+      dotaMatchId: g.dotaMatchId,
+      slot: g.match.bracketSlot,
+      week: g.match.week,
+    })),
+  ];
+  const archiveValue = JSON.stringify(
+    [...new Map(merged.map((g) => [g.dotaMatchId, g])).values()],
+  );
 
   try {
     await prisma.$transaction([
@@ -97,26 +131,9 @@ export async function createPlayoffBracket(seasonId: string) {
     ...(doomedGames.length
       ? [
           prisma.setting.upsert({
-            where: { key: `playoffGamesArchive:${seasonId}` },
-            create: {
-              key: `playoffGamesArchive:${seasonId}`,
-              value: JSON.stringify(
-                doomedGames.map((g) => ({
-                  dotaMatchId: g.dotaMatchId,
-                  slot: g.match.bracketSlot,
-                  week: g.match.week,
-                })),
-              ),
-            },
-            update: {
-              value: JSON.stringify(
-                doomedGames.map((g) => ({
-                  dotaMatchId: g.dotaMatchId,
-                  slot: g.match.bracketSlot,
-                  week: g.match.week,
-                })),
-              ),
-            },
+            where: { key: archiveKey },
+            create: { key: archiveKey, value: archiveValue },
+            update: { value: archiveValue },
           }),
         ]
       : []),
