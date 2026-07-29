@@ -82,6 +82,7 @@ import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { InviteLink } from "@/components/invite-link";
 import { DRAFT_PASSED_LABEL, phaseSubtitle } from "@/lib/season-copy";
+import projectStats from "@/lib/project-stats.json";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
 import { firstMedia } from "@/lib/linkify";
@@ -434,6 +435,11 @@ export default async function Home() {
           <CompleteView snapshot={snapshot} matches={matches} />
         </Suspense>
       )}
+      {/* Last band in every phase — it is context about the site, not about
+          the season, so it sits under whatever the season is doing. No
+          Suspense: the figures are a static import, so there is nothing to
+          wait for. */}
+      <ProjectScale />
     </div>
   );
 }
@@ -961,6 +967,48 @@ async function InhouseStrip() {
 }
 
 // ---------- SIGNUPS ----------
+
+/**
+ * "How much went into this" — one quiet line at the foot of the dashboard.
+ *
+ * Every figure is measured, never typed: `scripts/project-stats.mjs` recounts
+ * the tree on each build (`prebuild`) into `project-stats.json`. Hand-written
+ * numbers here would be a claim, and a stale one within a week.
+ *
+ * It reports COMMITS, not pull requests. This repo has never opened one — the
+ * GitHub API says zero — and "0 PRs" beside 294 commits in three weeks would
+ * describe an abandoned project rather than a busy one. The stat has to match
+ * how the work actually happened.
+ *
+ * `days` is derived at render rather than baked in, so it keeps counting
+ * between deploys instead of freezing at whenever the last build ran.
+ */
+function ProjectScale() {
+  const { codeLines, testLines, tests, commits, firstCommit } = projectStats;
+  const days = firstCommit
+    ? Math.max(
+        1,
+        Math.round((Date.now() - new Date(firstCommit).getTime()) / 86_400_000),
+      )
+    : null;
+  const n = (v: number) => v.toLocaleString("en-US");
+  // A footnote, not a section. Every figure is a plain fact and none of them
+  // is the reason anyone came to the page, so it gets one quiet line under
+  // everything rather than a card competing with the league itself.
+  const parts = [
+    `${n(codeLines + testLines)} lines of code`,
+    `${n(tests)} tests`,
+    // "over N days" qualifies the commit count, so it must NOT be another
+    // comma-separated item — "294 commits, over 23 days" reads as a list that
+    // lost its way.
+    commits ? `${n(commits)} commits${days ? ` over ${n(days)} days` : ""}` : null,
+  ].filter(Boolean);
+  return (
+    <p className="px-1 pt-2 text-center text-xs text-muted">
+      This league runs on software built for it — {parts.join(", ")}.
+    </p>
+  );
+}
 
 /**
  * The hero's control slot for a player who has already signed up.

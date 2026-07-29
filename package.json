@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "stats": "node scripts/project-stats.mjs",
+    "prebuild": "node scripts/project-stats.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
