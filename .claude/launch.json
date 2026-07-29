@@ -7,6 +7,15 @@
       "runtimeArgs": ["run", "dev"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "signups-fixture",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATABASE_URL=file:./signups-fixture.db ALLOW_DEV_LOGIN=true npx next dev -p 3111"
+      ],
+      "port": 3111
     }
   ]
 }

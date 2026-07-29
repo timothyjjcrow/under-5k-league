@@ -970,9 +970,20 @@ async function SignupsView({
       <ScheduleCallout label={season.matchSchedule} />
       <Card>
         <CardBody className="space-y-5">
-          <div className="flex items-center justify-between text-sm">
-            <span className="font-medium">
-              {playerCount} / {capacity.minPlayers} players to start
+          {/* `minTeams` is the FLOOR the draft needs, never a cap: nothing
+              refuses a signup past it (registrationGate checks the MMR ceiling
+              and the SIGNUPS phase, nothing else) and startDraft forms one team
+              per captain, so the 31st player on a 6-team season just becomes a
+              7th team. This headline used to read "31 / 30 players to start"
+              over a progress bar pegged at 100% — a fraction above 1, which is
+              the universal shape of "sold out", shown to exactly the person
+              deciding whether to bother signing up. Past the minimum it counts
+              UP instead, and the bar retargets on the next whole team. */}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+            <span className="min-w-0 font-medium">
+              {capacity.canDraft
+                ? `${playerCount} player${playerCount === 1 ? "" : "s"} signed up`
+                : `${playerCount} / ${capacity.minPlayers} players to start`}
               <span className="font-normal text-muted">
                 {" "}
                 · teams of {season.teamSize}
@@ -981,9 +992,9 @@ async function SignupsView({
                   : ""}
               </span>
             </span>
-            <span className="text-muted">
+            <span className="shrink-0 text-muted">
               {capacity.canDraft
-                ? "Ready to draft!"
+                ? "Ready to draft — still open"
                 : `${capacity.needed} more needed`}
             </span>
           </div>
@@ -1000,19 +1011,42 @@ async function SignupsView({
               <Countdown targetMs={season.draftAt.getTime()} eventLabel="Draft" />
             </p>
           ) : null}
-          <Progress value={playerCount} max={capacity.minPlayers} />
+          {capacity.canDraft ? (
+            <div className="space-y-2">
+              {/* Retargeted at the next whole team, so the bar keeps meaning
+                  something instead of sitting full for the rest of signups. */}
+              <Progress value={capacity.leftover} max={season.teamSize} />
+              <p className="text-sm text-muted">
+                The {season.minTeams}-team minimum is covered — signups stay open,
+                and every {season.teamSize} more players is another team.{" "}
+                <strong className="text-fg">
+                  {capacity.toNextTeam} more
+                </strong>{" "}
+                would make it {capacity.teamsFormable + 1} full teams.
+              </p>
+            </div>
+          ) : (
+            <Progress value={playerCount} max={capacity.minPlayers} />
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Players" value={playerCount} />
             <Stat label="Standins" value={standinCount} />
             <Stat
               label="Teams ready"
               value={capacity.teamsFormable}
-              hint={`of ${season.minTeams} needed`}
+              hint={
+                capacity.canDraft
+                  ? `minimum ${season.minTeams}`
+                  : `of ${season.minTeams} needed`
+              }
             />
             <Stat
               label="Captain volunteers"
               value={captainVolunteers}
-              hint={`need ${season.minTeams}`}
+              /* One captain per TEAM, and the team count grows with the pool —
+                 pinning this hint to minTeams told a 37-player season it needed
+                 6 captains when seating everyone takes 7. */
+              hint={`need ${Math.max(season.minTeams, capacity.teamsFormable)}`}
             />
           </div>
 

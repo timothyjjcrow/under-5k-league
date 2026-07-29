@@ -253,6 +253,23 @@ is the point at which someone has to justify it.
   the /admin hint to say over-limit signups are refused, and it took a reader
   going to the source to catch it. Nothing enforces the soft limit; reviewing
   those players is a human step with no tool behind it.
+- **`Season.minTeams` is a FLOOR, and signups are UNCAPPED.** Nothing anywhere
+  refuses the 31st signup on a 6-team season: `registrationGate` checks the MMR
+  ceiling and the SIGNUPS phase and nothing else, and `startDraft` forms one
+  team per CAPTAIN (`teams.length >= 2`, pool > 0), so extra players become
+  extra teams. `capacityInfo`'s `minPlayers`/`needed`/`canDraft` are *display*
+  values — never a gate; don't turn one into one. The player count is squared
+  against the roster size at DRAFT START, by choosing how many captains to
+  designate, and `startDraft` accepts both sides of that (a short pool takes
+  standins; a long one silently leaves players undrafted as free agents). The
+  Start-draft confirm states which of the three it is before the click, and the
+  SIGNUPS dashboard card counts UP past the minimum rather than showing
+  "31 / 30 players to start" over a pegged bar — a fraction above 1 is the
+  universal shape of "sold out", rendered to exactly the person deciding
+  whether to sign up. `capacityInfo` carries `extra`/`leftover`/`toNextTeam`
+  for that; keep them uncapped. `scripts/seed-signups-fixture.ts` +
+  `.claude/launch.json`'s `signups-fixture` entry seed and serve this state
+  (seed-fixture.ts has no SIGNUPS mode).
 - **Feedback**: risky server actions return `ActionResult`
   (`src/lib/action-result.ts`) instead of throwing; the UI wraps them in
   `<ActionForm>` (`src/components/action-form.tsx`), which toasts the result via

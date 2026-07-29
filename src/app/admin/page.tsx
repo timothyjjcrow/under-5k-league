@@ -891,11 +891,31 @@ function CaptainControls({
     0,
   );
   const captainCount = data.teams.length;
+  // Seat math, mirroring startDraft's own (pool = ACTIVE PLAYER signups not
+  // already rostered; seats = one team per CAPTAIN, captain's own seat taken).
+  // Signups are uncapped by design — minTeams is a floor — so the pool is
+  // routinely not a multiple of teamSize, and the count is settled HERE by
+  // choosing how many captains to start with. startDraft accepts both a short
+  // pool (standins fill in) and a long one, silently: an overflow leaves those
+  // players undrafted as free agents with no warning anywhere, which is a thing
+  // to learn before pressing the button, not after.
+  const rosteredIds = new Set(
+    data.teams.flatMap((t) => t.members.map((m) => m.userId)),
+  );
+  const poolCount = data.players.filter((p) => !rosteredIds.has(p.userId)).length;
+  const openSeats = captainCount * (season.teamSize - 1);
+  const seatNote =
+    openSeats === poolCount
+      ? ` The pool fits exactly: ${poolCount} players for ${openSeats} open seats.`
+      : openSeats > poolCount
+        ? ` ${poolCount} players for ${openSeats} open seats — ${openSeats - poolCount} seat${openSeats - poolCount === 1 ? "" : "s"} will go unfilled (standins cover them). Removing a captain would tighten it.`
+        : ` ${poolCount} players for only ${openSeats} open seats — ${poolCount - openSeats} player${poolCount - openSeats === 1 ? "" : "s"} will go undrafted. Adding a captain opens ${season.teamSize - 1} more seats.`;
   const startConfirm =
     `Start the draft with ${captainCount} captain${captainCount === 1 ? "" : "s"}?` +
     (captainCount < season.minTeams
       ? ` That is fewer than this season's ${season.minTeams}-team target.`
       : "") +
+    seatNote +
     " Captains are locked once the auction begins — the way back is Abort draft," +
     " which returns every drafted player and refund and keeps the captains, but" +
     " is refused once any result has been recorded.";
