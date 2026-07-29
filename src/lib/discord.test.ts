@@ -9,6 +9,7 @@ import {
   inhouseLobbyMessage,
   inhouseQueueMessage,
   inhouseResultMessage,
+  inhouseResultVoidedMessage,
   matchResultMessage,
   playerReleasedMessage,
   playerSoldMessage,
@@ -27,6 +28,7 @@ import {
   weekReminderMessage,
   weeklyHonorsMessage,
   draftRecapMessage,
+  type InhouseBetSlip,
 } from "./discord";
 
 describe("discord message formatters", () => {
@@ -228,6 +230,191 @@ describe("inhouse messages", () => {
     expect(msg).not.toContain("MVP");
     expect(msg).toContain("Radiant win 30–5");
     expect(msg).toContain("10:00");
+  });
+});
+
+describe("inhouseResultMessage — the slips block", () => {
+  const RESULT = {
+    winnerSide: "Radiant" as const,
+    radiantScore: 41,
+    direScore: 28,
+    durationSecs: 38 * 60 + 12,
+    mvpName: "Kessler",
+    mvpHero: "Puck",
+    dotaMatchId: "8412345678",
+  };
+
+  const won = (name: string, stake: number, matched: number): InhouseBetSlip => ({
+    name, stake, matched, outcome: "WON", delta: matched,
+  });
+  const lost = (name: string, stake: number, matched: number): InhouseBetSlip => ({
+    name, stake, matched, outcome: "LOST", delta: -matched,
+  });
+  const voided = (
+    name: string,
+    stake: number,
+    outcome: "VOID_LINEUP" | "VOID_LATE",
+  ): InhouseBetSlip => ({ name, stake, matched: 0, outcome, delta: 0 });
+
+  /** Everything below the headline — the block, on its own. */
+  const block = (slips: InhouseBetSlip[] | null, over = {}) =>
+    inhouseResultMessage({ ...RESULT, ...over, slips }).split("\n").slice(1);
+
+  it("sends byte-identical output to a league that doesn't bet", () => {
+    // The whole point of the omission: `slips` is passed unconditionally by the
+    // service, so the three ways of having no bets (never settled, nobody bet,
+    // settlement threw and was swallowed) must all read exactly as this message
+    // read before the economy existed.
+    const before = inhouseResultMessage(RESULT);
+    expect(inhouseResultMessage({ ...RESULT, slips: null })).toBe(before);
+    expect(inhouseResultMessage({ ...RESULT, slips: [] })).toBe(before);
+    expect(before).not.toContain("\n");
+  });
+
+  it("reports a fully-covered pot with both sides' slips", () => {
+    // Worked example 1: 200 a side, every stake matched at ratio 1.0.
+    expect(
+      block([
+        won("Kessler", 100, 100), won("Roo", 50, 50),
+        won("Vex", 40, 40), won("Bo", 10, 10),
+        lost("Dooley", 100, 100), lost("Mig", 60, 60), lost("Nine", 40, 40),
+      ]),
+    ).toEqual([
+      "**Pot 400 Cred** · CONTESTED · fully covered",
+      "Radiant: Kessler 100 → +100 · Roo 50 → +50 · Vex 40 → +40 · Bo 10 → +10",
+      "Dire: Dooley 100 → -100 · Mig 60 → -60 · Nine 40 → -40",
+    ]);
+  });
+
+  it("says how much came home when one side out-stakes the other", () => {
+    // Worked example 2: the long side is matched by largest remainder, so a
+    // 100 stake is live for 43. The player has to be able to read that off the
+    // line without doing the division — hence stake → net, side by side.
+    expect(
+      block(
+        [
+          won("Dooley", 100, 43), won("Mig", 100, 43),
+          won("Nine", 60, 26), won("Pia", 20, 8),
+          lost("Ash", 100, 100), lost("Bo", 20, 20),
+        ],
+        { winnerSide: "Dire" as const },
+      ),
+    ).toEqual([
+      "**Pot 400 Cred** · CONTESTED · 240 covered · 160 came home",
+      "Dire: Dooley 100 → +43 · Mig 100 → +43 · Nine 60 → +26 · Pia 20 → +8",
+      "Radiant: Ash 100 → -100 · Bo 20 → -20",
+    ]);
+  });
+
+  it("phrases an uncovered pot as a verdict, not a failure", () => {
+    // Even money means the side that thinks it's behind stakes nothing, so
+    // M = 0 is the ten agreeing the game wasn't close. Nobody lost anything.
+    expect(block([won("Ash", 100, 0), won("Bo", 50, 0)])).toEqual([
+      "**Pot 150 Cred** · nobody took the other side — every stake came home",
+      "Radiant: Ash 100 → 0 · Bo 50 → 0",
+    ]);
+  });
+
+  it("never prints a side nobody backed", () => {
+    expect(block([won("Ash", 100, 0)]).join("\n")).not.toContain("Dire:");
+  });
+
+  it("names the refunded and keeps their stake out of the pot", () => {
+    // A voided stake is handed back in full and never entered a pool — count it
+    // in the pot and the message advertises money that was never at risk.
+    expect(
+      block([
+        won("Kessler", 100, 100),
+        lost("Dooley", 100, 100),
+        voided("Ash", 100, "VOID_LINEUP"),
+        voided("Bo", 20, "VOID_LATE"),
+      ]),
+    ).toEqual([
+      "**Pot 200 Cred** · CONTESTED · fully covered",
+      "Radiant: Kessler 100 → +100",
+      "Dire: Dooley 100 → -100",
+      "-# Refunded: Ash 100 (lineup changed) · Bo 20 (placed after the game started)",
+    ]);
+  });
+
+  it("still reports a settlement in which every bet voided", () => {
+    // No pot line — there was no pot — but the two people who staked and got it
+    // back find that out here rather than from a balance that moved twice.
+    expect(block([voided("Ash", 100, "VOID_LATE")])).toEqual([
+      "-# Refunded: Ash 100 (placed after the game started)",
+    ]);
+  });
+
+  it("labels the loud pots and stays quiet on the ordinary ones", () => {
+    const potOf = (slips: InhouseBetSlip[]) => block(slips)[0];
+    expect(potOf([won("A", 50, 50), lost("B", 50, 50)])).toBe(
+      "**Pot 100 Cred** · fully covered", // casual: no label at all
+    );
+    expect(potOf([won("A", 100, 100), lost("B", 100, 100)])).toContain(
+      "CONTESTED",
+    );
+    expect(
+      potOf([
+        won("A", 100, 100), won("B", 100, 100), won("C", 100, 100),
+        lost("D", 100, 100), lost("E", 100, 100), lost("F", 100, 100),
+      ]),
+    ).toContain("HIGH STAKES");
+    expect(
+      potOf([
+        won("A", 100, 100), won("B", 100, 100), won("C", 100, 100),
+        won("D", 100, 100), won("E", 100, 100),
+        lost("F", 100, 100), lost("G", 100, 100), lost("H", 100, 100),
+        lost("I", 100, 100), lost("J", 100, 100),
+      ]),
+    ).toContain("MARQUEE");
+  });
+
+  it("orders each side by stake, deterministically", () => {
+    // Two equal stakes must not settle into whatever order Prisma returned the
+    // rows in — the same lobby has to read the same way every time.
+    const rows: InhouseBetSlip[] = [
+      won("Zed", 40, 40), won("Ana", 100, 100), won("Bob", 40, 40),
+    ];
+    expect(block(rows)[1]).toBe(
+      "Radiant: Ana 100 → +100 · Bob 40 → +40 · Zed 40 → +40",
+    );
+    expect(block([...rows].reverse())[1]).toBe(block(rows)[1]);
+  });
+
+  it("carries no emoji — the block is data, and every glyph is text", () => {
+    const msg = block([won("A", 100, 100), lost("B", 100, 100), voided("C", 10, "VOID_LATE")]);
+    expect(msg.join("\n")).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+});
+
+describe("inhouseResultVoidedMessage", () => {
+  it("names the pot and links the match the void is about to erase", () => {
+    const msg = inhouseResultVoidedMessage({
+      betCount: 4,
+      staked: 260,
+      dotaMatchId: "8412345678",
+    });
+    expect(msg).toContain("4 slips");
+    expect(msg).toContain("260 Cred");
+    // The correction has to be tie-able to the post it corrects, and the void
+    // NULLS dotaMatchId — after this message nothing in the database can say
+    // which game it was.
+    expect(msg).toContain("<https://www.opendota.com/matches/8412345678>");
+    // …and the link is bracketed, so the correction can't unfurl a preview
+    // card on top of the result post it is amending.
+    expect(msg).not.toMatch(/[^<]https:\/\//);
+  });
+
+  it("says 'slip' for one, and drops the link when there is no match id", () => {
+    const msg = inhouseResultVoidedMessage({
+      betCount: 1,
+      staked: 25,
+      dotaMatchId: null,
+    });
+    expect(msg).toContain("1 slip,");
+    expect(msg).not.toContain("opendota");
+    // No dangling " " where the link would have been.
+    expect(msg).toBe(msg.trim());
   });
 });
 
@@ -620,6 +807,14 @@ describe("no message unfurls a link preview", () => {
         winnerSide: "Radiant", radiantScore: 1, direScore: 0, durationSecs: 60,
         mvpName: null, mvpHero: null, dotaMatchId: "1",
       }),
+      inhouseResultMessage({
+        winnerSide: "Radiant", radiantScore: 1, direScore: 0, durationSecs: 60,
+        mvpName: null, mvpHero: null, dotaMatchId: "1",
+        slips: [
+          { name: "A", stake: 100, matched: 100, outcome: "WON", delta: 100 },
+          { name: "B", stake: 100, matched: 100, outcome: "LOST", delta: -100 },
+        ],
+      }),
       playerOutMessage({
         playerName: "A", homeName: "H", awayName: "W", week: 1,
         isPlayoff: false, whenMs: null,
@@ -713,6 +908,18 @@ describe("no player-supplied name can inject markdown", () => {
       durationSecs: 2000, mvpName: EVIL, mvpHero: "Pudge",
       dotaMatchId: "123",
     }),
+    // The slips block interpolates a name per bettor — same injection point,
+    // three renders (winning side, losing side, refunded), all of which land in
+    // a channel post the league appears to have written.
+    inhouseResultMessage({
+      winnerSide: "Radiant", radiantScore: 30, direScore: 10,
+      durationSecs: 2000, mvpName: null, mvpHero: null, dotaMatchId: "123",
+      slips: [
+        { name: EVIL, stake: 100, matched: 100, outcome: "WON", delta: 100 },
+        { name: EVIL, stake: 100, matched: 100, outcome: "LOST", delta: -100 },
+        { name: EVIL, stake: 10, matched: 0, outcome: "VOID_LATE", delta: 0 },
+      ],
+    }),
     weekReminderMessage({
       week: 1, isPlayoff: false,
       fixtures: [{
@@ -744,6 +951,17 @@ describe("no player-supplied name can inject markdown", () => {
       }],
     });
     expect(reminder.split("\n")).toHaveLength(4); // header, fixture, waiting, footer
+    // The slips block is one line per SIDE, so a newline in a persona would
+    // forge a row and make the message lie about who was in the game.
+    const slips = inhouseResultMessage({
+      winnerSide: "Radiant", radiantScore: 1, direScore: 0, durationSecs: 60,
+      mvpName: null, mvpHero: null, dotaMatchId: "1",
+      slips: [
+        { name: nl, stake: 100, matched: 100, outcome: "WON", delta: 100 },
+        { name: nl, stake: 100, matched: 100, outcome: "LOST", delta: -100 },
+      ],
+    });
+    expect(slips.split("\n")).toHaveLength(4); // headline, pot, two sides
   });
 
   // Escaping must not eat the one thing these messages exist to do.

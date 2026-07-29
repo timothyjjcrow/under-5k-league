@@ -24,6 +24,7 @@ import {
   resolveReadyCheck,
   resolveStalledPick,
 } from "./inhouse-service";
+import { resolveUnsettledBets } from "./inhouse-bet-service";
 import { claimThrottle, getSetting, SETTING_KEYS } from "./settings";
 import { syncInhouseBoard } from "./inhouse-board-service";
 import { raceHook } from "./race-hook";
@@ -226,6 +227,27 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
     }),
     prisma.inhouseQueueEntry.count(),
   ]);
+
+  // Settle/refund any stranded pot BEFORE the early return below — deliberately
+  // not down in the resolver chain past it, and for exactly the reason the board
+  // repaint inside that branch exists. "No lobby, empty queue" is not a quiet
+  // state for money: it is the state a pot gets stranded in. The request that
+  // won the COMPLETED claim can die before the payout, and every result path
+  // requires IN_PROGRESS, so nothing re-triggers it; meanwhile the ten who
+  // played have closed their tabs and the room has nobody polling it. Below the
+  // early return this sweep would first run whenever the NEXT lobby forms —
+  // hours or days of a debited stake with no outcome, on the one feature where
+  // "it caught up eventually" is not an acceptable answer.
+  //
+  // Wrapped, alone among the resolvers: /api/sync executes this chain on every
+  // page view of the entire site, so a bug in a play-money feature must never
+  // be able to stop ten people playing Dota (or a league match importing).
+  try {
+    await resolveUnsettledBets();
+  } catch (e) {
+    console.error("[inhouse] bet sweep failed:", e);
+  }
+
   if (!active && queued === 0) {
     // Repaint the board on the way out. This branch is where the queue is
     // ALREADY empty and no lobby is up — which is exactly the state the board
@@ -266,6 +288,12 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
   // five minutes behind on exactly the stretch that decides whether a game
   // happens. Present-only so a ghost row can't hold every client at the fast
   // cadence until the 180s prune catches it.
+  //
+  // An open BETTING window needs no clause of its own: `betsCloseAt` is stamped
+  // only on the DRAFTING→READY transition, and READY is one of
+  // INHOUSE_ACTIVE_STATUSES — so `stillActive` already pins every client to the
+  // fast cadence for the whole 45 seconds and beyond. A `betsCloseAt > now`
+  // test here would be dead code wearing the look of a live guard.
   return { recorded, watch: !!stillActive || present > 0 };
 }
 

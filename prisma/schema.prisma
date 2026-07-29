@@ -14,9 +14,9 @@ datasource db {
 }
 
 model User {
-  id         String   @id @default(cuid())
-  steamId    String   @unique
-  name       String
+  id            String   @id @default(cuid())
+  steamId       String   @unique
+  name          String
   avatar        String?
   profileUrl    String?
   dotaAccountId Int? // Dota 2 32-bit account id (defaults to one derived from steamId)
@@ -41,13 +41,15 @@ model User {
 
   registrations       Registration[]
   teamMemberships     TeamMember[]
-  captainedTeams      Team[]              @relation("TeamCaptain")
+  captainedTeams      Team[]               @relation("TeamCaptain")
   bids                Bid[]
-  standinAssignments  StandinAssignment[] @relation("StandinUser")
-  replacedAssignments StandinAssignment[] @relation("ReplacedUser")
+  standinAssignments  StandinAssignment[]  @relation("StandinUser")
+  replacedAssignments StandinAssignment[]  @relation("ReplacedUser")
   inhouseQueue        InhouseQueueEntry?
   inhouseLobbies      InhouseLobbyPlayer[]
-  startedInhouses     InhouseLobby[]      @relation("InhouseStarter")
+  startedInhouses     InhouseLobby[]       @relation("InhouseStarter")
+  inhouseBets         InhouseBet[]
+  inhouseCredit       InhouseCredit?
   matchAvailability   MatchAvailability[]
   rescheduleProposals RescheduleRequest[]
   fantasyRosters      FantasyRoster[]
@@ -69,43 +71,43 @@ model NewsPost {
 }
 
 model Season {
-  id             String   @id @default(cuid())
-  name           String
-  status         String   @default("SIGNUPS") // SIGNUPS | DRAFT | REGULAR_SEASON | PLAYOFFS | COMPLETE
-  minTeams       Int      @default(4)
-  teamSize       Int      @default(5)
-  draftBudget    Int      @default(100)
-  budgetMmrWeight Int     @default(20) // % budget swing by captain MMR (low-MMR captains get more; 0 = flat budgets)
-  maxMmr         Int      @default(0) // signup MMR cap; players above it can't join (0 = no cap)
-  regularBestOf  Int      @default(2) // series length for regular-season matches
-  playoffBestOf  Int      @default(3) // series length for playoff (non-final) matches
-  finalBestOf    Int      @default(5) // series length for the grand final
-  currentWeek    Int      @default(0)
-  isActive       Boolean  @default(true)
-  championTeamId String?
-  dotaLeagueId   String? // optional Valve league id, if the league is ticketed
-  matchSchedule  String? // weekly match slot shown before signup (null = app default)
+  id              String    @id @default(cuid())
+  name            String
+  status          String    @default("SIGNUPS") // SIGNUPS | DRAFT | REGULAR_SEASON | PLAYOFFS | COMPLETE
+  minTeams        Int       @default(4)
+  teamSize        Int       @default(5)
+  draftBudget     Int       @default(100)
+  budgetMmrWeight Int       @default(20) // % budget swing by captain MMR (low-MMR captains get more; 0 = flat budgets)
+  maxMmr          Int       @default(0) // signup MMR cap; players above it can't join (0 = no cap)
+  regularBestOf   Int       @default(2) // series length for regular-season matches
+  playoffBestOf   Int       @default(3) // series length for playoff (non-final) matches
+  finalBestOf     Int       @default(5) // series length for the grand final
+  currentWeek     Int       @default(0)
+  isActive        Boolean   @default(true)
+  championTeamId  String?
+  dotaLeagueId    String? // optional Valve league id, if the league is ticketed
+  matchSchedule   String? // weekly match slot shown before signup (null = app default)
   firstMatchNight DateTime? // week 1's match time; later weeks (incl. playoffs) are +7d each
   // When the live auction happens — announced with countdowns during SIGNUPS.
   draftAt         DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  registrations Registration[]
-  teams         Team[]
-  draft         Draft?
-  matches       Match[]
-  teamMembers   TeamMember[]
-  bids          Bid[]
+  registrations  Registration[]
+  teams          Team[]
+  draft          Draft?
+  matches        Match[]
+  teamMembers    TeamMember[]
+  bids           Bid[]
   fantasyRosters FantasyRoster[]
 }
 
 model Registration {
-  id           String   @id @default(cuid())
-  seasonId     String
-  userId       String
-  type         String   @default("PLAYER") // PLAYER | STANDIN
-  mmr          Int      @default(0)
+  id             String   @id @default(cuid())
+  seasonId       String
+  userId         String
+  type           String   @default("PLAYER") // PLAYER | STANDIN
+  mmr            Int      @default(0)
   wantsCaptain   Boolean  @default(false)
   roles          String   @default("") // preferred positions, comma-separated 1-5
   favoriteHeroes String   @default("")
@@ -201,28 +203,28 @@ model Bid {
 }
 
 model Match {
-  id           String    @id @default(cuid())
-  seasonId     String
-  week         Int
-  phase        String    @default("REGULAR") // REGULAR | PLAYOFF | FINAL
-  homeTeamId   String
-  awayTeamId   String
-  scheduledAt  DateTime?
-  status       String    @default("SCHEDULED") // SCHEDULED | LIVE | COMPLETED
-  homeScore    Int       @default(0)
-  awayScore    Int       @default(0)
-  bestOf       Int       @default(1) // series length; a team clinches at floor(bestOf/2)+1
-  winnerTeamId String?
-  bracketSlot  String?
+  id               String    @id @default(cuid())
+  seasonId         String
+  week             Int
+  phase            String    @default("REGULAR") // REGULAR | PLAYOFF | FINAL
+  homeTeamId       String
+  awayTeamId       String
+  scheduledAt      DateTime?
+  status           String    @default("SCHEDULED") // SCHEDULED | LIVE | COMPLETED
+  homeScore        Int       @default(0)
+  awayScore        Int       @default(0)
+  bestOf           Int       @default(1) // series length; a team clinches at floor(bestOf/2)+1
+  winnerTeamId     String?
+  bracketSlot      String?
   // Last automatic OpenDota scan for this match (result-sync-service). Updated
   // via an atomic claim so concurrent pollers can't double-scan — the inhouse
   // `detectedAt` pattern.
-  autoSyncedAt DateTime?
+  autoSyncedAt     DateTime?
   // Consecutive empty automatic scans — drives exponential backoff so a match
   // that never produces games (forfeit, private match data) stops burning the
   // OpenDota budget. Reset to 0 whenever a scan imports a game.
-  autoSyncAttempts Int   @default(0)
-  createdAt    DateTime  @default(now())
+  autoSyncAttempts Int       @default(0)
+  createdAt        DateTime  @default(now())
 
   season       Season              @relation(fields: [seasonId], references: [id], onDelete: Cascade)
   homeTeam     Team                @relation("HomeTeam", fields: [homeTeamId], references: [id])
@@ -328,16 +330,16 @@ model Setting {
 // after the fact, and a User row can be renamed by the Steam profile sync (or,
 // for a deleted season's admin, vanish) — a join would then rewrite history.
 model AdminAction {
-  id         String   @id @default(cuid())
-  actorId    String
-  actorName  String
+  id        String   @id @default(cuid())
+  actorId   String
+  actorName String
   /// Stable machine key, e.g. "generateSchedule" — grep-able, never localised.
-  action     String
+  action    String
   /// One human sentence, already including the counts that made it destructive.
-  summary    String
+  summary   String
   /// Null for season-independent work (webhooks, security, news).
-  seasonId   String?
-  createdAt  DateTime @default(now())
+  seasonId  String?
+  createdAt DateTime @default(now())
 
   @@index([createdAt])
 }
@@ -400,10 +402,10 @@ model Prediction {
 // A single global queue of players waiting for the next inhouse. One row per
 // user (a user can only wait once); the earliest to join are pulled into a lobby.
 model InhouseQueueEntry {
-  id       String   @id @default(cuid())
-  userId   String   @unique
-  mmr      Int      @default(0) // snapshot used to seed captains
-  joinedAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  mmr        Int      @default(0) // snapshot used to seed captains
+  joinedAt   DateTime @default(now())
   // Presence heartbeat — refreshed (throttled) by the player's own /inhouse
   // polls. Entries that go silent stop counting toward a lobby, then drop.
   lastSeenAt DateTime @default(now())
@@ -414,18 +416,18 @@ model InhouseQueueEntry {
 // A formed inhouse game + its live captain draft. Server-authoritative, like the
 // league Draft: the pick clock is enforced lazily on poll (no cron/websocket).
 model InhouseLobby {
-  id          String    @id @default(cuid())
-  status      String    @default("READY_CHECK") // READY_CHECK | CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | COMPLETED | CANCELLED
+  id           String    @id @default(cuid())
+  status       String    @default("READY_CHECK") // READY_CHECK | CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | COMPLETED | CANCELLED
   acceptEndsAt DateTime? // ready-check deadline (READY_CHECK phase) — all ten must accept before it
-  voteEndsAt  DateTime? // captain-selection vote deadline (CAPTAIN_VOTE phase)
-  pickTeam    Int? // 1 | 2 — team on the clock while DRAFTING
-  pickEndsAt  DateTime? // captain auto-picks when this passes
-  radiantTeam Int       @default(1) // which team (1|2) plays Radiant
-  winnerTeam  Int? // 1 | 2 once a result is reported
-  startedById String? // who launched the in-game lobby
-  startedAt   DateTime? // when the game was launched (IN_PROGRESS)
-  dotaMatchId String? // OpenDota match id, once the result is recorded
-  detectedAt  DateTime? // throttles the automatic OpenDota result scan
+  voteEndsAt   DateTime? // captain-selection vote deadline (CAPTAIN_VOTE phase)
+  pickTeam     Int? // 1 | 2 — team on the clock while DRAFTING
+  pickEndsAt   DateTime? // captain auto-picks when this passes
+  radiantTeam  Int       @default(1) // which team (1|2) plays Radiant
+  winnerTeam   Int? // 1 | 2 once a result is reported
+  startedById  String? // who launched the in-game lobby
+  startedAt    DateTime? // when the game was launched (IN_PROGRESS)
+  dotaMatchId  String? // OpenDota match id, once the result is recorded
+  detectedAt   DateTime? // throttles the automatic OpenDota result scan
   durationSecs Int? // game length once recorded
   radiantScore Int? // Radiant kills (box-score header)
   direScore    Int? // Dire kills
@@ -433,40 +435,142 @@ model InhouseLobby {
   // JSON userId → Elo change, stamped once when the result lands — the room's
   // post-game banner reads this instead of re-deriving the ladder per poll.
   eloDeltas    String    @default("{}")
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // --- Betting (see the "Inhouse betting" section in CLAUDE.md) ---
+  // When wagering closes. Written ONCE, in the same data block as
+  // `status: READY`, and by no other path — unlike `startedAt`, which an
+  // interested party can push forward by simply pressing Start later. The
+  // pick'em lesson: lock on a timestamp nobody can rewrite.
+  betsCloseAt    DateTime?
+  // null = this lobby has no bets and will never be swept.
+  // PENDING (set by the first bet) | SETTLED | REFUNDED | REVERSED
+  betSettlement  String?
+  // The PLAYED game's own start, straight from OpenDota. Stamped inside
+  // applyResult's existing COMPLETED claim so the lazy settlement resolver can
+  // enforce the late-bet void from COLUMNS ALONE — the request that held the
+  // BuiltResult in hand is allowed to die, and the recovery path must reach
+  // the same verdict as the fast path.
+  matchStartTime DateTime?
+  // JSON userId → net Cred change, stamped once at settlement. Exactly the
+  // eloDeltas contract: the room's post-game banner reads this rather than
+  // re-deriving a settlement on every poll.
+  betDeltas      String    @default("{}")
 
   players   InhouseLobbyPlayer[]
+  bets      InhouseBet[]
   startedBy User?                @relation("InhouseStarter", fields: [startedById], references: [id])
 
   // Nearly every service query filters on status (single active lobby,
   // completed-history scans).
   @@index([status])
+  // The unsettled-pot sweeper probes betSettlement = "PENDING", true of at
+  // most one lobby at a time — so a league that never bets pays one index
+  // probe per resolver run.
+  @@index([betSettlement])
 }
 
 model InhouseLobbyPlayer {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   lobbyId        String
   userId         String
   team           Int? // null = still in the draft pool; 1|2 once picked
-  isCaptain      Boolean  @default(false)
+  isCaptain      Boolean   @default(false)
   pickIndex      Int? // 0-based order picked (captains stay null)
-  mmr            Int      @default(0)
+  mmr            Int       @default(0)
   acceptedAt     DateTime? // when they pressed ACCEPT in the ready check (null = pending)
   votedMethod    String? // CAPTAIN_VOTE ballot: MMR | RECORD | VOTE
   votedNomineeId String? // player they nominated as captain (when votedMethod = VOTE)
   // Inhouse record snapshot, frozen at lobby formation (no results can land
   // while this lobby is the active one) — feeds the vote's RECORD ordering and
   // the vote/draft UI without a full-history scan on every poll.
-  wins           Int      @default(0)
-  losses         Int      @default(0)
-  games          Int      @default(0)
-  createdAt      DateTime @default(now())
+  wins           Int       @default(0)
+  losses         Int       @default(0)
+  games          Int       @default(0)
+  createdAt      DateTime  @default(now())
 
   lobby InhouseLobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
   user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([lobbyId, userId])
   // The "is this user in a live lobby" guard filters by userId first.
+  @@index([userId])
+}
+
+// One wager, on the bettor's OWN team, in the 45s after teams lock. IMMUTABLE
+// once placed — no raise, no withdraw, no side switch. That immutability is
+// what lets @@unique([lobbyId, userId]) be the double-spend guard: there is
+// exactly one debit path per (player, lobby), enforced by the database on both
+// SQLite and Postgres, so two tabs cannot both charge.
+model InhouseBet {
+  id          String    @id @default(cuid())
+  lobbyId     String
+  userId      String
+  // The side they were on at bet time. FROZEN on purpose: settlement compares
+  // it against the POST-teamFixes roster and voids on a mismatch, which is what
+  // makes a slot swap in the hand-hosted Dota lobby EV-zero in both directions.
+  team        Int
+  stake       Int
+  placedAt    DateTime  @default(now())
+  // Stamped by the betting-window claim. An unconfirmed row never settles.
+  confirmedAt DateTime?
+  // WON | LOST | VOID_LINEUP | VOID_LATE | REFUNDED
+  outcome     String?
+  matched     Int? // how much of the stake the other side actually covered
+  payout      Int? // net Cred delta at settlement (excludes the returned stake)
+  settledAt   DateTime?
+
+  lobby InhouseLobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([lobbyId, userId])
+  // Career conviction rolls (/players/[id], the Cred board).
+  @@index([userId])
+}
+
+// Play-money balance. A MUTABLE column rather than a SUM over the ledger
+// below, deliberately against this repo's derive-don't-store idiom: the
+// affordability test has to be re-asserted in the WHERE of the debit itself
+// (`balance: { gte: stake }`), and there is no way to atomically re-assert a
+// SUM over a ledger in a single Prisma statement. The ledger is the audit
+// trail; this column is the claim.
+model InhouseCredit {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  balance   Int      @default(500)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Append-only receipt for every Cred movement — the provenance behind the
+// balance column. userId is a PLAIN STRING with NO relation (the AdminAction
+// shape) because the record of what someone staked has to outlive their
+// account. NOTE: that also means it does NOT cascade, so EVERY table wipe has
+// to name it — test/integration/factories.ts's resetDb, prisma/seed.ts and
+// scripts/seed-signups-fixture.ts (scripts/seed-fixture.ts goes through
+// resetDb). Only resetDb had it, so orphan STAKE/REFUND rows outlived a reseed
+// and a freshly wiped database rendered a Cred board with betting history.
+// The other rows that survive `user.deleteMany()` are AdminAction (same shape)
+// and NewsPost (author is SetNull); add any new one to all three lists.
+model InhouseCreditEntry {
+  id      String  @id @default(cuid())
+  userId  String
+  delta   Int
+  // GRANT | STAKE | RETURN | WIN | LOSS | REFUND | REVERSAL | FLOOR | ADJUST
+  reason  String
+  // Idempotence key, unique WITH reason: the bet id for wager legs,
+  // "<userId>:<yyyy-mm-dd>" for the once-a-day floor, the userId for grants.
+  // This unique IS the guard for both — a retried settlement writes no second
+  // receipt, and the daily floor cannot pay twice.
+  refId   String
+  lobbyId String?
+  note    String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([reason, refId])
   @@index([userId])
 }

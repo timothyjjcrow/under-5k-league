@@ -2,6 +2,7 @@ import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
 import { splitLinks } from "./linkify";
 import { escapeDiscordText } from "./discord-escape";
+import { potTier, tierLabel, type BetOutcome } from "./inhouse-bets";
 
 /**
  * Player and team names are user-controlled (Steam personas, captain-chosen
@@ -185,6 +186,129 @@ export function inhouseLobbyMessage(
   return `${rolePrefix(roleId)}🚨 **Inhouse match found!** Accept your game before the clock runs out — <${resolveSiteUrl()}/inhouse>\n${who}`;
 }
 
+/**
+ * One settled wager, as inhouse-service adapts it from `settleBets`: a
+ * `SettledBet` plus the player's name, taken off the history scan that function
+ * already has in hand rather than a fresh query.
+ *
+ * Deliberately carries NO team number. A settled slip's side is derivable — a
+ * WON bet was on the winning side, a LOST bet on the other — and team 1 is not
+ * always Radiant (`radiantTeam` is decided by the game that got played, not by
+ * the draft), so a raw team number here would be one more thing to get
+ * backwards in the one message that tells ten people where their Cred went.
+ * A voided slip has no side worth printing at all: it never entered a pool.
+ */
+export type InhouseBetSlip = {
+  name: string;
+  stake: number;
+  /** How much of the stake the other side actually covered. */
+  matched: number;
+  outcome: BetOutcome;
+  /** Net Cred. The unmatched remainder is not in here — it was never at risk. */
+  delta: number;
+};
+
+const VOID_REASON: Record<"VOID_LINEUP" | "VOID_LATE", string> = {
+  // Neutral on purpose. A lineup void usually means the played game put them on
+  // the other side, but it also fires when we can't tie them to a side at all,
+  // and this line is read by the person it names.
+  VOID_LINEUP: "lineup changed",
+  VOID_LATE: "placed after the game started",
+};
+
+function isVoid(
+  s: InhouseBetSlip,
+): s is InhouseBetSlip & { outcome: "VOID_LINEUP" | "VOID_LATE" } {
+  return s.outcome === "VOID_LINEUP" || s.outcome === "VOID_LATE";
+}
+
+/** `+43` / `-43` / `0` — the sign carries the whole story, so never drop it. */
+function signedCred(n: number): string {
+  return n > 0 ? `+${n}` : String(n);
+}
+
+/** Biggest slip first; the raw (pre-escape) name is the tiebreak, so the same
+ *  settlement always reads the same way — the repo's total-order convention. */
+function bySlipSize(a: InhouseBetSlip, b: InhouseBetSlip): number {
+  return b.stake - a.stake || a.name.localeCompare(b.name);
+}
+
+/**
+ * Who was in for what, appended to the inhouse result post.
+ *
+ * OMITTED ENTIRELY when nobody bet. A league that never touches the economy has
+ * to get byte-for-byte what it got before the economy existed — that is what
+ * makes `slips` safe for the service to pass unconditionally, and there is a
+ * test pinning it.
+ *
+ * No emoji, and no MentionAllowlist: this message names no action anyone can
+ * take, and a notification people can't act on is what gets a channel muted.
+ */
+function betSlipsBlock(
+  slips: InhouseBetSlip[],
+  winnerSide: "Radiant" | "Dire",
+): string {
+  const voided = slips.filter(isVoid);
+  const live = slips.filter((s) => !isVoid(s));
+  const lines: string[] = [];
+
+  if (live.length > 0) {
+    // The pot is the SURVIVING stakes only: a voided bet is handed back in
+    // full, so counting it here would advertise a pot that partly never
+    // existed — and would push the tier label up on a game where the money came
+    // home. The room's live panel can't know that yet; this one does.
+    const pot = live.reduce((n, s) => n + s.stake, 0);
+    // Σ matched over BOTH sides is 2M by construction — each side's matched
+    // total is the same M — so this is the Cred that was genuinely in play and
+    // `pot - covered` is what was never at risk.
+    const covered = live.reduce((n, s) => n + s.matched, 0);
+    const label = tierLabel(potTier(pot));
+    const coverage =
+      covered === 0
+        ? // Not a failure state and not phrased as one: even money means the
+          // side that thinks it is behind stakes nothing, so an uncovered pot
+          // is the ten telling each other the game wasn't close.
+          "nobody took the other side — every stake came home"
+        : covered === pot
+          ? "fully covered"
+          : `${covered} covered · ${pot - covered} came home`;
+    lines.push(
+      [`**Pot ${pot} Cred**`, ...(label ? [label] : []), coverage].join(" · "),
+    );
+
+    const loserSide = winnerSide === "Radiant" ? "Dire" : "Radiant";
+    const sides = [
+      [winnerSide, live.filter((s) => s.outcome === "WON")],
+      [loserSide, live.filter((s) => s.outcome === "LOST")],
+    ] as const;
+    for (const [side, group] of sides) {
+      // A side nobody backed prints nothing — never an empty "Radiant:" row.
+      if (group.length === 0) continue;
+      lines.push(
+        `${side}: ${[...group]
+          .sort(bySlipSize)
+          .map((s) => `${name(s.name)} ${s.stake} → ${signedCred(s.delta)}`)
+          .join(" · ")}`,
+      );
+    }
+  }
+
+  if (voided.length > 0) {
+    // Subtext, because it is an exception note rather than the result — but it
+    // is never dropped: somebody staked and got their Cred back, and finding
+    // that out from a balance instead of from here is how a money feature
+    // reads as broken.
+    lines.push(
+      `-# Refunded: ${[...voided]
+        .sort(bySlipSize)
+        .map((s) => `${name(s.name)} ${s.stake} (${VOID_REASON[s.outcome]})`)
+        .join(" · ")}`,
+    );
+  }
+
+  return lines.length > 0 ? `\n${lines.join("\n")}` : "";
+}
+
 export function inhouseResultMessage(m: {
   winnerSide: "Radiant" | "Dire";
   radiantScore: number;
@@ -194,13 +318,56 @@ export function inhouseResultMessage(m: {
   mvpName: string | null;
   mvpHero: string | null;
   dotaMatchId: string;
+  /**
+   * Settled wagers, or null/absent when this caller didn't win the settlement
+   * claim, when nobody bet, or when the settlement threw and was swallowed —
+   * all three render the message exactly as it read before betting existed.
+   */
+  slips?: InhouseBetSlip[] | null;
 }): string {
   const mins = Math.floor(m.durationSecs / 60);
   const secs = String(m.durationSecs % 60).padStart(2, "0");
   const mvp = m.mvpName
     ? ` MVP: **${name(m.mvpName)}**${m.mvpHero ? ` (${m.mvpHero})` : ""}.`
     : "";
-  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: <${resolveSiteUrl()}/inhouse> · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
+  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: <${resolveSiteUrl()}/inhouse> · <https://www.opendota.com/matches/${m.dotaMatchId}>${betSlipsBlock(m.slips ?? [], m.winnerSide)}`;
+}
+
+/**
+ * An admin voided a result that had money on it.
+ *
+ * The correction is only worth sending because the ORIGINAL post is still
+ * sitting in the channel stating payouts, slip by slip, that have since been
+ * clawed back — and a Discord message that is never edited and never notifies
+ * is exactly the surface where a stale number outlives the state it described.
+ * Discord edits produce no notification, so amending the old post would leave
+ * everyone who already read it believing the old figures; a new line is the
+ * only thing anyone sees.
+ *
+ * The OpenDota link is the anchor, not decoration: the void NULLS the lobby's
+ * dotaMatchId, so once this is sent there is nothing left in the database
+ * tying the correction to the post it corrects.
+ *
+ * No MentionAllowlist — it names no action anyone can take, and a notification
+ * people can't act on is what gets a channel muted (the betSlipsBlock rule).
+ * Nothing here is player-supplied, so there is no name to escape.
+ */
+export function inhouseResultVoidedMessage(m: {
+  betCount: number;
+  /** Total confirmed stake on the voided game. */
+  staked: number;
+  /** Null only in theory — a COMPLETED lobby always came from a real match. */
+  dotaMatchId: string | null;
+}): string {
+  const link = m.dotaMatchId
+    ? ` <https://www.opendota.com/matches/${m.dotaMatchId}>`
+    : "";
+  const slips = `${m.betCount} ${m.betCount === 1 ? "slip" : "slips"}`;
+  // Present tense, not "have been": the reversal is the sweeper's, run on the
+  // next state read (milliseconds later, from this very request) rather than
+  // inside the void itself. This says what the outcome is without claiming a
+  // moment it can't promise.
+  return `↩️ **That inhouse result has been voided by an admin** — it's off the ladder, and the wagers on it reverse to their pre-game balances: ${slips}, ${m.staked} Cred back where it started. The payouts posted for that game no longer stand.${link}`;
 }
 
 export function playerOutMessage(m: {

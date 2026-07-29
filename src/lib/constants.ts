@@ -306,6 +306,103 @@ export const INHOUSE = {
   BOARD_MIN_SECONDS: 10,
 } as const;
 
+// ---------- Inhouse betting (play money — see CLAUDE.md) -------------------
+//
+// THE TRIPWIRE, stated first because every safety argument below rests on it:
+// Cred is WORTHLESS. It cannot be bought, sold, transferred, gifted or spent
+// on anything. The moment anyone proposes making it buy something real, this
+// whole feature has to be reconsidered from scratch — the anti-collusion
+// reasoning is only sound while there is nothing to collude FOR.
+
+/** Per-lobby settlement state (`InhouseLobby.betSettlement`; null = no bets). */
+export const INHOUSE_BET_STATUS = {
+  PENDING: "PENDING",
+  SETTLED: "SETTLED",
+  REFUNDED: "REFUNDED",
+  REVERSED: "REVERSED",
+} as const;
+export type InhouseBetSettlement =
+  (typeof INHOUSE_BET_STATUS)[keyof typeof INHOUSE_BET_STATUS];
+
+/** Per-bet outcome (`InhouseBet.outcome`). */
+export const INHOUSE_BET_OUTCOME = {
+  WON: "WON",
+  LOST: "LOST",
+  /** The bettor's post-teamFixes side ≠ the side they bet on — full refund. */
+  VOID_LINEUP: "VOID_LINEUP",
+  /** Placed after the played game's own start_time — full refund. */
+  VOID_LATE: "VOID_LATE",
+  /** Lobby died before a result (cancel / abandon / void) — full refund. */
+  REFUNDED: "REFUNDED",
+} as const;
+export type InhouseBetOutcome =
+  (typeof INHOUSE_BET_OUTCOME)[keyof typeof INHOUSE_BET_OUTCOME];
+
+/** Ledger reasons (`InhouseCreditEntry.reason`). */
+export const INHOUSE_CRED_REASON = {
+  GRANT: "GRANT", // opening balance, once per account
+  STAKE: "STAKE", // debit when the bet is placed
+  RETURN: "RETURN", // unmatched portion handed back at settlement
+  WIN: "WIN",
+  LOSS: "LOSS",
+  REFUND: "REFUND", // voided bet / dead lobby
+  REVERSAL: "REVERSAL", // admin voided an already-settled result
+  FLOOR: "FLOOR", // bankruptcy top-up
+  ADJUST: "ADJUST", // admin correction
+} as const;
+export type InhouseCredReason =
+  (typeof INHOUSE_CRED_REASON)[keyof typeof INHOUSE_CRED_REASON];
+
+/**
+ * Reasons that count toward the PROFIT board. Deliberately excludes GRANT,
+ * FLOOR and ADJUST: the ladder ranks what you took off other players, never
+ * what the system handed you. That single choice is what makes the bankruptcy
+ * floor safe — a player who parks at the floor and loses forever mints
+ * liquidity, but can never mint SCORE, so there is nothing to farm.
+ *
+ * Never add a "total staked" board beside it. Volume is the one number a
+ * behaviour like "bet max every game regardless" farms perfectly.
+ */
+export const INHOUSE_CRED_PROFIT_REASONS: InhouseCredReason[] = [
+  INHOUSE_CRED_REASON.STAKE,
+  INHOUSE_CRED_REASON.RETURN,
+  INHOUSE_CRED_REASON.WIN,
+  INHOUSE_CRED_REASON.LOSS,
+  INHOUSE_CRED_REASON.REFUND,
+  INHOUSE_CRED_REASON.REVERSAL,
+];
+
+export const INHOUSE_BETS = {
+  /** Opening balance — five max bets. A column default, so an existing
+   *  account is funded by the schema push itself, with no backfill script. */
+  START_BALANCE: 500,
+  /** Stakes are chips, never a text input: a bet that needs typing doesn't
+   *  happen inside a 45-second window with Dota already open. */
+  MIN_STAKE: 10,
+  STEP: 10,
+  /**
+   * FLAT, and never a fraction of balance. Two reasons, both load-bearing:
+   * a newcomer and the ladder leader max out at the same number on night one
+   * (so the economy can't compound into a rich-get-richer spiral), and a
+   * throw conspiracy's take is bounded at five stakes — 500 Cred — per game.
+   */
+  MAX_STAKE: 100,
+  /** The betting window, opened on the DRAFTING→READY transition. Matched to
+   *  ACCEPT_SECONDS so the room keeps one rhythm; longer is a real toll on the
+   *  one phase where ten people are trying to leave the browser. */
+  WINDOW_SECONDS: 45,
+  /** Bankruptcy net: a participant below this is topped up TO this, at most
+   *  once per UTC day (enforced by the ledger's @@unique([reason, refId])). */
+  FLOOR: 100,
+  /** …and only after a game that looks like a game. Without this the floor
+   *  pays out on 4-minute feed-fests, which is a faucet with a crank on it. */
+  REAL_GAME_SECONDS: 600,
+  /** Pot tiers, for the room's label and the pinned board's LIVE line. */
+  TIER_CONTESTED: 200,
+  TIER_HIGH: 500,
+  TIER_MARQUEE: 800,
+} as const;
+
 // Match-night Discord reminder: announced lazily from dashboard//schedule
 // renders for the next week whose matches kick off inside the window. Sent at
 // most once per season+week (atomic Setting-row claim).

@@ -7,6 +7,10 @@ import { prisma } from "@/lib/prisma";
 import {
   AUTO_SYNC,
   DRAFT_STATUS,
+  INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_BETS,
+  INHOUSE_BET_STATUS,
+  INHOUSE_CRED_REASON,
   MATCH_PHASE,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
@@ -70,6 +74,7 @@ import {
   setDraftSettings,
 } from "@/app/actions/admin";
 import { cancelReschedule } from "@/app/actions/reschedule";
+import { adjustCredAction } from "@/app/actions/inhouse-bets";
 import {
   createNewsPost,
   deleteNewsPost,
@@ -89,6 +94,8 @@ import {
   getInhouseBoardStatus,
   type InhouseBoardStatus,
 } from "@/lib/inhouse-board-service";
+import { credProfitBoard } from "@/lib/inhouse-bet-service";
+import { potView } from "@/lib/inhouse-bets";
 import {
   getDiscordReach,
   getPingHealth,
@@ -123,6 +130,8 @@ import {
   PageTitle,
   PlayerLink,
   Stat,
+  StatCell,
+  StatStrip,
   buttonClasses,
   textLink,
 } from "@/components/ui";
@@ -186,6 +195,9 @@ export default async function AdminPage() {
                 { id: "adm-discord", label: "Discord" },
               ]
             : []),
+          // Season-independent, like Activity/News/Security below it: inhouses
+          // (and therefore the Cred economy) outlive any one season.
+          { id: "adm-bets", label: "Betting" },
           { id: "adm-activity", label: "Activity" },
           { id: "adm-news", label: "News" },
           { id: "adm-security", label: "Security" },
@@ -235,6 +247,14 @@ export default async function AdminPage() {
           </CardBody>
         </Card>
       )}
+
+      {/* Streamed for the reason the Discord card is: `credProfitBoard` is an
+          unwindowed scan of the whole Cred ledger, and a set-up-and-check card
+          must never hold up Pause draft or Record result. Its <AdminSection>
+          carries the `adm-bets` anchor itself, same as DiscordSection. */}
+      <Suspense fallback={<CardSkeleton rows={5} />}>
+        <InhouseBetting />
+      </Suspense>
 
       <AdminAnchor id="adm-activity">
         <Suspense fallback={<CardSkeleton rows={4} />}>
@@ -3397,6 +3417,427 @@ type NewsPostRow = {
   createdAt: Date;
   author: { name: string } | null;
 };
+
+/**
+ * How long a pot may sit in a state it could be settled from before that is an
+ * alarm rather than a delay.
+ *
+ * `resolveUnsettledBets` runs from BOTH inhouse resolver chains and from
+ * `syncInhouse`, which `/api/sync` executes on every page view of the entire
+ * site — so a COMPLETED or CANCELLED lobby still at `betSettlement = PENDING`
+ * is settled by the next visitor to load ANY page, /inhouse or not. Past a
+ * minute the benign reading has run out, and this card is its own proof:
+ * loading /admin fires that ping too, so a reload clears a stranded pot if the
+ * sweeper is alive at all.
+ *
+ * Local to this card on purpose: it is a display threshold for a human, not a
+ * mechanism anything keys off, and `constants.ts` is the file for the latter.
+ */
+const POT_STRANDED_MS = 60_000;
+
+/** "4m" / "2h 10m" / "3d 4h" — an elapsed duration, never a wall-clock time. */
+function ageLabel(ms: number): string {
+  const mins = Math.max(0, Math.floor(ms / 60_000));
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/** A signed Cred figure — the sign IS the story, as on the /inhouse board. */
+function CredDelta({ n }: { n: number }) {
+  return (
+    <span
+      className={cn(
+        "font-semibold tabular-nums",
+        n > 0 ? "text-success" : n < 0 ? "text-danger" : "text-muted",
+      )}
+    >
+      {n > 0 ? `+${n}` : n}
+    </span>
+  );
+}
+
+/**
+ * Inhouse betting — the books, the pots still on the table, and the one control
+ * that can move a balance.
+ *
+ * It exists for the reason `AutoSyncHealth` does. A process that runs lazily off
+ * page views is invisible the moment it stops: a match parked in auto-sync
+ * backoff is indistinguishable from "no games yet", and a pot stranded at
+ * `betSettlement = PENDING` is indistinguishable from a quiet night — except
+ * this one is holding ten people's money, and nothing else in the app would
+ * ever mention it.
+ *
+ * And `adjustCred` shipped guarded, integration-tested and in the mutation
+ * baseline with NO caller anywhere in the app. Until this card the only way to
+ * repair a balance was psql against production.
+ *
+ * Streamed like the Discord card: `credProfitBoard` is an unwindowed scan of
+ * the whole Cred ledger, and this is set-up-and-check work that must never hold
+ * up Pause draft or Record result. Collapsed for the same reason.
+ */
+async function InhouseBetting() {
+  // async SERVER component: renders once per request, so there is no re-render
+  // for Date.now() to be non-idempotent across (the purity rule is written for
+  // client components) — the same note AutoSyncHealth carries.
+  // eslint-disable-next-line react-hooks/purity
+  const now = Date.now();
+  const [pots, accounts, ledger, profit, adjustments] = await Promise.all([
+    // Every pot still on the table. `betSettlement` is indexed and null on
+    // every lobby in a league that has never bet, so a league that doesn't use
+    // this feature pays one index probe for the whole card.
+    prisma.inhouseLobby.findMany({
+      where: { betSettlement: INHOUSE_BET_STATUS.PENDING },
+      orderBy: { updatedAt: "asc" },
+      select: {
+        id: true,
+        status: true,
+        // The lobby's last transition — for a PENDING pot that is the write
+        // that made it settleable (the COMPLETED claim, or the cancel), because
+        // settling is the only thing left that would touch the row again.
+        updatedAt: true,
+        bets: {
+          where: { confirmedAt: { not: null } },
+          select: { userId: true, team: true, stake: true, placedAt: true },
+        },
+      },
+    }),
+    // One query doing three jobs: the funded count, the circulation total, and
+    // the correction form's options. Rows are one per player who has ever bet
+    // — tens, not thousands.
+    prisma.inhouseCredit.findMany({
+      select: { userId: true, balance: true, user: { select: { name: true } } },
+      orderBy: { user: { name: "asc" } },
+    }),
+    prisma.inhouseCreditEntry.aggregate({ _sum: { delta: true } }),
+    credProfitBoard(),
+    prisma.inhouseCreditEntry.findMany({
+      // `reason` is LEFTMOST in @@unique([reason, refId]), so this needs no
+      // index of its own — the repo's rule for when to skip an @@index.
+      where: { reason: INHOUSE_CRED_REASON.ADJUST },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+    }),
+  ]);
+
+  const nameOf = new Map(accounts.map((a) => [a.userId, a.user.name]));
+  const circulation = accounts.reduce((s, a) => s + a.balance, 0);
+  const ledgerTotal = ledger._sum.delta ?? 0;
+  const boardSum = [...profit.values()].reduce((s, n) => s + n, 0);
+  const onTheTable = pots.reduce(
+    (s, l) => s + l.bets.reduce((t, b) => t + b.stake, 0),
+    0,
+  );
+
+  // THE TWO CHECKS, and they fail on different things — which is why both are
+  // here rather than whichever one looked tidier.
+  //
+  // `booksDrift` is the zero-sum one. Betting mints nothing: every Cred a
+  // winner takes came off an opposing stake, and STAKE/RETURN cancel exactly
+  // (that is why the RETURN leg carries the WHOLE stake), so the profit board
+  // sums to 0 — MINUS whatever is currently staked on a pot that hasn't paid
+  // its RETURN legs yet. Adding `onTheTable` back is not a fudge: without it
+  // this alarm would fire for the entire length of every live pot, and a
+  // health surface that cries wolf on the normal case is one nobody reads.
+  //
+  // `ledgerDrift` is the receipts one: `balance === Σ ledger deltas` per user
+  // (GRANT records the opening balance), so it holds in aggregate at every
+  // instant, live pots included. It is what catches a movement written without
+  // its receipt or a lost update over `applyFloor`'s compare-and-swap — a class
+  // the zero-sum check cannot see, because ADJUST, GRANT and FLOOR are all
+  // deliberately excluded from the profit reasons.
+  const booksDrift = boardSum + onTheTable;
+  const ledgerDrift = circulation - ledgerTotal;
+  const balanced = booksDrift === 0 && ledgerDrift === 0;
+  const negative = accounts.filter((a) => a.balance < 0);
+
+  const rows = pots.map((p) => {
+    // The same pure function the room and the pinned Discord board price a
+    // live pot with — one arithmetic, three surfaces.
+    const view = potView(
+      p.bets.map((b) => ({
+        userId: b.userId,
+        team: b.team,
+        stake: b.stake,
+        placedAtMs: b.placedAt.getTime(),
+      })),
+    );
+    // An ACTIVE lobby's pot is not late — it IS the live pot, and there is
+    // nothing to settle it against until the game produces a result.
+    const live = (INHOUSE_ACTIVE_STATUSES as string[]).includes(p.status);
+    const age = now - p.updatedAt.getTime();
+    return {
+      id: p.id,
+      status: p.status,
+      view,
+      age,
+      live,
+      stranded: !live && age > POT_STRANDED_MS,
+      total: view.pool1 + view.pool2,
+      bettors: p.bets.length,
+    };
+  });
+  const strandedCount = rows.filter((r) => r.stranded).length;
+
+  return (
+    <AdminSection
+      id="adm-bets"
+      title="Inhouse betting"
+      subtitle="Cred is play money — it buys nothing and can't be transferred. Check the books, watch for a pot nobody settled, and correct a balance."
+    >
+      <CardBody className="space-y-4">
+        <StatStrip>
+          <StatCell label="Accounts funded" value={accounts.length} />
+          <StatCell label="Cred in circulation" value={circulation} />
+          {/* Deliberately NOT <CredDelta>: green-for-positive is the right
+              convention for a player's net profit, and the wrong one here.
+              A negative board sum is normal (it is exactly the Cred currently
+              staked); the only thing this figure can be good or bad about is
+              whether it balances. */}
+          <StatCell
+            label="Profit board sum"
+            value={
+              <span className={balanced ? "text-success" : "text-danger"}>
+                {boardSum > 0 ? `+${boardSum}` : boardSum}
+              </span>
+            }
+            hint={
+              !balanced
+                ? "must be 0 — see below"
+                : onTheTable > 0
+                  ? `${onTheTable} on the table`
+                  : "balanced"
+            }
+          />
+        </StatStrip>
+
+        {/* The most valuable number on this card, so it gets a sentence rather
+            than a figure alone: a non-zero result is not "someone is winning",
+            it is Cred that came from nowhere or went nowhere. */}
+        {balanced ? (
+          <p className="text-xs text-muted">
+            <b className="text-success">The books balance.</b> Betting is
+            zero-sum — every Cred a winner takes came off an opposing stake — so
+            the profit board sums to exactly 0 once nothing is on the table
+            {onTheTable > 0
+              ? `, and to −${onTheTable} while that much is staked on a pot that hasn't settled`
+              : ""}
+            . Balances add up to {circulation} against {ledgerTotal} of recorded
+            movement, so every Cred that moved left a receipt.
+          </p>
+        ) : (
+          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
+            <b>The books do not balance.</b>{" "}
+            {booksDrift !== 0 ? (
+              <>
+                The profit board sums to {boardSum} with {onTheTable} Cred on
+                the table, so {booksDrift > 0 ? "+" : ""}
+                {booksDrift} Cred has been minted or destroyed — betting is
+                zero-sum and this figure can only be 0.{" "}
+              </>
+            ) : null}
+            {ledgerDrift !== 0 ? (
+              <>
+                Balances add up to {circulation} against {ledgerTotal} of
+                recorded movement, a drift of {ledgerDrift > 0 ? "+" : ""}
+                {ledgerDrift} — a Cred movement was written without its receipt,
+                or a receipt without its movement.{" "}
+              </>
+            ) : null}
+            Don&apos;t correct it away here until you know which path did it:
+            an adjustment moves a balance without touching the profit board, so
+            it hides this alarm rather than fixing it.
+          </p>
+        )}
+
+        {negative.length > 0 ? (
+          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
+            <b>
+              {negative.length} account
+              {negative.length === 1 ? " is" : "s are"} below zero:
+            </b>{" "}
+            {negative.map((a) => `${a.user.name} (${a.balance})`).join(", ")}.
+            Nothing lets a player spend past zero, so this comes from a void
+            clawing back winnings they had already re-staked. They can&apos;t
+            bet again until it&apos;s repaired — use Adjust Cred below.
+          </p>
+        ) : null}
+
+        <div>
+          <h4 className="mb-2 text-sm font-medium text-muted">
+            Pots on the table
+          </h4>
+          {rows.length === 0 ? (
+            <p className="text-sm text-muted">
+              Every pot is settled — nothing is outstanding. A pot appears here
+              from the first bet of a game until its Cred is paid out, refunded
+              or reversed.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {rows.map((r) => (
+                <li
+                  key={r.id}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-line bg-surface-2/40 p-3 text-sm"
+                >
+                  <Badge
+                    tone={r.stranded ? "danger" : r.live ? "info" : "neutral"}
+                  >
+                    {r.status}
+                  </Badge>
+                  <span className="min-w-0 flex-1 basis-48 tabular-nums">
+                    <b>{r.total} Cred</b> from {r.bettors} bettor
+                    {r.bettors === 1 ? "" : "s"}
+                    {/* Sides are "team 1/2", never Radiant/Dire: which side
+                        plays Radiant isn't known until the game imports, and
+                        the pinned board holds the same line. */}
+                    {" · "}team 1 {r.view.pool1} · team 2 {r.view.pool2} ·{" "}
+                    {r.view.matched} matched
+                  </span>
+                  <span className="shrink-0 text-xs text-muted">
+                    {ageLabel(r.age)} in this state
+                  </span>
+                  {r.stranded ? (
+                    <Badge tone="danger">not settled</Badge>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {strandedCount > 0 ? (
+            <p className="mt-2 text-xs text-danger">
+              Reload this page before doing anything else: <code>/api/sync</code>{" "}
+              fires from every page view, this one included, so a working sweeper
+              clears these faster than you can read them. Still here after a
+              reload means <code>resolveUnsettledBets</code> is failing — the
+              stakes stay debited and nothing is paid out until it lands, so
+              check the server logs rather than adjusting balances by hand.
+            </p>
+          ) : null}
+        </div>
+
+        <div>
+          <h4 className="mb-2 text-sm font-medium text-muted">
+            Correct a balance
+          </h4>
+          {accounts.length === 0 ? (
+            <p className="text-sm text-muted">
+              Nobody has bet yet. A Cred account is written by a player&apos;s
+              first wager — until then everyone is on the opening{" "}
+              {INHOUSE_BETS.START_BALANCE} Cred and there is nothing to correct.
+            </p>
+          ) : (
+            <>
+              <ActionForm
+                action={adjustCredAction}
+                className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+              >
+                <Field label="Player" htmlFor="credUserId">
+                  <select
+                    id="credUserId"
+                    name="userId"
+                    required
+                    defaultValue=""
+                    className={cn(selectCls, "h-10 w-full")}
+                  >
+                    <option value="" disabled>
+                      Player…
+                    </option>
+                    {accounts.map((a) => (
+                      <option key={a.userId} value={a.userId}>
+                        {a.user.name} — {a.balance} Cred
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Cred to add or take away" htmlFor="credDelta">
+                  <input
+                    id="credDelta"
+                    name="delta"
+                    type="number"
+                    step={1}
+                    required
+                    placeholder="e.g. 50, or -50"
+                    className={cn(inputCls, "min-w-0")}
+                  />
+                </Field>
+                <div className="sm:col-span-2">
+                  <Field label="Why (goes in the ledger)" htmlFor="credNote">
+                    <input
+                      id="credNote"
+                      name="note"
+                      required
+                      maxLength={200}
+                      placeholder="Refunding the pot voided on Tuesday"
+                      className={cn(inputCls, "min-w-0")}
+                    />
+                  </Field>
+                </div>
+                <div className="sm:col-span-2">
+                  {/* SubmitButton, not DangerSubmit. The typed-name barrier is
+                      for the five actions with no in-app undo; an adjustment is
+                      undone by an equal one in the other direction, and
+                      spending the strong barrier here would rebuild exactly the
+                      fatigue it exists to break. */}
+                  <SubmitButton
+                    variant="secondary"
+                    size="sm"
+                    confirm="Move this player's Cred? It writes a ledger receipt and an admin activity line, and it's reversed by an equal adjustment the other way."
+                  >
+                    Adjust Cred
+                  </SubmitButton>
+                </div>
+              </ActionForm>
+              <p className="mt-2 text-xs text-muted">
+                Negative takes Cred away and can&apos;t push anyone below zero;
+                a positive amount always lands, which is what repairs a negative
+                balance. Adjustments never touch the profit board — the ladder
+                ranks what a player took off other players, never what an admin
+                handed them.
+              </p>
+            </>
+          )}
+        </div>
+
+        {adjustments.length > 0 ? (
+          <div>
+            <h4 className="mb-2 text-sm font-medium text-muted">
+              Recent corrections
+            </h4>
+            {/* Read from the LEDGER rather than AdminAction: `logAdminAction`
+                has no name in hand, so its summary identifies the player by
+                cuid, while the ledger row carries userId, the amount and the
+                note as real columns. The actor is one card down in Recent
+                admin activity, which logs every adjustment too. */}
+            <ul className="space-y-1.5">
+              {adjustments.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-line px-3 py-1.5 text-sm"
+                >
+                  <span className="font-medium">
+                    {nameOf.get(a.userId) ?? a.userId}
+                  </span>
+                  <CredDelta n={a.delta} />
+                  <span className="min-w-0 flex-1 text-muted">
+                    {a.note || "(no reason recorded)"}
+                  </span>
+                  <LocalTime
+                    ts={a.createdAt.getTime()}
+                    variant="short"
+                    initial={formatMatchTime(a.createdAt, "short")}
+                    className="shrink-0 text-xs text-muted tabular-nums"
+                  />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </CardBody>
+    </AdminSection>
+  );
+}
 
 /**
  * WHAT DID I PRESS? Until now nothing in the app could answer that: no model

@@ -63,6 +63,28 @@ const EQUIVALENT = new Set([
   // that test ever goes red this entry has expired — the claim is a real gap
   // again and needs a real test.
   "src/lib/inhouse-service.ts::applyPick::status#1",
+  // placeInhouseBet's WRITE 4 arms the sweeper with
+  // `where: { id, betSettlement: null }`. Deleting `betSettlement: null`
+  // cannot be observed, because WRITE 4 is UNREACHABLE unless WRITE 3 — the
+  // confirm claim, three statements earlier — matched, and WRITE 3 requires
+  // `status: { in: [READY, IN_PROGRESS] }`. That excludes every value the
+  // column could hold besides null and PENDING: SETTLED is only written for a
+  // COMPLETED lobby, REFUNDED/REVERSED only for a CANCELLED one, and both
+  // statuses make WRITE 3 match zero rows and THROW. So the blind write is
+  // either PENDING over null (identical) or PENDING over PENDING (a no-op).
+  //
+  // The one interleaving worth ruling out explicitly, since Postgres
+  // re-snapshots per statement even inside one transaction and WRITE 3 locks
+  // the BET row, not the lobby: an admin cancel committing between WRITE 3 and
+  // WRITE 4, followed by the sweeper stamping REFUNDED. It cannot happen —
+  // the sweeper only touches lobbies already at PENDING, which is the very
+  // thing WRITE 4 sets, and if an EARLIER bettor had armed it then this
+  // bettor's WRITE 3 would have failed on the CANCELLED status first.
+  //
+  // Unlike applyPick::status#1 this rests on static control flow rather than a
+  // lock, so it needs no pinning test — but if WRITE 3's status filter is ever
+  // widened, this entry has expired and the claim is a real gap again.
+  "src/lib/inhouse-bet-service.ts::placeInhouseBet::betSettlement#1",
 ]);
 
 // Every file that holds transactional service logic. Add new ones here.
@@ -75,6 +97,7 @@ const FILES = [
   "src/lib/playoff-service.ts",
   "src/lib/result-sync-service.ts",
   "src/lib/inhouse-board-service.ts",
+  "src/lib/inhouse-bet-service.ts",
   "src/lib/settings.ts",
   "src/lib/season.ts",
   "src/app/actions/admin.ts",

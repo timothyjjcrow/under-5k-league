@@ -16,6 +16,15 @@
         "DATABASE_URL=file:./signups-fixture.db ALLOW_DEV_LOGIN=true npx next dev -p 3111"
       ],
       "port": 3111
+    },
+    {
+      "name": "e2e-fixture",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATABASE_URL=file:./e2e.db ALLOW_DEV_LOGIN=true npx next dev -p 3112"
+      ],
+      "port": 3112
     }
   ]
 }

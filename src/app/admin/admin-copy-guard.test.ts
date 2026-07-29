@@ -24,6 +24,7 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const SOURCES = [
   "src/app/admin/page.tsx",
   "src/app/actions/admin.ts",
+  "src/app/actions/inhouse-bets.ts",
   "src/lib/admin-next-step.ts",
   "src/components/match-import-controls.tsx",
 ];
@@ -51,6 +52,10 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Start playoffs", rendered: "Start playoffs" },
   { quoted: "Reset playoffs", rendered: "Reset playoffs" },
   { quoted: "Move a match night", rendered: "Move a match night" },
+  // The below-zero banner tells an admin to repair the balance with this one.
+  { quoted: "Adjust Cred", rendered: "Adjust Cred" },
+  // The betting card points at this section for who made a correction.
+  { quoted: "Recent admin activity", rendered: "Recent admin activity" },
 ];
 
 describe("admin copy names only controls that exist", () => {
@@ -106,6 +111,53 @@ describe("admin copy names only controls that exist", () => {
     ]) {
       expect(haystack).not.toContain(claim);
     }
+  });
+
+  // The betting card's headline figure is "the profit board sums to 0", and it
+  // is only zero-sum while the profit reasons exclude the three things the
+  // SYSTEM hands out. Add GRANT, FLOOR or ADJUST to that list and the alarm
+  // fires forever on a perfectly healthy league — the cry-wolf failure that
+  // gets a health surface ignored, on the number the card calls its most
+  // valuable one.
+  it("only calls betting zero-sum while the profit reasons stay zero-sum", () => {
+    const constants = read("src/lib/constants.ts");
+    const decl = constants.indexOf("INHOUSE_CRED_PROFIT_REASONS");
+    // Bounded from the `[` AFTER the `=`, not the first `[` in the line: the
+    // type annotation is `InhouseCredReason[]`, whose own brackets would end
+    // the slice before it started.
+    const open = constants.indexOf("[", constants.indexOf("=", decl));
+    const list = constants.slice(open, constants.indexOf("]", open));
+    expect(list).toContain("STAKE");
+    for (const handout of ["GRANT", "FLOOR", "ADJUST"]) {
+      expect(
+        list,
+        `${handout} is Cred the system hands out, not Cred taken off another player. In the profit board it makes /admin's zero-sum check non-zero on a healthy league.`,
+      ).not.toContain(handout);
+    }
+  });
+
+  // The below-zero banner tells the admin that a negative balance can ONLY come
+  // from a void clawing back re-staked winnings, and that a positive adjustment
+  // always lands. Both halves are claims about the bet service; if either stops
+  // being true the banner sends an admin hunting for a void that never happened.
+  it("does not claim a player can never spend past zero unless the debit says so", () => {
+    const betService = read("src/lib/inhouse-bet-service.ts");
+    expect(
+      betService.includes("balance: { gte: stake }"),
+      "placeInhouseBet's overdraft guard is what makes 'nothing lets a player spend past zero' true",
+    ).toBe(true);
+    // Asserted as the PRESENCE of the debit-only ternary, not the absence of
+    // the `gte: Math.max(0, -delta)` it replaced: that expression is quoted in
+    // adjustCred's own comment as the bug it fixed, so a ban on the string
+    // fails against correct code. What has to hold is that a CREDIT carries no
+    // balance predicate at all — on a negative balance any floor at all refuses
+    // the one operation that repairs it.
+    expect(
+      betService.includes(
+        "where: delta < 0 ? { userId, balance: { gte: -delta } } : { userId }",
+      ),
+      "adjustCred must apply its no-overdraw floor to debits only, or the below-zero banner points at a form that refuses the repair",
+    ).toBe(true);
   });
 
   // maxMmr is a REVIEW threshold, not a block (registration.ts says so in two

@@ -48,9 +48,20 @@ export async function raceN<T>(n: number, fn: () => Promise<T>): Promise<T[]> {
 
 /** Wipe every table (children first) so each test starts from empty. */
 export async function resetDb() {
+  // Cred first: InhouseCreditEntry has NO foreign key at all (the AdminAction
+  // shape — a staking record has to outlive the account), so nothing cascades
+  // it and a missing line here leaks balances between tests. For money math
+  // that is worse than a normal leak: the suite stays green while measuring
+  // the previous test's ledger.
+  await prisma.inhouseCreditEntry.deleteMany();
+  await prisma.inhouseCredit.deleteMany();
+  await prisma.inhouseBet.deleteMany();
   await prisma.inhouseLobbyPlayer.deleteMany();
   await prisma.inhouseLobby.deleteMany();
   await prisma.inhouseQueueEntry.deleteMany();
+  // Same relationless shape, and it was already missing — an AdminAction row
+  // written by one test was visible to the next.
+  await prisma.adminAction.deleteMany();
   await prisma.game.deleteMany();
   await prisma.standinAssignment.deleteMany();
   await prisma.bid.deleteMany();

@@ -15,6 +15,7 @@ import {
   recordMatch,
   startGame,
 } from "@/lib/inhouse-service";
+import { placeInhouseBet } from "@/lib/inhouse-bet-service";
 
 export const dynamic = "force-dynamic";
 
@@ -75,8 +76,23 @@ export async function POST(req: NextRequest) {
     case "detect":
       res = await autoDetectResult(user);
       break;
+    case "bet":
+      // Deliberately NOT in INHOUSE_SCAN_ACTIONS: this is one bounded DB
+      // transaction with no OpenDota call, so the room gives it
+      // ROOM_ACTION_TIMEOUT_MS (15s). Filing it with detect/record would leave
+      // the bet controls disabled for up to 45s inside a 45-second window —
+      // the same as having no window at all. `betGateError` refuses a NaN
+      // stake (it isn't an integer multiple of STEP), so a junk body is a
+      // sentence, not a throw.
+      res = await placeInhouseBet(user, Number(body.stake));
+      break;
     case "cancel":
-      res = await cancelLobby(user);
+      // `force` overrides the live-pot guard on the IN_PROGRESS branch of
+      // cancelLobby's claim — an admin must never be locked out (an unkillable
+      // lobby holds the single active slot for hours, a strictly worse
+      // failure), but it is a deliberate act that writes an AdminAction and
+      // announces the pot. Boolean() so an absent field is a plain cancel.
+      res = await cancelLobby(user, { force: Boolean(body.force) });
       break;
     case "void":
       res = await voidLastResult(user);

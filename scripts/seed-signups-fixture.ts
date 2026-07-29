@@ -29,11 +29,35 @@ const prisma = new PrismaClient();
 const PLAYER_COUNT = Number(process.env.PLAYERS ?? 37);
 
 async function main() {
+  // A fixture DB is reused across runs, so the reset has to reach everything a
+  // browsing session can create — not just what this script writes. /inhouse is
+  // reachable from every phase (the nav link is season-independent), so a poke
+  // at the queue leaves lobbies, credit accounts and ledger rows behind.
+  //
+  // InhouseCreditEntry and AdminAction carry NO foreign key on purpose (a
+  // staking record and an audit record outlive the account — see the model
+  // comments in schema.prisma) and NewsPost's author is SetNull, so
+  // `user.deleteMany()` cascades none of the three and they have to be named.
+  // Left out, a reseeded "empty" fixture still shows a Cred board with betting
+  // history on it.
+  await prisma.inhouseCreditEntry.deleteMany({});
+  await prisma.adminAction.deleteMany({});
+  await prisma.newsPost.deleteMany({});
+  await prisma.inhouseLobbyPlayer.deleteMany({});
+  await prisma.inhouseLobby.deleteMany({});
+  await prisma.inhouseQueueEntry.deleteMany({});
+  await prisma.bid.deleteMany({});
+  await prisma.standinAssignment.deleteMany({});
+  await prisma.match.deleteMany({});
   await prisma.teamMember.deleteMany({});
+  await prisma.draft.deleteMany({});
   await prisma.team.deleteMany({});
   await prisma.registration.deleteMany({});
   await prisma.season.deleteMany({});
   await prisma.user.deleteMany({});
+  // Relationless key-value store — a stale webhook URL or honors marker would
+  // otherwise outlive every season this fixture pretends to be.
+  await prisma.setting.deleteMany({});
 
   const season = await prisma.season.create({
     data: {

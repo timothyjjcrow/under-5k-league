@@ -56,6 +56,20 @@ async function main() {
   assertLocalDatabase("Seeding");
   console.log("Resetting database…");
   // Order matters for FK constraints.
+  //
+  // These three survive `user.deleteMany()` and every other line here, so they
+  // have to be named: InhouseCreditEntry and AdminAction carry NO foreign key
+  // at all — deliberately, since a staking record and an audit record have to
+  // outlive the account they describe (see the model comments in
+  // schema.prisma) — and NewsPost's author is `onDelete: SetNull`, so the post
+  // outlives its author too. Nothing cascades any of them.
+  //
+  // Missing, the ledger leaked STAKE/REFUND rows pointing at deleted users
+  // straight through a reseed, and /inhouse rendered a Cred board with betting
+  // history on a database that had just been wiped.
+  await prisma.inhouseCreditEntry.deleteMany();
+  await prisma.adminAction.deleteMany();
+  await prisma.newsPost.deleteMany();
   await prisma.bid.deleteMany();
   await prisma.standinAssignment.deleteMany();
   await prisma.match.deleteMany();
