@@ -44,6 +44,21 @@ describe("capacityInfo", () => {
     expect(c.toNextTeam).toBe(3);
   });
 
+  // The post-minimum progress bar runs playerCount against this, so its empty
+  // slice is exactly `toNextTeam` players wide. The invariant that matters is
+  // that the two agree: target - count === toNextTeam, at every count.
+  it("scales the next-team target so the gap is the players still needed", () => {
+    for (let n = 30; n <= 44; n++) {
+      const c = capacityInfo({ teamSize: 5, minTeams: 6 }, n);
+      expect(c.nextTeamTarget - n).toBe(c.toNextTeam);
+      expect(c.nextTeamTarget % 5).toBe(0);
+      // "Fills up, with room for a few more" — never empty, never full.
+      const pct = (n / c.nextTeamTarget) * 100;
+      expect(pct).toBeGreaterThanOrEqual(85);
+      expect(pct).toBeLessThan(100);
+    }
+  });
+
   // At an exact multiple the pool seats every player, so "leftover" is 0 — but
   // "how many more for another team" is a whole team, never 0. A 0 here would
   // render as "0 more makes it 7 full teams", which is a lie in the one state
@@ -54,6 +69,9 @@ describe("capacityInfo", () => {
     expect(c.toNextTeam).toBe(5);
     expect(c.extra).toBe(0);
     expect(c.teamsFormable).toBe(6);
+    // The state the bar got wrong: scaled on leftover/perTeam this is 0% —
+    // an empty bar under "the 6-team minimum is covered".
+    expect(c.nextTeamTarget).toBe(35);
   });
 
   it("survives a zero team size without dividing by it", () => {
@@ -61,5 +79,6 @@ describe("capacityInfo", () => {
     expect(c.teamsFormable).toBe(0);
     expect(c.leftover).toBe(0);
     expect(c.toNextTeam).toBe(0);
+    expect(c.nextTeamTarget).toBe(0);
   });
 });

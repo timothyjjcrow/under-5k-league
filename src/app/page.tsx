@@ -1029,9 +1029,13 @@ async function SignupsView({
           ) : null}
           {capacity.canDraft ? (
             <div className="space-y-2">
-              {/* Retargeted at the next whole team, so the bar keeps meaning
-                  something instead of sitting full for the rest of signups. */}
-              <Progress value={capacity.leftover} max={season.teamSize} />
+              {/* Scaled to the next whole team, so the bar keeps meaning
+                  something instead of sitting full for the rest of signups —
+                  and so its EMPTY slice is exactly the players still needed,
+                  narrowing from a team's worth down to one. Not
+                  leftover/teamSize: that renders empty at an exact multiple,
+                  which is the healthiest the league gets. */}
+              <Progress value={playerCount} max={capacity.nextTeamTarget} />
               <p className="text-sm text-muted">
                 The {season.minTeams}-team minimum is covered — signups stay open,
                 and every {season.teamSize} more players is another team.{" "}

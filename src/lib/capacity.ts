@@ -24,6 +24,19 @@ export type CapacityInfo = {
    * is always "how many more for one MORE team".
    */
   toNextTeam: number;
+  /**
+   * The player count that would complete another full team — the SCALE the
+   * post-minimum progress bar runs against, so its empty slice is exactly
+   * `toNextTeam` players wide.
+   *
+   * Do NOT scale that bar on `leftover / perTeam` instead. It reads the same in
+   * the middle and is wrong at both ends: at an exact multiple — 30 players on
+   * a 6-team season, the healthiest the league gets — leftover is 0, so the bar
+   * renders EMPTY under the words "the minimum is covered". Against this the
+   * same state is ~86% full with one team's worth of gap left, which is what
+   * the sentence beside it actually says.
+   */
+  nextTeamTarget: number;
 };
 
 /**
@@ -48,5 +61,6 @@ export function capacityInfo(
     extra: Math.max(0, playerCount - minPlayers),
     leftover,
     toNextTeam: perTeam > 0 ? perTeam - leftover : 0,
+    nextTeamTarget: perTeam > 0 ? (teamsFormable + 1) * perTeam : 0,
   };
 }
