@@ -1356,12 +1356,19 @@ function CaptainControls({
                       {!draftStarted ? (
                         <ActionForm action={addCaptain}>
                           <input type="hidden" name="userId" value={p.userId} />
-                          <button
-                            type="submit"
+                          {/* Confirmed because the UNDO is expensive, not the
+                              action: removing a captain again deletes the
+                              team and, once fixtures exist, the season's whole
+                              schedule. Also a real SubmitButton now, so it has
+                              a pending state and can't be double-submitted. */}
+                          <SubmitButton
+                            variant="ghost"
+                            size="sm"
                             className="text-xs text-accent hover:underline"
+                            confirm={`Make ${p.user.name} a captain? They get a team, and the only way back is removing that team — which also clears the schedule once one exists.`}
                           >
                             make captain
-                          </button>
+                          </SubmitButton>
                         </ActionForm>
                       ) : null}
                       {/* NOT phase-gated. This used to render only during
@@ -1613,13 +1620,25 @@ function ScheduleControls({
                     <input type="checkbox" name="cascade" />
                     shift later weeks too
                   </label>
-                  <SubmitButton variant="secondary" size="sm">
+                  {/* This had NO confirmation, and with the cascade ticked it
+                      retimes every LATER week too and deletes the check-ins on
+                      all of them — the widest-reaching unconfirmed control on
+                      the page. The times can be moved back; the check-ins
+                      cannot, so ten players per fixture have to be asked again.
+                      The dialog cannot know whether the cascade box is ticked
+                      (it is server-rendered), so it names both effects. */}
+                  <SubmitButton
+                    variant="secondary"
+                    size="sm"
+                    confirm={`Move this week's match night?\n\nEvery unplayed match in the week is retimed and its check-ins are cleared — players will have to check in again. If "shift later weeks too" is ticked, every later scheduled week moves by the same amount and loses its check-ins as well.`}
+                  >
                     Move night
                   </SubmitButton>
                   <span className="w-full text-muted">
-                    Retimes every unplayed match in the week; the cascade keeps
-                    the weekly rhythm by moving later scheduled weeks by the
-                    same amount.
+                    Retimes every unplayed match in the week and clears their
+                    check-ins and any open reschedule proposals; the cascade
+                    keeps the weekly rhythm by moving later scheduled weeks by
+                    the same amount.
                   </span>
                 </ActionForm>
               ) : null;
@@ -2213,12 +2232,14 @@ function StandinMatchBlock({
               </span>
               <ActionForm action={removeStandin}>
                 <input type="hidden" name="assignmentId" value={a.id} />
-                <button
-                  type="submit"
-                  className="text-danger hover:underline"
+                <SubmitButton
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-danger hover:underline"
+                  confirm={`Remove ${a.standin.name} from this match? They are told to stand down in Discord — if this was a mis-click they will have been pinged twice for nothing.`}
                 >
                   remove
-                </button>
+                </SubmitButton>
               </ActionForm>
             </li>
           ))}
@@ -2677,7 +2698,13 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
                 </option>
               ))}
             </select>
-            <SubmitButton variant="secondary" size="sm">
+            {/* Additive and undoable by Release — but Release permanently
+                erases the player's draft price, so the round trip is lossy. */}
+            <SubmitButton
+              variant="secondary"
+              size="sm"
+              confirm="Sign this player onto that team for the rest of the season? Releasing them again frees the seat but permanently erases their draft price."
+            >
               Sign player
             </SubmitButton>
           </ActionForm>

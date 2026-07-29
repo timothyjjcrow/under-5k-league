@@ -78,6 +78,18 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
+**The ratchet only models ONE guard shape.** `scripts/mutation-guard.mjs` line 3
+says it: a claim is an `updateMany({ where: … })` whose WHERE re-asserts a
+read-time precondition. Guards written as an early `return { error }` or as a
+count-check-then-`throw` inside a transaction are INVISIBLE to it — running
+`--discover` after adding one produces a byte-identical baseline (verified
+2026-07-29 after adding `removeCaptain`'s results guard, the
+`signFreeAgent`/`releasePlayer` missing-draft-row gate, and
+`assignStandinGuarded`'s empty-seat budget). Those are covered by hand-written
+integration tests instead, and the honest way to check such a test is to
+sabotage the guard and confirm the test goes red — the ratchet will not do it
+for you. Don't read "46/46" as "every guard in the repo is gated".
+
 Currently **46 of 46 gradeable claims protected** (2026-07-28) — every guarded
 claim in the repo now fails the suite when its predicate is deleted. The other
 four of the 50 are EQUIVALENT MUTANTS: predicates that can be deleted without
@@ -232,8 +244,15 @@ is the point at which someone has to justify it.
 - **Vitest config is `vitest.config.mts`** (`.mts`, not `.ts`) — the project is
   CommonJS and Vitest's config loader needs ESM.
 - After a mutation, server actions call `revalidatePath("/", "layout")`.
-- **MMR cap**: `Season.maxMmr` (0 = none). `saveRegistration` rejects
-  `mmr > maxMmr`; admins set it in the create-season form or via `setMaxMmr`.
+- **MMR cap**: `Season.maxMmr` (0 = none) is a SOFT limit — a review threshold,
+  NOT a block. Players above it still join the pool; only `HARD_MMR_CEILING`
+  turns anyone away (`registrationGate`, `registration.ts`, says so in two
+  places). Admins set it in the create-season form or via `setMaxMmr`.
+  This entry used to claim `saveRegistration` rejects `mmr > maxMmr`, which is
+  the opposite of the code — and it was believed: a 2026-07-29 pass "corrected"
+  the /admin hint to say over-limit signups are refused, and it took a reader
+  going to the source to catch it. Nothing enforces the soft limit; reviewing
+  those players is a human step with no tool behind it.
 - **Feedback**: risky server actions return `ActionResult`
   (`src/lib/action-result.ts`) instead of throwing; the UI wraps them in
   `<ActionForm>` (`src/components/action-form.tsx`), which toasts the result via
@@ -2291,6 +2310,79 @@ a `min-w-max` row, and every one of them was violating the SeasonGrid rule.
   no import path would ever re-trigger it — and only rows stamped failed are
   retried, so a deploy can't re-announce history). Keep the matching shape
   when adding claim-then-send announcements.
+
+## Admin panel: safety & honesty (2026-07-29 — read before touching /admin)
+
+A flow audit, then a copy audit, then a safety audit of every admin-reachable
+action. The engines were already hardened; the THIN SERVER ACTIONS calling them
+were not — nearly every defect found came back with no test coverage at all, in
+a repo running a 50-claim mutation ratchet. When adding an admin action, assume
+the guard you need is missing rather than present.
+
+**The barrier has two tiers, and the tier is the point.** Ordinary destructive
+actions use `<SubmitButton confirm>` (a `window.confirm`). The FIVE with no
+in-app undo use `<DangerSubmit>` (`src/components/danger-submit.tsx`), which
+requires TYPING the season or team name: delete season, abort draft, reset
+playoffs, regenerate schedule, remove captain. `window.confirm` focuses OK by
+default — one Enter — and looks identical whether it guards "Rename team" or a
+cascade delete of a season, which is exactly the distinction that matters.
+Do NOT reach for DangerSubmit on a reversible action; the fatigue it would
+rebuild is the thing it exists to break. `danger-submit.test.ts` pins the
+wiring, the exact-match rule and the "no magic word" rule (`token` must be a
+real name, never "DELETE"); `e2e-mid/danger.spec.ts` proves in a browser that
+the form cannot submit until the token matches and that Enter can't complete it.
+
+**Confirms must name the real numbers, read from the database.** `loadSeasonAdminData`
+returns `collateral` (check-ins / pick'em picks / standin bookings / open
+proposals on regular fixtures) purely so the regenerate and remove-captain
+dialogs can state what dies BEFORE the click, not just in the toast afterwards.
+
+**Split a destructive control away from its harmless twin.** Start/Reset
+playoffs and Generate/Regenerate schedule were each ONE button whose meaning
+flipped with state, in the same pixel — muscle memory aimed at the safe one hit
+the other. They are separate controls now; keep them that way.
+
+**Copy that names a control must name a real one.** That class appeared four
+times ("Detect games" for a button called "Auto-fetch games", "Add game by match
+ID", "Start next season", a "Remove" that only exists on one of three webhook
+fields). `src/app/admin/admin-copy-guard.test.ts` parses the admin sources and
+fails on any of them, and on copy asserting the draft can't be undone (abortDraft
+undoes it) or that the soft MMR limit refuses signups (it doesn't).
+
+**`adminNextStep` (`src/lib/admin-next-step.ts`, pure, tested) is the panel's
+roadmap** — one "what do I do next?" line per phase. It exists because several
+transitions are silent and fail QUIETLY: the auction finishing does not advance
+the phase, a schedule with no kickoff times disables auto-sync/reminders/pick'em
+locks for the whole season, nothing prompted "start the playoffs" or "record the
+final", and COMPLETE was a dead end whose only exit sat in a collapsed section.
+
+**Two safety nets that did not exist.** `GET /api/admin/season-export` downloads
+a whole season as JSON including box scores (the part that cannot be re-fetched
+once OpenDota ages them out) — it is the only backup behind `deleteSeason`,
+since `npm run db:backup` cannot run against production from a serverless host.
+Deliberately an EXPORT, not a restore. And `AdminAction` + `logAdminAction`
+(`src/lib/admin-log.ts`) records who did what: append-only, best-effort (a
+failed log must NEVER fail the mutation it describes), written from ONE helper
+that resolves the actor from the session rather than threading it through
+sixteen signatures, and with NO foreign key to Season — the record of a deletion
+has to outlive the thing deleted.
+
+**Pre-delete archives must MERGE, never replace.** `createPlayoffBracket` stashes
+the deleted playoff games' `dotaMatchId`s so the postseason can be re-imported.
+The first version overwrote the row, so the likeliest repair sequence — reset,
+re-import one game to check, reset again — left one id and destroyed the rest,
+at the exact moment an admin was repairing something. Union by id; it may only
+ever grow.
+
+Also here: `removeGame` writes an `importSkip:<seasonId>` memory BEFORE deleting
+(both importers decide "already recorded" from the Game rows, so without it
+auto-sync re-imported the removed game within a minute — the panel's own repair
+path did not work); a standin can fill an EMPTY seat (`replacingUserId: null` +
+an explicit `teamId`, guarded on the seat actually being open and one standin
+per seat) which is how a short roster gets covered at all; and `clashesAfterRetime`
+reports a standin double-booked by a retime, since `standinConflict` is only
+checked when cover is arranged and every retime path could move a fixture onto
+a night they were already booked for.
 
 ## Good next steps
 
