@@ -1022,7 +1022,6 @@ export function DraftRoom({
             <NominateBar
               state={state}
               selected={selected}
-              setSelected={setSelected}
               nomAmount={nomAmount}
               setNomAmount={setNomAmount}
               pending={pending}
@@ -1296,7 +1295,6 @@ function NominateBar({
 }: {
   state: DraftState;
   selected: string | null;
-  setSelected: (id: string | null) => void;
   nomAmount: number;
   setNomAmount: (n: number) => void;
   pending: boolean;

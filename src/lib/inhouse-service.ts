@@ -20,6 +20,7 @@ import {
   type CaptainMethod,
 } from "./inhouse";
 import { summarizeInhouse } from "./inhouse-stats";
+import type { InhouseBoxPlayer } from "./inhouse-box";
 import { potTier, potView, type PotTier, type Settlement } from "./inhouse-bets";
 import {
   resolveUnsettledBets,
@@ -51,7 +52,7 @@ import { logAdminAction } from "./admin-log";
 import { raceHook } from "./race-hook";
 import type { SessionUser } from "./auth";
 
-export type ActionResult = { ok: true } | { ok: false; error: string };
+export type InhouseActionResult = { ok: true } | { ok: false; error: string };
 
 // The transaction-scoped Prisma client type (also satisfied by `prisma` itself).
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
@@ -323,7 +324,7 @@ async function failReadyCheck(
 }
 
 /** Press ACCEPT on the ready check. Idempotent — a double-click is one accept. */
-export async function acceptMatch(viewer: SessionUser): Promise<ActionResult> {
+export async function acceptMatch(viewer: SessionUser): Promise<InhouseActionResult> {
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY_CHECK },
@@ -375,7 +376,7 @@ export async function acceptMatch(viewer: SessionUser): Promise<ActionResult> {
  * priority, and still-pending players re-queue with a backdated heartbeat —
  * they did nothing wrong, but must re-confirm presence via their own poll.
  */
-export async function declineMatch(viewer: SessionUser): Promise<ActionResult> {
+export async function declineMatch(viewer: SessionUser): Promise<InhouseActionResult> {
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY_CHECK },
@@ -558,7 +559,7 @@ export async function castVote(
   viewer: SessionUser,
   method: string,
   nomineeId?: string,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   const m = method as CaptainMethod;
   if (m !== "MMR" && m !== "RECORD" && m !== "VOTE") {
     return { ok: false, error: "Invalid vote" };
@@ -610,7 +611,7 @@ async function applyPick(
   targetUserId: string,
   /** The team the CALLER authorized against, when it authorized against one. */
   expectTeam?: number | null,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   const lobby = await tx.inhouseLobby.findUnique({
     where: { id: lobbyId },
     include: { players: true },
@@ -824,7 +825,7 @@ export async function resolveStalledPick(): Promise<boolean> {
 export async function makePick(
   viewer: SessionUser,
   targetUserId: string,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   await resolveStalledPick();
   try {
     return await prisma.$transaction(async (tx) => {
@@ -859,7 +860,7 @@ export async function makePick(
 export async function joinQueue(
   viewer: SessionUser,
   mmr: number,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   // MMR drives captain selection, auto-pick order, and the balance meter — so
   // prefer the league-trusted number (their registration, which admins see and
   // the season cap gates) over the free-typed client value. The typed value
@@ -1026,13 +1027,13 @@ async function touchQueueHeartbeat(viewerId: string): Promise<void> {
 }
 
 /** Remove the current user from the queue. No-op if they're not queued. */
-export async function leaveQueue(viewer: SessionUser): Promise<ActionResult> {
+export async function leaveQueue(viewer: SessionUser): Promise<InhouseActionResult> {
   await prisma.inhouseQueueEntry.deleteMany({ where: { userId: viewer.id } });
   return { ok: true };
 }
 
 /** Launch the game once teams are set — whoever hosts the in-client lobby. */
-export async function startGame(viewer: SessionUser): Promise<ActionResult> {
+export async function startGame(viewer: SessionUser): Promise<InhouseActionResult> {
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY },
@@ -1071,19 +1072,9 @@ type LobbyPlayerFull = {
 };
 
 // One per-player line of the stored box score (mirrors the league Game blob).
-type BoxScorePlayer = {
-  userId: string | null;
-  name: string | null;
-  team: number | null;
-  isRadiant: boolean;
-  heroId: number;
-  kills: number;
-  deaths: number;
-  assists: number;
-  netWorth: number | null;
-  gpm: number | null;
-  lastHits: number | null;
-};
+// Aliased to the readers' type so the writer/reader contract for
+// InhouseLobby.boxScore is compiler-enforced, not comment-enforced.
+type BoxScorePlayer = InhouseBoxPlayer;
 
 type BuiltResult = {
   winnerTeam: number;
@@ -1470,7 +1461,7 @@ async function findInhouseGame(
  */
 export async function autoDetectResult(
   viewer: SessionUser,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   const lobby = await prisma.inhouseLobby.findFirst({
     where: { status: INHOUSE_STATUS.IN_PROGRESS },
     include: { players: { include: { user: true } } },
@@ -1535,7 +1526,7 @@ export async function autoDetectResult(
 export async function recordMatch(
   viewer: SessionUser,
   input: string,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   const matchId = parseMatchId(input);
   if (!matchId) return { ok: false, error: "Enter a valid Dota match ID or link" };
 
@@ -1643,7 +1634,7 @@ export async function maybeAutoDetectResult(): Promise<boolean> {
  */
 export async function voidLastResult(
   viewer: SessionUser,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   const last = await prisma.inhouseLobby.findFirst({
     where: { status: INHOUSE_STATUS.COMPLETED },
@@ -1760,7 +1751,7 @@ export async function voidLastResult(
 export async function cancelLobby(
   viewer: SessionUser,
   opts?: { force?: boolean },
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   const force = opts?.force === true;
   const lobby = await prisma.inhouseLobby.findFirst({

@@ -1053,7 +1053,7 @@ export function HeroList({
 
 // ---------- Discord ----------
 
-export function DiscordIcon({
+function DiscordIcon({
   size = 18,
   className,
 }: {
@@ -1074,7 +1074,7 @@ export function DiscordIcon({
   );
 }
 
-export function CalendarIcon({
+function CalendarIcon({
   size = 18,
   className,
 }: {

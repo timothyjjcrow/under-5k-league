@@ -12,7 +12,7 @@ import { betGateError, settleBets, type Settlement } from "./inhouse-bets";
 import { logAdminAction } from "./admin-log";
 import { raceHook } from "./race-hook";
 import type { SessionUser } from "./auth";
-import type { ActionResult } from "./inhouse-service";
+import type { InhouseActionResult } from "./inhouse-service";
 
 /**
  * The DB half of inhouse betting. The pure math lives in `inhouse-bets.ts`;
@@ -121,7 +121,7 @@ export async function ensureCredAccount(userId: string): Promise<number> {
 export async function placeInhouseBet(
   viewer: SessionUser,
   stake: number,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   const balance = await ensureCredAccount(viewer.id);
 
   try {
@@ -715,7 +715,7 @@ export async function adjustCred(
   userId: string,
   delta: number,
   note: string,
-): Promise<ActionResult> {
+): Promise<InhouseActionResult> {
   if (actor.role !== "ADMIN") return { ok: false, error: "Admins only" };
   if (!Number.isInteger(delta) || delta === 0) {
     return { ok: false, error: "Enter a whole, non-zero amount of Cred." };
