@@ -25,6 +25,8 @@ import {
 } from "@/lib/constants";
 import { roundRobin, matchNightForWeek, slotRound } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
+import { parseSeatTarget, pendingCoverWhere } from "@/lib/standin";
+import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
 import {
@@ -48,6 +50,7 @@ import {
   syncLeagueGames,
   enrichStoredGames,
   rememberImportSkip,
+  ANNOUNCE_FAILED_PREFIX,
 } from "@/lib/match-import";
 import {
   parseMatchId,
@@ -70,6 +73,7 @@ import {
   draftScheduledMessage,
   webhookIdOf,
   getInhouseWebhookUrl,
+  getInhouseAlertWebhookUrl,
   sendInhouseDiscordMessage,
 } from "@/lib/discord";
 import { mentionsOf } from "@/lib/discord-mentions";
@@ -80,9 +84,13 @@ import {
 } from "@/lib/inhouse-board-service";
 import {
   getSetting,
+  honorsAnnouncedPrefix,
+  resultAnnouncedKey,
   setSetting,
   stampResultChange,
   SETTING_KEYS,
+  weekReminderKey,
+  weekReminderPrefix,
 } from "@/lib/settings";
 import { bumpSessionEpoch } from "@/lib/session-epoch";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
@@ -232,7 +240,7 @@ export async function deleteSeason(
       });
       if (gone.count === 0) throw new SeasonBecameActiveError();
       await tx.setting.deleteMany({
-        where: { key: { startsWith: `honorsAnnounced:${seasonId}:` } },
+        where: { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
       });
     });
   } catch (e) {
@@ -390,14 +398,6 @@ export async function setSeasonPhase(
   }
   return { message: `Season moved to ${PHASE_LABELS[target]}` };
 }
-
-const PHASE_LABELS: Record<SeasonStatus, string> = {
-  SIGNUPS: "Signups",
-  DRAFT: "Draft",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
 
 /** Rename the active season — its name is the hero title on the home page. */
 export async function renameSeason(formData: FormData) {
@@ -764,10 +764,7 @@ export async function withdrawSignup(
     // Same hole as the self-serve path: removing a standin who still owes cover
     // leaves the covered team looking staffed by someone no longer in the league.
     prisma.standinAssignment.count({
-      where: {
-        standinUserId: reg.userId,
-        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-      },
+      where: pendingCoverWhere(reg.userId, season.id),
     }),
   ]);
   const gate = withdrawGateError({
@@ -803,28 +800,56 @@ export async function withdrawSignup(
   // in that window and this removal both commit, leaving a REMOVED standin
   // holding live cover. Re-counting inside the transaction is what lets Postgres
   // see the cycle.
+  // Test seam: the gap between the gate reads above and the transaction below
+  // — fires BEFORE the tx (the leaveLeague placement) so the rival commits
+  // before the snapshot and the test runs on SQLite too.
+  await raceHook("admin.withdrawSignup.beforeTx");
   try {
     await prisma.$transaction(
       async (tx) => {
         const live = await tx.standinAssignment.count({
-          where: {
-            standinUserId: reg.userId,
-            match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-          },
+          where: pendingCoverWhere(reg.userId, season.id),
         });
         if (live > 0) throw new Error("COVER_APPEARED");
-        await tx.registration.update({
-          where: { id: reg.id },
+        // Re-check the roster seat too — leaveLeague's comment records that a
+        // draft sale or free-agent signing in this gap "let a ROSTERED player
+        // withdraw". TeamMember is a table this tx otherwise never reads, so
+        // the Serializable pairing argued above cannot see that cycle without
+        // this read.
+        const seated = await tx.teamMember.findUnique({
+          where: {
+            seasonId_userId: { seasonId: season.id, userId: reg.userId },
+          },
+        });
+        if (seated) {
+          throw new Error(seated.isCaptain ? "IS_CAPTAIN" : "IS_ROSTERED");
+        }
+        // Status carried in the WHERE (rule 1): a blind update stamped
+        // REMOVED over a concurrent self-withdrawal or reinstate.
+        const claimed = await tx.registration.updateMany({
+          where: { id: reg.id, status: REGISTRATION_STATUS.ACTIVE },
           data: { status: REGISTRATION_STATUS.REMOVED },
         });
+        if (claimed.count === 0) throw new Error("STATUS_CHANGED");
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
-    if ((e as Error).message === "COVER_APPEARED")
+    const msg = (e as Error).message;
+    if (msg === "COVER_APPEARED")
       return {
         error: `${reg.user.name} was just assigned to stand in for an unplayed match — remove that assignment first.`,
       };
+    if (msg === "IS_CAPTAIN")
+      return {
+        error: `${reg.user.name} captains a team — transfer the captaincy first.`,
+      };
+    if (msg === "IS_ROSTERED")
+      return {
+        error: `${reg.user.name} is on a roster — release them from the team first.`,
+      };
+    if (msg === "STATUS_CHANGED")
+      return { error: "That signup just changed — reload and try again." };
     if ((e as { code?: string }).code === "P2034")
       return { error: "That signup just changed — reload and try again." };
     throw e;
@@ -867,7 +892,13 @@ export async function reinstateSignup(
     data: { status: REGISTRATION_STATUS.ACTIVE },
   });
   refresh();
-  return { message: `${reg.user.name} is back in the pool` };
+  // Advisory only, never a gate (the operator's-call stance): the flag flow
+  // is one-way — syncPlayerRanks names over-ceiling signups in ITS toast and
+  // nothing warned when the same admin later reinstated one.
+  const warn = medalProvesIneligible(reg.user.rankTier)
+    ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`
+    : "";
+  return { message: `${reg.user.name} is back in the pool${warn}` };
 }
 
 /**
@@ -1303,7 +1334,7 @@ export async function generateSchedule(
       // Discord edits notify nobody, so releasing the markers is what lets the
       // reminder re-fire against the new slate.
       await tx.setting.deleteMany({
-        where: { key: { startsWith: `weekReminder:${season.id}:` } },
+        where: { key: { startsWith: weekReminderPrefix(season.id) } },
       });
     });
   } catch (e) {
@@ -1525,9 +1556,9 @@ export async function recordResult(
   // stamps the once-per-match marker so recomputeSeries (a later game import
   // for this match) can't post the same result a second time.
   await prisma.setting.upsert({
-    where: { key: `resultAnnounced:${matchId}` },
+    where: { key: resultAnnouncedKey(matchId) },
     create: {
-      key: `resultAnnounced:${matchId}`,
+      key: resultAnnouncedKey(matchId),
       value: new Date().toISOString(),
     },
     update: { value: new Date().toISOString() },
@@ -1537,6 +1568,15 @@ export async function recordResult(
     prisma.team.findUnique({ where: { id: match.awayTeamId } }),
     getWebhookUrl(),
   ]);
+  // The activity card's copy promises result changes are logged — and a
+  // manual score can override an auto-import, which is exactly the "what did
+  // I press?" case the log exists for. (setMatchTime deliberately stays
+  // unlogged: frequent, single-match, low collateral.)
+  await logAdminAction({
+    action: "recordResult",
+    summary: `Recorded ${home?.name ?? "?"} ${homeScore}–${awayScore} ${away?.name ?? "?"} (week ${match.week})`,
+    seasonId: match.seasonId,
+  });
   if (home && away) {
     const sent = await sendDiscordMessage(
       matchResultMessage({
@@ -1555,8 +1595,9 @@ export async function recordResult(
     // distinction — this path didn't.)
     if (!sent && webhook) {
       await prisma.setting.updateMany({
-        where: { key: `resultAnnounced:${matchId}` },
-        data: { value: `failed:${new Date().toISOString()}` },
+        where: { key: resultAnnouncedKey(matchId) },
+        // The retry sweep re-claims exactly this prefix — never hand-write it.
+        data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
       });
     }
   }
@@ -1922,7 +1963,7 @@ export async function assignStandin(
   // One select carries both cases: a userId covers that player, `seat:<teamId>`
   // fills an EMPTY seat on a short roster (replacing nobody).
   const target = str(formData, "replacingUserId");
-  const seat = target.startsWith("seat:") ? target.slice(5) : null;
+  const seat = parseSeatTarget(target);
   const res = await assignStandinGuarded({
     matchId: str(formData, "matchId"),
     standinUserId: str(formData, "standinUserId"),
@@ -2117,7 +2158,7 @@ export async function reopenMatch(
   // not merely racy: it only renders on a COMPLETED match with no games, which
   // is a state only recordResult can create, and recordResult always stamps.
   await prisma.setting.deleteMany({
-    where: { key: `resultAnnounced:${matchId}` },
+    where: { key: resultAnnouncedKey(matchId) },
   });
   await logAdminAction({
     action: "reopenMatch",
@@ -2307,9 +2348,27 @@ export async function setWeekNight(
   // The week reminder is idempotent via a `weekReminder:<season>:<week>`
   // marker. It was stamped against the OLD night, so without releasing it the
   // moved week never gets announced — Discord's last word on week N is a
-  // kickoff that no longer exists.
+  // kickoff that no longer exists. EVERY retimed week, not just the moved
+  // one: a cascaded later week whose reminder already fired kept a stale
+  // marker (reachable when one of its fixtures was individually retimed into
+  // the 24h window before the cascade moved it).
+  const retimedWeeks = [
+    ...new Set([week, ...(delta !== 0 ? later.map((m) => m.week) : [])]),
+  ];
   await prisma.setting.deleteMany({
-    where: { key: `weekReminder:${season.id}:${week}` },
+    where: { key: { in: retimedWeeks.map((w) => weekReminderKey(season.id, w)) } },
+  });
+  // Counts only, no formatted datetime (the server-TZ rule): a week-wide
+  // retime wipes RSVPs and open proposals — it belongs in the activity log.
+  await logAdminAction({
+    action: "setWeekNight",
+    summary:
+      `Moved week ${week}'s ${open.length} unplayed match(es)` +
+      (delta !== 0 && later.length > 0
+        ? ` and shifted ${later.length} later match(es)`
+        : "") +
+      ` — cleared check-ins and open proposals on ${retimedIds.length} match(es)`,
+    seasonId: season.id,
   });
   // A retime can DOUBLE-BOOK a standin: standinConflict is checked when cover
   // is arranged, and moving a fixture onto a night the standin is already
@@ -2380,7 +2439,7 @@ export async function setMatchTime(
           // this the channel's last word on the fixture stays wrong forever.
           prisma.setting.deleteMany({
             where: {
-              key: `weekReminder:${before.seasonId}:${before.week}`,
+              key: weekReminderKey(before.seasonId, before.week),
             },
           }),
         ]
@@ -2498,6 +2557,9 @@ async function syncRanksFor(
   }
   return { ranked, unreachable, skipped, outage };
 }
+
+// One validation regex for all three webhook fields — they must never drift.
+const DISCORD_WEBHOOK_URL_RE = /^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//;
 
 const OPENDOTA_OUTAGE_MSG =
   "OpenDota isn't responding right now — no medals were changed. Try again in a few minutes.";
@@ -2776,7 +2838,7 @@ export async function setDiscordWebhook(
         "No change — paste a new URL to replace it, or press \u201cRemove webhook\u201d to turn announcements off.",
     };
   }
-  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -2866,7 +2928,7 @@ export async function setInhouseWebhook(
         "No change — paste a new URL to replace it, or press \u201cUse the league channel instead\u201d to stop posting inhouse to its own channel.",
     };
   }
-  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -2936,7 +2998,7 @@ export async function setInhouseAlertWebhook(
         "No change — paste a new URL to replace it, or press \u201cSend alerts to the board channel instead\u201d to stop using a separate alerts channel.",
     };
   }
-  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -3016,10 +3078,18 @@ export async function testInhouseWebhook(
   } catch {
     return { error: "Not authorized" };
   }
-  if (!(await getInhouseWebhookUrl())) return { error: "Set a webhook first" };
+  // Gate on the ALERT resolver — the one the send below actually rides
+  // (alerts fall back alert → board → league). Gating on the board resolver
+  // refused alert-webhook-only leagues a test their send would deliver.
+  if (!(await getInhouseAlertWebhookUrl())) {
+    return { error: "Set a webhook first" };
+  }
   const ok = await sendInhouseDiscordMessage(testMessage());
   return ok
-    ? { message: "Test message sent — check your inhouse channel" }
+    ? {
+        message:
+          "Test message sent — check the channel your inhouse alerts post to",
+      }
     : { error: "Discord rejected the message — double-check the URL" };
 }
 
@@ -3216,10 +3286,7 @@ export async function promoteStandinToPlayer(
     }),
     prisma.draft.findUnique({ where: { seasonId: season.id } }),
     prisma.standinAssignment.count({
-      where: {
-        standinUserId: userId,
-        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-      },
+      where: pendingCoverWhere(userId, season.id),
     }),
   ]);
   if (!registration) {

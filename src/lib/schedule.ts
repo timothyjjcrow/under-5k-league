@@ -1,6 +1,8 @@
 // Round-robin schedule generation (circle method) + single-elimination seeding.
 // Pure + testable.
 
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+
 export type Pairing = { home: string; away: string };
 
 /** Week N's match night: week 1 = the first night, each later week +7 days. */
@@ -161,15 +163,15 @@ export function roundName(roundIndex: number, totalRounds: number): string {
  * continuing week number in the DB, so raw "Week N" reads wrong for them.
  */
 export function matchPhaseLabel(phase: string, week: number): string {
-  if (phase === "FINAL") return "Grand final";
-  if (phase === "PLAYOFF") return "Playoffs";
+  if (phase === MATCH_PHASE.FINAL) return "Grand final";
+  if (phase === MATCH_PHASE.PLAYOFF) return "Playoffs";
   return `Week ${week}`;
 }
 
 /** Compact chip form of matchPhaseLabel: "GF" | "PO" | "W3". */
 export function matchPhaseAbbrev(phase: string, week: number): string {
-  if (phase === "FINAL") return "GF";
-  if (phase === "PLAYOFF") return "PO";
+  if (phase === MATCH_PHASE.FINAL) return "GF";
+  if (phase === MATCH_PHASE.PLAYOFF) return "PO";
   return `W${week}`;
 }
 
@@ -214,7 +216,7 @@ export function byeTeamsByWeek<
 >(matches: T[], teamIds: string[]): Map<number, string[]> {
   const byWeek = new Map<number, Set<string>>();
   for (const m of matches) {
-    if (m.phase !== "REGULAR") continue;
+    if (m.phase !== MATCH_PHASE.REGULAR) continue;
     const playing = byWeek.get(m.week) ?? new Set<string>();
     playing.add(m.homeTeamId);
     playing.add(m.awayTeamId);
@@ -247,7 +249,7 @@ export function remainingSchedule<
     teamIds.map((id) => [id, []]),
   );
   const open = matches
-    .filter((m) => m.phase === "REGULAR" && m.status !== "COMPLETED")
+    .filter((m) => m.phase === MATCH_PHASE.REGULAR && m.status !== MATCH_STATUS.COMPLETED)
     .sort((a, b) => a.week - b.week);
   for (const m of open) {
     out.get(m.homeTeamId)?.push({ week: m.week, opponentId: m.awayTeamId });
@@ -348,14 +350,14 @@ export function focusSlate<T extends SlateMatch>(
   seasonStatus: string,
   matches: T[],
 ): { slate: T[]; title: string } {
-  const open = matches.filter((m) => m.status !== "COMPLETED");
+  const open = matches.filter((m) => m.status !== MATCH_STATUS.COMPLETED);
   if (seasonStatus === "PLAYOFFS") {
     return {
-      slate: open.filter((m) => m.phase !== "REGULAR"),
+      slate: open.filter((m) => m.phase !== MATCH_PHASE.REGULAR),
       title: "The round in progress",
     };
   }
-  const openRegular = open.filter((m) => m.phase === "REGULAR");
+  const openRegular = open.filter((m) => m.phase === MATCH_PHASE.REGULAR);
   if (openRegular.length === 0) return { slate: [], title: "This week" };
   const week = Math.min(...openRegular.map((m) => m.week));
   return {

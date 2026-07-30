@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { createSession } from "@/lib/auth";
 import { upsertLeagueUser } from "@/lib/users";
 import { safeReturnPath } from "@/lib/return-path";
+import { steamProfileUrl } from "@/lib/steam";
 
 // Mock login for local development and automated tests. Disabled unless
 // ALLOW_DEV_LOGIN=true, and hard-blocked in production regardless (defense in
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
     profile: {
       name,
       avatar: null,
-      profileUrl: `https://steamcommunity.com/profiles/${steamId}`,
+      profileUrl: steamProfileUrl(steamId),
     },
     forceAdmin,
   });

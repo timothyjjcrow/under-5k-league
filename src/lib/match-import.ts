@@ -12,7 +12,13 @@ import { advancePlayoffBracket } from "./playoff-service";
 import { raceHook } from "./race-hook";
 import { maybeAnnounceWeekHonors } from "./honors-service";
 import { getWebhookUrl, matchResultMessage, sendDiscordMessage } from "./discord";
-import { getSetting, setSetting, stampResultChange } from "./settings";
+import {
+  getSetting,
+  leagueSyncSkipKey,
+  resultAnnouncedKey,
+  setSetting,
+  stampResultChange,
+} from "./settings";
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
@@ -45,7 +51,7 @@ export async function announceSeriesResultOnce(match: {
   // Without a webhook, don't burn the once-only marker — if the admin wires
   // Discord up later, results that complete after that still announce.
   if (!(await getWebhookUrl())) return false;
-  const marker = `resultAnnounced:${match.id}`;
+  const marker = resultAnnouncedKey(match.id);
   try {
     await prisma.setting.create({
       data: { key: marker, value: new Date().toISOString() },
@@ -64,7 +70,19 @@ export async function announceSeriesResultOnce(match: {
     prisma.team.findUnique({ where: { id: match.homeTeamId } }),
     prisma.team.findUnique({ where: { id: match.awayTeamId } }),
   ]);
-  if (!home || !away) return false;
+  if (!home || !away) {
+    // Practically unreachable while the match exists (Match→Team is
+    // FK-RESTRICT), but a bare return here burned the marker with a plain
+    // timestamp — the one path violating this file's own "a failed send
+    // never permanently eats an announcement" rule. Stamp failed: the retry
+    // sweep either retries it (match alive) or its orphan cleanup deletes it
+    // (match gone mid-deleteSeason).
+    await prisma.setting.updateMany({
+      where: { key: marker },
+      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
+    });
+    return false;
+  }
   const sent = await sendDiscordMessage(
     matchResultMessage({
       homeName: home.name,
@@ -258,18 +276,30 @@ type MatchRow = {
 
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
 export async function gatherTeamAccounts(match: MatchRow) {
+  // Select-narrowed: this runs on every import AND every auto-sync roster
+  // scan, and only four user fields are ever read (id/name/steamId/
+  // dotaAccountId — the `add` helper's parameter type says so).
+  const userSelect = {
+    id: true,
+    name: true,
+    steamId: true,
+    dotaAccountId: true,
+  } as const;
   const [season, members, standins, registrants] = await Promise.all([
-    prisma.season.findUnique({ where: { id: match.seasonId } }),
+    prisma.season.findUnique({
+      where: { id: match.seasonId },
+      select: { teamSize: true },
+    }),
     prisma.teamMember.findMany({
       where: {
         seasonId: match.seasonId,
         teamId: { in: [match.homeTeamId, match.awayTeamId] },
       },
-      include: { user: true },
+      select: { teamId: true, user: { select: userSelect } },
     }),
     prisma.standinAssignment.findMany({
       where: { matchId: match.id },
-      include: { standin: true },
+      select: { teamId: true, standin: { select: userSelect } },
     }),
     // Attribution fallback: a player released between playing and importing
     // has no TeamMember row anymore, but their line should still carry their
@@ -277,7 +307,7 @@ export async function gatherTeamAccounts(match: MatchRow) {
     // sets, so classifyGame remains roster-strict.
     prisma.registration.findMany({
       where: { seasonId: match.seasonId },
-      include: { user: true },
+      select: { user: { select: userSelect } },
     }),
   ]);
 
@@ -468,7 +498,7 @@ export async function recomputeSeries(matchId: string) {
   // future), so the corrected result announces exactly once when it lands.
   if (!decided) {
     await prisma.setting.deleteMany({
-      where: { key: `resultAnnounced:${matchId}` },
+      where: { key: resultAnnouncedKey(matchId) },
     });
   }
 
@@ -516,7 +546,7 @@ export async function importGameForMatch(
   // `games.length < bestOf` let a later import through and quietly replaced the
   // admin's forfeit ruling. Auto-sync and league sync already skip COMPLETED
   // matches; this closes the manual paths (admin "Add game", captain report).
-  if (match.status === "COMPLETED") {
+  if (match.status === MATCH_STATUS.COMPLETED) {
     return {
       ok: false,
       error:
@@ -577,7 +607,7 @@ export async function importGameForMatch(
           select: { status: true, bestOf: true, _count: { select: { games: true } } },
         });
         if (!fresh) throw new ImportRaceError("Unknown league match");
-        if (fresh.status === "COMPLETED") {
+        if (fresh.status === MATCH_STATUS.COMPLETED) {
           throw new ImportRaceError(
             "This series is already final — remove one of its games first if you need to correct it",
           );
@@ -831,15 +861,23 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   // The `"benchmarks":` key only ever appears as a line's own field — a
   // player whose persona name is literally `benchmarks` serializes with a
   // comma after it, so the colon keeps the marker probe honest.
-  const candidates = await prisma.game.findMany({
-    where: { NOT: { players: { contains: '"benchmarks":' } } },
-    orderBy: { fetchedAt: "asc" },
-    select: { id: true, dotaMatchId: true, players: true },
-  });
+  // Count + bounded fetch, never the whole table: the rows exist only to
+  // process `limit` of them, and the count alone feeds `remaining` — on a
+  // legacy DB the old unbounded findMany read every un-enriched game's
+  // box-score JSON per button press to process 12.
+  const unenriched = { NOT: { players: { contains: '"benchmarks":' } } };
+  const [total, batch] = await Promise.all([
+    prisma.game.count({ where: unenriched }),
+    prisma.game.findMany({
+      where: unenriched,
+      orderBy: { fetchedAt: "asc" },
+      take: limit,
+      select: { id: true, dotaMatchId: true, players: true },
+    }),
+  ]);
 
   let enriched = 0;
   let failed = 0;
-  const batch = candidates.slice(0, limit);
   // A failed game keeps its stored JSON but moves to the back of the
   // fetchedAt-ordered queue — otherwise a dozen permanently-unfetchable games
   // at the head would starve every later run of this bounded batch.
@@ -896,7 +934,7 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   return {
     enriched,
     failed,
-    remaining: candidates.length - batch.length + failed,
+    remaining: total - batch.length + failed,
   };
 }
 
@@ -904,6 +942,8 @@ export type LeagueSyncResult = {
   imported: number;
   scanned: number;
   error?: string;
+  /** OpenDota didn't answer — the caller may retry sooner than usual. */
+  unreachable?: boolean;
 };
 
 /**
@@ -936,12 +976,23 @@ export async function syncLeagueGames(
   }
 
   const leagueMatchIds = await fetchLeagueMatchIds(season.dotaLeagueId);
+  if (leagueMatchIds === null) {
+    // Per-game fetch failures below stay `continue` (transient per-id); a
+    // null LIST means the feed itself was unreachable — say so instead of
+    // reporting a success-shaped "imported 0 of 0".
+    return {
+      imported: 0,
+      scanned: 0,
+      unreachable: true,
+      error: "OpenDota is unreachable right now — try again in a minute",
+    };
+  }
   const scheduled = await prisma.match.findMany({
     where: { seasonId },
     include: { games: { select: { id: true } } },
   });
 
-  const skipKey = `leagueSyncSkip:${seasonId}`;
+  const skipKey = leagueSyncSkipKey(seasonId);
   let skipList: string[] = [];
   if (opts.auto) {
     try {

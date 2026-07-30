@@ -9,6 +9,7 @@ import {
 } from "./schedule";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { championMessage, sendDiscordMessage } from "./discord";
+import { playoffGamesArchiveKey } from "./settings";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -75,7 +76,7 @@ export async function createPlayoffBracket(seasonId: string) {
   // not recoverable at all, because `importGameForMatch` needs a dotaMatchId
   // and nothing anywhere still held one. Keeping just the ids makes the reset
   // reversible by re-import, which is the part that actually mattered.
-  const archiveKey = `playoffGamesArchive:${seasonId}`;
+  const archiveKey = playoffGamesArchiveKey(seasonId);
   const [doomedGames, priorRaw] = await Promise.all([
     prisma.game.findMany({
       where: {

@@ -11,6 +11,7 @@ import {
   PROVISIONAL_GAMES,
   rankInhouse,
   summarizeInhouse,
+  toFinishedLobby,
   type FinishedLobby,
 } from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
@@ -436,17 +437,7 @@ async function LadderCard({ meId }: { meId: string | null }) {
     // up. This ranks what you took off other players.
     credProfitBoard(),
   ]);
-  const finished: FinishedLobby[] = ladderLobbies.map((l) => ({
-    id: l.id,
-    winnerTeam: l.winnerTeam,
-    createdAt: l.createdAt,
-    players: l.players.map((p) => ({
-      userId: p.userId,
-      name: p.user.name,
-      avatar: p.user.avatar,
-      team: p.team,
-    })),
-  }));
+  const finished: FinishedLobby[] = ladderLobbies.map(toFinishedLobby);
   const leaderboard = summarizeInhouse(finished);
   const cred = credBoard(leaderboard, credNet);
 

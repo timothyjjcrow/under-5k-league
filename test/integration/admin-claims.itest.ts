@@ -387,3 +387,81 @@ describe("a manual score and a concurrent import stay self-consistent", () => {
     }
   });
 });
+
+describe("setWeekNight releases the reminder marker for EVERY retimed week", () => {
+  // The cascade retimes LATER weeks too (and wipes their RSVPs/proposals),
+  // but only the moved week's weekReminder marker was released — a cascaded
+  // week whose reminder had already fired kept a stale marker, so it never
+  // re-announced with its new kickoff.
+  it("cascade on: both the moved and the shifted week's markers are released", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const weeks = [...new Set(matches.map((m) => m.week))].sort((a, b) => a - b);
+    expect(weeks.length).toBeGreaterThan(1);
+    const [w1, w2] = weeks;
+    await prisma.setting.createMany({
+      data: [
+        { key: `weekReminder:${season.id}:${w1}`, value: "sent" },
+        { key: `weekReminder:${season.id}:${w2}`, value: "sent" },
+      ],
+    });
+
+    const night = new Date(Date.now() + 3 * 864e5);
+    const out = await setWeekNight(
+      { message: "" },
+      fd({
+        week: String(w1),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+        cascade: "on",
+      }),
+    );
+    expect(out).not.toHaveProperty("error");
+
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `weekReminder:${season.id}:${w1}` },
+      }),
+    ).toBeNull();
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `weekReminder:${season.id}:${w2}` },
+      }),
+    ).toBeNull();
+  });
+
+  it("cascade off: only the moved week's marker is released", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const weeks = [...new Set(matches.map((m) => m.week))].sort((a, b) => a - b);
+    const [w1, w2] = weeks;
+    await prisma.setting.createMany({
+      data: [
+        { key: `weekReminder:${season.id}:${w1}`, value: "sent" },
+        { key: `weekReminder:${season.id}:${w2}`, value: "sent" },
+      ],
+    });
+
+    const night = new Date(Date.now() + 3 * 864e5);
+    const out = await setWeekNight(
+      { message: "" },
+      fd({
+        week: String(w1),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+      }),
+    );
+    expect(out).not.toHaveProperty("error");
+
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `weekReminder:${season.id}:${w1}` },
+      }),
+    ).toBeNull();
+    // The untouched week keeps its marker — releasing it would re-announce a
+    // week whose kickoff never moved.
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `weekReminder:${season.id}:${w2}` },
+      }),
+    ).not.toBeNull();
+  });
+});

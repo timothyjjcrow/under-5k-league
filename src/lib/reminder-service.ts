@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { MATCH_STATUS, SEASON_STATUS, WEEK_REMINDER } from "./constants";
+import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS, WEEK_REMINDER } from "./constants";
 import {
   getWebhookUrl,
   sendDiscordMessage,
@@ -10,6 +10,9 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "./availability";
+import { weekReminderKey } from "./settings";
+import { raceHook } from "./race-hook";
+import { mentionsOf } from "./discord-mentions";
 
 /**
  * Lazy match-night reminder: the first page load after a league night enters
@@ -64,7 +67,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
   try {
     await prisma.setting.create({
       data: {
-        key: `weekReminder:${season.id}:${next.week}`,
+        key: weekReminderKey(season.id, next.week),
         value: new Date().toISOString(),
       },
     });
@@ -72,6 +75,10 @@ export async function maybeAnnounceUpcomingWeek(season: {
     if ((e as { code?: string }).code === "P2002") return false; // already sent
     throw e;
   }
+
+  // Test seam: the gap between the claim above and the fetch below is where
+  // an auto-sync completion (any page view) can empty the week.
+  await raceHook("weekReminder.afterClaim");
 
   const matches = await prisma.match.findMany({
     where: {
@@ -86,7 +93,18 @@ export async function maybeAnnounceUpcomingWeek(season: {
     },
     orderBy: { scheduledAt: "asc" },
   });
-  if (matches.length === 0) return false;
+  if (matches.length === 0) {
+    // Release the claim like the failed-send path below: the week completed
+    // (or lost its times) between the probe and this fetch, and a burned
+    // marker would permanently suppress the reminder if a retime brings
+    // fixtures back. No loop risk: probe and fetch share predicates, so no
+    // consistent DB state satisfies one and empties the other — the next
+    // call stops at the probe without claiming.
+    await prisma.setting.deleteMany({
+      where: { key: weekReminderKey(season.id, next.week) },
+    });
+    return false;
+  }
 
   // Standin-aware check-in counts — same helpers as /schedule and the
   // dashboard's ThisWeek strip, so the reminder can't disagree with the site.
@@ -168,23 +186,18 @@ export async function maybeAnnounceUpcomingWeek(season: {
   const sent = await sendDiscordMessage(
     weekReminderMessage({
       week: next.week,
-      isPlayoff: next.phase !== "REGULAR",
+      isPlayoff: next.phase !== MATCH_PHASE.REGULAR,
       fixtures,
     }),
     // Only these exact ids may ring a phone — parse:[] still blocks everything
     // else, so a team name or persona in the same message stays inert.
-    {
-      users: fixtures
-        .flatMap((f) => f.waitingOn)
-        .map((p) => p.discordId)
-        .filter((id): id is string => !!id),
-    },
+    mentionsOf(fixtures.flatMap((f) => f.waitingOn).map((p) => p.discordId)),
   );
   if (!sent) {
     // A Discord blip must not eat the week's reminder — release the claim so
     // the next page load inside the window retries.
     await prisma.setting.deleteMany({
-      where: { key: `weekReminder:${season.id}:${next.week}` },
+      where: { key: weekReminderKey(season.id, next.week) },
     });
     return false;
   }

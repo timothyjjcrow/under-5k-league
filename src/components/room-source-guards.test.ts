@@ -90,6 +90,27 @@ describe("live-room fetch deadlines", () => {
   }
 });
 
+// The sitewide result-sync ping is the one client poll loop OUTSIDE the two
+// rooms, and it froze the same way: its fetch had no deadline, so a request
+// that connected and never answered latched `inFlight` forever and that tab
+// never synced again — silently, since the ping renders nothing at all.
+describe("result-sync ping fetch deadline", () => {
+  it("result-sync-ping.tsx: every fetch carries an AbortSignal", () => {
+    const src = read("result-sync-ping.tsx");
+    const calls = fetchCalls(src);
+    // Anti-vacuous: a ping that stops fetching entirely must fail here too.
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) {
+      expect(
+        call.includes("signal:"),
+        `The /api/sync fetch in result-sync-ping.tsx has no signal — a hung ` +
+          `request freezes the tab's sync loop with no visible failure. Add ` +
+          `signal: AbortSignal.timeout(...). Call was: ${call.slice(0, 120)}`,
+      ).toBe(true);
+    }
+  });
+});
+
 // Same kind of guard, for the same reason: these rules are unit-tested now,
 // but a test of a pure function proves nothing if the room stops calling it.
 // The failure mode this repo has actually hit is a policy re-inlined into a
@@ -98,6 +119,18 @@ describe("live-room fetch deadlines", () => {
 // another.
 
 describe("live rooms delegate their poll policy", () => {
+  it("result-sync-ping decides refresh/delay only through syncPingStep", () => {
+    const src = code("result-sync-ping.tsx");
+    expect(src).toContain("syncPingStep(");
+    // The rule's subtle halves (first-response baseline, null keeps it) live
+    // in the tested pure function; a re-inlined copy is a copy that drifts.
+    expect(
+      src.includes("cursorAdvanced"),
+      `result-sync-ping.tsx has re-inlined its cursor rule — the decision ` +
+        `must come from syncPingStep, where the parked-tab trigger is pinned.`,
+    ).toBe(false);
+  });
+
   it("inhouse-room computes its cadence only through inhousePollCadence", () => {
     const src = code("inhouse-room.tsx");
     expect(src).toContain("inhousePollCadence(");

@@ -1,0 +1,68 @@
+import type { computeStandings, ClinchStatus } from "@/lib/standings";
+import type { FormResult } from "@/lib/team-matches";
+import {
+  StandingsTableClient,
+  type StandingsRowView,
+} from "./standings-table";
+
+/**
+ * Server-side adapter for the sortable client table: flattens the maps into
+ * plain rows (Maps don't cross the client boundary) and drops clinch marks
+ * when every team makes the bracket (they'd all be ✓).
+ *
+ * Lives beside the client half rather than in a page module — /,
+ * /schedule and /seasons/[id] all render it, and importing a component
+ * from "@/app/page" pulled the whole 2,700-line dashboard module into
+ * those routes' graphs.
+ */
+export function StandingsTable({
+  standings,
+  teamName,
+  formByTeam,
+  playoffCut,
+  clinch,
+  viewerTeamId,
+  movement,
+  totalTeams,
+}: {
+  standings: ReturnType<typeof computeStandings>;
+  teamName: Map<string, string>;
+  formByTeam?: Map<string, FormResult[]>;
+  /** How many top teams make playoffs — draws a "playoff cut" line when set. */
+  playoffCut?: number;
+  /** Per-team clinched/eliminated verdicts (see clinchStatuses). */
+  clinch?: Map<string, ClinchStatus>;
+  /** The signed-in viewer's team — its row gets a subtle highlight. */
+  viewerTeamId?: string | null;
+  /** Weekly rank movement (see standingsMovement). */
+  movement?: Map<string, number>;
+  /** League size before any slicing (dashboard passes the top 8 only). */
+  totalTeams?: number;
+}) {
+  // "Everyone makes the bracket" must be judged against the whole league,
+  // not the (possibly sliced) rows this table happens to show.
+  const fieldSize = totalTeams ?? standings.length;
+  const cutIsReal =
+    playoffCut != null && playoffCut > 0 && playoffCut < fieldSize;
+  const rows: StandingsRowView[] = standings.map((s, i) => ({
+    teamId: s.teamId,
+    name: teamName.get(s.teamId) ?? "—",
+    rank: i + 1,
+    wins: s.wins,
+    draws: s.draws,
+    losses: s.losses,
+    gameDiff: s.gameDiff,
+    points: s.points,
+    form: formByTeam ? formByTeam.get(s.teamId) ?? [] : null,
+    clinch: cutIsReal ? clinch?.get(s.teamId) ?? null : null,
+    move: movement?.get(s.teamId) ?? 0,
+  }));
+  return (
+    <StandingsTableClient
+      rows={rows}
+      playoffCut={playoffCut}
+      viewerTeamId={viewerTeamId}
+      totalTeams={fieldSize}
+    />
+  );
+}

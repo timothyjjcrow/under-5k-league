@@ -555,3 +555,114 @@ describe("leaveLeague — an admin removal in the gap is not overwritten", () =>
     expect((await regFor(season.id, user.id))?.status).toBe("WITHDRAWN");
   });
 });
+
+// The mirror image of the seam above: admin withdrawSignup's transaction used
+// to re-count only standin cover, then write REMOVED with a blind
+// update({where:{id}}) — no seat re-check (a draft sale or signFreeAgent in
+// the gap left the player REMOVED while seated, a state nothing repairs) and
+// no status predicate (a concurrent self-withdrawal was silently stamped
+// over). Both rivals commit at the pre-transaction seam, so these run on
+// SQLite too.
+describe("admin withdrawSignup — the write re-asserts the seat and the status", () => {
+  beforeEach(() => {
+    vi.mocked(requireUser).mockReset();
+    vi.mocked(requireAdmin).mockReset();
+  });
+  afterEach(() => setRaceHook(null));
+
+  async function activeSignup() {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const admin = await makeUser("Admin", "ADMIN");
+    const user = await makeUser("Target");
+    const reg = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    return { season, admin, user, reg };
+  }
+
+  it("refuses when the player is rostered in the gap, leaving them ACTIVE", async () => {
+    const { season, user, reg } = await activeSignup();
+    const team = await prisma.team.create({
+      data: {
+        seasonId: season.id,
+        name: "Late Buyers",
+        captainId: (await makeUser("Cap")).id,
+        budget: 100,
+        draftOrder: 0,
+      },
+    });
+
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.withdrawSignup.beforeTx", async () => {
+        fired = true;
+        // The auction sale / free-agent signing commits in the gap. Plain
+        // committed write on its own connection — nothing is open yet.
+        await prisma.teamMember.create({
+          data: {
+            seasonId: season.id,
+            teamId: team.id,
+            userId: user.id,
+            price: 5,
+          },
+        });
+      }),
+    );
+
+    const res = await withdrawSignup({}, form({ registrationId: reg.id }));
+
+    expect(fired).toBe(true); // seam reached — not a vacuous pass
+    expect(res?.error).toMatch(/on a roster/i);
+    const after = await prisma.registration.findUniqueOrThrow({
+      where: { id: reg.id },
+    });
+    expect(after.status).toBe("ACTIVE"); // never REMOVED-while-seated
+  });
+
+  it("loses to a self-withdrawal in the gap instead of stamping over it", async () => {
+    // Kills the status-predicate mutant: with a blind update this test sees
+    // REMOVED — the admin's write overwrote a state the player chose and can
+    // reverse, with neither side told.
+    const { reg } = await activeSignup();
+
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.withdrawSignup.beforeTx", async () => {
+        fired = true;
+        await prisma.registration.update({
+          where: { id: reg.id },
+          data: { status: "WITHDRAWN" },
+        });
+      }),
+    );
+
+    const res = await withdrawSignup({}, form({ registrationId: reg.id }));
+
+    expect(fired).toBe(true);
+    expect(res?.error).toMatch(/just changed/i);
+    const after = await prisma.registration.findUniqueOrThrow({
+      where: { id: reg.id },
+    });
+    expect(after.status).toBe("WITHDRAWN"); // the player's choice stands
+  });
+
+  it("still removes normally when nothing races it", async () => {
+    const { reg } = await activeSignup();
+
+    const res = await withdrawSignup({}, form({ registrationId: reg.id }));
+
+    expect(res?.error).toBeUndefined();
+    const after = await prisma.registration.findUniqueOrThrow({
+      where: { id: reg.id },
+    });
+    expect(after.status).toBe("REMOVED");
+  });
+});

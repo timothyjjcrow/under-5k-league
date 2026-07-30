@@ -1,6 +1,7 @@
 import type { PrismaClient, User } from "@prisma/client";
 import { ROLE } from "./constants";
 import { fetchRankTier, steamIdToAccountId } from "./dota";
+import { placeholderPersona, steamProfileUrl } from "./steam";
 
 type UpsertInput = {
   steamId: string;
@@ -69,11 +70,9 @@ export async function upsertLeagueUser(
     where: { steamId: input.steamId },
     create: {
       steamId: input.steamId,
-      name: profile?.name ?? `Player ${input.steamId.slice(-5)}`,
+      name: profile?.name ?? placeholderPersona(input.steamId),
       avatar: profile?.avatar ?? null,
-      profileUrl:
-        profile?.profileUrl ??
-        `https://steamcommunity.com/profiles/${input.steamId}`,
+      profileUrl: profile?.profileUrl ?? steamProfileUrl(input.steamId),
       role,
     },
     update: {

@@ -8,6 +8,7 @@ import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
+import { seatValue } from "@/lib/standin";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
@@ -1342,7 +1343,7 @@ async function StandinSection({
                 Covers…
               </option>
               {openSeats > 0 ? (
-                <option value={`seat:${myTeamId}`}>
+                <option value={seatValue(myTeamId)}>
                   an empty roster seat ({openSeats} unfilled)
                 </option>
               ) : null}

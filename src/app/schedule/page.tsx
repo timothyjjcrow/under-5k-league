@@ -10,6 +10,7 @@ import type { ScenarioReport } from "@/lib/scenarios";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
   byeTeamsByWeek,
+  byKickoff,
   groupPlayoffRounds,
   pickBracketSize,
   playoffFirstRound,
@@ -17,6 +18,7 @@ import {
   roundName,
 } from "@/lib/schedule";
 import { formatMatchTime } from "@/lib/match-time";
+import { ChampionBanner } from "@/components/champion-banner";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
@@ -36,7 +38,7 @@ import {
   type RsvpSide,
   type WeekView,
 } from "@/components/schedule-weeks";
-import { StandingsTable } from "@/app/page";
+import { StandingsTable } from "@/components/standings-table-server";
 import {
   Card,
   CardBody,
@@ -54,26 +56,16 @@ export const metadata = { title: "Schedule" };
 
 type MatchStandin = StandinAssignment & { standin: User; replaced: User | null };
 
+// Both delegate to formatMatchTime — these strings are LocalTime hydration
+// snapshots, so drifting from the client's formatter causes flicker.
+// "full" keeps the weekday ("Sat" is what players actually plan around);
+// "short" is the phone-width variant where it doesn't fit between team names.
 function fmtWhen(d: Date | null): string | null {
-  if (!d) return null;
-  // Weekday included — "Sat" is what players actually plan around.
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return d ? formatMatchTime(d, "full") : null;
 }
 
-// Phone-width variant: the weekday doesn't fit between two team names.
 function fmtWhenShort(d: Date): string {
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return formatMatchTime(d, "short");
 }
 
 // Strip the RSVP summary to the two numbers the row badge shows.
@@ -177,11 +169,7 @@ export default async function SchedulePage() {
   // match past the next week's night; point at whatever plays first.
   const myNextMatch = viewer
     ? [...matches]
-        .sort(
-          (a, b) =>
-            (a.scheduledAt?.getTime() ?? Infinity) -
-              (b.scheduledAt?.getTime() ?? Infinity) || a.week - b.week,
-        )
+        .sort(byKickoff)
         .find(
           (m) =>
             m.status !== "COMPLETED" &&
@@ -240,32 +228,37 @@ export default async function SchedulePage() {
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
   // collapsible weeks). Dates preformatted server-side. Shared with the
   // playoff round list below so RSVP/standin/reschedule chips work everywhere.
-  const toMatchView = (m: Match): MatchView => ({
-    id: m.id,
-    homeTeamId: m.homeTeamId,
-    awayTeamId: m.awayTeamId,
-    homeName: teamName.get(m.homeTeamId) ?? "?",
-    awayName: teamName.get(m.awayTeamId) ?? "?",
-    homeScore: m.homeScore,
-    awayScore: m.awayScore,
-    done: m.status === "COMPLETED",
-    live: m.status === "LIVE",
-    homeWin: m.winnerTeamId === m.homeTeamId,
-    awayWin: m.winnerTeamId === m.awayTeamId,
-    whenFull: fmtWhen(m.scheduledAt),
-    whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
-    whenTs: m.scheduledAt?.getTime() ?? null,
-    isFinalPhase: m.phase === "FINAL",
-    standins: (standinsByMatch.get(m.id) ?? []).map(
-      (a) =>
-        `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
-    ),
-    rsvp: rsvpFor(m) && {
-      home: pickRsvp(rsvpFor(m)!.home),
-      away: pickRsvp(rsvpFor(m)!.away),
-    },
-    reschedulePending: rescheduleByMatch.get(m.id) ?? null,
-  });
+  const toMatchView = (m: Match): MatchView => {
+    // Once per match — each call scans the season's whole assignment list
+    // for both sides, and this used to run three times per row.
+    const rsvp = rsvpFor(m);
+    return {
+      id: m.id,
+      homeTeamId: m.homeTeamId,
+      awayTeamId: m.awayTeamId,
+      homeName: teamName.get(m.homeTeamId) ?? "?",
+      awayName: teamName.get(m.awayTeamId) ?? "?",
+      homeScore: m.homeScore,
+      awayScore: m.awayScore,
+      done: m.status === "COMPLETED",
+      live: m.status === "LIVE",
+      homeWin: m.winnerTeamId === m.homeTeamId,
+      awayWin: m.winnerTeamId === m.awayTeamId,
+      whenFull: fmtWhen(m.scheduledAt),
+      whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
+      whenTs: m.scheduledAt?.getTime() ?? null,
+      isFinalPhase: m.phase === "FINAL",
+      standins: (standinsByMatch.get(m.id) ?? []).map(
+        (a) =>
+          `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
+      ),
+      rsvp: rsvp && {
+        home: pickRsvp(rsvp.home),
+        away: pickRsvp(rsvp.away),
+      },
+      reschedulePending: rescheduleByMatch.get(m.id) ?? null,
+    };
+  };
   // The week's league night = its earliest kickoff (headers stay scannable
   // even when the weeks are collapsed).
   const earliestScheduled = (ms: Match[]): Date | null =>
@@ -379,31 +372,11 @@ export default async function SchedulePage() {
       ) : null}
 
       {champion && season.championTeamId ? (
-        <Link
-          href={`/teams/${season.championTeamId}`}
-          className="flex items-center gap-3 rounded-[var(--radius)] border border-amber-400/40 bg-amber-400/10 px-5 py-4 transition-colors hover:border-amber-400/60"
-        >
-          <div className="relative shrink-0">
-            <TeamCrest
-              name={champion}
-              seed={season.championTeamId}
-              size={44}
-              className="rounded-xl ring-2 ring-amber-400/50"
-            />
-            <span
-              aria-hidden
-              className="absolute -bottom-1.5 -right-1.5 grid h-6 w-6 place-items-center rounded-full border border-amber-400/40 bg-surface text-xs shadow"
-            >
-              🏆
-            </span>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-amber-300/90">
-              {season.name} Champion
-            </div>
-            <div className="text-lg font-bold">{champion}</div>
-          </div>
-        </Link>
+        <ChampionBanner
+          teamId={season.championTeamId}
+          teamName={champion}
+          seasonName={season.name}
+        />
       ) : null}
 
       <Card>

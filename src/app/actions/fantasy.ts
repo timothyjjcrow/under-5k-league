@@ -26,7 +26,7 @@ export async function saveFantasyRoster(
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
 
-  const [members, regs, importedGames] = await Promise.all([
+  const [members, regs] = await Promise.all([
     prisma.teamMember.findMany({
       where: { seasonId: season.id },
       select: { userId: true },
@@ -35,15 +35,9 @@ export async function saveFantasyRoster(
       where: { seasonId: season.id, status: "ACTIVE" },
       select: { userId: true, mmr: true },
     }),
-    prisma.game.count({ where: { match: { seasonId: season.id } } }),
   ]);
   if (members.length === 0) {
     return { error: "Fantasy opens once teams are drafted" };
-  }
-  if (importedGames > 0) {
-    return {
-      error: "Fantasy rosters are locked — the season's first game is in",
-    };
   }
 
   const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
@@ -55,17 +49,37 @@ export async function saveFantasyRoster(
   const error = validateFantasyPicks(picks, eligible, cap, FANTASY.SLOTS);
   if (error) return { error };
 
-  await prisma.$transaction(async (tx) => {
-    const roster = await tx.fantasyRoster.upsert({
-      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
-      create: { seasonId: season.id, userId: user.id },
-      update: {},
+  try {
+    await prisma.$transaction(async (tx) => {
+      // The league-wide lock, checked INSIDE the write transaction and
+      // nowhere else (the saveRegistration lesson: a read-time copy of this
+      // check would make it untestable AND leave the race open — the first
+      // import commits from any page view via auto-sync). Residual write-skew
+      // (an import committing after this count) is accepted at play-value
+      // stakes; closing it needs Serializable on both sides with overlapping
+      // read sets, which importGameForMatch does not have.
+      const games = await tx.game.count({
+        where: { match: { seasonId: season.id } },
+      });
+      if (games > 0) throw new Error("FANTASY_LOCKED");
+      const roster = await tx.fantasyRoster.upsert({
+        where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+        create: { seasonId: season.id, userId: user.id },
+        update: {},
+      });
+      await tx.fantasyPick.deleteMany({ where: { rosterId: roster.id } });
+      await tx.fantasyPick.createMany({
+        data: picks.map((p) => ({ rosterId: roster.id, userId: p })),
+      });
     });
-    await tx.fantasyPick.deleteMany({ where: { rosterId: roster.id } });
-    await tx.fantasyPick.createMany({
-      data: picks.map((p) => ({ rosterId: roster.id, userId: p })),
-    });
-  });
+  } catch (e) {
+    if ((e as Error).message === "FANTASY_LOCKED") {
+      return {
+        error: "Fantasy rosters are locked — the season's first game is in",
+      };
+    }
+    throw e;
+  }
 
   revalidatePath("/fantasy");
   return { message: "Fantasy five saved — good luck!" };

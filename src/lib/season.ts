@@ -1,14 +1,22 @@
+import { cache } from "react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import type { Season } from "@prisma/client";
 
-/** The single active season (most recent that hasn't been archived). */
-export async function getActiveSeason(): Promise<Season | null> {
+/**
+ * The single active season (most recent that hasn't been archived).
+ *
+ * cache(): one read per render pass — the layout fetches it for nav gating
+ * and nearly every page fetches it again. Outside a render dispatcher
+ * (route handlers, server actions, services) cache() passes through, so
+ * everything else reads fresh exactly as before.
+ */
+export const getActiveSeason = cache(async function getActiveSeason(): Promise<Season | null> {
   return prisma.season.findFirst({
     where: { isActive: true },
     orderBy: { createdAt: "desc" },
   });
-}
+});
 
 export type ReactivateResult =
   | { ok: true; name: string }
@@ -59,7 +67,3 @@ export async function reactivateSeason(
   }
   return { ok: true, name: season.name };
 }
-
-// Re-exported from the pure, prisma-free capacity module so callers can keep
-// importing from "@/lib/season" while the math stays unit-testable in isolation.
-export { capacityInfo, type CapacityInfo } from "./capacity";

@@ -78,7 +78,7 @@ model Season {
   teamSize        Int       @default(5)
   draftBudget     Int       @default(100)
   budgetMmrWeight Int       @default(20) // % budget swing by captain MMR (low-MMR captains get more; 0 = flat budgets)
-  maxMmr          Int       @default(0) // signup MMR cap; players above it can't join (0 = no cap)
+  maxMmr          Int       @default(0) // SOFT review threshold — does NOT block signup; only HARD_MMR_CEILING refuses (0 = none). See registrationGate.
   regularBestOf   Int       @default(2) // series length for regular-season matches
   playoffBestOf   Int       @default(3) // series length for playoff (non-final) matches
   finalBestOf     Int       @default(5) // series length for the grand final
@@ -113,7 +113,7 @@ model Registration {
   favoriteHeroes String   @default("")
   statement      String   @default("") // what the player wants from the league
   captainNote    String   @default("") // message to captains/drafters
-  status         String   @default("ACTIVE") // ACTIVE | WITHDRAWN
+  status         String   @default("ACTIVE") // ACTIVE | WITHDRAWN (self, reversible) | REMOVED (admin, sticky)
   createdAt      DateTime @default(now())
 
   season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
@@ -312,14 +312,17 @@ model Game {
   @@index([matchId])
 }
 
-// Simple key/value store for global config (e.g. activeSeasonId).
+// Simple key/value store for global config (e.g. discordWebhookUrl), plus a
+// dynamic keyspace of throttle claims, exactly-once markers and JSON state
+// blobs (resultAnnounced:*, weekReminder:*, inhouseBoard, …) — see
+// src/lib/settings.ts for the four usage patterns.
 model Setting {
   key   String @id
   value String
 }
 
 // What an admin did, so "the schedule is gone and I don't know what I pressed"
-// has an answer. Nineteen other models carry no actor column at all, and
+// has an answer. The other models carry no actor column at all, and
 // Discord — the de-facto audit trail — is silent on exactly the destructive
 // half of the panel (nothing announces a delete, a regenerate, an abort or a
 // bracket reset). Append-only and best-effort: a failed write must never fail

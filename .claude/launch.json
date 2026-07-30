@@ -27,6 +27,15 @@
       "port": 3112
     },
     {
+      "name": "ui-fixture",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATABASE_URL=file:./ui-fixture.db ALLOW_DEV_LOGIN=true npx next dev -p 3114"
+      ],
+      "port": 3114
+    },
+    {
       "name": "night-check",
       "runtimeExecutable": "sh",
       "runtimeArgs": [

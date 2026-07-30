@@ -48,6 +48,54 @@ export const SETTING_KEYS = {
   INHOUSE_PING_ROLE_ID: "inhousePingRoleId",
 } as const;
 
+// ---------------------------------------------------------------------------
+// The DYNAMIC keyspace. Beyond the fixed keys above, the Setting table hosts
+// per-entity rows: exactly-once markers (resultAnnounced:<matchId>,
+// weekReminder:<season>:<week>, honorsAnnounced:<season>:<week>,
+// playoffRoundBuilt:<season>:<round>), JSON state blobs
+// (playoffGamesArchive:<season>, importSkip:<season>, leagueSyncSkip:<season>)
+// and per-pair throttles (outPing:<matchId>:<userId>). Multi-file key formats
+// are built ONLY through the helpers below — a prefix that drifts between the
+// writer and the sweep that startsWith-matches it fails silently, with no
+// compile error. Single-file keys (importSkip, playoffRoundBuilt, outPing)
+// keep their local builders beside their one call site.
+// ---------------------------------------------------------------------------
+
+/** Exactly-once marker for a decided series' Discord announcement. */
+export const RESULT_ANNOUNCED_PREFIX = "resultAnnounced:";
+
+export function resultAnnouncedKey(matchId: string): string {
+  return `${RESULT_ANNOUNCED_PREFIX}${matchId}`;
+}
+
+/** Exactly-once marker for a week's match-night reminder. */
+export function weekReminderKey(seasonId: string, week: number): string {
+  return `weekReminder:${seasonId}:${week}`;
+}
+
+export function weekReminderPrefix(seasonId: string): string {
+  return `weekReminder:${seasonId}:`;
+}
+
+/** Exactly-once marker for a completed week's honors announcement. */
+export function honorsAnnouncedKey(seasonId: string, week: number): string {
+  return `honorsAnnounced:${seasonId}:${week}`;
+}
+
+export function honorsAnnouncedPrefix(seasonId: string): string {
+  return `honorsAnnounced:${seasonId}:`;
+}
+
+/** Merge-only archive of deleted playoff games' dotaMatchIds (JSON array). */
+export function playoffGamesArchiveKey(seasonId: string): string {
+  return `playoffGamesArchive:${seasonId}`;
+}
+
+/** League-feed ids fetched but not imported — never refetched (JSON array). */
+export function leagueSyncSkipKey(seasonId: string): string {
+  return `leagueSyncSkip:${seasonId}`;
+}
+
 /**
  * Atomic global throttle (Setting-row claim). ISO timestamps compare
  * lexicographically, so the conditional update below is a valid "only if

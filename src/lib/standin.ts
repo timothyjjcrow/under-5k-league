@@ -1,5 +1,40 @@
 // Pure standin scheduling rules. DB work lives in standin-service.ts.
 
+import { MATCH_STATUS } from "./constants";
+
+/**
+ * The assign-standin target <select> encoding: a bare userId covers that
+ * player; `seat:<teamId>` fills an EMPTY seat on a short roster. Builders and
+ * parsers must agree byte-for-byte — drift would silently turn an empty-seat
+ * fill into a bogus player-cover — so both live here.
+ */
+export const SEAT_PREFIX = "seat:";
+
+export function seatValue(teamId: string): string {
+  return SEAT_PREFIX + teamId;
+}
+
+/** The teamId of a `seat:<teamId>` target, or null for a plain userId. */
+export function parseSeatTarget(target: string): string | null {
+  return target.startsWith(SEAT_PREFIX)
+    ? target.slice(SEAT_PREFIX.length)
+    : null;
+}
+
+/**
+ * WHERE fragment: cover this standin still owes on unplayed matches this
+ * season. Several callers deliberately run this twice — once at read time and
+ * again INSIDE their Serializable transaction (the repo's concurrency rule 1)
+ * — so this builder shares only the predicate, never the read. Do not hoist
+ * the double reads.
+ */
+export function pendingCoverWhere(standinUserId: string, seasonId: string) {
+  return {
+    standinUserId,
+    match: { seasonId, status: { not: MATCH_STATUS.COMPLETED } },
+  };
+}
+
 /**
  * Two matches this close together are the same evening for a human. A standin
  * can't play both, whatever the roster tables say.

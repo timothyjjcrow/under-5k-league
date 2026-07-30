@@ -2,7 +2,16 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const PAGE = readFileSync(join(__dirname, "page.tsx"), "utf8");
+// Every file that renders a season.draftAt countdown — the guard's whole
+// lesson is that the surface nobody remembered is the one that regresses
+// (/me and the draft waiting room shipped without passedLabel while the
+// guard only read page.tsx).
+const FILES = [
+  join(__dirname, "page.tsx"),
+  join(__dirname, "me", "page.tsx"),
+  join(__dirname, "..", "components", "draft-room.tsx"),
+];
+const PAGE = FILES.map((f) => readFileSync(f, "utf8")).join("\n");
 
 /**
  * A `<Countdown>` on a SCHEDULED DATE THE PAGE ALSO PRINTS must say when that

@@ -2,6 +2,7 @@
 // Match rows into the engine's inputs and its report back into what the
 // standings/schedule/team surfaces render. Pure + testable — pages stay thin.
 
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { scenarioReport, type ScenarioMatch, type ScenarioReport } from "./scenarios";
 import { pickBracketSize } from "./schedule";
 import type { ClinchStatus, TeamStanding } from "./standings";
@@ -26,7 +27,7 @@ export type StakesMatchRow = {
  */
 export function remainingRegular(matches: StakesMatchRow[]): ScenarioMatch[] {
   const open = matches.filter(
-    (m) => m.phase === "REGULAR" && m.status !== "COMPLETED",
+    (m) => m.phase === MATCH_PHASE.REGULAR && m.status !== MATCH_STATUS.COMPLETED,
   );
   const byTime = open.every((m) => m.scheduledAt != null);
   open.sort((a, b) =>

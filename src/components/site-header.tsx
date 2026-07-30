@@ -277,7 +277,7 @@ export function SiteHeader({
             </Link>
           )}
 
-          {/* Menu toggle — only below lg, where the inline nav is hidden. */}
+          {/* Menu toggle — only below xl, where the inline nav is hidden. */}
           <button
             ref={buttonRef}
             type="button"

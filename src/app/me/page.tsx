@@ -18,6 +18,8 @@ import { getGuildConfig, getRoleConfig, hasPingRole } from "@/lib/discord-roles"
 import { DiscordSetupCard } from "@/components/discord-setup";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
+import { pendingCoverWhere } from "@/lib/standin";
+import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import { HARD_MMR_CEILING } from "@/lib/constants";
 import {
   formatMmrRange,
@@ -172,10 +174,7 @@ export default async function MePage({
   const standinAssignments =
     season && reg?.type === "STANDIN" && reg.status === "ACTIVE"
       ? await prisma.standinAssignment.findMany({
-          where: {
-            standinUserId: user.id,
-            match: { seasonId: season.id, status: { not: "COMPLETED" } },
-          },
+          where: pendingCoverWhere(user.id, season.id),
           include: { match: { include: { homeTeam: true, awayTeam: true } } },
           orderBy: { match: { week: "asc" } },
         })
@@ -474,6 +473,7 @@ export default async function MePage({
                 <Countdown
                   targetMs={season.draftAt.getTime()}
                   eventLabel="Draft"
+                  passedLabel={DRAFT_PASSED_LABEL}
                 />
               </p>
             ) : null}

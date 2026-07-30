@@ -8,6 +8,7 @@ import {
   isAutoSyncDue,
   minutesSinceAutoSyncOpen,
   nextAutoSyncAt,
+  syncPingStep,
 } from "./result-sync";
 
 const NOW = Date.UTC(2026, 6, 12, 20, 0, 0); // an arbitrary league night
@@ -169,5 +170,58 @@ describe("minutesSinceAutoSyncOpen", () => {
       60 - AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF,
       5,
     );
+  });
+});
+
+describe("syncPingStep", () => {
+  const WATCH_MS = AUTO_SYNC.WATCH_POLL_SECONDS * 1000;
+  const IDLE_MS = AUTO_SYNC.IDLE_POLL_SECONDS * 1000;
+
+  it("baselines the cursor from the first response without refreshing", () => {
+    // The page's own server render is at least as fresh as the first cursor —
+    // refreshing here would reload every page once per visit for nothing.
+    const step = syncPingStep({ cursor: "2026-07-30T01:00:00Z" }, null);
+    expect(step.refresh).toBe(false);
+    expect(step.cursor).toBe("2026-07-30T01:00:00Z");
+  });
+
+  it("refreshes when a later response advances the cursor", () => {
+    // The parked-tab trigger: another client's ping did the import, so this
+    // one sees updated:false — only the cursor moving says a result landed.
+    const step = syncPingStep({ updated: false, cursor: "b" }, "a");
+    expect(step.refresh).toBe(true);
+    expect(step.cursor).toBe("b");
+  });
+
+  it("does not refresh while the cursor holds still", () => {
+    const step = syncPingStep({ cursor: "a" }, "a");
+    expect(step.refresh).toBe(false);
+    expect(step.cursor).toBe("a");
+  });
+
+  it("updated:true refreshes without a cursor advance", () => {
+    // The client whose own ping performed the import: its baseline is already
+    // the new value, so the advance can never fire for it.
+    expect(syncPingStep({ updated: true, cursor: "a" }, "a").refresh).toBe(
+      true,
+    );
+    expect(syncPingStep({ updated: true }, null).refresh).toBe(true);
+  });
+
+  it("a null or absent cursor preserves the baseline and does not refresh", () => {
+    // Resetting to null would make the next real cursor read as a fresh first
+    // response — a landed result would slip past every parked tab.
+    const nulled = syncPingStep({ cursor: null }, "a");
+    expect(nulled.cursor).toBe("a");
+    expect(nulled.refresh).toBe(false);
+    const absent = syncPingStep({}, "a");
+    expect(absent.cursor).toBe("a");
+    expect(absent.refresh).toBe(false);
+  });
+
+  it("polls fast while the server says watch, near-free otherwise", () => {
+    expect(syncPingStep({ watch: true }, null).delayMs).toBe(WATCH_MS);
+    expect(syncPingStep({ watch: false }, null).delayMs).toBe(IDLE_MS);
+    expect(syncPingStep({}, null).delayMs).toBe(IDLE_MS);
   });
 });

@@ -8,12 +8,12 @@ import { raceHook } from "@/lib/race-hook";
 import { getActiveSeason } from "@/lib/season";
 import {
   DRAFT_STATUS,
-  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   type RegistrationType,
 } from "@/lib/constants";
 import { registrationGate, withdrawGateError } from "@/lib/registration";
+import { pendingCoverWhere } from "@/lib/standin";
 import { normalizeDiscordName } from "@/lib/discord-name";
 import { unlinkDiscordAccount } from "@/lib/discord-link-service";
 import { getRoleConfig, setPingRole } from "@/lib/discord-roles";
@@ -287,10 +287,7 @@ export async function leaveLeague(
     // Standin cover they still owe. Withdrawing over the top of it leaves the
     // covered team looking staffed on match night by someone who has left.
     prisma.standinAssignment.count({
-      where: {
-        standinUserId: user.id,
-        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-      },
+      where: pendingCoverWhere(user.id, season.id),
     }),
   ]);
   const onTheBlock =
@@ -325,10 +322,7 @@ export async function leaveLeague(
     await prisma.$transaction(
       async (tx) => {
         const live = await tx.standinAssignment.count({
-          where: {
-            standinUserId: user.id,
-            match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-          },
+          where: pendingCoverWhere(user.id, season.id),
         });
         if (live > 0) throw new Error("COVER_APPEARED");
         // The "you're on a roster — get released first" half of the gate was

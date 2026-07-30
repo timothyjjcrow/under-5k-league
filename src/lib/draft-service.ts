@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { DEFAULTS, DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { DEFAULTS, DRAFT_STATUS, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { steamIdToAccountId } from "./dota";
 import {
   canBid,
@@ -18,7 +18,7 @@ import {
   sendDiscordMessage,
 } from "./discord";
 
-export type ActionResult = { ok: true } | { ok: false; error: string };
+export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
 /**
  * Finalize a nomination whose clock has expired: the current high bidder wins
@@ -370,7 +370,7 @@ export async function resolveStalledNomination(
 export async function pauseDraft(
   seasonId: string,
   viewer: SessionUser,
-): Promise<ActionResult> {
+): Promise<DraftActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   const claim = await prisma.draft.updateMany({
     where: { seasonId, status: DRAFT_STATUS.IN_PROGRESS },
@@ -388,7 +388,7 @@ export async function pauseDraft(
 export async function resumeDraft(
   seasonId: string,
   viewer: SessionUser,
-): Promise<ActionResult> {
+): Promise<DraftActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   const draft = await prisma.draft.findUnique({ where: { seasonId } });
   if (!draft || draft.status !== DRAFT_STATUS.PAUSED) {
@@ -606,7 +606,7 @@ export async function abortDraft(
     // recorded results AND imported games — a forfeit typed by the admin has no
     // Game rows, and an auto-synced game can land before the series completes.
     const [played, games] = await Promise.all([
-      tx.match.count({ where: { seasonId, status: "COMPLETED" } }),
+      tx.match.count({ where: { seasonId, status: MATCH_STATUS.COMPLETED } }),
       tx.game.count({ where: { match: { seasonId } } }),
     ]);
     if (played > 0 || games > 0) {
@@ -865,7 +865,7 @@ export async function nominatePlayer(
   viewer: SessionUser,
   playerId: string,
   amount: number,
-): Promise<ActionResult> {
+): Promise<DraftActionResult> {
   await resolveExpiredNomination(seasonId);
 
   return prisma.$transaction(async (tx) => {
@@ -947,7 +947,7 @@ export async function placeBid(
   seasonId: string,
   viewer: SessionUser,
   amount: number,
-): Promise<ActionResult> {
+): Promise<DraftActionResult> {
   await resolveExpiredNomination(seasonId);
 
   return prisma.$transaction(async (tx) => {

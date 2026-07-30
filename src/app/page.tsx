@@ -24,7 +24,7 @@ import {
 } from "@/lib/schedule";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
-import { formByTeam, type FormResult } from "@/lib/team-matches";
+import { formByTeam } from "@/lib/team-matches";
 import {
   expectedSideSize,
   matchNightRoster,
@@ -74,10 +74,7 @@ import { predictionOpen } from "@/lib/pickem";
 import { HeroVideo } from "@/components/hero-video";
 import { CountUp } from "@/components/count-up";
 import { CheckinBanner } from "@/components/checkin-banner";
-import {
-  StandingsTableClient,
-  type StandingsRowView,
-} from "@/components/standings-table";
+import { StandingsTable } from "@/components/standings-table-server";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { InviteLink } from "@/components/invite-link";
@@ -122,14 +119,9 @@ const PHASE_STEP: Record<string, string> = {
 };
 
 function fmtWhen(d: Date | null): string | null {
-  if (!d) return null;
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  // Delegates to formatMatchTime — these strings are LocalTime hydration
+  // snapshots, so drifting from the client's formatter causes flicker.
+  return d ? formatMatchTime(d, "full") : null;
 }
 
 /**
@@ -2452,63 +2444,6 @@ function SideGameLink({
         <span className="block truncate text-xs text-muted">{hint}</span>
       </span>
     </Link>
-  );
-}
-
-/**
- * Server-side adapter for the sortable client table: flattens the maps into
- * plain rows (Maps don't cross the client boundary) and drops clinch marks
- * when every team makes the bracket (they'd all be \u2713).
- */
-export function StandingsTable({
-  standings,
-  teamName,
-  formByTeam,
-  playoffCut,
-  clinch,
-  viewerTeamId,
-  movement,
-  totalTeams,
-}: {
-  standings: ReturnType<typeof computeStandings>;
-  teamName: Map<string, string>;
-  formByTeam?: Map<string, FormResult[]>;
-  /** How many top teams make playoffs \u2014 draws a "playoff cut" line when set. */
-  playoffCut?: number;
-  /** Per-team clinched/eliminated verdicts (see clinchStatuses). */
-  clinch?: Map<string, ClinchStatus>;
-  /** The signed-in viewer's team \u2014 its row gets a subtle highlight. */
-  viewerTeamId?: string | null;
-  /** Weekly rank movement (see standingsMovement). */
-  movement?: Map<string, number>;
-  /** League size before any slicing (dashboard passes the top 8 only). */
-  totalTeams?: number;
-}) {
-  // "Everyone makes the bracket" must be judged against the whole league,
-  // not the (possibly sliced) rows this table happens to show.
-  const fieldSize = totalTeams ?? standings.length;
-  const cutIsReal =
-    playoffCut != null && playoffCut > 0 && playoffCut < fieldSize;
-  const rows: StandingsRowView[] = standings.map((s, i) => ({
-    teamId: s.teamId,
-    name: teamName.get(s.teamId) ?? "\u2014",
-    rank: i + 1,
-    wins: s.wins,
-    draws: s.draws,
-    losses: s.losses,
-    gameDiff: s.gameDiff,
-    points: s.points,
-    form: formByTeam ? formByTeam.get(s.teamId) ?? [] : null,
-    clinch: cutIsReal ? clinch?.get(s.teamId) ?? null : null,
-    move: movement?.get(s.teamId) ?? 0,
-  }));
-  return (
-    <StandingsTableClient
-      rows={rows}
-      playoffCut={playoffCut}
-      viewerTeamId={viewerTeamId}
-      totalTeams={fieldSize}
-    />
   );
 }
 

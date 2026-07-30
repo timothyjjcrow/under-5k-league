@@ -13,6 +13,35 @@ export type FinishedLobby = {
   }[];
 };
 
+/**
+ * Map a prisma lobby row (include- or select-shaped) into a FinishedLobby.
+ * The three call sites deliberately run DIFFERENT queries (windowed vs
+ * unwindowed, include vs select) — only the mapping is shared, so a field
+ * added to FinishedLobby needs exactly one edit here.
+ */
+export function toFinishedLobby(l: {
+  id: string;
+  winnerTeam: number | null;
+  createdAt: Date;
+  players: {
+    userId: string;
+    team: number | null;
+    user: { name: string; avatar: string | null };
+  }[];
+}): FinishedLobby {
+  return {
+    id: l.id,
+    winnerTeam: l.winnerTeam,
+    createdAt: l.createdAt,
+    players: l.players.map((p) => ({
+      userId: p.userId,
+      name: p.user.name,
+      avatar: p.user.avatar,
+      team: p.team,
+    })),
+  };
+}
+
 export type InhouseRecord = {
   userId: string;
   name: string;

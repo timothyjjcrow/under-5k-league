@@ -70,7 +70,7 @@ for real.
 
 **The mutation guard is CI's ratchet over all of this**
 (`scripts/mutation-guard.mjs`, baseline in `test/mutation-baseline.json`, run by
-the `integration on postgres` job). It deletes each guard the baseline records
+CI's own 4-shard `mutation guard` matrix job). It deletes each guard the baseline records
 as protected and requires the suite to fail. It gates on two things: a
 protected claim that stops being caught (its test regressed), and a protected
 claim that has DISAPPEARED (the guard itself was removed or weakened). Claim ids
@@ -88,15 +88,18 @@ count-check-then-`throw` inside a transaction are INVISIBLE to it — running
 `assignStandinGuarded`'s empty-seat budget). Those are covered by hand-written
 integration tests instead, and the honest way to check such a test is to
 sabotage the guard and confirm the test goes red — the ratchet will not do it
-for you. Don't read "46/46" as "every guard in the repo is gated".
+for you. Don't read "all gradeable claims protected" as "every guard in the repo is gated".
 
-Currently **46 of 46 gradeable claims protected** (2026-07-28) — every guarded
-claim in the repo now fails the suite when its predicate is deleted. The other
-four of the 50 are EQUIVALENT MUTANTS: predicates that can be deleted without
+Currently **every gradeable claim is protected** (the committed
+`test/mutation-baseline.json` is authoritative for the counts — 54 of 59 as of
+2026-07-30, and these numbers go stale here at every `--discover`) — every
+guarded claim in the repo fails the suite when its predicate is deleted. The
+remainder are EQUIVALENT MUTANTS: predicates that can be deleted without
 changing the end state, so no test can ever kill them. They are listed in the
 guard and excluded from the score rather than left looking like gaps — two
-archive-then-set pairs, a `{ gt: 0 }` guarding a write of 0, and `applyPick`'s
-advance claim (unfalsifiable behind the turn claim's row lock; see below). Each
+archive-then-set pairs, a `{ gt: 0 }` guarding a write of 0, `applyPick`'s
+advance claim (unfalsifiable behind the turn claim's row lock; see below), and
+`placeInhouseBet`'s betSettlement flip (PENDING over PENDING). Each
 carries its REASON in `EQUIVALENT`, because "equivalent" is also exactly what an
 untested gap looks like from here. A NEW claim is still reported and never
 gating — assume a guard is unprotected until the baseline says otherwise. To
@@ -109,7 +112,7 @@ switching the Prisma provider is a footgun if you forget to switch back):
     npm run pg:up            # create the throwaway DB, point Prisma at it, push
     export PG_TEST_URL="postgresql://$USER@localhost:5432/ld2l_pgtest"
     npm run test:pg                          # the suite on the prod engine
-    npm run test:mutation                    # verify the whole baseline (46 claims)
+    npm run test:mutation                    # verify the whole baseline
     npm run test:mutation -- --shard 2/4     # one CI shard (5-7 min on CI)
     npm run test:mutation -- --discover --only acceptMatch   # probe one claim
     npm run pg:down          # BACK TO SQLITE + drop the DB — do not skip this
@@ -120,10 +123,10 @@ switched provider. `--discover --only` deliberately refuses to write the
 baseline (a partial sweep would drop the ratchet for every claim it skipped);
 only a full `--discover` may.
 
-A full sweep is ~8 min of suite time for all 50 (a caught mutant `--bail=1`s out
+A full sweep is ~8 min of suite time (a caught mutant `--bail=1`s out
 in seconds, so the cost is dominated by the survivors) but ~25 min wall clock,
 because the guard proves the suite green ONCE before measuring anything and each
-mutant is a fresh `vitest run`. `npm run test:mutation` (verify all 46) is the
+mutant is a fresh `vitest run`. `npm run test:mutation` (verify the baseline) is the
 longer one; shard it.
 
 **How the last four were closed** (2026-07-28). This section used to list them

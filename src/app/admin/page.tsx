@@ -2,7 +2,8 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
-import { getActiveSeason, capacityInfo } from "@/lib/season";
+import { getActiveSeason } from "@/lib/season";
+import { capacityInfo } from "@/lib/capacity";
 import { prisma } from "@/lib/prisma";
 import {
   AUTO_SYNC,
@@ -18,6 +19,8 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { nextAutoSyncAt } from "@/lib/result-sync";
+import { seatValue } from "@/lib/standin";
+import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
   createSeason,
   setSeasonPhase,
@@ -84,7 +87,12 @@ import { sortNews, NEWS_LIMITS } from "@/lib/news";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
-import { getSetting, SETTING_KEYS } from "@/lib/settings";
+import {
+  getSetting,
+  leagueSyncSkipKey,
+  playoffGamesArchiveKey,
+  SETTING_KEYS,
+} from "@/lib/settings";
 import { adminNextStep } from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
 import { DangerSubmit } from "@/components/danger-submit";
@@ -144,14 +152,6 @@ export const metadata = { title: "Admin" };
 // than being killed mid-run (which leaves the button spinning "Working…").
 // 60s is the Hobby-plan ceiling; the actions themselves stop well before it.
 export const maxDuration = 60;
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups",
-  DRAFT: "Draft",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
 
 export default async function AdminPage() {
   const user = await getSessionUser();
@@ -577,7 +577,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // createPlayoffBracket so the postseason can be re-imported by hand — without
   // them the ids were simply gone, which is what made "recreate the bracket"
   // (the only correction path past an advanced round) irreversible.
-  const playoffArchive = await getSetting(`playoffGamesArchive:${seasonId}`);
+  const playoffArchive = await getSetting(playoffGamesArchiveKey(seasonId));
   // What a schedule REGENERATE would destroy. These rows hang off a fixture id
   // and cascade with it, and none of them is archived anywhere — so the confirm
   // has to be able to state them BEFORE the click, not just the toast after.
@@ -2323,7 +2323,7 @@ function StandinMatchBlock({
           {openSeats.length > 0 ? (
             <optgroup label="Open roster seat">
               {openSeats.map(({ team, open }) => (
-                <option key={`seat-${team.id}`} value={`seat:${team.id}`}>
+                <option key={`seat-${team.id}`} value={seatValue(team.id)}>
                   {team.name} — empty seat ({open} of {teamSize} unfilled)
                 </option>
               ))}
@@ -2393,7 +2393,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
       }),
       getSetting(SETTING_KEYS.LEAGUE_AUTO_SYNC_AT),
       getSetting(SETTING_KEYS.RESULT_CHANGED_AT),
-      getSetting(`leagueSyncSkip:${season.id}`),
+      getSetting(leagueSyncSkipKey(season.id)),
       // WHO the roster scans can't see — OpenDota flagged their match data
       // private. This is the admin's only mid-season surface for it (the
       // signup-pool badge lives on a card that retires after the draft).

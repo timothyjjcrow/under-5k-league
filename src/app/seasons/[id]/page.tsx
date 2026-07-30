@@ -1,11 +1,12 @@
 import Link from "next/link";
+import { ChampionBanner } from "@/components/champion-banner";
+import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
-import { pickBracketSize } from "@/lib/schedule";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
-import { StandingsTable } from "@/app/page";
+import { StandingsTable } from "@/components/standings-table-server";
 import {
   Avatar,
   Badge,
@@ -36,14 +37,6 @@ export async function generateMetadata({
   if (!season) notFound();
   return { title: `${season.name} · Season archive` };
 }
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups open",
-  DRAFT: "Drafting",
-  REGULAR_SEASON: "In season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
 
 function ResultRow({
   match: m,
@@ -181,31 +174,11 @@ export default async function SeasonArchivePage({
       </div>
 
       {champion ? (
-        <Link
-          href={`/teams/${champion.id}`}
-          className="flex items-center gap-3 rounded-[var(--radius)] border border-amber-400/40 bg-amber-400/10 px-5 py-4 transition-colors hover:border-amber-400/60"
-        >
-          <div className="relative shrink-0">
-            <TeamCrest
-              name={champion.name}
-              seed={champion.id}
-              size={44}
-              className="rounded-xl ring-2 ring-amber-400/50"
-            />
-            <span
-              aria-hidden
-              className="absolute -bottom-1.5 -right-1.5 grid h-6 w-6 place-items-center rounded-full border border-amber-400/40 bg-surface text-xs shadow"
-            >
-              🏆
-            </span>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-amber-300/90">
-              {season.name} Champion
-            </div>
-            <div className="text-lg font-bold">{champion.name}</div>
-          </div>
-        </Link>
+        <ChampionBanner
+          teamId={champion.id}
+          teamName={champion.name}
+          seasonName={season.name}
+        />
       ) : null}
 
       {season.teams.length > 0 ? (
