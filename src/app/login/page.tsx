@@ -35,7 +35,14 @@ export default async function LoginPage({
   const user = await getSessionUser();
   if (user) redirect(next ?? "/"); // already signed in → straight back
 
-  const errorCopy = error ? (LOGIN_ERRORS[error] ?? GENERIC_LOGIN_ERROR) : null;
+  // hasOwnProperty guard (the /me ?discord= pattern): a crafted
+  // ?error=__proto__/constructor/toString resolves an inherited truthy
+  // non-string past the ?? fallback and crashes the render as a JSX child.
+  const errorCopy = error
+    ? Object.prototype.hasOwnProperty.call(LOGIN_ERRORS, error)
+      ? LOGIN_ERRORS[error]
+      : GENERIC_LOGIN_ERROR
+    : null;
 
   const steamHref = next
     ? `/api/auth/steam?next=${encodeURIComponent(next)}`

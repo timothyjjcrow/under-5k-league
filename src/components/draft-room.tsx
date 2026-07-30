@@ -33,6 +33,7 @@ import {
   outbidLatchAfter,
   stripDraftTitleFlag,
 } from "@/lib/draft";
+import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
   FEED_MAX,
   draftFeedDiff,
@@ -576,7 +577,11 @@ export function DraftRoom({
                   minute: "2-digit",
                 })}
               </strong>
-              <Countdown targetMs={draftAtMs} eventLabel="Draft" />
+              <Countdown
+                targetMs={draftAtMs}
+                eventLabel="Draft"
+                passedLabel={DRAFT_PASSED_LABEL}
+              />
             </div>
           ) : null}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -606,6 +611,9 @@ export function DraftRoom({
   if (state.status === "COMPLETE") {
     return (
       <div className="space-y-6">
+        {/* Same strip as every other branch — undoLastSale can re-open a
+            draft from COMPLETE, and only the poll delivers that flip. */}
+        {disconnectedStrip}
         <div className="rounded-[var(--radius)] border border-success/40 bg-success/10 p-6 text-center">
           <div className="text-2xl">✅</div>
           <div className="mt-1 text-lg font-semibold">The draft is complete!</div>
