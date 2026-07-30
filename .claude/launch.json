@@ -25,6 +25,15 @@
         "DATABASE_URL=file:./e2e.db ALLOW_DEV_LOGIN=true npx next dev -p 3112"
       ],
       "port": 3112
+    },
+    {
+      "name": "night-check",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATABASE_URL=file:$PWD/prisma/night-check.db ALLOW_DEV_LOGIN=true npx next dev -p 3113"
+      ],
+      "port": 3113
     }
   ]
 }

@@ -760,11 +760,24 @@ export async function adjustCred(
     };
   }
 
+  // NAME the player, never the cuid. `AdminAction.summary` is documented as
+  // "one human sentence", and an audit line reading "Adjusted
+  // cms75soe9000012esv1jnzk8n's Cred by +67" is unreadable by the only person
+  // who will ever read it — the admin looking back at what was done, weeks
+  // later, probably because someone disputed it. Same rule as `undoLastSale`'s
+  // toast naming the purchase it reverted. The read is a PK lookup on a row
+  // this function has already written to, so it costs nothing, and it falls
+  // back to the id rather than failing the log: a lost name must never lose
+  // the record.
+  const who = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true },
+  });
   await logAdminAction({
     action: "adjustCred",
-    summary: `Adjusted ${userId}'s Cred by ${delta > 0 ? "+" : ""}${delta}${
-      note ? ` (${note})` : ""
-    }`,
+    summary: `Adjusted ${who?.name ?? userId}'s Cred by ${
+      delta > 0 ? "+" : ""
+    }${delta}${note ? ` (${note})` : ""}`,
   });
   return { ok: true };
 }
