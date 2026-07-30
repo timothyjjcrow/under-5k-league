@@ -228,32 +228,37 @@ export default async function SchedulePage() {
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
   // collapsible weeks). Dates preformatted server-side. Shared with the
   // playoff round list below so RSVP/standin/reschedule chips work everywhere.
-  const toMatchView = (m: Match): MatchView => ({
-    id: m.id,
-    homeTeamId: m.homeTeamId,
-    awayTeamId: m.awayTeamId,
-    homeName: teamName.get(m.homeTeamId) ?? "?",
-    awayName: teamName.get(m.awayTeamId) ?? "?",
-    homeScore: m.homeScore,
-    awayScore: m.awayScore,
-    done: m.status === "COMPLETED",
-    live: m.status === "LIVE",
-    homeWin: m.winnerTeamId === m.homeTeamId,
-    awayWin: m.winnerTeamId === m.awayTeamId,
-    whenFull: fmtWhen(m.scheduledAt),
-    whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
-    whenTs: m.scheduledAt?.getTime() ?? null,
-    isFinalPhase: m.phase === "FINAL",
-    standins: (standinsByMatch.get(m.id) ?? []).map(
-      (a) =>
-        `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
-    ),
-    rsvp: rsvpFor(m) && {
-      home: pickRsvp(rsvpFor(m)!.home),
-      away: pickRsvp(rsvpFor(m)!.away),
-    },
-    reschedulePending: rescheduleByMatch.get(m.id) ?? null,
-  });
+  const toMatchView = (m: Match): MatchView => {
+    // Once per match — each call scans the season's whole assignment list
+    // for both sides, and this used to run three times per row.
+    const rsvp = rsvpFor(m);
+    return {
+      id: m.id,
+      homeTeamId: m.homeTeamId,
+      awayTeamId: m.awayTeamId,
+      homeName: teamName.get(m.homeTeamId) ?? "?",
+      awayName: teamName.get(m.awayTeamId) ?? "?",
+      homeScore: m.homeScore,
+      awayScore: m.awayScore,
+      done: m.status === "COMPLETED",
+      live: m.status === "LIVE",
+      homeWin: m.winnerTeamId === m.homeTeamId,
+      awayWin: m.winnerTeamId === m.awayTeamId,
+      whenFull: fmtWhen(m.scheduledAt),
+      whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
+      whenTs: m.scheduledAt?.getTime() ?? null,
+      isFinalPhase: m.phase === "FINAL",
+      standins: (standinsByMatch.get(m.id) ?? []).map(
+        (a) =>
+          `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
+      ),
+      rsvp: rsvp && {
+        home: pickRsvp(rsvp.home),
+        away: pickRsvp(rsvp.away),
+      },
+      reschedulePending: rescheduleByMatch.get(m.id) ?? null,
+    };
+  };
   // The week's league night = its earliest kickoff (headers stay scannable
   // even when the weeks are collapsed).
   const earliestScheduled = (ms: Match[]): Date | null =>

@@ -89,7 +89,13 @@ export default async function LeadersPage({
   // Keep archived-season navigation on that season across the stat pages.
   const seasonQS = seasonParam ? `?season=${season.id}` : "";
 
-  const games = await getSeasonGameLeaders(season.id);
+  // Parse each game's players JSON once and reuse the lines for both the
+  // boards and the weekly-honors card (the dashboard's League pulse does the
+  // same) — honorsByWeek used to re-parse the week's games per week.
+  const games = (await getSeasonGameLeaders(season.id)).map((g) => ({
+    ...g,
+    lines: parseGamePlayers<PlayerStat>(g.players),
+  }));
 
   // Accumulate each mapped player's per-game lines across the whole season —
   // and the raw stored lines too, which carry the benchmark percentiles the
@@ -97,7 +103,7 @@ export default async function LeadersPage({
   const linesByUser = new Map<string, PlayerGameLine[]>();
   const rawByUser = new Map<string, PlayerStat[]>();
   for (const g of games) {
-    for (const p of parseGamePlayers<PlayerStat>(g.players)) {
+    for (const p of g.lines) {
       if (!p.userId) continue;
       const arr = linesByUser.get(p.userId) ?? [];
       arr.push({
@@ -173,7 +179,7 @@ export default async function LeadersPage({
       honors: weeklyHonors(
         games
           .filter((g) => g.match.week === week && g.match.phase === "REGULAR")
-          .map((g) => ({ radiantWin: g.radiantWin, players: parseGamePlayers<PlayerStat>(g.players) })),
+          .map((g) => ({ radiantWin: g.radiantWin, players: g.lines })),
         teamOf,
       ),
     }))

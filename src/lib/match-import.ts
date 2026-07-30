@@ -264,18 +264,30 @@ type MatchRow = {
 
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
 export async function gatherTeamAccounts(match: MatchRow) {
+  // Select-narrowed: this runs on every import AND every auto-sync roster
+  // scan, and only four user fields are ever read (id/name/steamId/
+  // dotaAccountId — the `add` helper's parameter type says so).
+  const userSelect = {
+    id: true,
+    name: true,
+    steamId: true,
+    dotaAccountId: true,
+  } as const;
   const [season, members, standins, registrants] = await Promise.all([
-    prisma.season.findUnique({ where: { id: match.seasonId } }),
+    prisma.season.findUnique({
+      where: { id: match.seasonId },
+      select: { teamSize: true },
+    }),
     prisma.teamMember.findMany({
       where: {
         seasonId: match.seasonId,
         teamId: { in: [match.homeTeamId, match.awayTeamId] },
       },
-      include: { user: true },
+      select: { teamId: true, user: { select: userSelect } },
     }),
     prisma.standinAssignment.findMany({
       where: { matchId: match.id },
-      include: { standin: true },
+      select: { teamId: true, standin: { select: userSelect } },
     }),
     // Attribution fallback: a player released between playing and importing
     // has no TeamMember row anymore, but their line should still carry their
@@ -283,7 +295,7 @@ export async function gatherTeamAccounts(match: MatchRow) {
     // sets, so classifyGame remains roster-strict.
     prisma.registration.findMany({
       where: { seasonId: match.seasonId },
-      include: { user: true },
+      select: { user: { select: userSelect } },
     }),
   ]);
 
@@ -837,15 +849,23 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   // The `"benchmarks":` key only ever appears as a line's own field — a
   // player whose persona name is literally `benchmarks` serializes with a
   // comma after it, so the colon keeps the marker probe honest.
-  const candidates = await prisma.game.findMany({
-    where: { NOT: { players: { contains: '"benchmarks":' } } },
-    orderBy: { fetchedAt: "asc" },
-    select: { id: true, dotaMatchId: true, players: true },
-  });
+  // Count + bounded fetch, never the whole table: the rows exist only to
+  // process `limit` of them, and the count alone feeds `remaining` — on a
+  // legacy DB the old unbounded findMany read every un-enriched game's
+  // box-score JSON per button press to process 12.
+  const unenriched = { NOT: { players: { contains: '"benchmarks":' } } };
+  const [total, batch] = await Promise.all([
+    prisma.game.count({ where: unenriched }),
+    prisma.game.findMany({
+      where: unenriched,
+      orderBy: { fetchedAt: "asc" },
+      take: limit,
+      select: { id: true, dotaMatchId: true, players: true },
+    }),
+  ]);
 
   let enriched = 0;
   let failed = 0;
-  const batch = candidates.slice(0, limit);
   // A failed game keeps its stored JSON but moves to the back of the
   // fetchedAt-ordered queue — otherwise a dozen permanently-unfetchable games
   // at the head would starve every later run of this bounded batch.
@@ -902,7 +922,7 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   return {
     enriched,
     failed,
-    remaining: candidates.length - batch.length + failed,
+    remaining: total - batch.length + failed,
   };
 }
 
