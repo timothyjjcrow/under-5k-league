@@ -3,6 +3,7 @@ import { parseGamePlayers } from "@/lib/player-stats";
 import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
+import { getSeasonGamesForRecap } from "@/lib/cached-queries";
 import { shareMetadata } from "@/lib/share-metadata";
 import { computeSeasonAwards, type AwardGame, type Award } from "@/lib/awards";
 import type { PlayerStat } from "@/lib/match-import";
@@ -76,17 +77,7 @@ export default async function RecapPage({
     );
   }
 
-  const games = await prisma.game.findMany({
-    where: { match: { seasonId: season.id } },
-    select: {
-      matchId: true,
-      radiantWin: true,
-      radiantScore: true,
-      direScore: true,
-      durationSecs: true,
-      players: true,
-    },
-  });
+  const games = await getSeasonGamesForRecap(season.id);
 
   if (games.length === 0) {
     return (

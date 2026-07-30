@@ -99,6 +99,28 @@ export const getSeasonGameScores = unstable_cache(
   { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
 );
 
+/** One season's games with scores/duration — the recap/awards page. No
+ *  orderBy on purpose: computeSeasonAwards' tie behavior follows row order,
+ *  and the wrapper must feed it exactly what the inline query did. */
+export function fetchSeasonGamesForRecap(seasonId: string) {
+  return prisma.game.findMany({
+    where: { match: { seasonId } },
+    select: {
+      matchId: true,
+      radiantWin: true,
+      radiantScore: true,
+      direScore: true,
+      durationSecs: true,
+      players: true,
+    },
+  });
+}
+export const getSeasonGamesForRecap = unstable_cache(
+  fetchSeasonGamesForRecap,
+  ["season-games-recap"],
+  { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
+);
+
 /** One season's games with week/phase context — the Leaders boards. */
 export function fetchSeasonGameLeaders(seasonId: string) {
   return prisma.game.findMany({

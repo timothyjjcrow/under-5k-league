@@ -9,6 +9,7 @@ import {
   fetchAllGamesForScouting,
   fetchSeasonGameLeaders,
   fetchSeasonGameScores,
+  fetchSeasonGamesForRecap,
 } from "@/lib/cached-queries";
 
 // The perf pass replaced five inline `prisma.game.findMany(...)` stat scans
@@ -151,5 +152,25 @@ describe("cached-queries data-equivalence", () => {
     // The season key genuinely partitions: A's rows carry A's week/phase and
     // never leak B's games.
     expect(leadersA.every((g) => g.match.week === 1)).toBe(true);
+
+    // getSeasonGamesForRecap === the recap/awards scan (scores + duration,
+    // deliberately NO orderBy — computeSeasonAwards' ties follow row order).
+    const recapA = await fetchSeasonGamesForRecap(a.season.id);
+    const recapB = await fetchSeasonGamesForRecap(b.season.id);
+    expect(recapA).toHaveLength(3);
+    expect(recapB).toHaveLength(2);
+    expect(recapA).toEqual(
+      await prisma.game.findMany({
+        where: { match: { seasonId: a.season.id } },
+        select: {
+          matchId: true,
+          radiantWin: true,
+          radiantScore: true,
+          direScore: true,
+          durationSecs: true,
+          players: true,
+        },
+      }),
+    );
   });
 });
