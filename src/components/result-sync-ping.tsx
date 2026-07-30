@@ -2,7 +2,8 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { AUTO_SYNC } from "@/lib/constants";
+import { AUTO_SYNC, INHOUSE_SCAN_ACTION_TIMEOUT_MS } from "@/lib/constants";
+import { syncPingStep } from "@/lib/result-sync";
 
 // Invisible sitewide trigger for the automatic result sync: POSTs /api/sync on
 // mount, then keeps a slow heartbeat — fast (WATCH_POLL_SECONDS) while the
@@ -10,12 +11,11 @@ import { AUTO_SYNC } from "@/lib/constants";
 // live, near-free (IDLE_POLL_SECONDS) otherwise. When something landed,
 // router.refresh() re-renders the page's server components, so whoever is
 // parked on the dashboard/standings sees results appear on their own.
-// Two refresh triggers, both needed: `updated` covers the one client whose
-// own ping performed the import (its cursor baseline is already the new
-// value), while the `cursor` advancing covers every OTHER parked viewer —
-// the atomic server claims guarantee only one request ever "does" an import,
-// so without the cursor the rest would poll updated:false forever and stay
-// stale. Mounted once in the root layout; renders nothing.
+// The refresh/delay/baseline rule is pure `syncPingStep` (result-sync.ts) —
+// the two-triggers rationale (why `updated` alone strands parked tabs) lives
+// on it. This component keeps only the timer, the inFlight latch, the
+// visibility listener, and the fetch. Mounted once in the root layout;
+// renders nothing.
 export function ResultSyncPing() {
   const router = useRouter();
 
@@ -23,8 +23,8 @@ export function ResultSyncPing() {
     let alive = true;
     let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    // Baseline from the FIRST response — the page's own server render is at
-    // least that fresh, so only a later advance means "something new landed".
+    // resultChangedAt baseline across responses; syncPingStep owns the rule
+    // (first response baselines without a refresh, null keeps the baseline).
     let lastCursor: string | null = null;
 
     const schedule = (ms: number) => {
@@ -46,22 +46,27 @@ export function ResultSyncPing() {
       inFlight = true;
       let delay = AUTO_SYNC.IDLE_POLL_SECONDS * 1000;
       try {
-        const res = await fetch("/api/sync", { method: "POST" });
+        const res = await fetch("/api/sync", {
+          method: "POST",
+          // The hung-request freeze class CLAUDE.md pins for the rooms — a
+          // request that connects and never answers latches inFlight forever;
+          // scan-sized, since /api/sync can run an OpenDota roster scan.
+          signal: AbortSignal.timeout(INHOUSE_SCAN_ACTION_TIMEOUT_MS),
+        });
         if (res.ok) {
           const data = (await res.json()) as {
             updated?: boolean;
             watch?: boolean;
             cursor?: string | null;
           };
-          if (data.watch) delay = AUTO_SYNC.WATCH_POLL_SECONDS * 1000;
-          const cursor = data.cursor ?? null;
-          const cursorAdvanced =
-            cursor !== null && lastCursor !== null && cursor !== lastCursor;
-          if (cursor !== null) lastCursor = cursor;
-          if (data.updated || cursorAdvanced) router.refresh();
+          const step = syncPingStep(data, lastCursor);
+          delay = step.delayMs;
+          lastCursor = step.cursor;
+          if (step.refresh) router.refresh();
         }
       } catch {
-        // Best-effort: a failed ping just waits for the next heartbeat.
+        // Best-effort: a failed ping (the abort's TimeoutError included) just
+        // waits for the next heartbeat.
       } finally {
         inFlight = false;
       }

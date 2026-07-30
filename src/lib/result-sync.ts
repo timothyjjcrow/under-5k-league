@@ -89,3 +89,39 @@ export function nextAutoSyncAt(
     autoSyncedAt.getTime() + autoSyncIntervalSeconds(attempts) * 1000,
   );
 }
+
+/**
+ * One step of the sitewide `<ResultSyncPing>` loop: given a `/api/sync`
+ * response and the cursor baseline from previous responses, decide how long to
+ * wait before the next ping, whether to `router.refresh()`, and the new
+ * baseline. The component keeps the timer/fetch plumbing; this is the rule.
+ *
+ * Two refresh triggers, both needed: `updated` covers the one client whose own
+ * ping performed the import (its cursor baseline is already the new value),
+ * while the `cursor` advancing covers every OTHER parked viewer — the atomic
+ * server claims guarantee only one request ever "does" an import, so without
+ * the cursor the rest would poll updated:false forever and stay stale.
+ *
+ * Two subtleties, both deliberate: the FIRST cursor seen only baselines, never
+ * refreshes (the page's own server render is at least that fresh, so only a
+ * later advance means "something new landed"), and a null/absent cursor keeps
+ * the existing baseline rather than resetting it — otherwise the next real
+ * cursor would read as a fresh first response and a landed result would slip
+ * past every parked tab.
+ */
+export function syncPingStep(
+  data: { updated?: boolean; watch?: boolean; cursor?: string | null },
+  lastCursor: string | null,
+): { delayMs: number; refresh: boolean; cursor: string | null } {
+  const delayMs =
+    (data.watch ? AUTO_SYNC.WATCH_POLL_SECONDS : AUTO_SYNC.IDLE_POLL_SECONDS) *
+    1000;
+  const cursor = data.cursor ?? null;
+  const cursorAdvanced =
+    cursor !== null && lastCursor !== null && cursor !== lastCursor;
+  return {
+    delayMs,
+    refresh: Boolean(data.updated) || cursorAdvanced,
+    cursor: cursor ?? lastCursor,
+  };
+}
