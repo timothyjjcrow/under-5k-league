@@ -310,6 +310,19 @@ export function RoleBadges({
  * at text-sm, 16px at text-xs — and WCAG 2.5.8 (AA) wants 24. An audit of 533
  * targets found 208 real failures, and 81 of them were `PlayerLink` alone.
  * Sizing the shared primitives beats sizing 200 call sites.
+ *
+ * THE TWO CLASSES ARE A PAIR AND twMerge WILL SPLIT THEM. Pass your own
+ * `py-*` to a component that bakes this in and twMerge drops the CONFLICTING
+ * `py-1` while keeping `-my-1` — margin and padding are different property
+ * groups, so only one half of the pair loses. The element is then 8px SHORTER
+ * in layout than it is on screen, i.e. it under-reserves rather than
+ * over-reserves, and in a wrapping rack every row overlaps the one above it.
+ * That shipped on three champion/roster chip racks: 26px chips reserving 18px,
+ * 7 overlapping pairs on /teams at 375px, each a 2px band ~120px wide where a
+ * tap opened the wrong player.
+ *
+ * So: a caller that sets its own vertical padding must also pass `my-0`, and
+ * should check it still clears 24px on its own (the chips do — 26px).
  */
 export const TAP_SAFE = "py-1 -my-1";
 

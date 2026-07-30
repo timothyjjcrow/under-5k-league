@@ -38,6 +38,7 @@ import {
   RoleBadges,
   Sparkline,
   Stat,
+  TAP_SAFE,
   TeamCrest,
   textLink,
 } from "@/components/ui";
@@ -414,7 +415,14 @@ export default async function PlayerProfilePage({
                   ) : null}
                 </div>
               ) : null}
-              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted">
+              {/* gap-y-2, not gap-y-1.5: every link in this row carries
+                  TAP_SAFE, which grows the hit box 4px above and below, so two
+                  wrapped rows need >=8px between them. At 6px the Dotabuff and
+                  OpenDota boxes overlapped by 2px (measured) and OpenDota
+                  painted last, so a tap on the bottom edge of Dotabuff opened
+                  OpenDota. Same rule player-pool.tsx already states: hit boxes
+                  may touch, never overlap. */}
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted">
                 {registration ? (
                   <span>
                     <span className="font-semibold text-fg">
@@ -465,9 +473,24 @@ export default async function PlayerProfilePage({
               </div>
             </div>
             {team ? (
+              // basis-full below sm: this card and the name column are flex
+              // siblings, and the column carries `min-w-0` (it must, or a long
+              // name widens the page). min-w-0 sets its min-content
+              // contribution to ZERO, so the row can never overflow and
+              // `flex-wrap` NEVER FIRES — the card kept its full 153px and the
+              // name column absorbed the whole shortfall. Measured at 375px it
+              // was 12px wide, and `[overflow-wrap:anywhere]` on the h1 then
+              // rendered the player's name ONE CHARACTER PER LINE: a 504px-tall
+              // h1 in a 908px hero card, with Dotabuff/OpenDota squeezed to
+              // 57px and wrapped onto two lines ~940px down. Broken at every
+              // phone width, healthy by 640px — which is why it never showed up
+              // on a desktop. Taking the card out of the line is the fix that
+              // cannot backfire: the floor has to go on the item that is
+              // ALLOWED to shrink, and a min-width on the name column instead
+              // overflows the page below ~320px.
               <Link
                 href={`/teams/${team.id}`}
-                className="rounded-lg border border-line bg-surface/60 px-4 py-2 text-sm backdrop-blur transition-colors hover:border-muted/60"
+                className="basis-full rounded-lg border border-line bg-surface/60 px-4 py-2 text-sm backdrop-blur transition-colors hover:border-muted/60 sm:basis-auto"
               >
                 <div className="text-xs uppercase tracking-wide text-muted">
                   Team
@@ -743,17 +766,42 @@ export default async function PlayerProfilePage({
             {careerRows.map(({ membership: m, tally, champion }) => (
               <div
                 key={m.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
+                // gap-y-2 for the TAP_SAFE rule below: at gap-y-1 (4px) the two
+                // links' grown hit boxes would overlap when this row wraps.
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
               >
                 <Link
                   href={`/seasons/${m.team.seasonId}`}
-                  className="w-24 shrink-0 text-muted hover:text-info"
+                  className={cn("w-24 shrink-0 text-muted hover:text-info", TAP_SAFE)}
                 >
                   {m.team.season.name}
                 </Link>
+                {/* Two unrelated fixes on one element, both measured.
+
+                    basis-40 below sm — the same collapse as the hero, in its
+                    other flavour. This is the `min-w-0 flex-1` child, and its
+                    three siblings are all `shrink-0` (season 96px, the Captain
+                    badge 67px, the W–L–D cell 36px). min-w-0 zeroes its
+                    line-breaking contribution, so the row never overflows,
+                    `flex-wrap` never fires, and the team name gets whatever is
+                    left: measured 0px at 320, 21px at 360 and 36px at 375
+                    against 119px of name — a captain reading their own profile
+                    saw a crest, "Captain" and "3–0–1" with the team name gone.
+                    It looks fine on a desktop because it is healthy from
+                    ~500px. `truncate` is why the hero's squeezed-text tripwire
+                    cannot see this one: one line, no ratio to measure.
+
+                    TAP_SAFE — the link is a flex box sized by its 22px crest,
+                    so it measured exactly 22px tall, under WCAG 2.5.8's 24px
+                    floor, with two targets inside 24px of it. Being `flex` and
+                    not inline, the spec's in-a-run-of-text exemption does not
+                    cover it either. */}
                 <Link
                   href={`/teams/${m.teamId}`}
-                  className="flex min-w-0 flex-1 items-center gap-2 hover:text-info"
+                  className={cn(
+                    "flex min-w-0 flex-1 basis-40 items-center gap-2 hover:text-info sm:basis-auto",
+                    TAP_SAFE,
+                  )}
                 >
                   <TeamCrest
                     name={m.team.name}

@@ -225,12 +225,14 @@ export default async function RecapPage({
               {champion.name}
             </Link>
             {champion.members.length > 0 ? (
+              // my-0 on the chips below: same orphaned -my-1 as the other two
+              // champion racks — see teams/page.tsx for the measurement.
               <div className="mt-1 flex flex-wrap justify-center gap-1.5">
                 {champion.members.map((m) => (
                   <PlayerLink
                     key={m.id}
                     userId={m.userId}
-                    className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
+                    className="my-0 flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
                   >
                     <Avatar name={m.user.name} src={m.user.avatar} size={20} />
                     <span>{m.user.name}</span>

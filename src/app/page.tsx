@@ -2614,12 +2614,16 @@ async function CompleteView({
             </div>
           ) : null}
           {champion && champion.members.length > 0 ? (
+            // my-0 on the chips below: the py-0.5 orphans TAP_SAFE's -my-1
+            // through twMerge, so the chip reserves 8px less than it occupies
+            // (see teams/page.tsx for the measurement). Centred chips for the
+            // winning five wrap on every phone, and this is the champion card.
             <div className="mt-1 flex flex-wrap justify-center gap-1.5">
               {champion.members.map((m) => (
                 <PlayerLink
                   key={m.id}
                   userId={m.userId}
-                  className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
+                  className="my-0 flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
                 >
                   <Avatar name={m.user.name} src={m.user.avatar} size={20} />
                   <span>{m.user.name}</span>

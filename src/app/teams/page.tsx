@@ -320,12 +320,21 @@ export default async function TeamsPage() {
                 </div>
               </div>
               <CardBody className="space-y-2">
+                {/* my-0 is load-bearing — see the note on TAP_SAFE in ui.tsx.
+                    PlayerLink bakes in `py-1 -my-1`; passing `py-0.5` makes
+                    twMerge drop the CONFLICTING `py-1` but keep `-my-1`, which
+                    is a different property group. The chip then occupied 26px
+                    while reserving 18px, and these racks wrap on every phone:
+                    measured 7 overlapping chip pairs at 375px, each a 2px band
+                    over ~120px of width, where a tap opened the player on the
+                    row above. The chip is 26px tall on its own padding, so it
+                    clears WCAG's 24px floor without the outdent. */}
                 <div className="flex flex-wrap gap-1.5">
                   {t.members.map((m) => (
                     <PlayerLink
                       key={m.id}
                       userId={m.userId}
-                      className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
+                      className="my-0 flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
                     >
                       <Avatar name={m.user.name} src={m.user.avatar} size={20} />
                       <span>{m.user.name}</span>

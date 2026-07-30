@@ -1,6 +1,9 @@
 import { test, expect } from "@playwright/test";
 import {
+  expectNoCollapsedTruncation,
   expectNoHorizontalOverflow,
+  expectNoOverlappingTargets,
+  expectNoSqueezedText,
   expectTapTargets,
   trackPageErrors,
 } from "./helpers";
@@ -57,6 +60,34 @@ test("team page renders roster, form, and the what-we-need card", async ({
   assertNoErrors();
 });
 
+// The /teams roster chip racks wrap on every phone, and each chip is a
+// PlayerLink carrying its own py-0.5 — the combination that splits TAP_SAFE's
+// pair through twMerge and leaves a chip occupying 26px while reserving 18px.
+// Measured before the fix: 7 overlapping pairs at 375px, each a 2px band over
+// ~120px of width, where the tap opened the player on the row above. No
+// existing check could see it — the chips are comfortably over WCAG's 24px
+// floor, and there is no wrapped text to measure a ratio on.
+test("teams roster chips do not overlap on a phone", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/teams");
+  const chip = page.locator('#main a[href^="/players/"]').first();
+  await chip.waitFor({ state: "visible", timeout: 10_000 });
+  // The racks are the point of this test; assert they rendered rather than
+  // letting an empty page report a clean bill of health.
+  await expect
+    .poll(() => page.locator('#main a[href^="/players/"]').count())
+    .toBeGreaterThan(4);
+  // Scoped to the racks, not the page. Page-wide currently fails on a separate,
+  // pre-existing 2px overlap between CardHeader's title link and the captain
+  // PlayerLink in its subtitle (subtitle is mt-0.5 = 2px against TAP_SAFE's 4px
+  // outdent) — a defect in a 22-call-site primitive, so not something to fix
+  // from here. Widen this to the whole page once that is dealt with.
+  await expectNoOverlappingTargets(page, "/teams rosters", "#main .flex-wrap");
+  await expectNoHorizontalOverflow(page, "/teams");
+  assertNoErrors();
+});
+
 // /leaders shipped a 188px horizontal page scroll at 390px: its board grid was
 // `grid gap-4 sm:grid-cols-2` with no base column, so below `sm` the implicit
 // track was `auto` and sized itself to a leaderboard row's max-content (560px
@@ -97,6 +128,108 @@ test("a player profile renders career stats and the report card", async ({
     .click();
   await expect(page).toHaveURL(/\/players\/.+/);
   await expect(page.getByText("Seasons").first()).toBeVisible();
+  assertNoErrors();
+});
+
+// This page shipped the flex collapse TWICE, in both of its flavours, and each
+// needs a different probe.
+//
+// The hero (wrapping flavour): a `min-w-0` name column sharing a line with the
+// non-shrinking team card. The column rendered 12px wide, the h1 went one
+// character per line at 504px tall, and the Dotabuff/OpenDota links were
+// squeezed to 57px and pushed ~940px down. A player reported it as "the
+// Dotabuff link doesn't work"; it could not be reproduced on a desktop because
+// the row is healthy from 640px up.
+//
+// The "Seasons" card (truncating flavour): a `min-w-0 flex-1` team link
+// against three shrink-0 siblings, so the team name rendered 36px of its
+// 119px at 375px and 0px at 320px — gone, with no ellipsis worth reading.
+//
+// 375px, not 390px: the Seasons row is only ~44% collapsed at 390 and would
+// slip under the threshold. The team card triggers the hero half, so the walk
+// below insists on a rostered profile rather than measuring an arbitrary one.
+test("a player profile hero survives a phone", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.goto("/teams");
+  await page.locator('#main a[href^="/teams/"]').first().click();
+  await expect(page).toHaveURL(/\/teams\/.+/);
+  // The roster streams in behind <Suspense>; collecting hrefs before it lands
+  // yields only the shell's links (the captain, who in this fixture holds no
+  // TeamMember row) and the walk below then finds nothing.
+  await expect
+    .poll(() => page.locator('#main a[href^="/players/"]').count())
+    .toBeGreaterThan(2);
+
+  // Walk the roster until a profile actually renders the team card. Taking the
+  // first link is not enough: the fixture's team pages also link users who
+  // hold no TeamMember row, whose profiles render no card and so do not
+  // exercise the bug at all — which is precisely the way this test could pass
+  // while measuring nothing.
+  const hrefs = await page
+    .locator('#main a[href^="/players/"]')
+    .evaluateAll((els) => [
+      ...new Set(
+        els
+          .map((e) => (e as HTMLAnchorElement).getAttribute("href") || "")
+          .filter((h) => h && !h.includes("compare")),
+      ),
+    ]);
+  let rostered = "";
+  for (const href of hrefs) {
+    await page.goto(href);
+    // The hero streams too, so an immediate isVisible() is answered before the
+    // card exists and every candidate reads as unrostered. Wait for the hero's
+    // own h1 first, then give the team card its own short wait.
+    await page
+      .locator("#main h1")
+      .first()
+      .waitFor({ state: "visible", timeout: 10_000 });
+    const hasTeamCard = await page
+      .locator('#main a[href^="/teams/"]')
+      .first()
+      .waitFor({ state: "visible", timeout: 2_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (hasTeamCard) {
+      rostered = href;
+      break;
+    }
+  }
+  expect(
+    rostered,
+    "no rostered player profile reachable — the team card is the flex sibling that triggers the collapse, so without it this test measures nothing",
+  ).not.toEqual("");
+
+  await expectNoSqueezedText(page, "/players/[id]");
+  await expectNoCollapsedTruncation(page, "/players/[id]");
+  await expectNoOverlappingTargets(page, "/players/[id]");
+  await expectNoHorizontalOverflow(page, "/players/[id]");
+  await expectTapTargets(page, "/players/[id]");
+
+  // Named assertion on the Seasons row, because the general check above only
+  // catches this defect at widths where it happens to be severe enough: the
+  // team name renders 18% of itself at 360px but 43% at 375px, and a
+  // generic ratio loose enough to catch 43% would fire on ordinary truncation
+  // elsewhere. This one is scoped to the element that broke, so it can be
+  // strict without any false-positive surface.
+  const seasonName = await page.evaluate(() => {
+    const sl = document.querySelector('#main a[href^="/seasons/"]');
+    const span = sl?.parentElement?.querySelector<HTMLElement>(
+      'a[href^="/teams/"] span.truncate',
+    );
+    if (!span) return null;
+    const r = span.getBoundingClientRect();
+    return { shown: Math.round(r.width), needs: span.scrollWidth };
+  });
+  expect(
+    seasonName,
+    "Seasons card team name not found — this assertion would otherwise measure nothing",
+  ).not.toBeNull();
+  expect(
+    seasonName!.shown / seasonName!.needs,
+    `Seasons row team name collapsed: ${seasonName!.shown}px of ${seasonName!.needs}px`,
+  ).toBeGreaterThan(0.6);
   assertNoErrors();
 });
 

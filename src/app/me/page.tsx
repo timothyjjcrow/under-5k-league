@@ -208,9 +208,34 @@ export default async function MePage({
       ) : null}
 
       <Card>
-        <CardBody className="flex items-center gap-4">
-          <Avatar name={user.name} src={user.avatar} size={56} />
-          <div>
+        {/* Two separate defects, both here all along, and only one of them is
+            about width.
+
+            THE SQUASH is what `shrink-0` fixes: Avatar sets width/height but
+            bakes in no shrink floor (callers pass one), so beside the name
+            block and the button column it rendered 19px wide inside its 56px
+            box — measured still squashed at 430px, i.e. on every phone made.
+            It is not width-dependent and no overflow check can see it.
+
+            THE OVERFLOW is the 17-digit SteamID64, one unbreakable token,
+            pushing this row past its own card: 58px at 320px, 18px at 360px,
+            3px at 375px, and gone by 390px. `min-w-0` + `break-all` and
+            `flex-wrap` + `basis-full` EACH fix that on their own (verified by
+            reverting one at a time) — both are kept because they do different
+            jobs: the first stops the id widening the row, the second gives the
+            buttons their own line rather than a 135px sliver of this one.
+
+            Note which item carries the floor. It goes on the column that is
+            ALLOWED to leave the line; a min-width on the min-w-0 child instead
+            is the trap that broke the player profile hero. */}
+        <CardBody className="flex flex-wrap items-center gap-4">
+          <Avatar
+            name={user.name}
+            src={user.avatar}
+            size={56}
+            className="shrink-0"
+          />
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-display text-xl font-semibold">
                 {user.name}
@@ -224,12 +249,12 @@ export default async function MePage({
               href={dbUser?.profileUrl ?? "#"}
               target="_blank"
               rel="noreferrer"
-              className="text-sm text-muted hover:text-fg"
+              className="break-all text-sm text-muted hover:text-fg"
             >
               Steam: {user.steamId}
             </a>
           </div>
-          <div className="ml-auto flex flex-col items-end gap-2">
+          <div className="ml-auto flex basis-full flex-col items-end gap-2 sm:basis-auto">
             <ActionForm action={refreshSteamProfile}>
               <SubmitButton variant="secondary" size="sm">
                 Refresh from Steam

@@ -78,6 +78,190 @@ export async function expectNoHorizontalOverflow(page: Page, label: string) {
 }
 
 /**
+ * A flex child carrying `min-w-0` has a min-content contribution of ZERO, so a
+ * row holding one can never overflow — which means `flex-wrap` NEVER FIRES and
+ * a non-shrinking sibling keeps its full width while the min-w-0 child absorbs
+ * the entire shortfall. The player profile hero shipped exactly that: at 375px
+ * the name column rendered 12px wide and `[overflow-wrap:anywhere]` on the h1
+ * turned the player's name into ONE CHARACTER PER LINE — a 504px-tall h1 inside
+ * a 908px hero card, with the Dotabuff/OpenDota links squeezed to 57px and
+ * wrapped, ~940px down.
+ *
+ * It needs its own check because THE OTHER TWO TRIPWIRES BOTH PASS ON IT, and
+ * that is the whole point of adding it:
+ *   - expectNoHorizontalOverflow  — nothing overflowed. The text wrapped
+ *     instead of spilling, so the page measured exactly 375px wide.
+ *   - expectTapTargets            — the links measured 57x48. min(w,h) = 48,
+ *     comfortably over the 24px floor. A squeezed target is not a small one.
+ * The defect is only visible as a RATIO: characters of text against lines used.
+ *
+ * Thresholds are deliberately far from the observed failure (1.07 chars/line)
+ * so ordinary narrow columns are never flagged — a real word broken across two
+ * or three lines in a tight cell is fine and common.
+ */
+export async function expectNoSqueezedText(page: Page, label: string) {
+  const squeezed = await page.evaluate(() => {
+    const out: string[] = [];
+    for (const el of document.querySelectorAll("main *")) {
+      // Only leaves: an ancestor's textContent is its children's, and would
+      // report the whole card as one blob of text.
+      if (el.children.length > 0) continue;
+      const text = (el.textContent || "").trim();
+      if (text.length < 8) continue;
+      if (el.closest("details:not([open])")) continue;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === "hidden" || cs.display === "none") continue;
+      // Genuinely vertical text is a deliberate choice, not this bug.
+      if (cs.writingMode && cs.writingMode !== "horizontal-tb") continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      const lh =
+        parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2 || 16;
+      const lines = Math.round(r.height / lh);
+      if (lines < 4) continue;
+      const perLine = text.length / lines;
+      if (perLine >= 2.5) continue;
+      out.push(
+        `<${el.tagName.toLowerCase()}> "${text.slice(0, 24)}" — ${lines} lines ` +
+          `for ${text.length} chars (${perLine.toFixed(1)}/line) in ${Math.round(r.width)}px`,
+      );
+      if (out.length >= 6) break;
+    }
+    return out;
+  });
+  expect(
+    squeezed,
+    `${label} has text squeezed into a collapsed column (a flex sibling is not wrapping)`,
+  ).toEqual([]);
+}
+
+/**
+ * The TRUNCATING flavour of the flex collapse, and the reason it needs its own
+ * check: expectNoSqueezedText measures lines against characters, and a
+ * `truncate` element is always exactly one line however narrow it gets. There
+ * is no ratio to see — the text just quietly disappears into an ellipsis.
+ *
+ * The player profile's "Seasons" card shipped it: a `min-w-0 flex-1` team link
+ * against three `shrink-0` siblings, so the row never wrapped and the name got
+ * the remainder — 0px at 320, 21px at 360, 36px at 375, against 119px of team
+ * name. Healthy from ~500px, i.e. invisible on a desktop.
+ *
+ * 35% is deliberately far below ordinary truncation (a name clipped from 119px
+ * to 100px is 84% and completely normal). It only fires on a box that has been
+ * squeezed to uselessness. The 60px content floor keeps short labels, which
+ * can legitimately lose a character or two, out of it.
+ */
+export async function expectNoCollapsedTruncation(page: Page, label: string) {
+  const collapsed = await page.evaluate(() => {
+    const out: string[] = [];
+    for (const el of document.querySelectorAll("main *")) {
+      const cs = getComputedStyle(el);
+      if (cs.textOverflow !== "ellipsis" || cs.overflowX === "visible") continue;
+      if (el.closest("details:not([open])")) continue;
+      const text = (el.textContent || "").trim();
+      if (!text) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      const needs = el.scrollWidth;
+      if (needs < 60) continue;
+      const shown = r.width / needs;
+      if (shown >= 0.35) continue;
+      out.push(
+        `"${text.slice(0, 22)}" renders ${Math.round(r.width)}px of ${needs}px (${Math.round(shown * 100)}%)`,
+      );
+      if (out.length >= 6) break;
+    }
+    return out;
+  });
+  expect(
+    collapsed,
+    `${label} truncates text into a collapsed flex column (a shrink-0 sibling is not yielding)`,
+  ).toEqual([]);
+}
+
+/**
+ * Two tap targets may TOUCH; they must never OVERLAP. An overlapping pair is
+ * worse than an undersized one — the tap goes wherever paint order decides,
+ * and on a roster chip that means opening the wrong player's profile.
+ *
+ * This is its own check because neither of the others can see it:
+ * expectTapTargets only asks whether a box is big enough, and a 26px chip
+ * passes; expectNoSqueezedText measures wrapped text, and these are one line.
+ * The failure it exists for is `TAP_SAFE`'s pair being split by twMerge (see
+ * ui.tsx) — an element that reserves 8px LESS than it occupies, so every row
+ * of a wrapping rack overlaps the row above.
+ *
+ * Same three visibility disciplines as expectTapTargets, for the same reason:
+ * a closed <details> still lays its contents out, and a clipping ancestor does
+ * not move a rect, so without them this reports ghosts.
+ */
+export async function expectNoOverlappingTargets(
+  page: Page,
+  label: string,
+  /**
+   * Optional root to scope the scan to. Page-wide is the goal, but `CardHeader`
+   * currently overlaps its own title link with a TAP_SAFE PlayerLink in its
+   * subtitle by 2px (its subtitle is `mt-0.5`, i.e. 2px against TAP_SAFE's 4px
+   * outdent), which is a defect in a 22-call-site primitive and its own
+   * decision. Scope to the region under test rather than deleting the check.
+   */
+  within?: string,
+) {
+  const overlaps = await page.evaluate((root: string | undefined) => {
+    const SEL = 'a[href], button, [role="button"], summary';
+    const scope = root ? `${root} ${SEL}` : `main ${SEL}`;
+    const live = [...document.querySelectorAll(scope)].filter((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return false;
+      if (el.closest("details:not([open])")) return false;
+      if (
+        typeof el.checkVisibility === "function" &&
+        !el.checkVisibility({
+          contentVisibilityAuto: true,
+          opacityProperty: true,
+          visibilityProperty: true,
+        })
+      )
+        return false;
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        if (getComputedStyle(p).overflow === "visible") continue;
+        const pr = p.getBoundingClientRect();
+        if (
+          Math.min(r.right, pr.right) - Math.max(r.left, pr.left) < 2 ||
+          Math.min(r.bottom, pr.bottom) - Math.max(r.top, pr.top) < 2
+        )
+          return false;
+      }
+      return true;
+    });
+    const out: string[] = [];
+    for (let i = 0; i < live.length && out.length < 6; i++) {
+      for (let j = i + 1; j < live.length && out.length < 6; j++) {
+        // Nesting is legitimate — an <a> wrapping a <button> overlaps by design.
+        if (live[i].contains(live[j]) || live[j].contains(live[i])) continue;
+        const a = live[i].getBoundingClientRect();
+        const b = live[j].getBoundingClientRect();
+        const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        // >0.5px on both axes: sub-pixel rounding on adjacent boxes is not an
+        // overlap, and "may touch" has to stay legal.
+        if (w > 0.5 && h > 0.5) {
+          const t = (el: Element) => (el.textContent || "").trim().slice(0, 18);
+          out.push(
+            `"${t(live[i])}" x "${t(live[j])}" overlap ${Math.round(w)}x${Math.round(h)}px`,
+          );
+        }
+      }
+    }
+    return out;
+  }, within);
+  expect(
+    overlaps,
+    `${label} has tap targets whose hit boxes overlap — the tap lands on whichever painted last`,
+  ).toEqual([]);
+}
+
+/**
  * Tap targets must clear WCAG 2.5.8 Target Size (Minimum), AA — 24x24 CSS px —
  * with the spec's own exceptions applied rather than ignored, because applying
  * them is the difference between a real defect and a link in a sentence:
