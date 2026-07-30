@@ -10,6 +10,7 @@ import type { ScenarioReport } from "@/lib/scenarios";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
   byeTeamsByWeek,
+  byKickoff,
   groupPlayoffRounds,
   pickBracketSize,
   playoffFirstRound,
@@ -168,11 +169,7 @@ export default async function SchedulePage() {
   // match past the next week's night; point at whatever plays first.
   const myNextMatch = viewer
     ? [...matches]
-        .sort(
-          (a, b) =>
-            (a.scheduledAt?.getTime() ?? Infinity) -
-              (b.scheduledAt?.getTime() ?? Infinity) || a.week - b.week,
-        )
+        .sort(byKickoff)
         .find(
           (m) =>
             m.status !== "COMPLETED" &&

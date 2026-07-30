@@ -19,7 +19,7 @@ import {
   type CaptainCandidate,
   type CaptainMethod,
 } from "./inhouse";
-import { summarizeInhouse } from "./inhouse-stats";
+import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
 import type { InhouseBoxPlayer } from "./inhouse-box";
 import { potTier, potView, type PotTier, type Settlement } from "./inhouse-bets";
 import {
@@ -107,19 +107,7 @@ async function loadRecords(
     orderBy: { createdAt: "desc" },
     take: 500,
   });
-  const recs = summarizeInhouse(
-    lobbies.map((l) => ({
-      id: l.id,
-      winnerTeam: l.winnerTeam,
-      createdAt: l.createdAt,
-      players: l.players.map((p) => ({
-        userId: p.userId,
-        name: p.user.name,
-        avatar: p.user.avatar,
-        team: p.team,
-      })),
-    })),
-  );
+  const recs = summarizeInhouse(lobbies.map(toFinishedLobby));
   return new Map(
     recs.map((r) => [
       r.userId,
@@ -1329,19 +1317,7 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
       },
     },
   });
-  const recs = summarizeInhouse(
-    history.map((l) => ({
-      id: l.id,
-      winnerTeam: l.winnerTeam,
-      createdAt: l.createdAt,
-      players: l.players.map((p) => ({
-        userId: p.userId,
-        name: p.user.name,
-        avatar: p.user.avatar,
-        team: p.team,
-      })),
-    })),
-  );
+  const recs = summarizeInhouse(history.map(toFinishedLobby));
   const thisLobby = history.find((l) => l.id === lobbyId);
   const participants = new Set(thisLobby?.players.map((p) => p.userId) ?? []);
   const deltas: Record<string, number> = {};
