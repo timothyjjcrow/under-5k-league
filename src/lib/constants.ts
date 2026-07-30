@@ -1,5 +1,7 @@
 // Central place for the string-union "enums" (SQLite has no native enums) and
 // tunable league defaults. Keeping these here makes the state machine explicit.
+// One deliberate exception: the MatchAvailability IN|OUT union lives beside its
+// math in src/lib/availability.ts, where its only consumers are.
 
 export const SEASON_STATUS = {
   SIGNUPS: "SIGNUPS",

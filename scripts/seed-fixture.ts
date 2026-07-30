@@ -3,9 +3,6 @@
 //   DATABASE_URL="file:/abs/path/fixture.db" npx tsx scripts/seed-fixture.ts
 // Modes: FIXTURE_MODE=regular (last week open, clinch/bye demo, 6 teams or
 // FIXTURE_TEAMS=n) | complete (whole bracket played) | default (mid-playoffs).
-// Seed a scratch DB into mid-PLAYOFFS so the interactive bracket is
-// visually verifiable: 8-team bracket, quarterfinals done, one semi done,
-// final still TBD. Run with: npx tsx fixture-playoffs.ts
 import { prisma } from "@/lib/prisma";
 import { SEASON_STATUS } from "@/lib/constants";
 import { matchNightForWeek } from "@/lib/schedule";

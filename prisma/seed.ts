@@ -15,7 +15,8 @@ function steamId(i: number) {
   return "765611980000" + String(1000 + i);
 }
 
-// Demo MMRs stay under the season's 4500 cap (signups above it are rejected).
+// Demo MMRs stay under the season's 4500 soft limit (a review threshold —
+// over-limit signups are still admitted; only the hard 5K+ ceiling refuses).
 function randomMmr() {
   return 1200 + Math.floor(Math.random() * 3301);
 }

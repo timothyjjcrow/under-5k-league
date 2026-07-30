@@ -24,16 +24,6 @@ export type RegistrationGateInput = {
   existingType?: RegistrationType | null;
 };
 
-/**
- * Enforce signup rules: the hard MMR ceiling, and that PLAYER registrations
- * only *begin* during SIGNUPS. The soft limit (`season.maxMmr`) does NOT block
- * signup — players above it join and are reviewed before the draft; only the
- * `HARD_MMR_CEILING` (no 5K+/Immortals) is a firm reject. Standins may sign up
- * any time; an existing registrant may always update their signup — but a
- * standin can't upgrade themselves to a full player once signups have closed
- * (that would sneak past the closed-signups rule). Returns an error message,
- * or null when allowed.
- */
 export type WithdrawGateInput = {
   /** The registration's current status string. */
   status: string;
@@ -89,6 +79,16 @@ export function withdrawGateError({
   return null;
 }
 
+/**
+ * Enforce signup rules: the hard MMR ceiling, and that PLAYER registrations
+ * only *begin* during SIGNUPS. The soft limit (`season.maxMmr`) does NOT block
+ * signup — players above it join and are reviewed before the draft; only the
+ * `HARD_MMR_CEILING` (no 5K+/Immortals) is a firm reject. Standins may sign up
+ * any time; an existing registrant may always update their signup — but a
+ * standin can't upgrade themselves to a full player once signups have closed
+ * (that would sneak past the closed-signups rule). Returns an error message,
+ * or null when allowed.
+ */
 export function registrationGate({
   season,
   type,

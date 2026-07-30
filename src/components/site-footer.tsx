@@ -40,8 +40,9 @@ export function SiteFooter({
     phase === "PLAYOFFS" ||
     phase === "COMPLETE";
 
-  // "League" — the surfaces tied to the current season, phase-gated exactly the
-  // way site-header.tsx gates the same links so the two never disagree.
+  // "League" — the surfaces tied to the current season. The PHASE GATING
+  // mirrors site-header.tsx; labels and extra links (calendar, Features)
+  // deliberately differ per surface — don't "fix" them into agreement.
   const leagueLinks: { href: string; label: string }[] = [
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },

@@ -104,13 +104,6 @@ async function clearStateIf(expected: string): Promise<void> {
 }
 
 /**
- * Compare-and-swap the board row: write `next` only if the row still holds
- * exactly `expected`. A blind upsert here would RESURRECT a board an admin
- * removed during the (up to 2.5s) PATCH round trip — the row is read before
- * the request and written after it, so this is the repo's standard guarded
- * claim rather than a read-modify-write.
- */
-/**
  * Reserve the board row before talking to Discord, so only one concurrent
  * "Post queue board" can ever send a message. Returns the placeholder value it
  * wrote (the CAS token for the real write), or null if someone else holds it.
@@ -169,6 +162,13 @@ async function claimBoardRow(webhookId: string): Promise<string | null> {
   return swapped.count > 0 ? placeholder : null;
 }
 
+/**
+ * Compare-and-swap the board row: write `next` only if the row still holds
+ * exactly `expected`. A blind upsert here would RESURRECT a board an admin
+ * removed during the (up to 2.5s) PATCH round trip — the row is read before
+ * the request and written after it, so this is the repo's standard guarded
+ * claim rather than a read-modify-write.
+ */
 async function swapState(expected: string, next: BoardState): Promise<void> {
   await prisma.setting.updateMany({
     where: { key: SETTING_KEYS.INHOUSE_BOARD, value: expected },

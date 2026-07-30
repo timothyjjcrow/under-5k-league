@@ -18,7 +18,8 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
   logins pull the player's **Steam name + avatar** via the Steam Web API; admins
   can bulk "Sync avatars" and players can refresh from their profile.
 - **Signups** with live progress toward the minimum needed to start, and an
-  optional **MMR cap** (e.g. an under-4.5K league) that blocks over-cap players.
+  optional **soft MMR limit** (e.g. an under-4.5K league) that flags over-limit
+  signups for admin review — only the hard 5K+ ceiling refuses anyone.
 - **Standins** — sign up to fill in for teams without committing full-time.
 - **Live auction draft** — captains take turns nominating players and bidding,
   with a shared countdown clock, budget/roster constraints, and auto-resolution.

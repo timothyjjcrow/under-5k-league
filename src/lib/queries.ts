@@ -3,7 +3,7 @@ import { getActiveSeason } from "./season";
 import { capacityInfo } from "./season";
 import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
 
-/** Everything the dashboard / players / admin pages need about the live season. */
+/** The dashboard's viewer-aware season snapshot (its only consumer — other pages run their own queries). */
 export async function getSeasonSnapshot(userId?: string) {
   const season = await getActiveSeason();
   if (!season) return null;
