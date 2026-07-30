@@ -7,6 +7,8 @@
 // order. Game order inside a series is unknown, so home wins apply first —
 // a negligible approximation at K=32.
 
+import { MATCH_STATUS } from "./constants";
+
 export const ELO = {
   START: 1000,
   K: 32,
@@ -56,7 +58,7 @@ export function ratingsThroughWeek(
 ): Map<string, number> {
   const ratings = new Map<string, number>(teamIds.map((t) => [t, ELO.START]));
   const done = matches
-    .filter((m) => m.status === "COMPLETED" && m.week <= upToWeek)
+    .filter((m) => m.status === MATCH_STATUS.COMPLETED && m.week <= upToWeek)
     .sort((a, b) => a.week - b.week);
   for (const m of done) {
     for (let i = 0; i < m.homeScore; i++) {
@@ -75,7 +77,7 @@ export function powerRankings(
   teamIds: string[],
 ): PowerRankingRow[] {
   const completedWeeks = matches
-    .filter((m) => m.status === "COMPLETED")
+    .filter((m) => m.status === MATCH_STATUS.COMPLETED)
     .map((m) => m.week);
   if (completedWeeks.length === 0) return [];
   const latest = Math.max(...completedWeeks);

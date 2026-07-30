@@ -4,7 +4,7 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { MATCH_STATUS } from "@/lib/constants";
+import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
 import { weekReminderKey } from "./settings";
 
@@ -96,7 +96,7 @@ export async function proposeReschedule(
     homeName: match.homeTeam.name,
     awayName: match.awayTeam.name,
     week: match.week,
-    isPlayoff: match.phase !== "REGULAR",
+    isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
     proposedTime,
     // The proposer is one of the two captains (asserted above), so the
     // counterpart is simply the other one.
@@ -206,7 +206,7 @@ export async function respondReschedule(
     homeName: match.homeTeam.name,
     awayName: match.awayTeam.name,
     week: match.week,
-    isPlayoff: match.phase !== "REGULAR",
+    isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
     newTime: request.proposedTime,
     notifyUserId: request.proposedById,
     clearedRsvps,

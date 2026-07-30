@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { MATCH_STATUS, SEASON_STATUS, WEEK_REMINDER } from "./constants";
+import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS, WEEK_REMINDER } from "./constants";
 import {
   getWebhookUrl,
   sendDiscordMessage,
@@ -170,7 +170,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
   const sent = await sendDiscordMessage(
     weekReminderMessage({
       week: next.week,
-      isPlayoff: next.phase !== "REGULAR",
+      isPlayoff: next.phase !== MATCH_PHASE.REGULAR,
       fixtures,
     }),
     // Only these exact ids may ring a phone — parse:[] still blocks everything

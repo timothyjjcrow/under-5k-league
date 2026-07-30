@@ -1,3 +1,4 @@
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { prisma } from "./prisma";
 import { heroById } from "./heroes";
 import { weeklyHonors, type HonorsGame, type WeeklyHonors } from "./honors";
@@ -39,11 +40,11 @@ export async function maybeAnnounceWeekHonors(
   week: number,
 ): Promise<void> {
   const weekMatches = await prisma.match.findMany({
-    where: { seasonId, week, phase: "REGULAR" },
+    where: { seasonId, week, phase: MATCH_PHASE.REGULAR },
     select: { status: true },
   });
   if (weekMatches.length === 0) return;
-  if (weekMatches.some((m) => m.status !== "COMPLETED")) return;
+  if (weekMatches.some((m) => m.status !== MATCH_STATUS.COMPLETED)) return;
 
   const marker = honorsAnnouncedKey(seasonId, week);
   // No webhook → don't burn the marker; wiring Discord later still announces

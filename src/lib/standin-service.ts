@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
-import { MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
+import { MATCH_PHASE, MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
 import { getActiveSeason } from "./season";
 import {
   standinAssignedMessage,
@@ -439,7 +439,7 @@ export async function assignStandinGuarded(opts: {
       homeName: match.homeTeam.name,
       awayName: match.awayTeam.name,
       week: match.week,
-      isPlayoff: match.phase !== "REGULAR",
+      isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
       whenMs: match.scheduledAt?.getTime() ?? null,
     }),
   };
@@ -519,7 +519,7 @@ export async function removeStandinGuarded(opts: {
       homeName: assignment.match.homeTeam.name,
       awayName: assignment.match.awayTeam.name,
       week: assignment.match.week,
-      isPlayoff: assignment.match.phase !== "REGULAR",
+      isPlayoff: assignment.match.phase !== MATCH_PHASE.REGULAR,
     }),
   };
 }

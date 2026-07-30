@@ -2,6 +2,7 @@
 // component renders: full skeleton (TBD slots included), team names, seeds,
 // and server-formatted dates (so hydration never disagrees on locale).
 
+import { MATCH_STATUS } from "./constants";
 import {
   bracketSkeleton,
   roundName,
@@ -72,7 +73,7 @@ export function buildBracketRounds(
             away: side(m.awayTeamId),
             homeScore: m.homeScore,
             awayScore: m.awayScore,
-            completed: m.status === "COMPLETED",
+            completed: m.status === MATCH_STATUS.COMPLETED,
             winnerTeamId: m.winnerTeamId,
             when: m.scheduledAt ? formatWhen(m.scheduledAt) : null,
             whenTs: m.scheduledAt?.getTime() ?? null,

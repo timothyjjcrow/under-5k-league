@@ -10,6 +10,7 @@
 // miss the cut. Never contradicts a non-null clinchStatuses result —
 // enumeration can only turn null into certainty.
 
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import {
   clinchStatuses,
   type ClinchStatus,
@@ -322,11 +323,11 @@ export function scenarioReport(
     matches.map((m) => ({
       homeTeamId: m.homeTeamId,
       awayTeamId: m.awayTeamId,
-      status: "SCHEDULED",
+      status: MATCH_STATUS.SCHEDULED,
       homeScore: 0,
       awayScore: 0,
       winnerTeamId: null,
-      phase: "REGULAR",
+      phase: MATCH_PHASE.REGULAR,
     })),
     cut,
   );

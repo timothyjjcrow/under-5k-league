@@ -5,6 +5,8 @@
 // team id — determinism's last resort, never the thing that decides a playoff
 // seed between teams the schedule actually separated.
 
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+
 export type MatchLike = {
   homeTeamId: string;
   awayTeamId: string;
@@ -63,7 +65,7 @@ export function standingsMovement(
   matches: (MatchLike & { week: number })[],
 ): Map<string, number> {
   const completedRegular = matches.filter(
-    (m) => m.phase === "REGULAR" && m.status === "COMPLETED",
+    (m) => m.phase === MATCH_PHASE.REGULAR && m.status === MATCH_STATUS.COMPLETED,
   );
   const movement = new Map(teamIds.map((id) => [id, 0]));
   if (completedRegular.length === 0) return movement;
@@ -82,8 +84,8 @@ export function standingsMovement(
       matches.filter(
         (m) =>
           !(
-            m.phase === "REGULAR" &&
-            m.status === "COMPLETED" &&
+            m.phase === MATCH_PHASE.REGULAR &&
+            m.status === MATCH_STATUS.COMPLETED &&
             m.week === lastWeek
           ),
       ),
@@ -112,7 +114,7 @@ export function clinchStatuses(
 ): Map<string, ClinchStatus> {
   const remaining = new Map<string, number>();
   for (const m of matches) {
-    if (m.phase !== "REGULAR" || m.status === "COMPLETED") continue;
+    if (m.phase !== MATCH_PHASE.REGULAR || m.status === MATCH_STATUS.COMPLETED) continue;
     remaining.set(m.homeTeamId, (remaining.get(m.homeTeamId) ?? 0) + 1);
     remaining.set(m.awayTeamId, (remaining.get(m.awayTeamId) ?? 0) + 1);
   }
@@ -163,8 +165,8 @@ export function computeStandings(
   }
 
   for (const m of matches) {
-    if (m.status !== "COMPLETED") continue;
-    if (m.phase !== "REGULAR") continue; // playoffs don't affect the table
+    if (m.status !== MATCH_STATUS.COMPLETED) continue;
+    if (m.phase !== MATCH_PHASE.REGULAR) continue; // playoffs don't affect the table
     const home = table.get(m.homeTeamId);
     const away = table.get(m.awayTeamId);
     if (!home || !away) continue;
@@ -245,7 +247,7 @@ export function headToHeadRanks(
   const inGroup = new Set(tiedIds);
   const mini = new Map(tiedIds.map((id) => [id, { points: 0, diff: 0 }]));
   for (const m of matches) {
-    if (m.status !== "COMPLETED" || m.phase !== "REGULAR") continue;
+    if (m.status !== MATCH_STATUS.COMPLETED || m.phase !== MATCH_PHASE.REGULAR) continue;
     if (!inGroup.has(m.homeTeamId) || !inGroup.has(m.awayTeamId)) continue;
     const home = mini.get(m.homeTeamId)!;
     const away = mini.get(m.awayTeamId)!;

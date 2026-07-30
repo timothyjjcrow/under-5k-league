@@ -2,6 +2,8 @@
 // (no DB). Unlike standings (regular season only), these summarize *all*
 // completed meetings, so playoff rematches show up in a team's history too.
 
+import { MATCH_STATUS } from "./constants";
+
 export type TeamMatchLike = {
   homeTeamId: string;
   awayTeamId: string;
@@ -28,7 +30,7 @@ export function recentForm(
   orderedMatches: TeamMatchLike[],
   limit = 5,
 ): FormResult[] {
-  const done = orderedMatches.filter((m) => m.status === "COMPLETED");
+  const done = orderedMatches.filter((m) => m.status === MATCH_STATUS.COMPLETED);
   return done
     .slice(-limit)
     .reverse()
@@ -70,7 +72,7 @@ export function headToHead(
 ): HeadToHead[] {
   const map = new Map<string, HeadToHead>();
   for (const m of matches) {
-    if (m.status !== "COMPLETED") continue;
+    if (m.status !== MATCH_STATUS.COMPLETED) continue;
     const isHome = m.homeTeamId === teamId;
     const isAway = m.awayTeamId === teamId;
     if (!isHome && !isAway) continue;

@@ -534,7 +534,7 @@ export async function importGameForMatch(
   // `games.length < bestOf` let a later import through and quietly replaced the
   // admin's forfeit ruling. Auto-sync and league sync already skip COMPLETED
   // matches; this closes the manual paths (admin "Add game", captain report).
-  if (match.status === "COMPLETED") {
+  if (match.status === MATCH_STATUS.COMPLETED) {
     return {
       ok: false,
       error:
@@ -595,7 +595,7 @@ export async function importGameForMatch(
           select: { status: true, bestOf: true, _count: { select: { games: true } } },
         });
         if (!fresh) throw new ImportRaceError("Unknown league match");
-        if (fresh.status === "COMPLETED") {
+        if (fresh.status === MATCH_STATUS.COMPLETED) {
           throw new ImportRaceError(
             "This series is already final — remove one of its games first if you need to correct it",
           );

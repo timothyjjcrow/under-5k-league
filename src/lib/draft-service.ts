@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { DEFAULTS, DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { DEFAULTS, DRAFT_STATUS, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { steamIdToAccountId } from "./dota";
 import {
   canBid,
@@ -606,7 +606,7 @@ export async function abortDraft(
     // recorded results AND imported games — a forfeit typed by the admin has no
     // Game rows, and an auto-synced game can land before the series completes.
     const [played, games] = await Promise.all([
-      tx.match.count({ where: { seasonId, status: "COMPLETED" } }),
+      tx.match.count({ where: { seasonId, status: MATCH_STATUS.COMPLETED } }),
       tx.game.count({ where: { match: { seasonId } } }),
     ]);
     if (played > 0 || games > 0) {

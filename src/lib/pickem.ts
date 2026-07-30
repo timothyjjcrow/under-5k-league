@@ -1,6 +1,8 @@
 // Pick'em math — pure and unit-tested. Members predict match winners; picks
 // lock at the scheduled start and grade against the recorded result.
 
+import { MATCH_STATUS } from "./constants";
+
 export type PredictionLike = {
   matchId: string;
   userId: string;
@@ -16,11 +18,11 @@ export type PickemMatchLike = {
 
 /** Whether a match still accepts (new or changed) predictions. */
 export function predictionOpen(m: PickemMatchLike, now = new Date()): boolean {
-  if (m.status === "COMPLETED") return false;
+  if (m.status === MATCH_STATUS.COMPLETED) return false;
   // A LIVE series has games in the books — a mid-series reschedule can move
   // scheduledAt back into the future, but picks with game 1's result public
   // would corrupt the oracle board.
-  if (m.status === "LIVE") return false;
+  if (m.status === MATCH_STATUS.LIVE) return false;
   if (m.scheduledAt && m.scheduledAt.getTime() <= now.getTime()) return false;
   return true;
 }
@@ -41,7 +43,7 @@ export function pickemStandings(
 ): PickemStanding[] {
   const decided = new Map(
     matches
-      .filter((m) => m.status === "COMPLETED" && m.winnerTeamId)
+      .filter((m) => m.status === MATCH_STATUS.COMPLETED && m.winnerTeamId)
       .map((m) => [m.id, m.winnerTeamId as string]),
   );
   const byUser = new Map<string, PickemStanding>();

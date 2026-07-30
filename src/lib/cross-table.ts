@@ -2,6 +2,8 @@
 // meeting, from the ROW team's perspective. Pure + DB-free — the schedule
 // page feeds it prisma Match rows, this does the pairing math.
 
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+
 export type CrossMatch = {
   id: string;
   week: number;
@@ -53,7 +55,7 @@ export function crossTable(
   const regular = matches
     .filter(
       (m) =>
-        m.phase === "REGULAR" &&
+        m.phase === MATCH_PHASE.REGULAR &&
         m.homeTeamId !== m.awayTeamId &&
         ids.has(m.homeTeamId) &&
         ids.has(m.awayTeamId),
@@ -67,12 +69,12 @@ export function crossTable(
     ] as const) {
       const mine = row === m.homeTeamId ? m.homeScore : m.awayScore;
       const theirs = row === m.homeTeamId ? m.awayScore : m.homeScore;
-      const played = m.status === "COMPLETED";
+      const played = m.status === MATCH_STATUS.COMPLETED;
       cells.get(row)!.get(col)!.push({
         matchId: m.id,
         week: m.week,
         played,
-        live: m.status === "LIVE",
+        live: m.status === MATCH_STATUS.LIVE,
         result: !played
           ? null
           : m.winnerTeamId === row

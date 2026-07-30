@@ -1,6 +1,8 @@
 // Pure helpers for surfacing outstanding results and gating the playoffs on a
 // fully-entered regular season. DB-free so they're unit-testable.
 
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+
 export type WeekStatus = {
   week: number;
   total: number;
@@ -28,12 +30,12 @@ type MatchLike = { week: number; phase: string; status: string };
 export function regularSeasonStatus(matches: MatchLike[]): RegularStatus {
   const byWeek = new Map<number, WeekStatus>();
   for (const m of matches) {
-    if (m.phase !== "REGULAR") continue;
+    if (m.phase !== MATCH_PHASE.REGULAR) continue;
     const w =
       byWeek.get(m.week) ??
       { week: m.week, total: 0, completed: 0, pending: 0 };
     w.total++;
-    if (m.status === "COMPLETED") w.completed++;
+    if (m.status === MATCH_STATUS.COMPLETED) w.completed++;
     else w.pending++;
     byWeek.set(m.week, w);
   }
