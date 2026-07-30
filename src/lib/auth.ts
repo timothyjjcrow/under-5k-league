@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "./prisma";
@@ -61,8 +62,16 @@ export async function destroySession() {
   cookieStore.delete(SESSION_COOKIE);
 }
 
-/** Resolve the currently logged-in user from the session cookie, or null. */
-export async function getSessionUser(): Promise<SessionUser | null> {
+/**
+ * Resolve the currently logged-in user from the session cookie, or null.
+ *
+ * cache(): one JWT verify + user read per RENDER PASS — the layout and the
+ * page (and getSeasonSnapshot) each call this, and they should share the
+ * answer. Outside a render dispatcher (route handlers, server actions)
+ * cache() passes through and every call reads fresh, so mutations are
+ * unaffected; the post-action re-render is a new pass with an empty cache.
+ */
+export const getSessionUser = cache(async function getSessionUser(): Promise<SessionUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -87,7 +96,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   } catch {
     return null;
   }
-}
+});
 
 export async function requireUser(): Promise<SessionUser> {
   const user = await getSessionUser();
