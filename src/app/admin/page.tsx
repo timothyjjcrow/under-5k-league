@@ -18,6 +18,7 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { nextAutoSyncAt } from "@/lib/result-sync";
+import { seatValue } from "@/lib/standin";
 import {
   createSeason,
   setSeasonPhase,
@@ -2323,7 +2324,7 @@ function StandinMatchBlock({
           {openSeats.length > 0 ? (
             <optgroup label="Open roster seat">
               {openSeats.map(({ team, open }) => (
-                <option key={`seat-${team.id}`} value={`seat:${team.id}`}>
+                <option key={`seat-${team.id}`} value={seatValue(team.id)}>
                   {team.name} — empty seat ({open} of {teamSize} unfilled)
                 </option>
               ))}

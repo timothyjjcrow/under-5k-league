@@ -9,6 +9,7 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
+import { parseSeatTarget } from "@/lib/standin";
 import {
   assignStandinGuarded,
   removeStandinGuarded,
@@ -35,7 +36,7 @@ export async function captainAssignStandin(
   // `seat:<teamId>` fills an EMPTY seat on a short roster. The service still
   // checks that the acting captain owns the team either way.
   const target = str(formData, "replacingUserId");
-  const seat = target.startsWith("seat:") ? target.slice(5) : null;
+  const seat = parseSeatTarget(target);
   const res = await assignStandinGuarded({
     matchId: str(formData, "matchId"),
     standinUserId: str(formData, "standinUserId"),

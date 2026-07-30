@@ -25,6 +25,7 @@ import {
 } from "@/lib/constants";
 import { roundRobin, matchNightForWeek, slotRound } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
+import { parseSeatTarget, pendingCoverWhere } from "@/lib/standin";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
 import {
@@ -764,10 +765,7 @@ export async function withdrawSignup(
     // Same hole as the self-serve path: removing a standin who still owes cover
     // leaves the covered team looking staffed by someone no longer in the league.
     prisma.standinAssignment.count({
-      where: {
-        standinUserId: reg.userId,
-        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-      },
+      where: pendingCoverWhere(reg.userId, season.id),
     }),
   ]);
   const gate = withdrawGateError({
@@ -807,10 +805,7 @@ export async function withdrawSignup(
     await prisma.$transaction(
       async (tx) => {
         const live = await tx.standinAssignment.count({
-          where: {
-            standinUserId: reg.userId,
-            match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-          },
+          where: pendingCoverWhere(reg.userId, season.id),
         });
         if (live > 0) throw new Error("COVER_APPEARED");
         await tx.registration.update({
@@ -1922,7 +1917,7 @@ export async function assignStandin(
   // One select carries both cases: a userId covers that player, `seat:<teamId>`
   // fills an EMPTY seat on a short roster (replacing nobody).
   const target = str(formData, "replacingUserId");
-  const seat = target.startsWith("seat:") ? target.slice(5) : null;
+  const seat = parseSeatTarget(target);
   const res = await assignStandinGuarded({
     matchId: str(formData, "matchId"),
     standinUserId: str(formData, "standinUserId"),
@@ -3219,10 +3214,7 @@ export async function promoteStandinToPlayer(
     }),
     prisma.draft.findUnique({ where: { seasonId: season.id } }),
     prisma.standinAssignment.count({
-      where: {
-        standinUserId: userId,
-        match: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
-      },
+      where: pendingCoverWhere(userId, season.id),
     }),
   ]);
   if (!registration) {
