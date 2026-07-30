@@ -1,5 +1,16 @@
 # Refactoring plan — 2026-07 architecture pass
 
+> **Outcome (2026-07-30):** every stage below landed on
+> `refactor/2026-07-architecture-pass` (~26 commits). Final matrix: tsc clean;
+> unit 1091; integration 570 (SQLite) and **570/570 on Postgres**; full
+> mutation `--discover` re-baseline **54/54 gradeable claims protected**
+> (59 total, 5 equivalent — one claim moved from
+> `inhouse-service::claimQueuePingThrottle` to the shared
+> `settings::claimThrottle`, one new `admin::withdrawSignup::status#1` added
+> and immediately protected); both Playwright suites green. Every new guard
+> and test was sabotage-verified red before being trusted. The Deferred and
+> Rejected sections below remain binding until re-argued with new evidence.
+
 The record of the 2026-07-30 architecture audit: what was changed, in what
 order, and — equally important — what was **deliberately not changed** and why.
 Read `docs/ARCHITECTURE.md` for the system map this audit was built on.
