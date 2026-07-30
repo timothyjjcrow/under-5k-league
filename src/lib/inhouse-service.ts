@@ -1217,6 +1217,41 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   //
   // The Elo scan deliberately stays OUTSIDE — it is a full-history read that
   // has no business holding a write transaction open.
+  // Computed OUT HERE, not inline in the claim's `data` below — and that is not
+  // a style choice. scripts/mutation-guard.mjs parses these writes to find the
+  // claims it ratchets, and an inline ternary in `data` made it stop seeing this
+  // one entirely: the claim went [GONE] against a baseline that still listed it,
+  // which is the ratchet's "a guard was removed or weakened" alarm. It fired on
+  // CI while a local --discover had been green, because the discover ran BEFORE
+  // the inline version was written. Keep `data` a flat object literal; hoist any
+  // expression that needs a conditional.
+  // `matchStartTime` is persisted into the EXISTING claim below rather than read
+  // from `r` at settlement time: any check performed AFTER a claim has to be
+  // computable from COLUMNS, because the request holding this BuiltResult is
+  // allowed to die (serverless, a dropped connection, a deploy). The late-bet
+  // void keys on Valve's own start_time, the one timestamp ten interested
+  // parties cannot forge, so the lazy sweeper hours later must reach the
+  // identical verdict to the fast path — and it can only do that if the number
+  // is on the row. Costs one field in a write that was already happening, and
+  // if the claim loses, nothing was stamped.
+  //
+  // The guard below it is BELT-AND-BRACES and UNREACHABLE TODAY, said plainly
+  // because "defensive" and "untested gap" look identical from here. Both
+  // result paths already floor start_time at the lobby createdAt (recordMatch
+  // refuses below it; findInhouseGame skips below it), so a 0 or missing value
+  // cannot arrive — which is also why no test can kill this predicate. It stays
+  // because the failure it prevents is silent and TOTAL: new Date(0) is 1970,
+  // every bet is then placedAt > matchStart, and the WHOLE pot voids to
+  // VOID_LATE. Nobody wins, nobody loses, and the feature simply looks broken
+  // with no error anywhere. Null instead means we cannot establish when the game
+  // began, so the late-bet rule is not enforced and the pot settles normally —
+  // failing OPEN, the right side when the uncertainty is ours not the bettor
+  // side's. If a THIRD result path is ever added, this is what stops it.
+  const matchStart =
+    Number.isFinite(r.startTime) && r.startTime > 0
+      ? new Date(r.startTime * 1000)
+      : null;
+
   const claimed = await prisma.$transaction(async (tx) => {
     const claim = await tx.inhouseLobby.updateMany({
       where: { id: lobbyId, status: INHOUSE_STATUS.IN_PROGRESS },
@@ -1229,38 +1264,7 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
         radiantScore: r.radiantScore,
         direScore: r.direScore,
         boxScore: JSON.stringify(r.boxScore),
-        // Persisted into the EXISTING claim rather than checked from `r` at
-        // settlement time: any check performed after a claim has to be
-        // computable from COLUMNS, because the request holding this
-        // BuiltResult is allowed to die (serverless, a dropped connection, a
-        // deploy). The late-bet void keys on Valve's own start_time — the one
-        // timestamp ten interested parties can't forge — so the lazy sweeper
-        // hours later must reach the identical verdict to the fast path, and
-        // it can only do that if the number is on the row. Costs one extra
-        // field in a write that was already happening, and if the claim
-        // loses, nothing was stamped.
-        //
-        // Belt-and-braces, and UNREACHABLE TODAY — said plainly, because
-        // "defensive" and "untested gap" look identical from here.
-        //
-        // Both result paths already floor `start_time` at the lobby's own
-        // createdAt (`recordMatch` refuses below it; `findInhouseGame` skips
-        // below it), so a 0 or missing value cannot arrive here — which is also
-        // why no test can kill this predicate. It stays because the failure it
-        // prevents is silent and total rather than partial: `new Date(0)` is
-        // 1970, every bet is then `placedAt > matchStart`, and the WHOLE pot
-        // voids to VOID_LATE. Nobody wins, nobody loses, and the feature simply
-        // looks broken with no error anywhere to explain it. Null instead means
-        // "we cannot establish when the game began, so don't enforce the
-        // late-bet rule" and the pot settles normally — failing OPEN, which is
-        // the right side when the uncertainty is ours and not the bettor's.
-        //
-        // If a THIRD result path is ever added, this is what stops it landing
-        // that outcome before anyone notices the floor was missing.
-        matchStartTime:
-          Number.isFinite(r.startTime) && r.startTime > 0
-            ? new Date(r.startTime * 1000)
-            : null,
+        matchStartTime: matchStart, // see the note above the claim
       },
     });
     // THE LAST LEGAL RETURN in this callback — nothing has been written.
