@@ -11,6 +11,7 @@ import {
   teamAvailability,
 } from "./availability";
 import { weekReminderKey } from "./settings";
+import { mentionsOf } from "./discord-mentions";
 
 /**
  * Lazy match-night reminder: the first page load after a league night enters
@@ -174,12 +175,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     }),
     // Only these exact ids may ring a phone — parse:[] still blocks everything
     // else, so a team name or persona in the same message stays inert.
-    {
-      users: fixtures
-        .flatMap((f) => f.waitingOn)
-        .map((p) => p.discordId)
-        .filter((id): id is string => !!id),
-    },
+    mentionsOf(fixtures.flatMap((f) => f.waitingOn).map((p) => p.discordId)),
   );
   if (!sent) {
     // A Discord blip must not eat the week's reminder — release the claim so
