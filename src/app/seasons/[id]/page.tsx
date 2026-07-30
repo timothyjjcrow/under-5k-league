@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
-import { StandingsTable } from "@/app/page";
+import { StandingsTable } from "@/components/standings-table-server";
 import {
   Avatar,
   Badge,

@@ -38,7 +38,7 @@ import {
   type RsvpSide,
   type WeekView,
 } from "@/components/schedule-weeks";
-import { StandingsTable } from "@/app/page";
+import { StandingsTable } from "@/components/standings-table-server";
 import {
   Card,
   CardBody,
