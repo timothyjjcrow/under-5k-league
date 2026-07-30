@@ -2016,4 +2016,58 @@ describe.skipIf(!ON_POSTGRES)("inhouse betting — claims that need a staged int
     ).toBe(0);
     await expectLedgerClosed();
   });
+
+  it("an admin deduction landing between the gate and the debit cannot overdraw", async () => {
+    // THE deterministic pin for `balance: { gte: stake }` in the debit.
+    //
+    // A RACED version of this exists above (adjustCred vs placeInhouseBet via
+    // raceAll) and it is NOT a reliable killer. The mutation ratchet caught
+    // that, which is the whole reason this test exists. With the predicate
+    // deleted, the raced version only goes red in ONE of the two orderings:
+    //
+    //   adjustCred first → balance 0 → blind debit → −100                → RED
+    //   the bet first    → balance 0 → adjustCred's own guard refuses    → GREEN
+    //
+    // On SQLite `raceAll` runs sequentially, so it always took the first path
+    // and looked like solid coverage. On Postgres — where the ratchet actually
+    // runs — the two are genuinely concurrent, so the mutant survived about
+    // half the time and the claim graded [unprotected]. A guard caught on a
+    // coin flip is not caught.
+    //
+    // The seam removes the coin flip by committing the rival at exactly the
+    // point between the gate's read and the debit. Safe on locks: at
+    // `beforeDebit` the open transaction has written NOTHING, so the
+    // InhouseCredit row is unlocked and the rival commits instead of blocking
+    // (rule 1 in race-hook.ts — a rival that touches an already-written row is
+    // a hang, not a failure).
+    const ctx = await readyLobby();
+    const me = ctx.t1[0];
+    await drainTo(ctx.admin, me.user.id, 100);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseBet.placeBet.beforeDebit", async () => {
+        fired = true;
+        // Takes the exact Cred this bet is about to stake, on another
+        // connection, after the gate has already read an affordable balance.
+        const res = await adjustCred(
+          ctx.admin,
+          me.user.id,
+          -100,
+          "clawback in the gap",
+        );
+        expect(res.ok).toBe(true);
+      }),
+    );
+
+    const res = await placeInhouseBet(me.session, 100);
+    expect(fired).toBe(true); // not a vacuous pass
+    // The debit re-asserts affordability at the WRITE, finds 0, matches no rows
+    // and refuses — rather than charging money that is no longer there.
+    expect(res.ok).toBe(false);
+    // The assertion that kills the mutant: blind, this lands at −100.
+    expect(await balanceOf(me.user.id)).toBe(0);
+    expect(await prisma.inhouseBet.count()).toBe(0);
+    await expectLedgerClosed();
+  });
 });

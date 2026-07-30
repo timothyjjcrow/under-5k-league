@@ -132,6 +132,23 @@ function fmtWhen(d: Date | null): string | null {
   });
 }
 
+/**
+ * Whole days from the repo's first commit to now, or null when git couldn't say.
+ *
+ * A plain module function, NOT inlined into `ProjectScale`, and deliberately not
+ * baked into project-stats.json either. Inlined it is a render-phase `Date.now()`
+ * that fails lint; baked, the figure freezes at whichever build last ran, which
+ * is exactly the "abandoned project" reading the footnote exists to avoid.
+ * Called from the async server component below, so it re-evaluates per request.
+ */
+function daysSinceFirstCommit(): number | null {
+  const { firstCommit } = projectStats;
+  if (!firstCommit) return null;
+  const started = new Date(firstCommit).getTime();
+  if (!Number.isFinite(started)) return null;
+  return Math.max(1, Math.round((Date.now() - started) / 86_400_000));
+}
+
 export default async function Home() {
   const user = await getSessionUser();
   const snapshot = await getSeasonSnapshot(user?.id);
@@ -439,7 +456,7 @@ export default async function Home() {
           the season, so it sits under whatever the season is doing. No
           Suspense: the figures are a static import, so there is nothing to
           wait for. */}
-      <ProjectScale />
+      <ProjectScale days={daysSinceFirstCommit()} />
     </div>
   );
 }
@@ -980,17 +997,17 @@ async function InhouseStrip() {
  * describe an abandoned project rather than a busy one. The stat has to match
  * how the work actually happened.
  *
- * `days` is derived at render rather than baked in, so it keeps counting
- * between deploys instead of freezing at whenever the last build ran.
+ * `days` is derived per REQUEST rather than baked into project-stats.json, so it
+ * keeps counting between deploys instead of freezing at whenever the last build
+ * ran. It arrives as a prop from `Home` via `daysSinceFirstCommit` rather than
+ * being computed here: `Date.now()` in a component body is an impure render-
+ * phase call and the linter fails the build on it (react-hooks purity rule),
+ * which is correct in general even though a server component re-renders per
+ * request. A plain helper called from the async component keeps the behaviour
+ * and drops the violation — do not inline it back.
  */
-function ProjectScale() {
-  const { codeLines, testLines, tests, commits, firstCommit } = projectStats;
-  const days = firstCommit
-    ? Math.max(
-        1,
-        Math.round((Date.now() - new Date(firstCommit).getTime()) / 86_400_000),
-      )
-    : null;
+function ProjectScale({ days }: { days: number | null }) {
+  const { codeLines, testLines, tests, commits } = projectStats;
   const n = (v: number) => v.toLocaleString("en-US");
   // A footnote, not a section. Every figure is a plain fact and none of them
   // is the reason anyone came to the page, so it gets one quiet line under

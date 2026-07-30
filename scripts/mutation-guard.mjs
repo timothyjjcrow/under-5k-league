@@ -111,6 +111,37 @@ const IDENTITY = new Set([
   "draftId", "gameId", "dotaMatchId", "registrationId", "steamId", "discordId",
 ]);
 
+/**
+ * Skip a `//` or block comment starting at `i`, returning the index to resume
+ * scanning from (or `i` when there is no comment there).
+ *
+ * BOTH scanners below need this and neither had it, which cost a red CI and a
+ * long diagnosis. They treat `'` as a string delimiter, so an ordinary prose
+ * comment inside a claim's object literal — "the lobby's", "don't", "the
+ * bettor's" — put an ODD number of apostrophes in their path, opened a phantom
+ * string, and desynced brace matching. The claim did not read as weakened: it
+ * vanished from discovery entirely, tripping the "a protected claim has
+ * DISAPPEARED" alarm against a baseline that still listed it.
+ *
+ * That failure mode is worse than it sounds, because it is SILENT in the other
+ * direction too. A `--discover` run after such an edit simply records the
+ * smaller claim set and reports all-clear, so the guard a comment happened to
+ * hide is dropped from the ratchet with nothing to say so. Comments in this
+ * repo are deliberately long and prose-heavy, so this was going to recur.
+ */
+function skipComment(src, i) {
+  if (src[i] !== "/") return i;
+  if (src[i + 1] === "/") {
+    const nl = src.indexOf("\n", i);
+    return nl === -1 ? src.length : nl;
+  }
+  if (src[i + 1] === "*") {
+    const end = src.indexOf("*/", i + 2);
+    return end === -1 ? src.length : end + 1;
+  }
+  return i;
+}
+
 /** The balanced {...} beginning at `open`. */
 function block(src, open) {
   let d = 0, inStr = null, esc = false;
@@ -118,6 +149,8 @@ function block(src, open) {
     const c = src[i];
     if (esc) { esc = false; continue; }
     if (inStr) { if (c === "\\") esc = true; else if (c === inStr) inStr = null; continue; }
+    const j = skipComment(src, i);
+    if (j !== i) { i = j; continue; }
     if (c === '"' || c === "'" || c === "`") { inStr = c; continue; }
     if (c === "{") d++;
     else if (c === "}") { d--; if (d === 0) return [open, i + 1]; }
@@ -133,6 +166,11 @@ function topKeys(src, s, e) {
     const c = src[i];
     if (esc) { esc = false; continue; }
     if (inStr) { if (c === "\\") esc = true; else if (c === inStr) inStr = null; continue; }
+    // Same reason as in `block` — and this scanner ALSO mis-read key names out
+    // of comment prose, which is how `refundLobbyBets`' signature acquired a
+    // phantom `write` key that no WHERE ever contained.
+    const j = skipComment(src, i);
+    if (j !== i) { i = j; continue; }
     if (c === '"' || c === "'" || c === "`") { inStr = c; continue; }
     if (c === "{" || c === "[" || c === "(") d++;
     else if (c === "}" || c === "]" || c === ")") d--;
@@ -144,6 +182,13 @@ function topKeys(src, s, e) {
           const cc = src[j];
           if (es) { es = false; continue; }
           if (st) { if (cc === "\\") es = true; else if (cc === st) st = null; continue; }
+          // Third scanner, same fix — and the most dangerous of the three to
+          // leave broken: this one decides where a predicate's value ENDS, i.e.
+          // the `drop` span `mutate()` physically deletes. A desync here cuts
+          // the wrong source text, so the "mutant" tested is not the mutant the
+          // report names.
+          const jj = skipComment(src, j);
+          if (jj !== j) { j = jj; continue; }
           if (cc === '"' || cc === "'" || cc === "`") { st = cc; continue; }
           if (cc === "{" || cc === "[" || cc === "(") dd++;
           else if (cc === "}" || cc === "]" || cc === ")") { if (dd === 0) break; dd--; }
