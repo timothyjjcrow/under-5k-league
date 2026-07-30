@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
-import { predictionOpen } from "@/lib/pickem";
+import { predictionOpen, predictionOpenWhere } from "@/lib/pickem";
 import { str } from "@/lib/form";
 import type { ActionResult } from "@/lib/action-result";
 
@@ -36,15 +36,40 @@ export async function savePrediction(
   if (pickedTeamId !== match.homeTeamId && pickedTeamId !== match.awayTeamId) {
     return { error: "Pick one of the two teams playing" };
   }
-  if (!predictionOpen(match)) {
-    return { error: "Predictions are locked for this match" };
-  }
-
-  await prisma.prediction.upsert({
-    where: { matchId_userId: { matchId, userId: user.id } },
-    create: { matchId, userId: user.id, pickedTeamId },
-    update: { pickedTeamId },
+  // The lock rides IN the write (rule 1: an auto-sync import can flip the
+  // match LIVE between any read-time check and the write — a post-information
+  // pick would corrupt the oracle board). There is deliberately NO standalone
+  // predictionOpen check up front: it would intercept every staged test and
+  // leave the WHERE unfalsifiable (the saveRegistration lesson).
+  const updated = await prisma.prediction.updateMany({
+    where: { matchId, userId: user.id, match: predictionOpenWhere() },
+    data: { pickedTeamId },
   });
+  if (updated.count === 0) {
+    // No row updated: either no pick exists yet, or the match locked. Re-read
+    // to discriminate, then create. The create leg keeps a residual
+    // read-then-insert window (create carries no relation WHERE) — accepted
+    // at play stakes.
+    const fresh = await prisma.match.findUnique({ where: { id: matchId } });
+    if (!fresh || !predictionOpen(fresh)) {
+      return { error: "Predictions are locked for this match" };
+    }
+    try {
+      await prisma.prediction.create({
+        data: { matchId, userId: user.id, pickedTeamId },
+      });
+    } catch (e) {
+      if ((e as { code?: string }).code !== "P2002") throw e;
+      // Two tabs raced the first pick — fall back to the guarded update.
+      const retry = await prisma.prediction.updateMany({
+        where: { matchId, userId: user.id, match: predictionOpenWhere() },
+        data: { pickedTeamId },
+      });
+      if (retry.count === 0) {
+        return { error: "Predictions are locked for this match" };
+      }
+    }
+  }
 
   revalidatePath("/pickem");
   const name =

@@ -4,6 +4,7 @@ import {
   pickemStandings,
   pickSplit,
   predictionOpen,
+  predictionOpenWhere,
 } from "./pickem";
 
 const m = (
@@ -116,5 +117,51 @@ describe("groupOpenByWeek", () => {
 
   it("handles an empty list", () => {
     expect(groupOpenByWeek([])).toEqual([]);
+  });
+});
+
+describe("predictionOpen and predictionOpenWhere agree on every state", () => {
+  // The action enforces the lock with the WHERE; the UI and the create-leg
+  // re-check use the boolean. If they drift, one of them lies. This sweep
+  // evaluates the WHERE fragment in JS against the same match grid (the
+  // registration.test.ts medalProvesIneligible↔registrationGate precedent).
+  function satisfiesWhere(
+    m: { status: string; scheduledAt: Date | null },
+    now: Date,
+  ): boolean {
+    const w = predictionOpenWhere(now);
+    if ((w.status.notIn as string[]).includes(m.status)) return false;
+    return w.OR.some((clause) =>
+      "scheduledAt" in clause && clause.scheduledAt === null
+        ? m.scheduledAt === null
+        : m.scheduledAt !== null &&
+          m.scheduledAt.getTime() >
+            (clause.scheduledAt as { gt: Date }).gt.getTime(),
+    );
+  }
+
+  it("sweeps status × scheduledAt", () => {
+    const now = new Date("2026-07-30T20:00:00Z");
+    const statuses = ["SCHEDULED", "LIVE", "COMPLETED"];
+    const times: (Date | null)[] = [
+      null,
+      new Date(now.getTime() - 3600_000), // past
+      new Date(now.getTime()), // exactly now (locked — predictionOpen uses <=)
+      new Date(now.getTime() + 3600_000), // future
+    ];
+    for (const status of statuses) {
+      for (const scheduledAt of times) {
+        const m = {
+          id: "m",
+          status,
+          winnerTeamId: null,
+          scheduledAt,
+        };
+        expect(
+          satisfiesWhere(m, now),
+          `status=${status} scheduledAt=${scheduledAt?.toISOString() ?? "null"}`,
+        ).toBe(predictionOpen(m, now));
+      }
+    }
   });
 });

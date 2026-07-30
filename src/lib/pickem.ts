@@ -27,6 +27,20 @@ export function predictionOpen(m: PickemMatchLike, now = new Date()): boolean {
   return true;
 }
 
+/**
+ * predictionOpen as a Match WHERE fragment, so the lock can be carried in the
+ * write itself (the repo's concurrency rule 1: a read-time check is not a
+ * guard — an auto-sync import can flip the match LIVE between the check and
+ * the upsert, accepting a post-information pick). A unit sweep pins that this
+ * and predictionOpen agree on every state — edit them together.
+ */
+export function predictionOpenWhere(now = new Date()) {
+  return {
+    status: { notIn: [MATCH_STATUS.COMPLETED, MATCH_STATUS.LIVE] },
+    OR: [{ scheduledAt: null }, { scheduledAt: { gt: now } }],
+  };
+}
+
 export type PickemStanding = {
   userId: string;
   correct: number;
