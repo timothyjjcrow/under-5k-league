@@ -119,43 +119,116 @@ export type GuildMemberInfo =
 const UNKNOWN_MEMBER = 10007;
 const UNKNOWN_USER = 10013; // account deleted — equally not in the server
 
+// ---------------------------------------------------------------------------
+// Member-route rate pacing. Discord's per-guild bucket for GET member is
+// single-digit requests per second, and the funnel sweeps every linked player
+// at once — on the first production run exactly one bucket's worth answered
+// and the other eleven burned into 429s, rendering as "couldn't check 11".
+// Two halves, both needed: read X-RateLimit-Remaining/Reset-After off every
+// response and PAUSE before spending a request the bucket can't honor, and on
+// an actual 429 honor retry_after with ONE retry. Waits are capped: a
+// retry_after longer than the cap means give up as unknown now rather than
+// dangle a render — the sweep's aggregate deadline and /me's blocking path
+// both depend on no single lookup stalling for long.
+// ---------------------------------------------------------------------------
+
+const RATE_WAIT_MAX_MS = 2_500;
+/** guildId → epoch-ms until which the member bucket is known to be empty. */
+const memberRouteBlocked = new Map<string, number>();
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Wait out a known-empty bucket. False = the wait exceeds the cap — don't
+ *  spend a request on a guaranteed 429. */
+async function memberGateWait(guildId: string): Promise<boolean> {
+  const wait = (memberRouteBlocked.get(guildId) ?? 0) - Date.now();
+  if (wait <= 0) return true;
+  if (wait > RATE_WAIT_MAX_MS) return false;
+  await sleep(wait);
+  return true;
+}
+
+function noteMemberRoute(guildId: string, blockedForSec: number): void {
+  if (!Number.isFinite(blockedForSec) || blockedForSec < 0) return;
+  memberRouteBlocked.set(
+    guildId,
+    Math.max(
+      memberRouteBlocked.get(guildId) ?? 0,
+      Date.now() + blockedForSec * 1000,
+    ),
+  );
+}
+
+export function _clearMemberRouteGateForTests(): void {
+  memberRouteBlocked.clear();
+}
+
 /**
  * The raw member lookup. One GET answers both questions this app has about a
  * member — "are they in the server?" (membership, with Membership Screening's
  * `pending` kept distinct because a pending member can't read or be pinged)
  * and "which roles do they hold?" — so surfaces that need both (/me) pay for
- * one request, not two.
+ * one request, not two. Rate-paced via the gate above; a lookup the bucket
+ * cannot honor inside the wait cap degrades to null (unknown), never to a
+ * fabricated answer.
  */
 export async function fetchGuildMember(
   discordId: string,
   cfg: GuildConfig,
 ): Promise<GuildMemberInfo> {
-  const res = await call(
-    cfg,
-    `/guilds/${cfg.guildId}/members/${discordId}`,
-    "GET",
-  );
-  if (!res) return null;
-  if (res.status === 404) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!(await memberGateWait(cfg.guildId))) return null;
+    const res = await call(
+      cfg,
+      `/guilds/${cfg.guildId}/members/${discordId}`,
+      "GET",
+    );
+    if (!res) return null;
+    if (res.status === 429) {
+      // Body retry_after (float seconds) is the precise value; the
+      // Retry-After header is the whole-second fallback. No parseable value
+      // still blocks the route briefly — a free-spinning retry loop against a
+      // 429 is the one thing this must never become.
+      let retryAfter = Number(res.headers.get("retry-after"));
+      try {
+        const body = (await res.json()) as { retry_after?: unknown };
+        if (typeof body?.retry_after === "number") retryAfter = body.retry_after;
+      } catch {
+        /* headers-only is fine */
+      }
+      noteMemberRoute(cfg.guildId, Number.isFinite(retryAfter) ? retryAfter : 1);
+      continue; // second pass re-enters the gate: waits if capped, else null
+    }
+    // Proactive half: when this response spent the bucket's last request,
+    // remember when it refills so the NEXT lookup waits instead of 429ing.
+    if (Number(res.headers.get("x-ratelimit-remaining")) === 0) {
+      noteMemberRoute(
+        cfg.guildId,
+        Number(res.headers.get("x-ratelimit-reset-after")),
+      );
+    }
+    if (res.status === 404) {
+      try {
+        const body = (await res.json()) as { code?: unknown };
+        return body?.code === UNKNOWN_MEMBER || body?.code === UNKNOWN_USER
+          ? { membership: "not-member" }
+          : null; // Unknown Guild etc. — OUR configuration's problem, not theirs
+      } catch {
+        return null;
+      }
+    }
+    if (!res.ok) return null;
     try {
-      const body = (await res.json()) as { code?: unknown };
-      return body?.code === UNKNOWN_MEMBER || body?.code === UNKNOWN_USER
-        ? { membership: "not-member" }
-        : null; // Unknown Guild etc. — OUR configuration's problem, not theirs
+      const body = (await res.json()) as { roles?: unknown; pending?: unknown };
+      return {
+        membership: body?.pending === true ? "pending" : "member",
+        roles: Array.isArray(body.roles) ? (body.roles as string[]) : [],
+      };
     } catch {
       return null;
     }
   }
-  if (!res.ok) return null;
-  try {
-    const body = (await res.json()) as { roles?: unknown; pending?: unknown };
-    return {
-      membership: body?.pending === true ? "pending" : "member",
-      roles: Array.isArray(body.roles) ? (body.roles as string[]) : [],
-    };
-  } catch {
-    return null;
-  }
+  return null; // second 429 — the bucket is being contested; unknown for now
 }
 
 /** Membership alone, for surfaces that don't care about roles. */
@@ -269,6 +342,7 @@ export function primeMembershipMemo(
 export function _clearMembershipMemoForTests(): void {
   membershipMemo.clear();
   membershipInflight.clear();
+  _clearMemberRouteGateForTests();
 }
 
 /**

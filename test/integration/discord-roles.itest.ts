@@ -46,7 +46,12 @@ type Recorded = {
 let server: Server;
 let base: string;
 let recorded: Recorded[] = [];
-let respond: (r: Recorded) => { status: number; body?: unknown };
+let respond: (r: Recorded) => {
+  status: number;
+  body?: unknown;
+  /** Extra response headers — the rate-pacing tests speak X-RateLimit-*. */
+  headers?: Record<string, string>;
+};
 
 const GUILD = "900000000000000001";
 const ROLE = "900000000000000002";
@@ -71,7 +76,10 @@ beforeAll(async () => {
       };
       recorded.push(entry);
       const out = respond(entry);
-      res.writeHead(out.status, { "content-type": "application/json" });
+      res.writeHead(out.status, {
+        "content-type": "application/json",
+        ...(out.headers ?? {}),
+      });
       res.end(JSON.stringify(out.body ?? {}));
     });
   });
@@ -566,6 +574,98 @@ describe("guildMembership / fetchGuildMember", () => {
     const info = await fetchGuildMember(MEMBER, guildCfg());
     expect(info).toEqual({ membership: "member", roles: [ROLE] });
     expect(recorded).toHaveLength(1);
+  });
+});
+
+// The member-route pacing. On the first production sweep exactly one
+// bucket's worth of lookups answered and the other eleven burned into 429s —
+// "couldn't check 11" on the one card the admin reads before the draft.
+describe("member lookup rate pacing", () => {
+  const guildCfg = () => ({ token: "test-token", guildId: GUILD, apiBase: base });
+  const MEMBER_OK = { status: 200, body: { pending: false, roles: [] } };
+
+  it("honors retry_after on a 429 and completes on the single retry", async () => {
+    let calls = 0;
+    respond = () =>
+      ++calls === 1
+        ? { status: 429, body: { retry_after: 0.05, global: false } }
+        : MEMBER_OK;
+    expect(await guildMembership(MEMBER, guildCfg())).toBe("member");
+    expect(recorded).toHaveLength(2);
+  });
+
+  it("gives up as unknown when Discord asks for a longer wait than the cap", async () => {
+    // A 30s retry_after must not dangle a render — and must not be answered
+    // with a second request that is a guaranteed 429.
+    respond = () => ({ status: 429, body: { retry_after: 30 } });
+    expect(await guildMembership(MEMBER, guildCfg())).toBeNull();
+    expect(recorded).toHaveLength(1);
+  });
+
+  it("paces the NEXT lookup off the rate headers instead of burning it into a 429", async () => {
+    // The stand-in enforces its own bucket: the first response announces
+    // empty-until-t, and a second request arriving BEFORE t gets a 429.
+    // Without the proactive gate the client would eat that 429 and pay a
+    // third request on retry — so asserting exactly two requests is what
+    // proves the pacing, not just the outcome.
+    let notBefore = 0;
+    respond = () => {
+      if (notBefore === 0) {
+        notBefore = Date.now() + 60;
+        return {
+          ...MEMBER_OK,
+          headers: {
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset-after": "0.06",
+          },
+        };
+      }
+      return Date.now() < notBefore
+        ? { status: 429, body: { retry_after: 0.06 } }
+        : MEMBER_OK;
+    };
+    const A = "800000000000000031";
+    const B = "800000000000000032";
+    expect(await memoGuildMembership(A, guildCfg(), 1000)).toBe("member");
+    expect(await memoGuildMembership(B, guildCfg(), 1000)).toBe("member");
+    expect(recorded).toHaveLength(2);
+  });
+
+  it("a rate-limited burst completes within one sweep instead of leaving a tail unknown", async () => {
+    // The production shape: a bucket of 5 per window against a 12-player
+    // sweep. Every id must classify on the first pass — pacing, not luck.
+    const WINDOW_MS = 60;
+    let windowStart = Date.now();
+    let used = 0;
+    respond = () => {
+      const now = Date.now();
+      if (now - windowStart >= WINDOW_MS) {
+        windowStart = now;
+        used = 0;
+      }
+      if (++used > 5) {
+        return {
+          status: 429,
+          body: { retry_after: (windowStart + WINDOW_MS - now) / 1000 },
+        };
+      }
+      return used === 5
+        ? {
+            ...MEMBER_OK,
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset-after": String(
+                (windowStart + WINDOW_MS - now) / 1000,
+              ),
+            },
+          }
+        : MEMBER_OK;
+    };
+    const ids = Array.from({ length: 12 }, (_, i) => `8000000000000001${String(i).padStart(2, "0")}`);
+    const out = await sweepGuildMemberships(ids, guildCfg());
+    const unknowns = ids.filter((id) => out.get(id) === null);
+    expect(unknowns).toEqual([]);
+    expect([...out.values()].every((v) => v === "member")).toBe(true);
   });
 });
 

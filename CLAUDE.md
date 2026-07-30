@@ -543,7 +543,16 @@ is the point at which someone has to justify it.
     a real answer the dashboard nag renders from. `sweepGuildMemberships` has
     an aggregate `SWEEP_DEADLINE_MS` (8s): the per-call 4s timeout compounds
     across serial batches, and past the budget ids come back null — the
-    funnel's honest couldn't-check count, never silently dropped.
+    funnel's honest couldn't-check count, never silently dropped. The member
+    lookup is RATE-PACED (first prod sweep: one bucket's worth answered, the
+    other 11 burned into 429s and read "couldn't check 11"): it reads
+    X-RateLimit-Remaining/Reset-After off every response and waits out a
+    known-empty bucket before spending a request on a guaranteed 429, and an
+    actual 429 honors retry_after with ONE capped retry (`RATE_WAIT_MAX_MS`
+    2.5s — longer means unknown NOW, because /me's blocking render and the
+    sweep deadline both sit on top of this). The stand-in tests enforce their
+    own bucket server-side, so the exact request COUNT is what proves the
+    pacing, not just the outcome.
   * **The join CTAs carry three DISTINCT names on purpose** ("Join the
     server" = one-click re-OAuth in `DiscordJoinCard`; "Use the invite
     instead" beside it; "Join via the invite" in /me's strip — and the pending
