@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { REGISTRATION_STATUS } from "./constants";
-import { getSetting, SETTING_KEYS } from "./settings";
+import { getInhousePingRoleId } from "./discord";
 
 // Self-serve opt-in to the inhouse ping role.
 //
@@ -55,10 +55,7 @@ export function getGuildConfig(): GuildConfig | null {
 export async function getRoleConfig(): Promise<RoleConfig | null> {
   const guild = getGuildConfig();
   if (!guild) return null;
-  const roleId =
-    (await getSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID)) ||
-    process.env.DISCORD_INHOUSE_ROLE_ID ||
-    null;
+  const roleId = await getInhousePingRoleId();
   if (!roleId) return null;
   return { ...guild, roleId };
 }
@@ -287,10 +284,7 @@ const CREATE_INSTANT_INVITE = BigInt("1");
 export async function getPingHealth(): Promise<PingHealth> {
   const hasToken = !!process.env.DISCORD_BOT_TOKEN;
   const hasGuild = !!process.env.DISCORD_GUILD_ID;
-  const roleId =
-    (await getSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID)) ||
-    process.env.DISCORD_INHOUSE_ROLE_ID ||
-    null;
+  const roleId = await getInhousePingRoleId();
   const base: PingHealth = {
     hasToken,
     hasGuild,

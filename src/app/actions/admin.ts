@@ -2499,6 +2499,9 @@ async function syncRanksFor(
   return { ranked, unreachable, skipped, outage };
 }
 
+// One validation regex for all three webhook fields — they must never drift.
+const DISCORD_WEBHOOK_URL_RE = /^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//;
+
 const OPENDOTA_OUTAGE_MSG =
   "OpenDota isn't responding right now — no medals were changed. Try again in a few minutes.";
 
@@ -2776,7 +2779,7 @@ export async function setDiscordWebhook(
         "No change — paste a new URL to replace it, or press \u201cRemove webhook\u201d to turn announcements off.",
     };
   }
-  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -2866,7 +2869,7 @@ export async function setInhouseWebhook(
         "No change — paste a new URL to replace it, or press \u201cUse the league channel instead\u201d to stop posting inhouse to its own channel.",
     };
   }
-  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -2936,7 +2939,7 @@ export async function setInhouseAlertWebhook(
         "No change — paste a new URL to replace it, or press \u201cSend alerts to the board channel instead\u201d to stop using a separate alerts channel.",
     };
   }
-  if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(value)) {
+  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",

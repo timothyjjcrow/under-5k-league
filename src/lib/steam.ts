@@ -7,6 +7,19 @@
 
 const STEAM_OPENID = "https://steamcommunity.com/openid/login";
 
+/**
+ * Fallback identity for a player whose Steam data is missing. The create-path
+ * fallback (users.ts) must match what a later successful fetch would replace,
+ * so every site builds these strings here.
+ */
+export function placeholderPersona(steamId: string): string {
+  return `Player ${steamId.slice(-5)}`;
+}
+
+export function steamProfileUrl(steamId: string): string {
+  return `https://steamcommunity.com/profiles/${steamId}`;
+}
+
 export function buildSteamLoginUrl(returnTo: string, realm: string): string {
   const params = new URLSearchParams({
     "openid.ns": "http://specs.openid.net/auth/2.0",
@@ -114,10 +127,9 @@ export async function fetchSteamProfile(
     const p = data?.response?.players?.[0];
     if (!p) return null;
     return {
-      name: p.personaname || `Player ${steamId.slice(-5)}`,
+      name: p.personaname || placeholderPersona(steamId),
       avatar: p.avatarfull || null,
-      profileUrl:
-        p.profileurl || `https://steamcommunity.com/profiles/${steamId}`,
+      profileUrl: p.profileurl || steamProfileUrl(steamId),
     };
   } catch {
     return null;
@@ -148,7 +160,7 @@ export async function fetchSteamProfiles(
       const data = await res.json();
       for (const p of data?.response?.players ?? []) {
         out.set(String(p.steamid), {
-          name: p.personaname || `Player ${String(p.steamid).slice(-5)}`,
+          name: p.personaname || placeholderPersona(String(p.steamid)),
           avatar: p.avatarfull || null,
           profileUrl: p.profileurl || null,
         });
