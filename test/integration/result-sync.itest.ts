@@ -12,6 +12,7 @@ import {
 } from "@/lib/constants";
 import { steamIdToAccountId } from "@/lib/dota";
 import { runResultSync } from "@/lib/result-sync-service";
+import { syncLeagueGames } from "@/lib/match-import";
 import { SETTING_KEYS } from "@/lib/settings";
 import { makeSeason, makeTeam, makeUser } from "./factories";
 
@@ -446,6 +447,61 @@ describe("result sync — league matches (integration)", () => {
     expect(again.imported).toBe(0);
     expect(again.watch).toBe(true);
     expect(mockLeague).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("result sync — league feed outage (integration)", () => {
+  // fetchLeagueMatchIds now signals unreachable as null (the
+  // fetchRecentMatchIds contract). The auto path claims its throttle BEFORE
+  // fetching, so without the rollback every outage tick cost one full
+  // LEAGUE_INTERVAL_SECONDS; and the admin's manual toast implied "zero
+  // league games" during a blip.
+  it("rolls the burned throttle claim back so the next tick retries", async () => {
+    const { season } = await setupNight({ offsetMs: -60 * 60_000 });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18181" },
+    });
+    mockLeague.mockResolvedValue(null);
+
+    await runResultSync();
+    expect(mockLeague).toHaveBeenCalledTimes(1);
+    // Claim rolled back — the throttle row is gone, so the very next run
+    // re-claims instead of waiting out the interval.
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: SETTING_KEYS.LEAGUE_AUTO_SYNC_AT },
+      }),
+    ).toBeNull();
+
+    mockLeague.mockResolvedValue([]);
+    await runResultSync();
+    expect(mockLeague).toHaveBeenCalledTimes(2); // retried immediately
+    // A genuinely-empty feed keeps its claim (no rollback).
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: SETTING_KEYS.LEAGUE_AUTO_SYNC_AT },
+      }),
+    ).not.toBeNull();
+  });
+
+  it("syncLeagueGames reports unreachable with an error, empty without", async () => {
+    const { season } = await setupNight({ offsetMs: -60 * 60_000 });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18181" },
+    });
+
+    mockLeague.mockResolvedValue(null);
+    const down = await syncLeagueGames(season.id);
+    expect(down.unreachable).toBe(true);
+    expect(down.error).toMatch(/unreachable/i);
+    expect(down.imported).toBe(0);
+
+    mockLeague.mockResolvedValue([]);
+    const empty = await syncLeagueGames(season.id);
+    expect(empty.unreachable).toBeUndefined();
+    expect(empty.error).toBeUndefined();
   });
 });
 

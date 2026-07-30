@@ -942,6 +942,8 @@ export type LeagueSyncResult = {
   imported: number;
   scanned: number;
   error?: string;
+  /** OpenDota didn't answer — the caller may retry sooner than usual. */
+  unreachable?: boolean;
 };
 
 /**
@@ -974,6 +976,17 @@ export async function syncLeagueGames(
   }
 
   const leagueMatchIds = await fetchLeagueMatchIds(season.dotaLeagueId);
+  if (leagueMatchIds === null) {
+    // Per-game fetch failures below stay `continue` (transient per-id); a
+    // null LIST means the feed itself was unreachable — say so instead of
+    // reporting a success-shaped "imported 0 of 0".
+    return {
+      imported: 0,
+      scanned: 0,
+      unreachable: true,
+      error: "OpenDota is unreachable right now — try again in a minute",
+    };
+  }
   const scheduled = await prisma.match.findMany({
     where: { seasonId },
     include: { games: { select: { id: true } } },

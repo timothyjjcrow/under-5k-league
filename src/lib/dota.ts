@@ -205,21 +205,31 @@ export async function fetchPlayerRankTier(
   return (await fetchRankTier(accountId)).rankTier;
 }
 
-/** All match ids for a Valve league id (from OpenDota /leagues/{id}/matches). */
-export async function fetchLeagueMatchIds(leagueId: string): Promise<number[]> {
+/**
+ * All match ids for a Valve league id (from OpenDota /leagues/{id}/matches).
+ *
+ * `null` means OpenDota was UNREACHABLE (429/5xx/timeout/garbage) — the
+ * fetchRecentMatchIds contract — vs `[]` for a league with genuinely no
+ * games. Collapsing both to [] left syncLeagueGames unable to tell an outage
+ * from an empty league: the auto path burned its throttle interval and the
+ * admin's manual toast implied zero league games during a blip.
+ */
+export async function fetchLeagueMatchIds(
+  leagueId: string,
+): Promise<number[] | null> {
   try {
     const res = await fetch(withKey(`${BASE}/leagues/${leagueId}/matches`), {
       cache: "no-store",
       signal: AbortSignal.timeout(12000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = await res.json();
-    if (!Array.isArray(data)) return [];
+    if (!Array.isArray(data)) return null;
     return data
       .map((m: { match_id?: number }) => m.match_id)
       .filter((x): x is number => typeof x === "number");
   } catch {
-    return [];
+    return null;
   }
 }
 

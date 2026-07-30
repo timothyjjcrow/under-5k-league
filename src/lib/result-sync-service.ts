@@ -122,6 +122,18 @@ async function syncDueMatches(
       return { imported: 0, watch: true };
     }
     const res = await syncLeagueGames(season.id, { auto: true });
+    if (res.unreachable) {
+      // Roll our own claim back so the next tick can retry immediately —
+      // otherwise every outage tick costs one full throttle interval (the
+      // roster path's rollback pattern). Value-scoped to the exact ISO
+      // claimThrottle stamped, so a NEWER claim is never deleted.
+      await prisma.setting.deleteMany({
+        where: {
+          key: SETTING_KEYS.LEAGUE_AUTO_SYNC_AT,
+          value: new Date(nowMs).toISOString(),
+        },
+      });
+    }
     return { imported: res.imported, watch: true };
   }
 
