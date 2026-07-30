@@ -800,6 +800,10 @@ export async function withdrawSignup(
   // in that window and this removal both commit, leaving a REMOVED standin
   // holding live cover. Re-counting inside the transaction is what lets Postgres
   // see the cycle.
+  // Test seam: the gap between the gate reads above and the transaction below
+  // — fires BEFORE the tx (the leaveLeague placement) so the rival commits
+  // before the snapshot and the test runs on SQLite too.
+  await raceHook("admin.withdrawSignup.beforeTx");
   try {
     await prisma.$transaction(
       async (tx) => {
@@ -807,18 +811,45 @@ export async function withdrawSignup(
           where: pendingCoverWhere(reg.userId, season.id),
         });
         if (live > 0) throw new Error("COVER_APPEARED");
-        await tx.registration.update({
-          where: { id: reg.id },
+        // Re-check the roster seat too — leaveLeague's comment records that a
+        // draft sale or free-agent signing in this gap "let a ROSTERED player
+        // withdraw". TeamMember is a table this tx otherwise never reads, so
+        // the Serializable pairing argued above cannot see that cycle without
+        // this read.
+        const seated = await tx.teamMember.findUnique({
+          where: {
+            seasonId_userId: { seasonId: season.id, userId: reg.userId },
+          },
+        });
+        if (seated) {
+          throw new Error(seated.isCaptain ? "IS_CAPTAIN" : "IS_ROSTERED");
+        }
+        // Status carried in the WHERE (rule 1): a blind update stamped
+        // REMOVED over a concurrent self-withdrawal or reinstate.
+        const claimed = await tx.registration.updateMany({
+          where: { id: reg.id, status: REGISTRATION_STATUS.ACTIVE },
           data: { status: REGISTRATION_STATUS.REMOVED },
         });
+        if (claimed.count === 0) throw new Error("STATUS_CHANGED");
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
-    if ((e as Error).message === "COVER_APPEARED")
+    const msg = (e as Error).message;
+    if (msg === "COVER_APPEARED")
       return {
         error: `${reg.user.name} was just assigned to stand in for an unplayed match — remove that assignment first.`,
       };
+    if (msg === "IS_CAPTAIN")
+      return {
+        error: `${reg.user.name} captains a team — transfer the captaincy first.`,
+      };
+    if (msg === "IS_ROSTERED")
+      return {
+        error: `${reg.user.name} is on a roster — release them from the team first.`,
+      };
+    if (msg === "STATUS_CHANGED")
+      return { error: "That signup just changed — reload and try again." };
     if ((e as { code?: string }).code === "P2034")
       return { error: "That signup just changed — reload and try again." };
     throw e;
