@@ -122,14 +122,9 @@ const PHASE_STEP: Record<string, string> = {
 };
 
 function fmtWhen(d: Date | null): string | null {
-  if (!d) return null;
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  // Delegates to formatMatchTime — these strings are LocalTime hydration
+  // snapshots, so drifting from the client's formatter causes flicker.
+  return d ? formatMatchTime(d, "full") : null;
 }
 
 /**

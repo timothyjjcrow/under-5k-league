@@ -1,17 +1,9 @@
 import { prisma } from "./prisma";
 import { heroById } from "./heroes";
 import { weeklyHonors, type HonorsGame, type WeeklyHonors } from "./honors";
+import { parseGamePlayers } from "./player-stats";
 import { getSetting } from "./settings";
 import { getWebhookUrl, sendDiscordMessage, weeklyHonorsMessage } from "./discord";
-
-function parsePlayers(json: string): HonorsGame["players"] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
 
 /** Compute one week's honors from the season's imported games. */
 export async function getWeekHonors(
@@ -31,7 +23,7 @@ export async function getWeekHonors(
   return weeklyHonors(
     games.map((g) => ({
       radiantWin: g.radiantWin,
-      players: parsePlayers(g.players),
+      players: parseGamePlayers<HonorsGame["players"][number]>(g.players),
     })),
     new Map(members.map((m) => [m.userId, m.teamId])),
   );

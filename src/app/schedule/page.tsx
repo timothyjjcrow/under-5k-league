@@ -54,26 +54,16 @@ export const metadata = { title: "Schedule" };
 
 type MatchStandin = StandinAssignment & { standin: User; replaced: User | null };
 
+// Both delegate to formatMatchTime — these strings are LocalTime hydration
+// snapshots, so drifting from the client's formatter causes flicker.
+// "full" keeps the weekday ("Sat" is what players actually plan around);
+// "short" is the phone-width variant where it doesn't fit between team names.
 function fmtWhen(d: Date | null): string | null {
-  if (!d) return null;
-  // Weekday included — "Sat" is what players actually plan around.
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return d ? formatMatchTime(d, "full") : null;
 }
 
-// Phone-width variant: the weekday doesn't fit between two team names.
 function fmtWhenShort(d: Date): string {
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return formatMatchTime(d, "short");
 }
 
 // Strip the RSVP summary to the two numbers the row badge shows.
