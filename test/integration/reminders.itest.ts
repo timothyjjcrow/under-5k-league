@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
@@ -157,5 +158,50 @@ describe("week reminder — reaching the people who owe an answer", () => {
     expect(mentions?.users ?? []).toHaveLength(0);
     expect(content).toContain("NL0");
     expect(content).not.toContain("<@null>");
+  });
+});
+
+describe("week reminder — the empty-week race releases the claim", () => {
+  // The claim is created BEFORE the fixtures fetch, and an auto-sync
+  // completion (any page view) can flip the week's sole in-window match
+  // COMPLETED in that gap. The empty-fetch branch used to bare-return with
+  // the marker held — permanently suppressing the week even if a retime
+  // brought fixtures back. It now releases the claim like the failed-send
+  // path. No consistent DB state can stage this (probe and fetch share
+  // predicates), hence the seam.
+  afterEach(() => setRaceHook(null));
+
+  it("releases the marker when the week empties mid-call, and can announce later", async () => {
+    const { season, match } = await setupWeek(4);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("weekReminder.afterClaim", async () => {
+        fired = true;
+        // The rival commits on its own connection; no transaction is open at
+        // the hook point, so this is SQLite-safe (the leaveLeague placement).
+        await prisma.match.update({
+          where: { id: match.id },
+          data: { status: "COMPLETED" },
+        });
+      }),
+    );
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
+    expect(fired).toBe(true); // seam reached — not a vacuous pass
+    expect(mockSend).not.toHaveBeenCalled();
+    const marker = await prisma.setting.findUnique({
+      where: { key: `weekReminder:${season.id}:1` },
+    });
+    expect(marker).toBeNull(); // claim released, not burned
+
+    // The week comes back (reopened / retimed) → the reminder still fires.
+    setRaceHook(null);
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: "SCHEDULED" },
+    });
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
   });
 });

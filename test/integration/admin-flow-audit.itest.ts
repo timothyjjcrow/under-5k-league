@@ -31,6 +31,7 @@ import {
   signFreeAgent,
   setLeagueId,
   setMatchTime,
+  reinstateSignup,
   setSeasonPhase,
   withdrawSignup,
 } from "@/app/actions/admin";
@@ -655,5 +656,47 @@ describe("assignStandin unpacks the empty-seat option from the form", () => {
       where: { matchId: match.id },
     });
     expect(row.replacingUserId).toBe(covered.id);
+  });
+});
+
+describe("reinstateSignup medal advisory", () => {
+  // The flag flow is one-way: syncPlayerRanks names over-ceiling signups in
+  // its own toast and expects a withdraw — nothing warned when the same admin
+  // later REINSTATED a flagged signup. Advisory only, never a gate: the
+  // mutation must succeed either way (operator's call).
+  async function removedSignup(rankTier: number | null) {
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    const user = await prisma.user.create({
+      data: { steamId: `7656119${Math.floor(Math.random() * 1e10)}`, name: "Flagged", rankTier },
+    });
+    const reg = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "REMOVED",
+        mmr: 4000,
+      },
+    });
+    return { season, user, reg };
+  }
+
+  it("appends the over-ceiling warning for an Immortal medal", async () => {
+    const { reg } = await removedSignup(80); // Immortal
+    const res = await reinstateSignup(empty, fd({ registrationId: reg.id }));
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toContain("⚠️");
+    expect(res?.message).toContain("review before the draft");
+    const after = await prisma.registration.findUniqueOrThrow({
+      where: { id: reg.id },
+    });
+    expect(after.status).toBe("ACTIVE"); // never a gate
+  });
+
+  it("keeps the plain message for an ordinary medal", async () => {
+    const { reg } = await removedSignup(44); // Archon 4
+    const res = await reinstateSignup(empty, fd({ registrationId: reg.id }));
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toBe("Flagged is back in the pool");
   });
 });

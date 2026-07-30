@@ -11,6 +11,7 @@ import {
   teamAvailability,
 } from "./availability";
 import { weekReminderKey } from "./settings";
+import { raceHook } from "./race-hook";
 import { mentionsOf } from "./discord-mentions";
 
 /**
@@ -75,6 +76,10 @@ export async function maybeAnnounceUpcomingWeek(season: {
     throw e;
   }
 
+  // Test seam: the gap between the claim above and the fetch below is where
+  // an auto-sync completion (any page view) can empty the week.
+  await raceHook("weekReminder.afterClaim");
+
   const matches = await prisma.match.findMany({
     where: {
       seasonId: season.id,
@@ -88,7 +93,18 @@ export async function maybeAnnounceUpcomingWeek(season: {
     },
     orderBy: { scheduledAt: "asc" },
   });
-  if (matches.length === 0) return false;
+  if (matches.length === 0) {
+    // Release the claim like the failed-send path below: the week completed
+    // (or lost its times) between the probe and this fetch, and a burned
+    // marker would permanently suppress the reminder if a retime brings
+    // fixtures back. No loop risk: probe and fetch share predicates, so no
+    // consistent DB state satisfies one and empties the other — the next
+    // call stops at the probe without claiming.
+    await prisma.setting.deleteMany({
+      where: { key: weekReminderKey(season.id, next.week) },
+    });
+    return false;
+  }
 
   // Standin-aware check-in counts — same helpers as /schedule and the
   // dashboard's ThisWeek strip, so the reminder can't disagree with the site.

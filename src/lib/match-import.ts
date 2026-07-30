@@ -70,7 +70,19 @@ export async function announceSeriesResultOnce(match: {
     prisma.team.findUnique({ where: { id: match.homeTeamId } }),
     prisma.team.findUnique({ where: { id: match.awayTeamId } }),
   ]);
-  if (!home || !away) return false;
+  if (!home || !away) {
+    // Practically unreachable while the match exists (Match→Team is
+    // FK-RESTRICT), but a bare return here burned the marker with a plain
+    // timestamp — the one path violating this file's own "a failed send
+    // never permanently eats an announcement" rule. Stamp failed: the retry
+    // sweep either retries it (match alive) or its orphan cleanup deletes it
+    // (match gone mid-deleteSeason).
+    await prisma.setting.updateMany({
+      where: { key: marker },
+      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
+    });
+    return false;
+  }
   const sent = await sendDiscordMessage(
     matchResultMessage({
       homeName: home.name,

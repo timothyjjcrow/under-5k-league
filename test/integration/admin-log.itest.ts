@@ -21,7 +21,12 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 
 import { prisma } from "@/lib/prisma";
 import { logAdminAction, recentAdminActions } from "@/lib/admin-log";
-import { generateSchedule, removeCaptain } from "@/app/actions/admin";
+import {
+  generateSchedule,
+  recordResult,
+  removeCaptain,
+  setWeekNight,
+} from "@/app/actions/admin";
 import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {
@@ -126,6 +131,62 @@ describe("destructive actions leave a trail", () => {
 
     const [row] = await recentAdminActions(1);
     expect(row.action).toBe("deleteSeason");
+    expect(row.seasonId).toBe(season.id);
+  });
+});
+
+describe("the activity card's copy is honest about results and week moves", () => {
+  // page.tsx's empty state says "Season, draft, schedule, playoff and result
+  // changes are logged here" — but recordResult (a manual score that can
+  // override an auto-import) and setWeekNight (retimes a whole week, wipes
+  // RSVPs and open proposals) left no line, while the repair paths around
+  // them did. setMatchTime deliberately stays unlogged (frequent,
+  // single-match, low collateral).
+  async function seasonWithSchedule() {
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Team ${i + 1}`, i + 1);
+    const matches = await generateRegularSchedule(season.id);
+    return { season, matches };
+  }
+
+  it("recordResult leaves a line naming the teams and score", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const target = matches[0];
+
+    const res = await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+    );
+    expect(res).not.toHaveProperty("error");
+
+    const [row] = await recentAdminActions(1);
+    expect(row.action).toBe("recordResult");
+    expect(row.summary).toMatch(/2–0/);
+    expect(row.summary).toMatch(/week 1/i);
+    expect(row.seasonId).toBe(season.id);
+  });
+
+  it("setWeekNight leaves a line with the counts, never a formatted datetime", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const week = matches[0].week;
+    const night = new Date(Date.now() + 3 * 864e5);
+
+    const res = await setWeekNight(
+      empty,
+      fd({
+        week: String(week),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+      }),
+    );
+    expect(res).not.toHaveProperty("error");
+
+    const [row] = await recentAdminActions(1);
+    expect(row.action).toBe("setWeekNight");
+    expect(row.summary).toMatch(/Moved week 1/);
+    expect(row.summary).toMatch(/cleared check-ins/);
+    // The server-TZ rule: counts only, no formatted datetime.
+    expect(row.summary).not.toMatch(/\d{1,2}:\d{2}/);
     expect(row.seasonId).toBe(season.id);
   });
 });

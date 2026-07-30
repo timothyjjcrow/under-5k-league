@@ -73,6 +73,7 @@ import {
   draftScheduledMessage,
   webhookIdOf,
   getInhouseWebhookUrl,
+  getInhouseAlertWebhookUrl,
   sendInhouseDiscordMessage,
 } from "@/lib/discord";
 import { mentionsOf } from "@/lib/discord-mentions";
@@ -860,7 +861,13 @@ export async function reinstateSignup(
     data: { status: REGISTRATION_STATUS.ACTIVE },
   });
   refresh();
-  return { message: `${reg.user.name} is back in the pool` };
+  // Advisory only, never a gate (the operator's-call stance): the flag flow
+  // is one-way — syncPlayerRanks names over-ceiling signups in ITS toast and
+  // nothing warned when the same admin later reinstated one.
+  const warn = medalProvesIneligible(reg.user.rankTier)
+    ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`
+    : "";
+  return { message: `${reg.user.name} is back in the pool${warn}` };
 }
 
 /**
@@ -1530,6 +1537,15 @@ export async function recordResult(
     prisma.team.findUnique({ where: { id: match.awayTeamId } }),
     getWebhookUrl(),
   ]);
+  // The activity card's copy promises result changes are logged — and a
+  // manual score can override an auto-import, which is exactly the "what did
+  // I press?" case the log exists for. (setMatchTime deliberately stays
+  // unlogged: frequent, single-match, low collateral.)
+  await logAdminAction({
+    action: "recordResult",
+    summary: `Recorded ${home?.name ?? "?"} ${homeScore}–${awayScore} ${away?.name ?? "?"} (week ${match.week})`,
+    seasonId: match.seasonId,
+  });
   if (home && away) {
     const sent = await sendDiscordMessage(
       matchResultMessage({
@@ -2301,9 +2317,27 @@ export async function setWeekNight(
   // The week reminder is idempotent via a `weekReminder:<season>:<week>`
   // marker. It was stamped against the OLD night, so without releasing it the
   // moved week never gets announced — Discord's last word on week N is a
-  // kickoff that no longer exists.
+  // kickoff that no longer exists. EVERY retimed week, not just the moved
+  // one: a cascaded later week whose reminder already fired kept a stale
+  // marker (reachable when one of its fixtures was individually retimed into
+  // the 24h window before the cascade moved it).
+  const retimedWeeks = [
+    ...new Set([week, ...(delta !== 0 ? later.map((m) => m.week) : [])]),
+  ];
   await prisma.setting.deleteMany({
-    where: { key: weekReminderKey(season.id, week) },
+    where: { key: { in: retimedWeeks.map((w) => weekReminderKey(season.id, w)) } },
+  });
+  // Counts only, no formatted datetime (the server-TZ rule): a week-wide
+  // retime wipes RSVPs and open proposals — it belongs in the activity log.
+  await logAdminAction({
+    action: "setWeekNight",
+    summary:
+      `Moved week ${week}'s ${open.length} unplayed match(es)` +
+      (delta !== 0 && later.length > 0
+        ? ` and shifted ${later.length} later match(es)`
+        : "") +
+      ` — cleared check-ins and open proposals on ${retimedIds.length} match(es)`,
+    seasonId: season.id,
   });
   // A retime can DOUBLE-BOOK a standin: standinConflict is checked when cover
   // is arranged, and moving a fixture onto a night the standin is already
@@ -3013,10 +3047,18 @@ export async function testInhouseWebhook(
   } catch {
     return { error: "Not authorized" };
   }
-  if (!(await getInhouseWebhookUrl())) return { error: "Set a webhook first" };
+  // Gate on the ALERT resolver — the one the send below actually rides
+  // (alerts fall back alert → board → league). Gating on the board resolver
+  // refused alert-webhook-only leagues a test their send would deliver.
+  if (!(await getInhouseAlertWebhookUrl())) {
+    return { error: "Set a webhook first" };
+  }
   const ok = await sendInhouseDiscordMessage(testMessage());
   return ok
-    ? { message: "Test message sent — check your inhouse channel" }
+    ? {
+        message:
+          "Test message sent — check the channel your inhouse alerts post to",
+      }
     : { error: "Discord rejected the message — double-check the URL" };
 }
 

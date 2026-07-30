@@ -224,3 +224,29 @@ describe("week-reminder announcement retry", () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("the missing-team exit stamps failed: instead of burning the marker", () => {
+  // Practically unreachable while the match exists (Match→Team is
+  // FK-RESTRICT), but the bare `return false` after the claim was the one
+  // path violating this file's "a failed send never permanently eats an
+  // announcement" rule: the marker held a plain timestamp the retry sweep
+  // refuses to re-claim. It now stamps failed:<iso> — retryable if the match
+  // is alive, swept as an orphan if it was deleted mid-flight.
+  it("stamps failed: when a team row is missing, and never sends", async () => {
+    const out = await announceSeriesResultOnce({
+      id: "ghost-match-1",
+      homeTeamId: "no-such-team-a",
+      awayTeamId: "no-such-team-b",
+      homeScore: 2,
+      awayScore: 0,
+      week: 1,
+      phase: "REGULAR",
+    });
+    expect(out).toBe(false);
+    expect(mockSend).not.toHaveBeenCalled();
+    const marker = await prisma.setting.findUniqueOrThrow({
+      where: { key: "resultAnnounced:ghost-match-1" },
+    });
+    expect(marker.value.startsWith("failed:")).toBe(true);
+  });
+});
