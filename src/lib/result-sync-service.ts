@@ -25,7 +25,12 @@ import {
   resolveStalledPick,
 } from "./inhouse-service";
 import { resolveUnsettledBets } from "./inhouse-bet-service";
-import { claimThrottle, getSetting, SETTING_KEYS } from "./settings";
+import {
+  claimThrottle,
+  getSetting,
+  RESULT_ANNOUNCED_PREFIX,
+  SETTING_KEYS,
+} from "./settings";
 import { syncInhouseBoard } from "./inhouse-board-service";
 import { raceHook } from "./race-hook";
 
@@ -315,7 +320,7 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   }
   const failed = await prisma.setting.findMany({
     where: {
-      key: { startsWith: "resultAnnounced:" },
+      key: { startsWith: RESULT_ANNOUNCED_PREFIX },
       value: { startsWith: ANNOUNCE_FAILED_PREFIX },
     },
     take: 3, // a Discord outage queues several — drain a few per sweep
@@ -323,7 +328,7 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   if (failed.length === 0) return;
   const matches = await prisma.match.findMany({
     where: {
-      id: { in: failed.map((f) => f.key.slice("resultAnnounced:".length)) },
+      id: { in: failed.map((f) => f.key.slice(RESULT_ANNOUNCED_PREFIX.length)) },
     },
     select: {
       id: true,
@@ -341,7 +346,7 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   const alive = new Set(matches.map((m) => m.id));
   const orphaned = failed
     .map((f) => f.key)
-    .filter((k) => !alive.has(k.slice("resultAnnounced:".length)));
+    .filter((k) => !alive.has(k.slice(RESULT_ANNOUNCED_PREFIX.length)));
   if (orphaned.length > 0) {
     await prisma.setting.deleteMany({ where: { key: { in: orphaned } } });
   }

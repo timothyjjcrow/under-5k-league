@@ -2,7 +2,7 @@ import { prisma } from "./prisma";
 import { heroById } from "./heroes";
 import { weeklyHonors, type HonorsGame, type WeeklyHonors } from "./honors";
 import { parseGamePlayers } from "./player-stats";
-import { getSetting } from "./settings";
+import { getSetting, honorsAnnouncedKey } from "./settings";
 import { getWebhookUrl, sendDiscordMessage, weeklyHonorsMessage } from "./discord";
 
 /** Compute one week's honors from the season's imported games. */
@@ -45,7 +45,7 @@ export async function maybeAnnounceWeekHonors(
   if (weekMatches.length === 0) return;
   if (weekMatches.some((m) => m.status !== "COMPLETED")) return;
 
-  const marker = `honorsAnnounced:${seasonId}:${week}`;
+  const marker = honorsAnnouncedKey(seasonId, week);
   // No webhook → don't burn the marker; wiring Discord later still announces
   // any week that completes (or re-triggers) after that.
   if (!(await getWebhookUrl())) return;

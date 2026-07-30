@@ -12,7 +12,13 @@ import { advancePlayoffBracket } from "./playoff-service";
 import { raceHook } from "./race-hook";
 import { maybeAnnounceWeekHonors } from "./honors-service";
 import { getWebhookUrl, matchResultMessage, sendDiscordMessage } from "./discord";
-import { getSetting, setSetting, stampResultChange } from "./settings";
+import {
+  getSetting,
+  leagueSyncSkipKey,
+  resultAnnouncedKey,
+  setSetting,
+  stampResultChange,
+} from "./settings";
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
@@ -45,7 +51,7 @@ export async function announceSeriesResultOnce(match: {
   // Without a webhook, don't burn the once-only marker — if the admin wires
   // Discord up later, results that complete after that still announce.
   if (!(await getWebhookUrl())) return false;
-  const marker = `resultAnnounced:${match.id}`;
+  const marker = resultAnnouncedKey(match.id);
   try {
     await prisma.setting.create({
       data: { key: marker, value: new Date().toISOString() },
@@ -468,7 +474,7 @@ export async function recomputeSeries(matchId: string) {
   // future), so the corrected result announces exactly once when it lands.
   if (!decided) {
     await prisma.setting.deleteMany({
-      where: { key: `resultAnnounced:${matchId}` },
+      where: { key: resultAnnouncedKey(matchId) },
     });
   }
 
@@ -941,7 +947,7 @@ export async function syncLeagueGames(
     include: { games: { select: { id: true } } },
   });
 
-  const skipKey = `leagueSyncSkip:${seasonId}`;
+  const skipKey = leagueSyncSkipKey(seasonId);
   let skipList: string[] = [];
   if (opts.auto) {
     try {

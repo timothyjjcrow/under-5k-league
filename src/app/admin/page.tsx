@@ -87,7 +87,12 @@ import { sortNews, NEWS_LIMITS } from "@/lib/news";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
-import { getSetting, SETTING_KEYS } from "@/lib/settings";
+import {
+  getSetting,
+  leagueSyncSkipKey,
+  playoffGamesArchiveKey,
+  SETTING_KEYS,
+} from "@/lib/settings";
 import { adminNextStep } from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
 import { DangerSubmit } from "@/components/danger-submit";
@@ -572,7 +577,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // createPlayoffBracket so the postseason can be re-imported by hand — without
   // them the ids were simply gone, which is what made "recreate the bracket"
   // (the only correction path past an advanced round) irreversible.
-  const playoffArchive = await getSetting(`playoffGamesArchive:${seasonId}`);
+  const playoffArchive = await getSetting(playoffGamesArchiveKey(seasonId));
   // What a schedule REGENERATE would destroy. These rows hang off a fixture id
   // and cascade with it, and none of them is archived anywhere — so the confirm
   // has to be able to state them BEFORE the click, not just the toast after.
@@ -2388,7 +2393,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
       }),
       getSetting(SETTING_KEYS.LEAGUE_AUTO_SYNC_AT),
       getSetting(SETTING_KEYS.RESULT_CHANGED_AT),
-      getSetting(`leagueSyncSkip:${season.id}`),
+      getSetting(leagueSyncSkipKey(season.id)),
       // WHO the roster scans can't see — OpenDota flagged their match data
       // private. This is the admin's only mid-season surface for it (the
       // signup-pool badge lives on a card that retires after the draft).

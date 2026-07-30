@@ -10,6 +10,7 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "./availability";
+import { weekReminderKey } from "./settings";
 
 /**
  * Lazy match-night reminder: the first page load after a league night enters
@@ -64,7 +65,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
   try {
     await prisma.setting.create({
       data: {
-        key: `weekReminder:${season.id}:${next.week}`,
+        key: weekReminderKey(season.id, next.week),
         value: new Date().toISOString(),
       },
     });
@@ -184,7 +185,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     // A Discord blip must not eat the week's reminder — release the claim so
     // the next page load inside the window retries.
     await prisma.setting.deleteMany({
-      where: { key: `weekReminder:${season.id}:${next.week}` },
+      where: { key: weekReminderKey(season.id, next.week) },
     });
     return false;
   }

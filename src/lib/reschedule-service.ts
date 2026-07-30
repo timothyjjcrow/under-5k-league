@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
+import { weekReminderKey } from "./settings";
 
 export type AcceptedReschedule = {
   homeName: string;
@@ -193,7 +194,7 @@ export async function respondReschedule(
     // once the NEW time comes inside its window — with correct times and a
     // fresh (now empty) check-in count.
     await tx.setting.deleteMany({
-      where: { key: `weekReminder:${match.seasonId}:${match.week}` },
+      where: { key: weekReminderKey(match.seasonId, match.week) },
     });
   });
   // Accepting a reschedule moves the fixture, which can put a standin on two

@@ -50,6 +50,7 @@ import {
   syncLeagueGames,
   enrichStoredGames,
   rememberImportSkip,
+  ANNOUNCE_FAILED_PREFIX,
 } from "@/lib/match-import";
 import {
   parseMatchId,
@@ -82,9 +83,13 @@ import {
 } from "@/lib/inhouse-board-service";
 import {
   getSetting,
+  honorsAnnouncedPrefix,
+  resultAnnouncedKey,
   setSetting,
   stampResultChange,
   SETTING_KEYS,
+  weekReminderKey,
+  weekReminderPrefix,
 } from "@/lib/settings";
 import { bumpSessionEpoch } from "@/lib/session-epoch";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
@@ -234,7 +239,7 @@ export async function deleteSeason(
       });
       if (gone.count === 0) throw new SeasonBecameActiveError();
       await tx.setting.deleteMany({
-        where: { key: { startsWith: `honorsAnnounced:${seasonId}:` } },
+        where: { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
       });
     });
   } catch (e) {
@@ -1291,7 +1296,7 @@ export async function generateSchedule(
       // Discord edits notify nobody, so releasing the markers is what lets the
       // reminder re-fire against the new slate.
       await tx.setting.deleteMany({
-        where: { key: { startsWith: `weekReminder:${season.id}:` } },
+        where: { key: { startsWith: weekReminderPrefix(season.id) } },
       });
     });
   } catch (e) {
@@ -1513,9 +1518,9 @@ export async function recordResult(
   // stamps the once-per-match marker so recomputeSeries (a later game import
   // for this match) can't post the same result a second time.
   await prisma.setting.upsert({
-    where: { key: `resultAnnounced:${matchId}` },
+    where: { key: resultAnnouncedKey(matchId) },
     create: {
-      key: `resultAnnounced:${matchId}`,
+      key: resultAnnouncedKey(matchId),
       value: new Date().toISOString(),
     },
     update: { value: new Date().toISOString() },
@@ -1543,8 +1548,9 @@ export async function recordResult(
     // distinction — this path didn't.)
     if (!sent && webhook) {
       await prisma.setting.updateMany({
-        where: { key: `resultAnnounced:${matchId}` },
-        data: { value: `failed:${new Date().toISOString()}` },
+        where: { key: resultAnnouncedKey(matchId) },
+        // The retry sweep re-claims exactly this prefix — never hand-write it.
+        data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
       });
     }
   }
@@ -2105,7 +2111,7 @@ export async function reopenMatch(
   // not merely racy: it only renders on a COMPLETED match with no games, which
   // is a state only recordResult can create, and recordResult always stamps.
   await prisma.setting.deleteMany({
-    where: { key: `resultAnnounced:${matchId}` },
+    where: { key: resultAnnouncedKey(matchId) },
   });
   await logAdminAction({
     action: "reopenMatch",
@@ -2297,7 +2303,7 @@ export async function setWeekNight(
   // moved week never gets announced — Discord's last word on week N is a
   // kickoff that no longer exists.
   await prisma.setting.deleteMany({
-    where: { key: `weekReminder:${season.id}:${week}` },
+    where: { key: weekReminderKey(season.id, week) },
   });
   // A retime can DOUBLE-BOOK a standin: standinConflict is checked when cover
   // is arranged, and moving a fixture onto a night the standin is already
@@ -2368,7 +2374,7 @@ export async function setMatchTime(
           // this the channel's last word on the fixture stays wrong forever.
           prisma.setting.deleteMany({
             where: {
-              key: `weekReminder:${before.seasonId}:${before.week}`,
+              key: weekReminderKey(before.seasonId, before.week),
             },
           }),
         ]
