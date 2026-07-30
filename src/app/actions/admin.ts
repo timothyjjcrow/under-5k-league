@@ -26,6 +26,7 @@ import {
 import { roundRobin, matchNightForWeek, slotRound } from "@/lib/schedule";
 import { seriesScoreError } from "@/lib/standings";
 import { parseSeatTarget, pendingCoverWhere } from "@/lib/standin";
+import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
 import {
@@ -391,14 +392,6 @@ export async function setSeasonPhase(
   }
   return { message: `Season moved to ${PHASE_LABELS[target]}` };
 }
-
-const PHASE_LABELS: Record<SeasonStatus, string> = {
-  SIGNUPS: "Signups",
-  DRAFT: "Draft",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
 
 /** Rename the active season — its name is the hero title on the home page. */
 export async function renameSeason(formData: FormData) {

@@ -2,7 +2,8 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
-import { getActiveSeason, capacityInfo } from "@/lib/season";
+import { getActiveSeason } from "@/lib/season";
+import { capacityInfo } from "@/lib/capacity";
 import { prisma } from "@/lib/prisma";
 import {
   AUTO_SYNC,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/constants";
 import { nextAutoSyncAt } from "@/lib/result-sync";
 import { seatValue } from "@/lib/standin";
+import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
   createSeason,
   setSeasonPhase,
@@ -145,14 +147,6 @@ export const metadata = { title: "Admin" };
 // than being killed mid-run (which leaves the button spinning "Working…").
 // 60s is the Hobby-plan ceiling; the actions themselves stop well before it.
 export const maxDuration = 60;
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups",
-  DRAFT: "Draft",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
 
 export default async function AdminPage() {
   const user = await getSessionUser();

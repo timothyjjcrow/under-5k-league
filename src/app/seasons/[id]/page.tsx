@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ChampionBanner } from "@/components/champion-banner";
+import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
@@ -36,14 +37,6 @@ export async function generateMetadata({
   if (!season) notFound();
   return { title: `${season.name} · Season archive` };
 }
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups open",
-  DRAFT: "Drafting",
-  REGULAR_SEASON: "In season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
 
 function ResultRow({
   match: m,

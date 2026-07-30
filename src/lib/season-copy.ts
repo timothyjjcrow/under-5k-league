@@ -30,6 +30,28 @@ export type PhaseCopyInput = {
  * One sentence under the season name. Returns "" for an unknown status so a
  * future phase renders nothing rather than a stale line about another one.
  */
+/**
+ * Phase labels for the season-HISTORY surfaces (/seasons, /seasons/[id]) and
+ * the ADMIN surfaces (panel + phase-move toast) — each pair was byte-identical
+ * and is single-sourced here. The dashboard, header and footer keep their own
+ * DELIBERATELY different per-surface maps; don't unify them into these.
+ */
+export const HISTORY_PHASE_LABEL: Record<string, string> = {
+  SIGNUPS: "Signups open",
+  DRAFT: "Drafting",
+  REGULAR_SEASON: "In season",
+  PLAYOFFS: "Playoffs",
+  COMPLETE: "Complete",
+};
+
+export const ADMIN_PHASE_LABEL: Record<string, string> = {
+  SIGNUPS: "Signups",
+  DRAFT: "Draft",
+  REGULAR_SEASON: "Regular season",
+  PLAYOFFS: "Playoffs",
+  COMPLETE: "Complete",
+};
+
 export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
   switch (status) {
     case SEASON_STATUS.SIGNUPS:

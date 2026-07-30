@@ -15,15 +15,9 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Season history" };
+import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups open",
-  DRAFT: "Drafting",
-  REGULAR_SEASON: "In season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
+export const metadata = { title: "Season history" };
 
 export default async function SeasonsPage() {
   const [seasons, viewer] = await Promise.all([

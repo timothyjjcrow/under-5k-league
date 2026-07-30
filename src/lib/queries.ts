@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { getActiveSeason } from "./season";
-import { capacityInfo } from "./season";
+import { capacityInfo } from "./capacity";
 import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
 
 /** The dashboard's viewer-aware season snapshot (its only consumer — other pages run their own queries). */

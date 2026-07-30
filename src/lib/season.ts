@@ -59,7 +59,3 @@ export async function reactivateSeason(
   }
   return { ok: true, name: season.name };
 }
-
-// Re-exported from the pure, prisma-free capacity module so callers can keep
-// importing from "@/lib/season" while the math stays unit-testable in isolation.
-export { capacityInfo, type CapacityInfo } from "./capacity";
