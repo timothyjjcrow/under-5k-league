@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { getGuildConfig } from "@/lib/discord-roles";
+import { getGuildConfig, memoGuildMembership } from "@/lib/discord-roles";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { Card, CardBody, DiscordButton, buttonClasses } from "@/components/ui";
 
@@ -88,13 +88,88 @@ export function DiscordSetupCard({
 }
 
 /**
+ * The second half of the same ask, for the cohort that LOOKS finished: linked
+ * (verified ✓ everywhere) but not actually in the league's server — or in it
+ * behind Membership Screening's rules gate, which is "in the guild" in name
+ * only, since nothing can ping a pending member. Every notification the
+ * league sends silently misses both, and until this card existed nothing
+ * anywhere ever said so after the one-shot ?discord= note was scrubbed.
+ *
+ * Only ever rendered when the caller has POSITIVELY determined the state — an
+ * unknown (Discord down, no bot) must render nothing rather than nag a player
+ * who is standing in the server.
+ */
+export function DiscordJoinCard({
+  membership,
+  linkAvailable,
+}: {
+  membership: "not-member" | "pending";
+  linkAvailable: boolean;
+}) {
+  const pending = membership === "pending";
+  return (
+    <Card>
+      <CardBody className="space-y-3">
+        <div>
+          <h2 className="font-display text-lg font-semibold">
+            {pending
+              ? "Almost there — accept the server rules"
+              : "One step left — join the Discord server"}
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            {pending
+              ? "You're in the league's Discord, but until you accept its rules nothing can reach you — no match pings, no scheduling, no standin scrambles."
+              : "Your Discord is linked, but you're not in the league's server — that's where scheduling, check-ins and standin scrambles happen, and your captain has no way to reach you until you join."}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {!pending && linkAvailable ? (
+            /* Re-running the OAuth link re-consents guilds.join with a fresh
+               token — a genuine one-click join for an already-linked player.
+               This card only renders when a bot is configured (membership is
+               unknowable otherwise). The invite rides along as the escape
+               hatch: when the auto-join itself is what's broken (bot missing
+               CREATE_INSTANT_INVITE, mismatched app), the OAuth button alone
+               would bounce the player through consent back to this exact card
+               forever. Distinct label on purpose — two controls named "Join
+               the server" on one page is the one-control-one-name defect. */
+            <>
+              <a
+                href="/api/auth/discord"
+                className={buttonClasses("primary", "md")}
+              >
+                Join the server
+              </a>
+              <DiscordButton label="Use the invite instead" />
+            </>
+          ) : (
+            <DiscordButton
+              label={pending ? "Open the server" : "Join the server"}
+            />
+          )}
+        </div>
+
+        <p className="text-xs text-muted">
+          {pending
+            ? "The rules screen is at the top of the server — one click and you're reachable."
+            : "Your handle is already verified; this just puts you where the league talks."}
+        </p>
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
  * Data wrapper for the dashboard. Renders NOTHING unless the viewer is signed
- * up for this season and hasn't linked — which is exactly the cohort every
- * Discord notification in the app silently skips.
+ * up for this season and is short a step: not linked (the setup card — the
+ * cohort every Discord notification in the app silently skips), or linked but
+ * not (fully) in the server (the join card — the cohort that looks reachable
+ * and isn't). Membership is the memoised live read; unknown renders nothing.
  *
  * Deliberately its own component behind its own <Suspense> rather than more
  * fields on getSeasonSnapshot: those selects are trimmed on purpose, and this
- * is two indexed reads that must never delay the hero paint.
+ * must never delay the hero paint.
  */
 export async function DiscordSetupPrompt({
   userId,
@@ -114,14 +189,21 @@ export async function DiscordSetupPrompt({
     }),
   ]);
   if (reg?.status !== REGISTRATION_STATUS.ACTIVE) return null;
-  if (user?.discordId) return null;
 
+  const linkAvailable = !!(
+    process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
+  );
+  const guildCfg = getGuildConfig();
+  if (!user?.discordId) {
+    return (
+      <DiscordSetupCard linkAvailable={linkAvailable} autoJoins={!!guildCfg} />
+    );
+  }
+  if (!guildCfg) return null; // membership unknowable — nothing to ask
+
+  const membership = await memoGuildMembership(user.discordId, guildCfg);
+  if (membership !== "not-member" && membership !== "pending") return null;
   return (
-    <DiscordSetupCard
-      linkAvailable={
-        !!(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET)
-      }
-      autoJoins={!!getGuildConfig()}
-    />
+    <DiscordJoinCard membership={membership} linkAvailable={linkAvailable} />
   );
 }

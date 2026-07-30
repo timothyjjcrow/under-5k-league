@@ -49,6 +49,8 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   },
   { quoted: "Abort draft", rendered: "Abort draft" },
   { quoted: "Start draft", rendered: "Start draft" },
+  // The pre-draft next-step points at the funnel that names the unlinked.
+  { quoted: "Discord notifications", rendered: "Discord notifications" },
   { quoted: "Start playoffs", rendered: "Start playoffs" },
   { quoted: "Reset playoffs", rendered: "Reset playoffs" },
   { quoted: "Move a match night", rendered: "Move a match night" },
@@ -167,5 +169,30 @@ describe("admin copy names only controls that exist", () => {
     expect(registration).toContain("review threshold, not a block");
     expect(haystack).not.toContain("MMR are refused");
     expect(haystack).not.toContain("are reviewed before joining");
+  });
+
+  // The REFERENCED_CONTROLS check is haystack-wide, and admin-next-step.ts —
+  // which QUOTES "the Discord notifications card" — is part of the haystack,
+  // so that entry satisfies itself: renaming the card leaves the quoting copy
+  // matching its own words (verified by mutation). Pin the RENDER site
+  // directly instead.
+  it("the card the pre-draft chase note points at is actually titled that", () => {
+    const page = read("src/app/admin/page.tsx");
+    expect(
+      page.includes('title="Discord notifications"'),
+      'admin-next-step copy points at "the Discord notifications card" — if the AdminSection was renamed, update the note (and this test), or the admin hunts for a card that is not there',
+    ).toBe(true);
+  });
+
+  // The house rule the Start-draft confirm upgrade exists for: state the real
+  // reachability numbers BEFORE the click. discordReachWarning is unit-tested,
+  // but nothing behavioural reaches a native confirm dialog — deleting the
+  // append would fail no test while silently reverting the feature.
+  it("the Start-draft confirm actually carries the Discord reachability line", () => {
+    const page = read("src/app/admin/page.tsx");
+    expect(
+      page.includes("confirmBase + discordReachWarning(reach)"),
+      "StartDraftControl must append discordReachWarning to the confirm — the warning copy is tested, this is the line that makes it reach the admin",
+    ).toBe(true);
   });
 });

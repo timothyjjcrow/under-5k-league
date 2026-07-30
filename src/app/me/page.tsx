@@ -14,8 +14,13 @@ import {
   setInhousePingOptIn,
 } from "@/app/actions/registration";
 import { DiscordTag } from "@/components/discord-tag";
-import { getGuildConfig, getRoleConfig, hasPingRole } from "@/lib/discord-roles";
-import { DiscordSetupCard } from "@/components/discord-setup";
+import {
+  fetchGuildMember,
+  getGuildConfig,
+  getRoleConfig,
+  primeMembershipMemo,
+} from "@/lib/discord-roles";
+import { DiscordJoinCard, DiscordSetupCard } from "@/components/discord-setup";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import { pendingCoverWhere } from "@/lib/standin";
@@ -120,7 +125,8 @@ export default async function MePage({
   // With a bot + server configured the OAuth consent also carries
   // `guilds.join`, so linking adds them to the server in the same click. The
   // copy has to match what the consent screen actually asks for.
-  const discordAutoJoins = !!getGuildConfig();
+  const guildCfg = getGuildConfig();
+  const discordAutoJoins = !!guildCfg;
 
   const season = await getActiveSeason();
   const reg = season
@@ -143,6 +149,39 @@ export default async function MePage({
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
 
+  // ONE live member lookup answers both questions this page has about the
+  // linked account: is the player actually IN the league's server (linking
+  // proves ownership of the handle; only membership makes them reachable), and
+  // do they hold the ping role. `membership` null = we can't tell — no bot
+  // configured, or Discord didn't answer — and null renders as the plain
+  // "Linked ✓" card, never as "not in the server": telling a player they left
+  // a server they're sitting in reads as broken (the hasPingRole rule).
+  const memberInfo =
+    dbUser?.discordId && guildCfg
+      ? await fetchGuildMember(dbUser.discordId, guildCfg)
+      : null;
+  const membership = memberInfo === null ? null : memberInfo.membership;
+  if (dbUser?.discordId && guildCfg) {
+    // Keep the dashboard's memoised join nag in step with what this page is
+    // about to render — the player mid-fix is exactly who would notice the
+    // two surfaces disagreeing for a memo window.
+    primeMembershipMemo(dbUser.discordId, membership);
+  }
+  // The ?discord= note was minted by the CALLBACK; the membership check ran
+  // just now — and the callback can be wrong about the present: a player who
+  // was ALREADY in the server when the auto-join 403'd (mismatched app,
+  // missing invite permission) arrives with ?discord=join_failed while the
+  // live check says "member". Rendering the param's copy verbatim put "we
+  // couldn't add you — join it with the button below" directly under an
+  // "In the server ✓" badge, with no such button anywhere on the page. The
+  // live answer wins; the param is still scrubbed either way.
+  const discordNoteResolved =
+    (discordParam === "join_failed" || discordParam === "joined_pending") &&
+    membership === "member"
+      ? DISCORD_LINK_NOTES.joined
+      : discordParam === "join_failed" && membership === "pending"
+        ? DISCORD_LINK_NOTES.joined_pending
+        : discordNote;
   // Inhouse ping opt-in. `on: null` = we genuinely don't know (Discord slow,
   // or the player isn't in the server) — rendered as unknown rather than "off",
   // because showing an unticked box to someone already opted in makes them
@@ -150,8 +189,10 @@ export default async function MePage({
   const pingCfg = dbUser?.discordId ? await getRoleConfig() : null;
   const pingOptIn = {
     available: !!pingCfg,
-    on: pingCfg && dbUser?.discordId
-      ? await hasPingRole(dbUser.discordId, pingCfg)
+    on: pingCfg
+      ? memberInfo && memberInfo.membership !== "not-member"
+        ? memberInfo.roles.includes(pingCfg.roleId)
+        : null
       : false,
   };
   // The medal's plausible MMR window — signup claims outside it are snapped
@@ -203,6 +244,15 @@ export default async function MePage({
         <DiscordSetupCard
           linkAvailable={discordLinkAvailable}
           autoJoins={discordAutoJoins}
+        />
+      ) : isRegistered &&
+        (membership === "not-member" || membership === "pending") ? (
+        /* Linked but not (fully) in the server — the cohort that LOOKS done.
+           Same above-the-fold placement as the setup card, same derived-state
+           rule: it disappears the moment the join/rules step is complete. */
+        <DiscordJoinCard
+          membership={membership}
+          linkAvailable={discordLinkAvailable}
         />
       ) : null}
 
@@ -284,34 +334,55 @@ export default async function MePage({
           title="Discord"
           subtitle={
             dbUser?.discordId
-              ? "Linked via Discord — your handle is verified, and shown to signed-in league members."
+              ? membership === "member"
+                ? "Linked and in the league's Discord server — your handle is verified, and captains can reach you."
+                : "Linked via Discord — your handle is verified, and shown to signed-in league members."
               : dbUser?.discordName
                 ? "Shown to signed-in league members on rosters and the player pool."
                 : "Add your Discord so your captain can reach you — it's how the league talks."
           }
           action={
-            dbUser?.discordId ? <Badge tone="success">Linked ✓</Badge> : null
+            /* The badge only claims what this render actually verified:
+               membership when the bot could answer, plain "Linked ✓" when it
+               couldn't (no bot, or Discord down) — an unknown must never be
+               downgraded to "Not in the server". */
+            dbUser?.discordId ? (
+              membership === "member" ? (
+                <Badge tone="success">In the server ✓</Badge>
+              ) : membership === "pending" ? (
+                <Badge tone="info">Rules pending</Badge>
+              ) : membership === "not-member" ? (
+                <Badge tone="danger">Not in the server</Badge>
+              ) : (
+                <Badge tone="success">Linked ✓</Badge>
+              )
+            ) : null
           }
         />
         <CardBody className="space-y-3">
-          {discordNote ? <StripQueryParam param="discord" /> : null}
-          {discordNote ? (
+          {discordNoteResolved ? <StripQueryParam param="discord" /> : null}
+          {discordNoteResolved ? (
             <p
               role="status"
               className={
-                discordNote.tone === "success"
+                discordNoteResolved.tone === "success"
                   ? "rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
-                  : discordNote.tone === "danger"
+                  : discordNoteResolved.tone === "danger"
                     ? "rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
                     : "rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm text-muted"
               }
             >
-              {discordNote.text}
+              {discordNoteResolved.text}
             </p>
           ) : null}
           {/* Both of these leave the player linked but not actually reachable,
-              so the note must come with the way out of it. */}
-          {discordParam === "join_failed" || discordParam === "joined_pending" ? (
+              so the note must come with the way out of it. Only rendered when
+              the live membership check below couldn't run (membership null) —
+              when it could, the durable strip carries the same CTA and two
+              stacked join buttons would fight over one click. */}
+          {(discordParam === "join_failed" ||
+            discordParam === "joined_pending") &&
+          membership === null ? (
             <DiscordButton
               size="sm"
               label={
@@ -320,6 +391,46 @@ export default async function MePage({
                   : "Join the server"
               }
             />
+          ) : null}
+          {/* Durable membership state — unlike the one-shot ?discord= note,
+              this is re-derived live on every render, so it survives the
+              scrubbed query param and disappears the moment the join (or the
+              rules screen) is actually done. */}
+          {membership === "not-member" ? (
+            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm">
+              <p className="text-danger">
+                You&apos;re not in the league&apos;s Discord server — that&apos;s
+                where scheduling, match-night check-ins and standin scrambles
+                happen, and your captain has no way to reach you until you
+                join.
+              </p>
+              <div className="mt-2">
+                {/* The INVITE, deliberately not the one-click OAuth join. This
+                    strip sits directly under the ?discord=join_failed note
+                    ("join it with the button below"), i.e. it renders for the
+                    player whose auto-join just FAILED — offering them the same
+                    OAuth round-trip again is a loop, and the invite works
+                    regardless of the bot's health. The one-click join lives in
+                    the DiscordJoinCard at the top of the page; the distinct
+                    label keeps one accessible name per control. */}
+                <DiscordButton size="sm" label="Join via the invite" />
+              </div>
+            </div>
+          ) : membership === "pending" ? (
+            <div className="rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm">
+              <p className="text-muted">
+                You&apos;re in the server but haven&apos;t accepted its rules
+                yet — until you do, nothing can ping you: not match found, not
+                your captain.
+              </p>
+              <div className="mt-2">
+                {/* "Open Discord", not "Open the server" — the top-of-page
+                    DiscordJoinCard's pending CTA already carries that name,
+                    and two controls with one accessible name is the /players
+                    "Clear filters" defect. */}
+                <DiscordButton size="sm" label="Open Discord" />
+              </div>
+            </div>
           ) : null}
           {dbUser?.discordId ? (
             <>

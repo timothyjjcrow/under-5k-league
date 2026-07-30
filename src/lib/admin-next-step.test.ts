@@ -35,6 +35,33 @@ describe("adminNextStep — signups", () => {
     // roadmap must not repeat that.
     expect(s.detail).toMatch(/Abort draft/);
   });
+
+  it("puts unlinked Discord on the pre-draft checklist — the last cheap moment to chase it", () => {
+    const s = at({
+      playerCount: 10,
+      minPlayers: 10,
+      teamCount: 4,
+      unlinkedDiscordCount: 3,
+    });
+    expect(s.detail).toMatch(/3 signed-up players haven't linked Discord/);
+    const one = at({
+      playerCount: 10,
+      minPlayers: 10,
+      teamCount: 4,
+      unlinkedDiscordCount: 1,
+    });
+    expect(one.detail).toMatch(/1 signed-up player hasn't linked Discord/);
+  });
+
+  it("says nothing about Discord when everyone linked (or the count wasn't supplied)", () => {
+    expect(
+      at({ playerCount: 10, minPlayers: 10, teamCount: 4, unlinkedDiscordCount: 0 })
+        .detail,
+    ).not.toMatch(/Discord/);
+    expect(
+      at({ playerCount: 10, minPlayers: 10, teamCount: 4 }).detail,
+    ).not.toMatch(/Discord/);
+  });
 });
 
 describe("adminNextStep — draft", () => {
@@ -44,6 +71,18 @@ describe("adminNextStep — draft", () => {
     const s = at({ seasonStatus: SEASON_STATUS.DRAFT, draftStatus: null });
     expect(s.title).toMatch(/Start draft/);
     expect(s.detail).toMatch(/hasn't been started/i);
+  });
+
+  it("keeps the Discord chase note on the DRAFT-phase pre-start banner too", () => {
+    // The auction hasn't run, so chasing joins is exactly as cheap as during
+    // SIGNUPS — the note must not vanish just because the admin clicked the
+    // phase button early.
+    const s = at({
+      seasonStatus: SEASON_STATUS.DRAFT,
+      draftStatus: null,
+      unlinkedDiscordCount: 2,
+    });
+    expect(s.detail).toMatch(/2 signed-up players haven't linked Discord/);
   });
 
   it("flags a PAUSED auction as the blocking state it is", () => {

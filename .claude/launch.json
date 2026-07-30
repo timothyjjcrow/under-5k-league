@@ -36,6 +36,15 @@
       "port": 3114
     },
     {
+      "name": "discord-fixture",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATABASE_URL=file:./signups-fixture.db ALLOW_DEV_LOGIN=true DISCORD_BOT_TOKEN=standin DISCORD_GUILD_ID=900000000000000001 DISCORD_API_BASE=http://127.0.0.1:4310 DISCORD_CLIENT_ID=900000000000000042 DISCORD_CLIENT_SECRET=standin-secret npx next dev -p 3115"
+      ],
+      "port": 3115
+    },
+    {
       "name": "night-check",
       "runtimeExecutable": "sh",
       "runtimeArgs": [

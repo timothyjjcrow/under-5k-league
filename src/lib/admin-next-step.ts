@@ -41,6 +41,15 @@ export type AdminPhaseInput = {
   playoffMatchCount: number;
   unfinishedPlayoffCount: number;
   hasChampion: boolean;
+  /**
+   * ACTIVE player signups whose user never linked Discord. Optional and
+   * DB-derived on purpose — this banner renders on the panel's blocking path,
+   * so it can never afford a Discord API call; the full in-server funnel
+   * lives on the streamed Discord notifications card. Linking is the step the
+   * league can see for free, and it is also the step that makes the one-click
+   * auto-join happen.
+   */
+  unlinkedDiscordCount?: number;
 };
 
 export type AdminNextStep = {
@@ -50,6 +59,17 @@ export type AdminNextStep = {
   detail: string;
   tone: "action" | "waiting" | "warning" | "done";
 };
+
+/**
+ * The pre-draft Discord chase line, appended to every "Next step: Start
+ * draft" variant — the last cheap moment to get players linked is before the
+ * draft locks them onto rosters, and that transition is otherwise silent.
+ */
+function discordChaseNote(i: AdminPhaseInput): string {
+  const unlinked = i.unlinkedDiscordCount ?? 0;
+  if (unlinked === 0) return "";
+  return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord notifications card names them).`;
+}
 
 export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
   const {
@@ -84,7 +104,9 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
     }
     return {
       title: "Next step: Start draft.",
-      detail: `${teamCount} captain(s) ready. Set the draft night and randomize the order first if you want to — starting the auction locks captain changes until it finishes (Abort draft is the way back).`,
+      detail:
+        `${teamCount} captain(s) ready. Set the draft night and randomize the order first if you want to — starting the auction locks captain changes until it finishes (Abort draft is the way back).` +
+        discordChaseNote(i),
       tone: "action",
     };
   }
@@ -117,7 +139,11 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
     return {
       title: "Next step: Start draft.",
       detail:
-        "The season is in the Draft phase but the auction hasn't been started yet — nothing happens until you press Start draft.",
+        "The season is in the Draft phase but the auction hasn't been started yet — nothing happens until you press Start draft." +
+        // Same note as the SIGNUPS start-draft step: the auction hasn't run,
+        // so chasing joins is exactly as cheap here — dropping it just because
+        // the admin clicked the phase button early would be arbitrary.
+        discordChaseNote(i),
       tone: "action",
     };
   }

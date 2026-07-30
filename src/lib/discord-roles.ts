@@ -89,6 +89,84 @@ async function call(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Guild membership — is a linked player actually IN the server?
+// ---------------------------------------------------------------------------
+
+/**
+ * What one member lookup can say about a linked player.
+ *
+ * `null` means WE DON'T KNOW — Discord unreachable, rate-limited, or a 404
+ * whose error code doesn't prove anything (see below). Callers must render
+ * unknown as the state they already show today, never as "not a member":
+ * telling a player they left a server they're in reads as broken, and telling
+ * an admin ten players are missing when Discord is having a bad day sends
+ * them chasing a problem that doesn't exist.
+ */
+export type GuildMembership = "member" | "pending" | "not-member" | null;
+
+export type GuildMemberInfo =
+  | { membership: "member" | "pending"; roles: string[] }
+  | { membership: "not-member" }
+  | null;
+
+// Discord's JSON error codes. A bare 404 status is NOT "player not in the
+// server" — this endpoint also 404s with Unknown Guild (10004) when the BOT
+// isn't in the guild or the guild id is wrong, and reading that as "every
+// player left" would nag the entire league to re-join a server they're all in.
+// Same lesson as the @me/400 bug above: branch on what the body actually
+// says, never on the status alone.
+const UNKNOWN_MEMBER = 10007;
+const UNKNOWN_USER = 10013; // account deleted — equally not in the server
+
+/**
+ * The raw member lookup. One GET answers both questions this app has about a
+ * member — "are they in the server?" (membership, with Membership Screening's
+ * `pending` kept distinct because a pending member can't read or be pinged)
+ * and "which roles do they hold?" — so surfaces that need both (/me) pay for
+ * one request, not two.
+ */
+export async function fetchGuildMember(
+  discordId: string,
+  cfg: GuildConfig,
+): Promise<GuildMemberInfo> {
+  const res = await call(
+    cfg,
+    `/guilds/${cfg.guildId}/members/${discordId}`,
+    "GET",
+  );
+  if (!res) return null;
+  if (res.status === 404) {
+    try {
+      const body = (await res.json()) as { code?: unknown };
+      return body?.code === UNKNOWN_MEMBER || body?.code === UNKNOWN_USER
+        ? { membership: "not-member" }
+        : null; // Unknown Guild etc. — OUR configuration's problem, not theirs
+    } catch {
+      return null;
+    }
+  }
+  if (!res.ok) return null;
+  try {
+    const body = (await res.json()) as { roles?: unknown; pending?: unknown };
+    return {
+      membership: body?.pending === true ? "pending" : "member",
+      roles: Array.isArray(body.roles) ? (body.roles as string[]) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Membership alone, for surfaces that don't care about roles. */
+export async function guildMembership(
+  discordId: string,
+  cfg: GuildConfig,
+): Promise<GuildMembership> {
+  const info = await fetchGuildMember(discordId, cfg);
+  return info === null ? null : info.membership;
+}
+
 /**
  * Does this member currently hold the ping role?
  *
@@ -105,20 +183,139 @@ export async function hasPingRole(
   discordId: string,
   cfg: RoleConfig,
 ): Promise<boolean | null> {
-  const res = await call(
-    cfg,
-    `/guilds/${cfg.guildId}/members/${discordId}`,
-    "GET",
-  );
-  if (!res) return null;
-  if (res.status === 404) return null; // not in the server — can't say
-  if (!res.ok) return null;
-  try {
-    const body = (await res.json()) as { roles?: unknown };
-    return Array.isArray(body.roles) && body.roles.includes(cfg.roleId);
-  } catch {
-    return null;
+  const info = await fetchGuildMember(discordId, cfg);
+  if (info === null || info.membership === "not-member") return null;
+  return info.roles.includes(cfg.roleId);
+}
+
+/**
+ * In-process memo over guildMembership, for the surfaces that render on every
+ * page view (the dashboard join nag, the admin funnel, the start-draft
+ * confirm). Membership stays a LIVE read everywhere — the hasPingRole comment
+ * above explains why a mirrored column is worse — but a hot page must not turn
+ * every render into a Discord request, so answers are held briefly
+ * (loadBoardStats' pattern).
+ *
+ * The TTLs are asymmetric on purpose. "member" is safe to hold for minutes:
+ * its only failure mode is a player who leaves the server keeping a green
+ * badge slightly longer. Everything else — not-member, pending, unknown — is
+ * held for seconds, because the player it describes is mid-fix: they just
+ * clicked Join, and a nag that outlives the thing it asks for by minutes
+ * reads as broken (the DiscordSetupCard rule).
+ */
+export const MEMBERSHIP_MEMBER_TTL_MS = 5 * 60_000;
+export const MEMBERSHIP_RECHECK_TTL_MS = 30_000;
+
+const membershipMemo = new Map<string, { at: number; value: GuildMembership }>();
+// In-flight promises, keyed like the memo. A result-only memo cannot dedupe
+// CONCURRENT lookups — /admin renders two funnel consumers (the Discord card
+// and the Start-draft confirm) in the same request, and on a cold memo both
+// sweeps would fire before either writes a result, doubling the burst against
+// Discord for every player at once.
+const membershipInflight = new Map<string, Promise<GuildMembership>>();
+
+export async function memoGuildMembership(
+  discordId: string,
+  cfg: GuildConfig,
+  nowMs = Date.now(),
+): Promise<GuildMembership> {
+  const hit = membershipMemo.get(discordId);
+  if (hit) {
+    const ttl =
+      hit.value === "member"
+        ? MEMBERSHIP_MEMBER_TTL_MS
+        : MEMBERSHIP_RECHECK_TTL_MS;
+    if (nowMs - hit.at < ttl) return hit.value;
   }
+  const inflight = membershipInflight.get(discordId);
+  if (inflight) return inflight;
+  const req = guildMembership(discordId, cfg)
+    .then((value) => {
+      // Supersession check: a prime (or a later lookup) that landed while
+      // this request was on the wire is FRESHER — /me's live read must not be
+      // clobbered by an admin sweep that merely resolved after it.
+      const existing = membershipMemo.get(discordId);
+      if (!existing || existing.at <= nowMs) {
+        membershipMemo.set(discordId, { at: nowMs, value });
+      }
+      return value;
+    })
+    .finally(() => {
+      membershipInflight.delete(discordId);
+    });
+  membershipInflight.set(discordId, req);
+  return req;
+}
+
+/**
+ * Feed a fresh answer (e.g. /me's own live lookup) into the memo, so the
+ * dashboard nag converges on what the profile page just showed instead of the
+ * two surfaces disagreeing for a memo window.
+ *
+ * A `null` prime is IGNORED: null is the absence of an answer, and letting one
+ * failed /me lookup erase a valid "not-member" cached seconds earlier would
+ * blank the dashboard nag for a player who still needs it. (memoGuildMembership
+ * caching its own nulls briefly is different — that bounds retry storms.)
+ */
+export function primeMembershipMemo(
+  discordId: string,
+  value: GuildMembership,
+  nowMs = Date.now(),
+): void {
+  if (value === null) return;
+  membershipMemo.set(discordId, { at: nowMs, value });
+}
+
+export function _clearMembershipMemoForTests(): void {
+  membershipMemo.clear();
+  membershipInflight.clear();
+}
+
+/**
+ * Membership for a batch of linked players, memoised, a few requests in
+ * flight at a time. Per-id lookups rather than the bulk member-list endpoint
+ * on purpose: listing a guild's members needs the GUILD_MEMBERS privileged
+ * intent — a Developer Portal checkbox that would be a FIFTH way for this
+ * integration to be half-configured, invisible until the list 403s. At league
+ * scale (tens of players) the per-id form costs a burst the memo amortises
+ * away, and a player Discord won't answer for degrades to `null` (unknown)
+ * instead of poisoning the whole sweep.
+ *
+ * The AGGREGATE deadline exists because the per-call 4s timeout compounds:
+ * ceil(N/4) serial batches against a hanging Discord is 40+ seconds of a
+ * streamed admin section dangling for a 40-player league. Once the budget is
+ * spent, the ids not yet fetched come back `null` — reported by the funnel as
+ * its honest "couldn't check" count, never silently dropped.
+ */
+export const SWEEP_DEADLINE_MS = 8_000;
+
+export async function sweepGuildMemberships(
+  discordIds: string[],
+  cfg: GuildConfig,
+  nowMs = Date.now(),
+  deadlineMs = SWEEP_DEADLINE_MS,
+): Promise<Map<string, GuildMembership>> {
+  const ids = [...new Set(discordIds)];
+  const out = new Map<string, GuildMembership>();
+  // Wall-clock on purpose (nowMs is the memo's injectable TTL clock, not a
+  // stopwatch): the deadline is about real elapsed network time.
+  const startedAt = Date.now();
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(4, ids.length) },
+    async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        if (Date.now() - startedAt >= deadlineMs) {
+          out.set(id, null);
+          continue;
+        }
+        out.set(id, await memoGuildMembership(id, cfg, nowMs));
+      }
+    },
+  );
+  await Promise.all(workers);
+  return out;
 }
 
 export type RoleChange = "ok" | "not-a-member" | "forbidden" | "failed";
@@ -263,7 +460,7 @@ type Fetched = { ok: boolean; status: number; data: unknown };
  * nothing. Letting a 400 through as data is exactly the bug that made this
  * whole check report a false failure on every server it ran on.
  */
-async function getJson(cfg: RoleConfig, path: string): Promise<Fetched | null> {
+async function getJson(cfg: GuildConfig, path: string): Promise<Fetched | null> {
   const res = await call(cfg, path, "GET");
   if (!res) return null;
   let data: unknown = null;
@@ -301,7 +498,13 @@ export async function getPingHealth(): Promise<PingHealth> {
     appMatchesOauth: null,
     problem: null,
   };
-  const cfg = await getRoleConfig();
+  // The bot checks need only token+guild; ONLY the role rows need a role id.
+  // This used to gate everything on getRoleConfig, which meant a league that
+  // configured the bot without picking a ping role — an explicitly supported
+  // state, see getGuildConfig's doc — got no diagnosis at all: a kicked bot or
+  // a wrong guild id left the membership funnel reading "couldn't check" while
+  // the one surface that can name the cause returned all-null.
+  const cfg = getGuildConfig();
   if (!cfg) return base;
 
   // 1. Who are we? A bot token's /users/@me IS valid — unlike the member
@@ -355,7 +558,7 @@ export async function getPingHealth(): Promise<PingHealth> {
   }
 
   const byId = new Map(roles.map((r) => [r.id, r]));
-  const target = byId.get(cfg.roleId) ?? null;
+  const target = roleId ? (byId.get(roleId) ?? null) : null;
   // The bot's height is its HIGHEST role; @everyone (id === guildId) is 0.
   const botTop = myRoleIds.reduce(
     (top, id) => Math.max(top, byId.get(id)?.position ?? 0),
@@ -375,7 +578,8 @@ export async function getPingHealth(): Promise<PingHealth> {
   return {
     ...known,
     botInGuild: true,
-    roleExists: !!target,
+    // null (not false) when no role id is chosen — there is nothing to find.
+    roleExists: roleId ? !!target : null,
     roleName: target?.name ?? null,
     botTopPosition: botTop,
     rolePosition: target?.position ?? null,
@@ -427,4 +631,152 @@ export async function getDiscordReach(seasonId: string | null): Promise<{
       .map((r) => r.user.name)
       .slice(0, 12),
   };
+}
+
+/**
+ * getDiscordReach plus the step it cannot see: of the linked, who is actually
+ * IN the server? Linking proves ownership of a handle; only membership makes
+ * the player reachable — a linked non-member wears the same verified ✓ while
+ * every mention, ping and week reminder silently misses them, which makes
+ * them the most deceptive cohort in the funnel.
+ *
+ * `guild: null` = no bot+guild configured, membership is unknowable, and
+ * callers must render exactly what getDiscordReach always rendered. Kept as a
+ * separate function (not folded into getDiscordReach) because that one's
+ * contract is "no Discord calls, cannot fail" and several callers rely on it
+ * being free.
+ */
+export type DiscordReachFunnel = {
+  registered: number;
+  linked: number;
+  unlinkedNames: string[];
+  guild: {
+    inServer: number;
+    /** In the server but behind Membership Screening — unpingable until they
+     *  accept the rules. */
+    pending: number;
+    pendingNames: string[];
+    /** Linked but definitively NOT in the server. */
+    missing: number;
+    missingNames: string[];
+    /** Linked players we couldn't get an answer for — an outage or rate
+     *  limit, but ALSO a bot that can't see the server at all (kicked, wrong
+     *  guild id, reset token), which answers this way FOREVER. Reported as
+     *  its own number, never lumped into missing; getPingHealth (rendered on
+     *  the same admin card, and it runs without a ping role) is what names
+     *  which cause. */
+    unknown: number;
+  } | null;
+};
+
+export async function getDiscordReachFunnel(
+  seasonId: string | null,
+): Promise<DiscordReachFunnel> {
+  if (!seasonId) {
+    return { registered: 0, linked: 0, unlinkedNames: [], guild: null };
+  }
+  const regs = await prisma.registration.findMany({
+    where: { seasonId, status: REGISTRATION_STATUS.ACTIVE },
+    select: { user: { select: { name: true, discordId: true } } },
+  });
+  const linkedUsers = regs
+    .filter((r) => !!r.user.discordId)
+    .map((r) => ({ name: r.user.name, discordId: r.user.discordId as string }));
+  const base = {
+    registered: regs.length,
+    linked: linkedUsers.length,
+    unlinkedNames: regs
+      .filter((r) => !r.user.discordId)
+      .map((r) => r.user.name)
+      .slice(0, 12),
+  };
+  const cfg = getGuildConfig();
+  if (!cfg) return { ...base, guild: null };
+
+  const byId = await sweepGuildMemberships(
+    linkedUsers.map((u) => u.discordId),
+    cfg,
+  );
+  let inServer = 0;
+  let unknown = 0;
+  const pendingNames: string[] = [];
+  const missingNames: string[] = [];
+  for (const u of linkedUsers) {
+    switch (byId.get(u.discordId) ?? null) {
+      case "member":
+        inServer++;
+        break;
+      case "pending":
+        pendingNames.push(u.name);
+        break;
+      case "not-member":
+        missingNames.push(u.name);
+        break;
+      default:
+        unknown++;
+    }
+  }
+  return {
+    ...base,
+    guild: {
+      inServer,
+      pending: pendingNames.length,
+      pendingNames: pendingNames.slice(0, 12),
+      missing: missingNames.length,
+      missingNames: missingNames.slice(0, 12),
+      unknown,
+    },
+  };
+}
+
+/** "A, B, C +2 more" — the cap keeps a confirm dialog a dialog. */
+function nameRun(names: string[], total: number): string {
+  const shown = names.slice(0, 6);
+  return shown.join(", ") + (total > shown.length ? ` +${total - shown.length} more` : "");
+}
+
+/**
+ * The reachability line appended to the Start-draft confirm. House rule: a
+ * destructive confirm states the real numbers BEFORE the click — and this is
+ * the last moment chasing a join is cheap, because after the draft these
+ * players are on rosters that need to schedule with them.
+ *
+ * Missing and pending players are NAMED (they're the actionable, deceptive
+ * cohort — each believes they're done); never-linked players are a count only,
+ * since their names are already on the Discord card and a confirm has to stay
+ * readable. `unknown` players appear as a caveat, not as missing. Empty string
+ * when there is nothing to warn about, so the confirm is byte-identical to
+ * what shipped before this existed.
+ */
+export function discordReachWarning(reach: DiscordReachFunnel): string {
+  const parts: string[] = [];
+  if (reach.guild) {
+    const g = reach.guild;
+    if (g.missing > 0) {
+      parts.push(
+        `${g.missing} ${g.missing === 1 ? "is" : "are"} not in the Discord server (${nameRun(g.missingNames, g.missing)})`,
+      );
+    }
+    if (g.pending > 0) {
+      parts.push(
+        `${g.pending} ${g.pending === 1 ? "hasn't" : "haven't"} accepted the server rules (${nameRun(g.pendingNames, g.pending)})`,
+      );
+    }
+    if (g.unknown > 0) {
+      // Never claim the cause: this reads the same for a Discord blip and for
+      // a bot that can't see the server at all. The card is where the
+      // checklist that CAN tell them apart lives.
+      parts.push(
+        `${g.unknown} couldn't be checked (the Discord notifications card has the diagnosis)`,
+      );
+    }
+  }
+  const unlinked = reach.registered - reach.linked;
+  if (unlinked > 0) {
+    parts.push(
+      `${unlinked} never linked Discord at all`,
+    );
+  }
+  if (parts.length === 0) return "";
+  return ` Reachability: of ${reach.registered} signed-up players, ${parts.join("; ")} — captains may not be able to reach them for scheduling.`;
 }

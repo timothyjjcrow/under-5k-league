@@ -494,6 +494,86 @@ is the point at which someone has to justify it.
   warns when you aren't registered yet, but the real fix needs a return path
   packed into the OAuth cookie (`unpackOauthCookie` hard-rejects anything that
   isn't exactly 2 dot-separated parts, so base64url it).
+- **Guild membership verification** — linking proves OWNERSHIP; only being in
+  the server makes a player reachable, and the auto-join runs exactly once (in
+  the OAuth callback), so linked-before-the-bot / join-failed-and-ignored /
+  joined-then-left / stuck-behind-Membership-Screening all wore the same green
+  "Linked ✓" forever. `fetchGuildMember`/`guildMembership` (`discord-roles.ts`,
+  real-HTTP itested) re-read it live: ONE member GET answers both membership
+  AND the ping role (`hasPingRole` is now a wrapper — its null-means-unknown
+  contract is unchanged). **A bare 404 from that endpoint is NOT "player left"**
+  — it also 404s with code 10004 (Unknown Guild) when the BOT is missing or the
+  guild id is wrong, which read naively would nag the whole league to re-join a
+  server they're in; only body codes 10007/10013 mean not-a-member, anything
+  else is `null` = unknown, and **unknown never renders as a negative
+  anywhere**. Membership is never mirrored into a column (the `hasPingRole`
+  drift argument); hot surfaces go through `memoGuildMembership` — asymmetric
+  TTLs (member 5min, everything else 30s) because a non-member is mid-fix and
+  the nag must notice their join fast — and /me's live read calls
+  `primeMembershipMemo` so the dashboard can't contradict the profile page.
+  Surfaces: /me's Discord card is three-state (In the server ✓ / Rules pending
+  / Not in the server + a durable CTA strip; the one-shot `?discord=` join
+  button renders only when `membership === null` so two CTAs never stack);
+  `DiscordJoinCard` renders on the dashboard via `DiscordSetupPrompt` for
+  linked-but-not-in/pending ACTIVE players (unknown renders NOTHING); the
+  admin card's `getDiscordReachFunnel` extends the reach line with
+  in-server/pending/missing/unknown — **unknown is its own count, never lumped
+  into missing**, and the headline's denominator is the players we could
+  CHECK, collapsing to just the couldn't-check line when Discord answered for
+  nobody — via `sweepGuildMemberships` (per-id on purpose: the bulk list
+  endpoint needs the GUILD_MEMBERS privileged intent, a fifth way to be
+  half-configured; `getDiscordReach` itself stays DB-only, its contract is
+  "no Discord calls, cannot fail"); the Start-draft confirm appends
+  `discordReachWarning` (names the missing/pending, counts the unlinked)
+  through a Suspense-wrapped `StartDraftControl` whose fallback is the SAME
+  working button with the base confirm — the admin blocking path gains no
+  Discord call, per the streamed-DiscordSection rule — and `adminNextStep`'s
+  Start-draft steps (BOTH of them — SIGNUPS and the DRAFT-phase pre-start
+  state) take `unlinkedDiscordCount`, counted over ALL ACTIVE registrations
+  in `loadSeasonAdminData` so the banner and the funnel card it points at can
+  never disagree. Policy: warn-and-name, never hard-block signup or
+  `startDraft` on a third-party API. The `<DiscordTag verified>` ✓ still means
+  ownership only, deliberately — per-row membership on pool/roster lists is
+  unaffordable and a mirrored column drifts.
+  An adversarial review pass hardened the edges — keep these:
+  * `memoGuildMembership` also memoises the IN-FLIGHT promise (two funnel
+    consumers render concurrently on /admin; a result-only memo doubles the
+    cold burst), its resolution won't clobber a FRESHER entry, and
+    `primeMembershipMemo` ignores null — one failed /me lookup must not erase
+    a real answer the dashboard nag renders from. `sweepGuildMemberships` has
+    an aggregate `SWEEP_DEADLINE_MS` (8s): the per-call 4s timeout compounds
+    across serial batches, and past the budget ids come back null — the
+    funnel's honest couldn't-check count, never silently dropped.
+  * **The join CTAs carry three DISTINCT names on purpose** ("Join the
+    server" = one-click re-OAuth in `DiscordJoinCard`; "Use the invite
+    instead" beside it; "Join via the invite" in /me's strip — and the pending
+    strip says "Open Discord" vs the card's "Open the server"). Two rules
+    collide here: one-control-one-name, and **a broken auto-join must always
+    leave an invite path visible** — re-OAuth alone bounces a player whose
+    join 403s (bot missing CREATE_INSTANT_INVITE, mismatched app) through
+    consent back to the same card forever.
+  * **The live membership answer beats the `?discord=` param** (`/me`'s
+    `discordNoteResolved`): the note was minted by the CALLBACK, and a player
+    who was already in the server when the auto-join 403'd otherwise reads
+    "we couldn't add you — join it with the button below" under an
+    "In the server ✓" badge, with no such button on the page.
+  * **`getPingHealth` runs its bot checks WITHOUT a ping role** (only the
+    role rows stay null): bot-without-role is a supported config that can run
+    the membership sweep, so when the sweep reads all-unknown because the bot
+    was kicked or the guild id is wrong, the checklist on the same card is
+    what names the cause — every unknown-copy pointer to it depends on that.
+    Never claim "reload fixes it" for unknowns: reload inside the 30s memo
+    TTL is a no-op, and a kicked bot answers that way forever.
+  COVERAGE LIMIT (stated, not hidden): the three-state /me card, the
+  dashboard join nag and the note-resolution are server-rendered JSX with no
+  automated render test (no jsdom; e2e has no bot env) — the lib layer under
+  them is fully itested, and they were verified in a real browser via the
+  `discord-fixture` launch entry (port 3115): run
+  `node scripts/discord-standin.mjs` (a stand-in Discord API on :4310 whose
+  member answers key off discordId suffix — …02 member, …03 pending,
+  …04 404-10007, …05 500), seed `signups-fixture.db`, then
+  `scripts/link-fixture-discord.ts` links fixture users to those ids; log in
+  with `/api/auth/dev`.
 - **Player questionnaire**: `Registration.roles` (comma-sep position keys,
   helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
   `captainNote` — captured on `/me`, surfaced in the player pool and draft room

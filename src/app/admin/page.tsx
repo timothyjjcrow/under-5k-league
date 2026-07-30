@@ -105,8 +105,10 @@ import {
 import { credProfitBoard } from "@/lib/inhouse-bet-service";
 import { potView } from "@/lib/inhouse-bets";
 import {
-  getDiscordReach,
+  discordReachWarning,
+  getDiscordReachFunnel,
   getPingHealth,
+  type DiscordReachFunnel,
   type PingHealth,
 } from "@/lib/discord-roles";
 import {
@@ -582,12 +584,24 @@ async function loadSeasonAdminData(seasonId: string) {
   // and cascade with it, and none of them is archived anywhere — so the confirm
   // has to be able to state them BEFORE the click, not just the toast after.
   const regularWhere = { match: { seasonId, phase: MATCH_PHASE.REGULAR } };
-  const [rsvps, picks, covers, proposals] = await Promise.all([
+  // ALL ACTIVE registrations, standins included — deliberately the same
+  // population as getDiscordReachFunnel's, because the next-step banner quotes
+  // this number and then points at that card ("names them"); counting only
+  // data.players (type PLAYER) made the two disagree whenever an unlinked
+  // standin existed. DB-only, so the blocking path stays Discord-free.
+  const [rsvps, picks, covers, proposals, unlinkedDiscord] = await Promise.all([
     prisma.matchAvailability.count({ where: regularWhere }),
     prisma.prediction.count({ where: regularWhere }),
     prisma.standinAssignment.count({ where: regularWhere }),
     prisma.rescheduleRequest.count({
       where: { ...regularWhere, status: "PENDING" },
+    }),
+    prisma.registration.count({
+      where: {
+        seasonId,
+        status: REGISTRATION_STATUS.ACTIVE,
+        user: { discordId: null },
+      },
     }),
   ]);
   return {
@@ -601,6 +615,7 @@ async function loadSeasonAdminData(seasonId: string) {
     outRsvps,
     playoffArchive: parsePlayoffArchive(playoffArchive),
     collateral: { rsvps, picks, covers, proposals },
+    unlinkedDiscord,
   };
 }
 
@@ -633,6 +648,7 @@ function SeasonControls({
     unfinishedPlayoffCount: playoff.filter((m) => m.status !== "COMPLETED")
       .length,
     hasChampion: !!season.championTeamId,
+    unlinkedDiscordCount: data.unlinkedDiscord,
   });
   return (
     <Card>
@@ -939,6 +955,10 @@ function CaptainControls({
     " Captains are locked once the auction begins — the way back is Abort draft," +
     " which returns every drafted player and refund and keeps the captains, but" +
     " is refused once any result has been recorded.";
+  const startDisabled =
+    data.teams.length < 2 ||
+    (season.status !== SEASON_STATUS.SIGNUPS &&
+      season.status !== SEASON_STATUS.DRAFT);
 
   return (
     <Card>
@@ -975,20 +995,34 @@ function CaptainControls({
                     Randomize order
                   </SubmitButton>
                 </ActionForm>
-                <ActionForm action={startDraft}>
-                  <SubmitButton
-                    variant="accent"
-                    size="sm"
-                    disabled={
-                      data.teams.length < 2 ||
-                      (season.status !== SEASON_STATUS.SIGNUPS &&
-                        season.status !== SEASON_STATUS.DRAFT)
-                    }
-                    confirm={startConfirm}
-                  >
-                    Start draft
-                  </SubmitButton>
-                </ActionForm>
+                {/* The confirm's Discord reachability line needs a (memoised)
+                    Discord lookup, and this card renders on the blocking path
+                    — so the button appears instantly with the base confirm and
+                    upgrades when the check resolves. Both renders are the same
+                    working control; a down Discord costs the warning line,
+                    never the panel (the DiscordSection rule). ACCEPTED
+                    trade-off: the reveal swaps component instances, so a click
+                    landed inside the fallback window carries the base confirm
+                    and can lose its pending spinner/toast when the swap lands
+                    (the action itself still commits). The sweep's aggregate
+                    deadline bounds that window to seconds; the alternative — a
+                    disabled fallback — would block starting the draft on
+                    Discord's health, which is the exact failure this Suspense
+                    exists to avoid. */}
+                <Suspense
+                  fallback={
+                    <StartDraftForm
+                      confirm={startConfirm}
+                      disabled={startDisabled}
+                    />
+                  }
+                >
+                  <StartDraftControl
+                    seasonId={season.id}
+                    confirmBase={startConfirm}
+                    disabled={startDisabled}
+                  />
+                </Suspense>
               </>
             ) : null}
             {draftLive ? (
@@ -2829,21 +2863,80 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
 }
 
 /**
+ * The Start-draft form itself, rendered twice: as the Suspense fallback with
+ * the base confirm (the button must exist the moment the panel paints), and
+ * by StartDraftControl with the Discord reachability line appended.
+ */
+function StartDraftForm({
+  confirm,
+  disabled,
+}: {
+  confirm: string;
+  disabled: boolean;
+}) {
+  return (
+    <ActionForm action={startDraft}>
+      <SubmitButton
+        variant="accent"
+        size="sm"
+        disabled={disabled}
+        confirm={confirm}
+      >
+        Start draft
+      </SubmitButton>
+    </ActionForm>
+  );
+}
+
+/**
+ * House rule: a consequential confirm states the real numbers BEFORE the
+ * click. This one appends who the league cannot reach on Discord — missing
+ * from the server, stuck behind its rules screen, or never linked — because
+ * the moment before the draft is the last cheap chance to chase a join:
+ * afterwards these players are locked onto rosters that need to schedule
+ * with them every week.
+ */
+async function StartDraftControl({
+  seasonId,
+  confirmBase,
+  disabled,
+}: {
+  seasonId: string;
+  confirmBase: string;
+  disabled: boolean;
+}) {
+  const reach = await getDiscordReachFunnel(seasonId);
+  return (
+    <StartDraftForm
+      confirm={confirmBase + discordReachWarning(reach)}
+      disabled={disabled}
+    />
+  );
+}
+
+/**
  * The denominator under every notification the league sends. Personal
  * mentions, the un-RSVP'd ping and the opt-in role all silently skip anyone
  * who never linked Discord — so this is the number that says whether that
  * machinery reaches the league or a handful of people.
+ *
+ * With a bot configured it also renders the step linking cannot prove: who is
+ * actually IN the server. A linked non-member is the deceptive cohort — they
+ * wear the verified ✓ on every roster while every mention misses them — and
+ * chasing them BEFORE the draft is the whole point of the funnel, because
+ * after it they're on rosters that need to schedule with them.
  */
 function DiscordReachLine({
   reach,
 }: {
-  reach: { registered: number; linked: number; unlinkedNames: string[] };
+  reach: DiscordReachFunnel;
 }) {
   if (reach.registered === 0) return null;
   const pct = Math.round((reach.linked / reach.registered) * 100);
   // Below half, the useful next move is chasing links rather than building
   // more notification machinery — so say so rather than just showing a number.
   const thin = pct < 50;
+  const g = reach.linked > 0 ? reach.guild : null;
   return (
     <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2">
       <p className="text-sm">
@@ -2865,6 +2958,65 @@ function DiscordReachLine({
             ? ` +${reach.registered - reach.linked - reach.unlinkedNames.length} more`
             : ""}
         </p>
+      ) : null}
+      {g ? (
+        <>
+          {/* When Discord answered for NOBODY, a bold "0 of 8 are in the
+              server" is a membership claim the data doesn't support — render
+              only the honest couldn't-check line below. With partial answers,
+              the denominator is the players we could actually check.
+              "Pingable" (not "in the server") is deliberate: pending members
+              ARE in the server, which made the old headline contradict the
+              rules-pending sub-line two rows down. */}
+          {g.unknown < reach.linked ? (
+            <p className="mt-2 border-t border-line-soft pt-2 text-sm">
+              <b>
+                {g.inServer} of {reach.linked - g.unknown}
+              </b>{" "}
+              {g.unknown > 0
+                ? "linked players we could check are in the Discord server and pingable"
+                : "linked players are in the Discord server and pingable"}
+              {g.missing > 0 ? (
+                <span className="text-danger"> — {g.missing} missing</span>
+              ) : g.unknown === 0 && g.pending === 0 ? (
+                <span className="text-success"> — all of them</span>
+              ) : null}
+            </p>
+          ) : null}
+          {g.missing > 0 ? (
+            <p className="mt-1 text-xs text-danger">
+              Linked but NOT in the server:{" "}
+              {g.missingNames.join(", ")}
+              {g.missing > g.missingNames.length
+                ? ` +${g.missing - g.missingNames.length} more`
+                : ""}{" "}
+              — they look reachable everywhere the ✓ renders, and aren&apos;t.
+            </p>
+          ) : null}
+          {g.pending > 0 ? (
+            <p className="mt-1 text-xs text-muted">
+              In the server but haven&apos;t accepted its rules (unpingable
+              until they do): {g.pendingNames.join(", ")}
+              {g.pending > g.pendingNames.length
+                ? ` +${g.pending - g.pendingNames.length} more`
+                : ""}
+            </p>
+          ) : null}
+          {g.unknown > 0 ? (
+            <p className="mt-1 text-xs text-muted">
+              {/* The quoted-string form matters twice over: JSX line-trimming
+                  eats a plain leading space across a source-line break
+                  (rendering "1— Discord"), and the copy must not promise a fix
+                  it can't deliver — "reload" is a no-op inside the 30s memo
+                  window, and a wrong guild id or kicked bot answers this way
+                  FOREVER; the checklist above is what names the broken piece. */}
+              Couldn&apos;t check {g.unknown}
+              {
+                " — Discord didn't answer. A hiccup clears itself within a minute; if this persists, the bot checklist above says which piece is broken."
+              }
+            </p>
+          ) : null}
+        </>
       ) : null}
     </div>
   );
@@ -3016,7 +3168,7 @@ async function DiscordSection({ seasonId }: { seasonId: string }) {
   const [board, pingHealth, discordReach] = await Promise.all([
     getInhouseBoardStatus(),
     getPingHealth(),
-    getDiscordReach(seasonId),
+    getDiscordReachFunnel(seasonId),
   ]);
   return (
     <DiscordControls
@@ -3043,7 +3195,7 @@ function DiscordControls({
   status: { configured: boolean; masked: string; envManaged: boolean };
   board: InhouseBoardStatus;
   pingHealth: PingHealth;
-  discordReach: { registered: number; linked: number; unlinkedNames: string[] };
+  discordReach: DiscordReachFunnel;
 }) {
   const { configured, masked, envManaged } = status;
   return (
