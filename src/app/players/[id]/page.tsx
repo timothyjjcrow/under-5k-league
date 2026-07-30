@@ -9,7 +9,7 @@ import { steamIdToAccountId } from "@/lib/dota";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
-import { matchPhaseLabel } from "@/lib/schedule";
+import { matchPhaseAbbrev, matchPhaseLabel } from "@/lib/schedule";
 import { getSessionUser } from "@/lib/auth";
 import { DiscordTag } from "@/components/discord-tag";
 import {
@@ -901,10 +901,22 @@ export default async function PlayerProfilePage({
                               {won ? "W" : "L"}
                             </Badge>
                             {hero ? <HeroIcon hero={hero} size={26} /> : null}
-                            <span className="min-w-0 flex-1 truncate">
+                            {/* Phones: two-line clamp + the compact phase
+                                abbrev — a long opponent name (the fixture
+                                stress-seeds a 47-char one) beside the two
+                                rigid siblings (W/L badge, KDA) left a
+                                single-line truncate rendering ~35% of itself
+                                at 360px, right on the e2e-mid collapse
+                                tripwire's line, with Linux/Android font
+                                metrics deciding pass or fail. From sm up this
+                                is byte-identical to the old single-line row. */}
+                            <span className="min-w-0 flex-1 line-clamp-2 sm:line-clamp-none sm:truncate">
                               <span className="text-muted">vs </span>
                               <span className="font-medium">{opponentName}</span>
-                              <span className="ml-2 text-xs uppercase text-muted">
+                              <span className="ml-2 text-xs uppercase text-muted sm:hidden">
+                                {matchPhaseAbbrev(game.match.phase, game.match.week)}
+                              </span>
+                              <span className="ml-2 hidden text-xs uppercase text-muted sm:inline">
                                 {matchPhaseLabel(game.match.phase, game.match.week)}
                               </span>
                             </span>
