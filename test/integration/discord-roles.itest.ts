@@ -794,8 +794,11 @@ describe("sweepGuildMemberships", () => {
 });
 
 describe("getDiscordReachFunnel — the admin's pre-draft denominator", () => {
-  const link = (userId: string, discordId: string) =>
-    prisma.user.update({ where: { id: userId }, data: { discordId } });
+  const link = (userId: string, discordId: string, handle = "") =>
+    prisma.user.update({
+      where: { id: userId },
+      data: { discordId, discordName: handle },
+    });
   const reg = (userId: string, seasonId: string) =>
     prisma.registration.create({
       data: { seasonId, userId, status: "ACTIVE", type: "PLAYER", mmr: 3000 },
@@ -824,7 +827,10 @@ describe("getDiscordReachFunnel — the admin's pre-draft denominator", () => {
     } as const;
     for (const [name, discordId] of Object.entries(ids)) {
       const u = await makeUser(name);
-      await link(u.id, discordId);
+      // Handle plumb-through is pinned here: the card and the chase message
+      // render it so a "missing" verdict is checkable against the member
+      // list (the alt-account case).
+      await link(u.id, discordId, name.toLowerCase());
       await reg(u.id, season.id);
     }
     const plain = await makeUser("Unlinked");
@@ -845,9 +851,9 @@ describe("getDiscordReachFunnel — the admin's pre-draft denominator", () => {
     expect(funnel.guild).toEqual({
       inServer: 1,
       pending: 1,
-      pendingNames: ["Pending"],
+      pendingNames: [{ name: "Pending", handle: "pending" }],
       missing: 1,
-      missingNames: ["Gone"],
+      missingNames: [{ name: "Gone", handle: "gone" }],
       unknown: 1,
     });
   });
@@ -959,19 +965,24 @@ describe("discordChaseMessage — the paste-into-Discord post", () => {
         guild: {
           inServer: 4,
           pending: 1,
-          pendingNames: ["Percy"],
+          pendingNames: [{ name: "Percy", handle: "percy_alt" }],
           missing: 1,
-          missingNames: ["Gone"],
+          missingNames: [{ name: "Gone", handle: "gone_smurf" }],
           unknown: 0,
         },
       }),
       OPTS,
     );
-    expect(msg).toContain("join us: https://discord.gg/x");
-    expect(msg).toContain("Gone");
+    // The missing ask names the LINKED account — the check is about that
+    // account, and the handle is what a player in the server on a different
+    // account needs in order to understand the verdict.
+    expect(msg).toContain("Your LINKED Discord account isn't in the league server");
+    expect(msg).toContain("https://discord.gg/x");
+    expect(msg).toContain("re-link that one instead");
+    expect(msg).toContain("Gone (linked @gone_smurf)");
     expect(msg).toContain("accept the rules");
-    expect(msg).toContain("Percy");
-    expect(msg).toContain("link it so the league can reach you");
+    expect(msg).toContain("Percy (linked @percy_alt)");
+    expect(msg).toContain("linking is what connects your Discord to your signup");
     expect(msg).toContain("U1, U2");
     // The unknowns are NOT chased — we don't know they did anything wrong.
     expect(msg).not.toContain("couldn't");
@@ -1030,9 +1041,12 @@ describe("discordReachWarning — the Start-draft confirm line", () => {
         guild: {
           inServer: 5,
           pending: 1,
-          pendingNames: ["Percy"],
+          pendingNames: [{ name: "Percy", handle: "p" }],
           missing: 2,
-          missingNames: ["Alice", "Bob"],
+          missingNames: [
+            { name: "Alice", handle: "a" },
+            { name: "Bob", handle: "b" },
+          ],
           unknown: 0,
         },
       }),
@@ -1082,12 +1096,15 @@ describe("discordReachWarning — the Start-draft confirm line", () => {
           pending: 0,
           pendingNames: [],
           missing: 8,
-          missingNames: names,
+          missingNames: names.map((n) => ({ name: n, handle: `${n}h` })),
           unknown: 0,
         },
       }),
     );
     expect(line).toContain("A, B, C, D, E, F +2 more");
     expect(line).not.toContain("G");
+    // Site names only in a CONFIRM — the handles live on the card and in the
+    // chase message, where they can be acted on.
+    expect(line).not.toContain("@");
   });
 });

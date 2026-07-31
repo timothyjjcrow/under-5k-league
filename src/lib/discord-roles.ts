@@ -1,7 +1,7 @@
 import { prisma } from "./prisma";
 import { REGISTRATION_STATUS } from "./constants";
 import { getInhousePingRoleId } from "./discord";
-import type { DiscordReachFunnel } from "./discord-reach";
+import type { DiscordReachFunnel, ReachPlayer } from "./discord-reach";
 
 // Self-serve opt-in to the inhouse ping role.
 //
@@ -715,6 +715,7 @@ export {
   discordChaseMessage,
   discordReachWarning,
   type DiscordReachFunnel,
+  type ReachPlayer,
 } from "./discord-reach";
 
 /**
@@ -738,11 +739,19 @@ export async function getDiscordReachFunnel(
   }
   const regs = await prisma.registration.findMany({
     where: { seasonId, status: REGISTRATION_STATUS.ACTIVE },
-    select: { user: { select: { name: true, discordId: true } } },
+    select: {
+      user: { select: { name: true, discordId: true, discordName: true } },
+    },
   });
   const linkedUsers = regs
     .filter((r) => !!r.user.discordId)
-    .map((r) => ({ name: r.user.name, discordId: r.user.discordId as string }));
+    .map((r) => ({
+      name: r.user.name,
+      discordId: r.user.discordId as string,
+      // The handle of the account they LINKED — what makes a "missing"
+      // verdict checkable against the member list (see ReachPlayer).
+      handle: r.user.discordName ?? "",
+    }));
   // Name lists are UNCAPPED here — the chase message has to name everyone,
   // and a display cap is the card's concern, not the data's. (getDiscordReach
   // above keeps its 12-cap; its consumers only ever render.)
@@ -762,18 +771,18 @@ export async function getDiscordReachFunnel(
   );
   let inServer = 0;
   let unknown = 0;
-  const pendingNames: string[] = [];
-  const missingNames: string[] = [];
+  const pendingNames: ReachPlayer[] = [];
+  const missingNames: ReachPlayer[] = [];
   for (const u of linkedUsers) {
     switch (byId.get(u.discordId) ?? null) {
       case "member":
         inServer++;
         break;
       case "pending":
-        pendingNames.push(u.name);
+        pendingNames.push({ name: u.name, handle: u.handle });
         break;
       case "not-member":
-        missingNames.push(u.name);
+        missingNames.push({ name: u.name, handle: u.handle });
         break;
       default:
         unknown++;

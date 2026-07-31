@@ -5,6 +5,18 @@
 // their import path.
 
 /**
+ * A player in the funnel's guild lists: site name + the Discord handle of
+ * the account they LINKED. The handle is load-bearing, not decoration — the
+ * membership check runs against the linked account BY ID, so "in the Discord
+ * but flagged missing" almost always means they linked a different account
+ * (an alt, an old one) than the person sitting in the server. Without the
+ * handle that reads as "the site is wrong" and cannot be checked; with it,
+ * an admin searches the handle in the member list and sees the truth in
+ * seconds, and the player knows exactly which account to fix.
+ */
+export type ReachPlayer = { name: string; handle: string };
+
+/**
  * getDiscordReach plus the step it cannot see: of the linked, who is actually
  * IN the server? `guild: null` = no bot+guild configured, membership is
  * unknowable. Name lists are UNCAPPED — the chase message has to name
@@ -19,10 +31,11 @@ export type DiscordReachFunnel = {
     /** In the server but behind Membership Screening — unpingable until they
      *  accept the rules. */
     pending: number;
-    pendingNames: string[];
-    /** Linked but definitively NOT in the server. */
+    pendingNames: ReachPlayer[];
+    /** The LINKED ACCOUNT is definitively not in the server — which is a
+     *  fact about the account, not always the human (see ReachPlayer). */
     missing: number;
-    missingNames: string[];
+    missingNames: ReachPlayer[];
     /** Linked players we couldn't get an answer for — an outage or rate
      *  limit, but ALSO a bot that can't see the server at all (kicked, wrong
      *  guild id, reset token), which answers this way FOREVER. Reported as
@@ -33,9 +46,11 @@ export type DiscordReachFunnel = {
   } | null;
 };
 
-/** "A, B, C +2 more" — the cap keeps a confirm dialog a dialog. */
-function nameRun(names: string[], total: number): string {
-  const shown = names.slice(0, 6);
+/** "A, B, C +2 more" — the cap keeps a confirm dialog a dialog. Site names
+ *  only: the confirm is glanced at mid-click; the handles live on the card
+ *  and in the chase message, where they can actually be acted on. */
+function nameRun(players: ReachPlayer[], total: number): string {
+  const shown = players.slice(0, 6).map((p) => p.name);
   return (
     shown.join(", ") + (total > shown.length ? ` +${total - shown.length} more` : "")
   );
@@ -122,23 +137,36 @@ export function discordChaseMessage(
   opts: { inviteUrl: string; profileUrl: string },
 ): string | null {
   const names = (list: string[]) => list.map(pasteSafeName).join(", ");
+  // Missing players are listed WITH the handle of the account they linked —
+  // the check is about that account, and "your linked account" is the phrase
+  // that keeps this honest for the player who is sitting in the server on a
+  // different one. The remedy line covers both cases: join on the linked
+  // account, or re-link the account they actually use.
+  const withHandles = (list: ReachPlayer[]) =>
+    list
+      .map((p) =>
+        p.handle
+          ? `${pasteSafeName(p.name)} (linked @${pasteSafeName(p.handle)})`
+          : pasteSafeName(p.name),
+      )
+      .join(", ");
   const blocks: string[] = [];
   if (reach.guild && reach.guild.missing > 0) {
     blocks.push(
-      `Not in the league Discord yet — join us: ${opts.inviteUrl}\n` +
-        names(reach.guild.missingNames),
+      `Your LINKED Discord account isn't in the league server — join on it (${opts.inviteUrl}), or if you're in the server on a different account, re-link that one instead: ${opts.profileUrl}\n` +
+        withHandles(reach.guild.missingNames),
     );
   }
   if (reach.guild && reach.guild.pending > 0) {
     blocks.push(
       "In the server but still need to accept the rules (top of the channel list) — until then nothing can ping you:\n" +
-        names(reach.guild.pendingNames),
+        withHandles(reach.guild.pendingNames),
     );
   }
   const unlinked = reach.registered - reach.linked;
   if (unlinked > 0) {
     blocks.push(
-      `Signed up but haven't linked Discord on the site — link it so the league can reach you: ${opts.profileUrl}\n` +
+      `Signed up but haven't linked Discord on the site (being in the server isn't enough — linking is what connects your Discord to your signup, so pings reach you): ${opts.profileUrl}\n` +
         names(reach.unlinkedNames),
     );
   }

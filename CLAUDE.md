@@ -606,6 +606,23 @@ is the point at which someone has to justify it.
     `previousDiscordId`, and the callback's injected `stripPingRole` dep
     fires best-effort AFTER the link commits — a failed strip never costs
     the link. Same-account re-links don't strip.
+  * **"Missing" is a fact about the LINKED ACCOUNT, not always the human —
+    and every surface says which account** (first live use: the admin
+    reported "some of these players are in the discord", and they were —
+    on accounts they hadn't linked). The membership check runs by ID
+    against the account the player linked, so a smurf/old-account link
+    classifies not-member while the person sits in the server. The funnel's
+    guild lists carry `ReachPlayer` ({name, handle}); the admin card, the
+    chase message and both player-facing surfaces render "(@handle)" plus
+    the remedy (join on the linked account, or re-link the one they use —
+    the OAuth Join button re-links whichever account the browser is signed
+    into, fixing both in one click). The Start-draft confirm stays
+    names-only (a confirm is glanced at; handles are for acting on). The
+    chase message's unlinked block also states "being in the server isn't
+    enough" — the admin read that list as "not in Discord", which it never
+    claimed. When copy follows a JSX expression onto a new source line, use
+    the quoted-string form — the plain leading space is line-trimmed
+    ("(@gone4)isn't"); this has now bitten three times.
   COVERAGE LIMIT (stated, not hidden): the three-state /me card, the
   dashboard join nag and the note-resolution are server-rendered JSX with no
   automated render test (no jsdom; e2e has no bot env) — the lib layer under

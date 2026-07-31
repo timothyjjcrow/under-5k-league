@@ -112,10 +112,14 @@ export function DiscordJoinCard({
   membership,
   linkAvailable,
   next,
+  handle,
 }: {
   membership: "not-member" | "pending";
   linkAvailable: boolean;
   next?: string;
+  /** The linked account's Discord handle — named so a player in the server
+   *  on a DIFFERENT account can see which one the site is talking about. */
+  handle?: string | null;
 }) {
   const pending = membership === "pending";
   return (
@@ -125,12 +129,12 @@ export function DiscordJoinCard({
           <h2 className="font-display text-lg font-semibold">
             {pending
               ? "Almost there — accept the server rules"
-              : "One step left — join the Discord server"}
+              : "One step left — get your Discord into the server"}
           </h2>
           <p className="mt-1 text-sm text-muted">
             {pending
               ? "You're in the league's Discord, but until you accept its rules nothing can reach you — no match pings, no scheduling, no standin scrambles."
-              : "Your Discord is linked, but you're not in the league's server — that's where scheduling, check-ins and standin scrambles happen, and your captain has no way to reach you until you join."}
+              : `The Discord account you linked${handle ? ` (@${handle})` : ""} isn't in the league's server — that's where scheduling, check-ins and standin scrambles happen, and nothing can reach you until it is. Already in the server on a different account? The button below re-links whichever account your browser is signed into, so one click fixes both.`}
           </p>
         </div>
 
@@ -196,7 +200,7 @@ export async function DiscordSetupPrompt({
     }),
     prisma.user.findUnique({
       where: { id: userId },
-      select: { discordId: true },
+      select: { discordId: true, discordName: true },
     }),
   ]);
   if (reg?.status !== REGISTRATION_STATUS.ACTIVE) return null;
@@ -225,6 +229,7 @@ export async function DiscordSetupPrompt({
       membership={membership}
       linkAvailable={linkAvailable}
       next="/"
+      handle={user.discordName}
     />
   );
 }

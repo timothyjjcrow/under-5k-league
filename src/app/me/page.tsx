@@ -253,6 +253,7 @@ export default async function MePage({
         <DiscordJoinCard
           membership={membership}
           linkAvailable={discordLinkAvailable}
+          handle={dbUser?.discordName}
         />
       ) : null}
 
@@ -399,10 +400,16 @@ export default async function MePage({
           {membership === "not-member" ? (
             <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm">
               <p className="text-danger">
-                You&apos;re not in the league&apos;s Discord server — that&apos;s
-                where scheduling, match-night check-ins and standin scrambles
-                happen, and your captain has no way to reach you until you
-                join.
+                {/* "The account you linked", never "you" — the check is about
+                    the linked account BY ID, and the commonest cause of this
+                    state is a player sitting in the server on a DIFFERENT
+                    account than the one they linked. Naming the handle makes
+                    that self-diagnosable. */}
+                The Discord account you linked
+                {dbUser?.discordName ? ` (@${dbUser.discordName})` : ""}
+                {/* Quoted string: JSX line-trimming eats a plain leading
+                    space after an expression across a source-line break. */}
+                {" isn't in the league's server — that's where scheduling, match-night check-ins and standin scrambles happen, and nothing can reach you until it is. In the server on a different account? Use the Join button at the top of this page — it re-links whichever account your browser is signed into, so one click fixes both."}
               </p>
               <div className="mt-2">
                 {/* The INVITE, deliberately not the one-click OAuth join. This

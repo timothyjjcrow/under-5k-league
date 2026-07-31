@@ -2943,6 +2943,15 @@ function DiscordReachLine({
   const capped = (names: string[]) =>
     names.slice(0, 12).join(", ") +
     (names.length > 12 ? ` +${names.length - 12} more` : "");
+  // Guild lists render "name (@linked-handle)" — the membership check is
+  // about the LINKED ACCOUNT, and the handle is what lets an admin verify a
+  // "missing" verdict against the member list in seconds (an alt-account
+  // link reads as "the site is wrong" without it).
+  const cappedPlayers = (list: { name: string; handle: string }[]) =>
+    list
+      .slice(0, 12)
+      .map((p) => (p.handle ? `${p.name} (@${p.handle})` : p.name))
+      .join(", ") + (list.length > 12 ? ` +${list.length - 12} more` : "");
   const anyoneToChase =
     reach.registered - reach.linked > 0 ||
     (g !== null && (g.missing > 0 || g.pending > 0));
@@ -2991,14 +3000,18 @@ function DiscordReachLine({
           ) : null}
           {g.missing > 0 ? (
             <p className="mt-1 text-xs text-danger">
-              Linked but NOT in the server: {capped(g.missingNames)}{" "}
-              — they look reachable everywhere the ✓ renders, and aren&apos;t.
+              Linked account NOT in the server:{" "}
+              {cappedPlayers(g.missingNames)}
+              {/* Quoted string: JSX line-trimming eats a plain leading space
+                  after an expression across a source-line break — the same
+                  bug the couldn't-check line documents below. */}
+              {" — pings to them land nowhere. If a player insists they're in the server, search the @handle in the member list: they likely linked a different account than the one they use, and the fix is re-linking on their profile."}
             </p>
           ) : null}
           {g.pending > 0 ? (
             <p className="mt-1 text-xs text-muted">
               In the server but haven&apos;t accepted its rules (unpingable
-              until they do): {capped(g.pendingNames)}
+              until they do): {cappedPlayers(g.pendingNames)}
             </p>
           ) : null}
           {g.unknown > 0 ? (
