@@ -456,19 +456,38 @@ describe("setSeasonPhase — the write re-asserts the phase it judged", () => {
       setSeasonPhase({}, phaseForm(SEASON_STATUS.REGULAR_SEASON)),
     ]);
 
+    // TWO legal schedules exist, and a slow runner produces either — the
+    // first version asserted "exactly one winner" and flaked CI's mutation
+    // shard when Promise.all happened to SEQUENCE the calls:
+    //  * concurrent reads: both see SIGNUPS, the claim lets exactly one land,
+    //    the loser reads "just changed".
+    //  * sequential visibility: B reads AFTER A commits, so B's guards judge
+    //    DRAFT and its claim re-asserts DRAFT — both succeed as the valid
+    //    chain SIGNUPS→DRAFT→REGULAR_SEASON.
+    // What the guarded write actually forbids — and what the old blind write
+    // allowed — is a THIRD shape: both succeed off the same stale read and
+    // the final phase is whichever write happened to land last (B's flip
+    // silently overwritten). The assertions below hold in both legal
+    // schedules and fail that one.
     const errors = [a, b].filter((r) => r?.error);
     const wins = [a, b].filter((r) => r?.message);
-    expect(wins.length).toBe(1);
-    expect(errors.length).toBe(1);
-    expect(errors[0]?.error).toMatch(/just changed|already in/i);
+    expect(wins.length).toBeGreaterThanOrEqual(1);
+    expect(wins.length + errors.length).toBe(2);
     const finalStatus = await statusOf(season.id);
-    // The final phase is whichever target actually won, never a blend.
-    expect([SEASON_STATUS.DRAFT, SEASON_STATUS.REGULAR_SEASON]).toContain(
-      finalStatus,
-    );
-    const winnerTarget = wins[0]?.message?.includes("Draft")
-      ? SEASON_STATUS.DRAFT
-      : SEASON_STATUS.REGULAR_SEASON;
-    expect(finalStatus).toBe(winnerTarget);
+    if (wins.length === 1) {
+      expect(errors[0]?.error).toMatch(/just changed|already in/i);
+      // The final phase is the winner's target, never a blend.
+      expect(finalStatus).toBe(
+        wins[0]?.message?.includes("Draft")
+          ? SEASON_STATUS.DRAFT
+          : SEASON_STATUS.REGULAR_SEASON,
+      );
+    } else {
+      // Both won ⇒ B's claim can only have matched DRAFT, i.e. A committed
+      // first and B saw it — the season MUST end at B's target. Ending at
+      // DRAFT with two successes is exactly the lost-update the claim exists
+      // to prevent.
+      expect(finalStatus).toBe(SEASON_STATUS.REGULAR_SEASON);
+    }
   });
 });
