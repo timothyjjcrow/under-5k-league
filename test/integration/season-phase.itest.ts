@@ -15,7 +15,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
-import { setSeasonPhase } from "@/app/actions/admin";
+import { setSeasonPhase, startDraft } from "@/app/actions/admin";
 import { pauseDraft } from "@/lib/draft-service";
 import { nominatePlayer } from "@/lib/draft-service";
 import { DRAFT_STATUS, MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
@@ -301,5 +301,174 @@ describe("setSeasonPhase — a finished draft can't be reopened over a live leag
 
     expect(res?.error).toMatch(/results are already recorded/i);
     expect(await statusOf(season.id)).toBe(SEASON_STATUS.REGULAR_SEASON);
+  });
+});
+
+describe("setSeasonPhase — the backward-into-DRAFT guard doesn't need a COMPLETE draft row", () => {
+  // The first version keyed the results refusal on `draft?.status === COMPLETE`,
+  // so the two shapes where DRAFT is MOST dangerous walked straight past it: a
+  // hand-run league with no Draft row at all, and a post-abort NOT_STARTED row.
+  // Both make Start draft UI-enabled over a played league — and until startDraft
+  // grew its own results guard, that click was a trap with no exit (abortDraft
+  // refuses over results; setSeasonPhase refuses to leave DRAFT mid-auction).
+  async function playedSeason(draftStatus: string | null) {
+    const season = await makeSeason({
+      teamSize: 3,
+      status: SEASON_STATUS.REGULAR_SEASON,
+    });
+    const a = await makeTeam(season.id, "Alpha", 0);
+    const b = await makeTeam(season.id, "Bravo", 1);
+    if (draftStatus) {
+      await prisma.draft.create({
+        data: { seasonId: season.id, status: draftStatus },
+      });
+    }
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: a.id,
+        awayTeamId: b.id,
+        bestOf: 2,
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 2,
+        awayScore: 0,
+        winnerTeamId: a.id,
+      },
+    });
+    return season;
+  }
+
+  it("refuses over results with NO draft row (the hand-run league)", async () => {
+    const season = await playedSeason(null);
+    const res = await setSeasonPhase({}, phaseForm(SEASON_STATUS.DRAFT));
+    expect(res?.error).toMatch(/results are already recorded/i);
+    expect(await statusOf(season.id)).toBe(SEASON_STATUS.REGULAR_SEASON);
+  });
+
+  it("refuses over results with a NOT_STARTED draft row (post-abort)", async () => {
+    const season = await playedSeason(DRAFT_STATUS.NOT_STARTED);
+    const res = await setSeasonPhase({}, phaseForm(SEASON_STATUS.DRAFT));
+    expect(res?.error).toMatch(/results are already recorded/i);
+    expect(await statusOf(season.id)).toBe(SEASON_STATUS.REGULAR_SEASON);
+  });
+
+  it("still allows DRAFT as the REPAIR for a stranded live auction, results or not", async () => {
+    // A draft IN_PROGRESS with the season outside DRAFT is the race state the
+    // guarded phase write exists for; moving back INTO Draft restores
+    // consistency and must not be refused by the results guard.
+    const season = await playedSeason(DRAFT_STATUS.IN_PROGRESS);
+    const res = await setSeasonPhase({}, phaseForm(SEASON_STATUS.DRAFT));
+    expect(res?.error).toBeUndefined();
+    expect(await statusOf(season.id)).toBe(SEASON_STATUS.DRAFT);
+  });
+});
+
+describe("startDraft — results-blind no more", () => {
+  it("refuses to open an auction over a league with recorded results", async () => {
+    // Reached via the phase buttons: season walked into DRAFT with no Draft row,
+    // two captains standing, pool available — the exact state where the old
+    // action opened a live auction over a played league and the trap closed.
+    const season = await makeSeason({
+      teamSize: 3,
+      status: SEASON_STATUS.DRAFT,
+    });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    await makePlayer(season.id, "Pool Player", 3000);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: capA.team.id,
+        awayTeamId: capB.team.id,
+        bestOf: 2,
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 2,
+        awayScore: 0,
+        winnerTeamId: capA.team.id,
+      },
+    });
+
+    const res = await startDraft({}, new FormData());
+
+    expect(res?.error).toMatch(/results are already recorded/i);
+    expect(
+      await prisma.draft.findUnique({ where: { seasonId: season.id } }),
+    ).toBeNull();
+  });
+
+  it("refuses on an imported game alone, before any series is decided", async () => {
+    const season = await makeSeason({
+      teamSize: 3,
+      status: SEASON_STATUS.DRAFT,
+    });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    await makePlayer(season.id, "Pool Player", 3000);
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: capA.team.id,
+        awayTeamId: capB.team.id,
+        bestOf: 3,
+        status: MATCH_STATUS.LIVE,
+        homeScore: 1,
+        awayScore: 0,
+      },
+    });
+    await prisma.game.create({
+      data: {
+        matchId: match.id,
+        dotaMatchId: "8333333333",
+        radiantWin: true,
+        winnerTeamId: capA.team.id,
+        players: "[]",
+      },
+    });
+
+    const res = await startDraft({}, new FormData());
+
+    expect(res?.error).toMatch(/results are already recorded/i);
+    expect(
+      await prisma.draft.findUnique({ where: { seasonId: season.id } }),
+    ).toBeNull();
+  });
+});
+
+describe("setSeasonPhase — the write re-asserts the phase it judged", () => {
+  it("two concurrent flips to different targets: exactly one wins", async () => {
+    // The claim is the enforcement, not the read-time guards: both calls read
+    // SIGNUPS, both pass their guards, and the WHERE {status: as-read} lets
+    // exactly one land. Meaningful on SQLite already (no transaction involved,
+    // so the reads interleave ahead of the serialized writes); real contention
+    // under `npm run test:pg`.
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    await makeTeam(season.id, "Alpha", 0);
+    await makeTeam(season.id, "Bravo", 1);
+
+    const [a, b] = await Promise.all([
+      setSeasonPhase({}, phaseForm(SEASON_STATUS.DRAFT)),
+      setSeasonPhase({}, phaseForm(SEASON_STATUS.REGULAR_SEASON)),
+    ]);
+
+    const errors = [a, b].filter((r) => r?.error);
+    const wins = [a, b].filter((r) => r?.message);
+    expect(wins.length).toBe(1);
+    expect(errors.length).toBe(1);
+    expect(errors[0]?.error).toMatch(/just changed|already in/i);
+    const finalStatus = await statusOf(season.id);
+    // The final phase is whichever target actually won, never a blend.
+    expect([SEASON_STATUS.DRAFT, SEASON_STATUS.REGULAR_SEASON]).toContain(
+      finalStatus,
+    );
+    const winnerTarget = wins[0]?.message?.includes("Draft")
+      ? SEASON_STATUS.DRAFT
+      : SEASON_STATUS.REGULAR_SEASON;
+    expect(finalStatus).toBe(winnerTarget);
   });
 });

@@ -56,6 +56,7 @@ export function StandingsTable({
     form: formByTeam ? formByTeam.get(s.teamId) ?? [] : null,
     clinch: cutIsReal ? clinch?.get(s.teamId) ?? null : null,
     move: movement?.get(s.teamId) ?? 0,
+    idDecided: s.idDecided ?? false,
   }));
   return (
     <StandingsTableClient

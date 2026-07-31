@@ -27,6 +27,15 @@ export type TeamStanding = {
   gameWins: number;
   gameLosses: number;
   gameDiff: number;
+  /**
+   * True when this row's order against an adjacent row was decided by NOTHING
+   * but the team-id fallback — points, game diff, series wins AND the
+   * head-to-head mini-table all tied. Set only when true (never false), so
+   * comparisons against rows built without the field still hold. The id keeps
+   * the sort deterministic, but a fully-tied pair straddling a playoff cut or
+   * a seed line is a coin flip the league should SEE, not discover.
+   */
+  idDecided?: boolean;
 };
 
 /**
@@ -226,6 +235,15 @@ export function computeStandings(
           h2h.get(a.teamId)! - h2h.get(b.teamId)! ||
           a.teamId.localeCompare(b.teamId),
       );
+      // Adjacent members sharing a mini-rank were ordered by the id alone —
+      // flag both so every standings surface can say "this order is a coin
+      // flip" instead of printing strict ordinals over a dead heat.
+      for (let k = 0; k < group.length - 1; k++) {
+        if (h2h.get(group[k].teamId) === h2h.get(group[k + 1].teamId)) {
+          group[k].idDecided = true;
+          group[k + 1].idDecided = true;
+        }
+      }
       rows.splice(i, j - i, ...group);
     }
     i = j;

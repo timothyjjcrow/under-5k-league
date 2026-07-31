@@ -1,6 +1,7 @@
 import { prisma } from "./prisma";
 import { MATCH_STATUS } from "./constants";
 import { parseMatchId } from "./dota";
+import { getActiveSeason } from "./season";
 import { autoDetectGamesForMatch, importGameForMatch } from "./match-import";
 
 // Captain-scoped result reporting (reschedule-service pattern: guards live
@@ -25,11 +26,23 @@ async function requireMatchCaptain(
     where: { id: matchId },
     select: {
       status: true,
+      seasonId: true,
       homeTeam: { select: { captainId: true } },
       awayTeam: { select: { captainId: true } },
     },
   });
   if (!match) throw new Error("Match not found");
+  // The standin-service rule: an archived season's unplayed match keeps its
+  // captains, and an import here still runs recomputeSeries → the bracket and
+  // every cross-season board — silently rewriting a finished season's history.
+  // Amending archives is deliberate admin work (/admin's import controls),
+  // never captain self-serve.
+  const season = await getActiveSeason();
+  if (!season || match.seasonId !== season.id) {
+    throw new Error(
+      "This match belongs to an archived season — ask an admin to amend it",
+    );
+  }
   if (match.status === MATCH_STATUS.COMPLETED) {
     throw new Error(
       "This match is already recorded — ask an admin to amend it",

@@ -9,10 +9,15 @@ import {
 } from "./schedule";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { championMessage, sendDiscordMessage } from "./discord";
+import { raceHook } from "./race-hook";
 import { playoffGamesArchiveKey } from "./settings";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
+
+/** The round-build's inputs stopped being true mid-flight (reset / correction /
+ *  close-out) — thrown inside the build transaction so nothing commits. */
+class StaleBracketError extends Error {}
 
 /**
  * Exactly-once marker for "round N of this season's bracket has been built".
@@ -257,34 +262,81 @@ export async function advancePlayoffBracket(seasonId: string) {
     select: { id: true },
   });
   if (exists) return; // cheap fast path; the claim below is the real guard
+  await raceHook("playoffs.advance.beforeBuild");
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.setting.create({
-        data: {
-          key: playoffRoundKey(seasonId, nextRound),
-          value: new Date().toISOString(),
-        },
-      });
-      await tx.match.createMany({
-        data: pairings.map((p, i) => ({
-          seasonId,
-          week,
-          phase,
-          homeTeamId: p.home,
-          awayTeamId: p.away,
-          bracketSlot: `R${nextRound}M${i}`,
-          bestOf,
-          // Same guard as the first round: a round created after its arithmetic
-          // date has passed must roll forward, not be born already stale.
-          scheduledAt: season.firstMatchNight
-            ? upcomingMatchNight(season.firstMatchNight, week, Date.now())
-            : null,
-        })),
-      });
-    });
+    await prisma.$transaction(
+      async (tx) => {
+        // Re-assert the build's INPUTS inside the transaction — everything
+        // above was read at default isolation, several round trips ago. The
+        // rival that made this real is Reset playoffs: its teardown deletes
+        // the round markers FIRST, so a stale advance's marker create
+        // SUCCEEDS and it would pair pre-reset winners into the brand-new
+        // bracket — a phantom R{n} that is never COMPLETED, which makes
+        // maxRound point at it forever: the rebuilt bracket can finish but
+        // never advance, no champion, and the only repair is ANOTHER reset.
+        // Re-reading the current round catches it (the reset deleted those
+        // match rows); re-reading the winners catches a removeGame /
+        // recordResult correction landing mid-build; re-reading season.status
+        // catches a close-out phase flip racing the final import (a round
+        // must not be built into a COMPLETE season).
+        const [seasonNow, currentNow] = await Promise.all([
+          tx.season.findUnique({
+            where: { id: seasonId },
+            select: { status: true },
+          }),
+          tx.match.findMany({
+            where: { id: { in: current.map((m) => m.id) } },
+            select: { id: true, status: true, winnerTeamId: true },
+          }),
+        ]);
+        if (seasonNow?.status !== SEASON_STATUS.PLAYOFFS) {
+          throw new StaleBracketError();
+        }
+        const winnerById = new Map(current.map((m) => [m.id, m.winnerTeamId]));
+        const inputsHold =
+          currentNow.length === current.length &&
+          currentNow.every(
+            (m) =>
+              m.status === MATCH_STATUS.COMPLETED &&
+              m.winnerTeamId &&
+              m.winnerTeamId === winnerById.get(m.id),
+          );
+        if (!inputsHold) throw new StaleBracketError();
+        await tx.setting.create({
+          data: {
+            key: playoffRoundKey(seasonId, nextRound),
+            value: new Date().toISOString(),
+          },
+        });
+        await tx.match.createMany({
+          data: pairings.map((p, i) => ({
+            seasonId,
+            week,
+            phase,
+            homeTeamId: p.home,
+            awayTeamId: p.away,
+            bracketSlot: `R${nextRound}M${i}`,
+            bestOf,
+            // Same guard as the first round: a round created after its arithmetic
+            // date has passed must roll forward, not be born already stale.
+            scheduledAt: season.firstMatchNight
+              ? upcomingMatchNight(season.firstMatchNight, week, Date.now())
+              : null,
+          })),
+        });
+      },
+      // Serializable so the reset (also Serializable, touching the same
+      // marker/match/season rows) and this build are guaranteed to serialize —
+      // one of them aborts with P2034 instead of interleaving.
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   } catch (e) {
     // Someone else is building (or already built) this exact round.
     if ((e as { code?: string }).code === "P2002") return;
+    // SSI loser — a rival build or a reset serialized ahead of us.
+    if ((e as { code?: string }).code === "P2034") return;
+    // The bracket we computed from no longer exists as we read it.
+    if (e instanceof StaleBracketError) return;
     throw e;
   }
 }

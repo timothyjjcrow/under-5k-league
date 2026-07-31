@@ -95,7 +95,10 @@ export async function POST(req: NextRequest) {
       res = await cancelLobby(user, { force: Boolean(body.force) });
       break;
     case "void":
-      res = await voidLastResult(user);
+      res = await voidLastResult(
+        user,
+        typeof body.lobbyId === "string" ? body.lobbyId : null,
+      );
       break;
     default:
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });

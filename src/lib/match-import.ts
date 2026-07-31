@@ -1033,6 +1033,17 @@ export async function syncLeagueGames(
     : Number.POSITIVE_INFINITY;
   let fetches = 0;
   let imported = 0;
+  // Phase 1 — fetch, classify, and BUFFER per fixture instead of importing per
+  // feed id. The feed lists newest-first, so a "one for fun" game after a
+  // decided night used to import BEFORE the real games (the series wasn't
+  // COMPLETED yet, so nothing refused it) and a 2-0 went into the record as
+  // 2-1 — wrong gameDiff tiebreak, bogus box score, wrong Discord post. Only
+  // the roster-scan path had `pickSeriesGames`' session-split + clinch-stop;
+  // buffering lets this path run the same filter per match below.
+  const candidatesByMatch = new Map<
+    string,
+    { id: number; idStr: string; startTime: number; winnerTeamId: string | null }[]
+  >();
   for (const dotaId of leagueMatchIds) {
     const idStr = String(dotaId);
     if (skip.has(idStr)) continue;
@@ -1049,18 +1060,21 @@ export async function syncLeagueGames(
     // COMPLETED matches never take a game: a decided series (or an admin's
     // manual/forfeit ruling) must not be silently rewritten by a late import —
     // amending one is an explicit per-match admin action.
-    const fits = scheduled.filter((m) => {
+    const fits: { m: (typeof scheduled)[number]; winnerTeamId: string | null }[] =
+      [];
+    for (const m of scheduled) {
       const acc = accountsByMatch.get(m.id);
-      if (!acc) return false;
-      if (m.games.length >= m.bestOf) return false;
-      if (m.status === MATCH_STATUS.COMPLETED) return false;
-      return classifyGame(
+      if (!acc) continue;
+      if (m.games.length >= m.bestOf) continue;
+      if (m.status === MATCH_STATUS.COMPLETED) continue;
+      const cls = classifyGame(
         od,
         { teamId: m.homeTeamId, accountIds: acc.home },
         { teamId: m.awayTeamId, accountIds: acc.away },
         Math.min(3, acc.teamSize),
-      ).ok;
-    });
+      );
+      if (cls.ok) fits.push({ m, winnerTeamId: cls.winnerTeamId });
+    }
     if (fits.length === 0) {
       newlySkipped.push(idStr);
       continue;
@@ -1068,24 +1082,51 @@ export async function syncLeagueGames(
 
     const gameMs = (od.start_time ?? 0) * 1000;
     const best = fits.reduce((a, b) => {
-      const da = a.scheduledAt
-        ? Math.abs(gameMs - a.scheduledAt.getTime())
+      const da = a.m.scheduledAt
+        ? Math.abs(gameMs - a.m.scheduledAt.getTime())
         : Number.MAX_SAFE_INTEGER;
-      const db = b.scheduledAt
-        ? Math.abs(gameMs - b.scheduledAt.getTime())
+      const db = b.m.scheduledAt
+        ? Math.abs(gameMs - b.m.scheduledAt.getTime())
         : Number.MAX_SAFE_INTEGER;
       return db < da ? b : a;
     });
+    const list = candidatesByMatch.get(best.m.id) ?? [];
+    list.push({
+      id: Number(idStr),
+      idStr,
+      startTime: od.start_time ?? 0,
+      winnerTeamId: best.winnerTeamId,
+    });
+    candidatesByMatch.set(best.m.id, list);
+  }
 
-    const r = await importGameForMatch(best.id, idStr);
-    if (r.ok) {
-      imported++;
-      // Keep the in-memory game counts honest for later league games.
-      best.games.push({ id: idStr });
-    } else {
-      // A refused import (recorded for another match, full series, manual
-      // result) won't succeed next run either — stop refetching it.
-      newlySkipped.push(idStr);
+  // Phase 2 — per match, keep only the real series (biggest session, clinch
+  // stop) and import it in PLAY order. Play order is itself a backstop: each
+  // import runs recomputeSeries, so once the series decides, the funnel's own
+  // COMPLETED/bestOf re-checks refuse anything a partial buffer let through
+  // (e.g. the match already held a roster-scanned game this buffer can't see
+  // the clinch math of).
+  for (const [matchId, candidates] of candidatesByMatch) {
+    const match = scheduled.find((m) => m.id === matchId);
+    if (!match) continue;
+    const chosen = pickSeriesGames(candidates, match.bestOf);
+    const chosenIds = new Set(chosen.map((c) => c.idStr));
+    for (const c of [...chosen].sort((a, b) => a.startTime - b.startTime)) {
+      const r = await importGameForMatch(matchId, c.idStr);
+      if (r.ok) {
+        imported++;
+      } else {
+        // A refused import (recorded for another match, full series, manual
+        // result) won't succeed next run either — stop refetching it.
+        newlySkipped.push(c.idStr);
+      }
+    }
+    for (const c of candidates) {
+      // The bonus/warmup games pickSeriesGames dropped: fetched, classified,
+      // and deliberately not imported — remember them so the automatic feed
+      // never refetches a game it has already judged. The manual admin button
+      // ignores the skip list, so a wrongly-dropped game stays importable.
+      if (!chosenIds.has(c.idStr)) newlySkipped.push(c.idStr);
     }
   }
   if (opts.auto && newlySkipped.length > 0) {

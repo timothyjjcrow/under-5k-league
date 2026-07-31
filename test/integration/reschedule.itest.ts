@@ -374,3 +374,57 @@ describe("accepting a reschedule reports what it invalidated", () => {
     ).toBe(2);
   });
 });
+
+describe("reschedule — archived seasons are read-only for captains", () => {
+  // An early season turnover (Create-a-new-season mid-run, or Make active
+  // again on an old one) leaves unplayed matches behind with their captains
+  // intact. Proposing opens a live negotiation over a dead fixture; accepting
+  // would RETIME it and wipe its RSVPs. Decline stays legal — cleaning up a
+  // proposal stranded by the archival only touches the request row.
+  async function archivedMatch() {
+    const season = await makeSeason();
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const [match] = await generateRegularSchedule(season.id);
+    return { season, home, away, match };
+  }
+
+  it("refuses a proposal on an archived season's match", async () => {
+    const { season, home, match } = await archivedMatch();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { isActive: false },
+    });
+    await expect(
+      proposeReschedule(home.captainId, match.id, NIGHT),
+    ).rejects.toThrow(/archived season/i);
+  });
+
+  it("refuses ACCEPT but allows DECLINE on a proposal stranded by archival", async () => {
+    const { season, home, away, match } = await archivedMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { isActive: false },
+    });
+
+    await expect(
+      respondReschedule(away.captainId, pending!.id, true),
+    ).rejects.toThrow(/archived season/i);
+    // The match was NOT retimed by the refused accept.
+    const row = await prisma.match.findUniqueOrThrow({
+      where: { id: match.id },
+    });
+    expect(row.scheduledAt?.getTime() ?? null).not.toBe(NIGHT.getTime());
+    // The stranded proposal can still be declined away.
+    await respondReschedule(away.captainId, pending!.id, false);
+    expect(
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: pending!.id },
+        })
+      ).status,
+    ).toBe("DECLINED");
+  });
+});

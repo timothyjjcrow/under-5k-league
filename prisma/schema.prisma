@@ -19,7 +19,12 @@ model User {
   name          String
   avatar        String?
   profileUrl    String?
-  dotaAccountId Int? // Dota 2 32-bit account id (defaults to one derived from steamId)
+  // Dota 2 32-bit account id (defaults to one derived from steamId). @unique
+  // is the write-time backstop for updateDotaAccount's collision check: one
+  // account id on two users puts the same account in both teams' import sets,
+  // and classifyGame then fails or mis-attributes every match containing both.
+  // (Nullable unique — most users never set an override.)
+  dotaAccountId Int? @unique
   rankTier      Int? // OpenDota rank_tier (tens=medal, ones=stars); null if unknown
   // OpenDota profile.fh_unavailable: true = "Expose Public Match Data" is OFF,
   // so every automatic import path is blind to this player's games. Null =

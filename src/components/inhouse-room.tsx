@@ -693,7 +693,14 @@ export function InhouseRoom({
                   "Void the last inhouse result? It leaves the ladder and history, and everyone's Elo is recalculated without it.",
                 )
               ) {
-                if (await act({ action: "void" })) {
+                // Name the target: the banner's own lobby, never "whatever
+                // completed most recently at click time".
+                if (
+                  await act({
+                    action: "void",
+                    lobbyId: state.lastResult?.lobbyId,
+                  })
+                ) {
                   pushToast("success", "Result voided — Elo recalculated");
                 }
               }

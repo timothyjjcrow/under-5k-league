@@ -490,3 +490,91 @@ describe("syncPlayerRanks — flags signups a new medal proves ineligible", () =
     expect(res?.message).not.toContain("Gone Already");
   });
 });
+
+describe("updateDotaAccount — one account id, one league player", () => {
+  // A collision puts the same account in both teams' import sets, and
+  // classifyGame then fails or mis-attributes every match containing both.
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockRequireUser.mockReset();
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 44, fhUnavailable: null });
+  });
+
+  function accountForm(id: number | string): FormData {
+    const fd = new FormData();
+    fd.set("dotaAccountId", String(id));
+    return fd;
+  }
+
+  it("refuses an id another user has stored as an override", async () => {
+    const holder = await makeUser("Holder");
+    await prisma.user.update({
+      where: { id: holder.id },
+      data: { dotaAccountId: 987654 },
+    });
+    const claimant = await makeUser("Claimant");
+    mockRequireUser.mockResolvedValue(sessionFor(claimant));
+
+    const res = await updateDotaAccount({}, accountForm(987654));
+
+    expect(res?.error).toMatch(/already linked to Holder/);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: claimant.id } }))
+        .dotaAccountId,
+    ).toBeNull();
+  });
+
+  it("refuses an id another user holds via their DERIVED steam account", async () => {
+    // The mistake the error copy anticipates: B pastes teammate A's Dotabuff
+    // URL. A never set an override, so their effective account id comes from
+    // their SteamID64 — the old override-only check found nothing and stored
+    // the duplicate.
+    const { accountIdToSteamId64 } = await import("@/lib/dota");
+    // A realistic 9-digit account id — the factory's sequential steamIds
+    // derive single-digit account ids, which parseAccountId's junk floor
+    // rejects before the collision check can even run.
+    const ownerAccount = 111222333;
+    const owner = await makeUser("Derived Owner");
+    await prisma.user.update({
+      where: { id: owner.id },
+      data: { steamId: accountIdToSteamId64(ownerAccount) },
+    });
+    const claimant = await makeUser("Url Paster");
+    mockRequireUser.mockResolvedValue(sessionFor(claimant));
+
+    const res = await updateDotaAccount({}, accountForm(ownerAccount));
+
+    expect(res?.error).toMatch(/already linked to Derived Owner/);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: claimant.id } }))
+        .dotaAccountId,
+    ).toBeNull();
+  });
+
+  it("the @unique is the write-time re-assert: two concurrent claims, one id, one winner", async () => {
+    // Both read-checks see a free id; the constraint decides. Meaningful on
+    // SQLite already (the reads interleave ahead of the serialized writes);
+    // real contention under `npm run test:pg`.
+    const a = await makeUser("Racer A");
+    const b = await makeUser("Racer B");
+    const claim = async (user: { id: string }) => {
+      mockRequireUser.mockResolvedValue(
+        sessionFor(
+          await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+        ),
+      );
+      return updateDotaAccount({}, accountForm(555111));
+    };
+    // Sequential stand-in for the race on SQLite's single writer: the second
+    // submit must hit the constraint path, not silently double-link.
+    const first = await claim(a);
+    expect(first?.error).toBeUndefined();
+    const second = await claim(b);
+    expect(second?.error).toMatch(/already linked/i);
+
+    const holders = await prisma.user.findMany({
+      where: { dotaAccountId: 555111 },
+    });
+    expect(holders.map((h) => h.id)).toEqual([a.id]);
+  });
+});

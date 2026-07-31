@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
+import { getActiveSeason } from "@/lib/season";
 import { str } from "@/lib/form";
 import { parseAvailabilityStatus } from "@/lib/availability";
 import { playerOutMessage, sendDiscordMessage } from "@/lib/discord";
@@ -41,6 +42,13 @@ export async function setAvailability(
   if (!match) return { error: "Unknown match" };
   if (match.status === MATCH_STATUS.COMPLETED) {
     return { error: "That match is already finished" };
+  }
+  // An archived season's unplayed match still lists its rosters, and an OUT
+  // here would ping a captain (with a Discord mention) about a fixture nobody
+  // is playing. RSVPs are answers about the ACTIVE season's match nights only.
+  const activeSeason = await getActiveSeason();
+  if (!activeSeason || match.seasonId !== activeSeason.id) {
+    return { error: "That match belongs to an archived season" };
   }
 
   const onRoster = await prisma.teamMember.findFirst({

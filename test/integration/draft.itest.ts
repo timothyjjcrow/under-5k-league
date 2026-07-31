@@ -705,3 +705,40 @@ describe("draft auction — claims fire exactly once under contention", () => {
     ).not.toHaveLength(0);
   });
 });
+
+describe("draft — a mid-lot type flip voids the sale instead of rostering a standin", () => {
+  it("no charge, no roster row, rotation advances, when the nominee turned STANDIN", async () => {
+    // saveRegistration refuses type changes during a live draft now, but this
+    // resolver check is the write-time backstop — staged is honest here, since
+    // the resolver's own in-transaction read is exactly what catches it.
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Flipper", 4000);
+    await makePlayer(season.id, "Rest", 3000);
+    await startDraftState(season.id);
+
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5)).ok,
+    ).toBe(true);
+    await prisma.registration.update({
+      where: { seasonId_userId: { seasonId: season.id, userId: star.id } },
+      data: { type: "STANDIN" },
+    });
+
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+
+    const teamA = await prisma.team.findUniqueOrThrow({
+      where: { id: capA.team.id },
+      include: { members: true },
+    });
+    expect(teamA.budget).toBe(100); // never charged
+    expect(teamA.members.some((m) => m.userId === star.id)).toBe(false);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatedUserId).toBeNull(); // lot cleared…
+    expect(draft.nominatorTeamId).toBe(capB.team.id); // …and the clock moved on
+  });
+});

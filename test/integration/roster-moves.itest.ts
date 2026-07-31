@@ -575,3 +575,119 @@ describe("withdrawSignup — refuses a standin who still owes cover", () => {
     expect(res?.error).toBeUndefined();
   });
 });
+
+describe("signFreeAgent — redundant empty-seat cover (the reverse of releasePlayer's rule)", () => {
+  // An empty-seat assignment is permanently "live" to matchNightRoster, so a
+  // signing that fills the team's last seat must cancel it — left behind, the
+  // refilled side computes as teamSize+1 everywhere (schedule counts, the week
+  // reminder, gatherTeamAccounts' import set) and the standin keeps a live
+  // @-mentioned instruction to show up for a seat that no longer exists.
+  async function withEmptySeatCover(teamSize: number, withGame = false) {
+    const season = await makeSeason({
+      status: SEASON_STATUS.REGULAR_SEASON,
+      teamSize,
+    });
+    const team = await makeTeam(season.id, "Shorthanded", 0);
+    const other = await makeTeam(season.id, "Opponent", 1);
+    const filler = await makeUser("Filler");
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: team.id, userId: filler.id, price: 0 },
+    });
+    const agent = await makeUser("Free Agent");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: agent.id,
+        type: REGISTRATION_TYPE.PLAYER,
+        status: "ACTIVE",
+        mmr: 3000,
+        roles: "1",
+      },
+    });
+    const standin = await makeUser("Cover Standin");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: standin.id,
+        type: REGISTRATION_TYPE.STANDIN,
+        status: "ACTIVE",
+        mmr: 2500,
+      },
+    });
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: team.id,
+        awayTeamId: other.id,
+        bestOf: 2,
+      },
+    });
+    if (withGame) {
+      await prisma.game.create({
+        data: {
+          matchId: match.id,
+          dotaMatchId: `84${Math.floor(Math.random() * 1e8)}`,
+          radiantWin: true,
+          winnerTeamId: team.id,
+          players: "[]",
+        },
+      });
+    }
+    const cover = await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: team.id,
+        standinUserId: standin.id,
+        replacingUserId: null,
+      },
+    });
+    return { season, team, agent, standin, match, cover };
+  }
+
+  it("cancels the booking and stands the standin down when the last seat fills", async () => {
+    const { team, agent, cover, standin } = await withEmptySeatCover(2);
+    mockSend.mockClear();
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toMatchObject({
+      message: expect.stringMatching(/open-seat standin booking\(s\) cancelled/i),
+    });
+    expect(
+      await prisma.standinAssignment.findUnique({ where: { id: cover.id } }),
+    ).toBeNull();
+    // The stand-down went out (signing announcement + one stand-down).
+    const sent = mockSend.mock.calls.map((c) => String(c[0]));
+    expect(sent.some((m) => m.includes(standin.name))).toBe(true);
+  });
+
+  it("keeps the booking on an already-started series and says so", async () => {
+    const { team, agent, cover } = await withEmptySeatCover(2, true);
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toMatchObject({
+      message: expect.stringMatching(/LEFT in place/),
+    });
+    expect(
+      await prisma.standinAssignment.findUnique({ where: { id: cover.id } }),
+    ).not.toBeNull();
+  });
+
+  it("leaves cover alone while the team is still short after the signing", async () => {
+    // 1 member + agent = 2 of 3: an open seat remains, so the booking is
+    // still doing its job.
+    const { team, agent, cover } = await withEmptySeatCover(3);
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toMatchObject({
+      message: expect.not.stringMatching(/cancelled|LEFT in place/),
+    });
+    expect(
+      await prisma.standinAssignment.findUnique({ where: { id: cover.id } }),
+    ).not.toBeNull();
+  });
+});

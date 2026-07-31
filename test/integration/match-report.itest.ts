@@ -161,3 +161,23 @@ describe("match-report service (integration)", () => {
     void homeAccts;
   });
 });
+
+describe("captain reporting — archived seasons are admin-only", () => {
+  it("refuses a captain import once the match's season is archived", async () => {
+    // An import here still runs recomputeSeries → the bracket and every
+    // cross-season board, silently rewriting a finished season's history.
+    // Amending archives is deliberate admin work (/admin's import controls).
+    const { season, home, match } = await setupMatch();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { isActive: false },
+    });
+    await expect(
+      reportImportGame(home.captainId, match.id, "8123456789"),
+    ).rejects.toThrow(/archived season/i);
+    await expect(
+      reportAutoDetect(home.captainId, match.id),
+    ).rejects.toThrow(/archived season/i);
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+  });
+});

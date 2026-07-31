@@ -248,9 +248,14 @@ export default async function SchedulePage() {
       whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
       whenTs: m.scheduledAt?.getTime() ?? null,
       isFinalPhase: m.phase === "FINAL",
-      standins: (standinsByMatch.get(m.id) ?? []).map(
-        (a) =>
-          `${a.standin.name} in for ${a.replaced?.name ?? "?"} · ${teamName.get(a.teamId) ?? "?"}`,
+      standins: (standinsByMatch.get(m.id) ?? []).map((a) =>
+        // A null `replaced` is EMPTY-SEAT cover (a standin filling an open
+        // seat on a short roster), not missing data — the match page and the
+        // admin card both say so, and this line used to render a literal "?"
+        // on the league's main public fixture list instead.
+        a.replaced
+          ? `${a.standin.name} in for ${a.replaced.name} · ${teamName.get(a.teamId) ?? "?"}`
+          : `${a.standin.name} filling an open seat · ${teamName.get(a.teamId) ?? "?"}`,
       ),
       rsvp: rsvp && {
         home: pickRsvp(rsvp.home),

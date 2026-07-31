@@ -27,6 +27,8 @@ export type StandingsRowView = {
   clinch: ClinchStatus;
   /** Places moved vs. before the latest completed week (positive = up). */
   move: number;
+  /** Order vs. a neighbour fell to the team-id fallback — a dead heat. */
+  idDecided: boolean;
 };
 
 type SortKey = "rank" | "wins" | "draws" | "losses" | "gameDiff" | "points";
@@ -227,6 +229,16 @@ export function StandingsTableClient({
                     {/* Marks only mean something when a team can miss the
                         bracket — with everyone qualifying they'd all be ✓. */}
                     <ClinchMark status={row.clinch} />
+                    {row.idDecided ? (
+                      <span
+                        role="img"
+                        aria-label="Fully tied with a neighbouring team — this order is arbitrary"
+                        title="Fully tied — points, game diff, series wins and head-to-head all level with a neighbouring team; this order is arbitrary"
+                        className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent"
+                      >
+                        tied
+                      </span>
+                    ) : null}
                   </Link>
                 </td>
                 <td className="px-1 py-2.5 text-center sm:px-2">{row.wins}</td>

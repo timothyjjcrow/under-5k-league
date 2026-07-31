@@ -118,6 +118,7 @@ import {
   slotRound,
   groupPlayoffRounds,
 } from "@/lib/schedule";
+import { computeStandings } from "@/lib/standings";
 import { mmrWeightedBudgets } from "@/lib/draft";
 import {
   MATCH_SCHEDULE,
@@ -1276,8 +1277,12 @@ function CaptainControls({
                         list below, so designating someone captain — the natural
                         FIRST step — put their MMR permanently out of reach, and
                         setRegistrationMmr never refused captains: it was a
-                        missing render, not a rule. */}
-                    {season.status === "SIGNUPS" && captainReg.get(t.captainId) ? (
+                        missing render, not a rule. Gated on the draft not
+                        having STARTED, not on SIGNUPS: an admin who walks the
+                        phase to DRAFT before pressing Start draft is in
+                        exactly the window where a typo still skews every
+                        budget, and the SIGNUPS-only gate hid the fix there. */}
+                    {!draftStarted && captainReg.get(t.captainId) ? (
                       <details className="mt-1.5">
                         <summary className="cursor-pointer text-xs text-muted hover:text-fg">
                           ✎ Edit captain MMR
@@ -1477,7 +1482,10 @@ function CaptainControls({
                       </ActionForm>
                     </span>
                   </div>
-                  {season.status === "SIGNUPS" ? (
+                  {/* Same window as the captain edit above: the number only
+                      feeds budgets until Start draft, so the gate is the
+                      draft, not the SIGNUPS phase. */}
+                  {!draftStarted ? (
                     <details className="mt-1">
                       <summary className="cursor-pointer text-xs text-muted hover:text-fg">
                         ✎ Edit MMR
@@ -1506,6 +1514,94 @@ function CaptainControls({
               ))
             )}
           </div>
+          {/* Registered STANDINs get the same moderation as players. Standin
+              signups open in EVERY phase (registrationGate exempts them), and
+              until this list existed the remove/MMR controls rendered only
+              over type=PLAYER rows — so a troll or duplicate standin signup
+              sat in every standin dropdown, the reach funnel and the reminder
+              machinery all season with no button anywhere to touch it. The
+              actions never had a type gate; this was a missing render.
+              (Undrafted PLAYERs in data.standins are covered by the eligible
+              list above — filter to real STANDIN registrations.) */}
+          {(() => {
+            const standinRegs = data.standins.filter(
+              (s) => s.type === REGISTRATION_TYPE.STANDIN,
+            );
+            if (standinRegs.length === 0) return null;
+            return (
+              <div className="mt-4 border-t border-line/60 pt-3">
+                <h5 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+                  Registered standins ({standinRegs.length})
+                </h5>
+                <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
+                  {standinRegs.map((s) => (
+                    <div
+                      key={s.id}
+                      className="rounded-lg border border-line px-3 py-1.5 text-sm"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <Avatar
+                            name={s.user.name}
+                            src={s.user.avatar}
+                            size={22}
+                          />
+                          <PlayerLink
+                            userId={s.userId}
+                            className="min-w-0 truncate"
+                          >
+                            {s.user.name}
+                          </PlayerLink>
+                          <span className="shrink-0 text-xs text-muted">
+                            {s.mmr}
+                          </span>
+                        </span>
+                        <ActionForm
+                          action={withdrawSignup}
+                          hidden={{ registrationId: s.id }}
+                        >
+                          <SubmitButton
+                            variant="ghost"
+                            size="sm"
+                            className="text-danger hover:underline"
+                            confirm={`Remove ${s.user.name}'s standin signup? They leave the standin lists and can't re-add themselves — you can reinstate them below. Standins still owing cover on an unplayed match are refused (remove the assignment first).`}
+                          >
+                            remove
+                          </SubmitButton>
+                        </ActionForm>
+                      </div>
+                      {/* Standins register in every phase, so their MMR edit
+                          can't be draft-gated like the players' above — it
+                          informs captains choosing cover all season. */}
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                          ✎ Edit MMR
+                        </summary>
+                        <ActionForm
+                          action={setRegistrationMmr}
+                          className="mt-1 flex items-center gap-2"
+                          hidden={{ registrationId: s.id }}
+                        >
+                          <input
+                            name="mmr"
+                            type="number"
+                            min={0}
+                            max={12000}
+                            defaultValue={s.mmr}
+                            aria-label={`MMR for ${s.user.name}`}
+                            className="h-8 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                          />
+                          <SubmitButton variant="secondary" size="sm">
+                            Save MMR
+                          </SubmitButton>
+                        </ActionForm>
+                      </details>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           {/* Removal is sticky (the player can't re-add themselves from /me),
               so it has to be undoable from here. */}
           {data.removed.length > 0 ? (
@@ -1970,6 +2066,25 @@ function PlayoffControls({
   const playoffMatches = data.matches.filter((m) => m.phase !== "REGULAR");
   const bracketSize = pickBracketSize(data.teams.length);
   const status = regularSeasonStatus(data.matches);
+  // A fully-tied pair (points, game diff, series wins AND head-to-head all
+  // level) is ordered by nothing but the team-id fallback — deterministic,
+  // but a coin flip. When such a pair touches the seeded slice, the seeding
+  // (possibly WHO makes the bracket) is arbitrary, and the admin should hear
+  // it BEFORE the click, not from a captain afterwards. The only levers today
+  // are correcting a result or accepting the flip; the confirm says so.
+  const standings = computeStandings(
+    data.teams.map((t) => t.id),
+    data.matches,
+  );
+  const teamNameById = new Map(data.teams.map((t) => [t.id, t.name]));
+  const coinFlipSeeding = standings
+    .slice(0, bracketSize + 1) // the pair straddling the cut counts too
+    .filter((s) => s.idDecided)
+    .map((s) => teamNameById.get(s.teamId) ?? s.teamId);
+  const coinFlipNote =
+    coinFlipSeeding.length > 0
+      ? `Dead heat in the seeding: ${coinFlipSeeding.join(" and ")} are fully tied (points, game diff, series wins, head-to-head) — their order is arbitrary. Correct a result first, or accept the coin flip.`
+      : null;
   const champion = season.championTeamId
     ? data.teams.find((t) => t.id === season.championTeamId)
     : null;
@@ -2011,6 +2126,7 @@ function PlayoffControls({
                   ...(season.status === SEASON_STATUS.COMPLETE
                     ? ["The champion is un-crowned and the season reopens into Playoffs."]
                     : []),
+                  ...(coinFlipNote ? [coinFlipNote] : []),
                 ]}
                 recovery={
                   playoffGameCount
@@ -2027,7 +2143,11 @@ function PlayoffControls({
                 variant="secondary"
                 size="sm"
                 disabled={data.teams.length < 2}
-                confirm="Seed and start the playoff bracket?"
+                confirm={
+                  coinFlipNote
+                    ? `Seed and start the playoff bracket?\n\n⚖️ ${coinFlipNote}`
+                    : "Seed and start the playoff bracket?"
+                }
               >
                 Start playoffs
               </SubmitButton>
@@ -2047,6 +2167,11 @@ function PlayoffControls({
             {status.pending === 1 ? "" : "s"} still needed — the playoffs are
             locked until every match is entered (weeks{" "}
             {status.pendingWeeks.join(", ")}).
+          </div>
+        ) : null}
+        {coinFlipNote && playoffMatches.length === 0 ? (
+          <div className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2">
+            ⚖️ {coinFlipNote}
           </div>
         ) : null}
         {playoffMatches.length > 0 ? (

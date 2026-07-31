@@ -233,6 +233,10 @@ export async function deleteSeason(
   // and roster row is genuinely reachable — and there is no undo.
   // deleteMany-with-a-predicate, then a count check, then throw so the match
   // deletion rolls back too (a return would commit it).
+  // Seam: the rival must COMMIT before this transaction's snapshot for the
+  // predicate to see it (the leaveLeague rule) — which also makes the test
+  // SQLite-runnable.
+  await raceHook("admin.deleteSeason.beforeTx");
   try {
     await prisma.$transaction(async (tx) => {
       await tx.match.deleteMany({ where: { seasonId } });
@@ -323,7 +327,7 @@ export async function setSeasonPhase(
     };
   }
   // The MIRROR of the guard above: don't let the season walk BACKWARD into DRAFT
-  // once the auction is over and real results exist. Doing so re-arms the whole
+  // once real results exist. With the draft COMPLETE this re-arms the whole
   // auction engine against a live league — `undoLastSaleAction` becomes callable
   // again (its only gate is `season.status === DRAFT`), and it deletes the newest
   // non-captain roster row, credits the budget, and forces the draft back to
@@ -331,9 +335,19 @@ export async function setSeasonPhase(
   // on the next /draft poll from ANY visitor and auto-sells an undrafted signup
   // at MIN_BID onto a mid-season roster, announcing the sale to Discord.
   // Verified end-to-end on a mid-season fixture during the 2026-07-25 QA pass.
+  // With NO draft row (a hand-run league that never pressed Start draft) or a
+  // NOT_STARTED one (post-abort), it is WORSE: Start draft becomes UI-enabled,
+  // and until it grew its own results guard one click opened a fresh auction
+  // over the played league — a trap with no exit, because abortDraft refuses
+  // over results and the guard above refuses to leave DRAFT mid-auction. So
+  // the refusal keys on target===DRAFT alone. The ONE exempt shape is a draft
+  // currently IN_PROGRESS/PAUSED: that season was stranded outside DRAFT with
+  // a live auction (the race the guarded write below exists for), and moving
+  // back INTO Draft is the repair, not the hazard.
   if (
     target === SEASON_STATUS.DRAFT &&
-    draft?.status === DRAFT_STATUS.COMPLETE
+    draft?.status !== DRAFT_STATUS.IN_PROGRESS &&
+    draft?.status !== DRAFT_STATUS.PAUSED
   ) {
     // Count IMPORTED GAMES as well as decided series — the same pair abortDraft
     // and generateSchedule check. A COMPLETED match is not the first signal that
@@ -351,7 +365,9 @@ export async function setSeasonPhase(
     if (played > 0 || games > 0) {
       return {
         error:
-          "The draft is finished and results are already recorded — reopening Draft would let the auction re-sell players mid-season. Use Roster moves to change a roster.",
+          draft?.status === DRAFT_STATUS.COMPLETE
+            ? "The draft is finished and results are already recorded — reopening Draft would let the auction re-sell players mid-season. Use Roster moves to change a roster."
+            : "Results are already recorded — in Draft, Start draft would open an auction over a played league. Use Roster moves to change a roster.",
       };
     }
   }
@@ -376,10 +392,22 @@ export async function setSeasonPhase(
       };
     }
   }
-  await prisma.season.update({
-    where: { id: season.id },
+  // Re-assert the phase every guard above judged IN THE WRITE's WHERE (rule 1:
+  // a read-time precondition is not a guard — this was the one lifecycle write
+  // still blind). The rivals are real: another admin's startDraft committing
+  // {DRAFT, IN_PROGRESS} in the gap would leave a live auction stranded outside
+  // DRAFT, and a PLAYOFFS→REGULAR_SEASON flip landing between the final's
+  // import and advancePlayoffBracket's PLAYOFFS-conditioned crowning claim
+  // would eat the champion. Losing here costs one reload.
+  const flipped = await prisma.season.updateMany({
+    where: { id: season.id, status: season.status },
     data: { status: target },
   });
+  if (flipped.count === 0) {
+    return {
+      error: "The season's phase just changed under you — reload and try again",
+    };
+  }
   refresh();
   // The close-out escape above is deliberate, but it is silent, and what it
   // costs is invisible: in COMPLETE, advancePlayoffBracket hard-returns, so
@@ -1003,6 +1031,26 @@ export async function startDraft(
     };
   }
 
+  // Results guard (the abortDraft/generateSchedule pair): an auction over a
+  // league with recorded results is unrecoverable from the panel — abortDraft
+  // refuses once results exist, and setSeasonPhase refuses to leave DRAFT while
+  // the auction runs — so the refusal has to live HERE, before the trap closes
+  // behind the click. Reachable: a season walked into DRAFT by phase button
+  // with a null/NOT_STARTED draft row, or a stale tab; the UI's `disabled`
+  // attribute is not a gate.
+  const [playedCount, importedCount] = await Promise.all([
+    prisma.match.count({
+      where: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
+    }),
+    prisma.game.count({ where: { match: { seasonId: season.id } } }),
+  ]);
+  if (playedCount > 0 || importedCount > 0) {
+    return {
+      error:
+        "Results are already recorded for this season — the auction can't open over a played league. Use Roster moves to change rosters.",
+    };
+  }
+
   const teams = await prisma.team.findMany({
     where: { seasonId: season.id },
     orderBy: { draftOrder: "asc" },
@@ -1042,43 +1090,64 @@ export async function startDraft(
     (season.teamSize - 1) * DEFAULTS.MIN_BID,
   );
 
-  await prisma.$transaction(async (tx) => {
-    await Promise.all(
-      teams.map((t) =>
-        tx.team.update({
-          where: { id: t.id },
-          data: { budget: budgets.get(t.id) ?? season.draftBudget },
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Re-assert INSIDE the transaction: auto-sync imports games from any
+      // visitor's page view, so "no results yet" can stop being true between
+      // the read above and the budget rewrite. Throwing rolls it back; a
+      // return would commit the half-armed auction it exists to prevent.
+      const [playedNow, gamesNow] = await Promise.all([
+        tx.match.count({
+          where: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
         }),
-      ),
-    );
-    await tx.season.update({
-      where: { id: season.id },
-      data: { status: SEASON_STATUS.DRAFT },
+        tx.game.count({ where: { match: { seasonId: season.id } } }),
+      ]);
+      if (playedNow > 0 || gamesNow > 0) throw new ResultsLandedError();
+      await Promise.all(
+        teams.map((t) =>
+          tx.team.update({
+            where: { id: t.id },
+            data: { budget: budgets.get(t.id) ?? season.draftBudget },
+          }),
+        ),
+      );
+      await tx.season.update({
+        where: { id: season.id },
+        data: { status: SEASON_STATUS.DRAFT },
+      });
+      const nominationEndsAt = new Date(
+        Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+      );
+      await tx.draft.upsert({
+        where: { seasonId: season.id },
+        create: {
+          seasonId: season.id,
+          status: DRAFT_STATUS.IN_PROGRESS,
+          nominatorTeamId: teams[0].id,
+          nominationIndex: 0,
+          nominationEndsAt,
+        },
+        update: {
+          status: DRAFT_STATUS.IN_PROGRESS,
+          nominatorTeamId: teams[0].id,
+          nominationIndex: 0,
+          nominatedUserId: null,
+          currentBid: 0,
+          currentBidTeamId: null,
+          bidEndsAt: null,
+          nominationEndsAt,
+        },
+      });
     });
-    const nominationEndsAt = new Date(
-      Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
-    );
-    await tx.draft.upsert({
-      where: { seasonId: season.id },
-      create: {
-        seasonId: season.id,
-        status: DRAFT_STATUS.IN_PROGRESS,
-        nominatorTeamId: teams[0].id,
-        nominationIndex: 0,
-        nominationEndsAt,
-      },
-      update: {
-        status: DRAFT_STATUS.IN_PROGRESS,
-        nominatorTeamId: teams[0].id,
-        nominationIndex: 0,
-        nominatedUserId: null,
-        currentBid: 0,
-        currentBidTeamId: null,
-        bidEndsAt: null,
-        nominationEndsAt,
-      },
-    });
-  });
+  } catch (e) {
+    if (e instanceof ResultsLandedError) {
+      return {
+        error:
+          "A result landed while you were starting the draft — nothing was changed. Reload and check the schedule.",
+      };
+    }
+    throw e;
+  }
   await sendDiscordMessage(draftStartedMessage(season.name));
   refresh();
   const budgetVals = [...budgets.values()];
@@ -1286,6 +1355,7 @@ export async function generateSchedule(
   // deleteMany cascades away the games, check-ins and predictions the counts
   // exist to protect. Throwing rolls the delete back; a return would commit it.
   let cleared = { rsvps: 0, picks: 0, covers: 0, proposals: 0 };
+  await raceHook("admin.generateSchedule.beforeTx");
   try {
     await prisma.$transaction(async (tx) => {
       const [played, games] = await Promise.all([
@@ -1714,8 +1784,22 @@ export async function signFreeAgent(
   // 5-a-side league. (SQLite serializes writers, which is why the old comment
   // read as if the re-check alone was enough.) The loser now aborts with
   // P2034 and is reported as the seat being taken.
+  let coverCleanup: {
+    cancelled: number;
+    kept: number;
+    standDowns: {
+      standinUserId: string;
+      standin: { name: string; discordId: string | null };
+      match: {
+        week: number;
+        phase: string;
+        homeTeam: { name: string };
+        awayTeam: { name: string };
+      };
+    }[];
+  } = { cancelled: 0, kept: 0, standDowns: [] };
   try {
-    await prisma.$transaction(
+    coverCleanup = await prisma.$transaction(
       async (tx) => {
         const seats = await tx.teamMember.count({ where: { teamId } });
         if (seats >= season.teamSize) throw new Error("SEAT_TAKEN");
@@ -1747,6 +1831,66 @@ export async function signFreeAgent(
             isCaptain: false,
           },
         });
+        // The reverse of releasePlayer's stale-cover rule: an EMPTY-SEAT
+        // assignment (replacingUserId null) is permanently "live" to
+        // matchNightRoster, so once this signing fills the team's LAST seat
+        // every such booking on an unplayed match is redundant — left behind,
+        // the refilled side computes as teamSize+1 on /schedule, the dashboard,
+        // the week reminder AND gatherTeamAccounts' import set, while the
+        // standin keeps a live @-mentioned instruction to show up. Cancel them
+        // here, under the same started-series rule as release: once a game is
+        // imported the assignment is load-bearing for the rest of the series,
+        // so it is kept and reported instead.
+        if (seats + 1 >= season.teamSize) {
+          const emptySeatCovers = await tx.standinAssignment.findMany({
+            where: {
+              teamId,
+              replacingUserId: null,
+              match: {
+                seasonId: season.id,
+                status: { not: MATCH_STATUS.COMPLETED },
+              },
+            },
+            select: {
+              id: true,
+              standinUserId: true,
+              standin: { select: { name: true, discordId: true } },
+              match: {
+                select: {
+                  games: { select: { id: true }, take: 1 },
+                  week: true,
+                  phase: true,
+                  homeTeam: { select: { name: true } },
+                  awayTeam: { select: { name: true } },
+                },
+              },
+            },
+          });
+          const removable = emptySeatCovers.filter(
+            (a) => a.match.games.length === 0,
+          );
+          let cancelled = 0;
+          if (removable.length) {
+            // "No games yet" rides in the WHERE, not just the JS filter — a
+            // series can acquire its first game between the findMany and this
+            // delete (the releasePlayer pattern).
+            ({ count: cancelled } = await tx.standinAssignment.deleteMany({
+              where: {
+                id: { in: removable.map((s) => s.id) },
+                match: { games: { none: {} } },
+              },
+            }));
+          }
+          return {
+            cancelled,
+            kept: emptySeatCovers.length - cancelled,
+            // Announce only if the DELETE really took them all — telling a
+            // standin to stand down from a game they are still booked for is
+            // worse than silence.
+            standDowns: cancelled === removable.length ? removable : [],
+          };
+        }
+        return { cancelled: 0, kept: 0, standDowns: [] };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -1770,8 +1914,36 @@ export async function signFreeAgent(
   await sendDiscordMessage(
     freeAgentSignedMessage(registration.user.name, team.name),
   );
+  // Post-commit, best-effort, one stand-down per cancelled empty-seat booking —
+  // the same shape releasePlayer and both removeStandin paths send, so a
+  // standin is never left holding an instruction for a seat that just filled.
+  for (const a of coverCleanup.standDowns) {
+    await sendDiscordMessage(
+      standinRemovedMessage({
+        standinName: a.standin.name,
+        teamName: team.name,
+        homeName: a.match.homeTeam.name,
+        awayName: a.match.awayTeam.name,
+        week: a.match.week,
+        isPlayoff: a.match.phase !== MATCH_PHASE.REGULAR,
+      }),
+      mentionsOf([a.standin.discordId]),
+    );
+  }
   refresh();
-  return { message: `${registration.user.name} signed to ${team.name}` };
+  const coverNotes = [
+    coverCleanup.cancelled > 0
+      ? `${coverCleanup.cancelled} now-redundant open-seat standin booking(s) cancelled and stood down`
+      : null,
+    coverCleanup.kept > 0
+      ? `${coverCleanup.kept} open-seat booking(s) on an already-started series were LEFT in place (removing a standin mid-series breaks the remaining imports)`
+      : null,
+  ].filter(Boolean);
+  return {
+    message:
+      `${registration.user.name} signed to ${team.name}` +
+      (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : ""),
+  };
 }
 
 /**

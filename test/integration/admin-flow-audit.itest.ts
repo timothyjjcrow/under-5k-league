@@ -35,6 +35,7 @@ import {
   setSeasonPhase,
   withdrawSignup,
 } from "@/app/actions/admin";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { recomputeSeries } from "@/lib/match-import";
 import { loadImportSkips } from "@/lib/match-import";
 import { getSetting, setSetting } from "@/lib/settings";
@@ -698,5 +699,85 @@ describe("reinstateSignup medal advisory", () => {
     const res = await reinstateSignup(empty, fd({ registrationId: reg.id }));
     expect(res?.error).toBeUndefined();
     expect(res?.message).toBe("Flagged is back in the pool");
+  });
+});
+
+describe("generateSchedule — the results gate (both halves)", () => {
+  // The guard protecting against "Regenerate erases the season" had ZERO
+  // coverage in either shape — the read-time refusal and the in-transaction
+  // count-then-throw are both invisible to the mutation ratchet (it models
+  // only updateMany WHERE-claims). Verified non-vacuous by sabotage: deleting
+  // either half turns its test red.
+  afterEach(() => setRaceHook(null));
+
+  it("refuses to regenerate once a series result is recorded", async () => {
+    const { season, matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    await prisma.match.update({
+      where: { id: matches[0].id },
+      data: {
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 2,
+        awayScore: 0,
+        winnerTeamId: matches[0].homeTeamId,
+      },
+    });
+
+    const res = await generateSchedule(empty, fd({ firstNight: "" }));
+
+    expect(res?.error).toMatch(/results are already recorded/i);
+    // The old slate survives untouched — same rows, same ids.
+    expect(
+      await prisma.match.count({ where: { id: { in: matches.map((m) => m.id) } } }),
+    ).toBe(matches.length);
+    void season;
+  });
+
+  it("refuses on an imported game alone, before any series is decided", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    await addGameToMatch(matches[0].id, "8666000001", matches[0].homeTeamId);
+
+    const res = await generateSchedule(empty, fd({ firstNight: "" }));
+
+    expect(res?.error).toMatch(/results are already recorded/i);
+    expect(
+      await prisma.match.count({ where: { id: { in: matches.map((m) => m.id) } } }),
+    ).toBe(matches.length);
+  });
+
+  it("a result landing mid-generate rolls the whole regeneration back", async () => {
+    // Auto-sync imports from any visitor's page view, so "no results yet" can
+    // stop being true between the read-time gate and the deleteMany it
+    // authorizes. The in-tx re-count throws; the fixtures the delete would
+    // have cascaded away must survive with their original ids.
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.generateSchedule.beforeTx", async () => {
+        fired = true;
+        await prisma.match.update({
+          where: { id: matches[0].id },
+          data: {
+            status: MATCH_STATUS.COMPLETED,
+            homeScore: 2,
+            awayScore: 0,
+            winnerTeamId: matches[0].homeTeamId,
+          },
+        });
+      }),
+    );
+
+    const res = await generateSchedule(empty, fd({ firstNight: "" }));
+
+    expect(fired).toBe(true);
+    expect(res?.error).toMatch(/result landed/i);
+    // Original fixtures intact — nothing was deleted or recreated…
+    expect(
+      await prisma.match.count({ where: { id: { in: matches.map((m) => m.id) } } }),
+    ).toBe(matches.length);
+    // …and the result that interrupted the regenerate survives too.
+    expect(
+      (await prisma.match.findUniqueOrThrow({ where: { id: matches[0].id } }))
+        .status,
+    ).toBe(MATCH_STATUS.COMPLETED);
   });
 });

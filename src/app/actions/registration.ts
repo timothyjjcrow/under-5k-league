@@ -19,6 +19,7 @@ import { unlinkDiscordAccount } from "@/lib/discord-link-service";
 import { getRoleConfig, setPingRole } from "@/lib/discord-roles";
 import { bool, clampInt, str } from "@/lib/form";
 import {
+  accountIdToSteamId64,
   parseAccountId,
   steamIdToAccountId,
   fetchPlayerRankTier,
@@ -133,6 +134,32 @@ export async function saveRegistration(
       return {
         error:
           "You're on a roster this season — ask an admin to release you before switching to standin",
+      };
+    }
+  }
+
+  // Draft-night lock: a type change while the auction is LIVE or PAUSED
+  // yanks the player out of a pool the engine is actively selling from. The
+  // nastiest shape is the player currently ON THE BLOCK flipping to standin:
+  // getDraftState looks the nominee up in the ACTIVE-PLAYER list, so every
+  // room rendered a headless lot while the clock ran, and the expiring sale
+  // still charged the team — minting a rostered STANDIN.
+  // resolveExpiredNomination now voids a non-PLAYER lot as the write-time
+  // backstop; the refusal belongs here, where the player can read it.
+  // (The mirror direction — STANDIN→PLAYER injecting into a running pool —
+  // is already refused by registrationGate outside SIGNUPS.)
+  if (existing && type !== existing.type) {
+    const draftRow = await prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    });
+    if (
+      draftRow?.status === DRAFT_STATUS.IN_PROGRESS ||
+      draftRow?.status === DRAFT_STATUS.PAUSED
+    ) {
+      return {
+        error:
+          "The draft is running — switching between player and standin reopens once it finishes",
       };
     }
   }
@@ -413,8 +440,20 @@ export async function updateDotaAccount(
     // claiming one account id puts the same account in both teams' sets, so
     // classifyGame sees a player on both sides and every import for that match
     // fails (or attributes the box-score line to the wrong person).
+    //
+    // Most users never set an override — their EFFECTIVE account id is DERIVED
+    // from their SteamID64 (`dotaAccountId ?? steamIdToAccountId(steamId)`,
+    // the pattern every consumer uses). So the check must catch B pasting A's
+    // Dotabuff URL even though A's stored override is null: match the stored
+    // override OR the steamId the pasted id derives from.
     const taken = await prisma.user.findFirst({
-      where: { dotaAccountId: parsed, id: { not: user.id } },
+      where: {
+        id: { not: user.id },
+        OR: [
+          { dotaAccountId: parsed },
+          { dotaAccountId: null, steamId: accountIdToSteamId64(parsed) },
+        ],
+      },
       select: { name: true },
     });
     if (taken) {
@@ -423,10 +462,23 @@ export async function updateDotaAccount(
       };
     }
     accountId = parsed;
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { dotaAccountId: parsed },
-    });
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { dotaAccountId: parsed },
+      });
+    } catch (e) {
+      // The @unique on dotaAccountId is the write-time re-assert of the
+      // read-time check above (two overrides racing to the same id) — map the
+      // constraint to the same honest error instead of a 500.
+      if ((e as { code?: string }).code === "P2002") {
+        return {
+          error:
+            "That Dota account was just linked by someone else — check you pasted your own profile",
+        };
+      }
+      throw e;
+    }
   }
 
   let medal = "";

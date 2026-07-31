@@ -71,12 +71,17 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     if (claim.count === 0) return false;
 
     // Void the lot — no charge, no roster add — if the player was withdrawn
-    // mid-auction (admin moderation). The claim above already cleared the
-    // nomination; the rotation still advances below.
+    // mid-auction (admin moderation) OR flipped to STANDIN on /me while on
+    // the block. The type half matters: saveRegistration now refuses type
+    // changes during a live/paused draft, but this is the write-time backstop
+    // — a flip that slips through must cost nothing rather than charging the
+    // team and minting a rostered STANDIN (the exact both-worlds state the
+    // rostered-player check exists to prevent). The claim above already
+    // cleared the nomination; the rotation still advances below.
     const nomReg = await tx.registration.findUnique({
       where: { seasonId_userId: { seasonId, userId: draft.nominatedUserId } },
     });
-    if (nomReg && nomReg.status === "ACTIVE") {
+    if (nomReg && nomReg.status === "ACTIVE" && nomReg.type === "PLAYER") {
       // Award the player to the winning team.
       await tx.teamMember.create({
         data: {

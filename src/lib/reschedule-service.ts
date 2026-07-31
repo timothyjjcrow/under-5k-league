@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
+import { getActiveSeason } from "./season";
 import { weekReminderKey } from "./settings";
 
 export type AcceptedReschedule = {
@@ -71,6 +72,13 @@ export async function proposeReschedule(
     throw new Error("Only the two captains can propose a time");
   if (match.status === MATCH_STATUS.COMPLETED)
     throw new Error("This match is already played");
+  // An archived season's unplayed match keeps its captains — proposing onto it
+  // opens a live negotiation (with a Discord mention) over a dead fixture, and
+  // an eventual accept would retime it and wipe its RSVPs. Decline/withdraw
+  // stay legal below: cleaning up a proposal stranded by the archival is fine.
+  const activeSeason = await getActiveSeason();
+  if (!activeSeason || match.seasonId !== activeSeason.id)
+    throw new Error("This match belongs to an archived season");
   assertSaneProposedTime(proposedTime);
 
   // Replace any open proposal — the newest ask is the only live one.
@@ -142,6 +150,15 @@ export async function respondReschedule(
       throw new Error("That proposal is no longer open");
     return null;
   }
+
+  // Accepting RETIMES the match, so the archived-season rule bites here, not
+  // on decline: a proposal stranded by an early season turnover must still be
+  // declinable (that only touches the request row), but never acceptable —
+  // that would stamp a new kickoff onto a finished season's fixture and wipe
+  // its RSVPs.
+  const activeSeason = await getActiveSeason();
+  if (!activeSeason || match.seasonId !== activeSeason.id)
+    throw new Error("This match belongs to an archived season");
 
   // Re-validate on ACCEPT, not just on propose: a proposal sat on for two
   // weeks would otherwise move the match to a night that has already passed

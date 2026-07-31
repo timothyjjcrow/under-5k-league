@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
   advancePlayoffBracket,
   createPlayoffBracket,
@@ -338,5 +339,109 @@ describe("playoffGamesArchive survives repeated resets", () => {
 
     await expect(createPlayoffBracket(season.id)).resolves.not.toThrow();
     expect((await archiveOf(season.id)).length).toBeGreaterThan(0);
+  });
+});
+
+describe("playoffs — a reset racing an in-flight advance cannot plant a phantom round", () => {
+  afterEach(() => setRaceHook(null));
+
+  it("the stale advance no-ops once the reset has torn its inputs down", async () => {
+    // The wedge this pins: advance computes winners from pre-transaction
+    // reads; Reset deletes the round markers FIRST, so a stale advance's
+    // marker create used to SUCCEED and pair pre-reset winners into the
+    // brand-new bracket — a phantom R1 that is never COMPLETED, so maxRound
+    // points at it forever and no champion can ever be crowned.
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    const round0 = (await playoffMatches(season.id)).filter((m) =>
+      m.bracketSlot?.startsWith("R0"),
+    );
+    // Decide both semis WITHOUT advancing — the state an in-flight advance
+    // reads just before a reset lands.
+    for (const m of round0) await recordMatch(m.id, 2, 0);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("playoffs.advance.beforeBuild", async () => {
+        fired = true;
+        await createPlayoffBracket(season.id); // the reset commits mid-advance
+      }),
+    );
+    await advancePlayoffBracket(season.id);
+    expect(fired).toBe(true);
+
+    // No phantom round: the fresh bracket is R0-only and fully open.
+    const after = await playoffMatches(season.id);
+    expect(after.every((m) => m.bracketSlot?.startsWith("R0"))).toBe(true);
+    expect(after.every((m) => m.status !== "COMPLETED")).toBe(true);
+    expect(
+      await prisma.setting.count({
+        where: { key: { startsWith: `playoffRoundBuilt:${season.id}:` } },
+      }),
+    ).toBe(0);
+
+    // And the rebuilt bracket is fully advanceable — the wedge is gone.
+    const final = await driveToChampion(season.id);
+    expect(final.status).toBe("COMPLETE");
+    expect(final.championTeamId).not.toBeNull();
+  });
+
+  it("a close-out phase flip mid-advance stops the round build too", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    const round0 = (await playoffMatches(season.id)).filter((m) =>
+      m.bracketSlot?.startsWith("R0"),
+    );
+    for (const m of round0) await recordMatch(m.id, 2, 0);
+
+    setRaceHook(
+      onceAt("playoffs.advance.beforeBuild", async () => {
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { status: "COMPLETE" },
+        });
+      }),
+    );
+    await advancePlayoffBracket(season.id);
+
+    // No round was built into the COMPLETE season.
+    expect(
+      (await playoffMatches(season.id)).filter((m) =>
+        m.bracketSlot?.startsWith("R1"),
+      ),
+    ).toHaveLength(0);
+  });
+});
+
+describe("playoffs — a reset bracket stays advanceable to a champion", () => {
+  it("reset AFTER an advanced round, then drive the rebuilt bracket to COMPLETE", async () => {
+    // Pins playoff-service's round-marker cleanup (the deleteMany inside the
+    // reset transaction): without it the rebuilt bracket's R1 marker create
+    // P2002s forever — silently swallowed — and every advance no-ops, a
+    // permanent dead end. Deleting that cleanup line turns this red.
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    const ids = await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    // Play R0 and build R1, so the R1 marker exists.
+    const round0 = (await playoffMatches(season.id)).filter((m) =>
+      m.bracketSlot?.startsWith("R0"),
+    );
+    for (const m of round0) {
+      await recordMatch(m.id, 2, 0);
+      await advancePlayoffBracket(season.id);
+    }
+    expect(
+      (await playoffMatches(season.id)).some((m) =>
+        m.bracketSlot?.startsWith("R1"),
+      ),
+    ).toBe(true);
+
+    // Reset — seeding was wrong, say — then run the whole bracket again.
+    await createPlayoffBracket(season.id);
+    const final = await driveToChampion(season.id);
+    expect(final.status).toBe("COMPLETE");
+    expect(final.championTeamId).toBe(ids[0]);
   });
 });

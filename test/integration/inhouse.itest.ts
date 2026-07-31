@@ -1513,6 +1513,35 @@ describe("inhouse — an admin can void a wrong result", () => {
     // Voiding twice is a no-op, not a double-apply.
     expect((await voidLastResult(admin)).ok).toBe(false);
   });
+
+  it("voids the NAMED game when a lobbyId is given, not the newest", async () => {
+    // The /inhouse/history control targets a specific row — a result landing
+    // between the admin's look and their click must never redirect the void.
+    const admin = sessionFor(await makeUser("Targeted Void Admin", "ADMIN"));
+    const older = await prisma.inhouseLobby.create({
+      data: { status: INHOUSE_STATUS.COMPLETED, radiantTeam: 1, winnerTeam: 1 },
+    });
+    const newer = await prisma.inhouseLobby.create({
+      data: { status: INHOUSE_STATUS.COMPLETED, radiantTeam: 1, winnerTeam: 2 },
+    });
+
+    expect((await voidLastResult(admin, older.id)).ok).toBe(true);
+
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: older.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+    // The newest result — which the bare form would have voided — survives.
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: newer.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.COMPLETED);
+
+    // A named target that isn't a completed result is refused, not redirected.
+    const again = await voidLastResult(admin, older.id);
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.error).toMatch(/already be voided/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

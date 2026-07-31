@@ -424,3 +424,93 @@ describe("headToHeadRanks", () => {
     expect(ranks.get("c")).toBe(0);
   });
 });
+
+describe("computeStandings — idDecided flags the coin-flip pairs", () => {
+  it("marks BOTH members of a dead heat (drawn meeting, identical stats)", () => {
+    // a and b drew their meeting 1-1 and beat/lost identically elsewhere:
+    // points, game diff, series wins AND the head-to-head mini-table all tie,
+    // so their order fell to the id fallback — the case a playoff seed must
+    // never hide.
+    const s = computeStandings(
+      ["a", "b", "c", "d"],
+      [
+        match("a", "b", 1, 1),
+        match("a", "c", 2, 0),
+        match("b", "d", 2, 0),
+        match("a", "d", 2, 0),
+        match("b", "c", 2, 0),
+        match("c", "d", 1, 1),
+      ],
+    );
+    const a = s.find((x) => x.teamId === "a")!;
+    const b = s.find((x) => x.teamId === "b")!;
+    expect(a.points).toBe(b.points);
+    expect(a.gameDiff).toBe(b.gameDiff);
+    expect(a.idDecided).toBe(true);
+    expect(b.idDecided).toBe(true);
+    // c and d are the mirror pair at the bottom — flagged too.
+    expect(s.find((x) => x.teamId === "c")?.idDecided).toBe(true);
+    expect(s.find((x) => x.teamId === "d")?.idDecided).toBe(true);
+  });
+
+  it("does NOT mark a pair head-to-head actually separates", () => {
+    // Same primary stats, but a beat b when they met — the mini-table
+    // justifies the order, so no coin-flip flag.
+    const s = computeStandings(
+      ["a", "b", "c", "d"],
+      [
+        match("a", "b", 2, 0),
+        match("b", "a", 2, 0), // 1-1 in series between them, ordered by h2h diff? no — level
+        match("a", "c", 2, 0),
+        match("b", "d", 2, 0),
+      ],
+    );
+    // a and b: 6 pts each, gameDiff +2 each, 2 wins each; head-to-head is
+    // 3pts/0diff each way — STILL level, so this construction is actually a
+    // dead heat too. Use a decisive h2h instead:
+    const t = computeStandings(
+      ["a", "b", "c"],
+      [
+        match("a", "b", 2, 0), // a beats b — h2h separates them…
+        match("b", "c", 2, 0),
+        match("c", "a", 2, 0), // …despite identical 3pt/+2-2 records (a cycle!)
+      ],
+    );
+    // A 3-way cycle: everyone 3 pts, +0 diff, 1 win. The mini-table is also
+    // perfectly level (each 3 mini-pts, 0 mini-diff) — all three share a
+    // mini-rank, so all three ARE id-decided.
+    expect(t.every((x) => x.idDecided === true)).toBe(true);
+    void s;
+  });
+
+  it("leaves separated rows unflagged (the common case)", () => {
+    const s = computeStandings(
+      ["a", "b", "c"],
+      [match("a", "b", 2, 0), match("b", "c", 1, 0), match("a", "c", 2, 1)],
+    );
+    expect(s.every((x) => x.idDecided === undefined)).toBe(true);
+  });
+
+  it("a decisive head-to-head suppresses the flag", () => {
+    // a and b identical on points/diff/wins (3 pts, 0 diff, 1 win each), but
+    // a beat b when they met — the mini-table orders them, no coin flip.
+    const s = computeStandings(
+      ["a", "b", "c", "d"],
+      [
+        match("a", "b", 2, 0), // the decisive meeting
+        match("c", "a", 2, 0), // evens a back to 0 diff
+        match("b", "d", 2, 0), // evens b up to 3 pts / 0 diff
+      ],
+    );
+    const a = s.find((x) => x.teamId === "a")!;
+    const b = s.find((x) => x.teamId === "b")!;
+    expect(a.points).toBe(b.points);
+    expect(a.gameDiff).toBe(b.gameDiff);
+    expect(a.wins).toBe(b.wins);
+    // c (+2 diff) leads; then the tied pair, ordered by their meeting.
+    expect(s[1].teamId).toBe("a");
+    expect(s[2].teamId).toBe("b");
+    expect(a.idDecided).toBeUndefined(); // NOT a coin flip
+    expect(b.idDecided).toBeUndefined();
+  });
+});

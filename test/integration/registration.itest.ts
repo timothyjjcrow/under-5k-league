@@ -666,3 +666,60 @@ describe("admin withdrawSignup — the write re-asserts the seat and the status"
     expect(after.status).toBe("REMOVED");
   });
 });
+
+describe("saveRegistration — no player/standin flips while the auction runs", () => {
+  // The pool is live property of the draft engine: the on-the-block player
+  // flipping to STANDIN rendered a headless lot in every room, and the sale
+  // still charged the team. The write-time backstop (resolveExpiredNomination
+  // voiding a non-PLAYER lot) is tested in draft.itest.ts; this is the
+  // player-facing refusal.
+  async function liveDraftSeason(draftStatus: string) {
+    const season = await makeSeason({ status: "DRAFT" });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: draftStatus },
+    });
+    const user = await makeUser("Mid Draft Flipper");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    return { season, user };
+  }
+
+  it("refuses PLAYER→STANDIN while the draft is IN_PROGRESS", async () => {
+    const { season, user } = await liveDraftSeason("IN_PROGRESS");
+    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+    expect(res?.error).toMatch(/draft is running/i);
+    expect((await regFor(season.id, user.id))?.type).toBe("PLAYER");
+  });
+
+  it("refuses while PAUSED too — parked is still live", async () => {
+    const { season, user } = await liveDraftSeason("PAUSED");
+    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+    expect(res?.error).toMatch(/draft is running/i);
+    expect((await regFor(season.id, user.id))?.type).toBe("PLAYER");
+  });
+
+  it("allows the flip again once the draft is COMPLETE (if unrostered)", async () => {
+    const { season, user } = await liveDraftSeason("COMPLETE");
+    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+    expect(res?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id))?.type).toBe("STANDIN");
+  });
+
+  it("a same-type edit is untouched by the lock", async () => {
+    const { season, user } = await liveDraftSeason("IN_PROGRESS");
+    const res = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3000, roles: "1" }),
+    );
+    expect(res?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id))?.type).toBe("PLAYER");
+  });
+});

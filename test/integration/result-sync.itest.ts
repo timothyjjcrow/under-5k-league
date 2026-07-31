@@ -679,3 +679,100 @@ describe("result sync — a claim that needs a staged interleaving", () => {
     expect(m.autoSyncAttempts).toBe(0);
   });
 });
+
+describe("syncLeagueGames — the clinch-stop applies to the league feed too", () => {
+  // The feed lists NEWEST FIRST, so a "one for fun" game after a decided night
+  // used to import BEFORE the real games — the series wasn't COMPLETED yet, so
+  // nothing refused it, and a 2-0 went into the record as 2-1 (wrong gameDiff
+  // tiebreak, bogus box score in career stats, wrong Discord post). Candidates
+  // are now buffered per fixture and run through pickSeriesGames — the same
+  // session-split + clinch-stop the roster-scan path has always had.
+  it("drops the bonus game after a decided Bo3, whatever the feed order", async () => {
+    const { season, match, home, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -2 * HOUR,
+      bestOf: 3,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18182" },
+    });
+    const G1 = 6661001;
+    const G2 = 6661002;
+    const BONUS = 6661003;
+    const now = Date.now();
+    const games: Record<string, ReturnType<typeof odGame>> = {
+      [String(G1)]: odGame(G1, homeAccts, awayAccts, now - 3 * HOUR),
+      [String(G2)]: odGame(G2, homeAccts, awayAccts, now - 2.5 * HOUR),
+      // The loser wins the fun one — recorded, it turns 2-0 into 2-1.
+      [String(BONUS)]: {
+        ...odGame(BONUS, homeAccts, awayAccts, now - 2 * HOUR),
+        radiant_win: false,
+      },
+    };
+    mockLeague.mockResolvedValue([BONUS, G2, G1]); // newest first, like OpenDota
+    mockMatch.mockImplementation(async (id) => games[id] ?? null);
+
+    const res = await syncLeagueGames(season.id, { auto: true });
+
+    expect(res.imported).toBe(2);
+    const m = await prisma.match.findUniqueOrThrow({
+      where: { id: match.id },
+      include: { games: true },
+    });
+    expect(m.status).toBe(MATCH_STATUS.COMPLETED);
+    expect(m.homeScore).toBe(2);
+    expect(m.awayScore).toBe(0);
+    expect(m.winnerTeamId).toBe(home.id);
+    expect(m.games.map((g) => g.dotaMatchId).sort()).toEqual([
+      String(G1),
+      String(G2),
+    ]);
+
+    // The dropped bonus game is remembered — the automatic feed never
+    // refetches a game it has already judged.
+    const skipRaw = await prisma.setting.findUnique({
+      where: { key: `leagueSyncSkip:${season.id}` },
+    });
+    expect(skipRaw?.value ?? "").toContain(String(BONUS));
+  });
+
+  it("drops a warmup scrim hours before the real series (session split)", async () => {
+    const { season, match, home, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -2 * HOUR,
+      bestOf: 3,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18183" },
+    });
+    const WARMUP = 6662001;
+    const G1 = 6662002;
+    const G2 = 6662003;
+    const now = Date.now();
+    const games: Record<string, ReturnType<typeof odGame>> = {
+      [String(WARMUP)]: {
+        ...odGame(WARMUP, homeAccts, awayAccts, now - 9 * HOUR),
+        radiant_win: false,
+      },
+      [String(G1)]: odGame(G1, homeAccts, awayAccts, now - 2 * HOUR),
+      [String(G2)]: odGame(G2, homeAccts, awayAccts, now - 1.5 * HOUR),
+    };
+    mockLeague.mockResolvedValue([G2, G1, WARMUP]);
+    mockMatch.mockImplementation(async (id) => games[id] ?? null);
+
+    const res = await syncLeagueGames(season.id, { auto: true });
+
+    expect(res.imported).toBe(2);
+    const m = await prisma.match.findUniqueOrThrow({
+      where: { id: match.id },
+      include: { games: true },
+    });
+    expect(m.homeScore).toBe(2);
+    expect(m.awayScore).toBe(0);
+    expect(m.winnerTeamId).toBe(home.id);
+    expect(m.games.map((g) => g.dotaMatchId).sort()).toEqual([
+      String(G1),
+      String(G2),
+    ]);
+  });
+});

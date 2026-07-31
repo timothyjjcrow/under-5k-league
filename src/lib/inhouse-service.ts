@@ -1587,13 +1587,31 @@ export async function maybeAutoDetectResult(): Promise<boolean> {
  */
 export async function voidLastResult(
   viewer: SessionUser,
+  lobbyId?: string | null,
 ): Promise<InhouseActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  const last = await prisma.inhouseLobby.findFirst({
-    where: { status: INHOUSE_STATUS.COMPLETED },
-    orderBy: { updatedAt: "desc" },
-  });
-  if (!last) return { ok: false, error: "No completed game to void" };
+  // With an explicit lobbyId, void THAT game — the /inhouse/history admin
+  // control names its target, so a result completing between the admin's look
+  // and their click can never redirect the void (the old newest-by-updatedAt
+  // lookup voided whatever finished most recently at click time). The bare
+  // form stays for the room's post-game banner, whose gate already pins the
+  // viewer to the game it shows.
+  const last = lobbyId
+    ? await prisma.inhouseLobby.findFirst({
+        where: { id: lobbyId, status: INHOUSE_STATUS.COMPLETED },
+      })
+    : await prisma.inhouseLobby.findFirst({
+        where: { status: INHOUSE_STATUS.COMPLETED },
+        orderBy: { updatedAt: "desc" },
+      });
+  if (!last) {
+    return {
+      ok: false,
+      error: lobbyId
+        ? "That game isn't a completed result — it may already be voided"
+        : "No completed game to void",
+    };
+  }
 
   // Refuse while a LIVE lobby is holding stakes.
   //

@@ -362,8 +362,15 @@ async function MatchPreview({
   const regByUser = new Map(regs.map((r) => [r.userId, r]));
   const rsvpByUser = new Map(rsvps.map((r) => [r.userId, r.status]));
 
+  // setAvailability refuses archived-season matches — an RSVP is an answer
+  // about the ACTIVE season's match nights, so the banner hides with it.
+  const previewSeason = await prisma.season.findUnique({
+    where: { id: match.seasonId },
+    select: { isActive: true },
+  });
   const isParticipant =
     !!viewer &&
+    !!previewSeason?.isActive &&
     (members.some((m) => m.userId === viewer.id) ||
       match.standins.some((s) => s.standin.id === viewer.id));
   const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
@@ -1147,6 +1154,7 @@ async function ReportResultSection({
 }: {
   match: {
     id: string;
+    seasonId: string;
     homeTeam: { name: string; captainId: string };
     awayTeam: { name: string; captainId: string };
   };
@@ -1157,6 +1165,13 @@ async function ReportResultSection({
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
   if (!isCaptain) return null;
+  // The service refuses archived-season matches (the StandinSection rule) —
+  // don't render a card whose every submit can only error.
+  const season = await prisma.season.findUnique({
+    where: { id: match.seasonId },
+    select: { isActive: true },
+  });
+  if (!season?.isActive) return null;
   return (
     <Card>
       <CardHeader
@@ -1368,6 +1383,7 @@ async function RescheduleSection({
 }: {
   match: {
     id: string;
+    seasonId: string;
     status: string;
     scheduledAt: Date | null;
     homeTeam: { name: string; captainId: string };
@@ -1375,10 +1391,20 @@ async function RescheduleSection({
   };
 }) {
   const viewer = await getSessionUser();
-  const isCaptain =
+  let isCaptain =
     !!viewer &&
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
+  if (isCaptain) {
+    // The service refuses proposing/accepting on archived-season matches —
+    // a captain on one gets the read-only strip below, not a form that can
+    // only error.
+    const season = await prisma.season.findUnique({
+      where: { id: match.seasonId },
+      select: { isActive: true },
+    });
+    if (!season?.isActive) isCaptain = false;
+  }
   if (isCaptain) {
     return <RescheduleCard match={match} viewerId={viewer!.id} />;
   }

@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 import { INHOUSE_STATUS } from "@/lib/constants";
 import { parseInhouseBox } from "@/lib/inhouse-box";
 import { gameMvp } from "@/lib/achievements";
 import { heroById } from "@/lib/heroes";
 import { formatMatchTime } from "@/lib/match-time";
+import { voidInhouseResult } from "@/app/actions/inhouse-admin";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { LocalTime } from "@/components/local-time";
 import {
   Badge,
@@ -28,6 +31,12 @@ const HISTORY_LIMIT = 100;
 // The permanent archive behind /inhouse's four recent cards: one compact row
 // per completed game, so the ladder's evidence never becomes unreachable.
 export default async function InhouseHistoryPage() {
+  // Admins get a per-row Void — the durable home for "the scan picked up the
+  // wrong game". The room's own void button requires the admin to have PLAYED
+  // the game and vanishes 10 minutes after it; this page is where a reported
+  // wrong result actually gets fixed.
+  const viewer = await getSessionUser();
+  const isAdmin = viewer?.role === "ADMIN";
   const lobbies = await prisma.inhouseLobby.findMany({
     where: { status: INHOUSE_STATUS.COMPLETED },
     orderBy: { createdAt: "desc" },
@@ -97,6 +106,11 @@ export default async function InhouseHistoryPage() {
                       Length
                     </th>
                     <th className="px-5 py-2.5 text-right font-medium">Match</th>
+                    {isAdmin ? (
+                      <th className="px-5 py-2.5 text-right font-medium">
+                        Admin
+                      </th>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -175,6 +189,26 @@ export default async function InhouseHistoryPage() {
                             <span className="text-muted">—</span>
                           )}
                         </td>
+                        {isAdmin ? (
+                          <td className="px-5 py-2.5 text-right">
+                            <ActionForm
+                              action={voidInhouseResult}
+                              hidden={{ lobbyId: lobby.id }}
+                            >
+                              {/* The confirm NAMES the game — a void must
+                                  never hit "whatever completed most recently
+                                  at click time". */}
+                              <SubmitButton
+                                variant="ghost"
+                                size="sm"
+                                className="text-danger hover:underline"
+                                confirm={`Void the ${formatMatchTime(lobby.createdAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, everyone's Elo recalculates without it, and any Cred payouts reverse to pre-game balances.`}
+                              >
+                                void
+                              </SubmitButton>
+                            </ActionForm>
+                          </td>
+                        ) : null}
                       </tr>
                     );
                   })}
