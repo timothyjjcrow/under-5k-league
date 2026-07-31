@@ -3,6 +3,7 @@ import {
   buildDiscordAuthUrl,
   codeChallengeS256,
   discordProfileFromMe,
+  oauthLandingPath,
   packOauthCookie,
   randomOauthValue,
   safeEqual,
@@ -95,7 +96,11 @@ describe("randomOauthValue", () => {
 describe("oauth cookie pack/unpack", () => {
   it("round-trips state + verifier", () => {
     const packed = packOauthCookie("abc", "def");
-    expect(unpackOauthCookie(packed)).toEqual({ state: "abc", verifier: "def" });
+    expect(unpackOauthCookie(packed)).toEqual({
+      state: "abc",
+      verifier: "def",
+      next: null,
+    });
   });
 
   it("round-trips real random values (base64url never contains the separator)", () => {
@@ -104,15 +109,70 @@ describe("oauth cookie pack/unpack", () => {
     expect(unpackOauthCookie(packOauthCookie(state, verifier))).toEqual({
       state,
       verifier,
+      next: null,
     });
   });
 
-  it.each(["", "no-separator", ".leading", "trailing.", "a.b.c", null, undefined])(
+  it.each(["", "no-separator", ".leading", "trailing.", "a.b.c.d", null, undefined])(
     "rejects malformed cookie %j",
     (v) => {
       expect(unpackOauthCookie(v as string | null | undefined)).toBeNull();
     },
   );
+
+  it("round-trips a validated return path as an opaque third part", () => {
+    const packed = packOauthCookie("abc", "def", "/players?pos=1");
+    expect(unpackOauthCookie(packed)).toEqual({
+      state: "abc",
+      verifier: "def",
+      next: "/players?pos=1",
+    });
+  });
+
+  it("refuses to pack an unsafe return path at all", () => {
+    // Validation happens at pack time too — an attacker-supplied ?next= must
+    // not even ride the cookie.
+    for (const evil of ["https://evil.test", "//evil.test", "/ok\nSet-Cookie: x", "\\evil"]) {
+      expect(packOauthCookie("abc", "def", evil)).toBe("abc.def");
+    }
+  });
+
+  it("a tampered third part degrades to no-return-path, never a redirect", () => {
+    // The cookie is client-held bytes. "https://evil.test" base64url'd is a
+    // structurally valid third part — safeReturnPath at unpack is what stops
+    // it becoming an open redirect.
+    const evil = Buffer.from("https://evil.test").toString("base64url");
+    expect(unpackOauthCookie(`abc.def.${evil}`)).toEqual({
+      state: "abc",
+      verifier: "def",
+      next: null,
+    });
+    // ...and garbage that isn't decodable text just drops the path, keeping
+    // the state/verifier halves working.
+    expect(unpackOauthCookie("abc.def.!!!")).toMatchObject({
+      state: "abc",
+      verifier: "def",
+      next: null,
+    });
+  });
+});
+
+describe("oauthLandingPath", () => {
+  it("honors the return path only on FULL success", () => {
+    expect(oauthLandingPath("joined", "/")).toBe("/");
+    expect(oauthLandingPath("linked", "/players")).toBe("/players");
+  });
+
+  it("routes every note-carrying outcome to /me, where the copy lives", () => {
+    for (const code of ["join_failed", "joined_pending", "taken", "error", "denied"]) {
+      expect(oauthLandingPath(code, "/")).toBe(`/me?discord=${code}`);
+    }
+  });
+
+  it("keeps the confirmation code when /me was the destination anyway", () => {
+    expect(oauthLandingPath("joined", "/me")).toBe("/me?discord=joined");
+    expect(oauthLandingPath("joined", null)).toBe("/me?discord=joined");
+  });
 });
 
 describe("safeEqual", () => {

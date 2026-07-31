@@ -29,6 +29,12 @@ export async function GET(req: NextRequest) {
   const base = process.env.APP_URL || req.nextUrl.origin;
   const state = randomOauthValue();
   const verifier = randomOauthValue();
+  // Where to land AFTER a fully successful link — validated here and again at
+  // unpack (packOauthCookie re-validates; a raw query value never reaches a
+  // redirect). Unset = /me, the old behavior. This exists because the join
+  // buttons now live on the dashboard too, and a full-page OAuth round-trip
+  // that always dumped the player on /me lost their place.
+  const next = req.nextUrl.searchParams.get("next");
 
   const res = NextResponse.redirect(
     buildDiscordAuthUrl({
@@ -41,7 +47,7 @@ export async function GET(req: NextRequest) {
       withGuildJoin: !!getGuildConfig(),
     }),
   );
-  res.cookies.set(DISCORD_OAUTH_COOKIE, packOauthCookie(state, verifier), {
+  res.cookies.set(DISCORD_OAUTH_COOKIE, packOauthCookie(state, verifier, next), {
     httpOnly: true,
     sameSite: "lax", // the callback arrives as a top-level nav from discord.com
     secure: process.env.NODE_ENV === "production",

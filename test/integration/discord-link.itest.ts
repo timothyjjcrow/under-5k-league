@@ -16,6 +16,10 @@ import {
   type CallbackDeps,
 } from "@/lib/discord-link-service";
 import { packOauthCookie } from "@/lib/discord-oauth";
+import {
+  _clearMembershipMemoForTests,
+  memoGuildMembership,
+} from "@/lib/discord-roles";
 import { updateDiscordName, unlinkDiscord } from "@/app/actions/registration";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -35,6 +39,7 @@ function happyDeps(overrides: Partial<CallbackDeps> = {}): CallbackDeps {
     exchange: vi.fn().mockResolvedValue("tok-123"),
     fetchIdentity: vi.fn().mockResolvedValue(PROFILE),
     joinGuild: vi.fn().mockResolvedValue(null),
+    stripPingRole: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -79,14 +84,14 @@ describe("linkDiscordAccount", () => {
     expect(await discordOf(second.id)).toEqual({ discordId: null, discordName: "" });
   });
 
-  it("re-linking a different Discord account overwrites the user's own link", async () => {
+  it("re-linking a different Discord account overwrites the user's own link — and reports the replaced id", async () => {
     const user = await makeUser("Relinker");
     await linkDiscordAccount(prisma, user.id, PROFILE);
     const next = { discordId: "90000000000000001", discordName: "smurf_acct" };
 
     const res = await linkDiscordAccount(prisma, user.id, next);
 
-    expect(res.ok).toBe(true);
+    expect(res).toEqual({ ok: true, previousDiscordId: PROFILE.discordId });
     expect(await discordOf(user.id)).toEqual(next);
   });
 
@@ -97,8 +102,160 @@ describe("linkDiscordAccount", () => {
 
     const res = await linkDiscordAccount(prisma, user.id, renamed);
 
-    expect(res.ok).toBe(true);
+    // No previousDiscordId: nothing was replaced, so there is no stale
+    // account for the callback to strip a role from.
+    expect(res).toEqual({ ok: true, previousDiscordId: null });
     expect(await discordOf(user.id)).toEqual(renamed);
+  });
+});
+
+describe("re-linking strips the ping role from the REPLACED account", () => {
+  // The gap this closes: unlinkDiscord takes the role with it, but re-linking
+  // a DIFFERENT account used to leave the role on the old one — pinged
+  // forever, with the off switch rendered only for the new account.
+  it("calls the strip with the old id exactly when the id changed", async () => {
+    const user = await makeUser("RoleCarrier");
+    await linkDiscordAccount(prisma, user.id, PROFILE);
+    const strip = vi.fn().mockResolvedValue(undefined);
+    const newId = { ...PROFILE, discordId: "90000000000000002" };
+    const deps = happyDeps({
+      fetchIdentity: vi.fn().mockResolvedValue(newId),
+      stripPingRole: strip,
+    });
+
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      deps,
+    );
+
+    expect(redirect).toBe("/me?discord=linked");
+    expect(strip).toHaveBeenCalledTimes(1);
+    expect(strip).toHaveBeenCalledWith(PROFILE.discordId);
+  });
+
+  it("does NOT strip on a same-account re-link", async () => {
+    const user = await makeUser("SameAgain");
+    await linkDiscordAccount(prisma, user.id, PROFILE);
+    const strip = vi.fn().mockResolvedValue(undefined);
+
+    await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({ stripPingRole: strip }),
+    );
+
+    expect(strip).not.toHaveBeenCalled();
+  });
+
+  it("a failed strip NEVER fails the link — best-effort by contract", async () => {
+    const user = await makeUser("StripFails");
+    await linkDiscordAccount(prisma, user.id, PROFILE);
+    const newId = { ...PROFILE, discordId: "90000000000000003" };
+
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({
+        fetchIdentity: vi.fn().mockResolvedValue(newId),
+        stripPingRole: vi.fn().mockRejectedValue(new Error("discord down")),
+      }),
+    );
+
+    expect(redirect).toBe("/me?discord=linked");
+    expect(await discordOf(user.id)).toEqual(newId);
+  });
+});
+
+describe("the return path — where a link lands", () => {
+  // Linking is a full-page round-trip that used to always dump the player on
+  // /me — wrong for everyone who clicked from the dashboard join nag. Only a
+  // FULL success honors it: every other outcome carries a ?discord= code
+  // that only /me can render and scrub.
+  const withNext = (userId: string, next: string) =>
+    callbackInput(userId, {
+      cookie: packOauthCookie("the-state", "the-verifier", next),
+    });
+
+  it("a full success lands back where the player clicked", async () => {
+    const user = await makeUser("Dashboarder");
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      withNext(user.id, "/"),
+      happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined") }),
+    );
+    expect(redirect).toBe("/");
+  });
+
+  it("identify-only success (no bot) honors it too", async () => {
+    const user = await makeUser("NoBotLeague");
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      withNext(user.id, "/"),
+      happyDeps(), // joinGuild → null = no bot configured
+    );
+    expect(redirect).toBe("/");
+  });
+
+  it("anything that needs the /me note overrides the return path", async () => {
+    const user = await makeUser("JoinFailed");
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      withNext(user.id, "/"),
+      happyDeps({ joinGuild: vi.fn().mockResolvedValue("forbidden") }),
+    );
+    // join_failed's copy and CTA render only on /me — landing it on the
+    // dashboard would strand an unexplained query param.
+    expect(redirect).toBe("/me?discord=join_failed");
+  });
+
+  it("a success bound for /me anyway keeps its confirmation code", async () => {
+    const user = await makeUser("MeBound");
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      withNext(user.id, "/me"),
+      happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined") }),
+    );
+    expect(redirect).toBe("/me?discord=joined");
+  });
+
+  it("a successful join PRIMES the membership memo — the landing page must not re-nag", async () => {
+    // A dashboard-bound success re-renders DiscordSetupPrompt immediately;
+    // without the prime it would serve a memoised "not-member" for up to a
+    // recheck-TTL and show the join nag to a player who JUST joined.
+    const user = await makeUser("FreshJoiner");
+    _clearMembershipMemoForTests();
+    await handleDiscordCallback(
+      prisma,
+      withNext(user.id, "/"),
+      happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined") }),
+    );
+    // The unreachable apiBase proves this answer comes from the memo, not a
+    // lookup: a miss would try the network and resolve null.
+    expect(
+      await memoGuildMembership(PROFILE.discordId, {
+        token: "t",
+        guildId: "g",
+        apiBase: "http://127.0.0.1:1",
+      }),
+    ).toBe("member");
+  });
+
+  it("a screening-gated join primes 'pending', so the rules nag shows instead", async () => {
+    const user = await makeUser("PendingJoiner");
+    _clearMembershipMemoForTests();
+    await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined-pending") }),
+    );
+    expect(
+      await memoGuildMembership(PROFILE.discordId, {
+        token: "t",
+        guildId: "g",
+        apiBase: "http://127.0.0.1:1",
+      }),
+    ).toBe("pending");
   });
 });
 

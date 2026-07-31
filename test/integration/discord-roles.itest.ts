@@ -4,6 +4,7 @@ import {
   MEMBERSHIP_MEMBER_TTL_MS,
   MEMBERSHIP_RECHECK_TTL_MS,
   _clearMembershipMemoForTests,
+  discordChaseMessage,
   discordReachWarning,
   fetchGuildMember,
   getDiscordReach,
@@ -17,6 +18,7 @@ import {
   memoGuildMembership,
   pingOptInAvailable,
   primeMembershipMemo,
+  reachabilityNote,
   setPingRole,
   sweepGuildMemberships,
   type DiscordReachFunnel,
@@ -864,6 +866,135 @@ describe("getDiscordReachFunnel — the admin's pre-draft denominator", () => {
     expect(funnel.guild?.missing).toBe(0);
     expect(funnel.guild?.missingNames).toEqual([]);
     expect(funnel.guild?.unknown).toBe(3);
+  });
+});
+
+describe("reachabilityNote — the assignment toast garnish", () => {
+  const link = (userId: string, discordId: string) =>
+    prisma.user.update({ where: { id: userId }, data: { discordId } });
+
+  it("warns when the player never linked — no Discord call needed", async () => {
+    delete process.env.DISCORD_BOT_TOKEN; // even with no bot, unlinked is knowable
+    const u = await makeUser("Plainest");
+    const note = await reachabilityNote(u.id);
+    expect(note).toContain("Plainest hasn't linked Discord");
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("warns for a linked player who isn't in the server", async () => {
+    process.env.DISCORD_API_BASE = base;
+    const u = await makeUser("GoneStandin");
+    await link(u.id, "800000000000000061");
+    respond = () => ({ status: 404, body: { code: 10007 } });
+    expect(await reachabilityNote(u.id)).toContain(
+      "GoneStandin isn't in the league's Discord server",
+    );
+  });
+
+  it("warns for a member stuck behind the rules screen", async () => {
+    process.env.DISCORD_API_BASE = base;
+    const u = await makeUser("RulesStandin");
+    await link(u.id, "800000000000000062");
+    respond = () => ({ status: 200, body: { pending: true, roles: [] } });
+    expect(await reachabilityNote(u.id)).toContain(
+      "RulesStandin hasn't accepted the Discord server's rules",
+    );
+  });
+
+  it("is SILENT for a reachable member — and for anything it can't tell", async () => {
+    process.env.DISCORD_API_BASE = base;
+    const member = await makeUser("FineStandin");
+    await link(member.id, "800000000000000063");
+    respond = () => ({ status: 200, body: { roles: [] } });
+    expect(await reachabilityNote(member.id)).toBe("");
+
+    // A Discord hiccup must not dress itself up as "this player is
+    // unreachable" — the assignment succeeded and the ping may well land.
+    const fuzzy = await makeUser("FuzzyStandin");
+    await link(fuzzy.id, "800000000000000064");
+    respond = () => ({ status: 500 });
+    expect(await reachabilityNote(fuzzy.id)).toBe("");
+  });
+});
+
+describe("discordChaseMessage — the paste-into-Discord post", () => {
+  const funnel = (over: Partial<DiscordReachFunnel>): DiscordReachFunnel => ({
+    registered: 10,
+    linked: 10,
+    unlinkedNames: [],
+    guild: {
+      inServer: 10,
+      pending: 0,
+      pendingNames: [],
+      missing: 0,
+      missingNames: [],
+      unknown: 0,
+    },
+    ...over,
+  });
+  const OPTS = { inviteUrl: "https://discord.gg/x", profileUrl: "https://l.test/me" };
+
+  it("is null when there is nobody to chase", () => {
+    expect(discordChaseMessage(funnel({}), OPTS)).toBeNull();
+    expect(discordChaseMessage(funnel({ guild: null }), OPTS)).toBeNull();
+  });
+
+  it("names EVERYONE — a chase message has no display cap", () => {
+    const names = Array.from({ length: 20 }, (_, i) => `P${i}`);
+    const msg = discordChaseMessage(
+      funnel({ registered: 30, linked: 10, unlinkedNames: names }),
+      OPTS,
+    );
+    for (const n of names) expect(msg).toContain(n);
+    expect(msg).toContain("https://l.test/me");
+    expect(msg).not.toContain("more"); // no "+N more" truncation anywhere
+  });
+
+  it("covers all three cohorts with their own ask", () => {
+    const msg = discordChaseMessage(
+      funnel({
+        registered: 8,
+        linked: 6,
+        unlinkedNames: ["U1", "U2"],
+        guild: {
+          inServer: 4,
+          pending: 1,
+          pendingNames: ["Percy"],
+          missing: 1,
+          missingNames: ["Gone"],
+          unknown: 0,
+        },
+      }),
+      OPTS,
+    );
+    expect(msg).toContain("join us: https://discord.gg/x");
+    expect(msg).toContain("Gone");
+    expect(msg).toContain("accept the rules");
+    expect(msg).toContain("Percy");
+    expect(msg).toContain("link it so the league can reach you");
+    expect(msg).toContain("U1, U2");
+    // The unknowns are NOT chased — we don't know they did anything wrong.
+    expect(msg).not.toContain("couldn't");
+  });
+
+  it("defuses hostile personas — the uncapped list is the one anyone can join", () => {
+    // This message is PASTED from an admin's own account, which has Mention
+    // Everyone — a persona of literally "@everyone" would mass-ping the
+    // server, and a bare URL auto-links into league-authored-looking text.
+    const msg = discordChaseMessage(
+      funnel({
+        registered: 13,
+        linked: 10,
+        unlinkedNames: ["@everyone", "https://evil.gg/x", "two\nlines"],
+      }),
+      OPTS,
+    );
+    expect(msg).not.toContain("@everyone"); // the raw ping never survives...
+    expect(msg).toContain("@​everyone"); // ...the name still reads the same
+    expect(msg).not.toContain("https://evil.gg"); // no auto-linkable URL
+    expect(msg).toContain("two lines"); // newline flattened — one row per list
+    // The league's OWN links must stay live — only names are defused.
+    expect(msg).toContain("https://l.test/me");
   });
 });
 

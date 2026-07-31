@@ -450,7 +450,9 @@ is the point at which someone has to justify it.
   claim — a plain read-then-write loses a race against the callback and a
   typed handle would wear the verified ✓; `unlinkDiscord` clears both
   fields. The client secret follows the webhook rule: server-only, never
-  rendered or logged.
+  rendered or logged. Re-linking a DIFFERENT account strips the ping role
+  from the replaced one (see the guild-membership entry below — this was a
+  KNOWN GAP here for a while).
 - **One click links AND joins the server (`guilds.join`)**: the scope is
   CONDITIONAL — `buildDiscordAuthUrl({withGuildJoin})`, passed
   `!!getGuildConfig()` by `/api/auth/discord`. Without a bot the consent
@@ -488,12 +490,11 @@ is the point at which someone has to justify it.
   DERIVED state, never a dismissible flag — a nag that can be dismissed
   permanently stops working, and one that outlives what it asks for is worse.
   Copy branches on `autoJoins` so it never promises the one-click version on a
-  league with no bot. KNOWN EDGE (not fixed): `/api/auth/discord` is a
-  full-page redirect and the callback always lands on `/me`, so clicking Link
-  with a half-filled signup form loses it — the card sits ABOVE the form and
-  warns when you aren't registered yet, but the real fix needs a return path
-  packed into the OAuth cookie (`unpackOauthCookie` hard-rejects anything that
-  isn't exactly 2 dot-separated parts, so base64url it).
+  league with no bot. The callback lands on the `?next=` return path now
+  (packed into the OAuth cookie as a base64url third part — see the
+  guild-membership entry below); a half-filled signup form is still lost to
+  the full-page redirect, but the player at least comes back to the page they
+  left.
 - **Guild membership verification** — linking proves OWNERSHIP; only being in
   the server makes a player reachable, and the auto-join runs exactly once (in
   the OAuth callback), so linked-before-the-bot / join-failed-and-ignored /
@@ -573,6 +574,38 @@ is the point at which someone has to justify it.
     what names the cause — every unknown-copy pointer to it depends on that.
     Never claim "reload fixes it" for unknowns: reload inside the 30s memo
     TTL is a no-op, and a kicked bot answers that way forever.
+  Second pass (same day), four additions:
+  * **The OAuth link carries a return path** — `/api/auth/discord?next=…`,
+    validated by `safeReturnPath` at pack time AND at unpack (the cookie is
+    client-held bytes; a tampered third part degrades to no-path, never a
+    redirect), ridden as a base64url third cookie part (two-part cookies from
+    mid-deploy still round-trip). `oauthLandingPath` (pure, tested) honors it
+    ONLY on full success (`joined`/`linked`) — every other outcome carries a
+    `?discord=` code that only /me can render and scrub, so it overrides the
+    path; a success bound for /me anyway keeps its confirmation code. The
+    dashboard's setup/join cards pass `next="/"`.
+  * **The chase message** (`discordChaseMessage` + `<ChaseCopy>`): the funnel
+    can't notify the very people it names, so the last mile is a human
+    pasting into Discord — one click builds the post (invite for the missing,
+    rules nudge for the pending, profile link for the unlinked) onto the
+    clipboard, origin built client-side at CLICK time (the InviteLink rule).
+    The funnel's name lists are now UNCAPPED — a chase that names 12 of 28
+    isn't a chase — and the CARD does the 12-cap display. The pure copy
+    builders live in `discord-reach.ts`, split out because ChaseCopy is
+    `"use client"` and discord-roles imports prisma; discord-roles re-exports
+    them so server import paths didn't move.
+  * **`reachabilityNote(userId)`** rides the assign-standin toasts (BOTH
+    paths — captain and admin): being assigned is the most action-demanding
+    message the league sends, so if the announcement structurally can't reach
+    the standin (unlinked / not in server / rules-pending), the person
+    arranging cover hears it NOW, not on match night. Silent on unknown — a
+    Discord hiccup must not dress up as "this player is unreachable" — and it
+    never throws (a toast garnish can't be allowed to fail an assignment).
+  * **Re-linking a DIFFERENT Discord account strips the ping role from the
+    replaced one** (was a KNOWN GAP): `linkDiscordAccount` returns
+    `previousDiscordId`, and the callback's injected `stripPingRole` dep
+    fires best-effort AFTER the link commits — a failed strip never costs
+    the link. Same-account re-links don't strip.
   COVERAGE LIMIT (stated, not hidden): the three-state /me card, the
   dashboard join nag and the note-resolution are server-rendered JSX with no
   automated render test (no jsdom; e2e has no bot env) — the lib layer under
@@ -1614,10 +1647,11 @@ reached a player who wasn't already looking at it.
   getting pinged AND the toggle that turns it off renders only inside the
   `discordId` branch, so they'd just thrown away their own off switch — exactly
   the un-opt-out-able ping the design refuses to ship. `failed`/`forbidden`
-  says so in the toast rather than claiming success. KNOWN GAP: re-linking a
-  DIFFERENT account leaves the role on the old one (rare, and deliberate — the
-  fix needs `linkDiscordAccount` to return the previous id plus another
-  injected dep in the callback).
+  says so in the toast rather than claiming success. The re-linking half of
+  this (a DIFFERENT account replacing the linked one) is closed the same way:
+  `linkDiscordAccount` returns the previous id and the callback's injected
+  `stripPingRole` dep takes the role off it, best-effort after the link
+  commits (see the guild-membership entry).
 
 ## Live inhouse queue board (done)
 

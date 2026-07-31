@@ -96,6 +96,7 @@ import {
 import { adminNextStep } from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
 import { DangerSubmit } from "@/components/danger-submit";
+import { ChaseCopy } from "@/components/chase-copy";
 import { cn } from "@/lib/utils";
 import { maskWebhookUrl } from "@/lib/discord";
 import {
@@ -2937,6 +2938,14 @@ function DiscordReachLine({
   // more notification machinery — so say so rather than just showing a number.
   const thin = pct < 50;
   const g = reach.linked > 0 ? reach.guild : null;
+  // The funnel's lists are uncapped (the chase message names everyone); the
+  // CARD caps at 12 so an unlinked league isn't a wall of names.
+  const capped = (names: string[]) =>
+    names.slice(0, 12).join(", ") +
+    (names.length > 12 ? ` +${names.length - 12} more` : "");
+  const anyoneToChase =
+    reach.registered - reach.linked > 0 ||
+    (g !== null && (g.missing > 0 || g.pending > 0));
   return (
     <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2">
       <p className="text-sm">
@@ -2953,10 +2962,7 @@ function DiscordReachLine({
       </p>
       {reach.unlinkedNames.length > 0 ? (
         <p className="mt-1 text-xs text-muted">
-          Not linked: {reach.unlinkedNames.join(", ")}
-          {reach.registered - reach.linked > reach.unlinkedNames.length
-            ? ` +${reach.registered - reach.linked - reach.unlinkedNames.length} more`
-            : ""}
+          Not linked: {capped(reach.unlinkedNames)}
         </p>
       ) : null}
       {g ? (
@@ -2985,21 +2991,14 @@ function DiscordReachLine({
           ) : null}
           {g.missing > 0 ? (
             <p className="mt-1 text-xs text-danger">
-              Linked but NOT in the server:{" "}
-              {g.missingNames.join(", ")}
-              {g.missing > g.missingNames.length
-                ? ` +${g.missing - g.missingNames.length} more`
-                : ""}{" "}
+              Linked but NOT in the server: {capped(g.missingNames)}{" "}
               — they look reachable everywhere the ✓ renders, and aren&apos;t.
             </p>
           ) : null}
           {g.pending > 0 ? (
             <p className="mt-1 text-xs text-muted">
               In the server but haven&apos;t accepted its rules (unpingable
-              until they do): {g.pendingNames.join(", ")}
-              {g.pending > g.pendingNames.length
-                ? ` +${g.pending - g.pendingNames.length} more`
-                : ""}
+              until they do): {capped(g.pendingNames)}
             </p>
           ) : null}
           {g.unknown > 0 ? (
@@ -3017,6 +3016,19 @@ function DiscordReachLine({
             </p>
           ) : null}
         </>
+      ) : null}
+      {anyoneToChase ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <ChaseCopy reach={reach} />
+          <span className="text-xs text-muted">
+            {/* Honest about the reach: a channel post lands with the linked
+                members — the not-in-server names WON'T see it, so it asks
+                teammates to relay and gives the admin the list to DM. */}
+            Builds the lists above into one Discord post. Players not in the
+            server won&apos;t see it — DM them the invite, or let teammates
+            relay it.
+          </span>
+        </div>
       ) : null}
     </div>
   );

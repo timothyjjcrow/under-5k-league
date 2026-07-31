@@ -1,6 +1,7 @@
 import { prisma } from "./prisma";
 import { REGISTRATION_STATUS } from "./constants";
 import { getInhousePingRoleId } from "./discord";
+import type { DiscordReachFunnel } from "./discord-reach";
 
 // Self-serve opt-in to the inhouse ping role.
 //
@@ -707,6 +708,15 @@ export async function getDiscordReach(seasonId: string | null): Promise<{
   };
 }
 
+// The funnel's shape + its pure copy builders live in discord-reach.ts (a
+// "use client" component needs them, and this module imports prisma).
+// Re-exported so existing server-side import paths keep working.
+export {
+  discordChaseMessage,
+  discordReachWarning,
+  type DiscordReachFunnel,
+} from "./discord-reach";
+
 /**
  * getDiscordReach plus the step it cannot see: of the linked, who is actually
  * IN the server? Linking proves ownership of a handle; only membership makes
@@ -720,29 +730,6 @@ export async function getDiscordReach(seasonId: string | null): Promise<{
  * contract is "no Discord calls, cannot fail" and several callers rely on it
  * being free.
  */
-export type DiscordReachFunnel = {
-  registered: number;
-  linked: number;
-  unlinkedNames: string[];
-  guild: {
-    inServer: number;
-    /** In the server but behind Membership Screening — unpingable until they
-     *  accept the rules. */
-    pending: number;
-    pendingNames: string[];
-    /** Linked but definitively NOT in the server. */
-    missing: number;
-    missingNames: string[];
-    /** Linked players we couldn't get an answer for — an outage or rate
-     *  limit, but ALSO a bot that can't see the server at all (kicked, wrong
-     *  guild id, reset token), which answers this way FOREVER. Reported as
-     *  its own number, never lumped into missing; getPingHealth (rendered on
-     *  the same admin card, and it runs without a ping role) is what names
-     *  which cause. */
-    unknown: number;
-  } | null;
-};
-
 export async function getDiscordReachFunnel(
   seasonId: string | null,
 ): Promise<DiscordReachFunnel> {
@@ -756,13 +743,15 @@ export async function getDiscordReachFunnel(
   const linkedUsers = regs
     .filter((r) => !!r.user.discordId)
     .map((r) => ({ name: r.user.name, discordId: r.user.discordId as string }));
+  // Name lists are UNCAPPED here — the chase message has to name everyone,
+  // and a display cap is the card's concern, not the data's. (getDiscordReach
+  // above keeps its 12-cap; its consumers only ever render.)
   const base = {
     registered: regs.length,
     linked: linkedUsers.length,
     unlinkedNames: regs
       .filter((r) => !r.user.discordId)
-      .map((r) => r.user.name)
-      .slice(0, 12),
+      .map((r) => r.user.name),
   };
   const cfg = getGuildConfig();
   if (!cfg) return { ...base, guild: null };
@@ -795,62 +784,53 @@ export async function getDiscordReachFunnel(
     guild: {
       inServer,
       pending: pendingNames.length,
-      pendingNames: pendingNames.slice(0, 12),
+      pendingNames,
       missing: missingNames.length,
-      missingNames: missingNames.slice(0, 12),
+      missingNames,
       unknown,
     },
   };
 }
 
-/** "A, B, C +2 more" — the cap keeps a confirm dialog a dialog. */
-function nameRun(names: string[], total: number): string {
-  const shown = names.slice(0, 6);
-  return shown.join(", ") + (total > shown.length ? ` +${total - shown.length} more` : "");
+/**
+ * The "will the announcement actually reach this player?" note, appended to
+ * the toast of actions that create an obligation for someone — a standin
+ * assignment is the most action-demanding message the league sends, and if
+ * the standin can't hear it, the CAPTAIN who arranged the cover is the one
+ * who needs to know NOW, not on match night. Empty string when the player is
+ * reachable — or when we simply can't tell (a Discord hiccup must not dress
+ * itself up as "this player is unreachable"). Never throws: a toast garnish
+ * must not be able to fail the assignment it rides on.
+ */
+export async function reachabilityNote(userId: string): Promise<string> {
+  try {
+    const u = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, discordId: true },
+    });
+    if (!u) return "";
+    if (!u.discordId) {
+      return ` Heads up: ${u.name} hasn't linked Discord, so the announcement won't notify them — contact them directly.`;
+    }
+    const cfg = getGuildConfig();
+    if (!cfg) return "";
+    // Deadline-raced: the assignment is already committed, and behind a
+    // contested rate gate the lookup's worst case (gate wait + timeout +
+    // retry) is ~13s — a toast garnish must not hold the captain's success
+    // message hostage that long. Timeout = unknown = silence, as always.
+    const membership = await Promise.race([
+      memoGuildMembership(u.discordId, cfg),
+      new Promise<null>((r) => setTimeout(() => r(null), 2_500)),
+    ]);
+    if (membership === "not-member") {
+      return ` Heads up: ${u.name} isn't in the league's Discord server, so the ping can't reach them — contact them directly.`;
+    }
+    if (membership === "pending") {
+      return ` Heads up: ${u.name} hasn't accepted the Discord server's rules yet, so the ping can't reach them.`;
+    }
+    return "";
+  } catch {
+    return "";
+  }
 }
 
-/**
- * The reachability line appended to the Start-draft confirm. House rule: a
- * destructive confirm states the real numbers BEFORE the click — and this is
- * the last moment chasing a join is cheap, because after the draft these
- * players are on rosters that need to schedule with them.
- *
- * Missing and pending players are NAMED (they're the actionable, deceptive
- * cohort — each believes they're done); never-linked players are a count only,
- * since their names are already on the Discord card and a confirm has to stay
- * readable. `unknown` players appear as a caveat, not as missing. Empty string
- * when there is nothing to warn about, so the confirm is byte-identical to
- * what shipped before this existed.
- */
-export function discordReachWarning(reach: DiscordReachFunnel): string {
-  const parts: string[] = [];
-  if (reach.guild) {
-    const g = reach.guild;
-    if (g.missing > 0) {
-      parts.push(
-        `${g.missing} ${g.missing === 1 ? "is" : "are"} not in the Discord server (${nameRun(g.missingNames, g.missing)})`,
-      );
-    }
-    if (g.pending > 0) {
-      parts.push(
-        `${g.pending} ${g.pending === 1 ? "hasn't" : "haven't"} accepted the server rules (${nameRun(g.pendingNames, g.pending)})`,
-      );
-    }
-    if (g.unknown > 0) {
-      // Never claim the cause: this reads the same for a Discord blip and for
-      // a bot that can't see the server at all. The card is where the
-      // checklist that CAN tell them apart lives.
-      parts.push(
-        `${g.unknown} couldn't be checked (the Discord notifications card has the diagnosis)`,
-      );
-    }
-  }
-  const unlinked = reach.registered - reach.linked;
-  if (unlinked > 0) {
-    parts.push(
-      `${unlinked} never linked Discord at all`,
-    );
-  }
-  if (parts.length === 0) return "";
-  return ` Reachability: of ${reach.registered} signed-up players, ${parts.join("; ")} — captains may not be able to reach them for scheduling.`;
-}

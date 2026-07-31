@@ -15,6 +15,7 @@ import {
   removeStandinGuarded,
 } from "@/lib/standin-service";
 import { sendDiscordMessage } from "@/lib/discord";
+import { reachabilityNote } from "@/lib/discord-roles";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
@@ -47,7 +48,13 @@ export async function captainAssignStandin(
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
   refresh();
-  return { message: res.message };
+  // If the announcement structurally can't reach the standin (unlinked, not
+  // in the server, stuck behind the rules screen), the captain arranging the
+  // cover finds out NOW, not on match night. "" when reachable or unknowable.
+  return {
+    message:
+      res.message + (await reachabilityNote(str(formData, "standinUserId"))),
+  };
 }
 
 /** A captain removes a standin assignment from their own team. */

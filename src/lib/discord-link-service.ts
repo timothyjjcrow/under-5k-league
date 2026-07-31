@@ -7,15 +7,35 @@ import {
   discordProfileFromMe,
   exchangeDiscordCode,
   fetchDiscordIdentity,
+  oauthLandingPath,
   safeEqual,
   unpackOauthCookie,
   type DiscordProfile,
 } from "./discord-oauth";
-import { getGuildConfig, joinGuild, type GuildJoin } from "./discord-roles";
+import {
+  getGuildConfig,
+  getRoleConfig,
+  joinGuild,
+  primeMembershipMemo,
+  setPingRole,
+  type GuildJoin,
+} from "./discord-roles";
 
 type Db = Pick<PrismaClient, "user">;
 
-export type LinkResult = { ok: true } | { ok: false; error: "taken" };
+export type LinkResult =
+  | {
+      ok: true;
+      /**
+       * The discordId this link REPLACED, when it differs from the new one —
+       * the callback strips the ping role from it. Leaving the role behind
+       * re-creates the exact failure unlinkDiscord refuses to ship: the OLD
+       * account keeps getting pinged, and the off switch renders only for the
+       * account currently linked.
+       */
+      previousDiscordId: string | null;
+    }
+  | { ok: false; error: "taken" };
 
 /**
  * Persist a proven Discord identity onto a user. The @unique on discordId is
@@ -28,17 +48,34 @@ export async function linkDiscordAccount(
   userId: string,
   profile: DiscordProfile,
 ): Promise<LinkResult> {
-  const holder = await db.user.findUnique({
-    where: { discordId: profile.discordId },
-    select: { id: true },
-  });
+  const [holder, self] = await Promise.all([
+    db.user.findUnique({
+      where: { discordId: profile.discordId },
+      select: { id: true },
+    }),
+    db.user.findUnique({
+      where: { id: userId },
+      select: { discordId: true },
+    }),
+  ]);
   if (holder && holder.id !== userId) return { ok: false, error: "taken" };
   try {
     await db.user.update({
       where: { id: userId },
       data: { discordId: profile.discordId, discordName: profile.discordName },
     });
-    return { ok: true };
+    // KNOWN LIMIT: `prior` is a pre-update read, so two of the SAME user's
+    // callbacks racing with different new accounts can each miss the other's
+    // id and leave one replaced account holding the ping role. Accepted: the
+    // window is one user double-completing OAuth simultaneously, the damage
+    // is a stale role the unlink/opt-out paths already recover, and closing
+    // it would put a transaction on the OAuth path for a best-effort cleanup.
+    const prior = self?.discordId ?? null;
+    return {
+      ok: true,
+      previousDiscordId:
+        prior && prior !== profile.discordId ? prior : null,
+    };
   } catch (e) {
     // P2002 = the unique race: someone else linked this Discord account
     // between our pre-check and the write.
@@ -89,6 +126,13 @@ export type CallbackDeps = {
     discordId: string,
     accessToken: string,
   ) => Promise<GuildJoin | null>;
+  /**
+   * Take the ping role off a discordId this link just REPLACED (re-linking a
+   * different account). Best-effort by contract: the link is already
+   * committed when this runs, and stripping a role from an account the user
+   * abandoned must never cost them the link.
+   */
+  stripPingRole: (discordId: string) => Promise<void>;
 };
 
 const DEFAULT_DEPS: CallbackDeps = {
@@ -98,6 +142,11 @@ const DEFAULT_DEPS: CallbackDeps = {
     const cfg = getGuildConfig();
     if (!cfg) return null;
     return joinGuild(discordId, accessToken, cfg);
+  },
+  stripPingRole: async (discordId) => {
+    const cfg = await getRoleConfig();
+    if (!cfg) return; // no ping role configured — nothing to strip
+    await setPingRole(discordId, false, cfg);
   },
 };
 
@@ -156,15 +205,35 @@ export async function handleDiscordCallback(
   if (!linked.ok) return { redirect: "/me?discord=taken" };
 
   // The link is committed. Everything past here is a bonus that must not be
-  // able to undo it — hence the swallow: a bot outage, a missing permission or
-  // a mismatched application costs the player the auto-join, never the link.
+  // able to undo it — hence the swallows: a bot outage, a missing permission
+  // or a mismatched application costs the player the auto-join, never the
+  // link; and a failed strip of the OLD account's ping role costs nothing
+  // visible at all (the next unlink/opt-out attempt can retry it).
+  if (linked.previousDiscordId) {
+    try {
+      await deps.stripPingRole(linked.previousDiscordId);
+    } catch {
+      /* best-effort by contract */
+    }
+  }
   let join: GuildJoin | null = null;
   try {
     join = await deps.joinGuild(profile.discordId, token);
   } catch {
     join = "failed";
   }
-  return { redirect: `/me?discord=${join ? JOIN_CODES[join] : "linked"}` };
+  // The join we just performed is the freshest membership answer there is —
+  // prime the memo with it, or a success bound for the dashboard re-renders
+  // the memoised "not-member" join nag for up to a recheck-TTL right after
+  // the player joined, which reads as the click having done nothing.
+  if (join === "joined" || join === "already") {
+    primeMembershipMemo(profile.discordId, "member");
+  } else if (join === "joined-pending") {
+    primeMembershipMemo(profile.discordId, "pending");
+  }
+  return {
+    redirect: oauthLandingPath(join ? JOIN_CODES[join] : "linked", packed.next),
+  };
 }
 
 // Re-exported so the itest can build valid payload shapes the same way the

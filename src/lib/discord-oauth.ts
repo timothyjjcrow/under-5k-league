@@ -16,6 +16,7 @@
 // never rendered to the client and never logged.
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { safeReturnPath } from "./return-path";
 
 const AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
 const TOKEN_URL = "https://discord.com/api/v10/oauth2/token";
@@ -37,19 +38,59 @@ export function codeChallengeS256(verifier: string): string {
   return createHash("sha256").update(verifier).digest("base64url");
 }
 
-/** Pack state + verifier into the one-shot cookie value. */
-export function packOauthCookie(state: string, verifier: string): string {
-  return `${state}.${verifier}`;
+/**
+ * Pack state + verifier (+ an optional validated return path) into the
+ * one-shot cookie value. The path rides base64url so it can never smuggle a
+ * `.` into the format, and it is validated at BOTH ends: here (never pack
+ * garbage) and again at unpack (the cookie is client-held bytes — a tampered
+ * value must degrade to "no return path", not become a redirect target).
+ * Linking is a full-page round-trip that used to always land on /me — which
+ * was wrong for everyone who clicked from the dashboard join nag.
+ */
+export function packOauthCookie(
+  state: string,
+  verifier: string,
+  next?: string | null,
+): string {
+  const safe = safeReturnPath(next);
+  if (!safe) return `${state}.${verifier}`;
+  return `${state}.${verifier}.${Buffer.from(safe).toString("base64url")}`;
 }
 
-/** Unpack the cookie; null on anything malformed. Pure — unit-tested. */
+/** Unpack the cookie; null on anything malformed. A bad THIRD part only
+ *  drops the return path — the state/verifier halves still work, so a stale
+ *  two-part cookie from before this format keeps round-tripping. Pure —
+ *  unit-tested. */
 export function unpackOauthCookie(
   value: string | null | undefined,
-): { state: string; verifier: string } | null {
+): { state: string; verifier: string; next: string | null } | null {
   if (!value) return null;
   const parts = value.split(".");
-  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
-  return { state: parts[0], verifier: parts[1] };
+  if (parts.length < 2 || parts.length > 3 || !parts[0] || !parts[1]) {
+    return null;
+  }
+  let next: string | null = null;
+  if (parts.length === 3 && parts[2]) {
+    try {
+      next = safeReturnPath(Buffer.from(parts[2], "base64url").toString("utf8"));
+    } catch {
+      next = null;
+    }
+  }
+  return { state: parts[0], verifier: parts[1], next };
+}
+
+/**
+ * Where the callback lands. Only a FULL success ("joined" / "linked") honors
+ * the return path — every other outcome carries a ?discord= code that only
+ * /me knows how to render (and scrub), so sending it anywhere else would
+ * strand an unexplained query param on a page with no note for it. A success
+ * bound for /me anyway keeps its code, so the profile page still confirms.
+ */
+export function oauthLandingPath(code: string, next: string | null): string {
+  const success = code === "joined" || code === "linked";
+  if (success && next && next !== "/me") return next;
+  return `/me?discord=${code}`;
 }
 
 /** Constant-time string compare (length leak is fine — states are fixed-size). */

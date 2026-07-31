@@ -13,6 +13,16 @@ import { Card, CardBody, DiscordButton, buttonClasses } from "@/components/ui";
 // be dismissed permanently is a nag that stops working, and one that outlives
 // the thing it asks for is worse).
 
+/** The OAuth kickoff href. `next` is where a fully successful link should
+ *  land — the flow is a full-page round-trip that used to always dump the
+ *  player on /me, which was wrong for everyone who clicked from the
+ *  dashboard. Unset keeps the /me landing (and its ?discord= note). */
+function linkHref(next?: string): string {
+  return next
+    ? `/api/auth/discord?next=${encodeURIComponent(next)}`
+    : "/api/auth/discord";
+}
+
 /**
  * Presentational, server-safe. `autoJoins` is the difference between the two
  * configurations the league can be in: with a bot token + guild id the OAuth
@@ -23,9 +33,11 @@ import { Card, CardBody, DiscordButton, buttonClasses } from "@/components/ui";
 export function DiscordSetupCard({
   linkAvailable,
   autoJoins,
+  next,
 }: {
   linkAvailable: boolean;
   autoJoins: boolean;
+  next?: string;
 }) {
   // Nothing configured at all: the invite still works, so still worth asking.
   const oneClick = linkAvailable && autoJoins;
@@ -54,10 +66,7 @@ export function DiscordSetupCard({
 
         <div className="flex flex-wrap items-center gap-2">
           {oneClick ? (
-            <a
-              href="/api/auth/discord"
-              className={buttonClasses("primary", "md")}
-            >
+            <a href={linkHref(next)} className={buttonClasses("primary", "md")}>
               Link Discord &amp; join the server
             </a>
           ) : (
@@ -65,7 +74,7 @@ export function DiscordSetupCard({
               <DiscordButton label="1. Join the server" />
               {linkAvailable ? (
                 <a
-                  href="/api/auth/discord"
+                  href={linkHref(next)}
                   className={buttonClasses("primary", "md")}
                 >
                   2. Link your account
@@ -102,9 +111,11 @@ export function DiscordSetupCard({
 export function DiscordJoinCard({
   membership,
   linkAvailable,
+  next,
 }: {
   membership: "not-member" | "pending";
   linkAvailable: boolean;
+  next?: string;
 }) {
   const pending = membership === "pending";
   return (
@@ -136,7 +147,7 @@ export function DiscordJoinCard({
                the server" on one page is the one-control-one-name defect. */
             <>
               <a
-                href="/api/auth/discord"
+                href={linkHref(next)}
                 className={buttonClasses("primary", "md")}
               >
                 Join the server
@@ -194,9 +205,15 @@ export async function DiscordSetupPrompt({
     process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
   );
   const guildCfg = getGuildConfig();
+  // next="/": these instances live on the dashboard, and a successful link
+  // should put the player back where they clicked, not on /me.
   if (!user?.discordId) {
     return (
-      <DiscordSetupCard linkAvailable={linkAvailable} autoJoins={!!guildCfg} />
+      <DiscordSetupCard
+        linkAvailable={linkAvailable}
+        autoJoins={!!guildCfg}
+        next="/"
+      />
     );
   }
   if (!guildCfg) return null; // membership unknowable — nothing to ask
@@ -204,6 +221,10 @@ export async function DiscordSetupPrompt({
   const membership = await memoGuildMembership(user.discordId, guildCfg);
   if (membership !== "not-member" && membership !== "pending") return null;
   return (
-    <DiscordJoinCard membership={membership} linkAvailable={linkAvailable} />
+    <DiscordJoinCard
+      membership={membership}
+      linkAvailable={linkAvailable}
+      next="/"
+    />
   );
 }

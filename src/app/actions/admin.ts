@@ -76,6 +76,7 @@ import {
   getInhouseAlertWebhookUrl,
   sendInhouseDiscordMessage,
 } from "@/lib/discord";
+import { reachabilityNote } from "@/lib/discord-roles";
 import { mentionsOf } from "@/lib/discord-mentions";
 import { logAdminAction } from "@/lib/admin-log";
 import {
@@ -1975,7 +1976,13 @@ export async function assignStandin(
   // The standin must HEAR about their game night — best-effort, never blocks.
   await sendDiscordMessage(res.announcement, res.mentions);
   refresh();
-  return { message: res.message };
+  // If the announcement structurally can't reach them (unlinked, not in the
+  // server, stuck behind the rules screen), the person arranging the cover
+  // finds out NOW, not on match night. "" when reachable or unknowable.
+  return {
+    message:
+      res.message + (await reachabilityNote(str(formData, "standinUserId"))),
+  };
 }
 
 /** Remove a standin assignment. */
