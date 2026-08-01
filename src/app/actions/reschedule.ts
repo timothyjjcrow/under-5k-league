@@ -13,6 +13,7 @@ import {
   respondReschedule as respondInService,
 } from "@/lib/reschedule-service";
 import {
+  rescheduleDeclinedMessage,
   rescheduleMessage,
   rescheduleProposedMessage,
   sendDiscordMessage,
@@ -89,9 +90,9 @@ export async function respondReschedule(
   }
   const accept = str(formData, "response") === "accept";
 
-  let accepted;
+  let outcome;
   try {
-    accepted = await respondInService(
+    outcome = await respondInService(
       user.id,
       str(formData, "requestId"),
       accept,
@@ -100,22 +101,39 @@ export async function respondReschedule(
     return { error: e instanceof Error ? e.message : "Couldn't respond" };
   }
 
-  if (accepted) {
+  if (outcome.accepted) {
     await sendDiscordMessage(
       rescheduleMessage({
-        homeName: accepted.homeName,
-        awayName: accepted.awayName,
-        week: accepted.week,
-        isPlayoff: accepted.isPlayoff,
-        whenMs: accepted.newTime.getTime(),
-        clearedRsvps: accepted.clearedRsvps,
+        homeName: outcome.homeName,
+        awayName: outcome.awayName,
+        week: outcome.week,
+        isPlayoff: outcome.isPlayoff,
+        whenMs: outcome.newTime.getTime(),
+        clearedRsvps: outcome.clearedRsvps,
       }),
       // The proposer asked a question and has been waiting for the answer.
-      await mentionUsers([accepted.notifyUserId]),
+      await mentionUsers([outcome.notifyUserId]),
+    );
+  } else {
+    // A DECLINE is the answer to a question this channel already announced.
+    // It used to send nothing at all: the service returned null and the
+    // `if (accepted)` above skipped every send, so the proposer waited on an
+    // answer that had already been given. Same audience as the acceptance —
+    // the proposer alone; nobody else can act on it.
+    await sendDiscordMessage(
+      rescheduleDeclinedMessage({
+        homeName: outcome.homeName,
+        awayName: outcome.awayName,
+        week: outcome.week,
+        isPlayoff: outcome.isPlayoff,
+        declinerName: user.name,
+        whenMs: outcome.proposedTime.getTime(),
+      }),
+      await mentionUsers([outcome.notifyUserId]),
     );
   }
   refresh();
-  return accepted
+  return outcome.accepted
     ? {
         ok: true,
         // Name a standin the move has just double-booked. The captain who
@@ -123,11 +141,14 @@ export async function respondReschedule(
         // person to hear it — and until now nothing anywhere said it.
         message:
           "Accepted — match retimed for both teams." +
-          (accepted.standinClashes.length
-            ? ` ⚠ Standin clash: ${accepted.standinClashes.join("; ")} — remove one of those assignments.`
+          (outcome.standinClashes.length
+            ? ` ⚠ Standin clash: ${outcome.standinClashes.join("; ")} — remove one of those assignments.`
             : ""),
       }
-    : { ok: true, message: "Declined — the current time stands." };
+    : {
+        ok: true,
+        message: "Declined — the current time stands, and the proposer was told.",
+      };
 }
 
 export async function cancelReschedule(

@@ -15,8 +15,13 @@ import {
 } from "./factories";
 
 // The champion ping is a Discord send — stub the sender so it can be counted.
+// getWebhookUrl must be stubbed TOO: announceChampionOnce refuses to burn its
+// once-only marker when no webhook is configured (the announceSeriesResultOnce
+// rule), and the test DB has no webhook Setting — so without this every
+// champion assertion in this file would silently count zero sends.
 vi.mock("@/lib/discord", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/discord")>()),
+  getWebhookUrl: vi.fn(async () => "https://discord.com/api/webhooks/1/test"),
   sendDiscordMessage: vi.fn(async () => true),
 }));
 import { sendDiscordMessage } from "@/lib/discord";

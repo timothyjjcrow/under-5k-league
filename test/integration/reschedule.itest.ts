@@ -93,10 +93,11 @@ describe("reschedule service (integration)", () => {
       pending!.id,
       true,
     );
-    expect(accepted).not.toBeNull();
-    expect(accepted!.newTime.getTime()).toBe(NIGHT.getTime());
+    expect(accepted.accepted).toBe(true);
+    if (!accepted.accepted) throw new Error("expected an acceptance");
+    expect(accepted.newTime.getTime()).toBe(NIGHT.getTime());
     // The answer goes back to whoever asked the question.
-    expect(accepted!.notifyUserId).toBe(home.captainId);
+    expect(accepted.notifyUserId).toBe(home.captainId);
 
     const updated = await prisma.match.findUnique({
       where: { id: match.id },
@@ -126,7 +127,13 @@ describe("reschedule service (integration)", () => {
     const pending = await pendingFor(match.id);
 
     const result = await respondReschedule(away.captainId, pending!.id, false);
-    expect(result).toBeNull();
+    // A decline now carries announcement data too — it used to return null,
+    // which is exactly how the action skipped every send and left the
+    // proposer waiting on an answer that had already been given.
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected a decline");
+    expect(result.notifyUserId).toBe(home.captainId);
+    expect(result.proposedTime.getTime()).toBe(NIGHT.getTime());
     const after = await prisma.match.findUnique({ where: { id: match.id } });
     expect(after?.scheduledAt?.getTime() ?? null).toBe(
       before?.getTime() ?? null,
@@ -335,7 +342,8 @@ describe("accepting a reschedule reports what it invalidated", () => {
 
     const accepted = await respondReschedule(away.captainId, pending!.id, true);
 
-    expect(accepted!.clearedRsvps).toBe(3);
+    if (!accepted.accepted) throw new Error("expected an acceptance");
+    expect(accepted.clearedRsvps).toBe(3);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
     ).toBe(0);
@@ -346,7 +354,8 @@ describe("accepting a reschedule reports what it invalidated", () => {
     await proposeReschedule(home.captainId, match.id, NIGHT);
     const pending = await pendingFor(match.id);
     const accepted = await respondReschedule(away.captainId, pending!.id, true);
-    expect(accepted!.clearedRsvps).toBe(0);
+    if (!accepted.accepted) throw new Error("expected an acceptance");
+    expect(accepted.clearedRsvps).toBe(0);
   });
 
   // The week's reminder already went out quoting the OLD kickoff, and a Discord
@@ -431,5 +440,29 @@ describe("reschedule — archived seasons are read-only for captains", () => {
         })
       ).status,
     ).toBe("DECLINED");
+  });
+});
+
+describe("reschedule — a decline reaches the person who asked", () => {
+  // The proposal is announced to the channel and mentions the opposing
+  // captain; the ACCEPT is announced back to the proposer. The DECLINE sent
+  // nothing at all, so the proposer waited on an answer that had already been
+  // given, and the question hung unanswered in the channel forever.
+  it("carries announcement data addressed to the proposer", async () => {
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+
+    const outcome = await respondReschedule(away.captainId, pending!.id, false);
+
+    expect(outcome.accepted).toBe(false);
+    if (outcome.accepted) throw new Error("expected a decline");
+    // Addressed to exactly one person — nobody else can act on it.
+    expect(outcome.notifyUserId).toBe(home.captainId);
+    expect(outcome.homeName).toBe("Home");
+    expect(outcome.awayName).toBe("Away");
+    expect(outcome.proposedTime.getTime()).toBe(NIGHT.getTime());
+    // …and the request really is closed.
+    expect(await pendingFor(match.id)).toBeNull();
   });
 });

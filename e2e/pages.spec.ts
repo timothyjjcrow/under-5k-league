@@ -39,6 +39,12 @@ test("pool filters survive a reload and a shared link", async ({ page }) => {
 test("season history lists every season with the current one badged", async ({
   page,
 }) => {
+  // Same dev-server caveat as the mid suite's /admin check: this is the only
+  // visit to /seasons, so the navigation pays that route's first compile. It
+  // renders in <1s warm, but on a loaded CI runner the cold compile has blown
+  // the default budget and failed here — a timeout wearing an
+  // element-not-found costume.
+  test.slow();
   await page.goto("/seasons");
   await expect(
     page.getByRole("heading", { name: "Season history" }),

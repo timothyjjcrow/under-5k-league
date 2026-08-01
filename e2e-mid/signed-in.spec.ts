@@ -115,6 +115,14 @@ test("mobile schedule has no horizontal page overflow", async ({ page }) => {
 // few px wider than macOS's — a tripwire you can only reproduce in CI is one you
 // cannot act on.
 test("mobile admin panel has no horizontal page overflow", async ({ page }) => {
+  // SLOW because of the DEV SERVER, not the assertion: /admin is by far the
+  // heaviest route in the app, this is the suite's only visit to it, and the
+  // first visit is what compiles it. Alone the page loads in ~5s; as test 29
+  // of 30 on a warm-but-busy dev server the same navigation has repeatedly
+  // taken >30s and failed on `page.goto`, which reads as an overflow
+  // regression and is not one. Triple the budget rather than chase compile
+  // time — the thing under test is the LAYOUT below.
+  test.slow();
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/api/auth/dev?name=Overflow%20Admin&admin=1");

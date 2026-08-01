@@ -41,6 +41,29 @@ export type ProposedReschedule = {
   notifyUserId: string | null;
 };
 
+export type DeclinedReschedule = {
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  /** The time that was refused — named so a channel that has seen several
+   *  proposals go by can tell WHICH one this closes. */
+  proposedTime: Date;
+  /** The PROPOSER. They asked a question and have been waiting; a decline is
+   *  addressed to exactly one person, same as the proposal was. */
+  notifyUserId: string;
+};
+
+/**
+ * Discriminated so the action can send the right message without a null check
+ * that silently means "declined" — which is exactly how the decline went
+ * unannounced for as long as it did: `respondReschedule` returned null and the
+ * action's `if (accepted)` skipped every send.
+ */
+export type RescheduleOutcome =
+  | (AcceptedReschedule & { accepted: true })
+  | (DeclinedReschedule & { accepted: false });
+
 // Sanity bounds for a proposed time: a datetime-local typo (year 0002 from
 // typing "2", 20268 from a stray digit) or a past date would otherwise sail
 // straight into Match.scheduledAt on acceptance.
@@ -123,7 +146,7 @@ export async function respondReschedule(
   userId: string,
   requestId: string,
   accept: boolean,
-): Promise<AcceptedReschedule | null> {
+): Promise<RescheduleOutcome> {
   const request = await prisma.rescheduleRequest.findUnique({
     where: { id: requestId },
     include: { match: { include: { homeTeam: true, awayTeam: true } } },
@@ -148,7 +171,17 @@ export async function respondReschedule(
     });
     if (declined.count === 0)
       throw new Error("That proposal is no longer open");
-    return null;
+    return {
+      accepted: false,
+      homeName: match.homeTeam.name,
+      awayName: match.awayTeam.name,
+      week: match.week,
+      isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+      proposedTime: request.proposedTime,
+      // The proposer — asserted above to be the OTHER captain, since a
+      // responder equal to proposedById is refused.
+      notifyUserId: request.proposedById,
+    };
   }
 
   // Accepting RETIMES the match, so the archived-season rule bites here, not
@@ -220,6 +253,7 @@ export async function respondReschedule(
   // refused: the reschedule is the legitimate act.
   const standinClashes = await clashesAfterRetime(match.seasonId, [match.id]);
   return {
+    accepted: true,
     homeName: match.homeTeam.name,
     awayName: match.awayTeam.name,
     week: match.week,

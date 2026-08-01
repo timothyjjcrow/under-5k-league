@@ -452,6 +452,24 @@ export function rescheduleProposedMessage(m: {
   return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
 }
 
+/**
+ * The ANSWER to a proposal this channel already announced. Addressed to the
+ * proposer, who asked and has been waiting — never a broadcast, since nobody
+ * else can act on it. Without this the question hung in the channel forever
+ * and the proposer learned only by revisiting the match page.
+ */
+export function rescheduleDeclinedMessage(m: {
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  declinerName: string;
+  whenMs: number;
+}): string {
+  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.`;
+}
+
 /** Cap the ping list so one badly-organised team can't produce a wall of
  *  mentions; a captain chasing eleven people needs the match page, not a
  *  longer Discord line. */

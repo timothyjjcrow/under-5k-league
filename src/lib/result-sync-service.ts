@@ -26,11 +26,13 @@ import {
 } from "./inhouse-service";
 import { resolveUnsettledBets } from "./inhouse-bet-service";
 import {
+  CHAMPION_ANNOUNCED_PREFIX,
   claimThrottle,
   getSetting,
   RESULT_ANNOUNCED_PREFIX,
   SETTING_KEYS,
 } from "./settings";
+import { announceChampionOnce } from "./playoff-service";
 import { syncInhouseBoard } from "./inhouse-board-service";
 import { raceHook } from "./race-hook";
 
@@ -330,6 +332,10 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   ) {
     return;
   }
+  // Inside the same throttle claim — the champion marker is rarer than a
+  // series result but strictly more important, so it must not wait on the
+  // series queue draining first.
+  await retryFailedChampionAnnouncements();
   const failed = await prisma.setting.findMany({
     where: {
       key: { startsWith: RESULT_ANNOUNCED_PREFIX },
@@ -364,6 +370,26 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   }
   for (const m of matches) {
     await announceSeriesResultOnce(m);
+  }
+}
+
+/**
+ * The champion's half of the same sweep. Kept separate because the marker is
+ * keyed by SEASON, not match, and because announceChampionOnce does its own
+ * orphan cleanup (an un-crowned season drops the marker instead of retrying
+ * forever). Cheap: one indexed prefix scan, and in the overwhelmingly common
+ * case it matches nothing.
+ */
+async function retryFailedChampionAnnouncements(): Promise<void> {
+  const failed = await prisma.setting.findMany({
+    where: {
+      key: { startsWith: CHAMPION_ANNOUNCED_PREFIX },
+      value: { startsWith: ANNOUNCE_FAILED_PREFIX },
+    },
+    take: 2,
+  });
+  for (const f of failed) {
+    await announceChampionOnce(f.key.slice(CHAMPION_ANNOUNCED_PREFIX.length));
   }
 }
 

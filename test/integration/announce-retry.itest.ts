@@ -5,6 +5,8 @@ import { announceSeriesResultOnce } from "@/lib/match-import";
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 import { runResultSync } from "@/lib/result-sync-service";
+import { announceChampionOnce } from "@/lib/playoff-service";
+import { championAnnouncedKey } from "@/lib/settings";
 import { makeSeason, makeTeam, makeUser } from "./factories";
 
 // A Discord blip (timeout, 5xx, revoked webhook) must never permanently eat a
@@ -248,5 +250,88 @@ describe("the missing-team exit stamps failed: instead of burning the marker", (
       where: { key: "resultAnnounced:ghost-match-1" },
     });
     expect(marker.value.startsWith("failed:")).toBe(true);
+  });
+});
+
+describe("champion announcement retry", () => {
+  // The crowning has exactly ONE natural trigger, ever: advancePlayoffBracket
+  // early-returns unless the season is PLAYOFFS, and the crowning claim has
+  // just set it COMPLETE. So before the marker existed, one failed send ate
+  // the message of the season permanently — no path re-triggered it.
+  async function crownedSeason() {
+    const season = await makeSeason({ status: SEASON_STATUS.COMPLETE });
+    const champ = await makeTeam(season.id, "Winners", 0);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { championTeamId: champ.id },
+    });
+    return { season, champ };
+  }
+
+  it("stamps failed: on a dead webhook, then a later sweep announces it", async () => {
+    const { season } = await crownedSeason();
+    mockSend.mockResolvedValue(false);
+
+    expect(await announceChampionOnce(season.id)).toBe(false);
+    const marker = await prisma.setting.findUniqueOrThrow({
+      where: { key: championAnnouncedKey(season.id) },
+    });
+    expect(marker.value).toMatch(/^failed:/);
+
+    // Discord comes back; the sitewide sweep re-claims exactly this marker.
+    mockSend.mockReset();
+    mockSend.mockResolvedValue(true);
+    await runResultSync();
+
+    const sent = mockSend.mock.calls.map((c) => String(c[0]));
+    expect(sent.some((m) => m.includes("champions"))).toBe(true);
+    const after = await prisma.setting.findUniqueOrThrow({
+      where: { key: championAnnouncedKey(season.id) },
+    });
+    expect(after.value).not.toMatch(/^failed:/);
+  });
+
+  it("never announces twice once it has succeeded", async () => {
+    const { season } = await crownedSeason();
+    expect(await announceChampionOnce(season.id)).toBe(true);
+    mockSend.mockReset();
+    mockSend.mockResolvedValue(true);
+
+    expect(await announceChampionOnce(season.id)).toBe(false);
+    await runResultSync();
+
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("no webhook configured never burns the marker", async () => {
+    // The league that wires Discord up later must still get its champion.
+    const { season } = await crownedSeason();
+    mockHook.mockResolvedValue("");
+
+    expect(await announceChampionOnce(season.id)).toBe(false);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: championAnnouncedKey(season.id) },
+      }),
+    ).toBeNull();
+  });
+
+  it("drops the marker instead of retrying forever when the season was un-crowned", async () => {
+    // Reset playoffs un-crowns; a stale failed marker would otherwise occupy a
+    // sweep slot on every run — the orphan lesson from the series sweep.
+    const { season } = await crownedSeason();
+    mockSend.mockResolvedValue(false);
+    await announceChampionOnce(season.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { championTeamId: null, status: SEASON_STATUS.PLAYOFFS },
+    });
+
+    expect(await announceChampionOnce(season.id)).toBe(false);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: championAnnouncedKey(season.id) },
+      }),
+    ).toBeNull();
   });
 });

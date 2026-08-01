@@ -61,11 +61,38 @@ export const SETTING_KEYS = {
 // keep their local builders beside their one call site.
 // ---------------------------------------------------------------------------
 
+/**
+ * Stamped over a marker's value when its Discord send FAILED, so the retry
+ * sweep can re-claim exactly those and nothing else.
+ *
+ * It lives HERE, with the keys it qualifies, and not in match-import:
+ * playoff-service needs it for the champion marker, match-import already
+ * imports advancePlayoffBracket from playoff-service, and importing it back
+ * the other way makes a require cycle. That cycle is not a style problem — it
+ * left a partially-initialised module under Turbopack and HUNG the /admin RSC
+ * stream (an empty <main>, the navigation never finishing), which reads as a
+ * layout regression in the e2e tripwire and is nothing of the kind.
+ */
+export const ANNOUNCE_FAILED_PREFIX = "failed:";
+
 /** Exactly-once marker for a decided series' Discord announcement. */
 export const RESULT_ANNOUNCED_PREFIX = "resultAnnounced:";
 
 export function resultAnnouncedKey(matchId: string): string {
   return `${RESULT_ANNOUNCED_PREFIX}${matchId}`;
+}
+
+/**
+ * Exactly-once marker for the champion announcement. The crowning has exactly
+ * ONE natural trigger, ever — advancePlayoffBracket early-returns unless the
+ * season is PLAYOFFS and the crowning claim has just set it COMPLETE — so
+ * without a retryable marker a single failed send ate the message of the
+ * season permanently. Released by a bracket reset, which un-crowns.
+ */
+export const CHAMPION_ANNOUNCED_PREFIX = "championAnnounced:";
+
+export function championAnnouncedKey(seasonId: string): string {
+  return `${CHAMPION_ANNOUNCED_PREFIX}${seasonId}`;
 }
 
 /** Exactly-once marker for a week's match-night reminder. */

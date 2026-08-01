@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { createPlayoffBracket } from "@/lib/playoff-service";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
   assignStandinGuarded,
@@ -729,5 +730,68 @@ describe("clashesAfterRetime", () => {
   it("is a no-op for an empty match list", async () => {
     const { season } = await doubleBooked();
     expect(await clashesAfterRetime(season.id, [])).toEqual([]);
+  });
+});
+
+describe("bulk teardowns stand their standins down", () => {
+  // StandinAssignment cascades from Match, so a playoff RESET and a schedule
+  // REGENERATE both delete bookings wholesale. Every ordinary removal path
+  // sends standinRemovedMessage; these two dropped a live @-mentioned
+  // instruction to turn up for a fixture that no longer exists, in silence.
+  async function bookedStandin(seasonId: string, matchId: string, teamId: string) {
+    const standin = await makeUser("Doomed Cover");
+    await prisma.user.update({
+      where: { id: standin.id },
+      data: { discordId: "123123123123123123" },
+    });
+    await prisma.registration.create({
+      data: {
+        seasonId,
+        userId: standin.id,
+        type: "STANDIN",
+        status: "ACTIVE",
+        mmr: 2500,
+      },
+    });
+    await prisma.standinAssignment.create({
+      data: { matchId, teamId, standinUserId: standin.id, replacingUserId: null },
+    });
+    return standin;
+  }
+
+  it("a playoff reset tells the standins their match is gone", async () => {
+    const season = await makeSeason({ status: "PLAYOFFS", teamSize: 3 });
+    const a = await makeTeam(season.id, "Alpha", 0);
+    const b = await makeTeam(season.id, "Bravo", 1);
+    const final = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 5,
+        phase: "FINAL",
+        homeTeamId: a.id,
+        awayTeamId: b.id,
+        bracketSlot: "R0M0",
+        bestOf: 3,
+      },
+    });
+    const standin = await bookedStandin(season.id, final.id, a.id);
+
+    const { standDowns } = await createPlayoffBracket(season.id);
+
+    expect(standDowns).toHaveLength(1);
+    expect(standDowns[0]).toMatchObject({
+      standinName: standin.name,
+      discordId: "123123123123123123",
+      teamId: a.id,
+    });
+    // The service returns display data only; the ACTION supplies isPlayoff
+    // and does the sending, so a webhook failure can't touch the teardown.
+    expect(standDowns[0]).not.toHaveProperty("isPlayoff");
+    // …and the booking really is gone with its match.
+    expect(
+      await prisma.standinAssignment.count({
+        where: { standinUserId: standin.id },
+      }),
+    ).toBe(0);
   });
 });

@@ -691,3 +691,46 @@ describe("signFreeAgent — redundant empty-seat cover (the reverse of releasePl
     ).not.toBeNull();
   });
 });
+
+describe("releasePlayer — the person it happens to is told", () => {
+  it("@-mentions the released player, not just the channel", async () => {
+    // Release is the most personal roster event the league produces, and its
+    // subject was the one participant never notified: the announcement was a
+    // bare broadcast while the stand-down loop right below it (and both
+    // removeStandin paths, and signFreeAgent) all mention their subject. They
+    // found out when the "Your team" block vanished from /me.
+    const { season, team } = await setup();
+    const player = await makeUser("Released Player");
+    await prisma.user.update({
+      where: { id: player.id },
+      data: { discordId: "999000111222333444" },
+    });
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: player.id,
+        type: REGISTRATION_TYPE.PLAYER,
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    const member = await prisma.teamMember.create({
+      data: {
+        seasonId: season.id,
+        teamId: team.id,
+        userId: player.id,
+        price: 7,
+      },
+    });
+    mockSend.mockClear();
+
+    const res = await releasePlayer(null, fd({ memberId: member.id }));
+
+    expect(res).toHaveProperty("message");
+    const call = mockSend.mock.calls.find((c) =>
+      String(c[0]).includes("Released Player"),
+    );
+    expect(call, "the release announcement was sent").toBeTruthy();
+    expect(call![1]).toMatchObject({ users: ["999000111222333444"] });
+  });
+});

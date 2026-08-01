@@ -8,9 +8,13 @@ import {
   upcomingMatchNight,
 } from "./schedule";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
-import { championMessage, sendDiscordMessage } from "./discord";
+import { championMessage, getWebhookUrl, sendDiscordMessage } from "./discord";
 import { raceHook } from "./race-hook";
-import { playoffGamesArchiveKey } from "./settings";
+import {
+  ANNOUNCE_FAILED_PREFIX,
+  championAnnouncedKey,
+  playoffGamesArchiveKey,
+} from "./settings";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -40,7 +44,20 @@ function parseSlot(slot: string | null): { round: number; match: number } {
  * bracket and create the first round of playoff matches. Moves the season to
  * PLAYOFFS. Idempotent-ish: clears any prior bracket first.
  */
-export async function createPlayoffBracket(seasonId: string) {
+/** A cover booking the teardown just deleted — display-ready so the ACTION can
+ *  announce the stand-down without a second query. */
+export type StandDown = {
+  standinName: string;
+  discordId: string | null;
+  teamId: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+};
+
+export async function createPlayoffBracket(
+  seasonId: string,
+): Promise<{ standDowns: StandDown[] }> {
   const [season, teams, matches] = await Promise.all([
     prisma.season.findUnique({ where: { id: seasonId } }),
     prisma.team.findMany({ where: { seasonId } }),
@@ -131,13 +148,52 @@ export async function createPlayoffBracket(seasonId: string) {
     [...new Map(merged.map((g) => [g.dotaMatchId, g])).values()],
   );
 
+  let doomedCover: {
+    teamId: string;
+    standin: { name: string; discordId: string | null };
+    match: {
+      week: number;
+      homeTeam: { name: string };
+      awayTeam: { name: string };
+    };
+  }[] = [];
   try {
-    await prisma.$transaction([
+    const results = await prisma.$transaction([
+    // The cover this teardown is about to delete, read INSIDE the transaction:
+    // afterwards the rows are gone, and reading before it would miss a booking
+    // made in the gap. Each is a standin holding a live @-mentioned
+    // instruction to turn up for a playoff match that is about to stop
+    // existing. MUST stay element 0 — batch results come back positionally and
+    // the archive upsert below is a conditional spread.
+    prisma.standinAssignment.findMany({
+      where: {
+        match: {
+          seasonId,
+          phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+        },
+      },
+      select: {
+        teamId: true,
+        standin: { select: { name: true, discordId: true } },
+        match: {
+          select: {
+            week: true,
+            homeTeam: { select: { name: true } },
+            awayTeam: { select: { name: true } },
+          },
+        },
+      },
+    }),
     // Round markers are per-round exactly-once claims (see playoffRoundKey);
     // a reset must release them or the rebuilt bracket can never advance.
     prisma.setting.deleteMany({
       where: { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
     }),
+    // A reset UN-CROWNS the season (championTeamId: null + PLAYOFFS below), so
+    // release the champion marker too — without this the rebuilt bracket's
+    // champion would be announced to nobody, a NEW permanent silence created
+    // by the very change that removed the old one.
+    prisma.setting.deleteMany({ where: { key: championAnnouncedKey(seasonId) } }),
     // Written inside the SAME transaction as the delete, so the archive can
     // never claim games that are still live, nor be lost if the reset aborts.
     ...(doomedGames.length
@@ -182,11 +238,23 @@ export async function createPlayoffBracket(seasonId: string) {
     ],
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+    doomedCover = results[0] as typeof doomedCover;
   } catch (e) {
-    // Lost the serialization race — the other copy built the same bracket.
-    if ((e as { code?: string }).code === "P2034") return;
+    // Lost the serialization race — the other copy built the same bracket,
+    // and ITS caller owns the stand-downs.
+    if ((e as { code?: string }).code === "P2034") return { standDowns: [] };
     throw e;
   }
+  return {
+    standDowns: doomedCover.map((a) => ({
+      standinName: a.standin.name,
+      discordId: a.standin.discordId,
+      teamId: a.teamId,
+      homeName: a.match.homeTeam.name,
+      awayName: a.match.awayTeam.name,
+      week: a.match.week,
+    })),
+  };
 }
 
 /**
@@ -195,6 +263,67 @@ export async function createPlayoffBracket(seasonId: string) {
  * winners or — if that round was the final — crown the champion and complete
  * the season. Safe to call after every result; no-ops until a round finishes.
  */
+/**
+ * Crown the champion in Discord exactly once, RETRYABLY.
+ *
+ * Unlike a series result this has exactly one natural trigger, ever:
+ * advancePlayoffBracket early-returns unless the season is PLAYOFFS, and the
+ * crowning claim has just set it COMPLETE — so nothing ever calls the path
+ * again and a single failed send ate the message of the season permanently.
+ * Same marker/`failed:` contract as announceSeriesResultOnce, so
+ * retryFailedAnnouncements re-claims it.
+ */
+export async function announceChampionOnce(seasonId: string): Promise<boolean> {
+  // No webhook ⇒ never burn the once-only marker (the announceSeriesResultOnce
+  // rule: a league that wires Discord up later must still get its champion).
+  if (!(await getWebhookUrl())) return false;
+  const marker = championAnnouncedKey(seasonId);
+  try {
+    await prisma.setting.create({
+      data: { key: marker, value: new Date().toISOString() },
+    });
+  } catch (e) {
+    if ((e as { code?: string }).code !== "P2002") throw e;
+    // Only a FAILED marker may be re-claimed — otherwise a retry would
+    // re-announce a champion the channel already has.
+    const reclaimed = await prisma.setting.updateMany({
+      where: { key: marker, value: { startsWith: ANNOUNCE_FAILED_PREFIX } },
+      data: { value: new Date().toISOString() },
+    });
+    if (reclaimed.count === 0) return false;
+  }
+  const season = await prisma.season.findUnique({
+    where: { id: seasonId },
+    select: { name: true, status: true, championTeamId: true },
+  });
+  const champion = season?.championTeamId
+    ? await prisma.team.findUnique({
+        where: { id: season.championTeamId },
+        select: { name: true },
+      })
+    : null;
+  // Un-crowned since (Reset playoffs) or the season is gone: there is nothing
+  // to announce and never will be for THIS crowning. Drop the marker rather
+  // than stamping `failed:`, which would make the sweep retry it forever and
+  // starve real failures out of its take-window — the orphan lesson already
+  // learned in retryFailedAnnouncements.
+  if (!season || season.status !== SEASON_STATUS.COMPLETE || !champion) {
+    await prisma.setting.deleteMany({ where: { key: marker } });
+    return false;
+  }
+  const sent = await sendDiscordMessage(
+    championMessage(season.name, champion.name),
+  );
+  if (!sent) {
+    await prisma.setting.updateMany({
+      where: { key: marker },
+      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
+    });
+    return false;
+  }
+  return true;
+}
+
 export async function advancePlayoffBracket(seasonId: string) {
   const season = await prisma.season.findUnique({ where: { id: seasonId } });
   if (!season || season.status !== SEASON_STATUS.PLAYOFFS) return;
@@ -228,12 +357,9 @@ export async function advancePlayoffBracket(seasonId: string) {
       },
     });
     if (crowned.count === 0) return;
-    const champion = await prisma.team.findUnique({
-      where: { id: current[0].winnerTeamId as string },
-    });
-    if (champion) {
-      await sendDiscordMessage(championMessage(season.name, champion.name));
-    }
+    // Best-effort AND retryable: the `crowned` claim above is still the
+    // single-winner gate; the marker only adds a way back from a Discord blip.
+    await announceChampionOnce(seasonId);
     return;
   }
 

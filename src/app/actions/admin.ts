@@ -1374,6 +1374,14 @@ export async function generateSchedule(
   // deleteMany cascades away the games, check-ins and predictions the counts
   // exist to protect. Throwing rolls the delete back; a return would commit it.
   let cleared = { rsvps: 0, picks: 0, covers: 0, proposals: 0 };
+  let standDowns: {
+    standinName: string;
+    discordId: string | null;
+    teamId: string;
+    homeName: string;
+    awayName: string;
+    week: number;
+  }[] = [];
   await raceHook("admin.generateSchedule.beforeTx");
   try {
     await prisma.$transaction(async (tx) => {
@@ -1402,15 +1410,42 @@ export async function generateSchedule(
       });
       const ids = doomed.map((m) => m.id);
       if (ids.length > 0) {
-        const [rsvps, picks, covers, proposals] = await Promise.all([
+        const [rsvps, picks, coverRows, proposals] = await Promise.all([
           tx.matchAvailability.count({ where: { matchId: { in: ids } } }),
           tx.prediction.count({ where: { matchId: { in: ids } } }),
-          tx.standinAssignment.count({ where: { matchId: { in: ids } } }),
+          // The ROWS, not just a count: each is a standin holding a live
+          // @-mentioned instruction to turn up for a fixture that is about to
+          // stop existing. Every ordinary removal path stands them down; this
+          // one deleted the booking in silence. Read INSIDE the transaction —
+          // after the deleteMany below they are gone, and reading before it
+          // would miss a booking made in the gap.
+          tx.standinAssignment.findMany({
+            where: { matchId: { in: ids } },
+            select: {
+              teamId: true,
+              standin: { select: { name: true, discordId: true } },
+              match: {
+                select: {
+                  week: true,
+                  homeTeam: { select: { name: true } },
+                  awayTeam: { select: { name: true } },
+                },
+              },
+            },
+          }),
           tx.rescheduleRequest.count({
             where: { matchId: { in: ids }, status: "PENDING" },
           }),
         ]);
-        cleared = { rsvps, picks, covers, proposals };
+        cleared = { rsvps, picks, covers: coverRows.length, proposals };
+        standDowns = coverRows.map((a) => ({
+          standinName: a.standin.name,
+          discordId: a.standin.discordId,
+          teamId: a.teamId,
+          homeName: a.match.homeTeam.name,
+          awayName: a.match.awayTeam.name,
+          week: a.match.week,
+        }));
       }
       await tx.match.deleteMany({
         where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
@@ -1435,6 +1470,23 @@ export async function generateSchedule(
       };
     }
     throw e;
+  }
+  // Post-commit, best-effort, one per deleted booking — the same formatter and
+  // shape releasePlayer/signFreeAgent/removeStandin use, so a standin is never
+  // left holding an instruction for a fixture that no longer exists.
+  const scheduleTeamNames = new Map(teams.map((t) => [t.id, t.name]));
+  for (const a of standDowns) {
+    await sendDiscordMessage(
+      standinRemovedMessage({
+        standinName: a.standinName,
+        teamName: scheduleTeamNames.get(a.teamId) ?? "their team",
+        homeName: a.homeName,
+        awayName: a.awayName,
+        week: a.week,
+        isPlayoff: false,
+      }),
+      mentionsOf([a.discordId]),
+    );
   }
   await logAdminAction({
     action: "generateSchedule",
@@ -1502,8 +1554,11 @@ export async function startPlayoffs(
     return { error: "Generate and play the regular season first" };
   }
 
+  let standDowns: Awaited<
+    ReturnType<typeof createPlayoffBracket>
+  >["standDowns"] = [];
   try {
-    await createPlayoffBracket(season.id);
+    ({ standDowns } = await createPlayoffBracket(season.id));
   } catch (e) {
     return { error: (e as Error).message };
   }
@@ -1517,6 +1572,24 @@ export async function startPlayoffs(
     prisma.team.findMany({ where: { seasonId: season.id } }),
   ]);
   const name = new Map(teams.map((t) => [t.id, t.name]));
+  // A reset deletes the postseason's standin bookings with it (StandinAssignment
+  // cascades from Match). Every ordinary removal path stands the standin down;
+  // this one dropped their live @-mentioned instruction in silence. Post-commit
+  // and best-effort, before the pairings announcement so the correction lands
+  // ahead of the new fixtures.
+  for (const a of standDowns) {
+    await sendDiscordMessage(
+      standinRemovedMessage({
+        standinName: a.standinName,
+        teamName: name.get(a.teamId) ?? "their team",
+        homeName: a.homeName,
+        awayName: a.awayName,
+        week: a.week,
+        isPlayoff: true,
+      }),
+      mentionsOf([a.discordId]),
+    );
+  }
   await sendDiscordMessage(
     playoffsStartedMessage(
       season.name,
@@ -2117,6 +2190,14 @@ export async function releasePlayer(
 
   await sendDiscordMessage(
     playerReleasedMessage(member.user.name, member.team.name),
+    // @-mention the released player. This was a bare broadcast while the
+    // stand-down loop right below it — and signFreeAgent, and both
+    // removeStandin paths — all mention their subject. Release is the most
+    // personal roster event the league produces, and the person it happens to
+    // was the one participant not told: they found out when the "Your team"
+    // block vanished from /me. `member` is loaded with its user, so the
+    // snowflake is already in hand.
+    mentionsOf([member.user.discordId]),
   );
   // Post-commit, best-effort, one per cancelled booking — same shape and same
   // formatter the two removeStandin paths use, so a standin can never be left

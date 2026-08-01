@@ -13,6 +13,7 @@ import { raceHook } from "./race-hook";
 import { maybeAnnounceWeekHonors } from "./honors-service";
 import { getWebhookUrl, matchResultMessage, sendDiscordMessage } from "./discord";
 import {
+  ANNOUNCE_FAILED_PREFIX,
   getSetting,
   leagueSyncSkipKey,
   resultAnnouncedKey,
@@ -24,7 +25,10 @@ import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
 /** Marker value recording a send that failed — claimable for a retry. */
-export const ANNOUNCE_FAILED_PREFIX = "failed:";
+// Re-exported for the call sites that already import it from here; the
+// definition lives in settings.ts beside the keys it qualifies (see the note
+// there — importing it back from this module made a require cycle).
+export { ANNOUNCE_FAILED_PREFIX };
 
 /**
  * Announce a decided series to Discord exactly once per match, whichever path
