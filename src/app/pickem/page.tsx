@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
@@ -11,6 +12,7 @@ import { formatMatchTime } from "@/lib/match-time";
 import {
   Avatar,
   Badge,
+  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -25,16 +27,60 @@ import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Pick'em" };
 
-export default async function PickemPage() {
-  const season = await getActiveSeason();
+export default async function PickemPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ season?: string }>;
+}) {
+  const { season: seasonParam } = await searchParams;
+  // ?season=<id> shows an archived season's oracle board (the leaders/meta/
+  // recap pattern). Prediction rows hang off Match and outlive archival, so
+  // without this the season's oracle champion became unreachable the moment
+  // season N+1 was created.
+  const season = seasonParam
+    ? await prisma.season.findUnique({ where: { id: seasonParam } })
+    : await getActiveSeason();
+  if (seasonParam && !season) notFound();
   if (!season) {
+    const archived = await prisma.season.findMany({
+      where: { isActive: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true },
+    });
     return (
       <div>
         <PageTitle title="Pick'em" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="No active season"
+          description={
+            archived.length > 0
+              ? "Browse a past season's oracle board instead."
+              : undefined
+          }
+          action={
+            archived.length > 0 ? (
+              <div className="flex flex-wrap justify-center gap-2">
+                {archived.map((s) => (
+                  <Link
+                    key={s.id}
+                    href={`/pickem?season=${s.id}`}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    {s.name} →
+                  </Link>
+                ))}
+              </div>
+            ) : undefined
+          }
+        />
       </div>
     );
   }
+  // Structurally read-only: savePrediction resolves the ACTIVE season itself,
+  // and predictionOpen returns true for any SCHEDULED match with no kickoff —
+  // so an archived season would otherwise render live pick buttons that can
+  // only error.
+  const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
   const [matches, teams, predictions, users] = await Promise.all([
@@ -74,7 +120,10 @@ export default async function PickemPage() {
     : new Map<string, string>();
 
   const standings = pickemStandings(predictions, matches);
-  const open = matches.filter((m) => predictionOpen(m));
+  // An archived season has no open picks by construction — this is the one
+  // branch the pick buttons hang off, so making it empty is what makes the
+  // read-only view structural rather than cosmetic.
+  const open = readOnly ? [] : matches.filter((m) => predictionOpen(m));
   const graded = matches.filter(
     (m) => m.status === "COMPLETED" && m.winnerTeamId,
   );

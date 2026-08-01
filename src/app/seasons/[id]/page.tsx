@@ -163,6 +163,21 @@ export default async function SeasonArchivePage({
             >
               Hero meta
             </Link>
+            {/* The two side games conclude with a winner nobody could see
+                once the season was archived — their pages are season-aware
+                now, so link them from the archive that owns the season. */}
+            <Link
+              href={`/fantasy?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Fantasy
+            </Link>
+            <Link
+              href={`/pickem?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Pick&rsquo;em
+            </Link>
             <Link
               href={`/recap?season=${season.id}`}
               className={buttonClasses("secondary", "sm")}

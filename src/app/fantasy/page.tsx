@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getSeasonGameScores } from "@/lib/cached-queries";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
@@ -19,6 +20,7 @@ import { LeaderBoard, type LeaderBoardRow } from "@/components/leader-board";
 import {
   Avatar,
   Badge,
+  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -33,16 +35,60 @@ import { cn } from "@/lib/utils";
 export const metadata = { title: "Fantasy" };
 
 
-export default async function FantasyPage() {
-  const season = await getActiveSeason();
+export default async function FantasyPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ season?: string }>;
+}) {
+  const { season: seasonParam } = await searchParams;
+  // ?season=<id> shows an archived season's fantasy league (the leaders/meta/
+  // recap pattern). FantasyRoster rows outlive archival — they cascade only on
+  // season DELETE — so without this every past season's fantasy champion
+  // became unreachable the instant season N+1 was created: the data survived
+  // and no page could render it.
+  const season = seasonParam
+    ? await prisma.season.findUnique({ where: { id: seasonParam } })
+    : await getActiveSeason();
+  if (seasonParam && !season) notFound();
   if (!season) {
+    const archived = await prisma.season.findMany({
+      where: { isActive: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true },
+    });
     return (
       <div>
         <PageTitle title="Fantasy" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="No active season"
+          description={
+            archived.length > 0
+              ? "Browse a past season's fantasy league instead."
+              : undefined
+          }
+          action={
+            archived.length > 0 ? (
+              <div className="flex flex-wrap justify-center gap-2">
+                {archived.map((s) => (
+                  <Link
+                    key={s.id}
+                    href={`/fantasy?season=${s.id}`}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    {s.name} →
+                  </Link>
+                ))}
+              </div>
+            ) : undefined
+          }
+        />
       </div>
     );
   }
+  // STRUCTURALLY read-only, not merely visually: saveFantasyRoster resolves
+  // the ACTIVE season itself, so a picker rendered over an archived season
+  // would silently edit the CURRENT season's roster with no error anywhere.
+  const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
   const [members, regs, games, rosters] = await Promise.all([
@@ -85,7 +131,12 @@ export default async function FantasyPage() {
     isCaptain: m.isCaptain,
   }));
   const cap = fantasyCap(candidates.map((c) => c.mmr));
-  const locked = games.length > 0;
+  // `readOnly` folds into `locked`, which is the ONE branch that decides
+  // whether the picker renders. That makes the archived view structurally
+  // read-only rather than visually so: there is no path to a FantasyPicker
+  // whose submit would edit the CURRENT season (saveFantasyRoster resolves
+  // the active season itself and would accept it silently).
+  const locked = readOnly || games.length > 0;
 
   // A saved pick can reference a since-released player. Pre-lock, that pick
   // must stay visible in the picker (and removable) or the manager is stuck:
@@ -243,15 +294,25 @@ export default async function FantasyPage() {
       <section className="space-y-4">
         <SectionTitle
           aside={
-            locked
-              ? "· locked for the season — scores update as games are imported"
-              : "· picks lock when the first game is imported"
+            readOnly
+              ? "· archived — these were the final fives"
+              : locked
+                ? "· locked for the season — scores update as games are imported"
+                : "· picks lock when the first game is imported"
           }
         >
-          {myRoster ? "Your fantasy five" : "Pick your fantasy five"}
+          {myRoster
+            ? "Your fantasy five"
+            : readOnly
+              ? "Fantasy fives"
+              : "Pick your fantasy five"}
         </SectionTitle>
 
-        {!viewer ? (
+        {/* An archived season falls through to the `locked` branch instead:
+            "Sign in to play fantasy" over a closed season promises a game that
+            cannot be played — the same class as the SIGNUPS dashboard's ask
+            with no control behind it. */}
+        {!viewer && !readOnly ? (
           <EmptyState
             title="Sign in to play fantasy"
             description="Anyone with a Steam login can manage a fantasy five — you don't need to be on a team."
@@ -281,8 +342,12 @@ export default async function FantasyPage() {
             </Card>
           ) : (
             <EmptyState
-              title="Rosters are locked"
-              description="The first game of the season is in — fantasy signups closed. Catch the next season!"
+              title={readOnly ? "No fantasy five on record" : "Rosters are locked"}
+              description={
+                readOnly
+                  ? "This season's fantasy league is closed — the final standings are above."
+                  : "The first game of the season is in — fantasy signups closed. Catch the next season!"
+              }
             />
           )
         ) : (
