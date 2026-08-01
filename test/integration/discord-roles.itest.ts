@@ -664,7 +664,15 @@ describe("member lookup rate pacing", () => {
         : MEMBER_OK;
     };
     const ids = Array.from({ length: 12 }, (_, i) => `8000000000000001${String(i).padStart(2, "0")}`);
-    const out = await sweepGuildMemberships(ids, guildCfg());
+    // An EXPLICIT deadline, not the 8s production default. What this test is
+    // about is PACING — that the sweep waits out a known-empty bucket instead
+    // of burning requests into guaranteed 429s, so every id classifies on the
+    // first pass. Inheriting the production wall-clock made it also a test of
+    // how fast the machine is: on a loaded CI runner twelve paced round trips
+    // to the stand-in server exceeded 8s and one id came back `null`, which
+    // reads as a pacing regression and is nothing of the kind. The deadline
+    // itself is covered by its own test below.
+    const out = await sweepGuildMemberships(ids, guildCfg(), Date.now(), 120_000);
     const unknowns = ids.filter((id) => out.get(id) === null);
     expect(unknowns).toEqual([]);
     expect([...out.values()].every((v) => v === "member")).toBe(true);
