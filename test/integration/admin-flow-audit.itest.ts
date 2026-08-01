@@ -45,7 +45,7 @@ import {
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { recomputeSeries } from "@/lib/match-import";
 import { loadImportSkips } from "@/lib/match-import";
-import { getSetting, setSetting } from "@/lib/settings";
+import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {
@@ -887,5 +887,45 @@ describe("recordResult — the forfeit flag rides the ruling end to end", () => 
     expect(row.forfeit).toBe(false);
     expect(row.homeScore).toBe(2);
     expect(row.awayScore).toBe(0);
+  });
+});
+
+describe("retractions bump the freshness cursor", () => {
+  // A retraction moves the standings exactly as much as a result does, but
+  // only importGameForMatch stamped the cursor — recomputeSeries doesn't. So
+  // every OTHER open tab kept rendering the removed score until an unrelated
+  // result landed: <ResultSyncPing> refreshes on `updated` (true for the
+  // acting client only) or on the cursor advancing.
+  const cursor = async () =>
+    (await getSetting(SETTING_KEYS.RESULT_CHANGED_AT)) ?? "";
+
+  it("removeGame advances it", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const game = await addGameToMatch(
+      matches[0].id,
+      "8777000001",
+      matches[0].homeTeamId,
+    );
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, "1999-01-01T00:00:00.000Z");
+    const before = await cursor();
+
+    await removeGame(empty, fd({ gameId: game.id }));
+
+    expect(await cursor()).not.toBe(before);
+  });
+
+  it("reopenMatch advances it", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    await recordResult(
+      empty,
+      fd({ matchId: matches[0].id, homeScore: "2", awayScore: "0" }),
+    );
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, "1999-01-01T00:00:00.000Z");
+    const before = await cursor();
+
+    const res = await reopenMatch(empty, fd({ matchId: matches[0].id }));
+
+    expect(res?.error).toBeUndefined();
+    expect(await cursor()).not.toBe(before);
   });
 });

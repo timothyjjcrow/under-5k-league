@@ -15,7 +15,12 @@ import {
   recordMatch,
 } from "./factories";
 
-const NIGHT = new Date("2026-08-01T19:00:00Z");
+// RELATIVE to now, never a literal date. This was hard-coded to
+// 2026-08-01T19:00Z and went off like a time bomb the moment the wall clock
+// passed it plus assertSaneProposedTime's one-hour grace: 16 of 19 tests
+// started failing on a file nobody had touched. A proposal is inherently a
+// future time, so the fixture has to be one too.
+const NIGHT = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
 /** A two-team season with one scheduled match; returns captains + match. */
 async function setupMatch() {

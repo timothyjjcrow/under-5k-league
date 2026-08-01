@@ -309,3 +309,69 @@ describe("medalProvesIneligible — the post-signup ceiling check", () => {
     }
   });
 });
+
+// The medal is synced behind the player's back and the admin's sync is
+// warn-only, so an ADMITTED player must never be re-judged by it — doing so
+// turned "the admin kept them" into a permanently unsaveable signup: no role,
+// hero, statement or standin-flip edit, ever again, refused by a medal nobody
+// had objected to.
+describe("registrationGate — the medal rule runs at ADMISSION only", () => {
+  const active = {
+    season: regular,
+    mmr: 3000,
+    rankTier: 80, // Immortal — refused for anyone signing up fresh
+    hasExisting: true,
+    existingStatus: "ACTIVE",
+  } as const;
+
+  it("lets an already-ACTIVE registrant keep editing", () => {
+    expect(
+      registrationGate({ ...active, type: "PLAYER", existingType: "PLAYER" }),
+    ).toBeNull();
+  });
+
+  it("lets them flip to standin", () => {
+    expect(
+      registrationGate({ ...active, type: "STANDIN", existingType: "PLAYER" }),
+    ).toBeNull();
+  });
+
+  it("still refuses a brand-new signup on the same medal", () => {
+    expect(
+      registrationGate({
+        season: signups,
+        type: "PLAYER",
+        mmr: 3000,
+        rankTier: 80,
+        hasExisting: false,
+      }),
+    ).toMatch(/medal puts you above/);
+  });
+
+  it("treats WITHDRAWN and REMOVED rows as re-entries, not edits", () => {
+    for (const status of ["WITHDRAWN", "REMOVED", null, undefined]) {
+      expect(
+        registrationGate({
+          ...active,
+          existingStatus: status,
+          type: "PLAYER",
+          existingType: "PLAYER",
+        }),
+        `status ${status}`,
+      ).toMatch(/medal puts you above/);
+    }
+  });
+
+  it("does NOT exempt the typed hard ceiling — that rule is unchanged", () => {
+    // The asymmetry, pinned: the medal is out of their hands, the number they
+    // type is not. An admitted player still cannot enter 5001.
+    expect(
+      registrationGate({
+        ...active,
+        mmr: 5001,
+        type: "PLAYER",
+        existingType: "PLAYER",
+      }),
+    ).toMatch(/over 5000/);
+  });
+});

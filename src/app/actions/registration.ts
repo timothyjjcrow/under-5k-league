@@ -12,7 +12,11 @@ import {
   REGISTRATION_TYPE,
   type RegistrationType,
 } from "@/lib/constants";
-import { registrationGate, withdrawGateError } from "@/lib/registration";
+import {
+  medalProvesIneligible,
+  registrationGate,
+  withdrawGateError,
+} from "@/lib/registration";
 import { pendingCoverWhere } from "@/lib/standin";
 import { normalizeDiscordName } from "@/lib/discord-name";
 import { unlinkDiscordAccount } from "@/lib/discord-link-service";
@@ -109,6 +113,11 @@ export async function saveRegistration(
     rankTier,
     hasExisting: !!existing,
     existingType: (existing?.type as RegistrationType | undefined) ?? null,
+    // The medal half of the ceiling is judged only at ADMISSION — an already
+    // ACTIVE registrant keeps editing (the admin's rank sync is warn-only, so
+    // a medal it merely flagged must not brick their form). existingStatus is
+    // what tells the gate which of the two this submit is.
+    existingStatus: existing?.status ?? null,
   });
   if (gateError) return { error: gateError };
 
@@ -176,11 +185,28 @@ export async function saveRegistration(
   // gap was silently undone. Keeping the read-time copy would also have made
   // the guard untestable: every test would stop at the `if` and pass just as
   // happily with the WHERE deleted. One enforcement point, at the write.
+  // The medal exemption above is a READ-time judgement about a row fetched
+  // several round trips back, so re-assert it in the WHERE. When the medal is
+  // ineligible we reached this line ONLY via the already-ACTIVE exemption, so
+  // the write may touch an ACTIVE row and nothing else: a self-withdrawal
+  // landing in the gap would otherwise be revived straight back to ACTIVE,
+  // which for this player is a re-ADMISSION the gate refuses. (WITHDRAWN stays
+  // freely reversible for everyone the ceiling doesn't exclude — the
+  // `{ not: REMOVED }` branch, unchanged.) The predicate keeps the KEY name
+  // `status`, so the ratchet's claim id (saveRegistration::status#1) is
+  // untouched and its protecting test still kills the mutant.
+  const medalIneligible = medalProvesIneligible(rankTier);
+  const statusClaim = medalIneligible
+    ? REGISTRATION_STATUS.ACTIVE
+    : { not: REGISTRATION_STATUS.REMOVED };
+  // Seam: the rival is this player's own withdrawal from another tab, landing
+  // between the gate's reads and this write.
+  await raceHook("registration.saveRegistration.beforeWrite");
   const revived = await prisma.registration.updateMany({
     where: {
       seasonId: season.id,
       userId: user.id,
-      status: { not: REGISTRATION_STATUS.REMOVED },
+      status: statusClaim,
     },
     data: {
       type,
@@ -198,8 +224,12 @@ export async function saveRegistration(
   // matches and updates normally.)
   if (revived.count === 0 && existing) {
     return {
-      error:
-        "An admin removed your signup for this season — message them if you think that's a mistake.",
+      error: medalIneligible
+        ? // The tighter ACTIVE claim above: their signup stopped being active
+          // between the gate and the write, and with an over-ceiling medal
+          // they can't reopen it themselves — say which door to knock on.
+          "Your signup isn't active any more, and your medal is above the league's MMR ceiling — an admin has to put you back in the pool."
+        : "An admin removed your signup for this season — message them if you think that's a mistake.",
     };
   }
   if (revived.count === 0) {

@@ -118,3 +118,120 @@ describe("seasonScenarioReport", () => {
     expect(clinchFromReport(null)).toBeUndefined();
   });
 });
+
+describe("seasonScenarioReport memo", () => {
+  // The engine enumerates up to 177k leaves at O(teams²) on four hot pages;
+  // the memo is content-addressed, so a landed result changes the KEY in the
+  // same render that reads it — invalidation by construction, no TTL.
+  const ids = ["A", "B", "C", "D", "E"];
+  // Carries the score fields too: computeStandings takes MatchLike, and an
+  // open match contributes nothing, so the zeros are inert.
+  const open = (id: string, home: string, away: string, week: number) => ({
+    ...row({ id, homeTeamId: home, awayTeamId: away, week }),
+    homeScore: 0,
+    awayScore: 0,
+    winnerTeamId: null as string | null,
+  });
+
+  it("identical inputs return the same report object", () => {
+    const matches = [
+      open("m1", "A", "B", 1),
+      open("m2", "C", "D", 1),
+      open("m3", "A", "C", 2),
+    ];
+    const standings = computeStandings(ids, matches);
+    const a = seasonScenarioReport(standings, matches, ids.length);
+    const b = seasonScenarioReport(standings, matches, ids.length);
+    expect(a).not.toBeNull();
+    expect(b).toBe(a);
+  });
+
+  it("a landed result busts the memo", () => {
+    // The load-bearing case: the match leaves `remaining` AND the points move,
+    // so the key changes twice over. A key of just [cut, teamCount] would
+    // serve the stale report next to a standings table built from live rows.
+    const before = [
+      open("m1", "A", "B", 1),
+      open("m2", "C", "D", 1),
+      open("m3", "A", "C", 2),
+    ];
+    const r1 = seasonScenarioReport(
+      computeStandings(ids, before),
+      before,
+      ids.length,
+    );
+    const after = before.map((m) =>
+      m.id === "m1"
+        ? {
+            ...m,
+            status: "COMPLETED",
+            homeScore: 1,
+            awayScore: 0,
+            winnerTeamId: "A",
+          }
+        : m,
+    );
+    const r2 = seasonScenarioReport(
+      computeStandings(ids, after),
+      after,
+      ids.length,
+    );
+    expect(r2).not.toBe(r1);
+    // …and it genuinely recomputed: the played match is nobody's next one now.
+    const nexts = [...r2!.teams.values()].map((t) => t.nextMatchId);
+    expect(nexts).not.toContain("m1");
+  });
+
+  it("a reschedule that reorders the run-in busts the memo", () => {
+    // Same standings, same match ids — only the kickoff order differs, which
+    // changes each team's "next match". This is the case a "games" cache tag
+    // and the resultChangedAt cursor would BOTH miss.
+    const base = [
+      open("early", "A", "B", 1),
+      open("late", "A", "C", 2),
+      open("other", "D", "E", 1),
+    ];
+    const standings = computeStandings(ids, base);
+    const inWeekOrder = seasonScenarioReport(standings, base, ids.length);
+    const retimed = [
+      { ...base[0], scheduledAt: new Date("2026-08-20") },
+      { ...base[1], scheduledAt: new Date("2026-08-10") },
+      { ...base[2], scheduledAt: new Date("2026-08-11") },
+    ];
+    const byKickoff = seasonScenarioReport(standings, retimed, ids.length);
+    expect(byKickoff).not.toBe(inWeekOrder);
+    expect(byKickoff!.teams.get("A")!.nextMatchId).toBe("late");
+    expect(inWeekOrder!.teams.get("A")!.nextMatchId).toBe("early");
+  });
+
+  it("a cached report cannot be mutated by one viewer's page", () => {
+    const matches = [open("f1", "A", "B", 1), open("f2", "C", "D", 1)];
+    const standings = computeStandings(ids, matches);
+    const r = seasonScenarioReport(standings, matches, ids.length)!;
+    expect(() => {
+      (r.teams.get("A") as unknown as { status: unknown }).status = "CLINCHED";
+    }).toThrow();
+  });
+
+  // LAST in the file on purpose: it deliberately churns the memo past its cap.
+  it("the memo is bounded", () => {
+    const matches = [open("b1", "A", "B", 1), open("b2", "C", "D", 1)];
+    const first = seasonScenarioReport(
+      computeStandings(ids, matches),
+      matches,
+      ids.length,
+    );
+    for (let i = 0; i < 9; i++) {
+      const churn = computeStandings(ids, matches).map((s, idx) =>
+        idx === 0 ? { ...s, points: s.points + i + 1 } : s,
+      );
+      seasonScenarioReport(churn, matches, ids.length);
+    }
+    const again = seasonScenarioReport(
+      computeStandings(ids, matches),
+      matches,
+      ids.length,
+    );
+    expect(again).not.toBe(first); // evicted, recomputed
+  });
+});

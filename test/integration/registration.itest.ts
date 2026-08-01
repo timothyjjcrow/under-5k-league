@@ -723,3 +723,109 @@ describe("saveRegistration — no player/standin flips while the auction runs", 
     expect((await regFor(season.id, user.id))?.type).toBe("PLAYER");
   });
 });
+
+describe("saveRegistration — a late medal must not brick an admitted signup", () => {
+  // The lockout, end to end: a player is admitted while rankTier is null (a
+  // private profile, or OpenDota down at signup), the admin's warn-only Sync
+  // ranks later fills in Divine 3+/Immortal, and the admin KEEPS them. Before
+  // this, every subsequent submit failed the gate — roles, heroes, statement,
+  // captain note and the standin flip were all permanently unsaveable, while
+  // /me told them the league couldn't take their signup at all.
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  async function admittedThenFlagged() {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Late Immortal");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    // Admitted with no medal on file.
+    const first = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3000, roles: "1" }),
+    );
+    expect(first?.error).toBeUndefined();
+    // …then the admin's rank sync fills one in that proves 5K+.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: 80 },
+    });
+    return { season, user };
+  }
+
+  it("lets them keep editing their signup", async () => {
+    const { season, user } = await admittedThenFlagged();
+
+    // `roles` is a repeated field (formData.getAll), so one valid key here.
+    const res = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3000, roles: "2", statement: "still here" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.roles).toBe("2");
+    expect(reg?.statement).toBe("still here");
+    expect(reg?.status).toBe("ACTIVE");
+  });
+
+  it("still refuses a BRAND-NEW signup carrying the same medal", async () => {
+    // The anti-sandbagging line is untouched for admissions.
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Fresh Immortal");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: 80 },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+
+    expect(res?.error).toMatch(/medal puts you above/);
+    expect(await regFor(season.id, user.id)).toBeNull();
+  });
+
+  it("does not let them re-enter the pool after withdrawing", async () => {
+    // WITHDRAWN is a re-ENTRY, judged as a fresh admission — otherwise the
+    // exemption would be a door back in for exactly the players the ceiling
+    // exists to keep out.
+    const { season, user } = await admittedThenFlagged();
+    await prisma.registration.updateMany({
+      where: { seasonId: season.id, userId: user.id },
+      data: { status: "WITHDRAWN" },
+    });
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+
+    expect(res?.error).toMatch(/medal puts you above/);
+    expect((await regFor(season.id, user.id))?.status).toBe("WITHDRAWN");
+  });
+
+  it("a withdrawal landing mid-save can't be revived by the tightened claim", async () => {
+    // The write-time half: the exemption was judged against a row read several
+    // round trips back. If they withdraw from another tab in the gap, the
+    // ACTIVE-only claim refuses rather than reviving them — which for this
+    // player would be a re-admission the gate itself would have refused.
+    const { season, user } = await admittedThenFlagged();
+    let fired = false;
+    setRaceHook(
+      onceAt("registration.saveRegistration.beforeWrite", async () => {
+        fired = true;
+        await prisma.registration.updateMany({
+          where: { seasonId: season.id, userId: user.id },
+          data: { status: "WITHDRAWN" },
+        });
+      }),
+    );
+
+    const res = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3000, roles: "3" }),
+    );
+
+    expect(fired).toBe(true);
+    expect(res?.error).toMatch(/isn't active any more/i);
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.status).toBe("WITHDRAWN"); // not revived
+    expect(reg?.roles).not.toBe("3"); // and the edit didn't land either
+    expect(reg?.statement).toBe(""); // nothing from this submit landed
+  });
+});

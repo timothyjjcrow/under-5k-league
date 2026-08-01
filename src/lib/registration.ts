@@ -1,5 +1,6 @@
 import {
   HARD_MMR_CEILING,
+  REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_STATUS,
   type RegistrationType,
@@ -22,6 +23,13 @@ export type RegistrationGateInput = {
   hasExisting: boolean;
   /** The existing registration's type, when there is one. */
   existingType?: RegistrationType | null;
+  /**
+   * The existing registration's STATUS, when there is one. `ACTIVE` is the
+   * league's own record that this player has already been admitted — the
+   * medal rule turns off for them and only for them. Absent/undefined means
+   * "judge this as an admission", the safe default every existing caller gets.
+   */
+  existingStatus?: string | null;
 };
 
 export type WithdrawGateInput = {
@@ -86,8 +94,15 @@ export function withdrawGateError({
  * `HARD_MMR_CEILING` (no 5K+/Immortals) is a firm reject. Standins may sign up
  * any time; an existing registrant may always update their signup — but a
  * standin can't upgrade themselves to a full player once signups have closed
- * (that would sneak past the closed-signups rule). Returns an error message,
- * or null when allowed.
+ * (that would sneak past the closed-signups rule).
+ *
+ * The two ceiling rules are asymmetric ON PURPOSE. The TYPED MMR is re-judged
+ * on every submit — it is a number the player controls, so the ceiling has to
+ * hold each time they set it. The MEDAL rule runs only at ADMISSION, because
+ * it judges a value synced behind their back that an admin has already been
+ * shown and chosen to keep (see the medal branch below).
+ *
+ * Returns an error message, or null when allowed.
  */
 export function registrationGate({
   season,
@@ -96,17 +111,33 @@ export function registrationGate({
   rankTier,
   hasExisting,
   existingType,
+  existingStatus,
 }: RegistrationGateInput): string | null {
   // The soft limit (season.maxMmr) is a review threshold, not a block — only
   // the hard ceiling turns anyone away (keeps out 5K+ players and Immortals).
   if (mmr > HARD_MMR_CEILING) {
     return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — you entered ${mmr}.`;
   }
-  // The medal alone can prove ineligibility: a Divine 3+/Immortal medal means
-  // 5K+ MMR whatever number is typed (its EXACT band floor is over the
-  // ceiling — no padding here, padding is for validating claims). Without
-  // this, sandbagging a low claim under a high medal walks past the ceiling.
-  if (medalProvesIneligible(rankTier)) {
+  // The medal alone can prove ineligibility — but only at ADMISSION. A Divine
+  // 3+/Immortal medal means 5K+ MMR whatever number is typed (its EXACT band
+  // floor is over the ceiling — no padding here, padding is for validating
+  // claims), so a NEW signup sandbagging a low claim under a high medal is
+  // refused right here.
+  //
+  // It must NOT re-judge someone the league has already admitted. The medal is
+  // a fact synced behind the player's back (admin "Sync ranks"), that sync is
+  // deliberately WARN-ONLY — who plays is the operator's call — and a player
+  // admitted while their rankTier was null holds no lever over it. Judging it
+  // on every submit turned the admin's decision to KEEP them into a silent
+  // lockout: no role/hero/statement edit, no flip to standin, ever again,
+  // refused by a medal nobody had objected to. Removing them from the pool is
+  // withdrawSignup's job, not a form that quietly stops saving.
+  //
+  // ACTIVE is the exemption, not `hasExisting`: WITHDRAWN and REMOVED rows are
+  // re-entries into the pool, i.e. fresh admissions, and are judged as such.
+  const admitted =
+    hasExisting && existingStatus === REGISTRATION_STATUS.ACTIVE;
+  if (!admitted && medalProvesIneligible(rankTier)) {
     return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — your ${rankMedalName(rankTier)} medal puts you above it.`;
   }
   const wasPlayer = hasExisting && existingType === REGISTRATION_TYPE.PLAYER;

@@ -2529,6 +2529,9 @@ export async function reopenMatch(
   await prisma.setting.deleteMany({
     where: { key: resultAnnouncedKey(matchId) },
   });
+  // Same reason as removeGame: un-recording a final is a standings change,
+  // and the cursor is what tells every other open tab to repaint.
+  await stampResultChange();
   await logAdminAction({
     action: "reopenMatch",
     summary: `Reopened a week ${match.week} match that had been marked final`,
@@ -2599,6 +2602,13 @@ export async function removeGame(
   await rememberImportSkip(game.match.seasonId, game.dotaMatchId);
   await prisma.game.deleteMany({ where: { id: gameId } });
   await recomputeSeries(game.matchId);
+  // Bump the sitewide freshness cursor. A RETRACTION moves standings exactly
+  // as much as a result does, but only `importGameForMatch` stamped — and
+  // `recomputeSeries` (which this calls) does not. Without it every parked
+  // dashboard keeps rendering the removed game's score until some UNRELATED
+  // result happens to land: <ResultSyncPing> only refreshes on `updated` or
+  // an advancing cursor, and `updated` is false for every client but this one.
+  await stampResultChange();
   await logAdminAction({
     action: "removeGame",
     summary: `Removed imported game ${game.dotaMatchId} from a week ${game.match.week} match`,
