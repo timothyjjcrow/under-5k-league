@@ -450,3 +450,45 @@ describe("playoffs — a reset bracket stays advanceable to a champion", () => {
     expect(final.championTeamId).toBe(ids[0]);
   });
 });
+
+describe("playoffs — the crowning claim guards the SEASON ROW, not just the ping", () => {
+  afterEach(() => setRaceHook(null));
+
+  // This test exists because the ratchet caught the claim regressing. It was
+  // protected by "exactly one Discord champions message across N racers" —
+  // but announceChampionOnce now carries its OWN exactly-once marker, so that
+  // assertion holds even with the predicate deleted. A second idempotency
+  // mechanism MASKED the first: the classic "something upstream serializes
+  // this" trap. The claim still protects real state, so pin the state.
+  it("a season that moved off PLAYOFFS mid-advance is not crowned", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 2 });
+    const ids = await makeSeededTeams(season.id, 3); // 3 teams → single final
+    await createPlayoffBracket(season.id);
+    const [final] = await playoffMatches(season.id);
+    await recordMatch(final.id, 2, 0);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("playoffs.advance.beforeCrown", async () => {
+        fired = true;
+        // The admin closes the season out by hand in the gap (the documented
+        // escape hatch) — this advance is now stale.
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { status: "COMPLETE" },
+        });
+      }),
+    );
+
+    await advancePlayoffBracket(season.id);
+
+    expect(fired).toBe(true);
+    const after = await prisma.season.findUniqueOrThrow({
+      where: { id: season.id },
+    });
+    // The claim matched zero rows, so no champion was stamped onto a season
+    // that had already moved on.
+    expect(after.championTeamId).toBeNull();
+    void ids;
+  });
+});

@@ -349,6 +349,11 @@ export async function advancePlayoffBracket(seasonId: string) {
     // The final is decided — crown the champion. Conditional write: a manual
     // recordResult racing an auto-import both reach here, and only the call
     // that actually flips PLAYOFFS→COMPLETE may announce (no double ping).
+    // Seam: a rival moving the season OFF PlayOffs between the read at the top
+    // of this function and the claim below — an admin's close-out, or another
+    // caller's crowning. The status predicate is the only thing that stops a
+    // stale advance re-stamping a season that has already moved on.
+    await raceHook("playoffs.advance.beforeCrown");
     const crowned = await prisma.season.updateMany({
       where: { id: seasonId, status: SEASON_STATUS.PLAYOFFS },
       data: {
