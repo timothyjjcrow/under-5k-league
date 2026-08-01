@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // setSeasonPhase is the single most consequential admin control — it decides what
 // the whole site shows and which engines run — and it had no integration coverage.
@@ -15,6 +15,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { setSeasonPhase, startDraft } from "@/app/actions/admin";
 import { pauseDraft } from "@/lib/draft-service";
 import { nominatePlayer } from "@/lib/draft-service";
@@ -489,5 +490,37 @@ describe("setSeasonPhase — the write re-asserts the phase it judged", () => {
       // to prevent.
       expect(finalStatus).toBe(SEASON_STATUS.REGULAR_SEASON);
     }
+  });
+});
+
+describe("setSeasonPhase — the claim is what makes a stale flip lose", () => {
+  afterEach(() => setRaceHook(null));
+
+  it("a rival phase change in the gap wins; the stale write is refused", async () => {
+    // Deterministic where the raced version can't be: BOTH orderings of two
+    // concurrent flips are legal, so only a seam pins the claim. Here the
+    // rival commits between the guards and the write — the blind update this
+    // replaced would stamp REGULAR_SEASON over it and silently eat the other
+    // admin's move.
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    await makeTeam(season.id, "Alpha", 0);
+    await makeTeam(season.id, "Bravo", 1);
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.setSeasonPhase.beforeWrite", async () => {
+        fired = true;
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { status: SEASON_STATUS.DRAFT },
+        });
+      }),
+    );
+
+    const res = await setSeasonPhase({}, phaseForm(SEASON_STATUS.REGULAR_SEASON));
+
+    expect(fired).toBe(true);
+    expect(res?.error).toMatch(/just changed/i);
+    // The rival's DRAFT stands — not overwritten by the stale REGULAR_SEASON.
+    expect(await statusOf(season.id)).toBe(SEASON_STATUS.DRAFT);
   });
 });

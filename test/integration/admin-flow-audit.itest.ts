@@ -13,7 +13,13 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
 }));
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
+vi.mock("@/lib/auth", () => ({
+  requireAdmin: vi.fn(),
+  requireUser: vi.fn(),
+  // logAdminAction resolves the actor itself; an undefined mock throws inside
+  // its try/catch and silently skips the rows the forfeit test asserts on.
+  getSessionUser: vi.fn(async () => null),
+}));
 vi.mock("@/lib/discord", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/discord")>()),
   getWebhookUrl: vi.fn(async () => ""),
@@ -31,6 +37,7 @@ import {
   signFreeAgent,
   setLeagueId,
   setMatchTime,
+  recordResult,
   reinstateSignup,
   setSeasonPhase,
   withdrawSignup,
@@ -779,5 +786,106 @@ describe("generateSchedule — the results gate (both halves)", () => {
       (await prisma.match.findUniqueOrThrow({ where: { id: matches[0].id } }))
         .status,
     ).toBe(MATCH_STATUS.COMPLETED);
+  });
+});
+
+describe("generateSchedule — the double-round-robin switch is actually wired", () => {
+  // roundRobin(ids, doubleRound) was built and unit-tested from the start but
+  // no caller ever passed the flag — the exact "the rendering half was built,
+  // the switch was never wired" class. This pins the wiring end to end.
+  it("doubleRound=on mirrors every pairing home/away over twice the weeks", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `RR${i}`, i + 1);
+
+    const res = await generateSchedule(
+      empty,
+      fd({ firstNight: "", doubleRound: "on" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/12 matches over 6 week\(s\) \(double round robin\)/);
+    const matches = await prisma.match.findMany({
+      where: { seasonId: season.id },
+    });
+    expect(matches).toHaveLength(12);
+    expect(new Set(matches.map((m) => m.week)).size).toBe(6);
+    // Every pairing appears exactly twice, once each way around.
+    const key = (h: string, a: string) => `${h}>${a}`;
+    const seen = new Map<string, number>();
+    for (const m of matches) {
+      seen.set(key(m.homeTeamId, m.awayTeamId), (seen.get(key(m.homeTeamId, m.awayTeamId)) ?? 0) + 1);
+    }
+    for (const [k, n] of seen) {
+      expect(n).toBe(1); // no repeated identical fixture…
+      const [h, a] = k.split(">");
+      expect(seen.get(key(a, h))).toBe(1); // …and the mirror exists
+    }
+  });
+
+  it("unchecked stays a single round robin, byte-for-byte the old behavior", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `SR${i}`, i + 1);
+
+    const res = await generateSchedule(empty, fd({ firstNight: "" }));
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/6 matches over 3 week\(s\)/);
+    expect(res?.message).not.toMatch(/double round robin/);
+    expect(
+      await prisma.match.count({ where: { seasonId: season.id } }),
+    ).toBe(6);
+  });
+});
+
+describe("recordResult — the forfeit flag rides the ruling end to end", () => {
+  it("stamps forfeit on the CAS write, logs it, and reopen un-rules it", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+
+    const res = await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0", forfeit: "on" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/forfeit/i);
+    let row = await prisma.match.findUniqueOrThrow({ where: { id: target.id } });
+    expect(row.forfeit).toBe(true);
+    expect(row.status).toBe(MATCH_STATUS.COMPLETED);
+    expect(row.winnerTeamId).toBe(target.homeTeamId);
+    const log = await prisma.adminAction.findFirst({
+      where: { action: "recordResult" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(log?.summary).toMatch(/forfeit/);
+
+    // Reopen un-rules it — the flag must not survive into the next result.
+    const reopened = await reopenMatch(empty, fd({ matchId: target.id }));
+    expect(reopened?.error).toBeUndefined();
+    row = await prisma.match.findUniqueOrThrow({ where: { id: target.id } });
+    expect(row.forfeit).toBe(false);
+    expect(row.status).toBe(MATCH_STATUS.SCHEDULED);
+  });
+
+  it("re-saving without the box un-rules a mistaken forfeit", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+    await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0", forfeit: "on" }),
+    );
+
+    const res = await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    const row = await prisma.match.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    expect(row.forfeit).toBe(false);
+    expect(row.homeScore).toBe(2);
+    expect(row.awayScore).toBe(0);
   });
 });

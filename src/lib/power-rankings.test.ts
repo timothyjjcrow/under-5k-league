@@ -108,3 +108,37 @@ describe("powerRankings — no invented movement after one week", () => {
     expect(rows.some((r) => r.delta !== 0)).toBe(true);
   });
 });
+
+describe("powerRankings — forfeits never move Elo", () => {
+  it("a ruled score produces zero rating change (in the lib, not a caller filter)", () => {
+    const played = powerRankings(
+      [
+        {
+          week: 1,
+          status: "COMPLETED",
+          homeTeamId: "a",
+          awayTeamId: "b",
+          homeScore: 2,
+          awayScore: 0,
+        },
+      ],
+      ["a", "b"],
+    );
+    const forfeited = powerRankings(
+      [
+        {
+          week: 1,
+          status: "COMPLETED",
+          homeTeamId: "a",
+          awayTeamId: "b",
+          homeScore: 2,
+          awayScore: 0,
+          forfeit: true,
+        },
+      ],
+      ["a", "b"],
+    );
+    expect(played.find((r) => r.teamId === "a")!.rating).toBeGreaterThan(1000);
+    expect(forfeited.every((r) => r.rating === 1000)).toBe(true);
+  });
+});

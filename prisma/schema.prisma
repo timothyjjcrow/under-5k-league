@@ -139,6 +139,11 @@ model Team {
   captainId  String
   budget     Int      @default(100)
   draftOrder Int      @default(0)
+  // The team quit mid-season (withdrawTeam): its remaining fixtures were
+  // forfeited to the opponents and it is EXCLUDED from playoff seeding —
+  // banked points could otherwise seed a dead team into the bracket. Rows,
+  // rosters and history are kept; standings badge it.
+  withdrawn  Boolean  @default(false)
   createdAt  DateTime @default(now())
 
   season      Season       @relation(fields: [seasonId], references: [id], onDelete: Cascade)
@@ -221,6 +226,12 @@ model Match {
   bestOf           Int       @default(1) // series length; a team clinches at floor(bestOf/2)+1
   winnerTeamId     String?
   bracketSlot      String?
+  // A defaulted/no-show result: the score was RULED, not played. Points and
+  // W-L count normally; game scores are EXCLUDED from the gameDiff tiebreak
+  // and the Elo power rankings (an admin-chosen 2-0 must not outrank a real
+  // one), and surfaces badge it. Set by recordResult's checkbox and by
+  // withdrawTeam; cleared by reopenMatch.
+  forfeit          Boolean   @default(false)
   // Last automatic OpenDota scan for this match (result-sync-service). Updated
   // via an atomic claim so concurrent pollers can't double-scan — the inhouse
   // `detectedAt` pattern.

@@ -241,6 +241,7 @@ export default async function SchedulePage() {
       homeScore: m.homeScore,
       awayScore: m.awayScore,
       done: m.status === "COMPLETED",
+      forfeit: m.forfeit,
       live: m.status === "LIVE",
       homeWin: m.winnerTeamId === m.homeTeamId,
       awayWin: m.winnerTeamId === m.awayTeamId,
@@ -390,6 +391,9 @@ export default async function SchedulePage() {
           <StandingsTable
             standings={standings}
             teamName={teamName}
+            withdrawnIds={
+              new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+            }
             formByTeam={teamForm}
             playoffCut={
               season.status === "REGULAR_SEASON"

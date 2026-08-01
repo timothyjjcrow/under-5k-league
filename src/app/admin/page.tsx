@@ -72,6 +72,8 @@ import {
   pauseDraftAction,
   resumeDraftAction,
   transferCaptaincy,
+  withdrawTeam,
+  reinstateTeam,
   reopenMatch,
   reinstateSignup,
   setDraftSettings,
@@ -480,13 +482,28 @@ function rosterMovesVisible(season: Season, data: AdminData): boolean {
   if (season.status === "SIGNUPS" || season.status === "COMPLETE") return false;
   // `?.status !== COMPLETE`, so a MISSING Draft row counts as "the auction
   // hasn't run" — matching the actions. In the DRAFT phase with no draft row
-  // (reachable by clicking the Draft phase button before Start draft) the forms
-  // must stay hidden, or the $0 free-agent path bypasses the auction entirely.
+  // (reachable by clicking the Draft phase button before Start draft) the
+  // sign/release forms must stay hidden, or the $0 free-agent path bypasses
+  // the auction entirely. PROMOTION is the one exception: promoteGateError
+  // explicitly blesses the pre-start window ("they'll be auctioned normally"),
+  // and a late joiner who filed as a standin the week before draft night is
+  // exactly who it serves — yet the form had no render anywhere in that
+  // window, so the only workaround was re-opening signups league-wide to move
+  // one person. The card shows with ONLY the promote form (see preStart in
+  // RosterMoves); a LIVE/PAUSED auction still hides everything.
   if (
     season.status === "DRAFT" &&
     data.draft?.status !== DRAFT_STATUS.COMPLETE
   ) {
-    return false;
+    const preStart =
+      !data.draft || data.draft.status === DRAFT_STATUS.NOT_STARTED;
+    if (!preStart) return false;
+    const rostered = new Set(
+      data.teams.flatMap((t) => t.members.map((m) => m.userId)),
+    );
+    return data.standins.some(
+      (s) => s.type === REGISTRATION_TYPE.STANDIN && !rostered.has(s.userId),
+    );
   }
   const rosteredIds = new Set(
     data.teams.flatMap((t) => t.members.map((m) => m.userId)),
@@ -1361,11 +1378,75 @@ function CaptainControls({
                         </p>
                       </details>
                     ) : null}
+                    {t.withdrawn ? (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <Badge>withdrew</Badge>
+                        <ActionForm action={reinstateTeam} hidden={{ teamId: t.id }}>
+                          <SubmitButton
+                            variant="ghost"
+                            size="sm"
+                            confirm={`Reinstate ${t.name}? They rejoin playoff-seeding contention. Forfeited fixtures stay as recorded — reverse any you want undone with "Reopen for import" on each row.`}
+                          >
+                            reinstate
+                          </SubmitButton>
+                        </ActionForm>
+                      </div>
+                    ) : null}
                   </div>
                 ));
               })()
             )}
           </div>
+          {/* Team dropout — the most common amateur-league disaster, which used
+              to be a weekly hand-typed-forfeit grind. ONE control with a team
+              picker, deliberately: a DangerSubmit per team would put N client
+              dialogs on the app's heaviest page (the release form beside it
+              uses the same idiom). Mid-season only — pre-season the tool is
+              removeCaptain, and a playoff slot needs an explicit per-match
+              ruling, which the action's errors say. */}
+          {season.status === "REGULAR_SEASON" &&
+          data.teams.some((t) => !t.withdrawn) ? (
+            <details className="mt-3 rounded-lg border border-line px-3 py-2">
+              <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                🏳️ A team has quit the season
+              </summary>
+              <ActionForm
+                action={withdrawTeam}
+                className="mt-2 flex flex-wrap items-center gap-2"
+              >
+                <select
+                  name="teamId"
+                  required
+                  defaultValue=""
+                  aria-label="Team withdrawing from the season"
+                  className={selectCls}
+                >
+                  <option value="" disabled>
+                    Team…
+                  </option>
+                  {data.teams
+                    .filter((t) => !t.withdrawn)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                </select>
+                <DangerSubmit
+                  token={season.name}
+                  title="Withdraw this team from the season?"
+                  consequences={[
+                    "Every unplayed regular fixture of the selected team is forfeited 0-N to the opponent (marked forfeit, so the ruled scores stay out of the game-diff tiebreaks).",
+                    "Open reschedule proposals on those fixtures are cancelled.",
+                    "The team is excluded from playoff seeding — its played results and roster are kept.",
+                  ]}
+                  recovery={`"Reinstate" (beside the team above) undoes the exclusion, and each forfeited fixture is individually reversible with "Reopen for import" — forfeits carry no games.`}
+                >
+                  Withdraw team
+                </DangerSubmit>
+              </ActionForm>
+            </details>
+          ) : null}
           {!draftStarted &&
           data.teams.length >= 2 &&
           season.budgetMmrWeight > 0 ? (
@@ -1671,6 +1752,21 @@ function ScheduleControls({
               defaultTs={season.firstMatchNight?.getTime()}
               className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
             />
+            {/* The lib always supported the mirrored second leg; this box is
+                what finally wires it. Decide BEFORE generating: switching
+                later is a full Regenerate, which clears every check-in, pick
+                and booking on the old fixtures. */}
+            <label
+              className="flex items-center gap-1.5 text-xs text-muted"
+              title="Every pairing plays twice, home/away swapped — roughly doubles the season length. Best for small leagues (4-6 teams), whose single round robin is only 3-5 weeks."
+            >
+              <input
+                type="checkbox"
+                name="doubleRound"
+                className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+              />
+              double round robin
+            </label>
             {/* GENERATE and REGENERATE are the same action and were the same
                 button. The first is routine; the second deletes every regular
                 fixture and recreates the identical pairings with NEW ids, so
@@ -1947,8 +2043,20 @@ function MatchResultRow({
           className="h-8 w-14 rounded-md border border-line bg-surface-2/50 px-2 text-center"
         />
         <span className="flex-1">{away?.name ?? "?"}</span>
+        {/* Ruled, not played: the flag is what keeps a defaulted 2-0 out of
+            the gameDiff tiebreak and the power rankings, and what badges the
+            result everywhere. Re-saving with the box unchecked un-rules it. */}
+        <label className="flex items-center gap-1 text-xs text-muted">
+          <input
+            type="checkbox"
+            name="forfeit"
+            defaultChecked={m.forfeit}
+            className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+          />
+          forfeit
+        </label>
         {m.status === "COMPLETED" ? (
-          <Badge tone="success">final</Badge>
+          <Badge tone="success">{m.forfeit ? "final · forfeit" : "final"}</Badge>
         ) : null}
         {/* This button had NO confirm, and the score boxes default to the
             current score — 0–0 on an unplayed match — with Enter submitting
@@ -2816,19 +2924,31 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   // "Release player" listing every player just bought.
   if (!rosterMovesVisible(season, data)) return null;
 
+  // Pre-start DRAFT (phase walked forward, auction not yet run): promotion is
+  // the ONLY legal move — promoteGateError blesses it ("they'll be auctioned
+  // normally") while signFreeAgent/releasePlayer refuse until the auction is
+  // COMPLETE. Rendering their forms here would be the controls-that-only-error
+  // class, and the short-team banner would cry wolf over rosters that are
+  // legitimately just captains.
+  const preStart =
+    season.status === "DRAFT" &&
+    (!data.draft || data.draft.status === DRAFT_STATUS.NOT_STARTED);
+
   const rosteredIds = new Set(
     data.teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
   const freeAgents = data.players.filter((p) => !rosteredIds.has(p.userId));
-  const shortTeams = data.teams.filter(
-    (t) => t.members.length < season.teamSize,
-  );
-  const canSign = freeAgents.length > 0 && shortTeams.length > 0;
-  const releasable = data.teams.flatMap((t) =>
-    t.members
-      .filter((m) => !m.isCaptain)
-      .map((m) => ({ id: m.id, name: m.user.name, teamName: t.name })),
-  );
+  const shortTeams = preStart
+    ? []
+    : data.teams.filter((t) => t.members.length < season.teamSize);
+  const canSign = !preStart && freeAgents.length > 0 && shortTeams.length > 0;
+  const releasable = preStart
+    ? []
+    : data.teams.flatMap((t) =>
+        t.members
+          .filter((m) => !m.isCaptain)
+          .map((m) => ({ id: m.id, name: m.user.name, teamName: t.name })),
+      );
   // Late joiners register as standins once signups close — promoting one is
   // the first step of the mid-season roster refill (promote → sign above).
   // `data.standins` deliberately unions registered STANDINs with undrafted full
@@ -2846,7 +2966,11 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
     <Card>
       <CardHeader
         title="Roster moves"
-        subtitle="Sign free agents onto short teams; release players who've left; promote late-joining standins to full players."
+        subtitle={
+          preStart
+            ? "Promote late-joining standins to full players — before the auction runs, a promoted player simply joins the draft pool."
+            : "Sign free agents onto short teams; release players who've left; promote late-joining standins to full players."
+        }
       />
       <CardBody className="space-y-3">
         {/* A SHORT ROSTER stated outright. The only place /admin printed a
@@ -2935,13 +3059,18 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
             <SubmitButton
               variant="secondary"
               size="sm"
-              confirm="Promote to full player? They leave the standin pool and can be signed onto a roster."
+              confirm={
+                preStart
+                  ? "Promote to full player? They join the draft pool and will be auctioned normally on draft night."
+                  : "Promote to full player? They leave the standin pool and can be signed onto a roster."
+              }
             >
               Promote to player
             </SubmitButton>
             <span className="text-xs text-muted">
-              then sign them with the form above — it appears once a team is
-              short and a free agent exists
+              {preStart
+                ? "they join the draft pool and get auctioned normally"
+                : "then sign them with the form above — it appears once a team is short and a free agent exists"}
             </span>
           </ActionForm>
         ) : null}
@@ -2976,13 +3105,15 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
             </SubmitButton>
           </ActionForm>
         ) : null}
-        <p className="text-xs text-muted">
-          Signings and releases last the rest of the season (unlike standins,
-          which cover a single match) and are announced in Discord. Both are
-          reversible from this card — release undoes a signing and refunds it,
-          and a released player goes back to the free-agent list. Captains
-          can&apos;t be released; hand over captaincy first.
-        </p>
+        {!preStart ? (
+          <p className="text-xs text-muted">
+            Signings and releases last the rest of the season (unlike standins,
+            which cover a single match) and are announced in Discord. Both are
+            reversible from this card — release undoes a signing and refunds it,
+            and a released player goes back to the free-agent list. Captains
+            can&apos;t be released; hand over captaincy first.
+          </p>
+        ) : null}
       </CardBody>
     </Card>
   );

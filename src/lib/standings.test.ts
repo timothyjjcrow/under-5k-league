@@ -514,3 +514,41 @@ describe("computeStandings — idDecided flags the coin-flip pairs", () => {
     expect(b.idDecided).toBeUndefined();
   });
 });
+
+describe("computeStandings — forfeits are ruled, not played", () => {
+  it("a forfeit counts for points and W-L but never the game diff", () => {
+    const s = computeStandings(
+      ["a", "b", "c"],
+      [
+        { ...match("a", "b", 2, 0), forfeit: true }, // ruled 2-0
+        match("a", "c", 1, 1),
+        match("b", "c", 2, 1),
+      ],
+    );
+    const a = s.find((x) => x.teamId === "a")!;
+    const b = s.find((x) => x.teamId === "b")!;
+    expect(a.points).toBe(4); // 3 (forfeit win) + 1 (draw) — points count
+    expect(a.wins).toBe(1);
+    expect(b.losses).toBe(1);
+    // …but the ruled 2-0 never reaches the map counts.
+    expect(a.gameWins).toBe(1); // only the real 1-1
+    expect(a.gameDiff).toBe(0);
+    expect(b.gameLosses).toBe(1); // only the real 2-1 vs c
+    expect(b.gameDiff).toBe(1);
+  });
+
+  it("head-to-head mini-diff ignores a forfeited meeting too", () => {
+    // a and b tied on everything; their two meetings were a real 1-1 draw and
+    // a forfeited 2-0 to a. Mini-POINTS still order them (a took 3 from the
+    // forfeit) but the ruled scores never feed the mini-diff.
+    const ranks = headToHeadRanks(
+      ["a", "b"],
+      [
+        { ...match("a", "b", 2, 0), forfeit: true },
+        match("b", "a", 1, 1),
+      ],
+    );
+    expect(ranks.get("a")).toBe(0); // forfeit WIN still orders the pair…
+    expect(ranks.get("b")).toBe(1);
+  });
+});

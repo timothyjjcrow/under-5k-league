@@ -21,6 +21,10 @@ export type RankableMatch = {
   awayTeamId: string;
   homeScore: number;
   awayScore: number;
+  /** Ruled/defaulted result — its scores are ADMIN-CHOSEN, not played, so the
+   *  per-game Elo expansion skips it entirely (in the LIB, not a caller's
+   *  filter: every consumer gets the rule). Optional for hand-built rows. */
+  forfeit?: boolean;
 };
 
 export type PowerRankingRow = {
@@ -58,7 +62,10 @@ export function ratingsThroughWeek(
 ): Map<string, number> {
   const ratings = new Map<string, number>(teamIds.map((t) => [t, ELO.START]));
   const done = matches
-    .filter((m) => m.status === MATCH_STATUS.COMPLETED && m.week <= upToWeek)
+    .filter(
+      (m) =>
+        m.status === MATCH_STATUS.COMPLETED && m.week <= upToWeek && !m.forfeit,
+    )
     .sort((a, b) => a.week - b.week);
   for (const m of done) {
     for (let i = 0; i < m.homeScore; i++) {

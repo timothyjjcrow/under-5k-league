@@ -59,13 +59,14 @@ import {
   fetchRankTier,
 } from "@/lib/dota";
 import { fetchSteamProfiles } from "@/lib/steam";
-import { clampInt, localDate, str } from "@/lib/form";
+import { bool, clampInt, localDate, str } from "@/lib/form";
 import {
   draftStartedMessage,
   freeAgentSignedMessage,
   getWebhookUrl,
   matchResultMessage,
   playerReleasedMessage,
+  teamWithdrewMessage,
   playoffsStartedMessage,
   standinRemovedMessage,
   sendDiscordMessage,
@@ -109,6 +110,13 @@ import type { ActionResult } from "@/lib/action-result";
  * destructive half the check exists to prevent.
  */
 class SeasonBecameActiveError extends Error {}
+
+/** Games the winner is credited in a forfeit: the series clinch number. Module
+ *  scope on purpose — a local arrow declared just above a transaction becomes
+ *  the "enclosing function" the mutation guard anchors its claim ids to. */
+function forfeitScore(bestOf: number): number {
+  return Math.floor(bestOf / 2) + 1;
+}
 class ResultsLandedError extends Error {}
 
 /**
@@ -399,6 +407,11 @@ export async function setSeasonPhase(
   // DRAFT, and a PLAYOFFS→REGULAR_SEASON flip landing between the final's
   // import and advancePlayoffBracket's PLAYOFFS-conditioned crowning claim
   // would eat the champion. Losing here costs one reload.
+  // Seam: a rival phase change committing between the guards above and this
+  // write — two admins, or one with two tabs. The claim is what makes the
+  // loser lose; a raced Promise.all can't steer this reliably (both orderings
+  // are legal), so the seam is what pins it.
+  await raceHook("admin.setSeasonPhase.beforeWrite");
   const flipped = await prisma.season.updateMany({
     where: { id: season.id, status: season.status },
     data: { status: target },
@@ -1336,7 +1349,13 @@ export async function generateSchedule(
     return { error: "Invalid first match night" };
   }
 
-  const rounds = roundRobin(teams.map((t) => t.id));
+  // The lib has supported a mirrored second leg since the beginning — this
+  // flag was just never wired to a form, locking a 4-6 team league to a 3-5
+  // week season with no in-app way to lengthen it. Mirrored = every pairing
+  // plays twice with home/away swapped, weeks N..2N-ish, and crossTable /
+  // SeasonGrid already render multiple meetings per pair.
+  const doubleRound = bool(formData, "doubleRound");
+  const rounds = roundRobin(teams.map((t) => t.id), doubleRound);
   const rows = rounds.flatMap((round, i) =>
     round.map((p) => ({
       seasonId: season.id,
@@ -1439,7 +1458,9 @@ export async function generateSchedule(
     // A blank first night isn't just "no times shown": unscheduled matches are
     // never auto-scanned, get no week reminder, and never lock pick'em. Say so
     // rather than letting the league discover it in week 2.
-    message: `Schedule generated · ${rows.length} matches${
+    message: `Schedule generated · ${rows.length} matches over ${rounds.length} week(s)${
+      doubleRound ? " (double round robin)" : ""
+    }${
       firstNight
         ? " · match nights set weekly"
         : " · no kickoff times set, so auto-sync, reminders and pick'em locks stay off until you set them"
@@ -1528,6 +1549,11 @@ export async function recordResult(
   const matchId = str(formData, "matchId");
   const homeScore = clampInt(formData, "homeScore", 0, 0, 99);
   const awayScore = clampInt(formData, "awayScore", 0, 0, 99);
+  // A forfeit is a RULED score, and the flag is what keeps the ruling honest
+  // downstream: standings/head-to-head exclude it from gameDiff, the power
+  // rankings skip it, and every surface badges it — an admin-chosen 2-0 no
+  // longer masquerades as a played sweep in the tiebreaks.
+  const forfeit = bool(formData, "forfeit");
 
   const match = await prisma.match.findUnique({ where: { id: matchId } });
   if (!match) return { error: "Unknown match" };
@@ -1611,6 +1637,7 @@ export async function recordResult(
       awayScore,
       winnerTeamId,
       status: MATCH_STATUS.COMPLETED,
+      forfeit,
     },
   });
   if (applied.count === 0) {
@@ -1645,7 +1672,7 @@ export async function recordResult(
   // unlogged: frequent, single-match, low collateral.)
   await logAdminAction({
     action: "recordResult",
-    summary: `Recorded ${home?.name ?? "?"} ${homeScore}–${awayScore} ${away?.name ?? "?"} (week ${match.week})`,
+    summary: `Recorded ${home?.name ?? "?"} ${homeScore}–${awayScore} ${away?.name ?? "?"} (week ${match.week})${forfeit ? " — forfeit" : ""}`,
     seasonId: match.seasonId,
   });
   if (home && away) {
@@ -1657,6 +1684,7 @@ export async function recordResult(
         awayScore,
         week: match.week,
         isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+        forfeit,
       }),
     );
     // Only a genuine send FAILURE is retryable. "No webhook configured" isn't:
@@ -1681,7 +1709,9 @@ export async function recordResult(
     await maybeAnnounceWeekHonors(match.seasonId, match.week);
   }
   refresh();
-  return { message: `Result saved · ${homeScore}–${awayScore}` };
+  return {
+    message: `Result saved · ${homeScore}–${awayScore}${forfeit ? " (forfeit — excluded from game-diff tiebreaks)" : ""}`,
+  };
 }
 
 /**
@@ -2122,6 +2152,163 @@ export async function releasePlayer(
   };
 }
 
+/**
+ * A whole TEAM quits mid-season — the most common amateur-league disaster,
+ * which used to be an unassisted grind: hand-typing a forfeit score for every
+ * remaining fixture, week after week, while the dead team stayed in the
+ * standings math, pick'em, the reminders, and — because seeding never asked —
+ * got seeded into the playoff bracket on its banked points.
+ *
+ * One action: every unplayed REGULAR fixture is forfeited 0-N to the opponent
+ * (forfeit=true, so the ruled scores stay out of the gameDiff tiebreak and the
+ * power rankings), open reschedule proposals on them are cancelled, and the
+ * team is flagged `withdrawn` — which is what excludes it from playoff
+ * seeding (createPlayoffBracket filters the flag; standings could not do that
+ * job, since a team that banked points before dying can out-rank the cut).
+ * Rosters, results and history are KEPT: the games happened.
+ *
+ * Recovery: reinstateTeam flips the flag back, and each forfeited fixture is
+ * individually reversible via "Reopen for import" (forfeits have no games).
+ */
+export async function withdrawTeam(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  // REGULAR_SEASON only. Before the season, removeCaptain is the tool (it
+  // deletes the empty team properly); during PLAYOFFS a bracket slot needs a
+  // per-match forfeit ruling via recordResult so advancement stays explicit.
+  if (season.status !== SEASON_STATUS.REGULAR_SEASON) {
+    return {
+      error:
+        season.status === SEASON_STATUS.PLAYOFFS
+          ? "During playoffs, rule their bracket match a forfeit with Save as final instead — advancement should be explicit"
+          : "Withdrawing a team is a mid-season act — before the season starts, remove the captain instead (it deletes the empty team)",
+    };
+  }
+  const teamId = str(formData, "teamId");
+  const team = await prisma.team.findFirst({
+    where: { id: teamId, seasonId: season.id },
+  });
+  if (!team) return { error: "Unknown team" };
+
+  const open = await prisma.match.findMany({
+    where: {
+      seasonId: season.id,
+      phase: MATCH_PHASE.REGULAR,
+      status: { not: MATCH_STATUS.COMPLETED },
+      OR: [{ homeTeamId: teamId }, { awayTeamId: teamId }],
+    },
+    select: { id: true, week: true, bestOf: true, homeTeamId: true, awayTeamId: true },
+  });
+  // Standins booked on the doomed fixtures: the rows become inert history the
+  // moment the matches complete, but the humans holding a live @-mentioned
+  // instruction to show up deserve a number in the toast, not silence.
+  const mootCover = await prisma.standinAssignment.count({
+    where: { matchId: { in: open.map((m) => m.id) } },
+  });
+
+  // Seam: the rival must COMMIT before the transaction below opens, which is
+  // exactly the auto-sync case (a separate request that already finished).
+  await raceHook("admin.withdrawTeam.beforeTx");
+  // Every leg is a guarded claim inside ONE transaction. The rival is
+  // auto-sync completing a fixture from any visitor's page view mid-flight:
+  // its real result must WIN, so each forfeit re-asserts not-COMPLETED in its
+  // WHERE and a lost row is simply skipped (counted honestly below), never
+  // overwritten. Array form: all-or-nothing, no return-after-write hazard.
+  const [flagged, ...rest] = await prisma.$transaction([
+    prisma.team.updateMany({
+      where: { id: teamId, withdrawn: false },
+      data: { withdrawn: true },
+    }),
+    ...open.map((m) =>
+      prisma.match.updateMany({
+        where: { id: m.id, status: { not: MATCH_STATUS.COMPLETED } },
+        data: {
+          status: MATCH_STATUS.COMPLETED,
+          forfeit: true,
+          homeScore: m.homeTeamId === teamId ? 0 : forfeitScore(m.bestOf),
+          awayScore: m.awayTeamId === teamId ? 0 : forfeitScore(m.bestOf),
+          winnerTeamId: m.homeTeamId === teamId ? m.awayTeamId : m.homeTeamId,
+        },
+      }),
+    ),
+    prisma.rescheduleRequest.updateMany({
+      where: { matchId: { in: open.map((m) => m.id) }, status: "PENDING" },
+      data: { status: "CANCELLED" },
+    }),
+  ]);
+  // THE enforcement point for "not already withdrawn" — there is deliberately
+  // no read-time copy of this check: a redundant one is strictly weaker (the
+  // forfeit legs below would still run) AND it makes this claim untestable,
+  // because every test stops at the `if` and passes just as happily with the
+  // predicate deleted. Same reasoning as saveRegistration's REMOVED claim.
+  if (flagged.count === 0) {
+    return { error: `${team.name} has already withdrawn` };
+  }
+  const matchClaims = rest.slice(0, open.length) as { count: number }[];
+  const forfeited = matchClaims.reduce((n, r) => n + r.count, 0);
+  const raced = open.length - forfeited;
+
+  await stampResultChange();
+  // Forfeits can close out whole weeks — honors are idempotent and quiet for
+  // weeks with nothing imported, so firing per affected week is safe.
+  for (const week of [...new Set(open.map((m) => m.week))]) {
+    await maybeAnnounceWeekHonors(season.id, week);
+  }
+  await sendDiscordMessage(teamWithdrewMessage(team.name, forfeited));
+  await logAdminAction({
+    action: "withdrawTeam",
+    summary: `Withdrew ${team.name} — ${forfeited} remaining fixture(s) forfeited to the opponents${raced ? ` (${raced} completed for real mid-flight and kept their result)` : ""}`,
+    seasonId: season.id,
+  });
+  refresh();
+  const notes = [
+    `${forfeited} fixture(s) forfeited to the opponents`,
+    raced ? `${raced} completed for real while you clicked and kept their result` : null,
+    mootCover ? `${mootCover} standin booking(s) on those fixtures are now moot` : null,
+    "excluded from playoff seeding · rosters and played results are kept",
+  ].filter(Boolean);
+  return { message: `${team.name} withdrawn · ${notes.join(" · ")}` };
+}
+
+/** The undo for the flag half of withdrawTeam. The forfeited fixtures are
+ *  reversed individually ("Reopen for import" — forfeits carry no games). */
+export async function reinstateTeam(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  const teamId = str(formData, "teamId");
+  const flipped = await prisma.team.updateMany({
+    where: { id: teamId, seasonId: season.id, withdrawn: true },
+    data: { withdrawn: false },
+  });
+  if (flipped.count === 0) return { error: "That team isn't withdrawn" };
+  const team = await prisma.team.findUnique({ where: { id: teamId } });
+  await logAdminAction({
+    action: "reinstateTeam",
+    summary: `Reinstated ${team?.name ?? teamId} — back in playoff-seeding contention`,
+    seasonId: season.id,
+  });
+  refresh();
+  return {
+    message: `${team?.name ?? "Team"} reinstated — reverse any forfeits you want undone with "Reopen for import" on each fixture`,
+  };
+}
+
 /** Assign a standin to fill in for a rostered player in a specific match.
  *  Guards live in standin-service (shared with the captain self-serve path). */
 export async function assignStandin(
@@ -2308,6 +2495,9 @@ export async function reopenMatch(
       homeScore: 0,
       awayScore: 0,
       winnerTeamId: null,
+      // A reopened forfeit ruling is un-ruled — the flag must not survive
+      // into whatever result gets recorded next.
+      forfeit: false,
       // Let auto-sync pick it up again from a clean slate.
       autoSyncedAt: null,
       autoSyncAttempts: 0,

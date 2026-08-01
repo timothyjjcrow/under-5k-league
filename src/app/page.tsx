@@ -1852,6 +1852,9 @@ async function SeasonView({
                 standings={standings.slice(0, 8)}
                 totalTeams={standings.length}
                 teamName={teamName}
+                withdrawnIds={
+                  new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+                }
                 formByTeam={teamForm}
                 playoffCut={
                   season.status === "REGULAR_SEASON"
@@ -2597,6 +2600,9 @@ async function CompleteView({
               <StandingsTable
                 standings={standings}
                 teamName={teamName}
+                withdrawnIds={
+                  new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+                }
                 formByTeam={teamForm}
               />
             </CardBody>

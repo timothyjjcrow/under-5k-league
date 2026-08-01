@@ -107,6 +107,9 @@ export function matchResultMessage(m: {
   awayScore: number;
   week: number;
   isPlayoff: boolean;
+  /** Ruled/defaulted result — say so, or the channel reads a no-show as a
+   *  played sweep. Optional so every existing call site is unchanged. */
+  forfeit?: boolean;
 }): string {
   const label = m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
   const home = name(m.homeName);
@@ -118,7 +121,12 @@ export function matchResultMessage(m: {
         ? away
         : null;
   const line = `⚔️ **${label}:** ${home} ${m.homeScore}–${m.awayScore} ${away}`;
-  return winner ? `${line} — **${winner}** take the series!` : `${line} — a draw!`;
+  const tail = winner
+    ? m.forfeit
+      ? `${line} — **${winner}** take the series by forfeit.`
+      : `${line} — **${winner}** take the series!`
+    : `${line} — a draw!`;
+  return tail;
 }
 
 export function playoffsStartedMessage(
@@ -148,6 +156,16 @@ export function playerReleasedMessage(
   teamName: string,
 ): string {
   return `📤 **${name(playerName)}** released from **${name(teamName)}** — they're a free agent again.`;
+}
+
+/** A team quit mid-season — the league-wide event, so a broadcast (results
+ *  of the individual forfeits are visible on /schedule; announcing each would
+ *  be N pings about one fact). */
+export function teamWithdrewMessage(
+  teamName: string,
+  forfeited: number,
+): string {
+  return `🏳️ **${name(teamName)}** have withdrawn from the season — their ${forfeited} remaining fixture(s) are forfeited to the opponents.`;
 }
 
 /** `<@&id>` prefix, or nothing when the league hasn't set a ping role. */

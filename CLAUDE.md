@@ -1366,8 +1366,11 @@ than letting someone discover it.
   = needs a player AND `maxBid >= minBid`; the resolver advances via its existing
   full-roster branch when it fails, and `nextNominatorIndex` requires it too so
   advancing can't cycle forever. -1 still means draft-complete. In a healthy
-  auction this is a no-op (maxBid maintains the invariant on every purchase) —
-  pinned by a 150-run randomised auction fuzz asserting no early completion.
+  auction this is a no-op (maxBid maintains the invariant on every purchase).
+  (An earlier version of this line claimed a "150-run randomised auction fuzz"
+  pinned it. There is no such test in the repo and there never was — the
+  2026-07-31 audit caught it. What exists is draft.itest.ts's broke-nominator
+  and pool-dry cases. Don't cite coverage without grepping for it.)
 - Pool-dry completion: if signups run out mid-draft, both resolvers mark the
   draft COMPLETE (short teams play with standins) instead of stalling forever.
   `startDraft` warns in its success toast when seats outnumber the pool.
@@ -1633,9 +1636,13 @@ reached a player who wasn't already looking at it.
   sent before. Only `discordId` is mentionable — the typed `discordName` is a
   string a captain copies by hand and no amount of it makes someone pingable.
   Services return `mentions`/`notifyUserId` and the ACTION does the send, so a
-  webhook failure still can't touch the write. NOTE the standin announcement
-  has FOUR call sites (`standins.ts` ×2 AND `admin.ts` ×2) — miss one and the
-  admin path silently stops notifying.
+  webhook failure still can't touch the write. NOTE the assign/remove
+  announcement has FOUR SEND sites (`standins.ts` ×2 AND `admin.ts` ×2) — miss
+  one and the admin path silently stops notifying. The STAND-DOWN message
+  (`standinRemovedMessage`) now has two more builders on top of those:
+  `releasePlayer` and `signFreeAgent`, which cancel cover as a side effect
+  (see the roster-moves section). Six total; count them before claiming a
+  number here.
 - **Every player/team name in an announcement goes through
   `escapeDiscordText`** (`src/lib/discord-escape.ts`, tested; `discord.ts`
   aliases it to `name`). Discord renders markdown in WEBHOOK messages and,
@@ -2816,8 +2823,150 @@ reports a standin double-booked by a retime, since `standinConflict` is only
 checked when cover is arranged and every retime path could move a fixture onto
 a night they were already booked for.
 
+## The 2026-07-31 audit and what it changed (read before re-litigating any of it)
+
+A 44-agent trace→verify→refute audit of the whole codebase, then a fix pass.
+The audit's own verdict: **a season runs start to finish for every actor** —
+the gaps were off-happy-path TOOLING and a family of read-time-only guards.
+Ten confirmed majors (each survived an independent refutation attempt) and
+three untested destructive guards were closed; the fixes below are load-bearing
+and several encode a rule worth keeping.
+
+**The DRAFT trap — the one exit-free state this app had.** `setSeasonPhase`'s
+backward-into-DRAFT results refusal used to key on `draft?.status === COMPLETE`,
+so a NULL draft row (the hand-run league) or a NOT_STARTED one (post-abort)
+walked straight past it — and `startDraft` checked neither phase nor results.
+One click then opened a live auction over a played league, and the trap closed:
+`abortDraft` refuses over results, and the phase guard refuses to leave DRAFT
+mid-auction. Both halves are fixed: the refusal keys on `target === DRAFT`
+alone (IN_PROGRESS/PAUSED exempt — that flip is the stranded-auction REPAIR),
+and `startDraft` carries the same played/games pair read-time AND re-asserted
+in its transaction. **`setSeasonPhase`'s write is now a guarded claim**
+(`updateMany` re-asserting the phase the guards judged) — it was the last blind
+lifecycle write, and its rivals are real (a concurrent `startDraft`; a
+PLAYOFFS→REGULAR_SEASON flip eating the crowning claim).
+
+**Archived seasons are read-only for captains.** `match-report-service`,
+`reschedule-service` (propose + ACCEPT; decline/withdraw stay legal as cleanup)
+and `setAvailability` now carry the archived-season refusal that only
+`standin-service` had, with matching render gates on the match page. Without
+it a captain on last season's unplayed fixture could import a game — which runs
+`recomputeSeries` → the bracket → every cross-season board.
+
+**Money surface: `voidLastResult` takes an explicit `lobbyId`** and
+`/inhouse/history` renders a per-row admin Void. The room button (gated on the
+viewer having PLAYED the game, within 10 minutes) meant the documented use case
+— players report a wrong auto-import to an admin who wasn't one of the ten —
+had no reachable control at all.
+
+**Import correctness, three fixes.** `updateDotaAccount`'s collision check now
+matches steam-DERIVED ids (most users have no override, so B pasting A's
+Dotabuff URL found nothing), backed by a nullable `@unique` on
+`User.dotaAccountId` with a P2002 catch. A PLAYER→STANDIN flip is refused while
+the auction runs, and `resolveExpiredNomination` voids a non-PLAYER lot — the
+on-the-block player could flip on /me, rendering a headless lot that still
+CHARGED the team and minted a rostered STANDIN. And **`syncLeagueGames` buffers
+candidates per fixture and runs `pickSeriesGames`** — the clinch-stop protected
+only the roster-scan path, while the league feed lists NEWEST FIRST, so a
+"one for fun" game after a decided night imported BEFORE the real ones and a
+2-0 went into the record as 2-1.
+
+**`advancePlayoffBracket`'s round build is Serializable and re-asserts its
+inputs in-transaction** (the round's rows still exist, same winners, season
+still PLAYOFFS). Reset deletes the round markers first, so a stale advance's
+marker create used to SUCCEED and pair pre-reset winners into the fresh
+bracket — a phantom round that `maxRound` then points at forever: no champion,
+ever, and the only repair was another reset.
+
+**Stale cover, the reverse direction.** `signFreeAgent` cancels now-redundant
+EMPTY-SEAT bookings when the signing fills the last seat (started series kept
+and reported — the `releasePlayer` rule), with stand-downs. Left behind, they
+made the refilled side compute as teamSize+1 in `matchNightRoster`, the week
+reminder AND `gatherTeamAccounts`' import set.
+
+**Dead heats are visible.** `computeStandings` sets `idDecided` on rows whose
+order fell to the team-id fallback; the table shows a "tied" chip and the
+Start/Reset-playoffs confirms name the tied teams when the heat touches the
+seeding. There is still no seed-override tool — the levers are correcting a
+result or accepting the flip, and the copy says so.
+
+**Three destructive guards had ZERO coverage** and are now pinned by
+sabotage-verified tests: the playoff reset's round-marker cleanup (reset →
+advance → champion), `deleteSeason`'s archived-ness re-assert + rollback, and
+`generateSchedule`'s results gate (both halves). Two new race-hook seams exist
+for them: `admin.deleteSeason.beforeTx` and `admin.generateSchedule.beforeTx`.
+`setAvailability` got its first tests at the same time.
+
+## Forfeits, team dropout, double round robin (2026-08-01)
+
+The product gaps the audit named. Each is small and each has a rule:
+
+- **`Match.forfeit` — a ruled score, and the flag is what keeps it honest.**
+  Points and W-L count normally; the game scores are EXCLUDED from `gameDiff`
+  (and from `headToHeadRanks`' mini-diff, and from `powerRankings`' per-game
+  Elo — in the LIB, not a caller's filter). Otherwise an admin's choice of
+  default score silently decides the tiebreak and the power rankings. Set by
+  `recordResult`'s checkbox, CLEARED by `reopenMatch` (a reopened ruling must
+  not survive into the next result) and by re-saving with the box unticked.
+  Badged on /schedule ("ff"), the match page, and the admin row; the Discord
+  result message says "by forfeit". `MatchLike.forfeit` and
+  `RankableMatch.forfeit` are OPTIONAL so hand-built rows and older snapshots
+  stay valid.
+- **`withdrawTeam` / `reinstateTeam` — the team-dropout tool.** REGULAR_SEASON
+  only (pre-season the tool is `removeCaptain`, which deletes the empty team;
+  a playoff slot needs an explicit per-match ruling, and the error says which).
+  One action forfeits every unplayed REGULAR fixture 0-N to the opponent,
+  cancels open proposals on them, and flags `Team.withdrawn`. **The flag is
+  what excludes the team from playoff seeding** (`createPlayoffBracket` filters
+  it, and the bracket size shrinks with the field) — the standings CAN'T do
+  that job, because a team that banked points before dying can out-rank the
+  cut, and its played results are real so the table keeps showing it, badged
+  "withdrew". Every forfeit leg re-asserts `status: { not: COMPLETED }` in its
+  WHERE, so a real result landing mid-click WINS and is counted honestly in
+  the toast rather than overwritten. Seam: `admin.withdrawTeam.beforeTx`.
+  **That guard's test had to be RACED** — the staged version (complete a match
+  before calling) passes against a blind write, because the action's own
+  read-time filter excludes it. Verified by sabotage in both directions.
+- **Double round robin is finally reachable**: `roundRobin(ids, doubleRound)`
+  was built and unit-tested from the start, but no caller ever passed the flag
+  — a 4-6 team league was locked to a 3-5 week season. It is a checkbox on
+  Generate schedule now, and the toast names the week count. DECIDE BEFORE
+  GENERATING: switching later is a full Regenerate, which clears every
+  check-in, pick and booking on the old fixtures.
+- **Pre-draft standin promotion renders.** `promoteGateError` always blessed
+  the window before the auction ("they'll be auctioned normally"), but
+  `rosterMovesVisible` hid the card for the whole DRAFT phase until the draft
+  was COMPLETE — so the most natural late-joiner timing (registered the week
+  before draft night) was undeliverable through any control. The card now shows
+  in DRAFT pre-start with ONLY the promote form; sign/release would refuse
+  there, and rendering controls that can only error is the class this panel
+  keeps getting rebuilt to avoid.
+- **Admin MMR edits render until the draft STARTS**, not just during SIGNUPS —
+  the DRAFT-pre-start window is exactly when a typo still skews every
+  MMR-weighted budget.
+- **Standin signups are moderatable**: the admin signups card lists registered
+  STANDINs with the same remove form plus an MMR edit that is deliberately NOT
+  draft-gated (standins register in every phase). `withdrawSignup` never had a
+  type gate — this was a missing render, and it meant a troll standin sat in
+  every dropdown all season.
+
 ## Good next steps
 
+- **Open product decisions** (the audit named them; each needs a call, not
+  code-first): an exclusion/ban layer (inhouse `joinQueue` has no ban concept
+  and no points-dock tool exists — deliberately deferred until the league
+  actually has a griefer, since standin removal, the acute case, is fixed); a
+  captain-initiated forfeit claim (the flag exists, the captain path doesn't);
+  archiving each season's fantasy and pick'em WINNERS (both pages are keyed to
+  the active season with no `?season=`, so those two side-games conclude with
+  no recorded winner anywhere once N+1 is created); a player-visible
+  rules/settings page.
+- **Known minors worth a sweep** (full list in the audit's findings doc): a
+  declined reschedule notifies nobody; a released player is never told; the
+  champion announcement has no failure retry (series results do); `removeGame`
+  and `reopenMatch` don't bump the result cursor; a late-arriving Divine medal
+  permanently locks an admitted player's /me form; `seasonScenarioReport`
+  recomputes uncached on four hot pages.
 - Production deploy config (swap SQLite → Postgres, real Steam key).
 - Optional: sync from a Valve `leagueid` (field exists on `Season`) if the
   league ever gets ticketed — `/leagues/{id}/matches` + `classifyGame`.

@@ -200,7 +200,17 @@ export default async function MatchDetailPage({
             )}
             <Badge>Bo{match.bestOf}</Badge>
             {match.status === "COMPLETED" ? (
-              <Badge>Final</Badge>
+              <>
+                <Badge>Final</Badge>
+                {match.forfeit ? (
+                  <Badge
+                    tone="accent"
+                    title="This score was ruled by an admin (no-show / default), not played — it counts for the standings but not the game-diff tiebreak."
+                  >
+                    forfeit
+                  </Badge>
+                ) : null}
+              </>
             ) : match.status === "LIVE" || games.length > 0 ? (
               <Badge tone="accent">LIVE</Badge>
             ) : null}

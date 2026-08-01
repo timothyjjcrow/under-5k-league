@@ -24,6 +24,7 @@ export function StandingsTable({
   viewerTeamId,
   movement,
   totalTeams,
+  withdrawnIds,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -38,6 +39,9 @@ export function StandingsTable({
   movement?: Map<string, number>;
   /** League size before any slicing (dashboard passes the top 8 only). */
   totalTeams?: number;
+  /** Teams that withdrew mid-season (withdrawTeam) — badged, never hidden:
+   *  their played results are real, they're just out of seeding contention. */
+  withdrawnIds?: Set<string>;
 }) {
   // "Everyone makes the bracket" must be judged against the whole league,
   // not the (possibly sliced) rows this table happens to show.
@@ -57,6 +61,7 @@ export function StandingsTable({
     clinch: cutIsReal ? clinch?.get(s.teamId) ?? null : null,
     move: movement?.get(s.teamId) ?? 0,
     idDecided: s.idDecided ?? false,
+    withdrawn: withdrawnIds?.has(s.teamId) ?? false,
   }));
   return (
     <StandingsTableClient

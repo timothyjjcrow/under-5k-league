@@ -29,6 +29,8 @@ export type StandingsRowView = {
   move: number;
   /** Order vs. a neighbour fell to the team-id fallback — a dead heat. */
   idDecided: boolean;
+  /** Quit mid-season — remaining fixtures forfeited, out of seeding. */
+  withdrawn: boolean;
 };
 
 type SortKey = "rank" | "wins" | "draws" | "losses" | "gameDiff" | "points";
@@ -229,6 +231,16 @@ export function StandingsTableClient({
                     {/* Marks only mean something when a team can miss the
                         bracket — with everyone qualifying they'd all be ✓. */}
                     <ClinchMark status={row.clinch} />
+                    {row.withdrawn ? (
+                      <span
+                        role="img"
+                        aria-label="Withdrew from the season — remaining fixtures forfeited, excluded from playoff seeding"
+                        title="Withdrew from the season — remaining fixtures were forfeited to the opponents; excluded from playoff seeding"
+                        className="shrink-0 rounded bg-surface-2 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+                      >
+                        withdrew
+                      </span>
+                    ) : null}
                     {row.idDecided ? (
                       <span
                         role="img"

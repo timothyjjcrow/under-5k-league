@@ -47,13 +47,19 @@ export async function createPlayoffBracket(seasonId: string) {
     prisma.match.findMany({ where: { seasonId } }),
   ]);
   if (!season) throw new Error("No season");
-  if (teams.length < 2) throw new Error("Need at least 2 teams for playoffs");
+  // A WITHDRAWN team (withdrawTeam — quit mid-season, remaining fixtures
+  // forfeited) is excluded from seeding HERE, not by the standings: a team
+  // that banked points before dying can out-rank the cut, and the standings
+  // table deliberately keeps showing it (badged) because its played results
+  // are real. The bracket size shrinks with the field.
+  const alive = teams.filter((t) => !t.withdrawn);
+  if (alive.length < 2) throw new Error("Need at least 2 teams for playoffs");
 
   const standings = computeStandings(
-    teams.map((t) => t.id),
+    alive.map((t) => t.id),
     matches,
   );
-  const bracketSize = pickBracketSize(teams.length);
+  const bracketSize = pickBracketSize(alive.length);
   const seeded = standings.slice(0, bracketSize).map((s) => s.teamId);
   const pairings = playoffFirstRound(seeded, bracketSize);
   const lastRegularWeek = matches

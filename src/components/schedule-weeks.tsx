@@ -22,6 +22,8 @@ export type MatchView = {
   homeScore: number;
   awayScore: number;
   done: boolean;
+  /** Ruled/defaulted result — the score was never played; badge it. */
+  forfeit: boolean;
   /** Series in progress — some games imported, not decided (auto-sync makes
    *  "Bo3 at 1–0" a common minutes-fresh state worth showing live). */
   live: boolean;
@@ -298,7 +300,10 @@ function MatchRow({ match: m }: { match: MatchView }) {
         </div>
         <div className="shrink-0 text-center">
           {m.done ? (
-            <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm tabular-nums">
+            <span
+              className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm tabular-nums"
+              title={m.forfeit ? "Forfeit — this score was ruled, not played" : undefined}
+            >
               <span
                 className={m.homeWin ? "font-semibold text-fg" : "text-muted"}
               >
@@ -310,6 +315,11 @@ function MatchRow({ match: m }: { match: MatchView }) {
               >
                 {m.awayScore}
               </span>
+              {m.forfeit ? (
+                <span className="ml-1.5 align-middle font-sans text-[10px] font-medium uppercase tracking-wide text-muted">
+                  ff
+                </span>
+              ) : null}
             </span>
           ) : m.live ? (
             <span
