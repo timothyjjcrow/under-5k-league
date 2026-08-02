@@ -1,15 +1,13 @@
 import Link from "next/link";
-import { parseGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
 import {
   formatGameDuration,
   leagueRecords,
+  toRecordGames,
   type GameRecord,
   type PlayerRecord,
-  type RecordGame,
 } from "@/lib/records";
-import type { PlayerStat } from "@/lib/match-import";
 import { heroById } from "@/lib/heroes";
 import { formatNetWorth } from "@/lib/utils";
 import {
@@ -78,27 +76,8 @@ export default async function RecordsPage() {
     ]),
   );
 
-  const recordGames: RecordGame[] = games.map((g) => ({
-    matchId: g.matchId,
-    seasonId: g.match.seasonId,
-    radiantWin: g.radiantWin,
-    durationSecs: g.durationSecs,
-    radiantScore: g.radiantScore,
-    direScore: g.direScore,
-    lines: parseGamePlayers<PlayerStat>(g.players).map((p) => ({
-      userId: p.userId,
-      heroId: p.heroId,
-      kills: p.kills,
-      deaths: p.deaths,
-      assists: p.assists,
-      netWorth: p.netWorth,
-      gpm: p.gpm,
-      lastHits: p.lastHits,
-      isRadiant: p.isRadiant,
-    })),
-  }));
-
-  const book = leagueRecords(recordGames);
+  // Shared with the profile page's record-holder chips — one mapping, no drift.
+  const book = leagueRecords(toRecordGames(games));
   if (book.players.length === 0 && book.games.length === 0) {
     return (
       <div className="space-y-6">

@@ -960,7 +960,9 @@ export function HeroPool({
   heroes,
   limit = 8,
 }: {
-  heroes: { heroId: number; games: number; wins: number }[];
+  /** `kda` is optional and additive: entries without it render byte-identical
+   *  to before it existed (team pages and pub heroes pass nothing). */
+  heroes: { heroId: number; games: number; wins: number; kda?: number }[];
   limit?: number;
 }) {
   return (
@@ -1000,6 +1002,9 @@ export function HeroPool({
                     {winPct}%
                   </span>{" "}
                   W
+                  {h.kda != null ? (
+                    <span className="tabular-nums"> · {h.kda} KDA</span>
+                  ) : null}
                 </div>
               </div>
             </div>

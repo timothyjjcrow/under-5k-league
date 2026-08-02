@@ -131,6 +131,7 @@ export default async function PlayersPage() {
   // Scouting extras, one parallel record per pool player (the PoolDraftInfo
   // precedent — PoolPlayer stays frozen). Everything is data-presence gated:
   // an empty league ships an empty map and the pool renders as before.
+  // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
   const inhouseInfo = buildPoolInhouseInfo(
     ladder,

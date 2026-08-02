@@ -67,7 +67,7 @@ export function PlayerPool({
   scout?: PoolScoutInfo;
   /** Server clock (epoch ms) for the pub recency labels — passed down so the
    *  SSR pass and hydration compute identical text. */
-  now?: number;
+  now: number;
   /** True for signed-in viewers (contact info is members-only). The payload
    *  blanks discordName when signed out, so without this flag the component
    *  can't tell "signed out" from "player has no Discord" — and would show
@@ -77,7 +77,7 @@ export function PlayerPool({
   // Data-presence gates (the anyDrafted precedent — never season phase).
   // Computed before the state hooks: the sort seeding below reads anyInhouse.
   const anyInhouse = players.some((p) => !!scout?.[p.userId]?.inhouse);
-  const nowMs = now ?? Date.now();
+  const nowMs = now;
   const grid = rowGrid(anyInhouse);
   // Filter state seeds from the URL so a captain can SEND someone "the pos-1
   // free agents" — and so a reload, or a trip to a player's profile and back,

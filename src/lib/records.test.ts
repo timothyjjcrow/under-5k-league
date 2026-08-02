@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   formatGameDuration,
   leagueRecords,
+  toRecordGames,
   type RecordGame,
   type RecordLine,
+  type StoredRecordGame,
 } from "./records";
 
 function line(overrides: Partial<RecordLine>): RecordLine {
@@ -125,5 +127,91 @@ describe("formatGameDuration", () => {
   it("formats minutes and seconds", () => {
     expect(formatGameDuration(2597)).toBe("43m 17s");
     expect(formatGameDuration(60)).toBe("1m 0s");
+  });
+});
+
+describe("toRecordGames", () => {
+  const row = (overrides: Partial<StoredRecordGame> = {}): StoredRecordGame => ({
+    matchId: "m1",
+    radiantWin: true,
+    durationSecs: 2400,
+    radiantScore: 30,
+    direScore: 20,
+    players: JSON.stringify([
+      {
+        userId: "u1",
+        heroId: 7,
+        kills: 9,
+        deaths: 2,
+        assists: 14,
+        netWorth: 21000,
+        gpm: 512,
+        lastHits: 230,
+        isRadiant: true,
+      },
+    ]),
+    match: { seasonId: "s1" },
+    ...overrides,
+  });
+
+  it("maps stored rows into the record book's shape", () => {
+    const [g] = toRecordGames([row()]);
+    expect(g).toMatchObject({
+      matchId: "m1",
+      seasonId: "s1",
+      radiantWin: true,
+      durationSecs: 2400,
+      radiantScore: 30,
+      direScore: 20,
+    });
+    expect(g.lines).toEqual([
+      {
+        userId: "u1",
+        heroId: 7,
+        kills: 9,
+        deaths: 2,
+        assists: 14,
+        netWorth: 21000,
+        gpm: 512,
+        lastHits: 230,
+        isRadiant: true,
+      },
+    ]);
+  });
+
+  it("normalizes missing economy fields and userId to null, never 0", () => {
+    const [g] = toRecordGames([
+      row({
+        players: JSON.stringify([
+          { heroId: 3, kills: 1, deaths: 1, assists: 1, isRadiant: false },
+        ]),
+      }),
+    ]);
+    expect(g.lines[0]).toMatchObject({
+      userId: null,
+      netWorth: null,
+      gpm: null,
+      lastHits: null,
+    });
+    // …and leagueRecords therefore never crowns an economy record from it.
+    const book = leagueRecords(toRecordGames([row({ players: JSON.stringify([
+      { userId: "u9", heroId: 3, kills: 1, deaths: 1, assists: 1, isRadiant: false },
+    ]) })]));
+    expect(book.players.find((r) => r.key === "netWorth")).toBeUndefined();
+    expect(book.players.find((r) => r.key === "gpm")).toBeUndefined();
+  });
+
+  it("degrades malformed players JSON to an empty line list", () => {
+    const [g] = toRecordGames([row({ players: "not json" })]);
+    expect(g.lines).toEqual([]);
+  });
+
+  it("keeps the caller's row order (records are first-achiever-keeps-tie)", () => {
+    const games = toRecordGames([
+      row({ matchId: "m1" }),
+      row({ matchId: "m2" }),
+    ]);
+    const book = leagueRecords(games);
+    expect(book.players.find((r) => r.key === "kills")?.matchId).toBe("m1");
   });
 });

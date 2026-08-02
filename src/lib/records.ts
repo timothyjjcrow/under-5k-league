@@ -4,6 +4,8 @@
 // decides who holds what. Ties keep the first achiever, so records must be
 // fed in chronological order (a record is only *broken*, never shared).
 
+import { parseGamePlayers } from "./player-stats";
+
 export type RecordLine = {
   /** Mapped league user, or null for an unmapped account (skipped). */
   userId: string | null;
@@ -136,6 +138,60 @@ export type RecordBook = {
   players: PlayerRecord[];
   games: GameRecord[];
 };
+
+/** The stored-Game row shape the record book needs — a structural subset of
+ *  what getAllGamesForRecords selects, so both /records and the profile page
+ *  can share one mapping. */
+export type StoredRecordGame = {
+  matchId: string;
+  radiantWin: boolean;
+  durationSecs: number;
+  radiantScore: number;
+  direScore: number;
+  /** The Game.players box-score JSON. */
+  players: string;
+  match: { seasonId: string };
+};
+
+/**
+ * Map stored Game rows (chronological — keep the caller's order) into
+ * RecordGames. Extracted from the /records page so the profile's record-holder
+ * chips can't drift from the record book's own parsing: a malformed players
+ * JSON yields an empty line list (parseGamePlayers' contract), and optional
+ * economy fields normalize to null rather than 0 so a legacy import can never
+ * hold an economy record with a fabricated value.
+ */
+export function toRecordGames(rows: StoredRecordGame[]): RecordGame[] {
+  return rows.map((g) => ({
+    matchId: g.matchId,
+    seasonId: g.match.seasonId,
+    radiantWin: g.radiantWin,
+    durationSecs: g.durationSecs,
+    radiantScore: g.radiantScore,
+    direScore: g.direScore,
+    lines: parseGamePlayers<{
+      userId?: string | null;
+      heroId: number;
+      kills: number;
+      deaths: number;
+      assists: number;
+      netWorth?: number | null;
+      gpm?: number | null;
+      lastHits?: number | null;
+      isRadiant: boolean;
+    }>(g.players).map((p) => ({
+      userId: p.userId ?? null,
+      heroId: p.heroId,
+      kills: p.kills,
+      deaths: p.deaths,
+      assists: p.assists,
+      netWorth: p.netWorth ?? null,
+      gpm: p.gpm ?? null,
+      lastHits: p.lastHits ?? null,
+      isRadiant: p.isRadiant,
+    })),
+  }));
+}
 
 /** Compute the record book. `games` must be in chronological order. */
 export function leagueRecords(games: RecordGame[]): RecordBook {
