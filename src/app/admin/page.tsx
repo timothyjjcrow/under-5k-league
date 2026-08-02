@@ -1029,8 +1029,11 @@ function CaptainControls({
              than macOS's, so it read as a 7px page scroll. */
           <div className="flex flex-wrap justify-end gap-2">
             <ActionForm action={syncPlayerRanks}>
+              {/* Pulls medals AND the pub-scouting snapshots the player pool
+                  renders (recent W/L, games, last-played) — one button, one
+                  OpenDota pass. */}
               <SubmitButton variant="secondary" size="sm">
-                Sync ranks
+                Sync ranks &amp; stats
               </SubmitButton>
             </ActionForm>
             <ActionForm action={syncSteamProfiles}>

@@ -18,9 +18,16 @@ import {
 import { DOTA_ROLES } from "@/lib/roles";
 import {
   filterAndSortPlayers,
+  inhouseTitle,
+  inhouseToken,
+  pubTitle,
+  pubToken,
+  sortByInhouseRecord,
   type PoolPlayer,
+  type PoolScoutInfo,
   type PoolSort,
 } from "@/lib/player-pool";
+import { pubActivity } from "@/lib/pub-stats";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
 
@@ -33,6 +40,11 @@ export type PoolDraftInfo = Record<
 
 type PoolStatus = "all" | "drafted" | "free";
 
+/** The component's sort space: the shared lib's three, plus the pool-only
+ *  inhouse ordering. Deliberately NOT added to PoolSort — that type is shared
+ *  with the draft room, where an inhouse option would be a phantom control. */
+type PoolSortEx = PoolSort | "inhouse";
+
 const SORTS: PoolSort[] = ["mmr", "rank", "name"];
 const ROLE_KEYS: string[] = DOTA_ROLES.map((r) => r.key);
 
@@ -40,11 +52,24 @@ export function PlayerPool({
   players,
   showDraftStatus,
   draftInfo,
+  scout,
+  now,
 }: {
   players: PoolPlayer[];
   showDraftStatus: boolean;
   draftInfo?: PoolDraftInfo;
+  /** Per-player scouting extras (inhouse record, pub snapshot, goals quote) —
+   *  a parallel record like draftInfo, so PoolPlayer stays frozen. */
+  scout?: PoolScoutInfo;
+  /** Server clock (epoch ms) for the pub recency labels — passed down so the
+   *  SSR pass and hydration compute identical text. */
+  now?: number;
 }) {
+  // Data-presence gates (the anyDrafted precedent — never season phase).
+  // Computed before the state hooks: the sort seeding below reads anyInhouse.
+  const anyInhouse = players.some((p) => !!scout?.[p.userId]?.inhouse);
+  const nowMs = now ?? Date.now();
+  const grid = rowGrid(anyInhouse);
   // Filter state seeds from the URL so a captain can SEND someone "the pos-1
   // free agents" — and so a reload, or a trip to a player's profile and back,
   // doesn't silently drop the filter they were reading. Read once on mount:
@@ -57,9 +82,13 @@ export function PlayerPool({
     const p = params.get("pos");
     return p && ROLE_KEYS.includes(p) ? p : null;
   });
-  const [sort, setSort] = useState<PoolSort>(() => {
-    const s = params.get("sort") as PoolSort | null;
-    return s && SORTS.includes(s) ? s : "mmr";
+  const [sort, setSort] = useState<PoolSortEx>(() => {
+    const s = params.get("sort");
+    // A shared ?sort=inhouse link degrades to mmr when the ladder is empty —
+    // the existing invalid-value pattern; the mirror effect then rewrites the
+    // URL, which is the established behavior.
+    if (s === "inhouse") return anyInhouse ? "inhouse" : "mmr";
+    return s && SORTS.includes(s as PoolSort) ? (s as PoolSort) : "mmr";
   });
   const [captainOnly, setCaptainOnly] = useState(() => params.get("cap") === "1");
   const [status, setStatus] = useState<PoolStatus>(() => {
@@ -96,11 +125,19 @@ export function PlayerPool({
   // (post-draft phases) — during SIGNUPS/an empty DRAFT the pool is all free.
   const anyDrafted = useMemo(() => players.some((p) => p.drafted), [players]);
 
-  const filtered = useMemo(
-    () =>
-      filterAndSortPlayers(players, { query, role, sort, captainOnly, status }),
-    [players, query, role, sort, captainOnly, status],
-  );
+  const filtered = useMemo(() => {
+    // "inhouse" is a pool-only re-sort layered on the shared lib: filter with
+    // the neutral mmr order, then band by inhouse record (ranked > provisional
+    // > no games; the stable sort keeps the MMR order inside the tail band).
+    const base = filterAndSortPlayers(players, {
+      query,
+      role,
+      sort: sort === "inhouse" ? "mmr" : sort,
+      captainOnly,
+      status,
+    });
+    return sort === "inhouse" ? sortByInhouseRecord(base, scout ?? {}) : base;
+  }, [players, query, role, sort, captainOnly, status, scout]);
   const filtersActive =
     query !== "" || role !== null || captainOnly || status !== "all";
   // Sort is deliberately NOT reset: it's an ordering preference, not a filter,
@@ -209,11 +246,12 @@ export function PlayerPool({
 
         <select
           value={sort}
-          onChange={(e) => setSort(e.target.value as PoolSort)}
+          onChange={(e) => setSort(e.target.value as PoolSortEx)}
           className="h-11 rounded-lg border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9"
           aria-label="Sort players"
         >
           <option value="mmr">Sort: MMR</option>
+          {anyInhouse ? <option value="inhouse">Sort: Inhouse</option> : null}
           <option value="rank">Sort: Rank</option>
           <option value="name">Sort: Name</option>
         </select>
@@ -266,13 +304,16 @@ export function PlayerPool({
           <div
             aria-hidden
             className={cn(
-              ROW_GRID,
+              grid,
               "hidden border-b border-line bg-surface-2/40 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted md:grid",
             )}
           >
             <span />
             <span>Player</span>
             <span className="text-right">MMR</span>
+            {anyInhouse ? (
+              <span className="hidden text-right lg:block">Inhouse</span>
+            ) : null}
             <span>Roles</span>
             <span className="hidden xl:block">Signature heroes</span>
             <span className="text-right">
@@ -280,11 +321,24 @@ export function PlayerPool({
             </span>
           </div>
           <ul className="divide-y divide-line/60">
-            {filtered.map((p) => (
+            {filtered.map((p) => {
+              const sc = scout?.[p.userId];
+              const ih = sc?.inhouse;
+              const pub = sc?.pub;
+              const activity = pub ? pubActivity(pub.lastPlayedAt, nowMs) : null;
+              // One quote line per row: the captain note (written TO captains)
+              // beats the player's own goals; the goals fill the slot when no
+              // note exists. `statement` is only sent when it would render.
+              const quote = hasText(p.captainNote)
+                ? { text: p.captainNote, label: "Note for captains" }
+                : sc?.statement
+                  ? { text: sc.statement, label: "Their goals" }
+                  : null;
+              return (
               <li
                 key={p.userId}
                 className={cn(
-                  ROW_GRID,
+                  grid,
                   "grid items-center px-4 py-3 transition-colors hover:bg-surface-2/40",
                 )}
               >
@@ -306,8 +360,33 @@ export function PlayerPool({
                       carry TAP_SAFE their hit boxes were overlapping by 6px —
                       a band where a tap landed on whichever painted last. A
                       target that is big enough but ambiguous is worse than a
-                      small one; hit boxes may touch, never overlap. */}
-                  <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                      small one; hit boxes may touch, never overlap.
+                      gap-y-2, not gap-y-1: the scouting tokens make wraps
+                      routine, and two TAP_SAFE targets on wrapped lines 4px
+                      apart overlap by ~4px (each grows 4px toward the other).
+                      8px of real spacing is the stacked-TAP_SAFE floor. */}
+                  <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
+                    {/* Facts before actions: the scouting tokens lead, the
+                        outbound links follow. Plain text — no new tap targets
+                        on a line already carrying two. */}
+                    {ih ? (
+                      <span
+                        className="tabular-nums lg:hidden"
+                        title={inhouseTitle(ih)}
+                      >
+                        {inhouseToken(ih)}
+                      </span>
+                    ) : null}
+                    {pub ? (
+                      <span className="tabular-nums" title={pubTitle(pub, nowMs)}>
+                        {pubToken(pub)}
+                      </span>
+                    ) : null}
+                    {activity?.quiet ? (
+                      <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
+                        last played {activity.label}
+                      </span>
+                    ) : null}
                     {p.accountId ? (
                       <a
                         href={`https://www.dotabuff.com/players/${p.accountId}`}
@@ -323,9 +402,12 @@ export function PlayerPool({
                       verified={p.discordVerified}
                     />
                   </span>
-                  {hasText(p.captainNote) ? (
-                    <span className="mt-1 block truncate text-xs italic text-muted">
-                      &ldquo;{p.captainNote}&rdquo;
+                  {quote ? (
+                    <span
+                      className="mt-1 block truncate text-xs italic text-muted"
+                      title={quote.label}
+                    >
+                      &ldquo;{quote.text}&rdquo;
                     </span>
                   ) : null}
                 </span>
@@ -350,6 +432,43 @@ export function PlayerPool({
                     </span>
                   )}
                 </span>
+
+                {/* 3b — inhouse record, lg+ only (below lg it rides the meta
+                    line above). Claimed MMR beside the observed rating is the
+                    exact comparison a bidding captain makes. Renders only when
+                    the league has ANY inhouse data (the column exists then);
+                    a player without games gets an empty cell, never a dash.
+                    Not a link — zero tap-target obligations. */}
+                {anyInhouse ? (
+                  <span
+                    className="hidden lg:flex lg:flex-col lg:items-end"
+                    title={ih ? inhouseTitle(ih) : undefined}
+                  >
+                    {ih ? (
+                      <>
+                        <span
+                          className={cn(
+                            "text-sm font-semibold tabular-nums",
+                            // The rankInhouse rule: provisionals are dimmed and
+                            // never ranked.
+                            ih.rank == null && "text-muted",
+                          )}
+                        >
+                          {ih.rating}
+                          {ih.rank != null ? (
+                            <span className="ml-1 text-xs font-normal text-muted">
+                              #{ih.rank}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="text-xs tabular-nums text-muted">
+                          {ih.wins}–{ih.losses}
+                          {ih.rank == null ? ` · ${ih.games}g` : ""}
+                        </span>
+                      </>
+                    ) : null}
+                  </span>
+                ) : null}
 
                 {/* 4 — roles, and (below md) the hero strip riding along with
                     them: both answer "what does this player play", and packing
@@ -395,7 +514,8 @@ export function PlayerPool({
                   <HeroList value={p.favoriteHeroes} size={22} max={4} />
                 </span>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </div>
       )}
@@ -404,23 +524,35 @@ export function PlayerPool({
 }
 
 /**
- * The shared row template — the header and every row use the SAME string, which
- * is the whole point: two copies of these tracks would drift within a week and
- * the header would start lying about which column is which.
+ * The shared row template — the header and every row use the SAME computed
+ * string, which is the whole point: two copies of these tracks would drift
+ * within a week and the header would start lying about which column is which.
+ * (A function now, not a const: the Inhouse column exists only when the league
+ * has inhouse data, so the template takes that one flag. `rowGrid(false)` is
+ * byte-identical to the pre-inhouse template — do NOT fork a second literal.)
  *
  * Below md there are no columns: the avatar keeps the left gutter and every
  * other cell stacks in the second track. That is not a nicety — at 390px the
  * old `justify-between` row gave its right-hand chips `shrink-0` and left the
  * name ~40px, so real players rendered as "P…", "R." and "Dir…".
+ *
+ * The Inhouse track appears at lg+ ONLY: md's five tracks have no rem budget —
+ * a sixth at 768px drops the name to ~140px, recreating the truncation bug
+ * class this grid exists to prevent. Below lg the record rides the meta line.
+ * The two branches are mutually exclusive, so cn() never sees competing
+ * lg:/xl: templates.
  */
-const ROW_GRID =
+const rowGrid = (withInhouse: boolean) =>
   "grid-cols-[2.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 " +
   // The roles track is 7.5rem because that is EXACTLY what five position pills
   // need (5 x 20px + 4 x 4px gap = 120px). At the 5.5rem it started as, 6 of
   // the 30 real signups wrapped their pills onto a second line, which is the
   // one thing a column is supposed to stop happening.
   "md:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_7.5rem_11rem] " +
-  "xl:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_7.5rem_9rem_11rem]";
+  (withInhouse
+    ? "lg:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_5.5rem_7.5rem_11rem] " +
+      "xl:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_5.5rem_7.5rem_9rem_11rem]"
+    : "xl:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_7.5rem_9rem_11rem]");
 
 /** Cells 3+ share one placement rule: stacked under the name until md. */
 const CELL = "col-start-2 col-span-2 md:col-span-1 md:col-start-auto";

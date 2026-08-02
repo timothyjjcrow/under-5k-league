@@ -32,6 +32,14 @@ model User {
   // medal is (login, /me refresh, admin bulk sync); never overwritten on a
   // failed fetch — same rule as rankTier.
   fhUnavailable Boolean?
+  // Pub-scouting snapshot from OpenDota (/wl + /heroes), stored as a JSON
+  // string (SQLite has no Json type — the Game.players precedent; parse with
+  // parsePubStats, which degrades garbage to null). Refreshed wherever the
+  // medal is: login when missing/stale, /me link/refresh, admin bulk sync.
+  // Never overwritten on a failed fetch — the rankTier rule. Null = never
+  // fetched. pubStatsAt is the freshness stamp login's re-fetch gate reads.
+  pubStats      String?
+  pubStatsAt    DateTime?
   // Discord username — the league runs on Discord, and this is how captains
   // reach their roster. Empty string = not provided. Persists across seasons.
   discordName   String   @default("")

@@ -2,6 +2,8 @@
 // over Valve's Dota 2 match data (what Dotabuff-style sites are built on).
 // Set OPENDOTA_API_KEY for higher rate limits (optional).
 
+import type { PubStats } from "./pub-stats";
+
 const BASE = "https://api.opendota.com/api";
 const STEAM64_BASE = BigInt("76561197960265728");
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -203,6 +205,81 @@ export async function fetchPlayerRankTier(
   accountId: number,
 ): Promise<number | null> {
   return (await fetchRankTier(accountId)).rankTier;
+}
+
+/**
+ * Result of a pub-scouting fetch — the fetchRankTier contract: `ok:false`
+ * means OpenDota couldn't be reached (429/5xx/timeout/garbage), which is NOT
+ * the same as "no games". Callers must never overwrite a stored snapshot on a
+ * failed call, or a busy moment silently wipes everyone's scouting data.
+ */
+export type PubStatsResult =
+  | { ok: true; stats: PubStats }
+  | { ok: false; stats: null };
+
+/**
+ * A player's pub-game scouting snapshot: W/L over their last ≤100 games
+ * (/players/{id}/wl?limit=100) plus all-time games / most-played heroes /
+ * last-played time (/players/{id}/heroes). Two calls, run in parallel — both
+ * must answer or the whole fetch reports unreachable, so a half-answer never
+ * masquerades as a snapshot. A player with match data private legitimately
+ * returns all-zero figures; that is a real answer, stored as such (the UI
+ * treats an empty recent window as "nothing scoutable").
+ */
+export async function fetchPubStats(accountId: number): Promise<PubStatsResult> {
+  try {
+    const [wlRes, heroesRes] = await Promise.all([
+      fetch(withKey(`${BASE}/players/${accountId}/wl?limit=100`), {
+        cache: "no-store",
+        signal: AbortSignal.timeout(8000),
+      }),
+      fetch(withKey(`${BASE}/players/${accountId}/heroes`), {
+        cache: "no-store",
+        signal: AbortSignal.timeout(8000),
+      }),
+    ]);
+    if (!wlRes.ok || !heroesRes.ok) return { ok: false, stats: null };
+    const wl = await wlRes.json();
+    const heroes = await heroesRes.json();
+    const wins = wl?.win;
+    const losses = wl?.lose;
+    if (
+      typeof wins !== "number" ||
+      typeof losses !== "number" ||
+      !Array.isArray(heroes)
+    ) {
+      return { ok: false, stats: null };
+    }
+    // OpenDota has historically served hero_id as a STRING on this endpoint —
+    // coerce rather than trust the type.
+    const rows = heroes
+      .map((h: Record<string, unknown>) => ({
+        heroId: Number(h?.hero_id),
+        games: Number(h?.games) || 0,
+        wins: Number(h?.win) || 0,
+        lastPlayed: Number(h?.last_played) || 0,
+      }))
+      .filter((h) => Number.isFinite(h.heroId) && h.heroId > 0);
+    const totalGames = rows.reduce((s, h) => s + h.games, 0);
+    const lastPlayedAt = rows.reduce((m, h) => Math.max(m, h.lastPlayed), 0);
+    const topHeroes = rows
+      .filter((h) => h.games > 0)
+      .sort((a, b) => b.games - a.games)
+      .slice(0, 5)
+      .map(({ heroId, games, wins: w }) => ({ heroId, games, wins: w }));
+    return {
+      ok: true,
+      stats: {
+        recentWins: wins,
+        recentLosses: losses,
+        totalGames,
+        lastPlayedAt: lastPlayedAt > 0 ? lastPlayedAt : null,
+        topHeroes,
+      },
+    };
+  } catch {
+    return { ok: false, stats: null };
+  }
 }
 
 /**

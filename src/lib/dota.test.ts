@@ -6,6 +6,7 @@ import {
   parseMatchId,
   parseLeagueId,
   fetchRankTier,
+  fetchPubStats,
 } from "./dota";
 
 describe("steamIdToAccountId", () => {
@@ -154,5 +155,117 @@ describe("fetchRankTier", () => {
       rankTier: null,
       fhUnavailable: null,
     });
+  });
+});
+
+describe("fetchPubStats", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Route by URL: the fetcher fires /wl and /heroes in parallel.
+  const stubEndpoints = (
+    wl: () => Promise<unknown> | unknown,
+    heroes: () => Promise<unknown> | unknown,
+  ) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/wl") ? wl() : heroes(),
+      ),
+    );
+
+  const okJson = (body: unknown) => ({ ok: true, json: async () => body });
+
+  it("composes both endpoints into one snapshot", async () => {
+    stubEndpoints(
+      () => okJson({ win: 54, lose: 46 }),
+      () =>
+        okJson([
+          // hero_id served as a STRING — the endpoint's documented quirk.
+          { hero_id: "14", games: 220, win: 121, last_played: 1_722_200_000 },
+          { hero_id: 74, games: 180, win: 92, last_played: 1_700_000_000 },
+          { hero_id: 99, games: 0, win: 0, last_played: 0 },
+        ]),
+    );
+    expect(await fetchPubStats(123)).toEqual({
+      ok: true,
+      stats: {
+        recentWins: 54,
+        recentLosses: 46,
+        totalGames: 400,
+        lastPlayedAt: 1_722_200_000,
+        topHeroes: [
+          { heroId: 14, games: 220, wins: 121 },
+          { heroId: 74, games: 180, wins: 92 },
+        ],
+      },
+    });
+  });
+
+  it("an all-zero answer is a REAL answer (private data), not a failure", async () => {
+    stubEndpoints(
+      () => okJson({ win: 0, lose: 0 }),
+      () => okJson([]),
+    );
+    expect(await fetchPubStats(123)).toEqual({
+      ok: true,
+      stats: {
+        recentWins: 0,
+        recentLosses: 0,
+        totalGames: 0,
+        lastPlayedAt: null,
+        topHeroes: [],
+      },
+    });
+  });
+
+  it("returns ok:FALSE when either endpoint fails — half an answer is no answer", async () => {
+    stubEndpoints(
+      () => okJson({ win: 10, lose: 5 }),
+      () => ({ ok: false, status: 429, json: async () => ({}) }),
+    );
+    expect(await fetchPubStats(123)).toEqual({ ok: false, stats: null });
+
+    stubEndpoints(
+      () => ({ ok: false, status: 500, json: async () => ({}) }),
+      () => okJson([]),
+    );
+    expect(await fetchPubStats(123)).toEqual({ ok: false, stats: null });
+  });
+
+  it("returns ok:FALSE on malformed bodies and thrown requests", async () => {
+    stubEndpoints(
+      () => okJson({ error: "rate limited" }),
+      () => okJson([]),
+    );
+    expect(await fetchPubStats(123)).toEqual({ ok: false, stats: null });
+
+    stubEndpoints(
+      () => {
+        throw new Error("The operation timed out");
+      },
+      () => okJson([]),
+    );
+    expect(await fetchPubStats(123)).toEqual({ ok: false, stats: null });
+  });
+
+  it("caps topHeroes at 5, ordered by games", async () => {
+    stubEndpoints(
+      () => okJson({ win: 1, lose: 1 }),
+      () =>
+        okJson(
+          Array.from({ length: 8 }, (_, i) => ({
+            hero_id: i + 1,
+            games: 10 + i,
+            win: 5,
+            last_played: 100 + i,
+          })),
+        ),
+    );
+    const res = await fetchPubStats(123);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.stats.topHeroes.map((h) => h.heroId)).toEqual([8, 7, 6, 5, 4]);
+      expect(res.stats.lastPlayedAt).toBe(107);
+    }
   });
 });

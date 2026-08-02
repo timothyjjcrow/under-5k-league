@@ -8,18 +8,37 @@ vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
 vi.mock("@/lib/dota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dota")>()),
   fetchRankTier: vi.fn(),
+  fetchPubStats: vi.fn(),
 }));
 
 import { syncPlayerRanks, syncAllRanks } from "@/app/actions/admin";
 import { updateDotaAccount } from "@/app/actions/registration";
-import { ensureRankTier, upsertLeagueUser } from "@/lib/users";
+import { ensurePubStats, ensureRankTier, upsertLeagueUser } from "@/lib/users";
 import { requireUser } from "@/lib/auth";
-import { fetchRankTier } from "@/lib/dota";
+import { fetchPubStats, fetchRankTier } from "@/lib/dota";
+import type { PubStats } from "@/lib/pub-stats";
 import { prisma } from "@/lib/prisma";
 import { makeSeason, makePlayer, makeUser, sessionFor } from "./factories";
 
 const mockFetch = vi.mocked(fetchRankTier);
+const mockPubFetch = vi.mocked(fetchPubStats);
 const mockRequireUser = vi.mocked(requireUser);
+
+// The pub-scouting fetch rides every rank-sync path now. Default it to
+// "unreachable" so the medal tests exercise exactly what they always did —
+// a failed pub fetch writes nothing (the never-overwrite rule, pinned below).
+beforeEach(() => {
+  mockPubFetch.mockReset();
+  mockPubFetch.mockResolvedValue({ ok: false, stats: null });
+});
+
+const PUB_FIXTURE: PubStats = {
+  recentWins: 60,
+  recentLosses: 40,
+  totalGames: 1500,
+  lastPlayedAt: 1_722_000_000,
+  topHeroes: [{ heroId: 14, games: 120, wins: 66 }],
+};
 
 async function medalOf(userId: string) {
   return (await prisma.user.findUnique({ where: { id: userId } }))?.rankTier;
@@ -576,5 +595,159 @@ describe("updateDotaAccount — one account id, one league player", () => {
       where: { dotaAccountId: 555111 },
     });
     expect(holders.map((h) => h.id)).toEqual([a.id]);
+  });
+});
+
+describe("pub-scouting snapshot capture (User.pubStats)", () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  async function pubOf(userId: string) {
+    const u = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    return { raw: u.pubStats, at: u.pubStatsAt };
+  }
+
+  it("syncPlayerRanks stores the snapshot beside the medal and reports it", async () => {
+    const season = await makeSeason();
+    const user = await makePlayer(season.id, "Scouted Player", 3000);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 777 },
+    });
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 55, fhUnavailable: null });
+    mockPubFetch.mockResolvedValue({ ok: true, stats: PUB_FIXTURE });
+
+    const res = await syncPlayerRanks({}, new FormData());
+
+    const { raw, at } = await pubOf(user.id);
+    expect(raw && JSON.parse(raw)).toEqual(PUB_FIXTURE);
+    expect(at).not.toBeNull();
+    // Anchored: "1 scouting profile" singular — the plural would also match a
+    // bare /1 scouting profile/, which is how a hard-coded "s" slipped by.
+    expect(res?.message).toMatch(/1 scouting profile(?!s)/);
+  });
+
+  it("a failed pub fetch never wipes a stored snapshot (the rankTier rule)", async () => {
+    const season = await makeSeason();
+    const user = await makePlayer(season.id, "Kept Player", 3000);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        dotaAccountId: 778,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+        pubStatsAt: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 55, fhUnavailable: null });
+    // Default mockPubFetch is ok:false — the failure case under test.
+
+    await syncPlayerRanks({}, new FormData());
+
+    const { raw } = await pubOf(user.id);
+    expect(raw && JSON.parse(raw)).toEqual(PUB_FIXTURE); // NOT wiped
+  });
+
+  it("ensurePubStats fetches only when the snapshot is MISSING — never a recurring login cost", async () => {
+    const now = Date.UTC(2026, 7, 1);
+    const user = await makeUser("Login Player");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 779 },
+    });
+    const shape = {
+      id: user.id,
+      steamId: user.steamId,
+      dotaAccountId: 779,
+      pubStatsAt: null as Date | null,
+    };
+    mockPubFetch.mockResolvedValue({ ok: true, stats: PUB_FIXTURE });
+
+    // Missing → fetches and stamps.
+    await ensurePubStats(prisma, shape, now);
+    expect(mockPubFetch).toHaveBeenCalledTimes(1);
+    const first = await pubOf(user.id);
+    expect(first.at?.getTime()).toBe(now);
+
+    // Present — even a stale month-old snapshot — → no fetch at all. Login is
+    // a one-time fill (the ensureRankTier rule); the admin sync owns staleness.
+    await ensurePubStats(
+      prisma,
+      { ...shape, pubStatsAt: new Date(now - 30 * 86_400_000) },
+      now,
+    );
+    expect(mockPubFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ensurePubStats drops the result if the account was relinked mid-fetch", async () => {
+    const now = Date.UTC(2026, 7, 1);
+    const user = await makeUser("Relink Racer");
+    // The fetch decision read dotaAccountId 785…
+    const shape = {
+      id: user.id,
+      steamId: user.steamId,
+      dotaAccountId: 785,
+      pubStatsAt: null as Date | null,
+    };
+    // …but by the time the write lands the row holds a DIFFERENT override
+    // (a /me relink committed mid-flight). The WHERE must refuse the write —
+    // the old account's scouting data must not describe the new link.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 786 },
+    });
+    mockPubFetch.mockResolvedValue({ ok: true, stats: PUB_FIXTURE });
+
+    await ensurePubStats(prisma, shape, now);
+
+    const { raw, at } = await pubOf(user.id);
+    expect(raw).toBeNull();
+    expect(at).toBeNull();
+  });
+
+  it("ensurePubStats writes nothing when OpenDota is unreachable", async () => {
+    const user = await makeUser("Blip Player");
+    // Default mockPubFetch is ok:false.
+    await ensurePubStats(
+      prisma,
+      {
+        id: user.id,
+        steamId: user.steamId,
+        dotaAccountId: 780,
+        pubStatsAt: null,
+      },
+      Date.UTC(2026, 7, 1),
+    );
+    const { raw, at } = await pubOf(user.id);
+    expect(raw).toBeNull();
+    expect(at).toBeNull();
+  });
+
+  it("clearing the Dota account clears the snapshot with the medal", async () => {
+    const user = await makeUser("Unlink Player");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        // No derivable account: a non-numeric steamId means "clear" leaves
+        // accountId null and takes the wipe branch.
+        steamId: `x-${user.id}`,
+        dotaAccountId: 781,
+        rankTier: 53,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+        pubStatsAt: new Date(),
+      },
+    });
+    mockRequireUser.mockResolvedValue(
+      sessionFor(
+        await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+      ),
+    );
+
+    const fd = new FormData();
+    fd.set("dotaAccountId", "");
+    const res = await updateDotaAccount({}, fd);
+    expect(res?.error).toBeUndefined();
+
+    const { raw, at } = await pubOf(user.id);
+    expect(raw).toBeNull();
+    expect(at).toBeNull();
   });
 });

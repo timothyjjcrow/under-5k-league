@@ -125,7 +125,7 @@ export function registrationGate({
   // refused right here.
   //
   // It must NOT re-judge someone the league has already admitted. The medal is
-  // a fact synced behind the player's back (admin "Sync ranks"), that sync is
+  // a fact synced behind the player's back (admin "Sync ranks & stats"), that sync is
   // deliberately WARN-ONLY — who plays is the operator's call — and a player
   // admitted while their rankTier was null holds no lever over it. Judging it
   // on every submit turned the admin's decision to KEEP them into a silent
@@ -158,7 +158,7 @@ export function registrationGate({
  * league-approved (an unchanged resubmit is never re-judged, so an admin's
  * setRegistrationMmr correction survives). So a player who signs up before
  * linking a Dota account — or while OpenDota is unreachable — is admitted with
- * `rankTier: null`, and when the admin's later "Sync ranks" fills in a Divine
+ * `rankTier: null`, and when the admin's later "Sync ranks & stats" fills in a Divine
  * 3+/Immortal medal, nothing re-checks: they stay ACTIVE, over the ceiling.
  *
  * This is the detector for that gap. It never removes anyone — who plays is the

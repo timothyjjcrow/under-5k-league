@@ -2284,6 +2284,66 @@ pages with none, and both carry wide content. All four `<Card>`s wrapping
 `<Bracket>` gained `overflow-hidden`: `Bracket`'s root is `overflow-x-auto` over
 a `min-w-max` row, and every one of them was violating the SeasonGrid rule.
 
+## Player pool scouting (done, 2026-08-01 — /players row enrichment)
+
+The pool rows carry per-player scouting data, ALL of it gated on **data
+presence, never season phase** (the `anyDrafted` precedent) — an empty league
+renders byte-identical to the pre-feature page:
+
+- **Inhouse record** (rating / ladder rank / W–L) via NEW
+  `src/lib/inhouse-ladder.ts` — the full-history ladder scan behind a
+  `loadBoardStats`-style in-process memo (60s TTL, `nowMs` param,
+  `resetInhouseLadderCache` seam; deliberately NOT `unstable_cache` — the
+  `"games"` tag is league-import semantics and inhouse completions never bust
+  it). Rendered as a 5.5rem column between MMR and Roles at **lg+ only** (md
+  has no rem budget — a sixth track at 768px recreates the name-truncation bug
+  class), as a plain-text meta-line token below lg. Provisionals
+  (< PROVISIONAL_GAMES) are dimmed, never ranked, and show `· Ng`; a player
+  with no games gets an EMPTY cell, never a dash. "Sort: Inhouse" is
+  **component-local** (`PoolSortEx` in player-pool.tsx) — never added to the
+  shared `PoolSort`, which the draft room consumes; the ranked band orders by
+  ladder RANK (it encodes the full tiebreak — rating alone rendered #5 above
+  #4 on a tie).
+- **Pub-scouting snapshot** — NEW `User.pubStats`/`pubStatsAt` (JSON string;
+  parse with `parsePubStats` in `src/lib/pub-stats.ts`, which degrades
+  garbage to null). Fetched by `fetchPubStats` (`dota.ts`: `/wl?limit=100` +
+  `/heroes` in parallel, both-or-nothing, the `fetchRankTier` ok:false
+  contract). Rendered as the "Pubs 54% · 2.1k games" token + a
+  "last played Nmo ago" flag past `PUB_QUIET_DAYS`. An empty recent window
+  (private data / new account) renders NOTHING — never "0% of 0".
+- **Capture points mirror rankTier exactly**: login (`ensurePubStats` —
+  MISSING-only, the ensureRankTier rule; an earlier 7-day staleness gate put
+  a recurring 8s worst case on the login path and was reverted), /me
+  link/refresh, and the admin "Sync ranks & stats" button. Never overwritten
+  on a failed fetch, and **every pubStats write re-asserts
+  `dotaAccountId` in its WHERE** — a relink committing mid-fetch must not
+  inherit the old account's data (raced in rank-sync.itest.ts). These
+  updateMany claims are NEW to the mutation baseline — assume unprotected
+  until a full `--discover` says otherwise.
+- **`PUB_SYNC_MAX_PER_RUN` (12) is the API budget** — the bulk sync fires 3
+  OpenDota calls per account with pub stats riding along, and the free tier's
+  bucket is ~60/min, so an uncapped 31-account sweep burned its own tail into
+  429s (and could false-trigger the outage bail). Each press syncs medals for
+  everyone, pub snapshots for the STALEST ≤12 (fresh ones skipped via
+  `pubStatsFresh`); the toast reports "(N more next run)".
+- `PoolPlayer` stays FROZEN: everything rides `PoolScoutInfo`, one parallel
+  record (the `PoolDraftInfo` precedent) carrying `{inhouse?, pub?,
+  statement?}` — statement is the row quote's fallback when `captainNote` is
+  empty, sent only when it will render. Token/title text lives in
+  `player-pool.ts` (`inhouseToken`/`pubToken`/…) so the rows, the lg column
+  and the hopefuls cards can never phrase the same fact differently.
+  The component takes `now` (server epoch ms) so SSR and hydration compute
+  identical recency labels.
+- The row grid is `rowGrid(withInhouse)` now — ONE computed template shared
+  by header and rows; `rowGrid(false)` is byte-identical to the old
+  `ROW_GRID`. The meta line moved `gap-y-1 → gap-y-2`: the tokens make wraps
+  routine and two stacked TAP_SAFE links 4px apart overlap by ~4px.
+- COVERAGE LIMIT (stated): the cell/token/StatCell JSX has no automated
+  render test (no jsdom; neither e2e seed has completed lobbies or pub
+  stats). The lib layer is fully tested; verified in a real browser at
+  390/768/1024/1440 via the enriched `signups-fixture` seed (which now also
+  creates 8 completed inhouse lobbies).
+
 ## Fantasy league (done, branch: bigger-features)
 
 - Anyone signed in picks a **fantasy five** from the drafted rosters under an

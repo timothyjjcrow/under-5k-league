@@ -71,14 +71,52 @@ async function main() {
     },
   });
 
+  // Pub-scouting variety: most players carry a snapshot (recent W/L, lifetime
+  // games, last-played), a few have none (private data / never synced), and
+  // one in seven is a quiet account — the pool's "last played Nmo ago" flag.
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const pubStatsFor = (i: number): string | null => {
+    if (i % 5 === 3) return null; // never synced / private
+    const quiet = i % 7 === 2;
+    const wins = 38 + ((i * 7) % 25); // 38..62 of 100
+    return JSON.stringify({
+      recentWins: wins,
+      recentLosses: 100 - wins,
+      totalGames: 300 + i * 173,
+      lastPlayedAt: nowSecs - (quiet ? 100 : i % 10) * 86_400,
+      topHeroes: [
+        { heroId: 1 + (i % 30), games: 120, wins: 60 },
+        { heroId: 31 + (i % 30), games: 90, wins: 41 },
+      ],
+    });
+  };
+  const STATEMENTS = [
+    "Trying to break out of Archon this year.",
+    "Here to learn pos 4 properly — I always solo queue.",
+    "Won my bracket last season, running it back.",
+    "",
+  ];
+  const NOTES = [
+    "Comfortable on 20 heroes, will fill any lane.",
+    "Techies Anonymous, $4 minimum bid please.",
+    "",
+    "",
+  ];
+  const HEROES = ["Lion, Mirana", "Pudge, Axe, Techies", "", "Invoker"];
+
+  const poolUsers: { id: string }[] = [];
   for (let i = 0; i < PLAYER_COUNT; i++) {
+    const pub = pubStatsFor(i);
     const user = await prisma.user.create({
       data: {
         steamId: `7656119800000${String(i).padStart(4, "0")}`,
         name: i === 0 ? "x" : `Player ${i + 1}`,
         role: i === 0 ? "ADMIN" : "USER",
+        pubStats: pub,
+        pubStatsAt: pub ? new Date() : null,
       },
     });
+    poolUsers.push(user);
     await prisma.registration.create({
       data: {
         seasonId: season.id,
@@ -88,6 +126,39 @@ async function main() {
         wantsCaptain: i < Number(process.env.CAPTAINS ?? 0) || i % 6 === 0,
         roles: ["1", "2", "3", "4", "5"][i % 5],
         status: "ACTIVE",
+        statement: STATEMENTS[i % STATEMENTS.length],
+        captainNote: NOTES[i % NOTES.length],
+        favoriteHeroes: HEROES[i % HEROES.length],
+      },
+    });
+  }
+
+  // Completed inhouse lobbies so the pool's Inhouse column/sort render: the
+  // first ten players clear the provisional floor (5+ games), players 11-12
+  // rotate in for a taste (provisional). Winners alternate with a bias so the
+  // ladder spreads.
+  const lobbyCount = 8;
+  for (let g = 0; g < lobbyCount; g++) {
+    const roster = [...poolUsers.slice(0, 10)];
+    if (poolUsers.length > 11 && g % 3 === 0) {
+      roster[8] = poolUsers[10];
+      roster[9] = poolUsers[11];
+    }
+    await prisma.inhouseLobby.create({
+      data: {
+        status: "COMPLETED",
+        winnerTeam: g % 3 === 0 ? 2 : 1,
+        radiantTeam: 1,
+        radiantScore: 20 + g,
+        direScore: 14 + ((g * 3) % 12),
+        createdAt: new Date(Date.now() - (lobbyCount - g) * 2 * 86_400_000),
+        players: {
+          create: roster.map((u, idx) => ({
+            userId: u.id,
+            team: idx % 2 === 0 ? 1 : 2,
+            mmr: 2000 + idx * 100,
+          })),
+        },
       },
     });
   }

@@ -27,6 +27,7 @@ import {
   parseAccountId,
   steamIdToAccountId,
   fetchPlayerRankTier,
+  fetchPubStats,
   fetchRankTier,
 } from "@/lib/dota";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
@@ -552,7 +553,24 @@ export async function updateDotaAccount(
 
   let medal = "";
   if (accountId) {
-    const result = await fetchRankTier(accountId);
+    // The scouting snapshot rides the same moment (in parallel — independent
+    // OpenDota calls). Same non-destructive rule as the medal below: a failed
+    // fetch leaves the stored snapshot alone; the player can hit Refresh.
+    const [result, pubResult] = await Promise.all([
+      fetchRankTier(accountId),
+      fetchPubStats(accountId),
+    ]);
+    if (pubResult.ok) {
+      // WHERE re-asserts the override this snapshot was fetched under — a
+      // second submit racing this one must not land the old account's data.
+      await prisma.user.updateMany({
+        where: { id: user.id, dotaAccountId: raw ? accountId : null },
+        data: {
+          pubStats: JSON.stringify(pubResult.stats),
+          pubStatsAt: new Date(),
+        },
+      });
+    }
     if (result.ok) {
       // OpenDota answered — trust it for the (possibly new) account,
       // INCLUDING the null fhUnavailable case: the flag described the OLD
@@ -574,10 +592,15 @@ export async function updateDotaAccount(
     }
   } else {
     // No derivable account — clear any stale medal (and the private-data
-    // flag, which belonged to the unlinked account).
+    // flag + scouting snapshot, which belonged to the unlinked account).
     await prisma.user.update({
       where: { id: user.id },
-      data: { rankTier: null, fhUnavailable: null },
+      data: {
+        rankTier: null,
+        fhUnavailable: null,
+        pubStats: null,
+        pubStatsAt: null,
+      },
     });
   }
 
@@ -600,9 +623,34 @@ export async function refreshRank(
   const accountId = dbUser?.dotaAccountId ?? steamIdToAccountId(user.steamId);
   if (!accountId) return { error: "Link your account first" };
 
-  const result = await fetchRankTier(accountId);
+  // The scouting snapshot refreshes on the same click (independent calls, in
+  // parallel; a failed pub fetch never blocks the medal or vice versa).
+  const [result, pubResult] = await Promise.all([
+    fetchRankTier(accountId),
+    fetchPubStats(accountId),
+  ]);
+  if (pubResult.ok) {
+    // WHERE re-asserts the account the snapshot describes (the repo rule) —
+    // an account relink committing mid-fetch must not inherit these figures.
+    await prisma.user.updateMany({
+      where: { id: user.id, dotaAccountId: dbUser?.dotaAccountId ?? null },
+      data: {
+        pubStats: JSON.stringify(pubResult.stats),
+        pubStatsAt: new Date(),
+      },
+    });
+  }
   if (!result.ok) {
-    // Don't wipe a stored medal because OpenDota was momentarily unreachable.
+    // Don't wipe a stored medal because OpenDota was momentarily unreachable —
+    // and if the pub half DID answer, say what actually happened rather than
+    // claiming nothing changed (the admin-panel honesty rule).
+    if (pubResult.ok) {
+      refresh();
+      return {
+        message:
+          "Scouting stats refreshed · couldn't fetch your medal (rate limited?) — try again in a moment",
+      };
+    }
     return {
       error: "Couldn't reach OpenDota (rate limited?) — try again in a moment",
     };

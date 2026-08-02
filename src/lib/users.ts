@@ -1,6 +1,6 @@
 import type { PrismaClient, User } from "@prisma/client";
 import { ROLE } from "./constants";
-import { fetchRankTier, steamIdToAccountId } from "./dota";
+import { fetchPubStats, fetchRankTier, steamIdToAccountId } from "./dota";
 import { placeholderPersona, steamProfileUrl } from "./steam";
 
 type UpsertInput = {
@@ -120,4 +120,38 @@ export async function ensureRankTier(
   if (Object.keys(data).length > 0) {
     await prisma.user.update({ where: { id: user.id }, data });
   }
+}
+
+/**
+ * Best-effort: fill in a user's pub-scouting snapshot (User.pubStats) if they
+ * don't have one yet. The ensureRankTier rule exactly: only when the snapshot
+ * is MISSING — a one-time cost per account — so login never pays a recurring
+ * OpenDota round trip (an earlier staleness gate here put an 8s worst case on
+ * roughly every weekly login; staleness is owned by the admin bulk sync and
+ * the /me refresh instead). A failed / rate-limited fetch is a no-op, so it
+ * never wipes anything and an OpenDota brownout costs one bounded wait.
+ */
+export async function ensurePubStats(
+  prisma: PrismaClient,
+  user: {
+    id: string;
+    steamId: string;
+    dotaAccountId: number | null;
+    pubStatsAt: Date | null;
+  },
+  nowMs: number = Date.now(),
+): Promise<void> {
+  if (user.pubStatsAt != null) return;
+  const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  if (!accountId) return;
+  const result = await fetchPubStats(accountId);
+  if (!result.ok) return;
+  // The WHERE re-asserts the account the snapshot describes (read-time
+  // precondition in the write — the repo rule): a relink committing while
+  // this fetch was in flight must not get the OLD account's scouting data
+  // stamped onto the new link. count 0 = someone relinked; drop the result.
+  await prisma.user.updateMany({
+    where: { id: user.id, dotaAccountId: user.dotaAccountId },
+    data: { pubStats: JSON.stringify(result.stats), pubStatsAt: new Date(nowMs) },
+  });
 }

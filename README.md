@@ -179,7 +179,9 @@ automatically. Set `OPENDOTA_API_KEY` for higher rate limits (optional).
 
 Players' **ranked medals** come from the same source (OpenDota `rank_tier`) —
 link a Dotabuff/OpenDota URL on your profile, or an admin can populate everyone's
-at once with the **Sync ranks** button before the draft.
+at once with the **Sync ranks & stats** button before the draft (it also pulls
+each player's pub-scouting snapshot — recent win rate, lifetime games, last
+played — which the player pool renders).
 
 ## Scripts
 

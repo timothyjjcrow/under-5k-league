@@ -7,6 +7,17 @@ import { prisma } from "@/lib/prisma";
 import { steamIdToAccountId } from "@/lib/dota";
 import { PlayerPool, type PoolDraftInfo } from "@/components/player-pool";
 import { averageMmr } from "@/lib/pool-stats";
+import { loadInhouseLadder } from "@/lib/inhouse-ladder";
+import {
+  buildPoolInhouseInfo,
+  inhouseTitle,
+  inhouseToken,
+  pubTitle,
+  pubToken,
+  type PoolScout,
+  type PoolScoutInfo,
+} from "@/lib/player-pool";
+import { poolPubRecord } from "@/lib/pub-stats";
 import {
   Avatar,
   Badge,
@@ -42,7 +53,7 @@ export default async function PlayersPage() {
 
   const viewer = await getSessionUser();
 
-  const [players, standins, teams, viewerReg] = await Promise.all([
+  const [players, standins, teams, viewerReg, ladder] = await Promise.all([
     prisma.registration.findMany({
       where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
       include: { user: true },
@@ -68,6 +79,9 @@ export default async function PlayersPage() {
           },
         })
       : Promise.resolve(null),
+    // Full-history inhouse ladder — memoised in-process (60s TTL), so this is
+    // one indexed scan per cold minute, not per view.
+    loadInhouseLadder(),
   ]);
 
   const draftDone = teams.length > 0 && season.status !== "DRAFT";
@@ -111,6 +125,37 @@ export default async function PlayersPage() {
   const freeAgents = players.filter((p) => !draftedUserIds.has(p.userId));
   const avgMmr = averageMmr(players);
 
+  // Scouting extras, one parallel record per pool player (the PoolDraftInfo
+  // precedent — PoolPlayer stays frozen). Everything is data-presence gated:
+  // an empty league ships an empty map and the pool renders as before.
+  const nowMs = Date.now();
+  const inhouseInfo = buildPoolInhouseInfo(
+    ladder,
+    players.map((p) => p.userId),
+  );
+  const scout: PoolScoutInfo = {};
+  for (const p of players) {
+    const entry: PoolScout = {};
+    if (inhouseInfo[p.userId]) entry.inhouse = inhouseInfo[p.userId];
+    const pub = poolPubRecord(p.user.pubStats);
+    if (pub) entry.pub = pub;
+    // The quote fallback only ships when it would render (payload trimming).
+    if (!hasText(p.captainNote) && hasText(p.statement)) {
+      entry.statement = p.statement;
+    }
+    if (entry.inhouse || entry.pub || entry.statement) scout[p.userId] = entry;
+  }
+  const inhouseActives = players.filter(
+    (p) => scout[p.userId]?.inhouse,
+  ).length;
+  // "Active" = a visible pub game in the last 30 days — for an admin planning
+  // a draft, the count of signups who actually still play Dota.
+  const pubActive30 = players.filter((p) => {
+    const last = scout[p.userId]?.pub?.lastPlayedAt;
+    return last != null && last * 1000 > nowMs - 30 * 86_400_000;
+  }).length;
+  const anyPub = players.some((p) => scout[p.userId]?.pub);
+
   return (
     <div className="space-y-8">
       <PageTitle
@@ -140,6 +185,21 @@ export default async function PlayersPage() {
           <StatCell label="Signed up" value={players.length} hint="players" />
           {avgMmr > 0 ? (
             <StatCell label="Average MMR" value={avgMmr} />
+          ) : null}
+          {inhouseActives > 0 ? (
+            <StatCell
+              label="Inhouse actives"
+              value={inhouseActives}
+              hint={`of ${players.length}`}
+            />
+          ) : null}
+          {anyPub ? (
+            <StatCell
+              label="Active in pubs"
+              value={pubActive30}
+              tone={pubActive30 > 0 ? "default" : "muted"}
+              hint="last 30 days"
+            />
           ) : null}
           {draftDone ? (
             <StatCell
@@ -191,6 +251,8 @@ export default async function PlayersPage() {
               players={poolPlayers}
               showDraftStatus={season.status !== "SIGNUPS"}
               draftInfo={draftInfo}
+              scout={scout}
+              now={nowMs}
             />
           </Suspense>
         )}
@@ -207,6 +269,7 @@ export default async function PlayersPage() {
             {captainHopefuls.map((p) => {
               const accountId =
                 p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
+              const sc = scout[p.userId];
               return (
                 <Card key={p.id} interactive>
                   <CardBody className="flex items-start gap-3">
@@ -224,6 +287,24 @@ export default async function PlayersPage() {
                         {p.mmr > 0 ? <span>{p.mmr} MMR</span> : null}
                         <RankBadge rankTier={p.user.rankTier} />
                         <RoleBadges roles={p.roles} />
+                        {/* Same scouting tokens as the pool rows — a captain
+                            vote is exactly where the observed record matters. */}
+                        {sc?.inhouse ? (
+                          <span
+                            className="tabular-nums"
+                            title={inhouseTitle(sc.inhouse)}
+                          >
+                            {inhouseToken(sc.inhouse)}
+                          </span>
+                        ) : null}
+                        {sc?.pub ? (
+                          <span
+                            className="tabular-nums"
+                            title={pubTitle(sc.pub, nowMs)}
+                          >
+                            {pubToken(sc.pub)}
+                          </span>
+                        ) : null}
                         {accountId ? (
                           <a
                             href={`https://www.dotabuff.com/players/${accountId}`}

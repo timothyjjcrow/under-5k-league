@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifySteamCallback, fetchSteamProfile } from "@/lib/steam";
 import { prisma } from "@/lib/prisma";
 import { createSession } from "@/lib/auth";
-import { upsertLeagueUser, ensureRankTier } from "@/lib/users";
+import { upsertLeagueUser, ensureRankTier, ensurePubStats } from "@/lib/users";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { RETURN_COOKIE, safeReturnPath } from "@/lib/return-path";
 
@@ -33,9 +33,14 @@ export async function GET(req: NextRequest) {
   // account already has instead of stamping a placeholder over it.
   const profile = await fetchSteamProfile(steamId);
   const user = await upsertLeagueUser(prisma, { steamId, profile });
-  // Pull their ranked medal now so accounts that log in but never sign up still
-  // show one (best-effort; a no-op once they have a medal).
-  await ensureRankTier(prisma, user);
+  // Pull their ranked medal + pub-scouting snapshot now so accounts that log
+  // in but never sign up still show them (best-effort; the medal is a no-op
+  // once set, the snapshot once fresh). In parallel — they're independent
+  // OpenDota calls and login shouldn't pay them serially.
+  await Promise.all([
+    ensureRankTier(prisma, user),
+    ensurePubStats(prisma, user),
+  ]);
   await createSession(user.id);
   // Land back where they clicked Sign in (validated again — the cookie is
   // ours, but defense in depth is free), clearing the one-shot cookie.
