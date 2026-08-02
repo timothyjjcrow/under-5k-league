@@ -636,13 +636,26 @@ describe("member lookup rate pacing", () => {
   it("a rate-limited burst completes within one sweep instead of leaving a tail unknown", async () => {
     // The production shape: a bucket of 5 per window against a 12-player
     // sweep. Every id must classify on the first pass — pacing, not luck.
-    const WINDOW_MS = 60;
+    //
+    // FIXED windows, like the real API. This stand-in used to re-anchor its
+    // window to the first post-refill arrival (`windowStart = now`), which
+    // real Discord buckets do NOT do — reset-after is epoch-authoritative.
+    // Re-anchoring made every reset-after this server handed out UNDERSTATE
+    // the true refill whenever an unblocked worker arrived first, so a
+    // gated retry waking exactly on time could land in a window the early
+    // arrivals had already drained — a second 429 on the same id, i.e. an
+    // honest `null`, i.e. a red CI run on an interleaving no real bucket
+    // can produce. The window is also 150ms rather than 60 so a timer
+    // waking late on a loaded runner still lands inside the window it was
+    // aimed at.
+    const WINDOW_MS = 150;
     let windowStart = Date.now();
     let used = 0;
     respond = () => {
       const now = Date.now();
       if (now - windowStart >= WINDOW_MS) {
-        windowStart = now;
+        windowStart +=
+          WINDOW_MS * Math.floor((now - windowStart) / WINDOW_MS);
         used = 0;
       }
       if (++used > 5) {
