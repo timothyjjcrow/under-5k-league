@@ -1,6 +1,7 @@
 // Pure filtering + sorting for the player-pool UI. Kept DB-free so it's
 // unit-testable and reusable on client and server.
-import { formatGamesCount, pubActivity, pubWinRate } from "./pub-stats";
+import { heroById } from "./heroes";
+import { pubActivity, pubWinRate } from "./pub-stats";
 import { parseRoles } from "./roles";
 
 export type PoolPlayer = {
@@ -41,9 +42,10 @@ export type PoolInhouseRecord = {
 export type PoolPubRecord = {
   recentWins: number;
   recentLosses: number;
-  totalGames: number;
   /** Epoch SECONDS of their newest visible pub game, or null. */
   lastPlayedAt: number | null;
+  /** Most-played heroes across their whole pub history, top 3 by games. */
+  topHeroes: { heroId: number; games: number; wins: number }[];
 };
 
 /** Everything the pool row knows about a player BEYOND the frozen PoolPlayer
@@ -129,18 +131,33 @@ export function inhouseTitle(ih: PoolInhouseRecord): string {
     : `Provisional — ${ih.games} inhouse game${ih.games === 1 ? "" : "s"}`;
 }
 
-/** "Pubs 54% · 2.1k games" — recent-window win rate + lifetime volume, the
- *  two figures that say whether the listed MMR describes an active player. */
+/** "Pubs 54% in last 100" — the win rate NAMES its recent window, so nobody
+ *  reads a hot (or cold) streak as a lifetime figure. The window is however
+ *  many games OpenDota could see, so a 37-game account honestly reads
+ *  "in last 37". Deliberately no games-played volume figure. */
 export function pubToken(pub: PoolPubRecord): string {
   const rate = pubWinRate(pub);
-  const pct = rate != null ? `${Math.round(rate * 100)}% · ` : "";
-  return `Pubs ${pct}${formatGamesCount(pub.totalGames)} games`;
+  const window = pub.recentWins + pub.recentLosses;
+  // poolPubRecord filters empty windows, but stay honest if one slips in.
+  if (rate == null) return "Pubs — no visible games";
+  return `Pubs ${Math.round(rate * 100)}% in last ${window}`;
 }
 
 export function pubTitle(pub: PoolPubRecord, nowMs: number): string {
   const window = pub.recentWins + pub.recentLosses;
   const activity = pubActivity(pub.lastPlayedAt, nowMs);
-  return `Last ${window} pub games: ${pub.recentWins}W–${pub.recentLosses}L · ${pub.totalGames} lifetime · last played ${activity?.label ?? "unknown"}`;
+  return `Last ${window} pub games: ${pub.recentWins}W–${pub.recentLosses}L · last played ${activity?.label ?? "unknown"}`;
+}
+
+/** Hover text for a most-played-hero icon: "Pudge — 220 pub games, 55% won". */
+export function pubHeroTitle(h: {
+  heroId: number;
+  games: number;
+  wins: number;
+}): string {
+  const name = heroById(h.heroId)?.name ?? `Hero #${h.heroId}`;
+  const pct = h.games > 0 ? `, ${Math.round((h.wins / h.games) * 100)}% won` : "";
+  return `${name} — ${h.games} pub game${h.games === 1 ? "" : "s"}${pct}`;
 }
 
 /**

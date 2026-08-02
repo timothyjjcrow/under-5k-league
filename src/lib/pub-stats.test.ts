@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   PUB_QUIET_DAYS,
   PUB_STATS_REFRESH_MS,
-  formatGamesCount,
   parsePubStats,
   poolPubRecord,
   pubActivity,
@@ -86,18 +85,6 @@ describe("pubWinRate", () => {
   });
 });
 
-describe("formatGamesCount", () => {
-  it("keeps small counts exact and compacts thousands", () => {
-    expect(formatGamesCount(0)).toBe("0");
-    expect(formatGamesCount(872)).toBe("872");
-    expect(formatGamesCount(1000)).toBe("1k");
-    expect(formatGamesCount(2113)).toBe("2.1k");
-    expect(formatGamesCount(9950)).toBe("9.9k");
-    expect(formatGamesCount(9999)).toBe("10k"); // trailing .0 stripped
-    expect(formatGamesCount(15_200)).toBe("15k");
-  });
-});
-
 describe("pubActivity", () => {
   const now = Date.UTC(2026, 7, 1); // Aug 1 2026
   const daysAgo = (d: number) => Math.floor((now - d * 86_400_000) / 1000);
@@ -133,15 +120,27 @@ describe("pubStatsFresh", () => {
 });
 
 describe("poolPubRecord", () => {
-  it("trims to the five scalars — no hero list crosses the wire", () => {
+  it("carries the recent window, last-played, and top-3 heroes — never the lifetime games figure", () => {
     const rec = poolPubRecord(JSON.stringify(good));
     expect(rec).toEqual({
       recentWins: 54,
       recentLosses: 46,
-      totalGames: 2113,
       lastPlayedAt: 1_722_200_000,
+      topHeroes: good.topHeroes, // fixture has 2; capped at 3
     });
-    expect(rec && "topHeroes" in rec).toBe(false);
+    expect(rec && "totalGames" in rec).toBe(false);
+  });
+
+  it("caps the hero list at 3 for the pool payload", () => {
+    const five = {
+      ...good,
+      topHeroes: Array.from({ length: 5 }, (_, i) => ({
+        heroId: i + 1,
+        games: 50 - i,
+        wins: 25,
+      })),
+    };
+    expect(poolPubRecord(JSON.stringify(five))?.topHeroes).toHaveLength(3);
   });
 
   it("is null with nothing scoutable: no blob, garbage, or an empty recent window", () => {

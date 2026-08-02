@@ -7,6 +7,7 @@ import {
   Avatar,
   Badge,
   EmptyState,
+  HeroIcon,
   HeroList,
   PlayerLink,
   RankBadge,
@@ -15,11 +16,13 @@ import {
   buttonClasses,
   textLink,
 } from "@/components/ui";
+import { heroById } from "@/lib/heroes";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
   filterAndSortPlayers,
   inhouseTitle,
   inhouseToken,
+  pubHeroTitle,
   pubTitle,
   pubToken,
   sortByInhouseRecord,
@@ -54,6 +57,7 @@ export function PlayerPool({
   draftInfo,
   scout,
   now,
+  showContact = false,
 }: {
   players: PoolPlayer[];
   showDraftStatus: boolean;
@@ -64,6 +68,11 @@ export function PlayerPool({
   /** Server clock (epoch ms) for the pub recency labels — passed down so the
    *  SSR pass and hydration compute identical text. */
   now?: number;
+  /** True for signed-in viewers (contact info is members-only). The payload
+   *  blanks discordName when signed out, so without this flag the component
+   *  can't tell "signed out" from "player has no Discord" — and would show
+   *  the no-Discord marker to the public internet. */
+  showContact?: boolean;
 }) {
   // Data-presence gates (the anyDrafted precedent — never season phase).
   // Computed before the state hooks: the sort seeding below reads anyInhouse.
@@ -382,6 +391,36 @@ export function PlayerPool({
                         {pubToken(pub)}
                       </span>
                     ) : null}
+                    {pub && pub.topHeroes.length > 0 ? (
+                      /* What they ACTUALLY play — the self-typed signature
+                         heroes live in their own column; these are OpenDota's
+                         lifetime most-played. role="img" + a spoken label per
+                         the decorative-indicator convention; each icon's title
+                         names the hero and its record. */
+                      <span
+                        role="img"
+                        aria-label={`Most played: ${pub.topHeroes
+                          .map((h) => heroById(h.heroId)?.name ?? `Hero #${h.heroId}`)
+                          .join(", ")}`}
+                        className="flex items-center gap-1"
+                      >
+                        {pub.topHeroes.map((h) => {
+                          const hero = heroById(h.heroId);
+                          // title on the ICON, not a wrapper — the browser
+                          // shows the innermost title, and the img fills any
+                          // span around it.
+                          return hero ? (
+                            <span key={h.heroId} aria-hidden>
+                              <HeroIcon
+                                hero={hero}
+                                size={18}
+                                title={pubHeroTitle(h)}
+                              />
+                            </span>
+                          ) : null;
+                        })}
+                      </span>
+                    ) : null}
                     {activity?.quiet ? (
                       <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
                         last played {activity.label}
@@ -401,6 +440,18 @@ export function PlayerPool({
                       name={p.discordName}
                       verified={p.discordVerified}
                     />
+                    {showContact && !p.discordName ? (
+                      /* The absence IS the information on draft night: this
+                         player can't be reached where the league lives. Only
+                         for signed-in viewers — the payload blanks handles
+                         when signed out, and this must not read as data. */
+                      <span
+                        className="text-muted/70"
+                        title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
+                      >
+                        no Discord
+                      </span>
+                    ) : null}
                   </span>
                   {quote ? (
                     <span

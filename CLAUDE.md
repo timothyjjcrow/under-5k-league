@@ -2308,9 +2308,25 @@ renders byte-identical to the pre-feature page:
   parse with `parsePubStats` in `src/lib/pub-stats.ts`, which degrades
   garbage to null). Fetched by `fetchPubStats` (`dota.ts`: `/wl?limit=100` +
   `/heroes` in parallel, both-or-nothing, the `fetchRankTier` ok:false
-  contract). Rendered as the "Pubs 54% · 2.1k games" token + a
-  "last played Nmo ago" flag past `PUB_QUIET_DAYS`. An empty recent window
-  (private data / new account) renders NOTHING — never "0% of 0".
+  contract). Rendered as the "Pubs 54% in last 100" token — the copy NAMES
+  the recent window so a streak never reads as a lifetime figure, and the
+  window is the games OpenDota could actually see (a 37-game account reads
+  "in last 37") — plus top-3 most-played hero icons (real, from /heroes —
+  the self-typed signature heroes keep their own column) and a
+  "last played Nmo ago" flag past `PUB_QUIET_DAYS`. Deliberately NO
+  games-played volume figure anywhere visible. An empty recent window
+  (private data / new account) renders NOTHING — never "0% of 0". The
+  PROFILE page renders the same token/flag in its hero meta line and folds
+  the full top-5 into the "Most played heroes" card beside the league
+  section (HeroPool's prop shape IS the stored PubHero shape) — which now
+  renders for pub data alone, so season-1 profiles aren't empty.
+- **Discord reachability marker** — beside the existing `<DiscordTag>`, a
+  muted "no Discord" token renders for players with neither a typed handle
+  nor an OAuth link, on the pool rows AND profiles. GATED to signed-in
+  viewers via the `showContact` prop: the payload blanks handles when
+  signed out, so without the flag the component cannot tell "signed out"
+  from "player has no Discord" and would leak the marker to the public
+  internet. Keep that rule.
 - **Capture points mirror rankTier exactly**: login (`ensurePubStats` —
   MISSING-only, the ensureRankTier rule; an earlier 7-day staleness gate put
   a recurring 8s worst case on the login path and was reverted), /me

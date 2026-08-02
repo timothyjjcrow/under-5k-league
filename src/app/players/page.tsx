@@ -12,12 +12,14 @@ import {
   buildPoolInhouseInfo,
   inhouseTitle,
   inhouseToken,
+  pubHeroTitle,
   pubTitle,
   pubToken,
   type PoolScout,
   type PoolScoutInfo,
 } from "@/lib/player-pool";
 import { poolPubRecord } from "@/lib/pub-stats";
+import { heroById } from "@/lib/heroes";
 import {
   Avatar,
   Badge,
@@ -25,6 +27,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  HeroIcon,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -253,6 +256,7 @@ export default async function PlayersPage() {
               draftInfo={draftInfo}
               scout={scout}
               now={nowMs}
+              showContact={!!viewer}
             />
           </Suspense>
         )}
@@ -303,6 +307,32 @@ export default async function PlayersPage() {
                             title={pubTitle(sc.pub, nowMs)}
                           >
                             {pubToken(sc.pub)}
+                          </span>
+                        ) : null}
+                        {sc?.pub && sc.pub.topHeroes.length > 0 ? (
+                          <span
+                            role="img"
+                            aria-label={`Most played: ${sc.pub.topHeroes
+                              .map(
+                                (h) =>
+                                  heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
+                              )
+                              .join(", ")}`}
+                            className="flex items-center gap-1"
+                          >
+                            {sc.pub.topHeroes.map((h) => {
+                              const hero = heroById(h.heroId);
+                              // title on the ICON — the innermost title wins.
+                              return hero ? (
+                                <span key={h.heroId} aria-hidden>
+                                  <HeroIcon
+                                    hero={hero}
+                                    size={18}
+                                    title={pubHeroTitle(h)}
+                                  />
+                                </span>
+                              ) : null;
+                            })}
                           </span>
                         ) : null}
                         {accountId ? (

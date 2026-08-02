@@ -114,6 +114,11 @@ async function main() {
         role: i === 0 ? "ADMIN" : "USER",
         pubStats: pub,
         pubStatsAt: pub ? new Date() : null,
+        // The pool's three Discord states: OAuth-linked (✓), typed-only,
+        // and nothing (the "no Discord" marker). Linked ⊂ named.
+        discordName: i % 3 === 0 ? `player${i + 1}` : "",
+        discordId:
+          i % 6 === 0 ? `90000000000010${String(i).padStart(2, "0")}` : null,
       },
     });
     poolUsers.push(user);

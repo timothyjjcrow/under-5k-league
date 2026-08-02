@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildPoolInhouseInfo,
   filterAndSortPlayers,
+  inhouseToken,
+  pubHeroTitle,
+  pubTitle,
+  pubToken,
   sortByInhouseRecord,
   type PoolPlayer,
   type PoolScoutInfo,
@@ -210,6 +214,47 @@ describe("sortByInhouseRecord", () => {
   it("treats an empty scout map as all no-games (stable no-op)", () => {
     expect(sortByInhouseRecord(rows, {}).map((r) => r.userId)).toEqual(
       rows.map((r) => r.userId),
+    );
+  });
+});
+
+describe("scouting token copy", () => {
+  const pub = {
+    recentWins: 54,
+    recentLosses: 46,
+    lastPlayedAt: null,
+    topHeroes: [{ heroId: 14, games: 220, wins: 121 }],
+  };
+
+  it("pubToken names the recent window — a win rate must never read as lifetime", () => {
+    expect(pubToken(pub)).toBe("Pubs 54% in last 100");
+    // A 37-game account states its real window, not "last 100".
+    expect(
+      pubToken({ ...pub, recentWins: 20, recentLosses: 17 }),
+    ).toBe("Pubs 54% in last 37");
+  });
+
+  it("pubToken and pubTitle carry no lifetime games figure", () => {
+    expect(pubToken(pub)).not.toMatch(/games/i);
+    expect(pubTitle(pub, Date.UTC(2026, 7, 1))).not.toMatch(/lifetime/i);
+  });
+
+  it("inhouseToken shows the rating only for RANKED players", () => {
+    expect(
+      inhouseToken({ rating: 1042, rank: 3, wins: 7, losses: 3, games: 10 }),
+    ).toBe("Inhouse 1042 · 7–3");
+    // Provisional: no rating — a 2-game Elo is noise (the rankInhouse rule).
+    expect(
+      inhouseToken({ rating: 1042, rank: null, wins: 2, losses: 0, games: 2 }),
+    ).toBe("Inhouse 2–0");
+  });
+
+  it("pubHeroTitle names the hero with its record, falling back on unknown ids", () => {
+    expect(pubHeroTitle({ heroId: 14, games: 220, wins: 121 })).toBe(
+      "Pudge — 220 pub games, 55% won",
+    );
+    expect(pubHeroTitle({ heroId: 99999, games: 1, wins: 1 })).toBe(
+      "Hero #99999 — 1 pub game, 100% won",
     );
   });
 });

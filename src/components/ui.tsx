@@ -922,17 +922,23 @@ export function HeroIcon({
   hero,
   size = 26,
   className,
+  title,
 }: {
   hero: Hero;
   size?: number;
   className?: string;
+  /** Hover text override. Needed because the browser shows the INNERMOST
+   *  title under the cursor, and this img fills any wrapper — a title on a
+   *  wrapping span is unreachable. Defaults to the hero name, so the
+   *  existing call sites render byte-identically. */
+  title?: string;
 }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={heroIcon(hero)}
       alt={hero.name}
-      title={hero.name}
+      title={title ?? hero.name}
       width={size}
       height={size}
       loading="lazy"

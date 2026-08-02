@@ -21,6 +21,8 @@ import {
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
 import { formatNetWorth, cn, hasText } from "@/lib/utils";
+import { pubTitle, pubToken } from "@/lib/player-pool";
+import { parsePubStats, poolPubRecord, pubActivity } from "@/lib/pub-stats";
 import {
   Avatar,
   Badge,
@@ -136,6 +138,16 @@ export default async function PlayerProfilePage({
     : [];
 
   const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+
+  // Pub scouting (public data — same visibility rule as the medal): the token
+  // gate comes from poolPubRecord (null when nothing is scoutable), the hero
+  // card uses the full stored top-5. One clock for every recency label.
+  const nowMs = Date.now();
+  const pubScout = poolPubRecord(user.pubStats);
+  const pubActivityNow = pubScout
+    ? pubActivity(pubScout.lastPlayedAt, nowMs)
+    : null;
+  const pubHeroes = parsePubStats(user.pubStats)?.topHeroes ?? [];
 
   // Career: every season this player was rostered in, with their team's record.
   const careerSeasonIds = [
@@ -434,6 +446,16 @@ export default async function PlayerProfilePage({
                 {roles.length > 0 ? (
                   <RoleBadges roles={registration?.roles} />
                 ) : null}
+                {pubScout ? (
+                  <span className="tabular-nums" title={pubTitle(pubScout, nowMs)}>
+                    {pubToken(pubScout)}
+                  </span>
+                ) : null}
+                {pubActivityNow?.quiet ? (
+                  <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
+                    last played {pubActivityNow.label}
+                  </span>
+                ) : null}
                 {user.profileUrl ? (
                   <a
                     href={user.profileUrl}
@@ -469,6 +491,17 @@ export default async function PlayerProfilePage({
                     name={user.discordName}
                     verified={!!user.discordId}
                   />
+                ) : null}
+                {viewer && !user.discordName ? (
+                  /* Members-only like the tag itself: on draft night the
+                     absence IS the information — this player can't be reached
+                     where the league lives. */
+                  <span
+                    className="text-muted/70"
+                    title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
+                  >
+                    no Discord
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -721,11 +754,42 @@ export default async function PlayerProfilePage({
         </Card>
       ) : null}
 
-      {careerSummary.topHeroes.length > 0 ? (
+      {careerSummary.topHeroes.length > 0 || pubHeroes.length > 0 ? (
         <Card>
-          <CardHeader title="Most played heroes" subtitle="All seasons" />
-          <CardBody>
-            <HeroPool heroes={careerSummary.topHeroes} />
+          <CardHeader
+            title="Most played heroes"
+            subtitle={
+              careerSummary.topHeroes.length > 0
+                ? pubHeroes.length > 0
+                  ? "League games, and their whole pub history"
+                  : "All seasons"
+                : "Their whole pub history (OpenDota)"
+            }
+          />
+          <CardBody className="space-y-4">
+            {careerSummary.topHeroes.length > 0 ? (
+              <div className="space-y-2">
+                {pubHeroes.length > 0 ? (
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted">
+                    In this league
+                  </div>
+                ) : null}
+                <HeroPool heroes={careerSummary.topHeroes} />
+              </div>
+            ) : null}
+            {pubHeroes.length > 0 ? (
+              <div className="space-y-2">
+                {careerSummary.topHeroes.length > 0 ? (
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted">
+                    In pubs
+                  </div>
+                ) : null}
+                {/* The same card the league heroes use — HeroPool's shape IS
+                    the stored PubHero shape, so what they actually play in
+                    ranked reads identically to what they play here. */}
+                <HeroPool heroes={pubHeroes} limit={5} />
+              </div>
+            ) : null}
           </CardBody>
         </Card>
       ) : null}

@@ -84,14 +84,6 @@ export function pubWinRate(s: {
   return total > 0 ? s.recentWins / total : null;
 }
 
-/** Compact games figure for a one-line token: 872 → "872", 2113 → "2.1k",
- *  15200 → "15k". */
-export function formatGamesCount(n: number): string {
-  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-  return String(n);
-}
-
 export type PubActivity = {
   /** "today" / "5d ago" / "3w ago" / "4mo ago" / "2y ago" */
   label: string;
@@ -125,14 +117,17 @@ export function pubStatsFresh(
   );
 }
 
-/** What the player pool actually ships to the client — the five scalars, no
- *  hero list. Null when there is nothing scoutable (no blob, garbage, or an
- *  account whose recent window is empty — private data or brand new). */
+/** What the player pool actually ships to the client: the recent-window W/L,
+ *  the last-played stamp, and the top-3 most-played heroes. Deliberately NO
+ *  lifetime games figure — a volume stat is the one number nobody should be
+ *  judged (or farm a reputation) on. Null when there is nothing scoutable
+ *  (no blob, garbage, or an account whose recent window is empty — private
+ *  data or brand new). */
 export type PoolPub = {
   recentWins: number;
   recentLosses: number;
-  totalGames: number;
   lastPlayedAt: number | null;
+  topHeroes: PubHero[];
 };
 
 export function poolPubRecord(raw: string | null | undefined): PoolPub | null {
@@ -142,7 +137,7 @@ export function poolPubRecord(raw: string | null | undefined): PoolPub | null {
   return {
     recentWins: stats.recentWins,
     recentLosses: stats.recentLosses,
-    totalGames: stats.totalGames,
     lastPlayedAt: stats.lastPlayedAt,
+    topHeroes: stats.topHeroes.slice(0, 3),
   };
 }
