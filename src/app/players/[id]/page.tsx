@@ -2,7 +2,11 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { getAllGameLines, getAllGamesForRecords } from "@/lib/cached-queries";
+import {
+  getAllGameLines,
+  getAllGameScores,
+  getAllGamesForRecords,
+} from "@/lib/cached-queries";
 import { shareMetadata } from "@/lib/share-metadata";
 import { getActiveSeason } from "@/lib/season";
 import { steamIdToAccountId } from "@/lib/dota";
@@ -28,11 +32,13 @@ import {
   type PlayerRecord,
 } from "@/lib/records";
 import { formatNetWorth, cn, hasText } from "@/lib/utils";
+import { rankMedalName } from "@/lib/rank";
 import { pubTitle, pubToken } from "@/lib/player-pool";
 import { parsePubStats, poolPubRecord, pubActivity } from "@/lib/pub-stats";
 import {
   Avatar,
   Badge,
+  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -69,24 +75,55 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const user = await prisma.user.findUnique({
-    where: { id },
-    select: { name: true },
-  });
+  const [user, gameScores] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id },
+      select: { name: true, rankTier: true, pubStats: true },
+    }),
+    getAllGameScores(),
+  ]);
   // notFound() in metadata runs before the shell streams → real 404 status.
   if (!user) notFound();
+  const rank = rankMedalName(user.rankTier);
+  const summary = summarizePlayerGames(
+    gameScores.flatMap(({ players, radiantWin }) =>
+      parseGamePlayers<PlayerStat>(players)
+        .filter((player) => player.userId === id)
+        .map((player) => ({
+          radiantWin,
+          isRadiant: player.isRadiant,
+          kills: player.kills,
+          deaths: player.deaths,
+          assists: player.assists,
+          heroId: player.heroId,
+        })),
+    ),
+  );
+  const favoriteHero = heroById(
+    summary.topHeroes[0]?.heroId ?? parsePubStats(user.pubStats)?.topHeroes[0]?.heroId ?? 0,
+  );
+  const highlights = [
+    rank !== "Unranked" ? `${rank} medal` : null,
+    summary.games > 0 ? `${summary.wins}–${summary.losses} league record` : null,
+    favoriteHero ? `${favoriteHero.name} player` : null,
+  ].filter((highlight): highlight is string => highlight !== null);
   return shareMetadata(
     `${user.name} · Player`,
-    `${user.name}'s player profile — record, heroes, and match history in GGD2L.`,
+    `${user.name}'s player profile${highlights.length > 0 ? ` · ${highlights.join(" · ")}` : ""} — match history in GGD2L.`,
   );
 }
 
 export default async function PlayerProfilePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ season?: string }>;
 }) {
-  const { id } = await params;
+  const [{ id }, { season: historySeasonParam }] = await Promise.all([
+    params,
+    searchParams,
+  ]);
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) notFound();
 
@@ -103,7 +140,7 @@ export default async function PlayerProfilePage({
     seasonMatches,
     careerMemberships,
     gamesLite,
-    inhouseSeen,
+    recentInhouse,
     recordRows,
   ] = await Promise.all([
     season
@@ -128,13 +165,16 @@ export default async function PlayerProfilePage({
     // Cached (viewer-independent) so every profile view doesn't re-scan the
     // whole Game table — see getAllGameLines.
     getAllGameLines(),
-    // Existence probe for the streamed Inhouse card: a point read on the
-    // @@index([userId]) so league-only players (the common case) never watch a
-    // skeleton mount and then vanish. A player whose only lobbies never
-    // COMPLETED still nulls out post-stream — rare and accepted.
-    prisma.inhouseLobbyPlayer.findFirst({
-      where: { userId: id },
-      select: { id: true },
+    // Latest completed inhouse game doubles as the activity-card data and the
+    // gate for the streamed ladder card, so league-only players never mount a
+    // skeleton that will immediately disappear.
+    prisma.inhouseLobby.findFirst({
+      where: {
+        status: INHOUSE_STATUS.COMPLETED,
+        players: { some: { userId: id } },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
     }),
     // All-time record book input — the cached /records scan ("games"-tagged).
     // Awaited in the page body on purpose: an unstable_cache wrapper awaited
@@ -388,6 +428,16 @@ export default async function PlayerProfilePage({
   }
   const historyGroups = [...bySeason.values()];
   const multiSeasonHistory = historyGroups.length > 1;
+  // An unknown `?season=` falls back to the all-seasons view rather than
+  // presenting a misleading empty history (links copied from an old profile
+  // should stay useful after a season gets removed or renamed).
+  const selectedHistoryGroup = historySeasonParam
+    ? historyGroups.find((group) => group.seasonId === historySeasonParam)
+    : undefined;
+  const visibleHistoryGroups = selectedHistoryGroup
+    ? [selectedHistoryGroup]
+    : historyGroups;
+  const latestLeagueGame = gameRows.find((row) => row.game.startTime > 0);
 
   // Team + record for this season, if drafted.
   const team = membership?.team ?? null;
@@ -435,6 +485,9 @@ export default async function PlayerProfilePage({
   const heroCardVisible =
     leagueHeroes.length > 0 || pubHeroes.length > 0 || hasText(selfPickedHeroes);
   const connectionsVisible = !!affinities.nemesis || !!affinities.duo;
+  const activityVisible =
+    !!latestLeagueGame || !!recentInhouse || !!pubActivityNow;
+  const newSignupVisible = !!activeReg && gameRows.length === 0;
 
   // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
   // game (older imports may lack them), so average only over games that have it.
@@ -911,10 +964,86 @@ export default async function PlayerProfilePage({
         </section>
       ) : null}
 
-      {signupCardVisible || heroCardVisible || heldRecords.length > 0 || connectionsVisible ? (
+      {activityVisible || newSignupVisible || signupCardVisible || heroCardVisible || heldRecords.length > 0 || connectionsVisible ? (
         <section className="space-y-3">
           <SectionTitle>Player profile</SectionTitle>
           <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
+            {activityVisible ? (
+              <Card className="min-w-0">
+                <CardHeader
+                  title="Recent activity"
+                  subtitle="The latest signal from each part of the league"
+                />
+                <CardBody className="space-y-3 text-sm">
+                  {latestLeagueGame ? (
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <span className="text-muted">League game</span>
+                      <Link
+                        href={`/matches/${latestLeagueGame.game.matchId}`}
+                        className="font-medium hover:text-info hover:underline"
+                      >
+                        <LocalTime
+                          ts={latestLeagueGame.game.startTime * 1000}
+                          variant="short"
+                          initial={formatMatchTime(
+                            new Date(latestLeagueGame.game.startTime * 1000),
+                            "short",
+                          )}
+                        />
+                      </Link>
+                    </div>
+                  ) : null}
+                  {recentInhouse ? (
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <span className="text-muted">Inhouse game</span>
+                      <Link
+                        href="/inhouse/history"
+                        className="font-medium hover:text-info hover:underline"
+                      >
+                        <LocalTime
+                          ts={recentInhouse.createdAt.getTime()}
+                          variant="short"
+                          initial={formatMatchTime(recentInhouse.createdAt, "short")}
+                        />
+                      </Link>
+                    </div>
+                  ) : null}
+                  {pubActivityNow ? (
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <span className="text-muted">Public pub</span>
+                      <span className="font-medium">last played {pubActivityNow.label}</span>
+                    </div>
+                  ) : null}
+                </CardBody>
+              </Card>
+            ) : null}
+
+            {activeReg && newSignupVisible ? (
+              <Card tone="quiet" className="min-w-0">
+                <CardHeader
+                  title="Ready for the first game"
+                  subtitle="League stats appear after the first imported match"
+                />
+                <CardBody className="space-y-3 text-sm">
+                  {roles.length > 0 ? (
+                    <Detail label="Preferred roles">
+                      <RoleBadges roles={activeReg.roles} />
+                    </Detail>
+                  ) : null}
+                  {hasText(selfPickedHeroes) ? (
+                    <Detail label="Wants to play">
+                      <HeroList value={selfPickedHeroes} size={24} />
+                    </Detail>
+                  ) : null}
+                  {!roles.length && !hasText(selfPickedHeroes) ? (
+                    <p className="text-muted">
+                      Their first imported game will start their public record.
+                    </p>
+                  ) : null}
+                </CardBody>
+              </Card>
+            ) : null}
+
             {activeReg && signupCardVisible ? (
               <Card className="min-w-0">
                 <CardHeader title="Signup profile" />
@@ -987,20 +1116,29 @@ export default async function PlayerProfilePage({
                   }
                 />
                 <CardBody className="flex flex-wrap gap-2">
-                  {heldRecords.map((record) => (
-                    <Link
-                      key={record.key}
-                      href={`/matches/${record.matchId}`}
-                      className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm transition-colors hover:border-muted/60"
-                      title={`${record.title}: ${recordDisplayValue(record)}`}
-                    >
-                      <span aria-hidden>{record.emoji}</span>{" "}
-                      <span className="font-medium">{record.title}</span>{" "}
-                      <span className="font-mono text-xs tabular-nums text-muted">
-                        {recordDisplayValue(record)}
-                      </span>
-                    </Link>
-                  ))}
+                  {heldRecords.map((record) => {
+                    const hero = heroById(record.heroId);
+                    return (
+                      <Link
+                        key={record.key}
+                        href={`/matches/${record.matchId}`}
+                        className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm transition-colors hover:border-muted/60"
+                        title={`${record.title}: ${recordDisplayValue(record)}`}
+                      >
+                        <span aria-hidden>{record.emoji}</span>
+                        {hero ? <HeroIcon hero={hero} size={22} /> : null}
+                        <span>
+                          <span className="block font-medium">{record.title}</span>
+                          <span className="block font-mono text-xs tabular-nums text-muted">
+                            {recordDisplayValue(record)}
+                          </span>
+                        </span>
+                        <Badge tone={record.won ? "success" : "danger"}>
+                          {record.won ? "W" : "L"}
+                        </Badge>
+                      </Link>
+                    );
+                  })}
                 </CardBody>
               </Card>
             ) : null}
@@ -1016,6 +1154,7 @@ export default async function PlayerProfilePage({
                     <Connection
                       label="Nemesis"
                       emoji="⚔️"
+                      profileId={id}
                       playerId={affinities.nemesis.userId}
                       playerName={affinityName.get(affinities.nemesis.userId)}
                       games={affinities.nemesis.games}
@@ -1028,6 +1167,7 @@ export default async function PlayerProfilePage({
                     <Connection
                       label="Best duo"
                       emoji="🤝"
+                      profileId={id}
                       playerId={affinities.duo.userId}
                       playerName={affinityName.get(affinities.duo.userId)}
                       games={affinities.duo.games}
@@ -1169,8 +1309,8 @@ export default async function PlayerProfilePage({
         </Card>
       ) : null}
 
-      {/* Inhouse career — only stream for players with a lobby row. */}
-      {inhouseSeen ? (
+      {/* Inhouse career — only stream for players with a completed game. */}
+      {recentInhouse ? (
         <Suspense fallback={<CardSkeleton rows={3} />}>
           <InhouseCareerCard userId={user.id} />
         </Suspense>
@@ -1181,14 +1321,46 @@ export default async function PlayerProfilePage({
           title="Match history"
           subtitle={
             gameRows.length > 0
-              ? multiSeasonHistory
+              ? selectedHistoryGroup
+                ? selectedHistoryGroup.seasonName
+                : multiSeasonHistory
                 ? "All seasons"
                 : historyGroups[0]?.seasonName
               : (season?.name ?? undefined)
           }
           action={
-            recentFormStrip.length > 0 ? (
-              <FormStrip form={recentFormStrip} size={5} />
+            recentFormStrip.length > 0 || multiSeasonHistory ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {recentFormStrip.length > 0 ? (
+                  <FormStrip form={recentFormStrip} size={5} />
+                ) : null}
+                {multiSeasonHistory ? (
+                  <form
+                    method="get"
+                    action={`/players/${id}`}
+                    className="flex items-center gap-2"
+                  >
+                    <label>
+                      <span className="sr-only">Show games from season</span>
+                      <select
+                        name="season"
+                        defaultValue={selectedHistoryGroup?.seasonId ?? ""}
+                        className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-xs text-fg outline-none focus:border-accent/60 sm:h-8"
+                      >
+                        <option value="">All seasons</option>
+                        {historyGroups.map((group) => (
+                          <option key={group.seasonId} value={group.seasonId}>
+                            {group.seasonName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button type="submit" className={buttonClasses("secondary", "sm")}>
+                      View
+                    </button>
+                  </form>
+                ) : null}
+              </div>
             ) : undefined
           }
         />
@@ -1202,9 +1374,9 @@ export default async function PlayerProfilePage({
             </div>
           ) : (
             <ul className="divide-y divide-line/60">
-              {historyGroups.map((group) => (
+              {visibleHistoryGroups.map((group) => (
                 <li key={group.seasonId}>
-                  {multiSeasonHistory ? (
+                  {multiSeasonHistory && !selectedHistoryGroup ? (
                     <Link
                       href={`/seasons/${group.seasonId}`}
                       className="flex items-center justify-between bg-surface-2/40 px-5 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
@@ -1314,6 +1486,7 @@ function recordDisplayValue(record: PlayerRecord): string {
 function Connection({
   label,
   emoji,
+  profileId,
   playerId,
   playerName,
   games,
@@ -1323,6 +1496,7 @@ function Connection({
 }: {
   label: string;
   emoji: string;
+  profileId: string;
   playerId: string;
   playerName: string | undefined;
   games: number;
@@ -1339,9 +1513,17 @@ function Connection({
         <div className="text-xs font-medium uppercase tracking-wide text-muted">
           {label}
         </div>
-        <PlayerLink userId={playerId} className="font-semibold hover:text-info">
-          {playerName ?? "Unknown player"}
-        </PlayerLink>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <PlayerLink userId={playerId} className="font-semibold hover:text-info">
+            {playerName ?? "Unknown player"}
+          </PlayerLink>
+          <Link
+            href={`/players/compare?a=${encodeURIComponent(profileId)}&b=${encodeURIComponent(playerId)}`}
+            className={textLink("text-xs")}
+          >
+            Compare →
+          </Link>
+        </div>
         <div className="text-xs text-muted">
           <span className="tabular-nums">
             {wins}–{losses}

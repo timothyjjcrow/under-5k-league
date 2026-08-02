@@ -26,6 +26,14 @@ test("a new player can sign in and join the season", async ({ page }) => {
   // Confirmed signed up.
   await expect(page.getByText("Playing").first()).toBeVisible();
 
+  // A player with an active signup but no imported league games gets an
+  // honest, useful public-profile starting state instead of a blank stat area.
+  await page.getByRole("link", { name: "View public profile →" }).click();
+  await expect(page.getByRole("heading", { name })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Ready for the first game" }),
+  ).toBeVisible();
+
   // And visible on the home dashboard's signup list (scoped to main content,
   // since the name also appears in the header nav).
   await page.goto("/");
