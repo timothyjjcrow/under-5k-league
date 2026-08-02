@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { createPlayoffBracket } from "@/lib/playoff-service";
-import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  DRAFT_STATUS,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import {
   assignStandinGuarded,
   clashesAfterRetime,
@@ -793,5 +798,375 @@ describe("bulk teardowns stand their standins down", () => {
         where: { standinUserId: standin.id },
       }),
     ).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHASE GATE. Cover is a statement about a SETTLED roster: SIGNUPS and a
+// running auction refuse (a booking made there would survive into whatever the
+// draft produces — the re-run-auction case, where a stale empty-seat cover
+// inflates a freshly drafted side to six), COMPLETE has nothing left to cover,
+// and the one DRAFT-phase window that stays open is draft COMPLETE — pool-dry
+// short rosters arranging their week-1 cover. Judged AFTER the archived and
+// completed-match refusals so the more specific error always wins.
+// ---------------------------------------------------------------------------
+describe("standin assignment phase gate", () => {
+  // Pins the SIGNUPS refusal — and that the error points at running the draft.
+  it("refuses during SIGNUPS", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.SIGNUPS },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/run the draft/);
+    expect(await prisma.standinAssignment.count()).toBe(0);
+  });
+
+  // Pins the DRAFT-phase no-draft-row branch: the phase was flipped by hand
+  // and no auction exists at all, so there are no drafted rosters to cover.
+  it("refuses in DRAFT before any auction exists", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.DRAFT },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/auction hasn't run/);
+  });
+
+  // Pins the DRAFT-phase draft-row branch: a draft ROW in any status short of
+  // COMPLETE refuses — the wording keys on the row's existence, so NOT_STARTED
+  // (phase flipped pre-start) and IN_PROGRESS both read as a draft in flight.
+  it("refuses while the draft row is NOT_STARTED or IN_PROGRESS", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.DRAFT },
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.NOT_STARTED },
+    });
+    const args = {
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    };
+    // A NOT_STARTED row is the post-abort state — "hasn't run yet", never
+    // "still running" (there is no auction to wait out).
+    const preStart = await assignStandinGuarded(args);
+    expect(preStart.ok).toBe(false);
+    if (!preStart.ok) expect(preStart.error).toMatch(/auction hasn't run/);
+
+    await prisma.draft.update({
+      where: { seasonId: season.id },
+      data: { status: DRAFT_STATUS.IN_PROGRESS },
+    });
+    const live = await assignStandinGuarded(args);
+    expect(live.ok).toBe(false);
+    if (!live.ok) expect(live.error).toMatch(/draft is still running/);
+    expect(await prisma.standinAssignment.count()).toBe(0);
+  });
+
+  // Pins the pool-dry cover window: DRAFT phase with the auction COMPLETE is
+  // exactly when a short roster arranges its week-1 cover — it must ALLOW.
+  it("allows in DRAFT once the auction is COMPLETE", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.DRAFT },
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(true);
+    const row = await prisma.standinAssignment.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+    expect(row.teamId).toBe(home.id);
+  });
+
+  // Pins the COMPLETE refusal — the season is over, nothing left to cover.
+  it("refuses once the season is COMPLETE", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.COMPLETE },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/season is over/);
+  });
+
+  // Pins the guard ORDER: the completed-match refusal sits BEFORE the phase
+  // gate, so a played match on a finished season blames the match, not the
+  // season — the more specific refusal wins.
+  it("a played match's refusal wins over the phase gate", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.COMPLETE },
+    });
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: MATCH_STATUS.COMPLETED },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain("already played");
+      expect(res.error).not.toContain("season is over");
+    }
+  });
+
+  // Pins the guard ORDER on the archived side: an archived season's match
+  // refuses as "archived season" even while the ACTIVE season sits in SIGNUPS
+  // — hoisting the phase gate above the archived check would shadow it with
+  // the misleading run-the-draft error.
+  it("the archived-season refusal wins while the active season is in SIGNUPS", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { isActive: false },
+    });
+    await makeSeason({ name: "Signups Season", status: SEASON_STATUS.SIGNUPS });
+
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain("archived season");
+      expect(res.error).not.toMatch(/run the draft/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MMR ADVISORY (standinMmrNote). Warn-and-name, NEVER a block — the maxMmr
+// house rule. Named cover compares against the REPLACED player's registration
+// MMR (the strength the team was already fielding); an empty seat has no
+// baseline, so the season's soft cap is the only yardstick.
+// ---------------------------------------------------------------------------
+describe("standin MMR advisory", () => {
+  it("flags a 4900 standin covering a 1800 seat — and still assigns", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.registration.updateMany({
+      where: { userId: sub.id },
+      data: { mmr: 4900 },
+    });
+    // The replaced player's MMR comes from their Registration row — the
+    // rostered fixtures are bare Users, so give them one.
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: homePlayer.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 1800,
+      },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    // Advisory means the assignment LANDS and the message names the gap.
+    expect(res.ok).toBe(true);
+    if (res.ok)
+      expect(res.message).toContain(
+        "heads up: a 4900 MMR standin is covering a 1800 MMR player",
+      );
+    expect(await prisma.standinAssignment.count()).toBe(1);
+  });
+
+  it("says nothing under the 500-MMR flag gap", async () => {
+    // 2600 covering 2500 — comparable cover is the normal case, no noise.
+    const { season, home, homePlayer, sub, match } = await setup();
+    await prisma.registration.updateMany({
+      where: { userId: sub.id },
+      data: { mmr: 2600 },
+    });
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: homePlayer.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 2500,
+      },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.message).not.toContain("heads up");
+  });
+
+  it("an empty-seat fill measures against the season's review threshold", async () => {
+    // No replaced player to compare with, so Season.maxMmr is the yardstick.
+    const { season, home, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { maxMmr: 3500 },
+    });
+    await prisma.registration.updateMany({
+      where: { userId: sub.id },
+      data: { mmr: 4000 },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: null,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok)
+      expect(res.message).toContain(
+        "above this season's 3500 MMR review threshold",
+      );
+  });
+
+  it("an empty-seat fill with no threshold set stays silent", async () => {
+    // maxMmr 0 = no review threshold — there is nothing to measure against.
+    const { season, home, sub, match } = await setup();
+    await prisma.registration.updateMany({
+      where: { userId: sub.id },
+      data: { mmr: 4000 },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: null,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.message).not.toContain("heads up");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SWAP WORDING. "Remove that assignment first" is only honest while the
+// series hasn't started — once a game imports, removeStandinGuarded refuses
+// the removal, so pointing at it would send the captain in a circle.
+// ---------------------------------------------------------------------------
+describe("seat-taken swap wording", () => {
+  /** Home's seat covered by Sub Sam, plus a second standin wanting the seat. */
+  async function coveredSeat() {
+    const { season, home, homePlayer, sub, match } = await setup();
+    const first = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(first.ok).toBe(true);
+    const rival = await makeUser("Sub Tara");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: rival.id,
+        type: "STANDIN",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    return { home, homePlayer, match, rival };
+  }
+
+  // Pins the mid-series wording: the seat conflict says the booking can't be
+  // swapped, and drops the circular remove-first advice.
+  it("mid-series, the booking can't be swapped — and the error says so", async () => {
+    const { home, homePlayer, match, rival } = await coveredSeat();
+    await prisma.game.create({
+      data: {
+        matchId: match.id,
+        dotaMatchId: "515151",
+        radiantWin: true,
+        winnerTeamId: home.id,
+        players: "[]",
+      },
+    });
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: rival.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain("can't be swapped");
+    // Removal refuses once games exist, so this advice would be a dead end.
+    expect(res.error).not.toContain("remove that assignment first");
+  });
+
+  // Pins the pre-series wording: while nothing is imported, removal is legal
+  // and the conflict points straight at it.
+  it("without games, the same conflict still points at removal to swap", async () => {
+    const { home, homePlayer, match, rival } = await coveredSeat();
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: rival.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok)
+      expect(res.error).toContain("remove that assignment first to swap");
+  });
+});
+
+describe("assignment announcement deep link", () => {
+  // Pins the match-page link in standinAssignedMessage: the check-in banner
+  // lives on /matches/[id], and a standin arriving from a phone ping needs
+  // the page, not a scavenger hunt.
+  it("the announcement links the match page", async () => {
+    const { home, homePlayer, sub, match } = await setup();
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.announcement).toContain(`/matches/${match.id}`);
   });
 });

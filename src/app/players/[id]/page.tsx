@@ -181,6 +181,39 @@ export default async function PlayerProfilePage({
     );
   const titles = careerRows.filter((r) => r.champion).length;
 
+  // Served cover — the standin's season, which used to vanish from every
+  // player-visible surface the moment each match completed (/me filters to
+  // pending, the rostered-seasons card never saw them). Recognition is the
+  // league's cheapest standin-recruitment tool for season two. COMPLETED
+  // matches only: pending bookings are /me's operational state, not history.
+  const coverServed = await prisma.standinAssignment.findMany({
+    where: { standinUserId: id, match: { status: "COMPLETED" } },
+    select: {
+      match: {
+        select: {
+          seasonId: true,
+          season: { select: { name: true, createdAt: true } },
+        },
+      },
+    },
+  });
+  const coverSeasons = [
+    ...coverServed
+      .reduce((acc, c) => {
+        const cur = acc.get(c.match.seasonId);
+        if (cur) cur.count += 1;
+        else
+          acc.set(c.match.seasonId, {
+            seasonId: c.match.seasonId,
+            name: c.match.season.name,
+            createdAt: c.match.season.createdAt,
+            count: 1,
+          });
+        return acc;
+      }, new Map<string, { seasonId: string; name: string; createdAt: Date; count: number }>())
+      .values(),
+  ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
   // Pull this player's line out of each imported game — every season's games.
   // The parsed box score is kept so achievements can identify each game's MVP.
   const gameRows = games
@@ -820,11 +853,18 @@ export default async function PlayerProfilePage({
         </Card>
       ) : null}
 
-      {careerRows.length > 0 ? (
+      {careerRows.length > 0 || coverSeasons.length > 0 ? (
         <Card>
           <CardHeader
             title="Seasons"
-            subtitle={`${careerRows.length} season${careerRows.length === 1 ? "" : "s"} played${titles > 0 ? ` · ${titles} title${titles === 1 ? "" : "s"} 🏆` : ""}`}
+            subtitle={
+              careerRows.length > 0
+                ? `${careerRows.length} season${careerRows.length === 1 ? "" : "s"} played${titles > 0 ? ` · ${titles} title${titles === 1 ? "" : "s"} 🏆` : ""}`
+                : // A standin-only career is still a career — this card used
+                  // to not render at all for the people who kept match nights
+                  // running.
+                  "Stood in when teams needed cover"
+            }
           />
           <CardBody className="divide-y divide-line/60 p-0">
             {careerRows.map(({ membership: m, tally, champion }) => (
@@ -886,6 +926,26 @@ export default async function PlayerProfilePage({
                 <span className="shrink-0 font-mono text-xs tabular-nums">
                   {tally.W}–{tally.L}
                   {tally.D > 0 ? `–${tally.D}` : ""}
+                </span>
+              </div>
+            ))}
+            {coverSeasons.map((s) => (
+              <div
+                key={`cover-${s.seasonId}`}
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
+              >
+                <Link
+                  href={`/seasons/${s.seasonId}`}
+                  className={cn(
+                    "w-24 shrink-0 text-muted hover:text-info",
+                    TAP_SAFE,
+                  )}
+                >
+                  {s.name}
+                </Link>
+                <span className="min-w-0 flex-1 text-muted">
+                  🧩 Stood in — {s.count} match{s.count === 1 ? "" : "es"}{" "}
+                  covered
                 </span>
               </div>
             ))}

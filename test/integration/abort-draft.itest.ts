@@ -356,6 +356,78 @@ describe("abortDraft — guards", () => {
   });
 });
 
+// abortDraft dissolves the rosters that standin cover was arranged around, and
+// the empty-seat kind (replacingUserId null) stays "live" to matchNightRoster
+// forever — a booking that survived into the re-run auction inflated a freshly
+// drafted side to six. So the abort deletes every booking in the season inside
+// its transaction and returns the rows as coverStandDowns for the action's
+// post-commit stand-down messages (the generateSchedule shape).
+describe("abortDraft — stands down the season's standin cover", () => {
+  it("deletes every booking and reports who was stood down, names intact", async () => {
+    const { season, a, b } = await prematureStart();
+    // The natural state for cover to exist in: the auction already finished.
+    await prisma.draft.update({
+      where: { seasonId: season.id },
+      data: {
+        status: DRAFT_STATUS.COMPLETE,
+        nominatedUserId: null,
+        bidEndsAt: null,
+        nominationEndsAt: null,
+      },
+    });
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 2,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: a.team.id,
+        awayTeamId: b.team.id,
+        bestOf: 3,
+      },
+    });
+    const standin = await makeUser("Cover Guy");
+    await prisma.user.update({
+      where: { id: standin.id },
+      data: { discordId: "111222333444555666" },
+    });
+    // Empty-seat fill: replacingUserId null, so the teamId names the side.
+    await prisma.standinAssignment.create({
+      data: { matchId: match.id, teamId: a.team.id, standinUserId: standin.id },
+    });
+
+    const res = await abortDraft(season.id, await admin());
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected the abort to succeed");
+    // The row carries everything the stand-down announcement needs — the
+    // discordId is what lets the action @-mention the person being stood down.
+    expect(res.coverStandDowns).toEqual([
+      {
+        standinName: "Cover Guy",
+        discordId: "111222333444555666",
+        teamName: "Captain A's Team",
+        homeName: "Captain A's Team",
+        awayName: "Captain B's Team",
+        week: 2,
+        isPlayoff: false,
+      },
+    ]);
+    // …and the booking is actually gone, not merely reported.
+    expect(await prisma.standinAssignment.count()).toBe(0);
+  });
+
+  it("returns [] when there was no cover, so the toast note stays silent", async () => {
+    const { season } = await prematureStart();
+
+    const res = await abortDraft(season.id, await admin());
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected the abort to succeed");
+    // Always the field, always an array — the action iterates it unguarded.
+    expect(res.coverStandDowns).toEqual([]);
+  });
+});
+
 function formWith(fields: Record<string, string>): FormData {
   const fd = new FormData();
   for (const [k, v] of Object.entries(fields)) fd.set(k, v);

@@ -21,6 +21,13 @@ export type AcceptedReschedule = {
   clearedRsvps: number;
   /** Standins now double-booked because this match moved — surfaced in the toast. */
   standinClashes: string[];
+  /**
+   * Standins ASSIGNED to this match — their personally-@-mentioned assignment
+   * message embedded the OLD kickoff, and the acceptance broadcast is the one
+   * message that carries the new one, so the action mentions them alongside
+   * the proposer. User ids, not snowflakes (the notifyUserId rule).
+   */
+  standinUserIds: string[];
 };
 
 // Announcement data for a fresh proposal (mirrors AcceptedReschedule) — the
@@ -252,6 +259,12 @@ export async function respondReschedule(
   // arranged, never when a match later moves onto that night. Reported, not
   // refused: the reschedule is the legitimate act.
   const standinClashes = await clashesAfterRetime(match.seasonId, [match.id]);
+  // The match's booked standins: their assignment ping quoted the OLD kickoff,
+  // and their RSVPs were just wiped with everyone else's.
+  const standins = await prisma.standinAssignment.findMany({
+    where: { matchId: match.id },
+    select: { standinUserId: true },
+  });
   return {
     accepted: true,
     homeName: match.homeTeam.name,
@@ -262,6 +275,7 @@ export async function respondReschedule(
     notifyUserId: request.proposedById,
     clearedRsvps,
     standinClashes,
+    standinUserIds: standins.map((s) => s.standinUserId),
   };
 }
 

@@ -30,6 +30,7 @@ import {
   generateRegularSchedule,
   makeSeason,
   makeTeam,
+  makeUser,
   recordMatch,
 } from "./factories";
 
@@ -300,5 +301,154 @@ describe("withdrawTeam", () => {
         })
       ).status,
     ).toBe("CANCELLED");
+  });
+});
+
+describe("withdrawTeam — booked standins are stood down with their fixtures", () => {
+  afterEach(() => setRaceHook(null));
+
+  /** A linked standin booked to cover a seat (either side) on one fixture. */
+  async function bookCover(
+    matchId: string,
+    teamId: string,
+    name: string,
+    discordId: string,
+  ) {
+    const standin = await makeUser(name);
+    await prisma.user.update({
+      where: { id: standin.id },
+      data: { discordId },
+    });
+    await prisma.standinAssignment.create({
+      data: { matchId, teamId, standinUserId: standin.id, replacingUserId: null },
+    });
+    return standin;
+  }
+
+  it("a standin on a doomed fixture is stood down by name, with a ping — and the toast says so", async () => {
+    // Pins the post-commit stand-down loop: every booking on a forfeited
+    // fixture gets standinRemovedMessage + mentionsOf([discordId]). The human
+    // holds a live @-mentioned instruction to show up, and the row vanishing
+    // from /me (pendingCoverWhere filters COMPLETED) can't correct them.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const doomed = matches.find(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    )!;
+    await bookCover(doomed.id, quitter.id, "Moot Cover", "800000000000000001");
+    mockSend.mockClear();
+
+    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+
+    const standDown = mockSend.mock.calls.find(([m]) =>
+      String(m).includes("stand down"),
+    );
+    expect(standDown, "the booked standin must be stood down").toBeTruthy();
+    expect(String(standDown![0])).toContain("Moot Cover");
+    // …and PINGED — they were @-mentioned when told to show up.
+    expect(standDown![1]).toEqual({ users: ["800000000000000001"] });
+    expect(res).toMatchObject({
+      message: expect.stringMatching(
+        /1 standin booking\(s\) on those fixtures stood down/,
+      ),
+    });
+  });
+
+  it("cover on the OPPONENT's side of a doomed fixture dies with it too", async () => {
+    // The fixture is dead for BOTH sides — mootCover keys on the match, never
+    // on the withdrawing team's side of it, and the message names the team
+    // the standin was actually covering for.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const doomed = matches.find(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    )!;
+    const opponentId =
+      doomed.homeTeamId === quitter.id ? doomed.awayTeamId : doomed.homeTeamId;
+    const opponent = teams.find((t) => t.id === opponentId)!;
+    await bookCover(doomed.id, opponentId, "Rival Cover", "800000000000000002");
+    mockSend.mockClear();
+
+    await withdrawTeam(null, fd({ teamId: quitter.id }));
+
+    const standDown = mockSend.mock.calls.find(([m]) =>
+      String(m).includes("stand down"),
+    );
+    expect(standDown, "the opponent's cover must be stood down too").toBeTruthy();
+    expect(String(standDown![0])).toContain("Rival Cover");
+    expect(String(standDown![0])).toContain(
+      `no longer standing in for **${opponent.name}**`,
+    );
+    expect(standDown![1]).toEqual({ users: ["800000000000000002"] });
+  });
+
+  it("a booking on an already-played fixture is untouched — no send, no toast note", async () => {
+    // The stand-down list is scoped to the OPEN fixtures the withdraw dooms:
+    // cover on a series that completed beforehand is history (its standin may
+    // well have played it) and must not be told to stand down.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const mine = matches.filter(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    );
+    const played = mine[0];
+    await recordMatch(played.id, 2, 0);
+    await bookCover(played.id, quitter.id, "Played Cover", "800000000000000003");
+    mockSend.mockClear();
+
+    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+
+    expect(
+      mockSend.mock.calls.some(([m]) => String(m).includes("stand down")),
+    ).toBe(false);
+    expect(res).toMatchObject({
+      message: expect.not.stringMatching(/stood down/),
+    });
+    // …and the booking row survives as the record of who played.
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: played.id } }),
+    ).toBe(1);
+  });
+
+  it("a fixture completed for real mid-click keeps its booking un-stood-down (seam)", async () => {
+    // matchClaims is index-aligned with `open`: only bookings whose forfeit
+    // claim WON may send. The rival is auto-sync completing the fixture from
+    // a visitor's page view in the gap — that series happened, its standin
+    // may have played it, and mootCover was fetched BEFORE the rival landed,
+    // so without the claim filter the send fires anyway.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const mine = matches.filter(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    );
+    const sniped = mine[0];
+    const doomed = mine[1];
+    await bookCover(sniped.id, quitter.id, "Sniped Cover", "800000000000000004");
+    await bookCover(doomed.id, quitter.id, "Doomed Cover", "800000000000000005");
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.withdrawTeam.beforeTx", async () => {
+        fired = true;
+        const asHome = sniped.homeTeamId === quitter.id;
+        await recordMatch(sniped.id, asHome ? 2 : 0, asHome ? 0 : 2);
+      }),
+    );
+    mockSend.mockClear();
+
+    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+
+    expect(fired).toBe(true);
+    const standDowns = mockSend.mock.calls.filter(([m]) =>
+      String(m).includes("stand down"),
+    );
+    // Exactly one: the genuinely forfeited fixture's cover, never the played one.
+    expect(standDowns).toHaveLength(1);
+    expect(String(standDowns[0][0])).toContain("Doomed Cover");
+    expect(String(standDowns[0][0])).not.toContain("Sniped Cover");
+    expect(res).toMatchObject({
+      message: expect.stringMatching(
+        /1 standin booking\(s\) on those fixtures stood down/,
+      ),
+    });
   });
 });

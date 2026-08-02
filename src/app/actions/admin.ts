@@ -1286,6 +1286,23 @@ export async function abortDraftAction(
     summary: `Aborted the draft — ${res.playersReturned} drafted player(s) returned to the pool, $${res.budgetRestored} refunded, ${res.teams} captain(s) kept, season back to Signups`,
     seasonId: season.id,
   });
+  // Stand down the standins whose bookings died with the rosters — post-commit
+  // and best-effort, one per deleted booking (the generateSchedule shape). A
+  // booking that survived into the re-run would inflate a freshly drafted
+  // side to six; the human holding it deserves better than silence either way.
+  for (const a of res.coverStandDowns) {
+    await sendDiscordMessage(
+      standinRemovedMessage({
+        standinName: a.standinName,
+        teamName: a.teamName,
+        homeName: a.homeName,
+        awayName: a.awayName,
+        week: a.week,
+        isPlayoff: a.isPlayoff,
+      }),
+      mentionsOf([a.discordId]),
+    );
+  }
   refresh();
   const bits = [
     `Draft aborted — season back to Signups with ${res.teams} captain(s) intact`,
@@ -1293,6 +1310,11 @@ export async function abortDraftAction(
   if (res.playersReturned > 0) {
     bits.push(
       `${res.playersReturned} drafted player(s) returned to the pool and $${res.budgetRestored} refunded`,
+    );
+  }
+  if (res.coverStandDowns.length > 0) {
+    bits.push(
+      `${res.coverStandDowns.length} standin booking(s) on the old rosters cancelled and stood down`,
     );
   }
   bits.push("fix the captains, then start the draft again");
@@ -1812,6 +1834,39 @@ export async function recordResult(
     }
   }
 
+  // A forfeit RULING on a series with no imported games is a fixture that
+  // won't be played — any standin booked on it (either side) holds a live
+  // @-mentioned instruction to show up, and completing the match silently
+  // drops the booking from their /me list. Stand them down by name, the same
+  // shape every other cover-killing path sends. Gated on the forfeit flag AND
+  // zero games: a manual score for a PLAYED series (private data, no imports)
+  // must not tell a standin who actually played to stand down.
+  if (forfeit && home && away) {
+    const games = await prisma.game.count({ where: { matchId } });
+    if (games === 0) {
+      const bookings = await prisma.standinAssignment.findMany({
+        where: { matchId },
+        select: {
+          teamId: true,
+          standin: { select: { name: true, discordId: true } },
+        },
+      });
+      for (const a of bookings) {
+        await sendDiscordMessage(
+          standinRemovedMessage({
+            standinName: a.standin.name,
+            teamName: a.teamId === match.homeTeamId ? home.name : away.name,
+            homeName: home.name,
+            awayName: away.name,
+            week: match.week,
+            isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+          }),
+          mentionsOf([a.standin.discordId]),
+        );
+      }
+    }
+  }
+
   // Playoff results auto-advance the bracket (and crown the champion at the end).
   if (match.phase !== MATCH_PHASE.REGULAR) {
     await advancePlayoffBracket(match.seasonId);
@@ -1901,6 +1956,15 @@ export async function signFreeAgent(
       }),
     ]);
   if (!team) return { error: "Unknown team" };
+  // A withdrawn team's fixtures are all forfeited — signing onto it parks the
+  // player on a dead roster (and rostered players can't stand in), for zero
+  // benefit until the team is reinstated. Read-time is enough: withdrawal is
+  // a slow admin act, and a mis-click here is losslessly undone by Release.
+  if (team.withdrawn) {
+    return {
+      error: `${team.name} has withdrawn from the season — reinstate them first if they're coming back`,
+    };
+  }
   if (!registration || registration.status !== "ACTIVE") {
     return { error: "That player isn't registered for this season" };
   }
@@ -1938,7 +2002,13 @@ export async function signFreeAgent(
         awayTeam: { name: string };
       };
     }[];
-  } = { cancelled: 0, kept: 0, standDowns: [] };
+    /** Per-match "bookings now exceed the open seats" notes — a PARTIAL
+     *  refill shrinks the seat count the assign-time budget was judged
+     *  against, and nothing re-audits existing bookings. Reported, never
+     *  auto-cancelled: which booking dies is the captain's call (the
+     *  withdrawGateError refuse-don't-auto-cancel precedent). */
+    overbooked: string[];
+  } = { cancelled: 0, kept: 0, standDowns: [], overbooked: [] };
   try {
     coverCleanup = await prisma.$transaction(
       async (tx) => {
@@ -2029,9 +2099,54 @@ export async function signFreeAgent(
             // standin to stand down from a game they are still booked for is
             // worse than silence.
             standDowns: cancelled === removable.length ? removable : [],
+            overbooked: [],
           };
         }
-        return { cancelled: 0, kept: 0, standDowns: [] };
+        // PARTIAL refill — the team is still short, so open-seat cover stays
+        // legitimate, but the seat count every booking was budgeted against
+        // just shrank by one. Surplus is a PER-MATCH fact (bookings live on
+        // matches, seats on the roster): a 3-of-5 team with two bookings on
+        // week 4 AND two on week 5 goes surplus-by-one on both. Left silent,
+        // each surplus rides matchNightRoster into /schedule, the week
+        // reminder and the import account set as a six-player side.
+        const newOpen = season.teamSize - (seats + 1);
+        const stillBooked = await tx.standinAssignment.findMany({
+          where: {
+            teamId,
+            replacingUserId: null,
+            match: {
+              seasonId: season.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          select: {
+            matchId: true,
+            match: {
+              select: {
+                week: true,
+                homeTeam: { select: { name: true } },
+                awayTeam: { select: { name: true } },
+              },
+            },
+          },
+        });
+        const perMatch = new Map<string, { label: string; count: number }>();
+        for (const b of stillBooked) {
+          const cur = perMatch.get(b.matchId);
+          if (cur) cur.count += 1;
+          else
+            perMatch.set(b.matchId, {
+              label: `week ${b.match.week} ${b.match.homeTeam.name} vs ${b.match.awayTeam.name}`,
+              count: 1,
+            });
+        }
+        const overbooked = [...perMatch.values()]
+          .filter((m) => m.count > newOpen)
+          .map(
+            (m) =>
+              `${m.count} open-seat booking(s) on ${m.label} now exceed the team's ${newOpen} open seat(s) — remove the extra on the match page`,
+          );
+        return { cancelled: 0, kept: 0, standDowns: [], overbooked };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -2054,6 +2169,11 @@ export async function signFreeAgent(
   }
   await sendDiscordMessage(
     freeAgentSignedMessage(registration.user.name, team.name),
+    // @-mention the signed player: a signing is a season-long obligation —
+    // every remaining match night is now theirs — and this was a bare
+    // broadcast while the one-night standin assign has always mentioned its
+    // subject. The message ends by naming their next move (check in).
+    mentionsOf([registration.user.discordId]),
   );
   // Post-commit, best-effort, one stand-down per cancelled empty-seat booking —
   // the same shape releasePlayer and both removeStandin paths send, so a
@@ -2079,11 +2199,15 @@ export async function signFreeAgent(
     coverCleanup.kept > 0
       ? `${coverCleanup.kept} open-seat booking(s) on an already-started series were LEFT in place (removing a standin mid-series breaks the remaining imports)`
       : null,
+    ...coverCleanup.overbooked,
   ].filter(Boolean);
   return {
     message:
       `${registration.user.name} signed to ${team.name}` +
-      (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : ""),
+      (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : "") +
+      // A permanent signing that structurally can't be reached on Discord is
+      // discovered on match night — the assign-standin garnish, same reason.
+      (await reachabilityNote(userId)),
   };
 }
 
@@ -2153,8 +2277,33 @@ export async function releasePlayer(
   //    admin's uncovered-OUT alert can't catch it because it only looks at
   //    current roster members.
   // 3. Announce the release, as before.
-  const { cancelled, kept, standDowns, teamName } = await prisma.$transaction(
-    async (tx) => {
+  let releaseResult: {
+    cancelled: number;
+    kept: number;
+    standDowns: {
+      id: string;
+      standinUserId: string;
+      standin: { name: string; discordId: string | null };
+      match: {
+        games: { id: string }[];
+        week: number;
+        phase: string;
+        homeTeam: { name: string };
+        awayTeam: { name: string };
+      };
+    }[];
+    teamName: string;
+  };
+  try {
+    releaseResult = await prisma.$transaction(
+      async (tx) => {
+    // THE claim, and the FIRST write — a deleteMany re-asserting the row still
+    // exists, never a raw delete: two releases racing (second tab, second
+    // admin) made the loser die on an unhandled P2025 (the undoLastSale
+    // lesson), and a `return` here after later writes would COMMIT them, so
+    // the zero-count case THROWS and rolls the transaction back whole.
+    const gone = await tx.teamMember.deleteMany({ where: { id: member.id } });
+    if (gone.count === 0) throw new Error("ALREADY_RELEASED");
     // Only cover on a series that hasn't started. Once a game is imported the
     // assignment is load-bearing for the REST of that series: gatherTeamAccounts
     // re-reads StandinAssignment on every import, so deleting it mid-Bo3 drops
@@ -2206,7 +2355,6 @@ export async function releasePlayer(
         },
       }));
     }
-    await tx.teamMember.delete({ where: { id: member.id } });
     if (member.price > 0) {
       await tx.team.update({
         where: { id: member.teamId },
@@ -2223,8 +2371,30 @@ export async function releasePlayer(
       standDowns: cancelled === removable.length ? removable : [],
       teamName: member.team.name,
     };
-    },
-  );
+      },
+      // SERIALIZABLE — release and assignStandinGuarded are a write-skew pair
+      // (release reads the assignments and deletes the TeamMember; assign
+      // reads the TeamMember and creates an assignment), and SSI only spots
+      // the cycle when EVERY participant is serializable. At read-committed
+      // both commit and the cover-cancel misses the assignment landing in the
+      // gap: a stale row matchNightRoster counts as a SIXTH player, whose
+      // stand-down announcement structurally never fired.
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if ((e as Error).message === "ALREADY_RELEASED") {
+      return {
+        error: `${member.user.name} was already released — reload to see the roster`,
+      };
+    }
+    if ((e as { code?: string }).code === "P2034") {
+      return {
+        error: "The roster changed while you were releasing — reload and try again",
+      };
+    }
+    throw e;
+  }
+  const { cancelled, kept, standDowns, teamName } = releaseResult;
 
   await sendDiscordMessage(
     playerReleasedMessage(member.user.name, member.team.name),
@@ -2260,9 +2430,18 @@ export async function releasePlayer(
       ? `${cancelled} standin assignment(s) covering them cancelled — re-cover those matches`
       : null,
     // Left in place on purpose; the admin still needs to know it's there.
+    // NOT "remove by hand": removeStandinGuarded refuses once games are
+    // imported, so that advice sent the admin in a circle — the truthful
+    // statement is that the booking is settled for the rest of the series.
     kept > 0
-      ? `${kept} assignment(s) on an already-started series were LEFT in place (removing a standin mid-series breaks the remaining imports) — remove by hand if they aren't playing`
+      ? `${kept} assignment(s) on an already-started series stay in place — the remaining games record whoever actually plays`
       : null,
+    // Release deliberately keeps the registration ACTIVE (release + sign =
+    // trade), so a true QUITTER is now the league's phantom free agent —
+    // offered in every standin dropdown and counted by the capacity math —
+    // unless the admin also runs the remove step, which nothing else at this
+    // point of use mentions.
+    "if they've left the league entirely, also remove their signup (Captains & draft) so they drop out of the free-agent and standin pools",
   ].filter(Boolean);
   return {
     message:
@@ -2327,10 +2506,29 @@ export async function withdrawTeam(
     select: { id: true, week: true, bestOf: true, homeTeamId: true, awayTeamId: true },
   });
   // Standins booked on the doomed fixtures: the rows become inert history the
-  // moment the matches complete, but the humans holding a live @-mentioned
-  // instruction to show up deserve a number in the toast, not silence.
-  const mootCover = await prisma.standinAssignment.count({
+  // moment the matches complete, but the humans hold a live @-mentioned
+  // instruction to show up — covering EITHER side, the surviving opponent
+  // included. The ROWS, not just a count: every other bulk teardown
+  // (generateSchedule, startPlayoffs' bracket rebuild) stands its standins
+  // down by name, and this was the one that went silent — the standin turned
+  // up Thursday for a fixture that died Monday, with the booking gone from
+  // their own /me list (pendingCoverWhere filters COMPLETED) so nothing on
+  // the site could correct them either.
+  const mootCover = await prisma.standinAssignment.findMany({
     where: { matchId: { in: open.map((m) => m.id) } },
+    select: {
+      matchId: true,
+      teamId: true,
+      standin: { select: { name: true, discordId: true } },
+      match: {
+        select: {
+          week: true,
+          phase: true,
+          homeTeam: { select: { name: true } },
+          awayTeam: { select: { name: true } },
+        },
+      },
+    },
   });
 
   // Seam: the rival must COMMIT before the transaction below opens, which is
@@ -2381,6 +2579,36 @@ export async function withdrawTeam(
   for (const week of [...new Set(open.map((m) => m.week))]) {
     await maybeAnnounceWeekHonors(season.id, week);
   }
+  // Stand the booked standins down BEFORE the broadcast, so the personal
+  // correction lands ahead of the news. Post-commit and best-effort (the
+  // house shape). Only bookings on fixtures whose forfeit claim actually WON:
+  // matchClaims is index-aligned with `open`, so a fixture that completed for
+  // real mid-click (count 0) keeps its booking un-stood-down — that series
+  // happened, and its standin may well have played it.
+  const forfeitedIds = new Set(
+    open.filter((_, i) => matchClaims[i].count > 0).map((m) => m.id),
+  );
+  const teamNameOf = new Map<string, string>();
+  for (const t of await prisma.team.findMany({
+    where: { seasonId: season.id },
+    select: { id: true, name: true },
+  })) {
+    teamNameOf.set(t.id, t.name);
+  }
+  const stoodDown = mootCover.filter((a) => forfeitedIds.has(a.matchId));
+  for (const a of stoodDown) {
+    await sendDiscordMessage(
+      standinRemovedMessage({
+        standinName: a.standin.name,
+        teamName: teamNameOf.get(a.teamId) ?? "their team",
+        homeName: a.match.homeTeam.name,
+        awayName: a.match.awayTeam.name,
+        week: a.match.week,
+        isPlayoff: a.match.phase !== MATCH_PHASE.REGULAR,
+      }),
+      mentionsOf([a.standin.discordId]),
+    );
+  }
   await sendDiscordMessage(teamWithdrewMessage(team.name, forfeited));
   await logAdminAction({
     action: "withdrawTeam",
@@ -2391,8 +2619,14 @@ export async function withdrawTeam(
   const notes = [
     `${forfeited} fixture(s) forfeited to the opponents`,
     raced ? `${raced} completed for real while you clicked and kept their result` : null,
-    mootCover ? `${mootCover} standin booking(s) on those fixtures are now moot` : null,
+    stoodDown.length
+      ? `${stoodDown.length} standin booking(s) on those fixtures stood down`
+      : null,
     "excluded from playoff seeding · rosters and played results are kept",
+    // The withdrawn team's players are the league's most natural standin pool
+    // — but rostered players can't stand in, and nothing else at the point of
+    // use says release is the unlock.
+    "release their players (Roster moves) to free them for standin duty or signing elsewhere",
   ].filter(Boolean);
   return { message: `${team.name} withdrawn · ${notes.join(" · ")}` };
 }
@@ -3872,10 +4106,31 @@ export async function promoteStandinToPlayer(
   });
   if (gateError) return { error: gateError };
 
-  await prisma.registration.update({
-    where: { id: registration.id },
+  // Seam: the rival is the standin SELF-WITHDRAWING on /me (leaveLeague)
+  // while the admin clicks Promote — it must commit between the gate's reads
+  // above and the claim below. Runs on SQLite (no open transaction here).
+  await raceHook("admin.promoteStandin.beforeWrite");
+  // A CLAIM, not a blind update (concurrency rule 1): the gate above judged a
+  // row read several round trips ago, and the standin can self-withdraw on /me
+  // (leaveLeague) in the gap — a blind write then stamps PLAYER over a
+  // WITHDRAWN row, minting a promotable ghost. Re-asserting status AND type
+  // also makes a double-promote race honest (the loser sees zero rows). The
+  // Start-draft rival lives in the Draft table and is deliberately NOT closed
+  // here: a promote that lands at auction-second-zero is materially the
+  // pre-start promote the gate blesses, and abortDraft recovers pre-results.
+  const promoted = await prisma.registration.updateMany({
+    where: {
+      id: registration.id,
+      status: REGISTRATION_STATUS.ACTIVE,
+      type: REGISTRATION_TYPE.STANDIN,
+    },
     data: { type: REGISTRATION_TYPE.PLAYER },
   });
+  if (promoted.count === 0) {
+    return {
+      error: `${registration.user.name}'s signup just changed — reload and check it before promoting`,
+    };
+  }
   refresh();
   return {
     message: `${registration.user.name} is now a full player — sign them onto a team in Roster moves`,

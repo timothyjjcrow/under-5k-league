@@ -9,6 +9,7 @@ import { shareMetadata } from "@/lib/share-metadata";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
 import { seatValue } from "@/lib/standin";
+import { roleShort } from "@/lib/roles";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
@@ -1232,33 +1233,72 @@ async function StandinSection({
   // active season) — don't render a form that can only error.
   const season = await prisma.season.findUnique({
     where: { id: match.seasonId },
-    select: { isActive: true, teamSize: true },
+    select: { isActive: true, teamSize: true, status: true },
   });
   if (!season?.isActive) return null;
+  // Mirror the service's PHASE GATE (render/guard pairing, the roster-moves
+  // rule): assignment is open in REGULAR_SEASON/PLAYOFFS, and in DRAFT only
+  // once the auction is COMPLETE (pool-dry short rosters arranging week-1
+  // cover). Existing assignments still render — removal is legal cleanup in
+  // every phase — but a form that can only error never should.
+  const draftRow =
+    season.status === "DRAFT"
+      ? await prisma.draft.findUnique({
+          where: { seasonId: match.seasonId },
+          select: { status: true },
+        })
+      : null;
+  const assignOpen =
+    season.status === "REGULAR_SEASON" ||
+    season.status === "PLAYOFFS" ||
+    (season.status === "DRAFT" && draftRow?.status === "COMPLETE");
 
-  const [assignments, roster, registrations, rostered] = await Promise.all([
-    prisma.standinAssignment.findMany({
-      where: { matchId: match.id },
-      include: {
-        standin: { select: { id: true, name: true } },
-        replaced: { select: { id: true, name: true } },
-      },
-    }),
-    prisma.teamMember.findMany({
-      where: { seasonId: match.seasonId, teamId: myTeamId },
-      include: { user: { select: { id: true, name: true } } },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.registration.findMany({
-      where: { seasonId: match.seasonId, status: "ACTIVE" },
-      include: { user: { select: { id: true, name: true } } },
-      orderBy: { mmr: "desc" },
-    }),
-    prisma.teamMember.findMany({
-      where: { seasonId: match.seasonId },
-      select: { userId: true },
-    }),
-  ]);
+  const [assignments, roster, registrations, rostered, outRows] =
+    await Promise.all([
+      prisma.standinAssignment.findMany({
+        where: { matchId: match.id },
+        include: {
+          standin: { select: { id: true, name: true } },
+          replaced: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.teamMember.findMany({
+        where: { seasonId: match.seasonId, teamId: myTeamId },
+        include: { user: { select: { id: true, name: true } } },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.registration.findMany({
+        where: { seasonId: match.seasonId, status: "ACTIVE" },
+        // roles + Discord fields feed the picker's option text: a captain
+        // choosing cover at 9pm needs "who fits the seat AND will answer a
+        // ping" without opening five profiles. Contact-adjacent, but this
+        // card only renders for the two captains (and admins), so the
+        // signed-in gate contact info requires is already satisfied.
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              discordId: true,
+              discordName: true,
+            },
+          },
+        },
+        orderBy: { mmr: "desc" },
+      }),
+      prisma.teamMember.findMany({
+        where: { seasonId: match.seasonId },
+        select: { userId: true },
+      }),
+      // OUT RSVPs on this match — the captain-facing uncovered-OUT alert.
+      // The admin panel has always had this list; the captain, who owns the
+      // fix (the assign form right below), had to notice a small ✗ in the
+      // preview grid instead.
+      prisma.matchAvailability.findMany({
+        where: { matchId: match.id, status: "OUT" },
+        select: { userId: true },
+      }),
+    ]);
   const rosteredIds = new Set(rostered.map((m) => m.userId));
   const pool = registrations.filter((r) => !rosteredIds.has(r.userId));
   // One seat, one standin — players already covered leave the Covers list.
@@ -1279,6 +1319,17 @@ async function StandinSection({
   );
   const teamNameOf = (teamId: string) =>
     teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
+  // OUT-and-uncovered on MY roster: the admin card has always alerted on
+  // this; the captain — who owns the assign form below — saw only the small
+  // ✗ in the preview grid.
+  const outIds = new Set(outRows.map((r) => r.userId));
+  const uncoveredOut = roster.filter(
+    (m) => outIds.has(m.userId) && !coveredIds.has(m.userId),
+  );
+
+  // A phase where assignment is closed and nothing is booked has nothing to
+  // say — don't render an empty card with a disabled story.
+  if (!assignOpen && assignments.length === 0) return null;
 
   return (
     <Card>
@@ -1287,6 +1338,13 @@ async function StandinSection({
         subtitle="Someone can't make it? Line up cover from the standin pool yourself — the assignment announces to Discord."
       />
       <CardBody className="space-y-3">
+        {uncoveredOut.length > 0 ? (
+          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm">
+            ✗ Out and uncovered:{" "}
+            <strong>{uncoveredOut.map((m) => m.user.name).join(", ")}</strong>
+            {assignOpen ? " — line up cover below." : "."}
+          </p>
+        ) : null}
         {assignments.length > 0 ? (
           <ul className="space-y-1.5 text-sm">
             {assignments.map((a) => (
@@ -1330,7 +1388,13 @@ async function StandinSection({
         ) : (
           <p className="text-sm text-muted">No standins assigned yet.</p>
         )}
-        {pool.length === 0 ? (
+        {!assignOpen ? (
+          <p className="text-sm text-muted">
+            {season.status === "COMPLETE"
+              ? "The season is over — standins no longer apply."
+              : "Standins can be assigned once the draft has run and rosters are settled."}
+          </p>
+        ) : pool.length === 0 ? (
           <p className="text-sm text-muted">
             Nobody is in the standin pool right now — ask around the Discord;
             late joiners can still sign up as standins.
@@ -1351,11 +1415,20 @@ async function StandinSection({
               <option value="" disabled>
                 Standin…
               </option>
-              {pool.map((r) => (
-                <option key={r.userId} value={r.userId}>
-                  {r.user.name} ({r.mmr} MMR)
-                </option>
-              ))}
+              {/* Option text carries what the 9pm decision needs: seat fit
+                  (roles) and whether a ping can reach them at all. "no
+                  Discord" = neither a verified link nor a typed handle. */}
+              {pool.map((r) => {
+                const roles = roleShort(r.roles).join("/");
+                const unreachable = !r.user.discordId && !r.user.discordName;
+                return (
+                  <option key={r.userId} value={r.userId}>
+                    {r.user.name} ({r.mmr} MMR
+                    {roles ? ` · ${roles}` : ""}
+                    {unreachable ? " · no Discord" : ""})
+                  </option>
+                );
+              })}
             </select>
             <select
               name="replacingUserId"

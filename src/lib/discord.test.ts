@@ -22,9 +22,11 @@ import {
   webhookApiUrl,
   draftScheduledMessage,
   playerOutMessage,
+  rescheduleDeclinedMessage,
   rescheduleProposedMessage,
   standinAssignedMessage,
   standinRemovedMessage,
+  teamWithdrewMessage,
   weekReminderMessage,
   weeklyHonorsMessage,
   draftRecapMessage,
@@ -800,6 +802,7 @@ describe("no message unfurls a link preview", () => {
       championMessage("S1", "T"),
       freeAgentSignedMessage("A", "T"),
       playerReleasedMessage("A", "T"),
+      teamWithdrewMessage("T", 3),
       inhouseQueueMessage(4, 10),
       inhouseQueueMessage(4, 10, "999"),
       inhouseLobbyMessage([{ name: "A", discordId: null }]),
@@ -834,6 +837,10 @@ describe("no message unfurls a link preview", () => {
       rescheduleMessage({
         homeName: "H", awayName: "W", week: 1, isPlayoff: false,
         whenMs: 1_800_000_000_000,
+      }),
+      rescheduleDeclinedMessage({
+        homeName: "H", awayName: "W", week: 1, isPlayoff: false,
+        declinerName: "D", whenMs: 1_800_000_000_000,
       }),
       weeklyHonorsMessage({
         week: 1, playerName: "A", playerPoints: 10, heroName: "Lina",
@@ -878,6 +885,7 @@ describe("no player-supplied name can inject markdown", () => {
     championMessage("Season 1", EVIL),
     freeAgentSignedMessage(EVIL, EVIL),
     playerReleasedMessage(EVIL, EVIL),
+    teamWithdrewMessage(EVIL, 3),
     playerOutMessage({
       playerName: EVIL, homeName: EVIL, awayName: EVIL,
       week: 1, isPlayoff: false, whenMs: null,
@@ -897,6 +905,10 @@ describe("no player-supplied name can inject markdown", () => {
     rescheduleMessage({
       homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false,
       whenMs: 1_800_000_000_000,
+    }),
+    rescheduleDeclinedMessage({
+      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false,
+      declinerName: EVIL, whenMs: 1_800_000_000_000,
     }),
     weeklyHonorsMessage({
       week: 1, playerName: EVIL, playerPoints: 40,
@@ -940,6 +952,13 @@ describe("no player-supplied name can inject markdown", () => {
   it("never lets a name forge an extra line", () => {
     const nl = "evil\nplayer";
     expect(playerSoldMessage(nl, nl, 1)).not.toContain("\n");
+    expect(teamWithdrewMessage(nl, 3)).not.toContain("\n");
+    expect(
+      rescheduleDeclinedMessage({
+        homeName: nl, awayName: nl, week: 1, isPlayoff: false,
+        declinerName: nl, whenMs: 1_800_000_000_000,
+      }),
+    ).not.toContain("\n");
     // The reminder is genuinely multi-line — assert the COUNT is unchanged
     // rather than that there are none.
     const reminder = weekReminderMessage({
@@ -986,5 +1005,55 @@ describe("no player-supplied name can inject markdown", () => {
     expect(playerSoldMessage("Puppey", "Team Liquid", 40)).toContain(
       "**Puppey** → **Team Liquid**",
     );
+  });
+});
+
+describe("match-page deep links", () => {
+  // The people these messages mention are by definition NOT on the site — the
+  // link must land them on the match page (Standins card / check-in banner),
+  // not the front door, and it must be <bracketed> so the alert can't unfurl
+  // a preview card over itself.
+  it("playerOutMessage links the match page when a matchId is given", () => {
+    const msg = playerOutMessage({
+      playerName: "Dendi", homeName: "H", awayName: "W",
+      week: 4, isPlayoff: false, whenMs: null, matchId: "m1",
+    });
+    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>/);
+  });
+
+  it("playerOutMessage stays link-free without one — hand-built calls", () => {
+    const msg = playerOutMessage({
+      playerName: "Dendi", homeName: "H", awayName: "W",
+      week: 4, isPlayoff: false, whenMs: null,
+    });
+    expect(msg).not.toContain("/matches/");
+  });
+
+  it("standinAssignedMessage links the check-in page when a matchId is given", () => {
+    const msg = standinAssignedMessage({
+      standinName: "S", replacedName: "R", teamName: "T", homeName: "H",
+      awayName: "W", week: 4, isPlayoff: false, whenMs: null, matchId: "m1",
+    });
+    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>/);
+  });
+
+  it("standinAssignedMessage stays link-free without one", () => {
+    const msg = standinAssignedMessage({
+      standinName: "S", replacedName: "R", teamName: "T", homeName: "H",
+      awayName: "W", week: 4, isPlayoff: false, whenMs: null,
+    });
+    expect(msg).not.toContain("/matches/");
+  });
+});
+
+describe("freeAgentSignedMessage addresses the signed player", () => {
+  // A signing is a season-long obligation (every remaining match night), so
+  // the message ends by naming the player's next move: check in on /schedule.
+  // The address line names them a SECOND time — a player being told something,
+  // not just announced.
+  it("ends by pointing the player at their new schedule", () => {
+    const msg = freeAgentSignedMessage("Late Joiner", "Short Squad");
+    expect(msg).toContain("/schedule");
+    expect(msg.split("Late Joiner")).toHaveLength(3); // named exactly twice
   });
 });

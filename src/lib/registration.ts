@@ -50,6 +50,16 @@ export type WithdrawGateInput = {
    * ACTIVE), so they get no reminder either.
    */
   pendingAssignments?: number;
+  /**
+   * Who is reading the refusal. "admin" (the default — byte-identical to the
+   * original strings) speaks about the player in the third person and names
+   * admin controls; "self" speaks TO the player and only prescribes actions
+   * they can actually take. The pendingAssignments branch is why this exists:
+   * a standin pressing Withdraw on /me was told "They're standing in … remove
+   * that assignment first" — third person, no match named, and pointing at a
+   * control only the covered team's captain or an admin has.
+   */
+  audience?: "admin" | "self";
 };
 
 /**
@@ -63,26 +73,36 @@ export function withdrawGateError({
   isRostered,
   isOnTheBlock,
   pendingAssignments = 0,
+  audience = "admin",
 }: WithdrawGateInput): string | null {
+  const self = audience === "self";
   if (status !== "ACTIVE") return "This signup isn't active.";
   // The admin path checked this inline; the SELF path didn't, so a player
   // could withdraw while captains were actively bidding on them — every draft
   // room rendered a headless auction and the expiring lot was voided.
   if (isOnTheBlock) {
-    return "They're on the auction block right now — wait for the lot to settle.";
+    return self
+      ? "You're on the auction block right now — wait for the lot to settle."
+      : "They're on the auction block right now — wait for the lot to settle.";
   }
   if (isCaptain) {
-    return "They captain a team — replace the captain first.";
+    return self
+      ? "You captain a team — an admin has to hand it over before you can leave."
+      : "They captain a team — replace the captain first.";
   }
   if (isRostered) {
-    return "They're on a roster — release them from the team first.";
+    return self
+      ? "You're on a roster — an admin has to release you from the team first."
+      : "They're on a roster — release them from the team first.";
   }
   // Refuse rather than auto-cancelling: the captain who arranged the cover is
   // the one who needs to know the seat is open again, and silently deleting the
   // assignment would take that news away from them. Same rule and wording family
   // as promoteGateError, which already blocks on this.
   if (pendingAssignments > 0) {
-    return "They're standing in for an unplayed match — remove that assignment first.";
+    return self
+      ? "You're booked to stand in for an unplayed match — ask that team's captain or an admin to remove the assignment, then withdraw."
+      : "They're standing in for an unplayed match — remove that assignment first.";
   }
   return null;
 }

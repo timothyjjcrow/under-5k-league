@@ -189,6 +189,50 @@ describe("withdrawGateError", () => {
       withdrawGateError({ status: "WITHDRAWN", isCaptain: false, isRostered: false }),
     ).toMatch(/isn't active/i);
   });
+
+  // The audience param's compatibility contract: the DEFAULT (no audience) is
+  // byte-identical to the original third-person strings — every pre-existing
+  // caller gets it implicitly, so any drift silently rewrites admin toasts.
+  it("default audience returns the exact original third-person strings", async () => {
+    const { withdrawGateError } = await import("./registration");
+    const base = { status: "ACTIVE", isCaptain: false, isRostered: false };
+    expect(withdrawGateError({ ...base, pendingAssignments: 1 })).toBe(
+      "They're standing in for an unplayed match — remove that assignment first.",
+    );
+    expect(withdrawGateError({ ...base, isCaptain: true })).toBe(
+      "They captain a team — replace the captain first.",
+    );
+    expect(withdrawGateError({ ...base, isRostered: true })).toBe(
+      "They're on a roster — release them from the team first.",
+    );
+    expect(withdrawGateError({ ...base, isOnTheBlock: true })).toBe(
+      "They're on the auction block right now — wait for the lot to settle.",
+    );
+  });
+
+  // audience "self" speaks TO the player and prescribes only actions they can
+  // take: the standin pressing Withdraw on /me was told "They're standing in …
+  // remove that assignment first" — third person, pointing at a control only
+  // the covered team's captain or an admin has.
+  it('audience "self" speaks second-person and names reachable controls', async () => {
+    const { withdrawGateError } = await import("./registration");
+    const self = {
+      status: "ACTIVE",
+      isCaptain: false,
+      isRostered: false,
+      audience: "self" as const,
+    };
+    const pending = withdrawGateError({ ...self, pendingAssignments: 1 });
+    expect(pending).toMatch(/You're booked to stand in/);
+    expect(pending).toMatch(/captain or an admin/);
+    expect(withdrawGateError({ ...self, isRostered: true })).toMatch(
+      /You're on a roster/,
+    );
+    expect(withdrawGateError({ ...self, isCaptain: true })).toMatch(/You captain/);
+    expect(withdrawGateError({ ...self, isOnTheBlock: true })).toMatch(
+      /You're on the auction block/,
+    );
+  });
 });
 
 describe("registrationGate — unknown MMR", () => {

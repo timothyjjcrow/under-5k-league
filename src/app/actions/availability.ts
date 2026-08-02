@@ -113,6 +113,9 @@ export async function setAvailability(
         week: match.week,
         isPlayoff: match.phase !== "REGULAR",
         whenMs: match.scheduledAt?.getTime() ?? null,
+        // Deep link — the mentioned captain lands on the page that holds the
+        // Standins card, not on the front door.
+        matchId: match.id,
       }),
       // Never ping the captain about their OWN withdrawal — they just clicked
       // the button and are looking at the toast.

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // signFreeAgent is a server action: stub the request-scope bits so it can be
 // driven against the test DB.
@@ -16,8 +16,15 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { sendDiscordMessage } from "@/lib/discord";
 const mockSend = vi.mocked(sendDiscordMessage);
-import { releasePlayer, signFreeAgent, withdrawSignup } from "@/app/actions/admin";
 import {
+  promoteStandinToPlayer,
+  releasePlayer,
+  signFreeAgent,
+  withdrawSignup,
+} from "@/app/actions/admin";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
+import {
+  DRAFT_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
   REGISTRATION_TYPE,
@@ -411,8 +418,12 @@ describe("releasePlayer — refunds the fee and cancels cover for the seat", () 
 
     expect(res?.error).toBeUndefined();
     expect(await prisma.standinAssignment.count({ where: { matchId: match.id } })).toBe(1);
-    expect(res?.message).toMatch(/LEFT in place/);
+    // "stay in place", with no removal advice: removeStandinGuarded refuses
+    // once games import, so the old "remove by hand" pointed at a dead end.
+    expect(res?.message).toMatch(/stay in place/);
+    expect(res?.message).toMatch(/record whoever actually plays/);
     expect(res?.message).not.toMatch(/cancelled/);
+    expect(res?.message).not.toMatch(/remove by hand/);
   });
 
   it("cancels the not-yet-started series' cover while keeping the in-progress one", async () => {
@@ -451,7 +462,7 @@ describe("releasePlayer — refunds the fee and cancels cover for the seat", () 
     const res = await releasePlayer({}, fd({ memberId: member.id }));
 
     expect(res?.message).toMatch(/1 standin assignment\(s\) covering them cancelled/);
-    expect(res?.message).toMatch(/1 assignment\(s\) on an already-started series were LEFT/);
+    expect(res?.message).toMatch(/1 assignment\(s\) on an already-started series stay in place/);
     expect(await prisma.standinAssignment.count({ where: { matchId: match.id } })).toBe(0);
     expect(await prisma.standinAssignment.count({ where: { matchId: started.id } })).toBe(1);
   });
@@ -732,5 +743,260 @@ describe("releasePlayer — the person it happens to is told", () => {
     );
     expect(call, "the release announcement was sent").toBeTruthy();
     expect(call![1]).toMatchObject({ users: ["999000111222333444"] });
+  });
+});
+
+describe("signFreeAgent — PARTIAL refill reports surplus open-seat bookings, never cancels them", () => {
+  // A partial refill shrinks the seat count every open-seat booking was
+  // budgeted against, and nothing re-audits existing bookings — but which
+  // booking dies is the captain's call (the withdrawGateError
+  // refuse-don't-auto-cancel precedent), so the surplus is REPORTED per match.
+  it("keeps both bookings and names the per-match surplus in the toast", async () => {
+    const { season, team, other, agent } = await setup(5);
+    // 3 of 5 rostered — the sign leaves ONE open seat, under two bookings.
+    for (const n of ["Filler A", "Filler B", "Filler C"]) {
+      const u = await makeUser(n);
+      await prisma.teamMember.create({
+        data: { seasonId: season.id, teamId: team.id, userId: u.id, price: 0 },
+      });
+    }
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 4,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: team.id,
+        awayTeamId: other.id,
+        bestOf: 2,
+        status: MATCH_STATUS.SCHEDULED,
+      },
+    });
+    for (const n of ["Booked One", "Booked Two"]) {
+      const s = await makeUser(n);
+      await prisma.registration.create({
+        data: {
+          seasonId: season.id,
+          userId: s.id,
+          type: REGISTRATION_TYPE.STANDIN,
+          status: "ACTIVE",
+          mmr: 2500,
+        },
+      });
+      await prisma.standinAssignment.create({
+        data: {
+          matchId: match.id,
+          teamId: team.id,
+          standinUserId: s.id,
+          replacingUserId: null,
+        },
+      });
+    }
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toHaveProperty("message");
+    expect(res?.message).toMatch(
+      /2 open-seat booking\(s\) on week 4 .* now exceed the team's 1 open seat\(s\)/,
+    );
+    expect(res?.message).toMatch(/remove the extra on the match page/);
+    expect(res?.message).not.toMatch(/cancelled/);
+    // Reported, never auto-cancelled — BOTH bookings survive.
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: match.id } }),
+    ).toBe(2);
+  });
+});
+
+describe("signFreeAgent — refuses a withdrawn team", () => {
+  // A withdrawn team's fixtures are all forfeited and rostered players can't
+  // stand in — signing onto it parks the player on a dead roster for nothing.
+  it("refuses with 'has withdrawn' and creates no seat", async () => {
+    const { team, agent } = await setup();
+    await prisma.team.update({ where: { id: team.id }, data: { withdrawn: true } });
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toMatchObject({ error: expect.stringContaining("has withdrawn") });
+    expect(
+      await prisma.teamMember.findFirst({
+        where: { teamId: team.id, userId: agent.id },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("signFreeAgent — the signing announcement pings its subject", () => {
+  // A signing is a season-long obligation (every remaining match night), and
+  // this send was a bare broadcast while the one-night standin assign has
+  // always mentioned its subject.
+  it("@-mentions the signed player on the Discord send", async () => {
+    const { agent, team } = await setup();
+    await prisma.user.update({
+      where: { id: agent.id },
+      data: { discordId: "555666777888999000" },
+    });
+    mockSend.mockClear();
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toHaveProperty("message");
+    const signing = mockSend.mock.calls.find(([msg]) =>
+      String(msg).includes("signs with"),
+    );
+    expect(signing, "the signing announcement was sent").toBeTruthy();
+    expect(String(signing![0])).toContain("Free Agent");
+    expect(String(signing![0])).toContain("Shorthanded");
+    expect(signing![1]).toEqual({ users: ["555666777888999000"] });
+  });
+});
+
+describe("releasePlayer — a double release fails clean and refunds once", () => {
+  // The claim is a deleteMany re-asserting the row exists, never a raw delete
+  // — the loser of a double release must land on an error toast, not an
+  // unhandled P2025 blowing the admin panel to the error page, and the refund
+  // rides behind the claim so it can only ever be credited once.
+  it("second release returns { error } with the budget credited exactly once", async () => {
+    const season = await makeSeason({
+      teamSize: 5,
+      status: SEASON_STATUS.REGULAR_SEASON,
+    });
+    const team = await makeTeam(season.id, "Refund Once", 0, 60);
+    const p = await makePlayer(season.id, "Twice Released", 3000);
+    const member = await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: team.id, userId: p.id, price: 40 },
+    });
+
+    const first = await releasePlayer({}, fd({ memberId: member.id }));
+    expect(first?.error).toBeUndefined();
+
+    // Sequential re-release: must resolve to a clean { error } — either the
+    // read-time "Unknown roster spot" or the claim's "already released".
+    const second = await releasePlayer({}, fd({ memberId: member.id }));
+    expect(second?.error).toMatch(/Unknown roster spot|already released/);
+    expect(second).not.toHaveProperty("message");
+
+    // Exactly one refund: 60 + 40, never + 80.
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: team.id } })).budget,
+    ).toBe(100);
+  });
+});
+
+describe("promoteStandinToPlayer — the write is a guarded claim", () => {
+  afterEach(() => setRaceHook(null));
+
+  // Seam admin.promoteStandin.beforeWrite: the standin self-withdraws on /me
+  // (leaveLeague) between the gate's reads and the write. The old blind update
+  // stamped PLAYER over the WITHDRAWN row — a promotable ghost; the claim
+  // re-asserts ACTIVE + STANDIN and must lose.
+  it("refuses when the signup changes between the gate and the write", async () => {
+    const season = await makeSeason({
+      teamSize: 5,
+      status: SEASON_STATUS.REGULAR_SEASON,
+    });
+    const standin = await makeUser("Late Joiner");
+    const reg = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: standin.id,
+        type: REGISTRATION_TYPE.STANDIN,
+        status: "ACTIVE",
+        mmr: 2800,
+      },
+    });
+
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.promoteStandin.beforeWrite", async () => {
+        fired = true;
+        await prisma.registration.update({
+          where: { id: reg.id },
+          data: { status: "WITHDRAWN" },
+        });
+      }),
+    );
+
+    const res = await promoteStandinToPlayer({}, fd({ userId: standin.id }));
+
+    expect(fired, "the seam must fire — a drifted label is a vacuous test").toBe(true);
+    expect(res).toMatchObject({ error: expect.stringMatching(/just changed/) });
+    const after = await prisma.registration.findUniqueOrThrow({
+      where: { id: reg.id },
+    });
+    expect(after.status).toBe("WITHDRAWN");
+    // The blind write used to stamp PLAYER here.
+    expect(after.type).toBe(REGISTRATION_TYPE.STANDIN);
+  });
+});
+
+describe("roster moves stay open through the PLAYOFFS", () => {
+  // The gates single out SIGNUPS / DRAFT / COMPLETE; playoffs are deliberately
+  // permissive — a bracket run is when a short roster hurts most. Pin the
+  // window so a future gate doesn't quietly close it.
+  async function playoffSeason() {
+    const season = await makeSeason({
+      teamSize: 5,
+      status: SEASON_STATUS.PLAYOFFS,
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    const team = await makeTeam(season.id, "Playoff Team", 0);
+    return { season, team };
+  }
+
+  it("signFreeAgent signs onto a short team mid-playoffs", async () => {
+    const { season, team } = await playoffSeason();
+    const agent = await makeUser("Playoff Agent");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: agent.id,
+        type: REGISTRATION_TYPE.PLAYER,
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toHaveProperty("message");
+    expect(
+      await prisma.teamMember.count({ where: { teamId: team.id, userId: agent.id } }),
+    ).toBe(1);
+  });
+
+  it("releasePlayer releases mid-playoffs", async () => {
+    const { season, team } = await playoffSeason();
+    const p = await makePlayer(season.id, "Playoff Released", 3000);
+    const member = await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: team.id, userId: p.id, price: 5 },
+    });
+
+    const res = await releasePlayer({}, fd({ memberId: member.id }));
+
+    expect(res?.error).toBeUndefined();
+    expect(res).toHaveProperty("message");
+  });
+
+  it("promoteStandinToPlayer promotes mid-playoffs", async () => {
+    const { season } = await playoffSeason();
+    const s = await makeUser("Playoff Standin");
+    const reg = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: s.id,
+        type: REGISTRATION_TYPE.STANDIN,
+        status: "ACTIVE",
+        mmr: 2500,
+      },
+    });
+
+    const res = await promoteStandinToPlayer({}, fd({ userId: s.id }));
+
+    expect(res).toHaveProperty("message");
+    expect(
+      (await prisma.registration.findUniqueOrThrow({ where: { id: reg.id } })).type,
+    ).toBe(REGISTRATION_TYPE.PLAYER);
   });
 });

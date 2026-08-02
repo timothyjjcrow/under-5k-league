@@ -399,6 +399,9 @@ export async function leaveLeague(
     isCaptain: !!captainTeam,
     isRostered: !!member,
     pendingAssignments,
+    // This is the player's own Withdraw button — speak to them, and only
+    // prescribe actions they can actually take.
+    audience: "self",
   });
   if (gateError) return { error: gateError };
 

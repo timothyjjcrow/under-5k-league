@@ -58,6 +58,10 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Adjust Cred", rendered: "Adjust Cred" },
   // The betting card points at this section for who made a correction.
   { quoted: "Recent admin activity", rendered: "Recent admin activity" },
+  // withdrawTeam's toast points released standin-pool candidates here.
+  { quoted: "Roster moves", rendered: "Roster moves" },
+  // releasePlayer's quitter note points at the signup remove control's card.
+  { quoted: "Captains & draft", rendered: "Captains & draft" },
 ];
 
 describe("admin copy names only controls that exist", () => {

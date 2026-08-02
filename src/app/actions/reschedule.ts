@@ -111,8 +111,10 @@ export async function respondReschedule(
         whenMs: outcome.newTime.getTime(),
         clearedRsvps: outcome.clearedRsvps,
       }),
-      // The proposer asked a question and has been waiting for the answer.
-      await mentionUsers([outcome.notifyUserId]),
+      // The proposer asked and has been waiting — and the booked standins'
+      // personally-mentioned assignment message quoted the OLD kickoff, so
+      // this is the one send that can correct them with the new one.
+      await mentionUsers([outcome.notifyUserId, ...outcome.standinUserIds]),
     );
   } else {
     // A DECLINE is the answer to a question this channel already announced.

@@ -902,6 +902,102 @@ describe("recordResult — the forfeit flag rides the ruling end to end", () => 
   });
 });
 
+describe("recordResult — a forfeit ruling on an unplayed series stands its standins down", () => {
+  // A forfeit with zero imported games is a fixture that won't be played, but
+  // its booked standins hold a live @-mentioned instruction to show up — and
+  // completing the match drops the booking from their /me list, so nothing on
+  // the site could correct them.
+  async function bookCover(
+    matchId: string,
+    teamId: string,
+    name: string,
+    discordId: string,
+  ) {
+    const standin = await makeUser(name);
+    await prisma.user.update({
+      where: { id: standin.id },
+      data: { discordId },
+    });
+    await prisma.standinAssignment.create({
+      data: { matchId, teamId, standinUserId: standin.id, replacingUserId: null },
+    });
+    return standin;
+  }
+
+  it("forfeit + zero games: every booking (either side) gets a stand-down naming them, with a ping", async () => {
+    // Pins the stand-down block: standinRemovedMessage per booking, the
+    // covered team named correctly per side, mentionsOf carrying the discordId.
+    const { matches } = await seasonWithSchedule();
+    const target = matches[0];
+    await bookCover(target.id, target.homeTeamId, "Home Cover", "810000000000000001");
+    await bookCover(target.id, target.awayTeamId, "Away Cover", "810000000000000002");
+    vi.mocked(sendDiscordMessage).mockClear();
+
+    const res = await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0", forfeit: "on" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    const standDowns = vi
+      .mocked(sendDiscordMessage)
+      .mock.calls.filter(([m]) => String(m).includes("stand down"));
+    expect(standDowns).toHaveLength(2);
+    const homeSend = standDowns.find(([m]) => String(m).includes("Home Cover"));
+    expect(homeSend, "the home side's cover must be stood down").toBeTruthy();
+    expect(homeSend![1]).toEqual({ users: ["810000000000000001"] });
+    const awaySend = standDowns.find(([m]) => String(m).includes("Away Cover"));
+    expect(awaySend, "the away side's cover must be stood down").toBeTruthy();
+    expect(awaySend![1]).toEqual({ users: ["810000000000000002"] });
+  });
+
+  it("forfeit on a series WITH an imported game keeps quiet — that series was played", async () => {
+    // The games === 0 gate: a forfeit ruling over a partially-imported series
+    // (say a 1-0 abandoned Bo3) must not tell a standin who actually played
+    // to stand down.
+    const { matches } = await seasonWithSchedule();
+    const target = matches[0];
+    await addGameToMatch(target.id, "888001", target.homeTeamId);
+    await bookCover(target.id, target.homeTeamId, "Played Cover", "810000000000000003");
+    vi.mocked(sendDiscordMessage).mockClear();
+
+    const res = await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0", forfeit: "on" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/forfeit/i); // the ruling itself still saved
+    expect(
+      vi
+        .mocked(sendDiscordMessage)
+        .mock.calls.some(([m]) => String(m).includes("stand down")),
+    ).toBe(false);
+  });
+
+  it("a normal manual score (no forfeit, no games) never stands anyone down", async () => {
+    // The forfeit half of the gate: a manual score for a PLAYED series with
+    // private match data has no imports either — its standin may well have
+    // been in the game.
+    const { matches } = await seasonWithSchedule();
+    const target = matches[0];
+    await bookCover(target.id, target.awayTeamId, "Quiet Cover", "810000000000000004");
+    vi.mocked(sendDiscordMessage).mockClear();
+
+    const res = await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(
+      vi
+        .mocked(sendDiscordMessage)
+        .mock.calls.some(([m]) => String(m).includes("stand down")),
+    ).toBe(false);
+  });
+});
+
 describe("retractions bump the freshness cursor", () => {
   // A retraction moves the standings exactly as much as a result does, but
   // only importGameForMatch stamped the cursor — recomputeSeries doesn't. So

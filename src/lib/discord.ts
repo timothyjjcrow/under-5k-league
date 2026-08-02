@@ -148,7 +148,10 @@ export function freeAgentSignedMessage(
   playerName: string,
   teamName: string,
 ): string {
-  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>`;
+  // Ends by naming the signed player's next move — a signing is a season-long
+  // obligation (every remaining match night), so the send mentions them and
+  // the copy tells them what being signed asks of them, the standin-assign rule.
+  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>. ${name(playerName)}: their schedule is yours now — check in on your match pages: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function playerReleasedMessage(
@@ -396,11 +399,19 @@ export function playerOutMessage(m: {
   isPlayoff: boolean;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
+  /** Deep link target — the match page holds the Standins card the message
+   *  is pointing the captain at. Optional so hand-built calls stay valid. */
+  matchId?: string;
 }): string {
   const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
-  return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.`;
+  // The mentioned captain is by definition NOT on the site — land them on the
+  // page with the assign form, not on the front door (the week-reminder shape).
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}/matches/${m.matchId}>`
+    : "";
+  return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
 }
 
 export function standinAssignedMessage(m: {
@@ -414,6 +425,8 @@ export function standinAssignedMessage(m: {
   isPlayoff: boolean;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
+  /** Deep link target — the match page holds the check-in banner. */
+  matchId?: string;
 }): string {
   const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   const when =
@@ -425,7 +438,12 @@ export function standinAssignedMessage(m: {
   const forWhom = m.replacedName
     ? `stands in for **${name(m.replacedName)}** on **${name(m.teamName)}**`
     : `fills an open roster seat for **${name(m.teamName)}**`;
-  return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page.`;
+  // "check in on the match page" without the page is a scavenger hunt for
+  // someone who arrived from a phone ping — link the page (week-reminder shape).
+  const link = m.matchId
+    ? `: <${resolveSiteUrl()}/matches/${m.matchId}>`
+    : ".";
+  return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page${link}`;
 }
 
 export function standinRemovedMessage(m: {

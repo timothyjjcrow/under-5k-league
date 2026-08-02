@@ -466,3 +466,40 @@ describe("reschedule — a decline reaches the person who asked", () => {
     expect(await pendingFor(match.id)).toBeNull();
   });
 });
+
+// A booked standin's assignment ping quoted the OLD kickoff, and the
+// acceptance broadcast is the one message that carries the new one — so the
+// ACCEPTED outcome names the match's standins for the action to mention.
+describe("reschedule — the acceptance carries the match's booked standins", () => {
+  it("accept → standinUserIds lists exactly the booked standin", async () => {
+    const { home, away, match } = await setupMatch();
+    const standin = await makeUser("Cover Guy");
+    await prisma.standinAssignment.create({
+      data: { matchId: match.id, teamId: home.id, standinUserId: standin.id },
+    });
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+
+    const outcome = await respondReschedule(away.captainId, pending!.id, true);
+
+    if (!outcome.accepted) throw new Error("expected an acceptance");
+    expect(outcome.standinUserIds).toEqual([standin.id]);
+  });
+
+  it("a decline carries no standinUserIds — nothing moved, nobody needs a new time", async () => {
+    const { home, away, match } = await setupMatch();
+    const standin = await makeUser("Cover Guy");
+    await prisma.standinAssignment.create({
+      data: { matchId: match.id, teamId: home.id, standinUserId: standin.id },
+    });
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+
+    const outcome = await respondReschedule(away.captainId, pending!.id, false);
+
+    expect(outcome.accepted).toBe(false);
+    // The field is AcceptedReschedule-only; leaking it onto the decline would
+    // invite the action to @-mention standins about a kickoff that never moved.
+    expect(outcome).not.toHaveProperty("standinUserIds");
+  });
+});

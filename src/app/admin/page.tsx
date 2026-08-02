@@ -19,7 +19,7 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { nextAutoSyncAt } from "@/lib/result-sync";
-import { seatValue } from "@/lib/standin";
+import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
   createSeason,
@@ -515,9 +515,16 @@ function rosterMovesVisible(season: Season, data: AdminData): boolean {
   const rosteredIds = new Set(
     data.teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
+  // A WITHDRAWN team is not a signing target and not a short-team alarm: its
+  // fixtures are all forfeited, so "short" is its permanent normal state and
+  // the alarm would cry wolf all season — the reason the team most likely to
+  // BE short (it usually withdrew because players left) must be excluded
+  // here. It stays releasable: freeing its players for standin duty is the
+  // documented post-withdrawal cleanup.
+  const liveTeams = data.teams.filter((t) => !t.withdrawn);
   const canSign =
     data.players.some((p) => !rosteredIds.has(p.userId)) &&
-    data.teams.some((t) => t.members.length < season.teamSize);
+    liveTeams.some((t) => t.members.length < season.teamSize);
   const releasable = data.teams.some((t) =>
     t.members.some((m) => !m.isCaptain),
   );
@@ -527,7 +534,7 @@ function rosterMovesVisible(season: Season, data: AdminData): boolean {
   // A SHORT team keeps the card open even when nothing can be done about it
   // yet: "this team is a player down" is the thing the admin most needs to
   // know, and it used to disappear precisely when no free agent existed.
-  const short = data.teams.some((t) => t.members.length < season.teamSize);
+  const short = liveTeams.some((t) => t.members.length < season.teamSize);
   return canSign || releasable || promotable || short;
 }
 
@@ -1464,13 +1471,45 @@ function CaptainControls({
                   <option value="" disabled>
                     Team…
                   </option>
-                  {data.teams
-                    .filter((t) => !t.withdrawn)
-                    .map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
+                  {/* The confirm's consequences are static strings on a
+                      one-picker form, so the per-team REAL number (confirms
+                      must name real numbers) rides in the option label:
+                      standin bookings on the fixtures this withdrawal would
+                      forfeit — either side's, since the opponent's cover dies
+                      with the fixture too. */}
+                  {(() => {
+                    const openRegular = data.matches.filter(
+                      (m) =>
+                        m.phase === "REGULAR" && m.status !== "COMPLETED",
+                    );
+                    const bookingsFor = (teamId: string) => {
+                      const ids = new Set(
+                        openRegular
+                          .filter(
+                            (m) =>
+                              m.homeTeamId === teamId ||
+                              m.awayTeamId === teamId,
+                          )
+                          .map((m) => m.id),
+                      );
+                      return data.assignments.filter((a) =>
+                        ids.has(a.matchId),
+                      ).length;
+                    };
+                    return data.teams
+                      .filter((t) => !t.withdrawn)
+                      .map((t) => {
+                        const n = bookingsFor(t.id);
+                        return (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                            {n > 0
+                              ? ` — ${n} standin booking(s) on their open fixtures`
+                              : ""}
+                          </option>
+                        );
+                      });
+                  })()}
                 </select>
                 <DangerSubmit
                   token={season.name}
@@ -1478,6 +1517,7 @@ function CaptainControls({
                   consequences={[
                     "Every unplayed regular fixture of the selected team is forfeited 0-N to the opponent (marked forfeit, so the ruled scores stay out of the game-diff tiebreaks).",
                     "Open reschedule proposals on those fixtures are cancelled.",
+                    "Standins booked on those fixtures — either side's — are stood down with an @-mention.",
                     "The team is excluded from playoff seeding — its played results and roster are kept.",
                   ]}
                   recovery={`"Reinstate" (beside the team above) undoes the exclusion, and each forfeited fixture is individually reversible with "Reopen for import" — forfeits carry no games.`}
@@ -2393,6 +2433,48 @@ function StandinControls({
     arr.push(a);
     byMatch.set(a.matchId, arr);
   }
+  // Mirror the service's phase gate (render/guard pairing): assignment is
+  // open mid-season and in the post-auction DRAFT window; the card still
+  // renders elsewhere because REMOVAL is legal cleanup in every phase.
+  const assignOpen =
+    season.status === "REGULAR_SEASON" ||
+    season.status === "PLAYOFFS" ||
+    (season.status === "DRAFT" && data.draft?.status === "COMPLETE");
+  // DOUBLE-BOOKED standins, recomputed from live data. standinConflict runs
+  // at assign time, but every retime path (setWeekNight, setMatchTime, an
+  // accepted reschedule) can move a fixture onto a night the assign-time
+  // check already approved — and the only report was a transient toast that
+  // could land on a captain with no power to fix the other team's booking.
+  // This is the durable, admin-owned surface.
+  const upcomingById = new Map(upcoming.map((m) => [m.id, m]));
+  const coverByStandin = new Map<
+    string,
+    { name: string; matches: (typeof upcoming)[number][] }
+  >();
+  for (const a of data.assignments) {
+    const m = upcomingById.get(a.matchId);
+    if (!m) continue;
+    const cur = coverByStandin.get(a.standinUserId) ?? {
+      name: a.standin.name,
+      matches: [],
+    };
+    cur.matches.push(m);
+    coverByStandin.set(a.standinUserId, cur);
+  }
+  const clashLines: string[] = [];
+  for (const { name: standinName, matches: covered } of coverByStandin.values()) {
+    for (let i = 0; i < covered.length; i++) {
+      for (let j = i + 1; j < covered.length; j++) {
+        if (standinConflict(covered[i], covered[j])) {
+          const label = (m: (typeof covered)[number]) =>
+            `${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"} (wk ${m.week})`;
+          clashLines.push(
+            `${standinName} covers both ${label(covered[i])} and ${label(covered[j])} the same night — remove one below`,
+          );
+        }
+      }
+    }
+  }
   // Standins are assigned for the imminent night — group by week and only
   // expand the earliest open one so the current night isn't a scroll away.
   const regularUpcoming = upcoming.filter((m) => m.phase === "REGULAR");
@@ -2414,13 +2496,30 @@ function StandinControls({
         subtitle="Slot a standin in for a player who can't make a match."
       />
       <CardBody className="space-y-3">
+        {clashLines.length > 0 ? (
+          <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm">
+            <div className="font-medium">⚠ Standin double-bookings</div>
+            <ul className="mt-1 list-inside list-disc space-y-0.5">
+              {clashLines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {!assignOpen && upcoming.length > 0 ? (
+          <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm text-muted">
+            {season.status === "COMPLETE"
+              ? "The season is over — existing bookings can still be removed."
+              : "Standin assignment opens once the draft has run — existing bookings can still be removed."}
+          </p>
+        ) : null}
         {/* The "no standins registered" branch used to swallow the WHOLE card,
             which hid the uncovered-OUT alerts inside it — the diagnostic was
             behind the cure. An admin with players declaring OUT and nobody
             registered as cover saw a blank card saying nothing was wrong, which
             is exactly the night they most needed the list. The note now rides
             ABOVE the match blocks instead of replacing them. */}
-        {data.standins.length === 0 && upcoming.length > 0 ? (
+        {assignOpen && data.standins.length === 0 && upcoming.length > 0 ? (
           <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm text-muted">
             No standins have registered yet — players can sign up as a standin
             on their profile. Anyone registered but undrafted can cover too.
@@ -2454,6 +2553,7 @@ function StandinControls({
                         assignments={byMatch.get(m.id) ?? []}
                         teamName={teamName}
                         teamSize={season.teamSize}
+                        assignOpen={assignOpen}
                         label={
                           <Link
                             href={`/matches/${m.id}`}
@@ -2489,6 +2589,7 @@ function StandinControls({
                       assignments={byMatch.get(m.id) ?? []}
                       teamName={teamName}
                       teamSize={season.teamSize}
+                      assignOpen={assignOpen}
                       label={
                         <Link
                           href={`/matches/${m.id}`}
@@ -2518,6 +2619,7 @@ function StandinMatchBlock({
   teamName,
   label,
   teamSize,
+  assignOpen,
 }: {
   m: AdminData["matches"][number];
   data: AdminData;
@@ -2525,6 +2627,9 @@ function StandinMatchBlock({
   teamName: Map<string, string>;
   label: React.ReactNode;
   teamSize: number;
+  /** The card-level phase gate — the assign form hides where the service
+   *  would refuse; removal stays rendered (cleanup is legal everywhere). */
+  assignOpen: boolean;
 }) {
   const home = data.teams.find((t) => t.id === m.homeTeamId);
   const away = data.teams.find((t) => t.id === m.awayTeamId);
@@ -2568,13 +2673,33 @@ function StandinMatchBlock({
           asg.map((a) => a.replacingUserId).filter(Boolean),
         );
         const needing = out.filter((r) => !covered.has(r.userId));
-        return needing.length > 0 ? (
-          <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
-            ✗ Can&apos;t make it:{" "}
-            <b>{needing.map((r) => r.user.name).join(", ")}</b> — assign a
-            standin below.
-          </div>
-        ) : null;
+        // The OTHER direction: an assigned STANDIN who has declared OUT. The
+        // roster filter above deliberately excludes them, so the seat read as
+        // covered while the cover had quit — the one state this card exists
+        // to catch that it couldn't see. Distinct copy because the fix path
+        // differs (remove/replace, not add).
+        const assignedIds = new Set(asg.map((a) => a.standinUserId));
+        const standinOut = data.outRsvps.filter(
+          (r) => r.matchId === m.id && assignedIds.has(r.userId),
+        );
+        return (
+          <>
+            {needing.length > 0 ? (
+              <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
+                ✗ Can&apos;t make it:{" "}
+                <b>{needing.map((r) => r.user.name).join(", ")}</b> — assign a
+                standin below.
+              </div>
+            ) : null}
+            {standinOut.length > 0 ? (
+              <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
+                ✗ Assigned standin{" "}
+                <b>{standinOut.map((r) => r.user.name).join(", ")}</b> has
+                declared OUT — remove that assignment and arrange other cover.
+              </div>
+            ) : null}
+          </>
+        );
       })()}
       {asg.length > 0 ? (
         <ul className="space-y-1">
@@ -2606,6 +2731,7 @@ function StandinMatchBlock({
           ))}
         </ul>
       ) : null}
+      {!assignOpen ? null : (
       <ActionForm
         action={assignStandin}
         className="flex flex-wrap items-center gap-2"
@@ -2621,9 +2747,11 @@ function StandinMatchBlock({
           <option value="" disabled>
             Standin…
           </option>
+          {/* MMR rides in the option text — the captain picker has always
+              shown it, and the any-team admin override was choosing blind. */}
           {data.standins.map((s) => (
             <option key={s.userId} value={s.userId}>
-              {s.user.name}
+              {s.user.name} ({s.mmr} MMR)
             </option>
           ))}
         </select>
@@ -2673,6 +2801,7 @@ function StandinMatchBlock({
           Assign
         </Button>
       </ActionForm>
+      )}
     </div>
   );
 }
@@ -2991,9 +3120,16 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
     data.teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
   const freeAgents = data.players.filter((p) => !rosteredIds.has(p.userId));
+  // Withdrawn teams are neither an alarm nor a signing target: their fixtures
+  // are all forfeited, so "short" is their permanent state (usually WHY they
+  // withdrew), and signFreeAgent refuses them — offering them here parks a
+  // player on a dead roster one mis-click away. Releasing their players stays
+  // available below; that's the legitimate post-withdrawal cleanup.
   const shortTeams = preStart
     ? []
-    : data.teams.filter((t) => t.members.length < season.teamSize);
+    : data.teams.filter(
+        (t) => !t.withdrawn && t.members.length < season.teamSize,
+      );
   const canSign = !preStart && freeAgents.length > 0 && shortTeams.length > 0;
   const releasable = preStart
     ? []

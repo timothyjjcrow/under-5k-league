@@ -1,6 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
-import { MATCH_PHASE, MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
+import {
+  DRAFT_STATUS,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  REGISTRATION_STATUS,
+  SEASON_STATUS,
+} from "./constants";
 import { getActiveSeason } from "./season";
 import {
   standinAssignedMessage,
@@ -8,7 +14,7 @@ import {
   type MentionAllowlist,
 } from "./discord";
 import { mentionsOf } from "./discord-mentions";
-import { standinConflict } from "./standin";
+import { standinConflict, standinMmrNote } from "./standin";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -181,6 +187,47 @@ export async function assignStandinGuarded(opts: {
   if (match.status === MATCH_STATUS.COMPLETED)
     return { ok: false, error: "This match is already played" };
 
+  // PHASE GATE (read-time, the signFreeAgent shape — phase flips are slow
+  // admin acts), judged AFTER the archived/completed checks so the more
+  // specific refusal always wins. Cover is a statement about a SETTLED
+  // roster: during SIGNUPS and a running auction the rosters are still
+  // forming, so a booking made there survives into whatever the draft
+  // produces — the re-run-auction case, where a stale empty-seat cover
+  // inflates a freshly drafted side to six. COMPLETE has nothing left to
+  // cover. The one DRAFT-phase window that stays open is draft COMPLETE
+  // (pool-dry short rosters arranging their week-1 cover — the reason empty
+  // seats exist). Removal is deliberately NOT gated: clearing stale cover is
+  // legal cleanup in every phase.
+  if (season.status === SEASON_STATUS.SIGNUPS) {
+    return {
+      ok: false,
+      error:
+        "Standins cover matches for drafted rosters — run the draft before arranging cover",
+    };
+  }
+  if (season.status === SEASON_STATUS.COMPLETE) {
+    return { ok: false, error: "The season is over — there's nothing left to cover" };
+  }
+  if (season.status === SEASON_STATUS.DRAFT) {
+    const draftRow = await prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    });
+    if (draftRow?.status !== DRAFT_STATUS.COMPLETE) {
+      // Keyed on STATUS, not row existence: a post-abort season carries a
+      // NOT_STARTED row, and telling that admin "the draft is still running"
+      // sends them hunting for an auction that isn't.
+      const notRunYet =
+        !draftRow || draftRow.status === DRAFT_STATUS.NOT_STARTED;
+      return {
+        ok: false,
+        error: notRunYet
+          ? "The auction hasn't run yet — standins cover drafted rosters"
+          : "The draft is still running — arrange cover once rosters are locked",
+      };
+    }
+  }
+
   // The standin must be a real signup who ISN'T on a roster this season — a
   // rostered player covering another team would land in BOTH account sets on
   // import, mis-crediting their box-score lines (a "double agent").
@@ -210,19 +257,31 @@ export async function assignStandinGuarded(opts: {
   let coverTeamName: string;
   let coverTeamCaptainId: string;
   let replacedName: string | null = null;
+  // The replaced player's registration MMR — only for the ADVISORY below,
+  // never a gate (the maxMmr house rule). 0/missing reads as unknown.
+  let replacedMmr: number | null = null;
 
   if (replacingUserId) {
-    const membership = await prisma.teamMember.findUnique({
-      where: {
-        seasonId_userId: { seasonId: season.id, userId: replacingUserId },
-      },
-      include: {
-        team: { select: { captainId: true, name: true } },
-        user: { select: { name: true } },
-      },
-    });
+    const [membership, replacedReg] = await Promise.all([
+      prisma.teamMember.findUnique({
+        where: {
+          seasonId_userId: { seasonId: season.id, userId: replacingUserId },
+        },
+        include: {
+          team: { select: { captainId: true, name: true } },
+          user: { select: { name: true } },
+        },
+      }),
+      prisma.registration.findUnique({
+        where: {
+          seasonId_userId: { seasonId: season.id, userId: replacingUserId },
+        },
+        select: { mmr: true },
+      }),
+    ]);
     if (!membership)
       return { ok: false, error: "Replaced player is not on a team" };
+    replacedMmr = replacedReg?.mmr ?? null;
     if (
       membership.teamId !== match.homeTeamId &&
       membership.teamId !== match.awayTeamId
@@ -303,10 +362,19 @@ export async function assignStandinGuarded(opts: {
   ]);
   if (already)
     return { ok: false, error: "That standin is already assigned to this match" };
+  // "Remove that assignment first" is only honest advice while the series
+  // hasn't started — once a game imports, removeStandinGuarded refuses the
+  // removal, so pointing at it sends the captain in a circle. Mid-series the
+  // truthful answer is that the booking is settled: whoever actually plays
+  // the remaining games is what the imports record.
+  const swapHint =
+    match.games.length > 0
+      ? "the series has already started, so the booking can't be swapped — the remaining games record whoever actually plays"
+      : "remove that assignment first to swap";
   if (seatTaken)
     return {
       ok: false,
-      error: `${replacedName} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`,
+      error: `${replacedName} is already covered by ${seatTaken.standin.name} — ${swapHint}`,
     };
   const clash = otherNights.find((o) => standinConflict(match, o.match));
   if (clash)
@@ -340,7 +408,7 @@ export async function assignStandinGuarded(opts: {
         // re-reading only the Registration left the assign-vs-signFreeAgent
         // pair with no cycle to detect, so both could commit and a rostered
         // player could hold live cover.
-        const [fresh, rostered, already, seatTaken, otherNights] = await Promise.all([
+        const [fresh, rostered, replacedSeat, already, seatTaken, otherNights] = await Promise.all([
           tx.registration.findUnique({
             where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
             select: { status: true },
@@ -349,6 +417,25 @@ export async function assignStandinGuarded(opts: {
             where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
             select: { id: true },
           }),
+          // The REPLACED player's seat, re-read for the same two reasons as the
+          // rest: releasePlayer deletes it and CANCELS the cover in one
+          // transaction, so an assign racing a release could recreate exactly
+          // the stale-cover row that cleanup exists to prevent (the inflated
+          // six-player side); and it has to sit in this transaction's READ SET
+          // so SSI can see the assign-vs-release cycle at all — release reads
+          // the assignments and writes the TeamMember, this reads the
+          // TeamMember and writes an assignment.
+          replacingUserId
+            ? tx.teamMember.findUnique({
+                where: {
+                  seasonId_userId: {
+                    seasonId: season.id,
+                    userId: replacingUserId,
+                  },
+                },
+                select: { teamId: true },
+              })
+            : Promise.resolve(undefined),
           tx.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
           replacingUserId
             ? tx.standinAssignment.findFirst({
@@ -359,6 +446,14 @@ export async function assignStandinGuarded(opts: {
               // read set, so two concurrent assigns can't both fill the last one
               // and put six players on the side. Shaped as a findFirst-style
               // result so the branch below stays one check.
+              //
+              // Sabotage-tested honestly (2026-08-02): deleting ONLY this
+              // re-read stays green under standins-raced.itest.ts, because the
+              // `already` findFirst's SIREAD range on the matchId index
+              // incidentally conflicts with the rival's insert — belt-and-
+              // braces under the CURRENT query plan, kept because a plan is
+              // not a guarantee. Dropping the Serializable isolation level is
+              // what the raced tests fail on, deterministically.
               tx.standinAssignment
                 .count({
                   where: { matchId, teamId: coverTeamId, replacingUserId: null },
@@ -385,6 +480,10 @@ export async function assignStandinGuarded(opts: {
           throw new StandinRaceError(
             "That player is on a roster — they can't stand in",
           );
+        if (replacingUserId && replacedSeat?.teamId !== coverTeamId)
+          throw new StandinRaceError(
+            `${replacedName} just left that roster — reload and pick again`,
+          );
         if (already)
           throw new StandinRaceError(
             "That standin is already assigned to this match",
@@ -392,7 +491,7 @@ export async function assignStandinGuarded(opts: {
         if (seatTaken)
           throw new StandinRaceError(
             replacingUserId
-              ? `${replacedName} is already covered by ${seatTaken.standin.name} — remove that assignment first to swap`
+              ? `${replacedName} is already covered by ${seatTaken.standin.name} — ${swapHint}`
               : `${coverTeamName}'s open seat(s) are already covered for this match`,
           );
         const clash = otherNights.find((o) => standinConflict(match, o.match));
@@ -419,13 +518,22 @@ export async function assignStandinGuarded(opts: {
     throw e;
   }
 
+  // ADVISORY only, computed from the reads the guards already made — a 4.9k
+  // standin covering a 1.8k seat is a fairness incident the assigner should
+  // commit to knowingly, but the maxMmr rule says warn-and-name, never block.
+  const mmrNote = standinMmrNote({
+    standinMmr: standinReg.mmr,
+    replacedMmr,
+    maxMmr: season.maxMmr,
+  });
   return {
     ok: true,
     message:
       "Standin assigned" +
       (match.games.length > 0
         ? " — heads up: already-imported games keep their original attribution"
-        : ""),
+        : "") +
+      (mmrNote ? ` — ${mmrNote}` : ""),
     // Being assigned is the single most action-demanding event a standin can
     // get — the action layer posts this so they hear about it without
     // happening to visit the site. Which is why it MENTIONS them: a plain
@@ -441,10 +549,19 @@ export async function assignStandinGuarded(opts: {
       week: match.week,
       isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
       whenMs: match.scheduledAt?.getTime() ?? null,
+      matchId: match.id,
     }),
   };
 }
 
+/**
+ * NO archived-season refusal here, unlike assign — DELIBERATE. Removal is
+ * cleanup (the reschedule decline/withdraw precedent): a stale booking on an
+ * archived season's unplayed match blocks that standin's own withdrawal
+ * (pendingCoverWhere is per-season, but the human is still listed) and there
+ * is no other control that can clear it. Same reason removal stays legal in
+ * every season PHASE while assign is gated.
+ */
 export async function removeStandinGuarded(opts: {
   assignmentId: string;
   /** null = admin; a userId must captain the assignment's team. */
@@ -495,6 +612,16 @@ export async function removeStandinGuarded(opts: {
   // queries ago: auto-sync imports games from any visitor's page view, so a
   // series can acquire its first game (or complete outright) in the gap, and
   // this delete is exactly the mid-series removal the checks above refuse.
+  //
+  // KNOWN RESIDUAL WINDOW, stated rather than implied closed: the WHERE only
+  // sees COMMITTED games, and importGameForMatch reads the assignment set
+  // (gatherTeamAccounts) before its own write transaction — so a delete
+  // landing inside the import's few-ms read-to-write gap still strands the
+  // rest of the series, and closing it for real needs the IMPORT side to
+  // re-assert the assignment set it classified with. Accepted for now: the
+  // window excludes the OpenDota fetch (it's DB round trips only), game 1
+  // keeps correct attribution, and re-assigning the same standin (legal even
+  // with games imported) repairs the remaining games.
   const gone = await prisma.standinAssignment.deleteMany({
     where: {
       id: opts.assignmentId,

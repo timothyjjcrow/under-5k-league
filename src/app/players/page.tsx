@@ -462,9 +462,28 @@ export default async function PlayersPage() {
                   </span>
                   {/* Standins are the people a captain has to find at 7pm on a
                       match night — they get the same roles/MMR legibility as
-                      the pool, not a bare name in a pill. */}
-                  <span className="mt-0.5 flex items-center gap-1.5">
+                      the pool, not a bare name in a pill. Contact rides along
+                      for SIGNED-IN viewers only (the showContact rule): the
+                      whole point of this list is "who can I actually reach
+                      tonight", and it made captains open profiles one by one.
+                      Plain text, not the copy-chip — the card is one link and
+                      a button inside a link is a tap-target trap. */}
+                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
                     <RoleBadges roles={s.roles} />
+                    {viewer ? (
+                      s.user.discordName || s.user.discordId ? (
+                        <span className="truncate text-xs text-muted">
+                          {s.user.discordName
+                            ? `@${s.user.discordName}`
+                            : "Discord linked"}
+                          {s.user.discordId ? " ✓" : ""}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted/70">
+                          no Discord
+                        </span>
+                      )
+                    ) : null}
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">

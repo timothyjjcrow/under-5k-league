@@ -460,7 +460,10 @@ describe("leaveLeague — a standin can't walk out on cover they owe", () => {
 
     const res = await leaveLeague({}, new FormData());
 
-    expect(res?.error).toMatch(/standing in for an unplayed match/i);
+    // Self-serve wording: second person, and it prescribes an action the
+    // standin can actually take (ask, not remove — they hold no remove control).
+    expect(res?.error).toMatch(/booked to stand in for an unplayed match/i);
+    expect(res?.error).toMatch(/captain or an admin/i);
     const reg = await prisma.registration.findUniqueOrThrow({
       where: { seasonId_userId: { seasonId: season.id, userId: standin.id } },
     });

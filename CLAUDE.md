@@ -91,9 +91,10 @@ sabotage the guard and confirm the test goes red — the ratchet will not do it
 for you. Don't read "all gradeable claims protected" as "every guard in the repo is gated".
 
 Currently **every gradeable claim is protected** (the committed
-`test/mutation-baseline.json` is authoritative for the counts — 61 of 66 as of
-2026-08-01, and these numbers go stale here at every `--discover`) — every
-guarded claim in the repo fails the suite when its predicate is deleted. The
+`test/mutation-baseline.json` is authoritative for the counts — 62 of 70 (65
+gradeable; the 3 unprotected are the pubStats `dotaAccountId` claims) as of
+2026-08-02, and these numbers go stale here at every `--discover`) — every
+gradeable non-pubStats claim fails the suite when its predicate is deleted. The
 remainder are EQUIVALENT MUTANTS: predicates that can be deleted without
 changing the end state, so no test can ever kill them. They are listed in the
 guard and excluded from the score rather than left looking like gaps — two
@@ -332,9 +333,10 @@ is the point at which someone has to justify it.
   write-skew pair (assign reads the Registration and writes an assignment;
   withdraw counts assignments and writes the Registration), and SSI only spots
   the cycle when EVERY participant is serializable, so don't drop one back to a
-  plain transaction. Proved with a forced schedule on Postgres (two connections,
-  barriered reads): at read-committed both commit and a WITHDRAWN standin keeps
-  live cover; at Serializable the assign fails P2034. Belt-and-braces,
+  plain transaction. Once hand-verified only; now pinned by
+  `test/integration/standins-raced.itest.ts` (Promise.all races over the
+  assign-vs-withdraw and assign-vs-release pairs — `npm run test:pg` is what
+  runs them for real, SQLite degrades them to sequential). Belt-and-braces,
 - **A standin can't cover two matches the same night.** Pure `standinConflict`
   (`src/lib/standin.ts`, tested): kickoffs within `STANDIN_CONFLICT_HOURS` (4)
   clash, falling back to the same WEEK when either time is unset. The old
@@ -1642,10 +1644,15 @@ reached a player who wasn't already looking at it.
   webhook failure still can't touch the write. NOTE the assign/remove
   announcement has FOUR SEND sites (`standins.ts` ×2 AND `admin.ts` ×2) — miss
   one and the admin path silently stops notifying. The STAND-DOWN message
-  (`standinRemovedMessage`) now has two more builders on top of those:
-  `releasePlayer` and `signFreeAgent`, which cancel cover as a side effect
-  (see the roster-moves section). Six total; count them before claiming a
-  number here.
+  (`standinRemovedMessage`) is sent from EVERY path that kills a booking or
+  its fixture: both removeStandin paths (one builder site in
+  `standin-service.ts` — the actions send it), `releasePlayer`,
+  `signFreeAgent` (last-seat cleanup), `generateSchedule`, `startPlayoffs`
+  (bracket rebuild), `withdrawTeam`, `recordResult` (forfeit ruling, zero
+  games), and `abortDraftAction`. Eight builder call sites in src as of
+  2026-08-02 — `grep` before claiming a number here; a cover-killing path
+  that doesn't send one is a bug (the standin keeps a live @-mentioned
+  instruction to show up for a dead fixture).
 - **Every player/team name in an announcement goes through
   `escapeDiscordText`** (`src/lib/discord-escape.ts`, tested; `discord.ts`
   aliases it to `name`). Discord renders markdown in WEBHOOK messages and,
@@ -3095,6 +3102,100 @@ status=DRAFT blindly, so a concurrent flip out of DRAFT still matches its
 WHERE); signFreeAgent/releasePlayer check draft-COMPLETE read-time only
 against a concurrent undoLastSale reopen.
 
+## Standins & replacement hardening (2026-08-02 — a 35-agent audit, then the fix pass)
+
+An 8-lens audit (captain / admin / the standin themselves / permanent
+replacement / phase coverage / integrity / notifications / eligibility) with
+adversarial verification: 25 confirmed findings, all fixed or explicitly
+deferred below. The rules that came out of it:
+
+- **Assignment now has a PHASE GATE; removal deliberately does not.**
+  `assignStandinGuarded` refuses SIGNUPS ("run the draft first"), DRAFT with
+  the auction not COMPLETE, and COMPLETE seasons — judged AFTER the
+  archived/completed-match refusals so the more specific error wins. The
+  DRAFT-with-auction-COMPLETE window stays open (pool-dry short rosters
+  arranging week-1 cover). Removal stays legal in EVERY phase and on archived
+  seasons: it is cleanup, and a stale booking blocks its standin's own
+  withdrawal. Both assign forms (match page + admin card) mirror the gate
+  (render/guard pairing) while keeping the assignments list + remove rendered.
+- **Every path that kills a booking or its fixture stands the standin down.**
+  `withdrawTeam` (filtered to fixtures whose forfeit claim WON — a result
+  landing mid-click keeps its booking silently), `recordResult` with the
+  forfeit flag on a zero-games match (a played-but-private manual score must
+  NOT stand down someone who actually played), and `abortDraft` (deletes every
+  season booking in-tx — cover keyed to dissolved rosters is stale by
+  definition, and an empty-seat booking surviving into the re-run auction
+  inflates a drafted side to six) all send `standinRemovedMessage` +
+  `mentionsOf` post-commit. See the count rule in the Discord section.
+- **`signFreeAgent` reconciles cover on PARTIAL refills too — by REPORTING.**
+  The last-seat case still auto-cancels (every empty-seat booking is
+  unambiguously redundant); a partial refill (3/5 → 4/5 under 2 bookings)
+  REPORTS the per-match surplus in the toast instead of guessing which
+  booking dies (the withdrawGateError refuse-don't-auto-cancel precedent).
+  Surplus is per-MATCH: bookings live on matches, seats on the roster.
+- **The assign-vs-release write-skew pair is closed on both sides.**
+  `releasePlayer` runs Serializable (it was the ONE roster-move transaction
+  that didn't) with a claim-first `deleteMany` + typed throw (the undoLastSale
+  P2025 lesson), and `assignStandinGuarded` re-reads the REPLACED player's
+  TeamMember inside its transaction (":328 said 'EVERY precondition is
+  re-read in here' and was wrong about its own transaction"). Raced coverage:
+  `test/integration/standins-raced.itest.ts` — same-seat, open-seat-budget,
+  same-night, assign-vs-release, assign-vs-leaveLeague; **SQLite runs them
+  sequentially, only `npm run test:pg` exercises them** (raceAll's contract).
+- **`promoteStandinToPlayer` is a guarded claim** (`updateMany` re-asserting
+  ACTIVE+STANDIN; the standin can self-withdraw on /me mid-click) with seam
+  `admin.promoteStandin.beforeWrite`. The Start-draft rival (Draft table) is
+  deliberately not closed — a promote at auction-second-zero is materially
+  the pre-start promote the gate blesses.
+- **`withdrawGateError` takes `audience`** — "admin" (default, byte-identical
+  strings) vs "self" (second person, prescribes only actions the player can
+  take: "ask that team's captain or an admin"). leaveLeague passes "self".
+  Extend the same way if a new surface shows gate errors to players.
+- **MMR advisory, never a block**: `standinMmrNote` (`standin.ts`, tested) —
+  named cover flags a ≥`STANDIN_MMR_FLAG_GAP` (500) gap over the REPLACED
+  player's registration MMR; empty seats compare against `Season.maxMmr`
+  (0 = silent); unknown (0) MMR never flags. Toast-only by design.
+- **Withdrawn teams**: excluded from the short-team alarm, the sign form and
+  `rosterMovesVisible`'s short/canSign clauses (their "short" is permanent —
+  the alarm would cry wolf all season); `signFreeAgent` refuses them
+  read-time; releasing their players stays available (it's the documented
+  cleanup — the withdrawTeam toast now says so, since their players are the
+  league's most natural standin pool and rostered players can't stand in).
+- **Notification parity for permanent moves**: `freeAgentSignedMessage`
+  mentions the signed player and ends naming their next move (check in,
+  /schedule link); the sign toast carries `reachabilityNote`. A reschedule
+  ACCEPT mentions the match's booked standins alongside the proposer (their
+  assignment ping quoted the OLD kickoff — this is the send that corrects
+  it); `AcceptedReschedule.standinUserIds` carries the ids. `playerOutMessage`
+  and `standinAssignedMessage` carry `<site>/matches/<id>` deep links (the
+  week-reminder shape — angle-bracketed, no unfurl).
+- **Visibility**: the admin standin card renders pairwise double-booking
+  clashes recomputed from live data (retimes made the toast-only report
+  vanish on the wrong person) and alerts on an assigned standin who RSVPs
+  OUT (the roster filter deliberately excludes them, so the seat read as
+  covered while the cover had quit); the captain's match-page card opens with
+  "✗ Out and uncovered" for their own roster; the picker options carry
+  roles + "no Discord"; /players' standin cards show contact (signed-in
+  gated); /me's cover card keys on ACTIVE+unrostered, not type (undrafted
+  PLAYER free agents are legal cover), with the bare card still standin-only;
+  profiles get a "Stood in — N matches covered" season line (COMPLETED
+  matches only — recognition is the cheapest standin-recruitment tool).
+- **Honest dead-end copy**: a mid-series swap is impossible by design (remove
+  refuses once games import; the seat conflict error says "can't be swapped —
+  the remaining games record whoever actually plays" instead of pointing at
+  the refusing control; releasePlayer's kept-cover note matches). The
+  first-import race window in `removeStandinGuarded` is DOCUMENTED beside the
+  WHERE rather than implied closed (closing it needs the import side to
+  re-assert the assignment set — do that there if it ever matters).
+
+**Deferred deliberately** (don't rediscover as new): a mid-series standin
+SWAP tool (the copy now tells the truth instead; build it only if a real
+season hits the emergency twice); relaxing "rostered players can't stand in"
+for withdrawn-team members (reinstateTeam would resurrect the double-agent
+hazard — release is the path, and the toast points at it); MMR advisory in
+the Discord announcement (toast-only for now); auto-cancelling surplus
+partial-refill bookings (report-only, captain owns the choice).
+
 ## Good next steps
 
 - **Open product decisions** (the audit named them; each needs a call, not
@@ -3106,12 +3207,14 @@ against a concurrent undoLastSale reopen.
   the active season with no `?season=`, so those two side-games conclude with
   no recorded winner anywhere once N+1 is created); a player-visible
   rules/settings page.
-- **Known minors worth a sweep** (full list in the audit's findings doc): a
-  declined reschedule notifies nobody; a released player is never told; the
-  champion announcement has no failure retry (series results do); `removeGame`
-  and `reopenMatch` don't bump the result cursor; a late-arriving Divine medal
+- **Known minors worth a sweep** (full list in the audit's findings doc —
+  three earlier entries here were already FIXED and kept being re-cited, so
+  this list is now only what's actually open): the champion announcement has
+  no failure retry (series results do); a late-arriving Divine medal
   permanently locks an admitted player's /me form; `seasonScenarioReport`
-  recomputes uncached on four hot pages.
+  recomputes uncached on four hot pages. Fixed and struck: declined
+  reschedules announce (`rescheduleDeclinedMessage`), released players are
+  @-mentioned, and `removeGame`/`reopenMatch` both bump the result cursor.
 - Production deploy config (swap SQLite → Postgres, real Steam key).
 - Optional: sync from a Valve `leagueid` (field exists on `Season`) if the
   league ever gets ticketed — `/leagues/{id}/matches` + `classifyGame`.

@@ -71,3 +71,38 @@ export function standinConflict(target: StandinSlot, other: StandinSlot): boolea
   }
   return target.week === other.week;
 }
+
+/**
+ * Flag a standin whose MMR towers over the seat they're filling. ADVISORY,
+ * never a block (the maxMmr house rule): amateur-league convention is
+ * comparable-or-lower-MMR cover, but the league's only hard gate is
+ * registration's ceiling, so the assigner just gets told what they're doing.
+ */
+export const STANDIN_MMR_FLAG_GAP = 500;
+
+/**
+ * The advisory line for an assign toast, or null when there's nothing to say.
+ *
+ * Named cover compares against the REPLACED player — that's the strength the
+ * team was already fielding, so a small gap (or covering down) is silent even
+ * in a capped season. An empty seat has no baseline, so the season's soft MMR
+ * cap (0 = none) is the only yardstick. An unknown standin MMR (0) never
+ * flags: "unknown" must not dress up as "fine" OR as "too strong".
+ */
+export function standinMmrNote(opts: {
+  standinMmr: number;
+  /** The replaced player's registration MMR; null/0 = empty seat or unknown. */
+  replacedMmr: number | null;
+  /** Season.maxMmr — 0 = no review threshold set. */
+  maxMmr: number;
+}): string | null {
+  if (opts.standinMmr <= 0) return null;
+  if (opts.replacedMmr && opts.replacedMmr > 0) {
+    return opts.standinMmr - opts.replacedMmr >= STANDIN_MMR_FLAG_GAP
+      ? `heads up: a ${opts.standinMmr} MMR standin is covering a ${opts.replacedMmr} MMR player — make sure the other captain is fine with it`
+      : null;
+  }
+  return opts.maxMmr > 0 && opts.standinMmr > opts.maxMmr
+    ? `heads up: ${opts.standinMmr} MMR is above this season's ${opts.maxMmr} MMR review threshold`
+    : null;
+}

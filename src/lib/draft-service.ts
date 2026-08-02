@@ -1,5 +1,11 @@
 import { prisma } from "./prisma";
-import { DEFAULTS, DRAFT_STATUS, MATCH_STATUS, SEASON_STATUS } from "./constants";
+import {
+  DEFAULTS,
+  DRAFT_STATUS,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SEASON_STATUS,
+} from "./constants";
 import { steamIdToAccountId } from "./dota";
 import {
   canBid,
@@ -590,6 +596,17 @@ export type AbortDraftSummary = {
   playersReturned: number;
   budgetRestored: number;
   teams: number;
+  /** Standin bookings deleted with the rosters they covered — the ACTION
+   *  sends one stand-down per row post-commit (the generateSchedule shape). */
+  coverStandDowns: {
+    standinName: string;
+    discordId: string | null;
+    teamName: string;
+    homeName: string;
+    awayName: string;
+    week: number;
+    isPlayoff: boolean;
+  }[];
 };
 
 /**
@@ -686,6 +703,42 @@ export async function abortDraft(
     // the aborted draft's prices (the reason undoLastSale clears Bids too).
     await tx.bid.deleteMany({ where: { draftId: draft.id } });
 
+    // Cover keyed to rosters this abort just dissolved is stale by definition
+    // — and the empty-seat kind (replacingUserId null) is permanently "live"
+    // to matchNightRoster, so a booking that survives into the re-run auction
+    // inflates a freshly drafted side to six on /schedule, the week reminder
+    // and the import account sets. Deleted here, stood down by the ACTION
+    // post-commit (the generateSchedule pattern). No played-games caveat
+    // needed: this abort already refused if any game or result exists.
+    const staleCover = await tx.standinAssignment.findMany({
+      where: { match: { seasonId } },
+      select: {
+        teamId: true,
+        standin: { select: { name: true, discordId: true } },
+        match: {
+          select: {
+            week: true,
+            phase: true,
+            homeTeam: { select: { name: true } },
+            awayTeam: { select: { name: true } },
+          },
+        },
+      },
+    });
+    if (staleCover.length) {
+      await tx.standinAssignment.deleteMany({
+        where: { match: { seasonId } },
+      });
+    }
+    const teamNames = new Map(
+      (
+        await tx.team.findMany({
+          where: { seasonId },
+          select: { id: true, name: true },
+        })
+      ).map((t) => [t.id, t.name]),
+    );
+
     // Back to SIGNUPS: that is what reopens captain management AND lets the late
     // players this abort exists for register at all (registrationGate blocks new
     // PLAYER signups outside SIGNUPS).
@@ -700,6 +753,15 @@ export async function abortDraft(
       playersReturned: bought.length,
       budgetRestored: [...spentByTeam.values()].reduce((n, v) => n + v, 0),
       teams,
+      coverStandDowns: staleCover.map((a) => ({
+        standinName: a.standin.name,
+        discordId: a.standin.discordId,
+        teamName: teamNames.get(a.teamId) ?? "their team",
+        homeName: a.match.homeTeam.name,
+        awayName: a.match.awayTeam.name,
+        week: a.match.week,
+        isPlayoff: a.match.phase !== MATCH_PHASE.REGULAR,
+      })),
     };
   });
 }

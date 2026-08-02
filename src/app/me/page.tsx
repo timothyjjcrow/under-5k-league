@@ -212,8 +212,13 @@ export default async function MePage({
           include: { team: true },
         })
       : null;
+  // Gated on "ACTIVE and not rostered" — the SAME predicate the assign pools
+  // use — never on type: both assign forms deliberately offer undrafted
+  // PLAYER-type free agents as cover ("anyone registered but undrafted"), and
+  // the type gate hid this card from exactly those people. The member check
+  // rides below (isRostered), so a rostered player never sees a stray card.
   const standinAssignments =
-    season && reg?.type === "STANDIN" && reg.status === "ACTIVE"
+    season && reg?.status === "ACTIVE"
       ? await prisma.standinAssignment.findMany({
           where: pendingCoverWhere(user.id, season.id),
           include: { match: { include: { homeTeam: true, awayTeam: true } } },
@@ -628,15 +633,26 @@ export default async function MePage({
               </Link>
             ) : null}
 
-            {isRegistered && !member && standinAssignments ? (
+            {/* Renders for a STANDIN signup (empty state included) and for ANY
+                unrostered signup that actually holds a booking — undrafted
+                PLAYER-type free agents are legal cover in both assign forms,
+                and the old type gate hid their own bookings from them. The
+                bare card stays standin-only: during SIGNUPS every registrant
+                is unrostered, and an empty "your assignments" box for the
+                whole pool would be noise. */}
+            {isRegistered &&
+            !member &&
+            standinAssignments &&
+            (reg?.type === "STANDIN" || standinAssignments.length > 0) ? (
               <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   Your standin assignments
                 </div>
                 {standinAssignments.length === 0 ? (
                   <p className="mt-1 text-sm text-muted">
-                    No assignments yet — admins place standins as matches need
-                    cover.
+                    No assignments yet — captains grab cover from the standin
+                    pool on each match page as their players drop out. Keep
+                    your Discord linked so their ping reaches you.
                   </p>
                 ) : (
                   <ul className="mt-2 space-y-2">
