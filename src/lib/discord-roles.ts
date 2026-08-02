@@ -134,6 +134,17 @@ const UNKNOWN_USER = 10013; // account deleted — equally not in the server
 // ---------------------------------------------------------------------------
 
 const RATE_WAIT_MAX_MS = 2_500;
+// Slop added to every gate sleep, NOT to the stored deadline (the cap check
+// judges the honest wait). The deadline is computed from OUR clock at
+// header-processing time while the bucket's owner stamped its refill moment
+// when it SERVED the response — those can land in the same millisecond — and
+// setTimeout truncates float delays (0.06s * 1000 = 60.00000000000001 → 60ms)
+// and may run in the target millisecond, so a slopless sleep can wake a hair
+// before the bucket actually refills and burn the request into the exact 429
+// the gate exists to avoid. Twenty milliseconds is invisible next to the
+// 2.5s wait cap and the sweep's 8s deadline; the CI flake it closes was
+// "3 requests instead of 2" in the pacing test, i.e. this, observed.
+const RATE_GATE_SLOP_MS = 20;
 /** guildId → epoch-ms until which the member bucket is known to be empty. */
 const memberRouteBlocked = new Map<string, number>();
 
@@ -145,7 +156,7 @@ async function memberGateWait(guildId: string): Promise<boolean> {
   const wait = (memberRouteBlocked.get(guildId) ?? 0) - Date.now();
   if (wait <= 0) return true;
   if (wait > RATE_WAIT_MAX_MS) return false;
-  await sleep(wait);
+  await sleep(wait + RATE_GATE_SLOP_MS);
   return true;
 }
 
