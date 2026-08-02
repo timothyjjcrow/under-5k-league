@@ -110,10 +110,15 @@ import { potView } from "@/lib/inhouse-bets";
 import {
   discordReachWarning,
   getDiscordReachFunnel,
+  getGuildConfig,
   getPingHealth,
+  sweepGuildMemberships,
   type DiscordReachFunnel,
+  type GuildMembership,
   type PingHealth,
 } from "@/lib/discord-roles";
+import { membershipChipView, signupFlags } from "@/lib/signup-readiness";
+import { DiscordTag } from "@/components/discord-tag";
 import {
   pickBracketSize,
   roundName,
@@ -143,6 +148,8 @@ import {
   CardSkeleton,
   PageTitle,
   PlayerLink,
+  RankMedal,
+  RoleBadges,
   Stat,
   StatCell,
   StatStrip,
@@ -919,6 +926,36 @@ function CaptainControls({
   const nonCaptains = data.players.filter(
     (p) => !captainUserIds.has(p.userId),
   );
+  // Real STANDIN registrations, for the moderation list below (data.standins
+  // also carries undrafted PLAYERs for the cover dropdowns — those rows are
+  // already in the eligible list above).
+  const standinRegs = data.standins.filter(
+    (s) => s.type === REGISTRATION_TYPE.STANDIN,
+  );
+  // The signup lists' "is this player actually IN the Discord server?" chips.
+  // STARTED here, never awaited: this card is on /admin's blocking path, which
+  // must stay Discord-free (the DiscordSection rule) — each row's chip
+  // suspends on this promise individually, so the list and its make-captain /
+  // remove controls paint immediately and the chips stream in when the
+  // rate-paced sweep answers. The catch degrades a sweep-level failure to the
+  // chips' honest "couldn't check" state; a Discord outage must never cost the
+  // panel. (The funnel card and the Start-draft confirm sweep the same ids —
+  // the membership memo and its in-flight dedupe make the third consumer
+  // nearly free.)
+  const guildCfg = getGuildConfig();
+  const linkedIds = [
+    ...new Set(
+      [...nonCaptains, ...standinRegs]
+        .map((p) => p.user.discordId)
+        .filter((id): id is string => !!id),
+    ),
+  ];
+  const membershipSweep =
+    guildCfg && linkedIds.length > 0
+      ? sweepGuildMemberships(linkedIds, guildCfg).catch(
+          () => new Map<string, GuildMembership>(),
+        )
+      : null;
   // Captains are ACTIVE PLAYER registrations too (addCaptain requires it), so
   // their row is in `data.players` — it is only filtered out of the list above.
   const captainReg = new Map(data.players.map((p) => [p.userId, p]));
@@ -1495,6 +1532,14 @@ function CaptainControls({
                       >
                         {p.user.name}
                       </PlayerLink>
+                      {/* Medal beside the claimed number: the pair is what
+                          makes an inflated claim scannable, and the flag
+                          below states the window when they disagree. */}
+                      <RankMedal
+                        rankTier={p.user.rankTier}
+                        size={18}
+                        className="shrink-0"
+                      />
                       <span className="shrink-0 text-xs text-muted">
                         {p.mmr}
                       </span>
@@ -1563,6 +1608,7 @@ function CaptainControls({
                       </ActionForm>
                     </span>
                   </div>
+                  <SignupRowMeta reg={p} sweep={membershipSweep} />
                   {/* Same window as the captain edit above: the number only
                       feeds budgets until Start draft, so the gate is the
                       draft, not the SIGNUPS phase. */}
@@ -1603,11 +1649,9 @@ function CaptainControls({
               machinery all season with no button anywhere to touch it. The
               actions never had a type gate; this was a missing render.
               (Undrafted PLAYERs in data.standins are covered by the eligible
-              list above — filter to real STANDIN registrations.) */}
+              list above — standinRegs, hoisted above for the membership
+              sweep, is filtered to real STANDIN registrations.) */}
           {(() => {
-            const standinRegs = data.standins.filter(
-              (s) => s.type === REGISTRATION_TYPE.STANDIN,
-            );
             if (standinRegs.length === 0) return null;
             return (
               <div className="mt-4 border-t border-line/60 pt-3">
@@ -1633,6 +1677,11 @@ function CaptainControls({
                           >
                             {s.user.name}
                           </PlayerLink>
+                          <RankMedal
+                            rankTier={s.user.rankTier}
+                            size={18}
+                            className="shrink-0"
+                          />
                           <span className="shrink-0 text-xs text-muted">
                             {s.mmr}
                           </span>
@@ -1651,6 +1700,7 @@ function CaptainControls({
                           </SubmitButton>
                         </ActionForm>
                       </div>
+                      <SignupRowMeta reg={s} sweep={membershipSweep} />
                       {/* Standins register in every phase, so their MMR edit
                           can't be draft-gated like the players' above — it
                           informs captains choosing cover all season. */}
@@ -3116,6 +3166,113 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
         ) : null}
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * The readiness line under each row of the signup-moderation lists — the
+ * prune pass the panel exists for: is this signup reachable on Discord,
+ * plausible on MMR, and filled in enough to draft? Every fact on it is
+ * DB-only and renders inline on the blocking path; the ONE
+ * Discord-dependent fact (live server membership) streams in behind a
+ * row-level Suspense over the shared sweep, so the row's make-captain /
+ * remove controls never swap component instances underneath a click — only
+ * the chip does (which is why this doesn't inherit StartDraftControl's
+ * accepted lost-pending-state trade-off). `sweep` is null when no bot+guild
+ * is configured: membership is unknowable then, and the row renders exactly
+ * what it always rendered (the funnel's `guild: null` rule).
+ */
+function SignupRowMeta({
+  reg,
+  sweep,
+}: {
+  reg: AdminData["players"][number];
+  sweep: Promise<Map<string, GuildMembership>> | null;
+}) {
+  const flags = signupFlags({
+    mmr: reg.mmr,
+    roles: reg.roles,
+    favoriteHeroes: reg.favoriteHeroes,
+    statement: reg.statement,
+    captainNote: reg.captainNote,
+    rankTier: reg.user.rankTier,
+  });
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {reg.user.discordId ? (
+        <>
+          {/* Verified ✓ = proven OWNERSHIP of the handle (the OAuth link) —
+              deliberately not membership; the chip beside it answers that. */}
+          <DiscordTag
+            name={reg.user.discordName}
+            verified
+            className="min-w-0"
+          />
+          {sweep ? (
+            <Suspense
+              fallback={
+                <Badge
+                  className="opacity-60"
+                  title="Checking the league's Discord server for this account…"
+                >
+                  checking Discord…
+                </Badge>
+              }
+            >
+              <MembershipChip
+                sweep={sweep}
+                discordId={reg.user.discordId}
+                handle={reg.user.discordName}
+              />
+            </Suspense>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <Badge
+            tone="danger"
+            title="Hasn't linked a Discord account — match-found mentions, week reminders and pings can't reach them. A typed handle beside this is unverified text, not a link."
+          >
+            no Discord link
+          </Badge>
+          {/* The hand-typed handle, when they left one: unverified (no ✓),
+              but still the admin's best lead for chasing them. Renders
+              nothing when blank. */}
+          <DiscordTag name={reg.user.discordName} className="min-w-0" />
+        </>
+      )}
+      <RoleBadges roles={reg.roles} />
+      {flags.map((f) => (
+        <Badge key={f.key} tone={f.tone} title={f.detail}>
+          {f.label}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One row's live membership verdict, resolved from the card-wide sweep. All
+ * four states (member / pending / not-member / couldn't-check) and their
+ * copy live in the tested membershipChipView — including the two rules the
+ * words must keep: unknown is neutral, never a negative, and a not-member
+ * verdict names the LINKED account.
+ */
+async function MembershipChip({
+  sweep,
+  discordId,
+  handle,
+}: {
+  sweep: Promise<Map<string, GuildMembership>>;
+  discordId: string;
+  handle: string;
+}) {
+  const byId = await sweep;
+  const chip = membershipChipView(byId.get(discordId) ?? null, handle);
+  return (
+    <Badge tone={chip.tone} title={chip.detail}>
+      {chip.label}
+    </Badge>
   );
 }
 
