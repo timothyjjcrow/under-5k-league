@@ -52,10 +52,15 @@ export async function logAdminAction(opts: {
   }
 }
 
-/** Most recent admin actions, newest first, for the panel's activity card. */
+/** Most recent admin actions, newest first, for the panel's activity card.
+ *  `id desc` is the determinism tiebreak: createdAt is timestamp(3) on
+ *  Postgres, two quick writes can land in the same millisecond, and a sort on
+ *  the tied key alone returns them in arbitrary (usually insert) order — which
+ *  flaked CI exactly once. Cuids are time-prefixed with a per-process counter,
+ *  so id desc orders same-millisecond rows newest-first correctly. */
 export async function recentAdminActions(limit = 40) {
   return prisma.adminAction.findMany({
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
   });
 }
