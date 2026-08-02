@@ -10,6 +10,7 @@ import {
   type DraftTeam,
 } from "./draft";
 import type { SessionUser } from "./auth";
+import { raceHook } from "./race-hook";
 import { draftRecap } from "./draft-recap";
 import {
   draftCompleteMessage,
@@ -490,7 +491,19 @@ export async function undoLastSale(
       };
     }
 
-    await tx.teamMember.delete({ where: { id: last.id } });
+    // deleteMany, not delete: two Undo clicks racing (or Undo racing an
+    // abort's teardown) leave the loser deleting a row the winner already
+    // removed — delete-by-unique raises P2025 there, which blew the losing
+    // admin's panel to the error page mid-dispute. This is the FIRST write in
+    // the transaction, so a zero count can safely return a typed refusal:
+    // nothing has been written yet.
+    const gone = await tx.teamMember.deleteMany({ where: { id: last.id } });
+    if (gone.count === 0) {
+      return {
+        ok: false as const,
+        error: "That sale was already undone — nothing changed.",
+      };
+    }
     // Void this lot's audit trail too. The Bid rows are keyed by
     // (draftId, userId) with no per-nomination id, so leaving them meant the
     // re-run auction's "Bid trail" replayed the VOIDED sale's prices — every
@@ -921,8 +934,31 @@ export async function nominatePlayer(
     // Claim the nomination slot: if the auto-skip resolver (or an admin
     // nomination) landed between our read and this write, reject instead of
     // silently replacing a live auction.
+    //
+    // The claim also re-asserts the TURN the authorization above was judged
+    // against — nominatorTeamId AND nominationEndsAt. `nominatedUserId: null`
+    // alone misses the one rival that moves the turn while leaving the lot
+    // empty: undoLastSale repoints nominatorTeamId to the refunded buyer with
+    // a fresh clock. Without these, a captain's in-flight nomination composed
+    // under the OLD turn landed after the undo — a lot opened out of turn,
+    // and the buyer the undo promised the next nomination never got it. The
+    // clock is included for the same reason the inhouse turn claim carries
+    // pickEndsAt: the rotation can hand the SAME team a fresh turn, so team
+    // id alone does not identify one.
+    // Seam: the rival is undoLastSale repointing the rotation (nominatorTeamId
+    // + a fresh clock, lot still empty) between this transaction's reads and
+    // the claim. It only writes the Draft row, which this tx has READ but not
+    // written — safe for a second connection (Postgres-only in tests; SQLite
+    // pins one connection).
+    await raceHook("draft.nominatePlayer.beforeClaim");
     const claim = await tx.draft.updateMany({
-      where: { seasonId, status: DRAFT_STATUS.IN_PROGRESS, nominatedUserId: null },
+      where: {
+        seasonId,
+        status: DRAFT_STATUS.IN_PROGRESS,
+        nominatedUserId: null,
+        nominatorTeamId: draft.nominatorTeamId,
+        nominationEndsAt: draft.nominationEndsAt,
+      },
       data: {
         nominatedUserId: playerId,
         currentBid: amount,
@@ -932,7 +968,10 @@ export async function nominatePlayer(
       },
     });
     if (claim.count === 0) {
-      return { ok: false as const, error: "A nomination is already in progress" };
+      return {
+        ok: false as const,
+        error: "The draft just changed — check the clock and try again",
+      };
     }
     await tx.bid.create({
       data: {

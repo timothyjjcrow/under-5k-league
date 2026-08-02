@@ -243,9 +243,14 @@ describe("withdrawGateError — on the auction block", () => {
   const base = { status: "ACTIVE", isCaptain: false, isRostered: false };
 
   it("refuses withdrawal while the player is the live lot", () => {
-    // Both the admin path and the player's own "Leave the league" button run
-    // through here. Only the admin one used to check this, so a player could
-    // withdraw mid-auction and leave every captain staring at a headless lot.
+    // This pins the PURE gate's branch, which the player's own "Leave the
+    // league" path runs through. The admin withdrawSignup path does NOT pass
+    // isOnTheBlock here — its on-the-block refusal is a separate inline check
+    // in the action, pinned by its own integration test in
+    // admin-flow-audit.itest.ts ("never the player currently ON THE BLOCK").
+    // An earlier version of this comment claimed both paths ran through this
+    // branch, which quietly misattributed the admin path's coverage to a test
+    // that never exercised it.
     expect(withdrawGateError({ ...base, isOnTheBlock: true })).toMatch(
       /auction block/i,
     );

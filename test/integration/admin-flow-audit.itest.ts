@@ -40,23 +40,35 @@ import {
   recordResult,
   reinstateSignup,
   setSeasonPhase,
+  startDraft,
   withdrawSignup,
 } from "@/app/actions/admin";
+import { nominatePlayer } from "@/lib/draft-service";
+import { sendDiscordMessage } from "@/lib/discord";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { recomputeSeries } from "@/lib/match-import";
 import { loadImportSkips } from "@/lib/match-import";
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
-import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  DRAFT_STATUS,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {
   addGameToMatch,
   generateRegularSchedule,
+  makeCaptain,
   makePlayer,
   makeSeason,
   makeTeam,
   makeUser,
+  raceN,
   recordMatch,
   resetDb,
+  sessionFor,
+  startDraftState,
 } from "./factories";
 
 const fd = (o: Record<string, string>) => {
@@ -927,5 +939,158 @@ describe("retractions bump the freshness cursor", () => {
 
     expect(res?.error).toBeUndefined();
     expect(await cursor()).not.toBe(before);
+  });
+});
+
+describe("startDraft — the one-shot lives at the WRITE, not just the read", () => {
+  afterEach(() => setRaceHook(null));
+
+  /** Two captains + a one-player pool: the minimum startable season. */
+  async function startableSeason() {
+    const season = await makeSeason();
+    const capA = await makeCaptain(season.id, "StartCapA", 100, 0);
+    const capB = await makeCaptain(season.id, "StartCapB", 100, 1);
+    await makePlayer(season.id, "StartPool", 3000);
+    return { season, capA, capB };
+  }
+
+  it("a result landing between the read-time check and the transaction refuses the start (seam)", async () => {
+    // The in-tx playedNow/gamesNow recount is the throw-inside-transaction
+    // guard shape the mutation ratchet cannot see; without this seam test,
+    // deleting it left every suite green — and the next season walked into
+    // DRAFT with auto-sync importing an opening game got a live auction armed
+    // over a played league.
+    const { season } = await startableSeason();
+    const matches = await generateRegularSchedule(season.id);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.startDraft.beforeTx", async () => {
+        fired = true;
+        await recordMatch(matches[0].id, 2, 0);
+      }),
+    );
+
+    const res = await startDraft(empty, fd({}));
+
+    expect(fired).toBe(true);
+    expect(res?.error).toMatch(/result landed/i);
+    // Nothing armed: no draft row, and the season never moved to DRAFT.
+    expect(
+      await prisma.draft.findUnique({ where: { seasonId: season.id } }),
+    ).toBeNull();
+    expect(
+      (await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
+        .status,
+    ).toBe(SEASON_STATUS.SIGNUPS);
+  });
+
+  it("two simultaneous Starts arm the auction ONCE and announce once", async () => {
+    // The old draft.upsert had no status predicate, so the loser blindly
+    // restamped the just-started draft (fresh nomination clock, rotation
+    // reset) and the league got a second "draft is live" announcement.
+    const { season } = await startableSeason();
+    vi.mocked(sendDiscordMessage).mockClear();
+
+    const res = await raceN(2, () => startDraft(empty, fd({})));
+
+    expect(res.filter((r) => r?.message)).toHaveLength(1);
+    expect(res.filter((r) => r?.error)).toHaveLength(1);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.status).toBe(DRAFT_STATUS.IN_PROGRESS);
+    expect(
+      vi
+        .mocked(sendDiscordMessage)
+        .mock.calls.filter((c) => /draft/i.test(String(c[0]))),
+    ).toHaveLength(1);
+  });
+
+  it("a double re-start over an aborted draft row claims NOT_STARTED once", async () => {
+    // The post-abort state: the draft row exists at NOT_STARTED, so the
+    // rival pair goes through the guarded updateMany branch instead of the
+    // create-P2002 one. Same invariant, other door.
+    const { season } = await startableSeason();
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.NOT_STARTED },
+    });
+
+    const res = await raceN(2, () => startDraft(empty, fd({})));
+
+    expect(res.filter((r) => r?.message)).toHaveLength(1);
+    expect(res.filter((r) => r?.error)).toHaveLength(1);
+    expect(
+      (
+        await prisma.draft.findUniqueOrThrow({
+          where: { seasonId: season.id },
+        })
+      ).status,
+    ).toBe(DRAFT_STATUS.IN_PROGRESS);
+  });
+});
+
+describe("removeCaptain — the in-tx results recount actually refuses (seam)", () => {
+  afterEach(() => setRaceHook(null));
+
+  it("a result landing between the read-time check and the delete rolls everything back", async () => {
+    const season = await makeSeason();
+    const capA = await makeCaptain(season.id, "RmSeamA", 100, 0);
+    await makeCaptain(season.id, "RmSeamB", 100, 1);
+    const matches = await generateRegularSchedule(season.id);
+
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.removeCaptain.beforeTx", async () => {
+        fired = true;
+        await recordMatch(matches[0].id, 2, 0);
+      }),
+    );
+
+    const res = await removeCaptain(empty, fd({ teamId: capA.team.id }));
+
+    expect(fired).toBe(true);
+    expect(res?.error).toMatch(/result landed/i);
+    // The team survived, the schedule survived, and the result that
+    // interrupted the removal survived too.
+    expect(
+      await prisma.team.findUnique({ where: { id: capA.team.id } }),
+    ).not.toBeNull();
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(
+      matches.length,
+    );
+    expect(
+      (await prisma.match.findUniqueOrThrow({ where: { id: matches[0].id } }))
+        .status,
+    ).toBe(MATCH_STATUS.COMPLETED);
+  });
+});
+
+describe("withdrawSignup — never the player currently ON THE BLOCK", () => {
+  it("refuses to withdraw a live lot's nominee, and the signup stays ACTIVE", async () => {
+    // This refusal is an inline early-return — invisible to the mutation
+    // ratchet — and the only on-the-block test used to cover the separate
+    // pure withdrawGateError branch, which this path never invokes. Deleting
+    // the inline guard reopened the headless-auction bug with every suite
+    // green; this pins it.
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "BlockCapA", 100, 0);
+    await makeCaptain(season.id, "BlockCapB", 100, 1);
+    const star = await makePlayer(season.id, "OnTheBlock", 4000);
+    await startDraftState(season.id);
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5)).ok,
+    ).toBe(true);
+
+    const reg = await prisma.registration.findUniqueOrThrow({
+      where: { seasonId_userId: { seasonId: season.id, userId: star.id } },
+    });
+    const res = await withdrawSignup(empty, fd({ registrationId: reg.id }));
+
+    expect(res?.error).toMatch(/auction block/i);
+    expect(
+      (await prisma.registration.findUniqueOrThrow({ where: { id: reg.id } }))
+        .status,
+    ).toBe("ACTIVE");
   });
 });

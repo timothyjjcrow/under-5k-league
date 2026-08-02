@@ -58,7 +58,7 @@ export async function saveRegistration(
     str(formData, "type") === REGISTRATION_TYPE.STANDIN
       ? REGISTRATION_TYPE.STANDIN
       : REGISTRATION_TYPE.PLAYER;
-  const mmr = clampInt(formData, "mmr", 0, 0, 12000);
+  let mmr = clampInt(formData, "mmr", 0, 0, 12000);
   const wantsCaptain = bool(formData, "wantsCaptain");
   const roles = serializeRoles(formData.getAll("roles").map(String));
   // Clamp on whole hero names, not raw characters — a mid-name cut rendered
@@ -121,6 +121,71 @@ export async function saveRegistration(
   });
   if (gateError) return { error: gateError };
 
+  // Draft-night lock: while the auction is LIVE or PAUSED, an existing signup
+  // can't change anything the engine is actively selling from. Three doors,
+  // each with its own failure mode:
+  //  * TYPE: a flip yanks the player out of the pool — nastiest as the player
+  //    ON THE BLOCK flipping to standin, which rendered a headless lot that
+  //    still charged the team. resolveExpiredNomination voids a non-PLAYER
+  //    lot as the write-time backstop; the refusal belongs here, where the
+  //    player can read it. (The mirror — STANDIN→PLAYER injecting into a
+  //    running pool — is already refused by registrationGate + promoteGate.)
+  //  * REVIVAL: a WITHDRAWN player resubmitting sets status ACTIVE below, so
+  //    they'd inject themselves into the live pool between lots. The /me UI
+  //    disables that tile, but a replayed POST never reads the UI.
+  //  * MMR: getDraftState re-reads Registration.mmr on every ~1.2s poll — it
+  //    feeds the pool's MMR sort, the nominated panel, and
+  //    resolveStalledNomination's top-MMR auto-pick — and the admin's
+  //    Edit-MMR forms are deliberately hidden once the draft starts, so a
+  //    mid-auction rewrite had no counter. FREEZE the number instead of
+  //    refusing the submit (role/hero/note edits are still useful to the
+  //    captains bidding), and say so in the toast — never a silent rewrite.
+  let lockedMmrNote = "";
+  if (existing) {
+    const wantsTypeFlip = type !== existing.type;
+    // WITHDRAWN only, NOT `!== ACTIVE`: a REMOVED player must fall through to
+    // the write-time `{ not: REMOVED }` claim below, whose refusal says the
+    // true thing ("an admin removed your signup — message them"). Catching
+    // them here instead told a moderated user that rejoining "reopens once
+    // the draft finishes" — a promise the claim will never keep.
+    const wantsRevival =
+      existing.status === REGISTRATION_STATUS.WITHDRAWN &&
+      type === REGISTRATION_TYPE.PLAYER;
+    // PLAYER rows only: everything the freeze protects (the pool's MMR sort,
+    // the nominated panel, resolveStalledNomination's top-MMR auto-pick)
+    // filters type PLAYER, so a standin's MMR feeds nothing the auction sells
+    // from — and standins REGISTER during draft night, typos included; their
+    // corrections must stay live (the admin standin MMR form is un-gated for
+    // the same reason).
+    const wantsMmrChange =
+      existing.type === REGISTRATION_TYPE.PLAYER && mmr !== existing.mmr;
+    if (wantsTypeFlip || wantsRevival || wantsMmrChange) {
+      const draftRow = await prisma.draft.findUnique({
+        where: { seasonId: season.id },
+        select: { status: true },
+      });
+      if (
+        draftRow?.status === DRAFT_STATUS.IN_PROGRESS ||
+        draftRow?.status === DRAFT_STATUS.PAUSED
+      ) {
+        if (wantsTypeFlip) {
+          return {
+            error:
+              "The draft is running — switching between player and standin reopens once it finishes",
+          };
+        }
+        if (wantsRevival) {
+          return {
+            error:
+              "The draft is running — rejoining the player pool reopens once it finishes",
+          };
+        }
+        mmr = existing.mmr;
+        lockedMmrNote = ` · MMR is locked while the draft runs — kept ${existing.mmr}`;
+      }
+    }
+  }
+
   // Medal check: a claim outside the medal's plausible window (blank
   // included) snaps to the window's floor — the conservative estimate. No
   // medal on file = the typed value stands. An UNCHANGED resubmit is never
@@ -143,32 +208,6 @@ export async function saveRegistration(
       return {
         error:
           "You're on a roster this season — ask an admin to release you before switching to standin",
-      };
-    }
-  }
-
-  // Draft-night lock: a type change while the auction is LIVE or PAUSED
-  // yanks the player out of a pool the engine is actively selling from. The
-  // nastiest shape is the player currently ON THE BLOCK flipping to standin:
-  // getDraftState looks the nominee up in the ACTIVE-PLAYER list, so every
-  // room rendered a headless lot while the clock ran, and the expiring sale
-  // still charged the team — minting a rostered STANDIN.
-  // resolveExpiredNomination now voids a non-PLAYER lot as the write-time
-  // backstop; the refusal belongs here, where the player can read it.
-  // (The mirror direction — STANDIN→PLAYER injecting into a running pool —
-  // is already refused by registrationGate outside SIGNUPS.)
-  if (existing && type !== existing.type) {
-    const draftRow = await prisma.draft.findUnique({
-      where: { seasonId: season.id },
-      select: { status: true },
-    });
-    if (
-      draftRow?.status === DRAFT_STATUS.IN_PROGRESS ||
-      draftRow?.status === DRAFT_STATUS.PAUSED
-    ) {
-      return {
-        error:
-          "The draft is running — switching between player and standin reopens once it finishes",
       };
     }
   }
@@ -302,7 +341,7 @@ export async function saveRegistration(
             ? "Registered as a standin"
             : "You're signed up!") +
           // The adjustment note already names the medal — don't say it twice.
-          (mmrNote ? "" : medalLabel)) + mmrNote,
+          (mmrNote ? "" : medalLabel)) + mmrNote + lockedMmrNote,
   };
 }
 

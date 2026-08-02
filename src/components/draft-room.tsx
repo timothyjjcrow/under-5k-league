@@ -1042,7 +1042,11 @@ export function DraftRoom({
               <p className="text-center text-muted">
                 Waiting for {nominatorName} to nominate a player…
               </p>
-              {me.isAdmin ? (
+              {/* Hidden while PAUSED: nominatePlayer refuses any non-live
+                  draft, so in the pause → settle → resume flow this button
+                  could only walk the admin through the confirm into a
+                  "Draft is not live" toast. Resume is the real next step. */}
+              {me.isAdmin && !paused ? (
                 <button
                   disabled={pending}
                   onClick={() => {

@@ -118,6 +118,23 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(capOnePage.getByText("You're on the clock")).toBeVisible({
     timeout: 15_000,
   });
+
+  // REGRESSION (2026-08-01): a tab that parked on /draft pre-start and
+  // flipped live via its own poll never attached the compact clock bar's
+  // IntersectionObserver (the banner element mounts AFTER the hook's effect
+  // already ran), so captains scrolled into the pool had no clock and no
+  // one-tap action for the whole auction. Cap One parked before Start, so
+  // this page is exactly that tab: scroll the banner away and the sticky
+  // bar must pin under the header. (Target by title — the bar deliberately
+  // has no aria-label; its content is its accessible name.)
+  await capOnePage.evaluate(() => {
+    document.documentElement.style.scrollBehavior = "auto";
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+  await expect(
+    capOnePage.getByTitle("Back to the auction clock"),
+  ).toBeVisible();
+  await capOnePage.evaluate(() => window.scrollTo(0, 0));
   await capOnePage
     .locator("#player-pool")
     .getByRole("button", { name: /Topson/ })

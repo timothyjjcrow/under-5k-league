@@ -132,7 +132,16 @@ export function usePollHealth(threshold = ROOM_POLL_FAIL_THRESHOLD) {
  * must change TOGETHER (see the CLAUDE.md mobile rules).
  */
 export function useBannerOffscreen(active: boolean) {
-  const ref = useRef<HTMLDivElement | null>(null);
+  // CALLBACK ref, not useRef: the banner element can mount LATER than the
+  // component that calls this hook. The draft room mounts once in its
+  // waiting-room state (no banner in that branch) and flips to live via its
+  // own poll — with a plain ref the [active]-keyed effect had already run
+  // against ref.current === null and never re-ran, so every tab that parked
+  // on /draft before "Start draft" spent the whole auction without the
+  // compact clock bar. Tracking the element in state re-runs the effect the
+  // moment the banner actually exists.
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
+  const ref = useCallback((node: HTMLDivElement | null) => setEl(node), []);
   const [offscreen, setOffscreen] = useState(false);
   // Reset during render when the banner goes inactive (the draft ended, the
   // lobby closed) — same reason as site-header: an effect would commit one
@@ -144,7 +153,6 @@ export function useBannerOffscreen(active: boolean) {
   }
   useEffect(() => {
     if (!active) return;
-    const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
     const obs = new IntersectionObserver(
       ([entry]) => setOffscreen(!entry.isIntersecting),
@@ -152,6 +160,6 @@ export function useBannerOffscreen(active: boolean) {
     );
     obs.observe(el);
     return () => obs.disconnect();
-  }, [active]);
+  }, [active, el]);
   return { ref, offscreen };
 }

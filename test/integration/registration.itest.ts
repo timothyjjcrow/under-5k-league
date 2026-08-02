@@ -829,3 +829,168 @@ describe("saveRegistration — a late medal must not brick an admitted signup", 
     expect(reg?.statement).toBe(""); // nothing from this submit landed
   });
 });
+
+// Draft-night locks: while the auction is LIVE or PAUSED the pool is being
+// sold from, so an existing signup can't change what the engine reads —
+// the type flip (long-standing), and now the MMR figure and a WITHDRAWN
+// player's re-entry (both found by the 2026-08-01 pre-draft audit: the /me
+// UI blocked re-entry but a replayed POST didn't, and a mid-auction MMR
+// rewrite had no admin counter because the Edit-MMR forms hide at start).
+describe("saveRegistration — draft-night locks (live auction)", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  async function liveDraftSeason(draftStatus = "IN_PROGRESS") {
+    const season = await makeSeason({ status: "DRAFT" });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: draftStatus },
+    });
+    return season;
+  }
+
+  it("freezes MMR while the auction runs — the edit lands, the number doesn't, the toast says so", async () => {
+    const season = await liveDraftSeason();
+    const user = await makeUser("Mid Draft Editor");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 4400,
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 1500, statement: "new goals" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/MMR is locked/);
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.mmr).toBe(4400); // getDraftState re-reads this every poll
+    expect(reg?.statement).toBe("new goals"); // the harmless edit still lands
+  });
+
+  it("freezes MMR while the auction is merely PAUSED too", async () => {
+    const season = await liveDraftSeason("PAUSED");
+    const user = await makeUser("Paused Editor");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3200,
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 100 }));
+
+    expect(res?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id))?.mmr).toBe(3200);
+  });
+
+  it("a WITHDRAWN player can't re-enter the live pool with a direct resubmit", async () => {
+    const season = await liveDraftSeason();
+    const user = await makeUser("Mid Draft Reviver");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "WITHDRAWN",
+        mmr: 3000,
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+
+    expect(res?.error).toMatch(/rejoining the player pool/i);
+    expect((await regFor(season.id, user.id))?.status).toBe("WITHDRAWN");
+  });
+
+  it("the re-entry lock lifts once the draft completes", async () => {
+    const season = await liveDraftSeason("COMPLETE");
+    const user = await makeUser("Post Draft Returner");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "WITHDRAWN",
+        mmr: 3000,
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+
+    expect(res?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id))?.status).toBe("ACTIVE");
+  });
+});
+
+// The two scope refinements the diff review caught: the freeze is for what
+// the AUCTION reads (ACTIVE PLAYER rows), and the revival door must not
+// swallow the REMOVED claim's honest message.
+describe("saveRegistration — draft-night lock scope", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  it("a STANDIN's MMR edit is NOT frozen mid-draft — their typo fixes stay live", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "IN_PROGRESS" },
+    });
+    const user = await makeUser("Standin Typo Fixer");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "STANDIN",
+        status: "ACTIVE",
+        mmr: 320, // the classic dropped digit
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3200 }));
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).not.toMatch(/MMR is locked/);
+    expect((await regFor(season.id, user.id))?.mmr).toBe(3200);
+  });
+
+  it("a REMOVED player mid-draft still gets the admin-removed message, not a reopening promise", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "IN_PROGRESS" },
+    });
+    const user = await makeUser("Moderated Mid Draft");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "REMOVED",
+        mmr: 3000,
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+
+    expect(res?.error).toMatch(/admin removed your signup/i);
+    expect(res?.error).not.toMatch(/reopens once it finishes/i);
+    expect((await regFor(season.id, user.id))?.status).toBe("REMOVED");
+  });
+});

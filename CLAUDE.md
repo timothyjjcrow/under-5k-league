@@ -91,8 +91,8 @@ sabotage the guard and confirm the test goes red — the ratchet will not do it
 for you. Don't read "all gradeable claims protected" as "every guard in the repo is gated".
 
 Currently **every gradeable claim is protected** (the committed
-`test/mutation-baseline.json` is authoritative for the counts — 54 of 59 as of
-2026-07-30, and these numbers go stale here at every `--discover`) — every
+`test/mutation-baseline.json` is authoritative for the counts — 61 of 66 as of
+2026-08-01, and these numbers go stale here at every `--discover`) — every
 guarded claim in the repo fails the suite when its predicate is deleted. The
 remainder are EQUIVALENT MUTANTS: predicates that can be deleted without
 changing the end state, so no test can ever kill them. They are listed in the
@@ -1452,8 +1452,11 @@ than letting someone discover it.
   would refuse. Not phase-gated on purpose: recovering a season whose phase
   already moved is the point. Captain rows keep a nonzero `price` after
   `transferCaptaincy` and are correctly NOT credited (that player is still
-  rostered). Verified under Postgres contention: 8 simultaneous aborts tear down
-  once, and it races cleanly against placeBid / resolveExpiredNomination.
+  rostered). Pinned by a raced test: raceN(4) simultaneous aborts tear down
+  once (draft.itest.ts — an earlier version of this line said "8" and nothing
+  pinned it). The placeBid / resolveExpiredNomination pairing was hand-verified
+  during the hardening pass but is NOT pinned by any test — don't cite it as
+  coverage (the 2026-08-01 audit caught exactly that citation drift here).
 - **setSeasonPhase refuses to leave DRAFT while the auction is PAUSED** (parked
   is not finished) and refuses to move BACKWARD into DRAFT once the draft is
   COMPLETE and any result exists — **counting imported GAMES as well as decided
@@ -2949,6 +2952,72 @@ The product gaps the audit named. Each is small and each has a rule:
   draft-gated (standins register in every phase). `withdrawSignup` never had a
   type gate — this was a missing render, and it meant a troll standin sat in
   every dropdown all season.
+
+## Pre-draft-night hardening (2026-08-01 — a 28-agent audit of the draft path)
+
+Run because a REAL draft with live players was imminent. 15 findings survived
+adversarial verification (1 major, rest minor/notes); the ones a single-admin
+draft night could actually hit were fixed, each sabotage-verified:
+
+- **The compact clock bar now attaches for tabs that watched the waiting-room
+  → live flip** (the one MAJOR). `useBannerOffscreen` used a plain `useRef` +
+  an `[active]`-keyed effect, and the draft room passes `status !== COMPLETE`
+  — already true in the waiting room, whose branch renders no banner element.
+  So every tab parked on /draft before Start (the documented, encouraged flow)
+  ran the effect once against a null ref and NEVER got the sticky bar: on
+  phones, captains scrolled into the pool had no clock and no one-tap Bid for
+  the whole auction, silently. The hook now tracks the element in state via a
+  CALLBACK ref and re-attaches when it appears — the fix covers the inhouse
+  callers too. Pinned in zz-admin-draft.spec.ts on exactly a parked-then-
+  flipped tab.
+- **`nominatePlayer`'s claim re-asserts the TURN it authorized against**
+  (nominatorTeamId AND nominationEndsAt — the applyPick/pickEndsAt lesson:
+  the rotation can hand the SAME team a fresh turn, so team id alone doesn't
+  identify one). The one rival that moves the turn while leaving the lot
+  empty is undoLastSale's repoint; a stale in-flight nomination used to land
+  out of turn and steal the make-good nomination the undo's toast had just
+  promised the refunded buyer. Seam `draft.nominatePlayer.beforeClaim`,
+  Postgres-only test in draft.itest.ts.
+- **`startDraft`'s one-shot is claimed at the WRITE**: the blind `upsert` is
+  now a CREATE (loses on the seasonId unique, P2002) / guarded `updateMany`
+  re-asserting NOT_STARTED (the post-abort door) split; either loss throws
+  `DraftAlreadyStartedError`, rolling back the budget + phase writes, so two
+  overlapping Starts arm the auction once and announce once. Raced tests for
+  both doors. Its in-tx results recount ALSO gained the seam it lacked
+  (`admin.startDraft.beforeTx`) — it was a ratchet-invisible throw-guard with
+  no test, i.e. deletable with every suite green. Same seam treatment for
+  `removeCaptain` (`admin.removeCaptain.beforeTx`).
+- **`undoLastSale`'s roster delete is a `deleteMany` + count check** — two
+  racing Undos (or Undo racing an abort) made the loser die on a raw P2025,
+  blowing that admin's panel to the error page mid-dispute. First write in
+  the tx, so a zero count safely RETURNS a typed refusal (nothing written).
+- **`saveRegistration`'s draft-night lock now covers all three doors** while
+  the auction is IN_PROGRESS/PAUSED: type flips (as before), a WITHDRAWN
+  PLAYER re-activating by direct POST (the /me UI blocked it; a replayed POST
+  didn't — self-serve pool injection between lots), and the MMR field, which
+  is FROZEN (not refused — role/hero/note edits stay useful to bidding
+  captains) with a toast note, because getDraftState re-reads it every poll
+  into the pool sort + resolveStalledNomination's top-MMR auto-pick, and the
+  admin Edit-MMR counter-control is deliberately hidden once the draft starts.
+- **Coverage debts named by the audit, paid**: withdrawSignup's on-the-block
+  refusal (an inline early-return NO test exercised — the pure-gate unit test
+  its comment pointed at covers a branch the admin path never runs; comment
+  corrected) and the void-lot guard's STATUS half (only the type half was
+  pinned; deleting `nomReg.status === "ACTIVE"` passed the whole suite).
+- The admin auto-nominate button no longer renders while PAUSED (it could
+  only walk the admin through the confirm into "Draft is not live").
+
+**Deferred deliberately — two-admin sub-second races, all recoverable via
+abortDraft pre-results, none reachable with one admin driving draft night**
+(don't rediscover these as new): captain-management actions (add/remove/
+transfer/randomize/setDraftSettings) hold only read-time draft-status locks
+against a CONCURRENT startDraft; two concurrent addCaptains can mint a
+duplicate draftOrder (the real fix is `@@unique([seasonId, draftOrder])` — a
+schema change deliberately not shipped hours before a live draft);
+setSeasonPhase's claim can't see a same-value DRAFT rival (startDraft writes
+status=DRAFT blindly, so a concurrent flip out of DRAFT still matches its
+WHERE); signFreeAgent/releasePlayer check draft-COMPLETE read-time only
+against a concurrent undoLastSale reopen.
 
 ## Good next steps
 

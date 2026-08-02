@@ -118,6 +118,7 @@ function forfeitScore(bestOf: number): number {
   return Math.floor(bestOf / 2) + 1;
 }
 class ResultsLandedError extends Error {}
+class DraftAlreadyStartedError extends Error {}
 
 /**
  * Copy for "the season is COMPLETE, so a playoff result can't advance anything".
@@ -597,6 +598,9 @@ export async function removeCaptain(
       OR: [{ homeTeamId: teamId }, { awayTeamId: teamId }],
     },
   });
+  // Seam: the rival is an auto-sync import completing a match between the
+  // read-time results check above and the transaction below.
+  await raceHook("admin.removeCaptain.beforeTx");
   try {
     await prisma.$transaction(async (tx) => {
       // Re-assert INSIDE the transaction: auto-sync imports games from any
@@ -1103,6 +1107,9 @@ export async function startDraft(
     (season.teamSize - 1) * DEFAULTS.MIN_BID,
   );
 
+  // Seam: the rival is an auto-sync import completing a match between the
+  // read-time results check above and the transaction below.
+  await raceHook("admin.startDraft.beforeTx");
   try {
     await prisma.$transaction(async (tx) => {
       // Re-assert INSIDE the transaction: auto-sync imports games from any
@@ -1131,32 +1138,61 @@ export async function startDraft(
       const nominationEndsAt = new Date(
         Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
       );
-      await tx.draft.upsert({
-        where: { seasonId: season.id },
-        create: {
-          seasonId: season.id,
-          status: DRAFT_STATUS.IN_PROGRESS,
-          nominatorTeamId: teams[0].id,
-          nominationIndex: 0,
-          nominationEndsAt,
-        },
-        update: {
-          status: DRAFT_STATUS.IN_PROGRESS,
-          nominatorTeamId: teams[0].id,
-          nominationIndex: 0,
-          nominatedUserId: null,
-          currentBid: 0,
-          currentBidTeamId: null,
-          bidEndsAt: null,
-          nominationEndsAt,
-        },
-      });
+      // The draft-row write IS the start's one-shot claim. The NOT_STARTED
+      // check above is read-time only, so two overlapping Starts (a co-admin,
+      // or a re-click racing the first request) both passed it — and the
+      // loser's upsert blindly restamped the just-started draft row: fresh
+      // nomination clock, rotation reset to teams[0], and a second "draft is
+      // live" Discord announcement. Split on the row's existence: CREATE
+      // loses on the seasonId unique (P2002), UPDATE re-asserts NOT_STARTED
+      // in its WHERE. Either loss THROWS so the budget and phase writes
+      // above roll back (a return would commit them).
+      if (existingDraft) {
+        const claimed = await tx.draft.updateMany({
+          where: { seasonId: season.id, status: DRAFT_STATUS.NOT_STARTED },
+          data: {
+            status: DRAFT_STATUS.IN_PROGRESS,
+            nominatorTeamId: teams[0].id,
+            nominationIndex: 0,
+            nominatedUserId: null,
+            currentBid: 0,
+            currentBidTeamId: null,
+            bidEndsAt: null,
+            nominationEndsAt,
+          },
+        });
+        if (claimed.count === 0) throw new DraftAlreadyStartedError();
+      } else {
+        try {
+          await tx.draft.create({
+            data: {
+              seasonId: season.id,
+              status: DRAFT_STATUS.IN_PROGRESS,
+              nominatorTeamId: teams[0].id,
+              nominationIndex: 0,
+              nominationEndsAt,
+            },
+          });
+        } catch (e) {
+          // Thrown straight out — a P2002 aborts the transaction anyway, and
+          // the typed error is what turns it into a clean toast.
+          if ((e as { code?: string }).code === "P2002")
+            throw new DraftAlreadyStartedError();
+          throw e;
+        }
+      }
     });
   } catch (e) {
     if (e instanceof ResultsLandedError) {
       return {
         error:
           "A result landed while you were starting the draft — nothing was changed. Reload and check the schedule.",
+      };
+    }
+    if (e instanceof DraftAlreadyStartedError) {
+      return {
+        error:
+          "Another Start just beat this one — the draft is already live. Nothing was changed twice.",
       };
     }
     throw e;

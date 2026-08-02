@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   abortDraft,
@@ -12,7 +12,9 @@ import {
   undoLastSale,
 } from "@/lib/draft-service";
 import { DRAFT_STATUS } from "@/lib/constants";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
+  ON_POSTGRES,
   expireClock,
   expireNominationClock,
   makeCaptain,
@@ -741,4 +743,149 @@ describe("draft — a mid-lot type flip voids the sale instead of rostering a st
     expect(draft.nominatedUserId).toBeNull(); // lot cleared…
     expect(draft.nominatorTeamId).toBe(capB.team.id); // …and the clock moved on
   });
+
+  it("no charge, no roster row, rotation advances, when the nominee WITHDREW mid-lot", async () => {
+    // The STATUS half of the same void guard (`nomReg.status === "ACTIVE"`).
+    // Reachable cross-path: both withdraw paths check on-the-block only at
+    // read time, so a nomination committing in their gate→write gap leaves a
+    // WITHDRAWN player as the live lot. Without this test, deleting the
+    // status conjunct passed the whole suite — only the type half was pinned.
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Leaver", 4000);
+    await makePlayer(season.id, "Rest", 3000);
+    await startDraftState(season.id);
+
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5)).ok,
+    ).toBe(true);
+    await prisma.registration.update({
+      where: { seasonId_userId: { seasonId: season.id, userId: star.id } },
+      data: { status: "WITHDRAWN" },
+    });
+
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+
+    const teamA = await prisma.team.findUniqueOrThrow({
+      where: { id: capA.team.id },
+      include: { members: true },
+    });
+    expect(teamA.budget).toBe(100); // never charged
+    expect(teamA.members.some((m) => m.userId === star.id)).toBe(false);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatedUserId).toBeNull(); // lot cleared…
+    expect(draft.nominatorTeamId).toBe(capB.team.id); // …and the clock moved on
+  });
 });
+
+describe("undoLastSale — two racing undos stay a toast, never a crash", () => {
+  it("exactly one undo wins; the loser gets a typed refusal and the refund lands once", async () => {
+    // The loser used to die on a raw P2025 (delete-by-unique on a row the
+    // winner already removed), which blew the admin panel to the error page
+    // mid-dispute. deleteMany + count makes it a typed refusal. On SQLite the
+    // pair serializes (the loser sees "No sale to undo"); Postgres is where
+    // the P2025 path was reachable — `npm run test:pg` runs this for real.
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Disputed", 4000);
+    await makePlayer(season.id, "Rest", 3000);
+    await startDraftState(season.id);
+    const admin = sessionFor(await makeUser("UndoAdmin", "ADMIN"));
+
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5)).ok,
+    ).toBe(true);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+
+    // Must RESOLVE — an unhandled P2025 would reject the whole race.
+    const res = await raceN(2, () => undoLastSale(season.id, admin));
+    expect(res.filter((r) => r.ok)).toHaveLength(1);
+    const loser = res.find((r) => !r.ok) as { ok: false; error: string };
+    expect(loser.error).toMatch(/already undone|No sale to undo/);
+
+    // Refunded exactly once.
+    const teamA = await prisma.team.findUniqueOrThrow({
+      where: { id: capA.team.id },
+    });
+    expect(teamA.budget).toBe(100);
+    expect(
+      await prisma.teamMember.count({
+        where: { seasonId: season.id, userId: star.id },
+      }),
+    ).toBe(0);
+  });
+});
+
+describe.skipIf(!ON_POSTGRES)(
+  "nominatePlayer — the claim re-asserts the TURN it authorized against",
+  () => {
+    afterEach(() => setRaceHook(null));
+
+    it("a nomination in flight while undoLastSale repoints the rotation is refused, not landed out of turn", async () => {
+      // The one rival that moves the turn while leaving the lot EMPTY:
+      // undoLastSale repoints nominatorTeamId to the refunded buyer with a
+      // fresh clock. `nominatedUserId: null` alone still matched, so the
+      // stale nomination opened a lot out of turn and the buyer the undo
+      // promised the next nomination never got it. Postgres-only: the rival
+      // commits on a second connection while this transaction is open.
+      const season = await makeSeason({ teamSize: 3 });
+      const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+      const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+      const sold = await makePlayer(season.id, "SoldFirst", 4000);
+      const next = await makePlayer(season.id, "NextUp", 3500);
+      await makePlayer(season.id, "Rest", 3000);
+      await startDraftState(season.id);
+      const admin = sessionFor(await makeUser("TurnAdmin", "ADMIN"));
+
+      // A sale to team A, so the rotation moves on to team B and Undo has a
+      // target to refund.
+      expect(
+        (await nominatePlayer(season.id, sessionFor(capA.user), sold.id, 5)).ok,
+      ).toBe(true);
+      await expireClock(season.id);
+      expect(await resolveExpiredNomination(season.id)).toBe(true);
+      const before = await prisma.draft.findUniqueOrThrow({
+        where: { seasonId: season.id },
+      });
+      expect(before.nominatorTeamId).toBe(capB.team.id);
+
+      let fired = false;
+      setRaceHook(
+        onceAt("draft.nominatePlayer.beforeClaim", async () => {
+          fired = true;
+          const undone = await undoLastSale(season.id, admin);
+          if (!undone.ok) throw new Error(`rival undo failed: ${undone.error}`);
+        }),
+      );
+
+      const res = await nominatePlayer(
+        season.id,
+        sessionFor(capB.user),
+        next.id,
+        1,
+      );
+
+      expect(fired).toBe(true);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/draft just changed/i);
+
+      const draft = await prisma.draft.findUniqueOrThrow({
+        where: { seasonId: season.id },
+      });
+      // The undo's repoint stands: no lot open, team A (the refunded buyer)
+      // holds the make-good nomination.
+      expect(draft.nominatedUserId).toBeNull();
+      expect(draft.nominatorTeamId).toBe(capA.team.id);
+      // And the refused nomination left no opening-bid audit row behind.
+      expect(
+        await prisma.bid.count({ where: { seasonId: season.id, userId: next.id } }),
+      ).toBe(0);
+    });
+  },
+);
