@@ -158,7 +158,17 @@ export function DangerSubmit({
               <button
                 type="submit"
                 disabled={!armed || pending}
-                onClick={() => setOpen(false)}
+                onClick={(e) => {
+                  // Dispatch while the submitter is still mounted. Closing the
+                  // dialog first removes the button before Chrome's default
+                  // submit behavior runs, so ActionForm never sees onSubmit.
+                  e.preventDefault();
+                  const form = e.currentTarget.form;
+                  if (!form) return;
+                  form.requestSubmit(e.currentTarget);
+                  setOpen(false);
+                  setTyped("");
+                }}
                 className={buttonClasses("danger", "md")}
               >
                 {children}

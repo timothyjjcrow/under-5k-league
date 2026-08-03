@@ -102,4 +102,12 @@ describe("the DangerSubmit mechanism itself", () => {
     const clears = danger.match(/setTyped\(""\)/g) ?? [];
     expect(clears.length).toBeGreaterThanOrEqual(3); // open, cancel, escape
   });
+
+  it("does not unmount its submit button during the click event", () => {
+    // Removing the button in onClick cancels Chrome's default form submission
+    // before ActionForm can dispatch the server action. The dialog closes only
+    // after requestSubmit synchronously delivers the form's submit event.
+    expect(danger).not.toContain('onClick={() => setOpen(false)}');
+    expect(danger).toContain("form.requestSubmit(e.currentTarget)");
+  });
 });

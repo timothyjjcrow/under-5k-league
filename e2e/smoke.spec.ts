@@ -70,6 +70,40 @@ test("admin sees the league control panel", async ({ page }) => {
   await expect(page.getByText("Create a new season")).toBeVisible();
 });
 
+test("typed confirmation actually removes a designated captain", async ({
+  page,
+}) => {
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.goto(
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+  );
+
+  const dendiRow = page.locator(".max-h-80 div.rounded-lg", {
+    hasText: "Dendi",
+  });
+  await dendiRow.getByRole("button", { name: "make captain" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Captains (1)" }),
+  ).toBeVisible();
+
+  const captainSection = page
+    .getByRole("heading", { name: "Captains (1)" })
+    .locator("..");
+  await captainSection
+    .getByRole("button", { name: "remove", exact: true })
+    .click();
+  const confirmation = page.getByRole("dialog");
+  await confirmation.locator("input").fill("Dendi's Team");
+  await confirmation
+    .getByRole("button", { name: "remove", exact: true })
+    .click();
+
+  await expect(
+    page.getByRole("heading", { name: "Captains (0)" }),
+  ).toBeVisible();
+  await expect(page.getByText("Dendi's Team", { exact: true })).toHaveCount(0);
+});
+
 test("non-admin is redirected away from admin", async ({ page }) => {
   const steamId = "7656119" + String(Date.now() + 1).slice(-10);
   await page.goto(
