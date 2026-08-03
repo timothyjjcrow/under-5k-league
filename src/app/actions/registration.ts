@@ -41,6 +41,115 @@ function refresh() {
   revalidatePath("/", "layout");
 }
 
+const clearedDraftConfirmation = {
+  draftConfirmedRevision: null,
+  draftConfirmedAt: null,
+  draftConfirmedFor: null,
+} as const;
+
+/**
+ * A signed-up full player acknowledges the exact draft schedule rendered on
+ * /me. Both hidden values are untrusted: identity, registration state and the
+ * current schedule are re-read here, and the write also claims the season
+ * revision so a stale tab cannot silently confirm a time the player never saw.
+ */
+export async function confirmDraftReadiness(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+
+  const revisionRaw = str(formData, "draftRevision").trim();
+  const draftAtRaw = str(formData, "draftAtTs").trim();
+  const expectedRevision = Number(revisionRaw);
+  const expectedDraftAt = Number(draftAtRaw);
+  if (
+    !/^\d+$/.test(revisionRaw) ||
+    !Number.isSafeInteger(expectedRevision) ||
+    expectedRevision < 0 ||
+    !/^\d+$/.test(draftAtRaw) ||
+    !Number.isSafeInteger(expectedDraftAt) ||
+    expectedDraftAt <= 0
+  ) {
+    return { error: "Reload the page and review the draft time again." };
+  }
+
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  if (season.status !== "SIGNUPS") {
+    return { error: "Draft confirmations are closed for this season." };
+  }
+  if (!season.draftAt) {
+    return { error: "The draft night has not been scheduled yet." };
+  }
+  if (
+    season.draftRevision !== expectedRevision ||
+    season.draftAt.getTime() !== expectedDraftAt
+  ) {
+    return {
+      error: "The draft time changed — reload and confirm the updated time.",
+    };
+  }
+
+  await raceHook("registration.confirmDraftReadiness.beforeWrite");
+  const confirmedAt = new Date();
+  const confirmed = await prisma.registration.updateMany({
+    where: {
+      seasonId: season.id,
+      userId: user.id,
+      status: REGISTRATION_STATUS.ACTIVE,
+      type: REGISTRATION_TYPE.PLAYER,
+      // A single SQL statement re-asserts the schedule after the reads above.
+      // If the admin moved it from another request, zero rows are updated.
+      season: {
+        draftRevision: expectedRevision,
+        draftAt: new Date(expectedDraftAt),
+        status: "SIGNUPS",
+        isActive: true,
+      },
+    },
+    data: {
+      draftConfirmedRevision: expectedRevision,
+      draftConfirmedAt: confirmedAt,
+      draftConfirmedFor: new Date(expectedDraftAt),
+    },
+  });
+  if (confirmed.count === 0) {
+    return {
+      error:
+        "Your signup or the draft time just changed — reload and review it again.",
+    };
+  }
+
+  // A schedule update that lands immediately after the guarded write makes
+  // this confirmation honestly stale. Detect it before claiming success; the
+  // stored old revision is retained so /me and admin can explain what changed.
+  const current = await prisma.season.findUnique({
+    where: { id: season.id },
+    select: { draftRevision: true, draftAt: true, status: true },
+  });
+  if (
+    current?.status !== "SIGNUPS" ||
+    current.draftRevision !== expectedRevision ||
+    current.draftAt?.getTime() !== expectedDraftAt
+  ) {
+    refresh();
+    return {
+      error: "The draft time changed while you confirmed — review it again.",
+    };
+  }
+
+  refresh();
+  return {
+    message: "Ready for draft confirmed — thanks for checking in!",
+  };
+}
+
 /** Join the active season (or update your existing signup: MMR, type, captain). */
 export async function saveRegistration(
   _prev: ActionResult,
@@ -239,6 +348,12 @@ export async function saveRegistration(
   const statusClaim = medalIneligible
     ? REGISTRATION_STATUS.ACTIVE
     : { not: REGISTRATION_STATUS.REMOVED };
+  // A type change or a return from WITHDRAWN is a new season commitment. Keep
+  // confirmations through ordinary profile edits, but never let a former
+  // standin/rejoined player inherit an old "ready" badge.
+  const resetDraftConfirmation =
+    !!existing &&
+    (existing.type !== type || existing.status !== REGISTRATION_STATUS.ACTIVE);
   // Seam: the rival is this player's own withdrawal from another tab, landing
   // between the gate's reads and this write.
   await raceHook("registration.saveRegistration.beforeWrite");
@@ -257,6 +372,7 @@ export async function saveRegistration(
       statement,
       captainNote,
       status: "ACTIVE",
+      ...(resetDraftConfirmation ? clearedDraftConfirmation : {}),
     },
   });
   // Zero rows with a row on file means the claim refused it — the signup is
@@ -299,6 +415,10 @@ export async function saveRegistration(
         statement,
         captainNote,
         status: "ACTIVE",
+        // This branch means another first-signup request created the row in
+        // the gap. It cannot legitimately carry a confirmation from the page
+        // this request rendered before that row existed.
+        ...clearedDraftConfirmation,
       },
     });
   }
@@ -446,7 +566,10 @@ export async function leaveLeague(
         // and the caller can't be told they withdrew when nothing moved.
         const withdrawn = await tx.registration.updateMany({
           where: { seasonId: season.id, userId: user.id, status: "ACTIVE" },
-          data: { status: "WITHDRAWN" },
+          data: {
+            status: "WITHDRAWN",
+            ...clearedDraftConfirmation,
+          },
         });
         if (withdrawn.count === 0) throw new Error("NOT_ACTIVE");
       },

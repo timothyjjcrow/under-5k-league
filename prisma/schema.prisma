@@ -103,6 +103,10 @@ model Season {
   firstMatchNight DateTime? // week 1's match time; later weeks (incl. playoffs) are +7d each
   // When the live auction happens — announced with countdowns during SIGNUPS.
   draftAt         DateTime?
+  // Incremented whenever draftAt actually changes. Player acknowledgements
+  // are tied to this revision so moving the draft automatically makes every
+  // old confirmation stale — including the change-away-then-back edge case.
+  draftRevision   Int       @default(0)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -127,6 +131,11 @@ model Registration {
   statement      String   @default("") // what the player wants from the league
   captainNote    String   @default("") // message to captains/drafters
   status         String   @default("ACTIVE") // ACTIVE | WITHDRAWN (self, reversible) | REMOVED (admin, sticky)
+  // Acknowledgement of the current Season.draftAt. The revision is the
+  // validity check; the two dates make the admin/player copy auditable.
+  draftConfirmedRevision Int?
+  draftConfirmedAt       DateTime?
+  draftConfirmedFor      DateTime?
   createdAt      DateTime @default(now())
 
   season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)

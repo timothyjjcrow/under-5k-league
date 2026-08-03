@@ -5,6 +5,7 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import {
   saveRegistration,
+  confirmDraftReadiness,
   leaveLeague,
   updateDotaAccount,
   refreshRank,
@@ -25,7 +26,8 @@ import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
-import { HARD_MMR_CEILING } from "@/lib/constants";
+import { HARD_MMR_CEILING, REGISTRATION_TYPE } from "@/lib/constants";
+import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
 import {
   formatMmrRange,
   mmrRangeForRankTier,
@@ -237,6 +239,9 @@ export default async function MePage({
   const playerLocked =
     !signupsOpen && !(isRegistered && reg?.type === "PLAYER");
   const myRoles = parseRoles(form?.roles);
+  const myDraftReadiness = reg
+    ? draftReadiness(reg, season?.draftRevision ?? 0)
+    : DRAFT_READINESS.AWAITING;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -599,6 +604,102 @@ export default async function MePage({
                   passedLabel={DRAFT_PASSED_LABEL}
                 />
               </p>
+            ) : null}
+            {season.draftAt &&
+            signupsOpen &&
+            isRegistered &&
+            reg?.type === REGISTRATION_TYPE.PLAYER ? (
+              <div
+                className={
+                  myDraftReadiness === DRAFT_READINESS.READY
+                    ? "rounded-lg border border-success/35 bg-success/10 px-4 py-3"
+                    : "rounded-lg border border-accent/35 bg-accent/10 px-4 py-3"
+                }
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="font-medium text-fg">Draft commitment</h4>
+                      {myDraftReadiness === DRAFT_READINESS.READY ? (
+                        <Badge tone="success">Ready for draft ✓</Badge>
+                      ) : myDraftReadiness === DRAFT_READINESS.STALE ? (
+                        <Badge tone="accent">Reconfirmation required</Badge>
+                      ) : (
+                        <Badge tone="accent">Confirmation needed</Badge>
+                      )}
+                    </div>
+                    {myDraftReadiness === DRAFT_READINESS.READY ? (
+                      <p className="mt-1 text-sm text-muted">
+                        You&apos;ve seen the draft time and confirmed you&apos;re
+                        still committed to playing this season.
+                        {reg.draftConfirmedAt ? (
+                          <>
+                            {" "}Confirmed{" "}
+                            <LocalTime
+                              ts={reg.draftConfirmedAt.getTime()}
+                              variant="short"
+                              initial={formatMatchTime(
+                                reg.draftConfirmedAt,
+                                "short",
+                              )}
+                            />
+                            .
+                          </>
+                        ) : null}
+                      </p>
+                    ) : (
+                      <>
+                        <p className="mt-1 text-sm text-muted">
+                          {myDraftReadiness === DRAFT_READINESS.STALE
+                            ? "The draft time changed after your last confirmation. Review the current time above and confirm again."
+                            : "Confirm that you have seen the draft time above and are still committed to playing this season."}
+                        </p>
+                        {myDraftReadiness === DRAFT_READINESS.STALE &&
+                        reg.draftConfirmedFor ? (
+                          <p className="mt-1 text-xs text-muted">
+                            Previously confirmed for{" "}
+                            <LocalTime
+                              ts={reg.draftConfirmedFor.getTime()}
+                              variant="full"
+                              initial={formatMatchTime(
+                                reg.draftConfirmedFor,
+                                "full",
+                              )}
+                            />
+                            .
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                  {myDraftReadiness !== DRAFT_READINESS.READY ? (
+                    <ActionForm
+                      action={confirmDraftReadiness}
+                      hidden={{
+                        draftRevision: String(season.draftRevision),
+                        draftAtTs: String(season.draftAt.getTime()),
+                      }}
+                    >
+                      <SubmitButton
+                        variant={
+                          myDraftReadiness === DRAFT_READINESS.STALE
+                            ? "accent"
+                            : "primary"
+                        }
+                        size="sm"
+                      >
+                        {myDraftReadiness === DRAFT_READINESS.STALE
+                          ? "Confirm updated draft time"
+                          : "Confirm I’m ready for draft"}
+                      </SubmitButton>
+                    </ActionForm>
+                  ) : null}
+                </div>
+                <p className="mt-2 text-xs text-muted">
+                  If your plans change later, withdraw your signup below or
+                  message an admin.
+                </p>
+              </div>
             ) : null}
             {member ? (
               <Link

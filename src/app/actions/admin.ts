@@ -122,6 +122,12 @@ function forfeitScore(bestOf: number): number {
 class ResultsLandedError extends Error {}
 class DraftAlreadyStartedError extends Error {}
 
+const clearedDraftConfirmation = {
+  draftConfirmedRevision: null,
+  draftConfirmedAt: null,
+  draftConfirmedFor: null,
+} as const;
+
 /**
  * Copy for "the season is COMPLETE, so a playoff result can't advance anything".
  *
@@ -876,7 +882,10 @@ export async function withdrawSignup(
         // REMOVED over a concurrent self-withdrawal or reinstate.
         const claimed = await tx.registration.updateMany({
           where: { id: reg.id, status: REGISTRATION_STATUS.ACTIVE },
-          data: { status: REGISTRATION_STATUS.REMOVED },
+          data: {
+            status: REGISTRATION_STATUS.REMOVED,
+            ...clearedDraftConfirmation,
+          },
         });
         if (claimed.count === 0) throw new Error("STATUS_CHANGED");
       },
@@ -937,7 +946,10 @@ export async function reinstateSignup(
   }
   await prisma.registration.update({
     where: { id: reg.id },
-    data: { status: REGISTRATION_STATUS.ACTIVE },
+    data: {
+      status: REGISTRATION_STATUS.ACTIVE,
+      ...clearedDraftConfirmation,
+    },
   });
   refresh();
   // Advisory only, never a gate (the operator's-call stance): the flag flow
@@ -4049,18 +4061,28 @@ export async function setDraftNight(
   const when = localDate(formData, "draftAt", "draftAtTs");
   if (raw && !when) return { error: "Invalid draft night" };
 
-  // A no-op resubmit (same timestamp) must not re-announce to Discord.
+  // A no-op resubmit (same timestamp) must neither re-announce to Discord nor
+  // invalidate confirmations. A real change bumps the revision instead of
+  // deleting acknowledgements, so both /me and admin can identify stale rows.
   const changed = (when?.getTime() ?? null) !== (season.draftAt?.getTime() ?? null);
   await prisma.season.update({
     where: { id: season.id },
-    data: { draftAt: when },
+    data: changed
+      ? { draftAt: when, draftRevision: { increment: 1 } }
+      : { draftAt: when },
   });
   // Best-effort announcement — the countdown surfaces update either way.
   if (when && changed) {
     await sendDiscordMessage(draftScheduledMessage(season.name, when.getTime()));
   }
   refresh();
-  return { message: when ? "Draft night set 🗓️" : "Draft night cleared" };
+  return {
+    message: when
+      ? changed && season.draftAt
+        ? "Draft night updated — players need to confirm the new time"
+        : "Draft night set 🗓️"
+      : "Draft night cleared",
+  };
 }
 
 /**
@@ -4124,7 +4146,10 @@ export async function promoteStandinToPlayer(
       status: REGISTRATION_STATUS.ACTIVE,
       type: REGISTRATION_TYPE.STANDIN,
     },
-    data: { type: REGISTRATION_TYPE.PLAYER },
+    data: {
+      type: REGISTRATION_TYPE.PLAYER,
+      ...clearedDraftConfirmation,
+    },
   });
   if (promoted.count === 0) {
     return {

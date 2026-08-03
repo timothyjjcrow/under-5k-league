@@ -70,6 +70,69 @@ test("admin sees the league control panel", async ({ page }) => {
   await expect(page.getByText("Create a new season")).toBeVisible();
 });
 
+test("a player confirms the draft schedule and admin sees the readiness change", async ({
+  page,
+  browser,
+}) => {
+  const name = `Draft Ready ${Date.now()}`;
+  const steamId = "7656118" + String(Date.now()).slice(-10);
+
+  // Schedule draft night from the real admin form. The datetime-local helper
+  // converts this browser-local value to the epoch the confirmation action
+  // later binds to its revision.
+  await page.goto(
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+  );
+  await page.getByLabel(/Draft night/).fill("2026-08-15T18:00");
+  await page.getByRole("button", { name: "Set draft night" }).click();
+  await expect(page.getByText(/0\/\d+ ready/)).toBeVisible();
+
+  const playerContext = await browser.newContext();
+  const playerPage = await playerContext.newPage();
+  await playerPage.goto(
+    `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/me`,
+  );
+  await playerPage.getByLabel("Dota 2 MMR").fill("3100");
+  await playerPage
+    .getByRole("button", { name: /Join the season|Update signup/ })
+    .click();
+  await expect(playerPage.getByText("Playing").first()).toBeVisible();
+  await expect(
+    playerPage.getByRole("button", { name: "Confirm I’m ready for draft" }),
+  ).toBeVisible();
+
+  await playerPage
+    .getByRole("button", { name: "Confirm I’m ready for draft" })
+    .click();
+  await expect(
+    playerPage.getByText("Ready for draft ✓", { exact: true }),
+  ).toBeVisible();
+
+  await page.reload();
+  const playerRow = page
+    .locator(".max-h-80 div.rounded-lg", { hasText: name })
+    .first();
+  await expect(playerRow.getByText("ready ✓", { exact: true })).toBeVisible();
+
+  // Moving the date must invalidate the old acknowledgement rather than
+  // leaving a misleading permanent ready flag.
+  await page.getByLabel(/Draft night/).fill("2026-08-15T19:00");
+  await page.getByRole("button", { name: "Update draft night" }).click();
+  await expect(
+    page
+      .locator(".max-h-80 div.rounded-lg", { hasText: name })
+      .first()
+      .getByText("reconfirm", { exact: true }),
+  ).toBeVisible();
+
+  await playerPage.reload();
+  await expect(playerPage.getByText("Reconfirmation required")).toBeVisible();
+  await expect(
+    playerPage.getByRole("button", { name: "Confirm updated draft time" }),
+  ).toBeVisible();
+  await playerContext.close();
+});
+
 test("typed confirmation actually removes a designated captain", async ({
   page,
 }) => {

@@ -118,6 +118,11 @@ import {
   type PingHealth,
 } from "@/lib/discord-roles";
 import { membershipChipView, signupFlags } from "@/lib/signup-readiness";
+import {
+  DRAFT_READINESS,
+  draftReadiness,
+  draftReadinessCounts,
+} from "@/lib/draft-readiness";
 import { DiscordTag } from "@/components/discord-tag";
 import {
   pickBracketSize,
@@ -966,6 +971,17 @@ function CaptainControls({
   // Captains are ACTIVE PLAYER registrations too (addCaptain requires it), so
   // their row is in `data.players` — it is only filtered out of the list above.
   const captainReg = new Map(data.players.map((p) => [p.userId, p]));
+  const confirmationCounts = draftReadinessCounts(
+    data.players,
+    season.draftRevision,
+  );
+  const awaitingConfirmation = data.players.filter(
+    (p) =>
+      draftReadiness(p, season.draftRevision) === DRAFT_READINESS.AWAITING,
+  );
+  const staleConfirmation = data.players.filter(
+    (p) => draftReadiness(p, season.draftRevision) === DRAFT_READINESS.STALE,
+  );
   const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
   const collateral = data.collateral;
 
@@ -1017,7 +1033,10 @@ function CaptainControls({
     seatNote +
     " Captains are locked once the auction begins — the way back is Abort draft," +
     " which returns every drafted player and refund and keeps the captains, but" +
-    " is refused once any result has been recorded.";
+    " is refused once any result has been recorded." +
+    (season.draftAt
+      ? ` Draft confirmations: ${confirmationCounts.ready} of ${confirmationCounts.total} ready; ${confirmationCounts.awaiting} awaiting${confirmationCounts.stale ? `; ${confirmationCounts.stale} must reconfirm` : ""}. This is a warning only and does not block the draft.`
+      : " No draft night is scheduled, so players have not been asked to confirm one.");
   const startDisabled =
     data.teams.length < 2 ||
     (season.status !== SEASON_STATUS.SIGNUPS &&
@@ -1206,6 +1225,54 @@ function CaptainControls({
             ) : null}
           </ActionForm>
         ) : null}
+        {season.draftAt ? (
+          <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 md:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-medium text-fg">
+                  Draft confirmations
+                </h4>
+                <p className="mt-0.5 text-xs text-muted">
+                  Player acknowledgements are advisory—the draft can still be
+                  started if someone has not responded.
+                </p>
+              </div>
+              <Badge
+                tone={
+                  confirmationCounts.ready === confirmationCounts.total &&
+                  confirmationCounts.total > 0
+                    ? "success"
+                    : "accent"
+                }
+              >
+                {confirmationCounts.ready}/{confirmationCounts.total} ready
+              </Badge>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              <Badge tone="success">{confirmationCounts.ready} ready</Badge>
+              <Badge>{confirmationCounts.awaiting} awaiting</Badge>
+              {confirmationCounts.stale > 0 ? (
+                <Badge tone="accent">
+                  {confirmationCounts.stale} need reconfirmation
+                </Badge>
+              ) : null}
+            </div>
+            {awaitingConfirmation.length > 0 ? (
+              <p className="mt-2 text-xs text-muted">
+                <span className="font-medium text-fg">Waiting on:</span>{" "}
+                {awaitingConfirmation.map((p) => p.user.name).join(", ")}
+              </p>
+            ) : null}
+            {staleConfirmation.length > 0 ? (
+              <p className="mt-1 text-xs text-muted">
+                <span className="font-medium text-accent">
+                  Must reconfirm:
+                </span>{" "}
+                {staleConfirmation.map((p) => p.user.name).join(", ")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {season.status === "SIGNUPS" && data.teams.length >= 2 ? (
           <p className="text-xs text-muted md:col-span-2">
             {(() => {
@@ -1311,6 +1378,14 @@ function CaptainControls({
                         </ActionForm>
                       ) : null}
                     </div>
+                    {captainReg.get(t.captainId) ? (
+                      <div className="mt-1.5">
+                        <DraftReadinessBadge
+                          reg={captainReg.get(t.captainId)!}
+                          season={season}
+                        />
+                      </div>
+                    ) : null}
                     <details className="mt-1.5">
                       <summary className="cursor-pointer text-xs text-muted hover:text-fg">
                         ✎ Rename team
@@ -1651,7 +1726,11 @@ function CaptainControls({
                       </ActionForm>
                     </span>
                   </div>
-                  <SignupRowMeta reg={p} sweep={membershipSweep} />
+                  <SignupRowMeta
+                    reg={p}
+                    sweep={membershipSweep}
+                    season={season}
+                  />
                   {/* Same window as the captain edit above: the number only
                       feeds budgets until Start draft, so the gate is the
                       draft, not the SIGNUPS phase. */}
@@ -1743,7 +1822,11 @@ function CaptainControls({
                           </SubmitButton>
                         </ActionForm>
                       </div>
-                      <SignupRowMeta reg={s} sweep={membershipSweep} />
+                      <SignupRowMeta
+                        reg={s}
+                        sweep={membershipSweep}
+                        season={season}
+                      />
                       {/* Standins register in every phase, so their MMR edit
                           can't be draft-gated like the players' above — it
                           informs captains choosing cover all season. */}
@@ -3308,6 +3391,50 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   );
 }
 
+function DraftReadinessBadge({
+  reg,
+  season,
+}: {
+  reg: AdminData["players"][number];
+  season: Season;
+}) {
+  if (!season.draftAt || reg.type !== REGISTRATION_TYPE.PLAYER) return null;
+  const state = draftReadiness(reg, season.draftRevision);
+  if (state === DRAFT_READINESS.READY) {
+    return (
+      <Badge
+        tone="success"
+        title={
+          reg.draftConfirmedAt
+            ? `Confirmed ${formatMatchTime(reg.draftConfirmedAt, "full")} for the current draft schedule.`
+            : "Confirmed for the current draft schedule."
+        }
+      >
+        ready ✓
+      </Badge>
+    );
+  }
+  if (state === DRAFT_READINESS.STALE) {
+    return (
+      <Badge
+        tone="accent"
+        title={
+          reg.draftConfirmedFor
+            ? `They confirmed ${formatMatchTime(reg.draftConfirmedFor, "full")}, but the draft schedule changed.`
+            : "They confirmed an earlier draft schedule and need to review the new time."
+        }
+      >
+        reconfirm
+      </Badge>
+    );
+  }
+  return (
+    <Badge title="They have not yet acknowledged the current draft time.">
+      awaiting draft confirmation
+    </Badge>
+  );
+}
+
 /**
  * The readiness line under each row of the signup-moderation lists — the
  * prune pass the panel exists for: is this signup reachable on Discord,
@@ -3324,9 +3451,11 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
 function SignupRowMeta({
   reg,
   sweep,
+  season,
 }: {
   reg: AdminData["players"][number];
   sweep: Promise<Map<string, GuildMembership>> | null;
+  season: Season;
 }) {
   const flags = signupFlags({
     mmr: reg.mmr,
@@ -3338,6 +3467,7 @@ function SignupRowMeta({
   });
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      <DraftReadinessBadge reg={reg} season={season} />
       {reg.user.discordId ? (
         <>
           {/* Verified ✓ = proven OWNERSHIP of the handle (the OAuth link) —
