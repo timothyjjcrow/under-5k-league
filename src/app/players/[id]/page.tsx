@@ -488,6 +488,8 @@ export default async function PlayerProfilePage({
   const activityVisible =
     !!latestLeagueGame || !!recentInhouse || !!pubActivityNow;
   const newSignupVisible = !!activeReg && gameRows.length === 0;
+  const signupSnapshotVisible =
+    !!activeReg && (newSignupVisible || signupCardVisible);
 
   // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
   // game (older imports may lack them), so average only over games that have it.
@@ -964,113 +966,130 @@ export default async function PlayerProfilePage({
         </section>
       ) : null}
 
-      {activityVisible || newSignupVisible || signupCardVisible || heroCardVisible || heldRecords.length > 0 || connectionsVisible ? (
+      {activityVisible || signupSnapshotVisible || heroCardVisible || heldRecords.length > 0 || connectionsVisible ? (
         <section className="space-y-3">
           <SectionTitle>Player profile</SectionTitle>
-          <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
-            {activityVisible ? (
-              <Card className="min-w-0">
+          <div className="grid gap-6 lg:grid-cols-2">
+            {activityVisible || signupSnapshotVisible ? (
+              <Card
+                className={cn(
+                  "min-w-0",
+                  activityVisible && signupSnapshotVisible && "lg:col-span-2",
+                )}
+              >
                 <CardHeader
-                  title="Recent activity"
-                  subtitle="The latest signal from each part of the league"
+                  title={signupSnapshotVisible ? "League snapshot" : "Recent activity"}
+                  subtitle={
+                    signupSnapshotVisible
+                      ? "Signup details, availability, and recent activity"
+                      : "The latest signal from league and public play"
+                  }
                 />
-                <CardBody className="space-y-3 text-sm">
-                  {latestLeagueGame ? (
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                      <span className="text-muted">League game</span>
-                      <Link
-                        href={`/matches/${latestLeagueGame.game.matchId}`}
-                        className="font-medium hover:text-info hover:underline"
-                      >
-                        <LocalTime
-                          ts={latestLeagueGame.game.startTime * 1000}
-                          variant="short"
-                          initial={formatMatchTime(
-                            new Date(latestLeagueGame.game.startTime * 1000),
-                            "short",
-                          )}
-                        />
-                      </Link>
+                <CardBody className="space-y-5 text-sm">
+                  {activityVisible ? (
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-line/60 bg-surface-2/30 px-3 py-2.5">
+                      {signupSnapshotVisible ? (
+                        <h4 className="text-xs font-medium uppercase tracking-wide text-muted">
+                          Recent activity
+                        </h4>
+                      ) : null}
+                      {latestLeagueGame ? (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <span className="text-muted">League game</span>
+                          <Link
+                            href={`/matches/${latestLeagueGame.game.matchId}`}
+                            className="font-medium hover:text-info hover:underline"
+                          >
+                            <LocalTime
+                              ts={latestLeagueGame.game.startTime * 1000}
+                              variant="short"
+                              initial={formatMatchTime(
+                                new Date(latestLeagueGame.game.startTime * 1000),
+                                "short",
+                              )}
+                            />
+                          </Link>
+                        </div>
+                      ) : null}
+                      {recentInhouse ? (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <span className="text-muted">Inhouse game</span>
+                          <Link
+                            href="/inhouse/history"
+                            className="font-medium hover:text-info hover:underline"
+                          >
+                            <LocalTime
+                              ts={recentInhouse.createdAt.getTime()}
+                              variant="short"
+                              initial={formatMatchTime(recentInhouse.createdAt, "short")}
+                            />
+                          </Link>
+                        </div>
+                      ) : null}
+                      {pubActivityNow ? (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <span className="text-muted">Public pub</span>
+                          <span className="font-medium">
+                            last played {pubActivityNow.label}
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
-                  {recentInhouse ? (
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                      <span className="text-muted">Inhouse game</span>
-                      <Link
-                        href="/inhouse/history"
-                        className="font-medium hover:text-info hover:underline"
-                      >
-                        <LocalTime
-                          ts={recentInhouse.createdAt.getTime()}
-                          variant="short"
-                          initial={formatMatchTime(recentInhouse.createdAt, "short")}
-                        />
-                      </Link>
-                    </div>
-                  ) : null}
-                  {pubActivityNow ? (
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                      <span className="text-muted">Public pub</span>
-                      <span className="font-medium">last played {pubActivityNow.label}</span>
-                    </div>
-                  ) : null}
-                </CardBody>
-              </Card>
-            ) : null}
 
-            {activeReg && newSignupVisible ? (
-              <Card tone="quiet" className="min-w-0">
-                <CardHeader
-                  title="Ready for the first game"
-                  subtitle="League stats appear after the first imported match"
-                />
-                <CardBody className="space-y-3 text-sm">
-                  {roles.length > 0 ? (
-                    <Detail label="Preferred roles">
-                      <RoleBadges roles={activeReg.roles} />
-                    </Detail>
-                  ) : null}
-                  {hasText(selfPickedHeroes) ? (
-                    <Detail label="Wants to play">
-                      <HeroList value={selfPickedHeroes} size={24} />
-                    </Detail>
-                  ) : null}
-                  {!roles.length && !hasText(selfPickedHeroes) ? (
-                    <p className="text-muted">
-                      Their first imported game will start their public record.
-                    </p>
-                  ) : null}
-                </CardBody>
-              </Card>
-            ) : null}
-
-            {activeReg && signupCardVisible ? (
-              <Card className="min-w-0">
-                <CardHeader title="Signup profile" />
-                <CardBody className="space-y-4 text-sm">
-                  {activeReg.wantsCaptain ? (
-                    <Detail label="Captaincy">
-                      <Badge tone="brand">Wants to captain</Badge>
-                    </Detail>
-                  ) : null}
-                  {hasText(activeReg.statement) ? (
-                    <Detail label="Goals">
-                      <span className="text-muted">{activeReg.statement}</span>
-                    </Detail>
-                  ) : null}
-                  {hasText(activeReg.captainNote) ? (
-                    <Detail label="Note for captains">
-                      <span className="italic text-muted">
-                        &ldquo;{activeReg.captainNote}&rdquo;
-                      </span>
-                    </Detail>
+                  {signupSnapshotVisible && activeReg ? (
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-fg">Signup profile</h4>
+                      {newSignupVisible ? (
+                        <div className="rounded-lg border border-line/60 bg-surface-2/30 px-3 py-2.5">
+                          <h4 className="font-medium text-fg">Ready for the first game</h4>
+                          <p className="mt-0.5 text-xs text-muted">
+                            League stats appear after the first imported match.
+                          </p>
+                        </div>
+                      ) : null}
+                      <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
+                        {roles.length > 0 ? (
+                          <Detail label="Preferred roles">
+                            <RoleBadges roles={activeReg.roles} />
+                          </Detail>
+                        ) : null}
+                        {hasText(selfPickedHeroes) ? (
+                          <Detail label="Wants to play">
+                            <HeroList value={selfPickedHeroes} size={24} />
+                          </Detail>
+                        ) : null}
+                        {activeReg.wantsCaptain ? (
+                          <Detail label="Captaincy">
+                            <Badge tone="brand">Wants to captain</Badge>
+                          </Detail>
+                        ) : null}
+                        {hasText(activeReg.statement) ? (
+                          <Detail label="Goals">
+                            <span className="text-muted">{activeReg.statement}</span>
+                          </Detail>
+                        ) : null}
+                        {hasText(activeReg.captainNote) ? (
+                          <Detail label="Note for captains">
+                            <span className="italic text-muted">
+                              &ldquo;{activeReg.captainNote}&rdquo;
+                            </span>
+                          </Detail>
+                        ) : null}
+                      </div>
+                    </div>
                   ) : null}
                 </CardBody>
               </Card>
             ) : null}
 
             {heroCardVisible ? (
-              <Card className="min-w-0">
+              <Card
+                className={cn(
+                  "min-w-0",
+                  activityVisible && signupSnapshotVisible && "lg:col-span-2",
+                )}
+              >
                 <CardHeader
                   title="Hero pool"
                   subtitle="League games, public pubs, and heroes they want to play"
