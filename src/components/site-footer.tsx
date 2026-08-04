@@ -77,6 +77,8 @@ export function SiteFooter({
   clubLinks.push({ href: "/hall-of-fame", label: "Hall of Fame" });
   clubLinks.push({ href: "/records", label: "Record book" });
   clubLinks.push({ href: "/features", label: "Features" });
+  clubLinks.push({ href: "/privacy", label: "Privacy & data use" });
+  clubLinks.push({ href: "/terms", label: "League terms" });
 
   return (
     <footer className="border-t border-line/70">

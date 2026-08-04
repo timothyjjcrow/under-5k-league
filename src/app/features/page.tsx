@@ -114,7 +114,7 @@ const SECTIONS: Section[] = [
       {
         icon: "📝",
         title: "Tell captains about yourself",
-        desc: "Preferred roles. Favorite heroes. A note to the drafters. Everything captains see on draft night.",
+        desc: "Preferred roles. Favorite heroes. A public note to the drafters. Everything is visible in the player pool before draft night.",
       },
       {
         icon: "🔁",

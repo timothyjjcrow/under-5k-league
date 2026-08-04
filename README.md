@@ -92,9 +92,9 @@ dev-login buttons. You can also hit the endpoint directly:
 Players can prove they own their Discord account ("Link Discord" on `/me`) via
 Discord OAuth2. The site always requests `identify`; when the bot and guild are
 configured it also requests `guilds.join` so the player can join the league
-server. The site stores only the account id + username (no tokens or email), and
-rosters show a ✓ on verified handles. Typed handles still work as an unverified
-fallback.
+server. The site stores only the account id + username, does not request email,
+and discards the temporary OAuth access token after the callback. Rosters show
+a ✓ on verified handles. Typed handles still work as an unverified fallback.
 
 1. Create an application at https://discord.com/developers/applications
 2. OAuth2 → add `<APP_URL>/api/auth/discord/callback` as a **Redirect**.
@@ -113,7 +113,9 @@ player demonstrated they own.
    @mention this role OFF** — the site pings it through an explicit allowlist
    regardless, and keeping it off stops members spam-pinging everyone.
 2. Create an application at https://discord.com/developers/applications → Bot →
-   copy the token. Invite it with **Manage Roles only** (not Administrator).
+   copy the token. Invite it with **Manage Roles** and **Create Invite** (not
+   Administrator). Manage Roles powers the ping toggle; Discord requires Create
+   Invite for the automatic `guilds.join` performed while linking an account.
 3. **Drag the bot's role ABOVE the ping role** in Server Settings → Roles.
    Discord refuses to let a bot grant a role above its own; this is the single
    most common setup mistake and the site reports it as its own error.
@@ -125,9 +127,10 @@ Discord, and the two interrupting inhouse alerts can mention the role. Miss any
 one and the feature stays invisible rather than half-working.
 
 **To check it worked**, the admin Discord card shows a live checklist — bot
-token, server id, role chosen, bot in server, role found, and whether the bot
-can actually grant it — naming the first broken step and its fix. Step 3 above
-is the one nothing in Discord warns you about.
+token, server id, role chosen, bot in server, role found, matching OAuth app,
+Create Invite, and whether the bot can actually grant the role — naming the
+first broken step and its fix. Step 3 above is the one nothing in Discord warns
+you about.
 
 Two messages ping that role: the queue filling up, and a match being found.
 Nothing else — not results, and never the board, whose edits notify nobody by
@@ -217,10 +220,11 @@ alerts and the live board use their separate best-effort/reservation workflows.
 
 ### Match data (OpenDota)
 
-Real games are pulled from the free [OpenDota API](https://docs.opendota.com/) —
-Dotabuff has no public API, so OpenDota (built on the same Valve data) is used.
-Each player's SteamID converts to a Dota `account_id`, so a fetched game's
-players are matched to your rosters to decide who played and who won.
+Real games are pulled from the [OpenDota API](https://docs.opendota.com/), which
+currently offers free and paid usage tiers. Dotabuff has no public API, so
+OpenDota (built on the same Valve data) is used. Each player's SteamID converts
+to a Dota `account_id`, so a fetched game's players are matched to your rosters
+to decide who played and who won.
 
 From the admin panel, for any match you can:
 
@@ -232,6 +236,9 @@ From the admin panel, for any match you can:
 
 Imported games set the series score and (for playoff games) advance the bracket
 automatically. Set `OPENDOTA_API_KEY` for higher rate limits (optional).
+Turning **Expose Public Match Data** off can stop future automatic discovery;
+it does not delete league history already imported here or data OpenDota
+already collected.
 
 Players' **ranked medals** come from the same source (OpenDota `rank_tier`). The
 Dota account is derived from each player's verified Steam sign-in; players can
@@ -386,9 +393,11 @@ declares the same runtime line used by every CI job.
    | `APP_URL`                                     | canonical HTTPS origin, e.g. `https://league.example`                |
    | `NEXT_PUBLIC_SITE_URL`                        | the same canonical HTTPS origin as `APP_URL`                         |
    | `ADMIN_STEAM_IDS`                             | one or more valid, unique SteamID64s, comma-separated                |
+   | `PRIVACY_CONTACT_EMAIL`                       | monitored public mailbox for access/correction/deletion requests     |
+   | `PRIVACY_DATA_LOCATIONS`                      | verified storage countries used by hosting, DB, backups, and logs    |
    | `OPENDOTA_API_KEY`                            | optional                                                             |
    | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional — enables "Link Discord" account verification               |
-   | `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID`      | optional — lets players self-assign the inhouse ping role from `/me` |
+   | `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID`      | optional — Discord join + inhouse role; bot needs Manage Roles + Create Invite |
 
    Leave `ALLOW_DEV_LOGIN` unset or set it exactly to `false`. Production does
    not support a first-user admin bootstrap: `ADMIN_STEAM_IDS` must already
@@ -398,6 +407,17 @@ declares the same runtime line used by every CI job.
    as `Authorization: Bearer <CRON_SECRET>`; an external scheduler must do the
    same. Never put this value in a URL, query string, source file, or copied
    shell command.
+
+   > **Privacy and terms are launch configuration, not placeholders.**
+   > `/privacy` and `/terms` are public and linked from the site. Set
+   > `PRIVACY_CONTACT_EMAIL` to a monitored, deliverable mailbox, then verify
+   > the actual hosting, database, backup, and application-log countries before
+   > setting `PRIVACY_DATA_LOCATIONS`; do not infer a country from the operator's
+   > address or the provider's company address. Before promotion, the operator
+   > must review both pages for the league's real practices and jurisdiction,
+   > monitor the published mailbox, and put the canonical `/privacy` URL in the
+   > Discord Developer Portal. Update the notices and effective dates whenever
+   > those practices materially change.
 
    > **`ADMIN_STEAM_IDS` is authoritative.** Exactly those accounts are admins;
    > authorization is recomputed on every authenticated request, so removing an
@@ -453,6 +473,8 @@ declares the same runtime line used by every CI job.
    used for migrations, placeholder or short auth/backup-receipt secrets, a
    missing/placeholder Steam API key, an unusable cron secret, incomplete
    Discord OAuth or bot/guild pairs, a production `DISCORD_API_BASE` test seam,
+   a missing/placeholder public privacy mailbox, missing verified data-storage
+   locations,
    missing/invalid/duplicate admin SteamIDs, non-HTTPS or divergent site
    origins, enabled dev login, and configured test-only or obsolete release
    overrides. Runtime and migration URLs may legitimately use different

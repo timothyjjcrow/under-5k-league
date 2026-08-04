@@ -1067,7 +1067,7 @@ export default async function PlayerProfilePage({
                   }
                   subtitle={
                     signupSnapshotVisible
-                      ? "Signup details, availability, and recent activity"
+                      ? "Signup details and recent activity"
                       : "The latest signal from league and public play"
                   }
                 />

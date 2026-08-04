@@ -92,9 +92,9 @@ export function DiscordSetupCard({
 
         <p className="text-xs text-muted">
           {oneClick
-            ? "Sign in with Discord once — it proves the handle is yours and adds you to the server. We only ever read your username."
+            ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
             : linkAvailable
-              ? "Linking proves the handle is really yours, so pings actually reach you. We only ever read your username."
+              ? "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."
               : "Your handle is how captains find you."}
         </p>
       </CardBody>

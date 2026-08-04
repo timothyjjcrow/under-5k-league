@@ -6,6 +6,10 @@ const playersPage = readFileSync(
   path.resolve(process.cwd(), "src/app/players/page.tsx"),
   "utf8",
 );
+const playerProfile = readFileSync(
+  path.resolve(process.cwd(), "src/app/players/[id]/page.tsx"),
+  "utf8",
+);
 
 describe("player-directory contact visibility wiring", () => {
   it("does not equate any signed-in account with directory contact access", () => {
@@ -21,6 +25,18 @@ describe("player-directory contact visibility wiring", () => {
     );
     expect(playersPage).not.toMatch(
       /standins\.map[\s\S]*?\{viewer \? \(/,
+    );
+  });
+
+  it("keeps profile contact and the private-match-data flag behind the shared policy", () => {
+    expect(playerProfile).toContain(
+      "const canSeeLeagueContact = canViewLeagueContact(",
+    );
+    expect(playerProfile).toMatch(
+      /canSeeLeagueContact && user\.fhUnavailable === true/,
+    );
+    expect(playerProfile).toMatch(
+      /canSeeLeagueContact \? \(\s*<DiscordTag/,
     );
   });
 });

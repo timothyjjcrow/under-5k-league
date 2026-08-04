@@ -386,9 +386,9 @@ export default async function MePage({
                 ? isCaptain
                   ? "Linked and in the league's Discord server — your handle is verified, and your team and league admins can reach you."
                   : "Linked and in the league's Discord server — your handle is verified, and captains can reach you."
-                : "Linked via Discord — your handle is verified, and shown to signed-in league members."
+                : "Linked via Discord — your handle is verified, and shown to you, league admins, and active league participants."
               : dbUser?.discordName
-                ? "Shown to signed-in league members on rosters and the player pool."
+                ? "Shown to you, league admins, and active league participants on rosters and the player pool."
                 : isCaptain
                   ? "Add your Discord so your team and league admins can reach you — it's how the league coordinates."
                   : "Add your Discord so your captain can reach you — it's how the league talks."
@@ -565,13 +565,11 @@ export default async function MePage({
                   </a>
                   <span className="text-xs text-muted">
                     {/* This has to describe the real consent screen. With
-                        guilds.join in the scope, "we only see your username"
-                        is still true of what we READ — but it stops being the
-                        whole story, and a player who spots the gap has every
-                        reason to distrust the rest. */}
+                        guilds.join in the scope, the copy must name both the
+                        stable identity we store and the server write it permits. */}
                     {discordAutoJoins
-                      ? "Sign in with Discord once — proves the handle is really yours and adds you to the league server. We only ever read your username; the join is the only thing we ask to do."
-                      : "Sign in with Discord once — proves the handle is really yours. We only ever see your username, nothing else."}
+                      ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
+                      : "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."}
                   </span>
                   {!isRegistered && signupsOpen ? (
                     <span className="text-xs text-muted">
@@ -901,6 +899,34 @@ export default async function MePage({
                   </div>
                 ) : null}
                 <ActionForm action={saveRegistration} className="space-y-5">
+                  <div className="rounded-lg border border-accent/35 bg-accent/10 p-3 text-sm">
+                    <h3 className="font-medium text-fg">
+                      Public signup profile
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-muted">
+                      Your participation type, submitted or estimated MMR,
+                      medal, preferred roles, favorite heroes, captain
+                      interest, goals, and captain note can appear in the public
+                      player pool and on your public profile. Do not enter
+                      contact details, specific availability, health details,
+                      or anything private in free-text fields. Joining asks the
+                      league to periodically refresh the public Steam and Dota
+                      data needed to run your competition.
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      Discord contact is limited to you, league admins, and
+                      active league participants. Read{" "}
+                      <Link href="/privacy" className={textLink()}>
+                        Privacy &amp; data use
+                      </Link>{" "}
+                      and the{" "}
+                      <Link href="/terms" className={textLink()}>
+                        league terms
+                      </Link>
+                      .
+                    </p>
+                  </div>
+
                   <div>
                     <label className="mb-1.5 block text-sm font-medium">
                       Participation
@@ -961,6 +987,8 @@ export default async function MePage({
                         ? "Not sure? Leave it blank — we'll estimate it from your ranked medal. "
                         : "Unranked or not sure? Leave it blank — captains will see your ranked medal instead, and you can update it later. "}
                       Used to help balance the draft. Be honest!
+                      {" "}Your submitted or medal-estimated MMR is public on
+                      the player pool and profile.
                       {season.maxMmr > 0
                         ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
                         : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}
@@ -1018,6 +1046,10 @@ export default async function MePage({
                         </label>
                       ))}
                     </div>
+                    <p className="mt-1 text-xs text-muted">
+                      Shown publicly on your player profile and in the player
+                      pool.
+                    </p>
                   </div>
 
                   <div>
@@ -1029,11 +1061,11 @@ export default async function MePage({
                       defaultValue={form?.favoriteHeroes}
                     />
                     <p className="mt-1 text-xs text-muted">
-                      Pick the heroes you&apos;re known for —{" "}
+                      Pick the heroes you&apos;re known for — shown publicly on your{" "}
                       <Link href={`/players/${user.id}`} className={textLink()}>
-                        captains see these
+                        player profile
                       </Link>{" "}
-                      during the draft.
+                      and in the player pool, including during the draft.
                     </p>
                   </div>
 
@@ -1042,7 +1074,7 @@ export default async function MePage({
                       htmlFor="statement"
                       className="mb-1.5 block text-sm font-medium"
                     >
-                      What you want from the league
+                      What you want from the league (public)
                     </label>
                     <textarea
                       id="statement"
@@ -1050,9 +1082,14 @@ export default async function MePage({
                       rows={3}
                       maxLength={1000}
                       defaultValue={form?.statement ?? ""}
-                      placeholder="Why you're here, your goals, availability…"
+                      placeholder="Why you're here and what you'd like to improve…"
                       className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
                     />
+                    <p className="mt-1 text-xs text-muted">
+                      Shown publicly on your player profile and, when no captain
+                      note is present, in the player pool. Don&apos;t include
+                      contact details or specific availability.
+                    </p>
                   </div>
 
                   <div>
@@ -1092,7 +1129,7 @@ export default async function MePage({
                       </span>
                       <span className="block text-xs text-muted">
                         {signupsOpen
-                          ? "Applies to full-player signups only."
+                          ? "Applies to full-player signups only and is public on the player pool and profile."
                           : "Captain volunteering closed when player signups ended."}
                       </span>
                     </span>

@@ -621,3 +621,178 @@ to authenticated operator tooling.
 
 **Privacy, data use, public-field disclosure, retention, and the participant
 request channel across login, signup, profile, footer, and league pages.**
+
+## Iteration 4 — privacy, public data, terms, and participant requests
+
+### Section audited
+
+Steam sign-in and immediate OpenDota enrichment; signup/profile fields and
+their public visibility; Discord linking, contact visibility, guild/role
+behavior, and unlink limits; cookies and browser storage; public league
+history; retention; participant access/correction/deletion requests; policy
+discoverability; production disclosure configuration; and restoration replay.
+
+### Current purpose
+
+This boundary lets a prospective participant understand what signing in and
+joining will publish before providing data. It also gives participants a
+private request route and gives operators a fail-closed, rehearsable process
+for handling corrections or de-identification without corrupting shared league
+history or resurrecting old values during disaster recovery.
+
+### Actors affected
+
+- Visitors and prospective players need disclosure before Steam sign-in or a
+  public signup submission.
+- Players and standins need accurate field-level visibility, retention, and
+  Discord-link explanations.
+- Captains and active participants need the existing restricted contact data
+  without expanding it to every signed-in account.
+- Administrators need public-history integrity and safe, reviewable correction
+  procedures.
+- Operators need a monitored private mailbox, verified storage-country
+  disclosure, retention evidence, provider limits, and restoration replay.
+
+### Problems found
+
+- There was no privacy page, terms page, private request contact, storage-country
+  disclosure, retention contract, or participant-request runbook.
+- Steam copy said sign-in fetched only a name/profile even though it stores a
+  stable Steam identity, derives a Dota account, and immediately requests an
+  OpenDota medal, public-match state, and scouting snapshot.
+- Signup copy did not explain that participation type, MMR/medal estimate,
+  roles, favorite heroes, goals, captain interest, and captain note are public.
+  The free-text prompt encouraged players to publish specific availability.
+- Discord copy said the application only read a username. The real flow stores
+  the stable account ID and username, conditionally requests `guilds.join`, and
+  lets the bot inspect league-server membership and role IDs. Another line
+  incorrectly granted contact visibility to every signed-in account.
+- Bot setup documented only Manage Roles, although automatic OAuth joining also
+  needs Create Invite. It did not clearly reject Administrator permission.
+- Withdrawal and Discord unlink could be mistaken for erasure. There is no
+  safe generic `User` deletion: restrictive relations, embedded game JSON,
+  denormalized history, Discord deliveries, and a relationless Cred ledger
+  require a case-specific plan.
+- The operations guide named no privacy owner and did not define verification,
+  subject-only export, two-person review, retention truth, provider-source
+  limits, or post-restore replay.
+- Production could build without a monitored mailbox or the exact countries
+  where league-controlled Steam/application copies are stored.
+
+### Changes made
+
+- Added public `/privacy` and `/terms` pages with effective dates, external
+  service links, plain-language public/restricted data maps, cookie/local
+  storage behavior, no-ad/no-payment statements, retention truth, public
+  history, play-money Cred terms, external-data limitations, and request
+  instructions.
+- Added pre-sign-in acknowledgement, global footer and sitemap links, and
+  collection notices on the shared Steam explanation and signup form.
+- Labeled every public signup category, removed the availability solicitation,
+  and updated the public profile and features copy to match actual visibility.
+- Corrected Discord wording to name the ID/username, discarded temporary token,
+  conditional server join, visibility policy, and unlink limitations.
+- Corrected Discord setup to Manage Roles plus Create Invite for automatic
+  joining, explicitly without Administrator permission.
+- Added server-only `PRIVACY_CONTACT_EMAIL` and `PRIVACY_DATA_LOCATIONS` values.
+  Production validation requires one normalized non-placeholder mailbox and
+  exact verified storage countries; errors name the field without echoing it.
+  Missing values remain visibly unconfigured outside production.
+- Added an executable privacy-request/retention runbook: primary and deputy
+  ownership, independent MFA, private case register, linked-account
+  verification without passwords/2FA/API keys/identity documents, complete
+  source inventory, subject-only disclosure, reviewed clone rehearsal,
+  restoration replay, tabletop scenarios, and release-stop conditions.
+- Updated the README and architecture map for the two new pages, real data
+  flows, OpenDota persistence limits, production variables, provider evidence,
+  and Discord Developer Portal configuration.
+
+### Architecture improvements made
+
+- One small server-only normalization module is shared by public rendering and
+  the production environment gate, preventing configuration/render drift and
+  unsafe `mailto:` values.
+- Privacy policy pages are database-independent and fail visibly in local or
+  preview environments while production fails closed before migration/build.
+- Existing contact visibility remains centralized in `visibility.ts`; new
+  source guards pin its use on both the directory and profile rather than
+  duplicating authorization logic in policy UI.
+- Manual privacy operations are now a defined release and recovery boundary.
+  A restored database is not eligible for promotion until later approved
+  corrections/de-identifications are replayed and verified.
+
+### Tests added or updated
+
+- Pure mailbox and storage-country normalization coverage, including display
+  names, whitespace, multiple addresses, URLs, control/header injection,
+  placeholder domains, vague locations, and length boundaries.
+- Production-environment acceptance/rejection and secret-redaction coverage.
+- Static render and source guards for privacy/terms content, collection links,
+  every public signup category, stale misleading phrases, footer/sitemap/robots
+  wiring, and profile contact/private-match visibility.
+- Operations source guards for ownership, safe identity verification, complete
+  source inventory, subject-only exports, two-person clone rehearsal, restore
+  replay, and launch-stop conditions.
+- A 360px Chromium journey from login to privacy to terms, including configured
+  contact/storage facts, footer discoverability, and horizontal overflow.
+
+### Commands run
+
+- focused Vitest suites for privacy normalization, production environment,
+  notices, policy wiring, sitemap, robots, contact visibility, and operations
+- `npm test` and `npm run test:integration`
+- `npm run lint -- --max-warnings=0`, `npx tsc --noEmit`, and
+  `git diff --check`
+- schema-current isolated SQLite `npm run build` with configured public privacy
+  values
+- focused Chromium phone workflow in `e2e/pages.spec.ts`
+- manual desktop browser pass through login disclosure, privacy, terms,
+  Discord copy, and the signup form in the SIGNUPS phase
+
+### Test results
+
+- Focused privacy/configuration suites: 105/105 plus 5/5 operations guards.
+- Unit: 144 files, 1,910/1,910 passed.
+- SQLite integration: 45 files passed and one provider-only file skipped;
+  1,106 passed and 38 intentional skips (1,144 total).
+- Zero-warning ESLint, TypeScript, and `git diff --check` passed.
+- The clean isolated build compiled, type-checked, generated all 38 entries,
+  and included `/privacy` and `/terms`. An earlier diagnostic build exposed a
+  stale local `dev.db`; it was not used as evidence and the user database was
+  not mutated.
+- Focused Chromium: 1/1 passed at 360px with no horizontal overflow.
+- Manual browser inspection confirmed the sign-in acknowledgement, full
+  policy hierarchy, configured mailbox/countries, footer links, truthful
+  Discord explanation, every public signup label, and SIGNUPS-phase context.
+
+### Remaining concerns
+
+- Repository validation proves configuration shape, not that the mailbox is
+  monitored, the published countries are accurate, provider encryption and
+  retention settings match the notice, or the deputy can operate the process.
+- There is intentionally no self-service account export/deletion in this first
+  release. A production removal request remains manual and must follow the
+  reviewed runbook; automatic retention/pruning should be a later focused
+  migration rather than an untested promise.
+- Operator identity, jurisdiction, age/guardian applicability, and final legal
+  language require review for the actual launch community. The repository does
+  not claim universal legal compliance.
+- The canonical PostgreSQL production migration/build and provider restore are
+  reserved for the final release gate. Actual Steam, Discord, and OpenDota
+  credentials and Discord Developer Portal policy URL still need live evidence.
+- Public polling, proxy-aware client identity, request amplification, and
+  abuse/rate-limit behavior remain the next repository blocker.
+
+### Recommended future improvements
+
+After launch evidence exists, add an automated retention inventory and focused
+cleanup design for optional signup text, delivered outboxes, and operational
+history. A future subject-export tool should be requester-specific and redact
+other players; it must never expose the multi-user season audit archive. Keep
+provider links and policy effective dates current as integrations change.
+
+### Next section to audit
+
+**Public API and polling abuse resistance, trusted-proxy identity, bounded
+queries and payloads, request failure behavior, and externally reachable
+security surfaces.**

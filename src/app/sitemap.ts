@@ -22,6 +22,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { path: "/inhouse", changeFrequency: "daily", priority: 0.7 },
     { path: "/inhouse/history", changeFrequency: "weekly", priority: 0.6 },
     { path: "/features", changeFrequency: "monthly", priority: 0.6 },
+    { path: "/privacy", changeFrequency: "monthly", priority: 0.4 },
+    { path: "/terms", changeFrequency: "monthly", priority: 0.4 },
   ] as const;
   return routes.map((route) => ({
     url: `${base}${route.path}`,

@@ -575,6 +575,18 @@ Rules that follow from the layering:
   admins (each player still sees their own response); aggregate readiness is
   for active participants and admins. Public pages blank these DTO fields and
   skip the underlying contact/availability queries for outsiders.
+- **Privacy publication boundary.** `/privacy` and `/terms` are public server
+  pages linked from the login, profile, and footer surfaces. They do not query
+  the database: `src/lib/privacy-contact.mjs` normalizes the server-only
+  `PRIVACY_CONTACT_EMAIL` and `PRIVACY_DATA_LOCATIONS` values that they publish.
+  A non-production build with either value absent renders an explicit setup
+  notice; the production environment gate refuses the build. The locations
+  value is operator attestation, not application discovery: it must cover the
+  verified hosting, database, backup, and application-log storage countries. The notice
+  describes the split between intentionally public competition history and the
+  restricted contact/availability policy above, and exposes a reviewed manual
+  access/correction/deletion-request path without promising that shared match
+  history, Discord messages, or backup snapshots can be erased in place.
 - **Accessibility baseline.** The UI kit supplies labeled progress, visible
   field focus, opaque high-contrast error/brand surfaces, and non-blocking
   avatar loading. `globals.css` has a catch-all reduced-motion rule for
@@ -590,7 +602,7 @@ Rules that follow from the layering:
 
 ## 5. Page inventory
 
-25 pages. "Nav from X" = the link appears from that phase onward
+27 pages. "Nav from X" = the link appears from that phase onward
 (`src/components/site-header.tsx`); most pages still render if visited
 directly.
 
@@ -620,9 +632,11 @@ directly.
 | `/inhouse/history` | Complete completed-lobby archive, 100 rows per `?page=N`, exact-row admin void                 | Always                                                                                             | Stable formation ordering; authoritative played-time fallback                                                 |
 | `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Evergreen: Explore, mobile menu, footer                                                            | `NewsPost`; create request receipts; `NewsMedia`                                                              |
 | `/features`        | Phase-aware feature tour with honest live/locked destinations                                  | Always                                                                                             | `featureAvailability`, live counts, viewer-aware closing CTA                                                  |
+| `/privacy`         | Public data map, visibility/retention choices, processors, locations, and request contact      | Always; intentionally public and linked from login/profile/footer                                  | Server-only `PRIVACY_CONTACT_EMAIL` + `PRIVACY_DATA_LOCATIONS`; no DB read                                    |
+| `/terms`           | Participation, public-record, conduct, external-service, and play-money terms                   | Always; intentionally public and linked from login/profile/footer                                  | Server-only `PRIVACY_CONTACT_EMAIL`; no DB read                                                               |
 | `/admin`           | The control panel (§8)                                                                         | Admin only                                                                                         | `loadSeasonAdminData`                                                                                         |
 
-API routes (16): `/api/auth/steam` + `/callback`, `/api/auth/discord` +
+API routes (19): `/api/auth/steam` + `/callback`, `/api/auth/discord` +
 `/callback`, `/api/auth/dev`, `/api/auth/logout` — auth (§2);
 `/api/draft/tick|bid|nominate|admin-nominate` — the auction. Every draft POST
 requires an `application/json` media type and canonical same-origin `Origin`;
@@ -883,17 +897,25 @@ reactivation is visibly locked and points the admin to the handoff controls.
 **Steam** (`src/lib/steam.ts`): OpenID 2.0 login (one-shot browser state,
 exact return-to and signed-field pinning, duplicate assertion rejection,
 canonical Steam identity, check_authentication round-trip, 8s timeouts) and GetPlayerSummaries for
-name/avatar (needs `STEAM_API_KEY`). Failure rule: never overwrite a stored
-profile with a placeholder — fetch failures return null and the upsert leaves
-existing fields untouched. Login destinations are limited to validated
-same-origin relative paths; the short-lived return cookie is secure in
-production, reset at each kickoff, and consumed on success or failure.
+public persona name/avatar/profile URL (needs `STEAM_API_KEY`). OpenID returns
+the SteamID64; the app never receives the Steam password. It stores the ID and
+selected profile fields, which `/privacy` names along with the operator-verified
+storage/processing countries. Failure rule: never overwrite a stored profile with
+a placeholder — fetch failures return null and the upsert leaves existing fields
+untouched. Login destinations are limited to validated same-origin relative
+paths; the short-lived return cookie is secure in production, reset at each
+kickoff, and consumed on success or failure. `/terms` carries the independent,
+not-endorsed and as-is/as-available boundary required for external data.
 
 **OpenDota** (`src/lib/dota.ts`): match fetches (`/matches/{id}`, 12s cap),
 per-player recent-match lists (8s; returns `null` for unreachable vs `[]` for
 genuinely empty — callers use the distinction to blame the right thing),
 league feeds (`/leagues/{id}/matches`), and rank medals (`rank_tier` +
-`fh_unavailable`). Optional `OPENDOTA_API_KEY`. Budgets: one roster scan ≈ 10
+`fh_unavailable`), scouting (`/players/{id}/wl` + `/heroes`), and player
+profiles. These server-side requests send the relevant Dota account, match, or
+league id; there is no OpenDota login. Selected rank/privacy/scouting fields and
+imported match records persist locally as described on `/privacy`. Optional
+`OPENDOTA_API_KEY`. Budgets: one roster scan ≈ 10
 recent-match lookups + ≤12 match fetches under a 25s deadline; the league feed
 fetches ≤25 unknown ids per auto run; inhouse detection needs 4 of 10 lists to
 agree on a candidate. Hero names are never fetched — `src/lib/heroes.ts` is a
@@ -903,8 +925,7 @@ effective account first clears the old medal/private-data/scouting snapshot;
 every asynchronous write re-asserts the account it fetched, so another tab's
 newer link or snapshot wins.
 
-**Discord** — three mechanisms, all outbound only (no gateway, no slash
-commands):
+**Discord** — three mechanisms (no gateway, no slash commands):
 
 1. _Webhooks_ (`src/lib/discord.ts`): ~24 pure, tested message formatters +
    the transport (`sendTo`, 5s timeout, resolves false and never throws).
@@ -922,12 +943,21 @@ commands):
 2. _Bot token_ (`src/lib/discord-roles.ts`, env `DISCORD_BOT_TOKEN` +
    `DISCORD_GUILD_ID`): the self-serve inhouse ping-role toggle
    (`setPingRole`), the OAuth `guilds.join`, and the `getPingHealth`
-   diagnostic (hierarchy + permission math). Missing any config piece makes
-   the feature invisible, never half-working.
-3. _OAuth linking_ (§2): identify scope (+ conditional guilds.join), tokens
-   discarded, a failed join never fails the link. A versioned one-shot cookie
-   binds state, PKCE verifier, and the initiating site user; duplicate callback
-   parameters and a session swap are rejected before token exchange.
+   diagnostic (hierarchy + permission math). Role assignment needs **Manage
+   Roles** with the bot role above the target; automatic joining needs **Create
+   Invite**, and the bot token must belong to the OAuth application's client id.
+   Administrator is neither needed nor recommended. Missing any config piece
+   makes the feature invisible, never half-working.
+3. _OAuth linking_ (§2): `identify` (+ conditional `guilds.join`) receives the
+   basic Discord user response; the app persists only `discordId` and
+   `discordName`, does not request email, and discards the temporary access
+   token after the callback/join attempt. The bot subsequently reads membership
+   and role ids for linked accounts. A failed join never fails the link. A
+   versioned one-shot cookie binds state, PKCE verifier, and the initiating site
+   user; duplicate callback parameters and a session swap are rejected before
+   token exchange. `/privacy` also discloses that configured webhook messages
+   send public player/team/schedule/result data and explicit user mentions to
+   Discord, and that unlinking cannot erase messages already delivered there.
 
 The overarching failure-tolerance rule: **a Discord failure can never fail or
 roll back a database write.** League-channel work uses the globally ordered
@@ -1033,7 +1063,14 @@ at 512 characters and may not contain whitespace); a configured non-placeholder
 `STEAM_API_KEY`; complete-or-absent Discord OAuth and bot/guild pairs; no
 production `DISCORD_API_BASE`; at least one valid, unique individual SteamID64 in
 `ADMIN_STEAM_IDS`; identical canonical HTTPS origins in `APP_URL` and
-`NEXT_PUBLIC_SITE_URL`; and dev login unset or exactly `false`.
+`NEXT_PUBLIC_SITE_URL`; one normalized, non-placeholder public mailbox in
+`PRIVACY_CONTACT_EMAIL`; non-empty operator-verified storage/processing countries
+in `PRIVACY_DATA_LOCATIONS`; and dev login unset or exactly `false`.
+The two privacy values remain server-side but are rendered by `/privacy` (and
+the contact is also rendered by `/terms`); they are public operational facts,
+not secrets. Validation proves their shape and presence, not that the mailbox
+is monitored or the claimed provider storage countries are true — those remain promotion
+checks for the operator.
 `BUILD_DB_DRY_RUN` is reserved for unit tests running with `NODE_ENV=test` and
 is rejected in production. `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` is also
 rejected so concurrent migration commands retain Prisma's database lock.

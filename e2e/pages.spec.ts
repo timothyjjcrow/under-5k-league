@@ -23,6 +23,105 @@ test("signed-out profile requests explain sign-in without a duplicate header CTA
   await expect(page.getByText("Steam signs you into this site.")).toBeVisible();
 });
 
+test("privacy and terms are truthful and discoverable on a phone", async ({
+  page,
+}) => {
+  test.slow();
+  await page.setViewportSize({ width: 360, height: 800 });
+
+  const expectNoHorizontalOverflow = async () => {
+    const widths = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
+    expect(
+      widths.document,
+      `document width ${widths.document}px exceeds ${widths.viewport}px viewport`,
+    ).toBeLessThanOrEqual(widths.viewport);
+  };
+
+  await page.goto("/login");
+  const login = page.locator("#main");
+  await expect(
+    login.getByRole("link", { name: "league terms", exact: true }),
+  ).toHaveAttribute("href", "/terms");
+  const loginPrivacy = login.getByRole("link", {
+    name: "Privacy & data use notice",
+    exact: true,
+  });
+  await expect(loginPrivacy).toHaveAttribute("href", "/privacy");
+  await expectNoHorizontalOverflow();
+
+  await loginPrivacy.click();
+  await expect(page).toHaveURL(/\/privacy$/);
+  const privacy = page.locator("#main");
+  await expect(
+    privacy.getByRole("heading", { name: "Privacy & data use", level: 1 }),
+  ).toBeVisible();
+  await expect(
+    privacy.getByText(/GGD2L is a public amateur competition/),
+  ).toBeVisible();
+  await expect(
+    privacy.getByRole("heading", { name: "What is public" }),
+  ).toBeVisible();
+  await expect(
+    privacy.getByRole("heading", { name: "What is restricted" }),
+  ).toBeVisible();
+  await expect(
+    privacy.getByText(/does not currently use advertising pixels/),
+  ).toBeVisible();
+  await expect(
+    privacy.getByRole("heading", { name: "Cookies and browser storage" }),
+  ).toBeVisible();
+  await expect(
+    privacy.getByText(/signed login session that can last up to 30 days/),
+  ).toBeVisible();
+  await expect(
+    privacy.getByText(/remembers optional live-room sound choices/),
+  ).toBeVisible();
+  await expect(
+    privacy.getByText(/does not offer an instant self-service account export/),
+  ).toBeVisible();
+  await expect(
+    privacy.getByText("United States, Germany", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    privacy.getByRole("link", { name: "privacy@ggd2l.org", exact: true }),
+  ).toHaveAttribute("href", "mailto:privacy@ggd2l.org");
+  await expectNoHorizontalOverflow();
+
+  await privacy
+    .getByRole("link", { name: "league terms", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/terms$/);
+  const terms = page.locator("#main");
+  await expect(
+    terms.getByRole("heading", { name: "League terms", level: 1 }),
+  ).toBeVisible();
+  await expect(
+    terms.getByRole("heading", { name: "Public league record" }),
+  ).toBeVisible();
+  await expect(
+    terms.getByRole("heading", { name: "No money or prize account" }),
+  ).toBeVisible();
+  await expect(terms.getByText(/play money with no cash value/)).toBeVisible();
+  await expect(
+    terms.getByRole("link", {
+      name: "Privacy & data use notice",
+      exact: true,
+    }),
+  ).toHaveAttribute("href", "/privacy");
+
+  const footer = page.getByRole("contentinfo");
+  await expect(
+    footer.getByRole("link", { name: "Privacy & data use", exact: true }),
+  ).toHaveAttribute("href", "/privacy");
+  await expect(
+    footer.getByRole("link", { name: "League terms", exact: true }),
+  ).toHaveAttribute("href", "/terms");
+  await expectNoHorizontalOverflow();
+});
+
 test("logout confirms the session ended", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const steamId = "76561198" + String(Date.now()).slice(-9);

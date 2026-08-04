@@ -24,14 +24,20 @@ scheduler—not both. Vercel Hobby is not compatible with this release.
 
 ## Required owners
 
-Record names or on-call handles for all three roles. Two people should be able
-to access the hosting and database providers with MFA before traffic is opened.
+Record names or on-call handles for all four functions. Two people should be
+able to access the hosting and database providers with MFA before traffic is
+opened. The privacy owner and deputy must each have independent MFA access to
+the privacy mailbox and private case register; a shared password is not
+continuity.
 
 - Release owner: controls the pinned deployment and final go/no-go.
 - Database/recovery owner: owns backup, PITR, restore, and cutover decisions.
 - Incident/communications owner: owns monitoring acknowledgement and player
   communication through a channel independent of the application and Discord
   bot being recovered.
+- Privacy request owner and deputy: own private intake, identity verification,
+  request scoping, the case register, reviewed fulfillment, and restoration
+  replay. The deputy must be able to continue the process without the primary.
 
 ## Launch evidence record
 
@@ -46,6 +52,7 @@ Previous production deployment ID + commit:
 Candidate deployment ID + commit:
 Production deployment ID + commit:
 Release owner / database owner / communications owner:
+Privacy request owner / deputy:
 Go/no-go approvers:
 
 Hosting plan and Node 22 evidence:
@@ -62,6 +69,8 @@ Backup verification result/time:
 Disposable restore target + result/time:
 Baseline fingerprint / migration preflight / postflight results:
 Runtime and direct-connection read/write smoke results:
+Application-log retention and protected-access evidence:
+Backup/PITR expiry and deletion-process evidence:
 
 Canonical domain + HTTPS/certificate result:
 Apex/www redirect result:
@@ -70,7 +79,14 @@ Discord OAuth exact callback result:
 Discord bot guild/role hierarchy result:
 League/inhouse webhook channel result:
 OpenDota profile and real match-import result:
-Privacy contact request test result:
+Published privacy mailbox and page verification:
+Verified hosting/database/backup/log storage countries:
+Primary/deputy mailbox MFA and continuity result:
+Private case-register storage/access/encryption/retention evidence:
+Privacy action/replay register location and access evidence:
+Privacy contact test case ID + send/acknowledgement result (no request content):
+Privacy request/retention/restore tabletop result:
+External-provider and backup limitations verified against the public page:
 
 live probe result:
 ready probe result:
@@ -111,12 +127,154 @@ Residual risks explicitly accepted:
    OpenDota profile lookup, and one known Dota match import. Confirm failure UI
    does not disclose credentials.
 8. Verify the privacy/data-use page matches the selected host, database,
-   backups, scheduler, logging, and contact process. Send and acknowledge one
-   privacy request through the published private contact channel.
+   backups, scheduler, logging, retention behavior, external-provider limits,
+   and contact process. Confirm the privacy primary and deputy can independently
+   reach the protected mailbox and case register, send and acknowledge one test
+   request, and complete the tabletop below. Record the real provider retention
+   windows and enforcement mechanisms; do not rely on an unsupported public
+   promise.
 9. Configure independent monitors for liveness, readiness, automation freshness,
    cron non-2xx, and database/provider faults. Deliver and acknowledge a test
    alert through a channel that remains available if Discord or this site is
    down.
+
+## Privacy requests and retention
+
+This is the manual operating contract for the first release. It is not a
+self-service export or deletion feature, does not decide whether a particular
+request must be granted, and does not create a universal response deadline. Do
+not promise an outcome until the request is verified, scoped, and shown to be
+safe with the current data model and provider controls. Escalate any request
+outside this runbook rather than improvising against production data.
+
+### Intake, verification, and case handling
+
+1. Accept requests only through the private mailbox published on the
+   privacy/data-use page. The mailbox must remain available if the application
+   or Discord is unavailable. Never direct private request details to a public
+   Discord channel, repository issue, ordinary support log, or an application
+   `AdminAction` summary.
+2. Reply with an opaque case ID and open a record in the access-controlled case
+   register. Record only what is needed to operate the request: received time,
+   request category, claimed account identifiers, verification state, assigned
+   owner, affected systems, status, decisions, completed actions, and closure
+   evidence. Keep request text and identity evidence out of launch records and
+   ordinary application logs.
+3. The application does not use an email address as account identity, so control
+   of the sender mailbox does not prove control of a league account. Verify the
+   requester with a single-use, non-sensitive case nonce through the exact
+   Discord account already linked to the site, or through temporary proof of
+   control of the linked Steam profile. Remove temporary proof after checking
+   it. Never request a Steam or Discord password, Steam Guard or other 2FA code,
+   API key, session cookie, backup receipt, or government identity document.
+   Do not disclose non-public data before verification succeeds.
+4. If verification is disputed, unavailable, or would expose another person,
+   stop fulfillment, preserve the minimal case record, and escalate it. Do not
+   weaken verification because a deadline or launch window is approaching.
+
+### Scope and fulfillment
+
+1. Build a case-specific source inventory before changing or disclosing data.
+   Check the live `User` identity/profile/link fields; registrations, rosters,
+   captaincy, bids, stand-ins, availability, reschedules, predictions and fantasy
+   data; game and inhouse JSON; the Cred balance and relationless ledger; news,
+   admin actions and announcement outboxes; hosted application logs; database
+   replicas, backups and PITR; delivered Discord messages and roles; and source
+   copies held by Steam, OpenDota, or Discord. Mark each source as found, not
+   applicable, externally controlled, or pending review.
+2. For an access request, assemble a read-only, subject-specific collection and
+   review it with two people before delivery through an agreed private channel.
+   Remove credentials, internal security material, and other players' private
+   information. The Admin season JSON is a multi-user audit archive and must
+   never be sent as a personal-data export. If there is no tested way to extract
+   a source safely, record the gap and escalate it instead of claiming the
+   request is complete.
+3. Prefer existing, tested controls for corrections: profile edits, provider
+   refresh, Discord unlink, registration editing, and season withdrawal. State
+   their actual effects—withdrawal retains the registration record, and Discord
+   unlink removes the local link/handle but cannot retract messages already
+   delivered to Discord. Data sourced from Steam, OpenDota, or Discord may need
+   correction at that provider before the next local refresh.
+4. A database correction or de-identification that is not an existing tested
+   application action requires a written, row-scoped change plan. The database
+   owner and privacy owner must review it, create or reconfirm a recovery point,
+   rehearse it against a disposable clone, record credential-free before/after
+   counts and invariants, run it in a controlled traffic-free window, and verify
+   connected league pages and workflows afterward. Never use an unreviewed
+   `user.delete`, ad-hoc live SQL, a destructive Prisma command, or a season
+   deletion as a shortcut.
+5. There is no first-release self-service account deletion. For a removal
+   request, identify which live values can be deleted or de-identified, which
+   league/audit history would remain, which provider copies are outside this
+   application's control, and which backups expire only through their configured
+   lifecycle. Do not describe the request as fulfilled until the approved plan
+   has run and its postflight checks pass. If the requested outcome cannot be
+   performed safely, keep it open or escalate it and communicate the limitation
+   without claiming deletion occurred.
+6. Close a case with a concise record of the verified subject, systems checked,
+   live changes made, retained categories and reason, external-provider limits,
+   applicable backup/log expiry behavior, reviewers, and verification result.
+   Send the requester the same factual boundaries without exposing internal
+   credentials, other players, or provider administration details.
+
+### Retention and restoration replay
+
+- The current application has no general automatic expiry for accounts, season
+  participation, game/inhouse history, admin actions, Cred ledger entries, or
+  delivered announcement rows. Season withdrawal preserves its registration.
+  Do not publish or repeat a fixed deletion period for any of these categories
+  unless a tested application job or provider lifecycle actually enforces it.
+- Before launch, inventory each stored category, its purpose and visibility,
+  storage/provider, current retention behavior, deletion or de-identification
+  mechanism, and owner. Separately record the real database backup/PITR,
+  application-log, mailbox, and case-register retention settings. Verify and
+  record the providers' encryption and protected-access controls; do not infer
+  them from marketing language or leave them as an undocumented assumption.
+- Discord messages and roles already delivered, and source records held by
+  Steam, OpenDota, or Discord, are controlled through those providers. The public
+  page and case closure must distinguish a local unlink/correction from deletion
+  at an external provider. Backups and PITR can retain an older value until their
+  configured expiry even after the live database is corrected.
+- Maintain a private restoration-replay register for every approved correction
+  or de-identification. Store the opaque case ID, stable subject identifiers,
+  affected sources, exact reviewed operation or immutable script reference,
+  completion time, reviewers, and verification result—never passwords, request
+  prose, or exported personal data. Protect it like the case register.
+- Before promoting any restored snapshot, compare its recovery time with the
+  replay register. Reapply and verify every later approved correction or
+  de-identification on the disposable restore, then obtain privacy-owner and
+  database-owner approval. A technically healthy restore that resurrects a
+  previously corrected value is not safe to promote.
+- A future retention cleanup must be a focused, reviewed release with backup,
+  dry-run/rehearsal, bounded deletion, observability, and tests. Until then, keep
+  the privacy page truthful about the absence of automatic expiry.
+
+### Pre-launch privacy tabletop
+
+Run all five scenarios with fixture-only request content and record the opaque
+case IDs, operators, outcomes, and unresolved gaps in the private launch record:
+
+1. The primary receives and verifies a subject-access request, inventories every
+   source, rejects the multi-user season archive, and produces a reviewed
+   subject-only response.
+2. A player asks to correct provider data, unlink Discord, and withdraw. The
+   operator explains which change is local, which must happen at the provider,
+   and which season history remains.
+3. A verified player requests removal. The operators identify restrictive
+   relations, embedded/denormalized history, delivered Discord content and
+   backups, then rehearse a reviewed de-identification plan on a disposable
+   clone without touching production.
+4. A disposable restore predating that correction is created. The operators
+   find the later action in the replay register, reapply it, and verify it before
+   declaring the restore eligible for promotion.
+5. The primary is unavailable. The deputy independently accesses the MFA-backed
+   mailbox and encrypted case register, acknowledges the test case, and follows
+   the same verification rules without a shared credential.
+
+An unverified mailbox, inaccessible deputy path, missing storage/encryption or
+retention evidence, unsafe subject extraction, failed rehearsal, or incomplete
+restore replay is a release stop, not a residual risk to discover after traffic
+opens.
 
 ## Controlled promotion
 
@@ -191,13 +349,18 @@ Use this when data is corrupt, missing, or of uncertain integrity.
 4. Test both the direct migration connection and the pooled runtime connection.
    Confirm reads and a disposable transactional write/rollback through the
    runtime role. Exercise the actor/phase smoke checklist.
-5. Obtain database-owner and release-owner approval for cutover. Point
+5. Compare the restore point with the private restoration-replay register.
+   Reapply every later approved privacy correction or de-identification on the
+   clone, verify its subject-specific postflight, and obtain privacy-owner and
+   database-owner approval that the recovered data will not resurrect it.
+6. Obtain database-owner and release-owner approval for cutover. Point
    production secrets to the recovered target through a manually approved
    deployment, verify postflight and application health, then enable one
    scheduler and observe two clean passes.
-6. Lift the traffic freeze only after monitoring and player-visible state are
+7. Lift the traffic freeze only after monitoring and player-visible state are
    verified. Preserve the original database and incident artifacts according to
-   the approved retention policy.
+   the recorded provider and case-retention decisions; do not keep them under an
+   undefined policy.
 
 ## Secret compromise
 

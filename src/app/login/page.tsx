@@ -101,6 +101,17 @@ export default async function LoginPage({
           ) : null}
 
           <div className="space-y-2">
+            <p className="text-xs leading-relaxed text-muted">
+              By signing in, you agree to the{" "}
+              <Link href="/terms" className={textLink()}>
+                league terms
+              </Link>{" "}
+              and acknowledge the{" "}
+              <Link href="/privacy" className={textLink()}>
+                Privacy &amp; data use notice
+              </Link>
+              .
+            </p>
             <a
               href={steamHref}
               className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-[#1b2838] px-4 font-medium text-white transition-colors hover:bg-[#223247] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"

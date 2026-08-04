@@ -1230,8 +1230,9 @@ export function ShieldCheckIcon({
 }
 
 /**
- * Reassurance for players wary of "Sign in with Steam" — explains, plainly,
- * that it's used only to grab their name + profile and the Steam API is safe.
+ * Reassurance for players wary of "Sign in with Steam". This copy is also the
+ * collection notice: login creates the durable Steam identity and immediately
+ * performs the documented public OpenDota enrichment.
  */
 export function SteamSafetyNote({ className }: { className?: string }) {
   return (
@@ -1246,10 +1247,14 @@ export function SteamSafetyNote({ className }: { className?: string }) {
         Why Steam sign-in?
       </div>
       <p className="mt-2 text-xs leading-relaxed text-muted">
-        Only to get your <b className="font-medium text-fg">name and profile</b>{" "}
-        — nothing else. You log in on Steam&apos;s own site, so we never see
-        your password, and Steam&apos;s API only shares public info — it
-        can&apos;t touch your account.
+        Steam verifies your <b className="font-medium text-fg">SteamID64</b>.
+        This creates or updates your league profile with your public name,
+        avatar, and profile link; we derive your Dota account and use OpenDota
+        for your medal and public match activity. You sign in on Steam&apos;s own
+        site, so we never receive your Steam password or email.{" "}
+        <Link href="/privacy" className={textLink()}>
+          How your data is used →
+        </Link>
       </p>
     </div>
   );

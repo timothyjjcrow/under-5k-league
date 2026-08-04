@@ -185,6 +185,8 @@ jobs:
           ADMIN_STEAM_IDS: "76561198000000001"
           APP_URL: "https://ci.ld2l.invalid"
           NEXT_PUBLIC_SITE_URL: "https://ci.ld2l.invalid"
+          PRIVACY_CONTACT_EMAIL: "privacy-ci@ggd2l.org"
+          PRIVACY_DATA_LOCATIONS: "United States"
           ALLOW_DEV_LOGIN: "false"
 
   # THE RATCHET, sharded. A guarded claim's WHERE predicate is its entire
