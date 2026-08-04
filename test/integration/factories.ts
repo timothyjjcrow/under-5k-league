@@ -48,6 +48,10 @@ export async function raceN<T>(n: number, fn: () => Promise<T>): Promise<T[]> {
 
 /** Wipe every table (children first) so each test starts from empty. */
 export async function resetDb() {
+  // Operational singletons/outboxes are relationless and survive every domain
+  // cascade; clear them first so lease/backlog state cannot cross test cases.
+  await prisma.leagueAnnouncement.deleteMany();
+  await prisma.automationRunState.deleteMany();
   // Cred first: InhouseCreditEntry has NO foreign key at all (the AdminAction
   // shape — a staking record has to outlive the account), so nothing cascades
   // it and a missing line here leaks balances between tests. For money math

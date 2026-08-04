@@ -29,12 +29,13 @@ import {
   type Settlement,
 } from "./inhouse-bets";
 import { resolveUnsettledBets, settleInhouseBets } from "./inhouse-bet-service";
-import { gameMvp } from "./achievements";
-import { heroById } from "./heroes";
 import {
+  canStartOpenDotaFetch,
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
+  openDotaBudgetExpired,
   parseMatchId,
+  type OpenDotaFetchOptions,
   type OpenDotaMatch,
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
@@ -42,13 +43,13 @@ import { classifyGame } from "./match-import";
 import {
   inhouseLobbyMessage,
   inhouseQueueMessage,
-  inhouseResultMessage,
   inhouseResultVoidedMessage,
   sendInhouseDiscordMessage,
   getInhousePingRoleId,
 } from "./discord";
 import {
   deliverInhouseAnnouncements,
+  inhouseResultAnnouncementContent,
   INHOUSE_ANNOUNCEMENT_KIND,
   INHOUSE_ANNOUNCEMENT_STATUS,
 } from "./inhouse-announcement-outbox";
@@ -1292,6 +1293,10 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   // result. Hoisted to keep the guarded claim's data block flat for the mutation
   // ratchet (same rule as matchStart immediately above).
   const completedAt = new Date();
+  // Truthful without the optional wager receipt block, so the durable event
+  // can commit with COMPLETED. Finalization enriches a still-pending row after
+  // settlement, but a process death can no longer erase the result itself.
+  const baseResultContent = inhouseResultAnnouncementContent(r);
 
   const claimed = await prisma.$transaction(async (tx) => {
     const claim = await tx.inhouseLobby.updateMany({
@@ -1331,9 +1336,24 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
         data: { team: fix.team },
       });
     }
+    await tx.inhouseAnnouncement.create({
+      data: {
+        lobbyId,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        sequence: 1,
+        content: baseResultContent,
+        resultMatchId: r.dotaMatchId,
+      },
+    });
+    await stampResultChange(tx);
     return true;
   });
   if (!claimed) return false;
+
+  // Exact process-death seam: everything above is committed, while betting,
+  // Elo and optional announcement enrichment have not started. The heartbeat
+  // reconciler must be able to finish from columns alone after this point.
+  await raceHook("inhouse.applyResult.afterPrimaryCommit");
 
   // Pay the pot. Both boundaries around this call are load-bearing:
   //
@@ -1357,8 +1377,8 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   let settlement: Settlement | null = null;
   try {
     settlement = await settleInhouseBets(lobbyId);
-  } catch (e) {
-    console.error("[inhouse-bets] settlement failed", e);
+  } catch {
+    console.error("[inhouse-bets] settlement failed (BET_SETTLEMENT_FAILED)");
   }
 
   // Stamp each participant's Elo swing from THIS game: the lobby is now the
@@ -1404,27 +1424,7 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
     ? settlement.bets.map((b) => ({ ...b, name: nameOf.get(b.userId) ?? "?" }))
     : null;
 
-  const radiantWin = r.winnerTeam === r.radiantTeam;
-  const mvpId = gameMvp(r.boxScore, radiantWin);
-  const mvp = mvpId ? r.boxScore.find((b) => b.userId === mvpId) : null;
-  // Assembled as a variable, not passed as a fresh literal: `slips` rides along
-  // on the argument the formatter already takes, and TypeScript only applies its
-  // excess-property check to literals at the call site. So this compiles while
-  // inhouseResultMessage still ignores the field (rendering the block is
-  // discord.ts's half of the feature) and starts feeding it the day it declares
-  // one — and if it declares a DIFFERENT shape, this stops compiling rather than
-  // quietly sending the old message.
-  const resultMessage = {
-    winnerSide: (radiantWin ? "Radiant" : "Dire") as "Radiant" | "Dire",
-    radiantScore: r.radiantScore,
-    direScore: r.direScore,
-    durationSecs: r.durationSecs,
-    mvpName: mvp?.name ?? null,
-    mvpHero: mvp ? (heroById(mvp.heroId)?.name ?? null) : null,
-    dotaMatchId: r.dotaMatchId,
-    slips,
-  };
-  const resultContent = inhouseResultMessage(resultMessage);
+  const resultContent = inhouseResultAnnouncementContent(r, slips);
 
   // A completed result is still voidable while settlement/history are being
   // computed. The old update-by-id below could therefore restore eloDeltas on
@@ -1433,10 +1433,11 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   // tested without deadlocking a rival on this row.
   await raceHook("inhouse.applyResult.beforeFinalizationClaim");
 
-  // Finalize only if this exact result is still current. The UPDATE and outbox
-  // insert commit together, so a committed result can never silently lack its
-  // retryable Discord work. No network call runs while this transaction is
-  // open. voidLastResult serializes publication through the same outbox:
+  // Finalize only if this exact result is still current. COMPLETED already
+  // committed with a truthful base outbox row; this transaction stamps Elo and
+  // enriches that row with wager receipts only while it is still pending. No
+  // network call runs while this transaction is open. voidLastResult
+  // serializes publication through the same outbox:
   //
   //   * void wins first -> this claim loses, so no result event exists;
   //   * finalization wins first -> void cancels an unsent result, or queues its
@@ -1451,28 +1452,31 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
       data: { eloDeltas: JSON.stringify(deltas) },
     });
     if (claim.count === 0) return false;
-    await tx.inhouseAnnouncement.create({
-      data: {
-        lobbyId,
-        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
-        sequence: 1,
-        content: resultContent,
-        resultMatchId: r.dotaMatchId,
-      },
-    });
+    if (settlement) {
+      await tx.inhouseAnnouncement.updateMany({
+        where: {
+          lobbyId,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+          status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+          resultMatchId: r.dotaMatchId,
+        },
+        data: { content: resultContent },
+      });
+    }
+    await stampResultChange(tx);
     return true;
   });
   if (!finalized) return false;
 
-  // Every parked client learns via the /api/sync cursor, not just this one.
-  await stampResultChange();
   // Preserve the immediate announcement when Discord is healthy, but only
   // AFTER the result + outbox transaction commits. A false/throw leaves the
   // row PENDING for the sitewide sync heartbeat instead of burning the event.
   try {
     await deliverInhouseAnnouncements({ lobbyId });
-  } catch (error) {
-    console.error("[inhouse-announcement] immediate delivery failed", error);
+  } catch {
+    console.error(
+      "[inhouse-announcement] immediate delivery failed (DELIVERY_FAILED)",
+    );
   }
   return true;
 }
@@ -1488,15 +1492,26 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
 async function findInhouseGame(
   players: LobbyPlayerFull[],
   floorSeconds: number,
-): Promise<{ result: BuiltResult | null; unreachable: boolean }> {
+  options: OpenDotaFetchOptions = {},
+): Promise<{
+  result: BuiltResult | null;
+  unreachable: boolean;
+  deadlineReached?: boolean;
+}> {
   const accounts = players
     .map((p) => effectiveDotaAccountId(p.user))
     .filter((a): a is number => a != null);
   if (accounts.length === 0) return { result: null, unreachable: false };
+  if (!canStartOpenDotaFetch(options)) {
+    return { result: null, unreachable: false, deadlineReached: true };
+  }
 
   const lists = await Promise.all(
-    accounts.map((acc) => fetchRecentMatchIds(acc, 10)),
+    accounts.map((acc) => fetchRecentMatchIds(acc, 10, options)),
   );
+  if (!canStartOpenDotaFetch(options) || openDotaBudgetExpired(options)) {
+    return { result: null, unreachable: false, deadlineReached: true };
+  }
   // A game shared by fewer than this many of our players isn't a candidate.
   const MIN_SHARED = 4;
   const reachable = lists.filter((l) => l !== null).length;
@@ -1523,9 +1538,16 @@ async function findInhouseGame(
     .map(([id]) => id);
   if (candidateIds.length === 0) return { result: null, unreachable };
 
+  if (!canStartOpenDotaFetch(options)) {
+    return { result: null, unreachable, deadlineReached: true };
+  }
+
   const matches = await Promise.all(
-    candidateIds.map((id) => fetchOpenDotaMatch(String(id))),
+    candidateIds.map((id) => fetchOpenDotaMatch(String(id), options)),
   );
+  if (!canStartOpenDotaFetch(options) || openDotaBudgetExpired(options)) {
+    return { result: null, unreachable, deadlineReached: true };
+  }
   let best: BuiltResult | null = null;
   for (const od of matches) {
     if (!od || od.start_time < floorSeconds) continue;
@@ -1668,15 +1690,27 @@ export async function recordMatch(
  * lobby out if we find it. Safe to call on every poll (claims the attempt
  * atomically so concurrent pollers don't all scan). Idempotent.
  */
-export async function maybeAutoDetectResult(): Promise<boolean> {
+export function maybeAutoDetectResult(): Promise<boolean>;
+export function maybeAutoDetectResult(
+  options: OpenDotaFetchOptions,
+): Promise<{ recorded: boolean; deadlineReached: boolean }>;
+export async function maybeAutoDetectResult(
+  options?: OpenDotaFetchOptions,
+): Promise<boolean | { recorded: boolean; deadlineReached: boolean }> {
+  const detailed = options !== undefined;
+  const finish = (recorded: boolean, deadlineReached = false) =>
+    detailed ? { recorded, deadlineReached } : recorded;
+  const fetchOptions = options ?? {};
+  if (!canStartOpenDotaFetch(fetchOptions)) return finish(false, true);
+
   const now = Date.now();
   const lobby = await prisma.inhouseLobby.findFirst({
     where: { status: INHOUSE_STATUS.IN_PROGRESS },
     include: { players: { include: { user: true } } },
   });
-  if (!lobby || !lobby.startedAt) return false;
+  if (!lobby || !lobby.startedAt) return finish(false);
   if (now - lobby.startedAt.getTime() < INHOUSE.DETECT_MIN_MINUTES * 60_000) {
-    return false; // too early — the game can't be over yet
+    return finish(false); // too early — the game can't be over yet
   }
 
   // Claim this attempt so only one concurrent poll actually hits OpenDota.
@@ -1693,14 +1727,30 @@ export async function maybeAutoDetectResult(): Promise<boolean> {
     },
     data: { detectedAt: new Date(now) },
   });
-  if (claim.count === 0) return false;
+  if (claim.count === 0) return finish(false);
 
-  const { result: found } = await findInhouseGame(
+  const { result: found, deadlineReached } = await findInhouseGame(
     lobby.players,
     Math.floor(lobby.createdAt.getTime() / 1000),
+    fetchOptions,
   );
-  if (!found) return false;
-  return applyResult(lobby.id, found);
+  if (deadlineReached) {
+    // The attempt did not finish, so it must not buy a full backoff interval.
+    // Restore only the exact claim this invocation stamped; a newer poll or an
+    // admin result can never be overwritten by a timed-out worker.
+    await raceHook("inhouse.autoDetect.beforeDeadlineRollback");
+    await prisma.inhouseLobby.updateMany({
+      where: {
+        id: lobby.id,
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        detectedAt: new Date(now),
+      },
+      data: { detectedAt: lobby.detectedAt },
+    });
+    return finish(false, true);
+  }
+  if (!found) return finish(false);
+  return finish(await applyResult(lobby.id, found));
 }
 
 /** Admin: scrap the current lobby (stuck draft, no-shows). Players can requeue. */
@@ -1863,8 +1913,8 @@ export async function voidLastResult(
   // retry the unchanged settlement state.
   try {
     await resolveUnsettledBets(last.id);
-  } catch (e) {
-    console.error("[inhouse-bets] post-void sweep failed", e);
+  } catch {
+    console.error("[inhouse-bets] post-void sweep failed (BET_SWEEP_FAILED)");
   }
 
   // Post-claim, so only the winner of a concurrent void writes the record —
@@ -1891,8 +1941,10 @@ export async function voidLastResult(
   // permanent. It rides the ALERT webhook, never the board's.
   try {
     await deliverInhouseAnnouncements({ lobbyId: last.id });
-  } catch (error) {
-    console.error("[inhouse-announcement] void delivery failed", error);
+  } catch {
+    console.error(
+      "[inhouse-announcement] void delivery failed (DELIVERY_FAILED)",
+    );
   }
   return { ok: true };
 }
@@ -2028,8 +2080,8 @@ export async function cancelLobby(
   // refund path has had a chance to synchronize balances with CANCELLED.
   try {
     await resolveUnsettledBets(lobby.id);
-  } catch (e) {
-    console.error("[inhouse-bets] post-cancel sweep failed", e);
+  } catch {
+    console.error("[inhouse-bets] post-cancel sweep failed (BET_SWEEP_FAILED)");
   }
   return { ok: true };
 }
@@ -2143,8 +2195,8 @@ export async function getInhouseState(
   // next poll from anywhere retries the same pot.
   try {
     await resolveUnsettledBets();
-  } catch (e) {
-    console.error("[inhouse-bets]", e);
+  } catch {
+    console.error("[inhouse-bets] resolver failed (BET_SWEEP_FAILED)");
   }
   await maybeFormLobby();
   await resolveReadyCheck();

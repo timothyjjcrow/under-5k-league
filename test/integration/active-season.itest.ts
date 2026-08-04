@@ -16,12 +16,35 @@ describe("active-season read integrity", () => {
   );
 
   it.skipIf(ON_POSTGRES)(
-    "stops background lifecycle work instead of mutating the newest active season",
+    "reports bounded failures instead of mutating the newest active season",
     async () => {
-      await makeSeason({ name: "First" });
-      await makeSeason({ name: "Second" });
+      const first = await makeSeason({ name: "First" });
+      const second = await makeSeason({ name: "Second" });
 
-      await expect(runResultSync()).rejects.toThrow(/more than one season/i);
+      await expect(runResultSync()).resolves.toMatchObject({
+        imported: 0,
+        inhouse: false,
+        draft: false,
+        playoff: false,
+        watch: false,
+        issues: expect.arrayContaining([
+          "LEAGUE_SYNC_FAILED",
+          "DRAFT_SYNC_FAILED",
+          "PLAYOFF_SYNC_FAILED",
+          "REMINDER_FAILED",
+          "NOTIFICATION_RETRY_FAILED",
+        ]),
+      });
+      expect(
+        await prisma.season.findMany({
+          where: { id: { in: [first.id, second.id] } },
+          orderBy: { name: "asc" },
+          select: { name: true, status: true, isActive: true },
+        }),
+      ).toEqual([
+        { name: "First", status: first.status, isActive: true },
+        { name: "Second", status: second.status, isActive: true },
+      ]);
     },
   );
 

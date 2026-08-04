@@ -71,7 +71,6 @@ import {
   syncLeagueGames,
   enrichStoredGames,
   rememberImportSkip,
-  ANNOUNCE_FAILED_PREFIX,
 } from "@/lib/match-import";
 import {
   parseMatchId,
@@ -95,8 +94,6 @@ import {
   draftResumedMessage,
   draftSaleUndoneMessage,
   freeAgentSignedMessage,
-  getWebhookUrl,
-  matchResultMessage,
   playerReleasedMessage,
   teamWithdrewMessage,
   playoffsStartedMessage,
@@ -137,6 +134,7 @@ import {
   markWeekHonorsStale,
   maybeAnnounceWeekHonors,
 } from "@/lib/honors-service";
+import { invalidatePendingAnnouncementMarkers } from "@/lib/announcement-marker";
 import {
   medalProvesIneligible,
   promoteGateError,
@@ -213,6 +211,7 @@ class CaptainStateChangedError extends Error {}
 class DraftOrderConflictError extends Error {}
 class DraftStartPreflightError extends Error {}
 class ResultWriteError extends Error {}
+class ResultAlreadySavedError extends Error {}
 
 const clearedDraftConfirmation = {
   draftConfirmedRevision: null,
@@ -3173,6 +3172,7 @@ export async function recordResult(
             homeTeamId: true,
             awayTeamId: true,
             week: true,
+            scheduledAt: true,
             bracketSlot: true,
             status: true,
             homeScore: true,
@@ -3221,6 +3221,14 @@ export async function recordResult(
           throw new ResultWriteError(
             "That match just changed — a game was imported while you were typing, or another result correction landed. Reload and check the score before saving.",
           );
+        }
+        if (
+          match.status === MATCH_STATUS.COMPLETED &&
+          match.homeScore === homeScore &&
+          match.awayScore === awayScore &&
+          match.forfeit === forfeit
+        ) {
+          throw new ResultAlreadySavedError();
         }
 
         const currentScoreError = forfeit
@@ -3292,12 +3300,30 @@ export async function recordResult(
             winnerTeamId,
             status: MATCH_STATUS.COMPLETED,
             forfeit,
+            completedAt: new Date(),
           },
         });
         if (applied.count === 0) {
           throw new ResultWriteError(
             "That match just changed — a game was imported while you were typing, or another result correction landed. Reload and check the score before saving.",
           );
+        }
+
+        if (match.status === MATCH_STATUS.SCHEDULED && match.scheduledAt) {
+          await invalidatePendingAnnouncementMarkers(
+            tx,
+            weekReminderKey(
+              match.seasonId,
+              match.week,
+              match.scheduledAt.getTime(),
+            ),
+          );
+        }
+        if (
+          match.phase === MATCH_PHASE.REGULAR &&
+          match.status === MATCH_STATUS.COMPLETED
+        ) {
+          await markWeekHonorsStale(tx, match.seasonId, match.week);
         }
 
         let bookings: {
@@ -3325,6 +3351,13 @@ export async function recordResult(
           create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
           update: { value: changedAt },
         });
+        // The score and its announcement source change together. Deleting the
+        // old generation makes any not-yet-delivered payload fail its source
+        // check, while a crash after this commit leaves a completedAt-backed
+        // recovery candidate for the unattended worker.
+        await tx.setting.deleteMany({
+          where: { key: resultAnnouncedKey(match.id) },
+        });
         return {
           seasonId: match.seasonId,
           phase: match.phase,
@@ -3340,6 +3373,9 @@ export async function recordResult(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
+    if (error instanceof ResultAlreadySavedError) {
+      return { message: "That result is already saved — no changes were made" };
+    }
     if (error instanceof ResultWriteError) return { error: error.message };
     if ((error as { code?: string }).code === "P2034") {
       return {
@@ -3350,18 +3386,6 @@ export async function recordResult(
     throw error;
   }
 
-  // An explicit admin save always announces (corrections included), but it
-  // stamps the once-per-match marker so recomputeSeries (a later game import
-  // for this match) can't post the same result a second time.
-  await prisma.setting.upsert({
-    where: { key: resultAnnouncedKey(matchId) },
-    create: {
-      key: resultAnnouncedKey(matchId),
-      value: new Date().toISOString(),
-    },
-    update: { value: new Date().toISOString() },
-  });
-  const webhook = await getWebhookUrl();
   // The activity card's copy promises result changes are logged — and a
   // manual score can override an auto-import, which is exactly the "what did
   // I press?" case the log exists for. Match retiming is logged separately
@@ -3371,28 +3395,22 @@ export async function recordResult(
     summary: `Recorded ${outcome.homeName} ${homeScore}–${awayScore} ${outcome.awayName} (week ${outcome.week})${forfeit ? " — forfeit" : ""}`,
     seasonId: outcome.seasonId,
   });
-  const sent = await sendDiscordMessage(
-    matchResultMessage({
-      homeName: outcome.homeName,
-      awayName: outcome.awayName,
+  // Use the same leased marker + durable outbox path as imported results.
+  // Notification trouble must not turn a committed result into a misleading
+  // failed admin action; completedAt recovery owns the crash/failure gap.
+  try {
+    await announceSeriesResultOnce({
+      id: matchId,
+      homeTeamId: outcome.homeTeamId,
+      awayTeamId: outcome.awayTeamId,
       homeScore,
       awayScore,
       week: outcome.week,
-      isPlayoff: outcome.phase !== MATCH_PHASE.REGULAR,
+      phase: outcome.phase,
       forfeit,
-    }),
-  );
-  // Only a genuine send FAILURE is retryable. "No webhook configured" isn't:
-  // flagging those meant a league that entered results before wiring Discord
-  // up got every historical result replayed into the channel minutes after
-  // pasting the URL. (announceSeriesResultOnce already makes this
-  // distinction — this path didn't.)
-  if (!sent && webhook) {
-    await prisma.setting.updateMany({
-      where: { key: resultAnnouncedKey(matchId) },
-      // The retry sweep re-claims exactly this prefix — never hand-write it.
-      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
     });
+  } catch {
+    console.error("[admin] result announcement deferred (RESULT_ANNOUNCEMENT_FAILED)");
   }
 
   // A forfeit RULING on a series with no imported games is a fixture that
@@ -4194,6 +4212,8 @@ export async function withdrawTeam(
             select: {
               id: true,
               week: true,
+              status: true,
+              scheduledAt: true,
               bestOf: true,
               homeTeamId: true,
               awayTeamId: true,
@@ -4244,26 +4264,48 @@ export async function withdrawTeam(
 
         const matchClaims: { count: number }[] = [];
         for (const match of open) {
-          matchClaims.push(
-            await tx.match.updateMany({
-              where: {
-                id: match.id,
-                status: { not: MATCH_STATUS.COMPLETED },
-              },
-              data: {
-                status: MATCH_STATUS.COMPLETED,
-                forfeit: true,
-                homeScore:
-                  match.homeTeamId === teamId ? 0 : forfeitScore(match.bestOf),
-                awayScore:
-                  match.awayTeamId === teamId ? 0 : forfeitScore(match.bestOf),
-                winnerTeamId:
-                  match.homeTeamId === teamId
-                    ? match.awayTeamId
-                    : match.homeTeamId,
-              },
-            }),
-          );
+          const matchClaim = await tx.match.updateMany({
+            where: {
+              id: match.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+            data: {
+              status: MATCH_STATUS.COMPLETED,
+              forfeit: true,
+              completedAt: new Date(),
+              homeScore:
+                match.homeTeamId === teamId ? 0 : forfeitScore(match.bestOf),
+              awayScore:
+                match.awayTeamId === teamId ? 0 : forfeitScore(match.bestOf),
+              winnerTeamId:
+                match.homeTeamId === teamId
+                  ? match.awayTeamId
+                  : match.homeTeamId,
+            },
+          });
+          matchClaims.push(matchClaim);
+          if (matchClaim.count === 1) {
+            if (match.status === MATCH_STATUS.SCHEDULED && match.scheduledAt) {
+              await invalidatePendingAnnouncementMarkers(
+                tx,
+                weekReminderKey(
+                  expectedActiveSeasonId,
+                  match.week,
+                  match.scheduledAt.getTime(),
+                ),
+              );
+            }
+            // The single team-withdrawal broadcast replaces noisy per-series
+            // result posts. Persist that decision with the result so generic
+            // completedAt crash recovery cannot replay these ruled fixtures;
+            // updating also invalidates any impossible stale queued source.
+            const value = `suppressed:team-withdrawal:${new Date().toISOString()}`;
+            await tx.setting.upsert({
+              where: { key: resultAnnouncedKey(match.id) },
+              create: { key: resultAnnouncedKey(match.id), value },
+              update: { value },
+            });
+          }
         }
         await tx.rescheduleRequest.updateMany({
           where: {
@@ -4621,6 +4663,7 @@ export async function reopenMatch(
             homeTeamId: true,
             awayTeamId: true,
             week: true,
+            scheduledAt: true,
             bracketSlot: true,
             status: true,
             _count: { select: { games: true } },
@@ -4737,11 +4780,23 @@ export async function reopenMatch(
             forfeit: false,
             autoSyncedAt: null,
             autoSyncAttempts: 0,
+            completedAt: null,
           },
         });
         if (claimed.count === 0) {
           throw new ResultWriteError(
             "That match or its games just changed — reload before reopening it.",
+          );
+        }
+
+        if (match.scheduledAt) {
+          await invalidatePendingAnnouncementMarkers(
+            tx,
+            weekReminderKey(
+              match.seasonId,
+              match.week,
+              match.scheduledAt.getTime(),
+            ),
           );
         }
 
@@ -4896,6 +4951,7 @@ export async function removeGame(
                 id: true,
                 seasonId: true,
                 week: true,
+                scheduledAt: true,
                 phase: true,
                 bracketSlot: true,
                 status: true,
@@ -5003,8 +5059,23 @@ export async function removeGame(
             winnerTeamId: projection.winnerTeamId,
             status: projection.status,
             forfeit: false,
+            completedAt: projection.decided ? new Date() : null,
           },
         });
+        if (
+          match.scheduledAt &&
+          match.status !== MATCH_STATUS.SCHEDULED &&
+          projection.status === MATCH_STATUS.SCHEDULED
+        ) {
+          await invalidatePendingAnnouncementMarkers(
+            tx,
+            weekReminderKey(
+              match.seasonId,
+              match.week,
+              match.scheduledAt.getTime(),
+            ),
+          );
+        }
         if (correctingFinalNow) {
           const uncrowned = await tx.season.updateMany({
             where: {
@@ -5073,17 +5144,19 @@ export async function removeGame(
   const followUpFailures: string[] = [];
   try {
     refreshGames();
-  } catch (error) {
+  } catch {
     followUpFailures.push("public-stat cache refresh");
-    console.error("[removeGame] public-stat cache refresh failed", error);
+    console.error(
+      "[removeGame] public-stat cache refresh failed (CACHE_REFRESH_FAILED)",
+    );
   }
 
   const runFollowUp = async (label: string, effect: () => Promise<unknown>) => {
     try {
       await effect();
-    } catch (error) {
+    } catch {
       followUpFailures.push(label);
-      console.error(`[removeGame] ${label} failed`, error);
+      console.error(`[removeGame] ${label} failed (FOLLOW_UP_FAILED)`);
     }
   };
 
@@ -5112,8 +5185,10 @@ export async function removeGame(
         // the authoritative Season row before telling the admin what happened.
         try {
           await advancePlayoffBracket(corrected.seasonId);
-        } catch (error) {
-          console.error("[removeGame] champion re-crowning failed", error);
+        } catch {
+          console.error(
+            "[removeGame] champion re-crowning failed (BRACKET_ADVANCE_FAILED)",
+          );
         }
         try {
           const season = await prisma.season.findUnique({
@@ -5126,11 +5201,10 @@ export async function removeGame(
           if (!finalChampionConfirmed) {
             followUpFailures.push("champion re-crowning");
           }
-        } catch (error) {
+        } catch {
           followUpFailures.push("champion re-crowning verification");
           console.error(
-            "[removeGame] champion re-crowning verification failed",
-            error,
+            "[removeGame] champion re-crowning verification failed (VERIFY_FAILED)",
           );
         }
       } else {
@@ -6609,7 +6683,12 @@ export async function testDiscordWebhook(
     (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ||
     process.env.DISCORD_WEBHOOK_URL;
   if (!configured) return { error: "Set a webhook URL first" };
-  const ok = await sendDiscordMessage(testMessage());
+  // A webhook check must report this exact network attempt. Ordinary league
+  // announcements are durably queued, where `true` means accepted by the
+  // outbox rather than necessarily accepted by Discord already.
+  const ok = await sendDiscordMessage(testMessage(), undefined, {
+    durable: false,
+  });
   return ok
     ? { message: "Test message sent — check your Discord" }
     : { error: "Discord rejected the message — double-check the URL" };

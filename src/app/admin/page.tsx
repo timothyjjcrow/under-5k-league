@@ -84,6 +84,7 @@ import {
   reinstateSignup,
   setDraftSettings,
 } from "@/app/actions/admin";
+import { runMaintenanceNow } from "@/app/actions/automation";
 import { cancelReschedule } from "@/app/actions/reschedule";
 import { adjustCredAction } from "@/app/actions/inhouse-bets";
 import {
@@ -96,13 +97,22 @@ import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import {
+  ANNOUNCE_FAILED_PREFIX,
   getSetting,
+  HONORS_ANNOUNCED_PREFIX,
   leagueSyncSkipKey,
   playoffGamesArchiveKey,
   SETTING_KEYS,
 } from "@/lib/settings";
 import { adminNextStep } from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
+import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
+import {
+  automationHealthView,
+  type AutomationHealthRecord,
+} from "@/lib/automation-health";
+import { LEAGUE_ANNOUNCEMENT_STATUS } from "@/lib/league-announcement-outbox";
+import { INHOUSE_ANNOUNCEMENT_STATUS } from "@/lib/inhouse-announcement-outbox";
 import { DangerSubmit } from "@/components/danger-submit";
 import { ChaseCopy } from "@/components/chase-copy";
 import { cn } from "@/lib/utils";
@@ -266,6 +276,7 @@ export default async function AdminPage() {
                 { id: "adm-league", label: "League id" },
               ]
             : []),
+          { id: "adm-automation", label: "Automation" },
           // Season-independent: inhouse alerts/board and the Cred economy are
           // most important in the offseason, when inhouse is the live mode.
           { id: "adm-discord", label: "Discord" },
@@ -311,6 +322,16 @@ export default async function AdminPage() {
           </CardBody>
         </Card>
       )}
+
+      {/* Evergreen: cron also owns offseason/inhouse maintenance, and an
+          absent active season must never hide the only production scheduler
+          health surface. The query is isolated so an unavailable health table
+          does not take the rest of the admin panel down with it. */}
+      <AdminAnchor id="adm-automation">
+        <Suspense fallback={<CardSkeleton rows={5} />}>
+          <AutomationRunnerHealth />
+        </Suspense>
+      </AdminAnchor>
 
       {/* Evergreen because its inhouse channel, ping role and live board do
           not belong to a season. With no active season the reach funnel is
@@ -3640,6 +3661,265 @@ function StandinMatchBlock({
         </ActionForm>
       )}
     </div>
+  );
+}
+
+function AutomationTimestamp({
+  value,
+  emptyLabel,
+}: {
+  value: Date | null | undefined;
+  emptyLabel: string;
+}) {
+  return value ? (
+    <LocalTime
+      ts={value.getTime()}
+      variant="short"
+      initial={formatMatchTime(value, "short")}
+    />
+  ) : (
+    emptyLabel
+  );
+}
+
+/**
+ * Production-wide runner health. This is separate from AutoSyncHealth below:
+ * that card explains per-match scan/backoff state during playable phases,
+ * while this one answers whether the single scheduled worker is alive and
+ * safe to recover in every phase (including offseason and no season).
+ */
+async function AutomationRunnerHealth() {
+  let state: AutomationHealthRecord | null | undefined;
+  let backlog:
+    | {
+        league: number;
+        inhouse: number;
+        markerRetries: number;
+      }
+    | undefined;
+  try {
+    const [runner, league, inhouse, markerRetries] = await Promise.all([
+      prisma.automationRunState.findUnique({
+        where: { key: AUTOMATION_RUN_KEY },
+        select: {
+          lastStatus: true,
+          leaseExpiresAt: true,
+          lastAttemptAt: true,
+          lastStartedAt: true,
+          lastFinishedAt: true,
+          lastSuccessAt: true,
+          lastSource: true,
+          lastDurationMs: true,
+          consecutiveFailures: true,
+          lastErrorCode: true,
+          lastSummary: true,
+        },
+      }),
+      prisma.leagueAnnouncement.count({
+        where: {
+          status: {
+            in: [
+              LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+              LEAGUE_ANNOUNCEMENT_STATUS.SENDING,
+            ],
+          },
+        },
+      }),
+      prisma.inhouseAnnouncement.count({
+        where: {
+          status: {
+            in: [
+              INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+              INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
+            ],
+          },
+        },
+      }),
+      prisma.setting.count({
+        where: {
+          OR: [
+            { value: { startsWith: ANNOUNCE_FAILED_PREFIX } },
+            {
+              key: { startsWith: HONORS_ANNOUNCED_PREFIX },
+              value: { startsWith: "stale:" },
+            },
+          ],
+        },
+      }),
+    ]);
+    state = runner;
+    backlog = { league, inhouse, markerRetries };
+  } catch {
+    // The admin panel remains usable during a migration/readiness incident.
+    // `undefined` is intentionally distinct from a missing (never-run) row.
+    state = undefined;
+    backlog = undefined;
+  }
+
+  // Async SERVER component: one value per request. The React purity rule is
+  // aimed at client re-renders, not a server health snapshot.
+  // eslint-disable-next-line react-hooks/purity
+  const now = Date.now();
+  const health = automationHealthView(state, now);
+  const emptyTime = state === undefined ? "Unavailable" : "Never";
+  const badgeTone =
+    health.kind === "HEALTHY"
+      ? "success"
+      : health.kind === "RUNNING"
+        ? "accent"
+        : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
+          ? "danger"
+          : "neutral";
+  const calloutClass =
+    health.kind === "HEALTHY"
+      ? "border-success/30 bg-success/10"
+      : health.kind === "RUNNING"
+        ? "border-accent/30 bg-accent/10"
+        : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
+          ? "border-danger/30 bg-danger/10"
+          : "border-line bg-surface-2/40";
+
+  return (
+    <Card>
+      <CardHeader
+        title="Automation runner"
+        subtitle="Database-owned maintenance for result imports and league background work, available in every league phase."
+        action={<Badge tone={badgeTone}>{health.label}</Badge>}
+      />
+      <CardBody className="space-y-5">
+        <div className={cn("rounded-lg border px-4 py-3", calloutClass)}>
+          <div className="font-medium text-fg">{health.headline}</div>
+          <p className="mt-1 text-sm text-muted">{health.description}</p>
+        </div>
+
+        <StatStrip>
+          <StatCell
+            label="Last attempt"
+            value={
+              <AutomationTimestamp
+                value={state?.lastAttemptAt}
+                emptyLabel={emptyTime}
+              />
+            }
+          />
+          <StatCell
+            label="Last success"
+            value={
+              <AutomationTimestamp
+                value={state?.lastSuccessAt}
+                emptyLabel={emptyTime}
+              />
+            }
+          />
+          <StatCell label="Source" value={health.sourceLabel} />
+          <StatCell label="Duration" value={health.durationLabel} />
+          <StatCell
+            label="Failure streak"
+            value={health.consecutiveFailures}
+            tone={health.consecutiveFailures > 0 ? "accent" : "muted"}
+          />
+        </StatStrip>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-lg border border-line bg-surface-2/30 p-4">
+            <h4 className="font-medium text-fg">Lease and work signals</h4>
+            {health.signals.length > 0 ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+                {health.signals.map((signal) => (
+                  <li key={signal}>{signal}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-sm text-muted">
+                No persisted lease, deferred-work, or failure signal is
+                recorded.
+              </p>
+            )}
+            {health.leaseExpiresAt ? (
+              <p className="mt-2 text-xs text-muted">
+                Lease {health.leaseActive ? "expires" : "expired"} at{" "}
+                <AutomationTimestamp
+                  value={health.leaseExpiresAt}
+                  emptyLabel="Not recorded"
+                />
+                .
+              </p>
+            ) : null}
+          </div>
+
+          <div className="rounded-lg border border-line bg-surface-2/30 p-4">
+            <h4 className="font-medium text-fg">Expected cadence</h4>
+            <p className="mt-2 text-sm text-muted">
+              Production should invoke one maintenance pass every minute. The
+              health state becomes degraded after four minutes without a
+              completed pass, allowing for deploy and scheduler jitter.
+            </p>
+            <p className="mt-2 text-xs text-muted">
+              A manual pass uses the same owner-and-token lease as cron. It can
+              recover an expired run, but it cannot force, overlap, or clear an
+              active owner.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-line bg-surface-2/30 p-4">
+          <h4 className="font-medium text-fg">Durable delivery backlog</h4>
+          {backlog ? (
+            backlog.league + backlog.inhouse + backlog.markerRetries > 0 ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+                <li>{backlog.league} league-channel message(s) pending</li>
+                <li>{backlog.inhouse} inhouse message(s) pending</li>
+                <li>
+                  {backlog.markerRetries} result, champion, reminder, or honors
+                  marker(s) awaiting retry
+                </li>
+              </ul>
+            ) : (
+              <p className="mt-2 text-sm text-muted">
+                No league, inhouse, or marker retry is waiting for delivery.
+              </p>
+            )
+          ) : (
+            <p className="mt-2 text-sm text-danger">
+              Backlog state is unavailable until database readiness is
+              restored.
+            </p>
+          )}
+          <p className="mt-2 text-xs text-muted">
+            Pending work survives a process restart and drains in order. A
+            growing count means Discord or the scheduled runner needs
+            attention.
+          </p>
+        </div>
+
+        <div
+          className="flex flex-wrap items-start justify-between gap-4 border-t border-line pt-4"
+          role="group"
+          aria-labelledby="automation-manual-run-title"
+        >
+          <div className="min-w-0 flex-1 basis-64">
+            <div
+              id="automation-manual-run-title"
+              className="font-medium text-fg"
+            >
+              Manual recovery
+            </div>
+            <p className="mt-1 text-sm text-muted">
+              {health.disabledReason ??
+                "Run a bounded pass now. If cron acquires the lease first, this request exits without starting duplicate work."}
+            </p>
+          </div>
+          <ActionForm action={runMaintenanceNow}>
+            <SubmitButton
+              variant={health.kind === "DEGRADED" ? "accent" : "secondary"}
+              disabled={!health.canRunNow}
+            >
+              Run maintenance now
+            </SubmitButton>
+          </ActionForm>
+        </div>
+      </CardBody>
+    </Card>
   );
 }
 

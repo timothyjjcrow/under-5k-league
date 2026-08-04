@@ -7,11 +7,12 @@ later gate remains open.
 
 ## Current verdict
 
-**HOLD — the release artifact, CI gate, versioned PostgreSQL migrations, and
-local restore proof are reproducible, but production is not ready yet.**
-Authenticated scheduled automation, durable/observable notification delivery,
-accurate privacy and operator disclosures, the incident runbook, and the final
-target-provider launch drill remain release blockers.
+**HOLD — repository gates for a reproducible artifact, versioned PostgreSQL
+deployment, recovery, and unattended league automation are closed, but
+production is not ready yet.** Accurate privacy/data-use disclosures and
+public-abuse hardening remain repository blockers. The target-provider restore,
+PITR, deployment, scheduler, domain/OAuth, monitoring, credential, and
+two-operator proofs remain external launch gates.
 
 ## Iteration 1 — immutable release candidate and truthful CI
 
@@ -423,3 +424,200 @@ transient mutant in a developer checkout.
 
 **Authenticated scheduled synchronization, durable notifications, automation
 health, distributed ownership, bounded work, and operator recovery.**
+
+## Iteration 3 — unattended automation, durable delivery, and operator recovery
+
+### Section audited
+
+Scheduled result import, reminders, league and inhouse Discord delivery,
+notification markers, work ownership, runtime budgets, automation health,
+administrator recovery, production configuration, database command safety,
+historical backup restoration, release promotion, rollback, and incident
+operations.
+
+### Current purpose
+
+This gate makes league maintenance independent of visitor traffic. One
+authenticated scheduler or administrator may own a bounded pass, durable work
+survives process restarts, operators can distinguish healthy, stale, failed,
+and actively running states, and a public dead-man probe can alert without
+disclosing league or infrastructure details.
+
+### Actors affected
+
+- Players, captains, teams, and visitors depend on current results, standings,
+  reminders, and Discord announcements.
+- Administrators need safe manual recovery and actionable failure/backlog
+  visibility in every league phase.
+- Operators need an authenticated scheduler contract, machine-readable health,
+  deployment evidence, rollback controls, and a rehearsed restore path.
+
+### Problems found
+
+- Public page traffic and a public `/api/sync` request performed league writes.
+  Quiet periods could stall maintenance, while arbitrary traffic could trigger
+  it unpredictably.
+- There was no global lease, fencing token, execution budget, durable run
+  status, failure streak, dead-man probe, or administrator recovery control.
+- Result imports and Discord sends had crash windows. A restart could lose a
+  pending announcement, replay a marker, or publish a stale payload after a
+  result correction.
+- Match completion history had no durable completion timestamp, so enabling a
+  scheduler risked replaying historical completed matches.
+- Application-clock comparisons and concurrent imports could hide new work,
+  race a correction, or surface PostgreSQL serialization errors.
+- The production validator did not fully match runtime cron/Steam/Discord
+  requirements, allowed a Discord API-base override, and allowed separate
+  migration/runtime database users that the first-release restore procedure
+  could not safely prove.
+- `db:push` was not guarded, and the local-database refusal path could echo
+  credential-bearing database URLs.
+- Restore rehearsal only handled already-migrated backups. It did not prove the
+  exact untracked historical schema that an existing first deployment may
+  contain.
+- Deployment notes lacked an executable promotion stop rule, traffic freeze,
+  scheduler ownership, monitoring, rollback, PITR, credential-rotation, and
+  evidence record.
+
+### Changes made
+
+- Replaced traffic-driven writes with an authenticated `GET
+  /api/cron/automation` route. `/api/sync` is now read-only, and the removed
+  page/week reminder pings are replaced by the scheduled worker.
+- Added one database-owned, token-fenced 90-second lease and a 45-second work
+  budget shared by cron and the administrator's **Run maintenance now**
+  control. An active owner cannot be forced, cleared, or overlapped.
+- Persisted attempt, success, source, duration, failure streak, lease, bounded
+  issue codes, deferred work, and delivery backlog signals. The admin card
+  explains cadence, locks, recovery, and what operators should do next.
+- Added public `GET /api/health/automation`. It returns only a bounded status
+  and HTTP 200/503: healthy for a fresh clean pass (or a valid active lease
+  backed by a fresh clean success), and unavailable for never-run, stale,
+  failed, degraded, expired, or database-unavailable states.
+- Added durable league and inhouse announcement outboxes with ordered retry,
+  exponential backoff, marker generations, correction cancellation, and
+  in-flight payload fencing. Work is committed before delivery and survives a
+  process restart.
+- Added database-maintained `Match.completedAt` state and migration sentinels so
+  existing completed history is not mistaken for new work.
+- Centralized database time. PostgreSQL and SQLite now compare against their
+  own clocks; SQLite uses fractional-second precision so just-created work is
+  immediately eligible.
+- Added bounded retry for PostgreSQL serialization conflicts during match
+  import and explicit concurrency seams for correction, withdrawal, marker,
+  and delivery races.
+- Tightened production validation: cron secrets must match runtime length and
+  whitespace rules; Steam is required; half-configured Discord OAuth and bot
+  pairs fail; `DISCORD_API_BASE` is forbidden; and migration/runtime URLs must
+  use one database principal for this release.
+- Guarded `db:push` with the exact local-target assertion and redacted all
+  credential, path, query, and fragment data from refusal messages.
+- Added explicit `--legacy-baseline` restore rehearsal. It accepts only the
+  immutable, migration-free historical schema in the dedicated local scratch
+  database, resolves the baseline there, deploys current migrations, runs the
+  normal postflight, and proves fixtures plus exact migration history.
+- Added `docs/PRODUCTION-OPERATIONS.md` with named owners, immutable commit
+  approval, one-scheduler policy, evidence template, pre-promotion stop rule,
+  controlled promotion, provider traffic freeze, rollback, PITR recovery, and
+  secret rotation. README, architecture, CI, environment examples, and stale
+  operator notes now match those controls.
+
+### Architecture improvements made
+
+- Cron is a thin authenticated adapter over one reusable leased worker rather
+  than a second synchronization implementation.
+- Database outboxes and generation-fenced markers separate league state commits
+  from external delivery while keeping retry state observable.
+- Database time, completion state, issue codes, and health projection are
+  shared typed boundaries rather than route-specific conventions.
+- The public probe exposes a stable low-information contract; detailed timing,
+  failures, leases, and backlogs remain restricted to administrators.
+- Historical-baseline adoption, current restore rehearsal, deployment
+  migration, and postflight use the same fail-closed migration boundaries.
+- Operational evidence is now part of the release contract instead of an
+  informal hosting checklist.
+
+### Tests added or updated
+
+- Cron authentication, lease acquisition/recovery/token fencing, deadline,
+  worker status, admin action, and public health-state unit coverage.
+- SQLite and PostgreSQL integration coverage for parallel lease election,
+  expired-owner recovery, stale-owner completion, deferred work, independent
+  failure capture, database-unavailable health, and phase-independent operation.
+- Result and announcement coverage for crash recovery, duplicate passes,
+  correction/withdrawal races, marker replay, historical sentinels, retry
+  ordering, stale payloads, Discord transport failure, and PostgreSQL
+  serialization retry.
+- Production-environment, redacted local-database guard, migration/native
+  object, legacy restore, and CI workflow coverage.
+- A phone-width browser assertion now requires the automation card and manual
+  recovery control to be visible with no horizontal page overflow.
+
+### Commands run
+
+- Focused Vitest suites for automation, production environment, database
+  targeting, backup restoration, result synchronization, Discord transport,
+  reminders, markers, and both announcement outboxes
+- `npm test`, `npm run test:integration`, and serial PostgreSQL runs through
+  `npm run pg:up`, `PG_TEST_URL=… npm run test:pg`, and `npm run pg:down`
+- authoritative `PG_TEST_URL=… npm run test:mutation:discover`
+- `npm run db:migrate:validate`, fresh/invalid/populated
+  `npm run db:migrate:rehearse`, and real legacy-dump
+  `npm run db:backup:rehearse -- --legacy-baseline …`
+- production-shaped `npm run build:vercel`
+- `npm run lint -- --max-warnings=0`, `npx tsc --noEmit`, and `git diff --check`
+- focused Chromium phone test for the admin automation card
+- manual desktop browser pass through dev authentication, administrator
+  recovery, persisted health refresh, success feedback, and console inspection
+
+### Test results
+
+- Unit: 140 files, 1,859/1,859 passed.
+- SQLite integration: 45 files passed and one provider-only file skipped;
+  1,106 passed and 38 intentional skips (1,144 total).
+- PostgreSQL integration: 46 files; 1,141 passed and three intentional
+  provider-only skips (1,144 total). The latest focused result/outbox rerun was
+  44/44.
+- Mutation discovery: 133 live write claims — 85 protected, 48 reviewed
+  equivalents, zero unprotected or unclassified.
+- Focused production environment: 54/54; local database guard: 12/12; mocked
+  backup/restore: 31/31; automation health/route: 24/24.
+- Fresh, invalid, populated-legacy, deliberate-drift, current-backup, and real
+  historical-dump rehearsals passed. The historical fixture survived with one
+  user, one season, and all three current migrations attested.
+- The exact production build passed validation, migration pre/postflight,
+  Prisma generation, TypeScript, compilation, and route generation, including
+  the new automation endpoint.
+- Zero-warning ESLint, TypeScript, `git diff --check`, and the focused 360–375px
+  Chromium layout/visibility test passed.
+- Manual browser recovery changed the card from **Never run** to **Healthy**,
+  recorded **Admin manual run** and a duration, showed success feedback, left
+  no backlog or lease, emitted no browser errors, and the server recorded HTTP
+  200 for `/api/health/automation`.
+
+### Remaining concerns
+
+- Discord delivery is intentionally at-least-once. A process failure after
+  Discord accepts a request but before `SENT` is committed can produce a
+  duplicate message; correctness no longer depends on losing the message.
+- Privacy/data-use disclosures, public-field labels, retention/request
+  handling, and a real request contact are still missing and are the next
+  repository blocker.
+- Public polling and proxy-aware abuse controls still need a focused audit.
+- Actual provider backup/PITR/restore evidence, manual production approval,
+  exactly one scheduler, alert routing, credentials, custom domains, Steam and
+  Discord callbacks, MFA, and two named operators cannot be proved from this
+  repository and remain hard launch gates.
+
+### Recommended future improvements
+
+If Discord offers an idempotency or application-level deduplication primitive,
+bind it to the outbox id. After production behavior is observed, consider a
+separate cleanup release for delivered-outbox retention and archived automation
+history. Keep the public probe contract small; send detailed diagnostics only
+to authenticated operator tooling.
+
+### Next section to audit
+
+**Privacy, data use, public-field disclosure, retention, and the participant
+request channel across login, signup, profile, footer, and league pages.**

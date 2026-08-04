@@ -1,8 +1,6 @@
 import Link from "next/link";
-import { Suspense } from "react";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
-import { WeekReminderPing } from "@/components/week-reminder-ping";
 import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
@@ -532,10 +530,6 @@ export default async function SchedulePage() {
 
   return (
     <div className="space-y-8">
-      {/* Lazy match-night Discord reminder — invisible, never blocks paint. */}
-      <Suspense fallback={null}>
-        <WeekReminderPing season={season} />
-      </Suspense>
       <PageTitle
         title={
           season.status === "COMPLETE"
@@ -772,8 +766,7 @@ function SeasonGrid({
           "block rounded px-1 py-1.5 font-mono text-[11px] tabular-nums transition-colors",
           cell.result === "W" &&
             "bg-success/15 text-success hover:bg-success/25",
-          cell.result === "L" &&
-            "bg-danger/10 text-danger hover:bg-danger/20",
+          cell.result === "L" && "bg-danger/10 text-danger hover:bg-danger/20",
           cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
           !cell.played && "text-muted hover:text-info",
         )}

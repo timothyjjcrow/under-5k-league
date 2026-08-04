@@ -54,7 +54,8 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
 - **Next.js 16** (App Router, React 19, TypeScript) — server components + server
   actions + route handlers.
 - **Tailwind CSS v4** for styling.
-- **Prisma 5 + SQLite** — zero-config local database (easy to swap to Postgres).
+- **Prisma 5** — zero-config SQLite locally and migration-managed PostgreSQL in
+  production.
 - **jose** for signed session cookies.
 - **Vitest** (unit) + **Playwright** (e2e) for tests.
 
@@ -89,9 +90,11 @@ dev-login buttons. You can also hit the endpoint directly:
 ### Enabling Discord account linking
 
 Players can prove they own their Discord account ("Link Discord" on `/me`) via
-Discord OAuth2 with the minimal `identify` scope — the site stores only the
-account id + username (no tokens, no email), and rosters show a ✓ on verified
-handles. Typed handles still work as an unverified fallback.
+Discord OAuth2. The site always requests `identify`; when the bot and guild are
+configured it also requests `guilds.join` so the player can join the league
+server. The site stores only the account id + username (no tokens or email), and
+rosters show a ✓ on verified handles. Typed handles still work as an unverified
+fallback.
 
 1. Create an application at https://discord.com/developers/applications
 2. OAuth2 → add `<APP_URL>/api/auth/discord/callback` as a **Redirect**.
@@ -157,11 +160,13 @@ empty" on its own. Nothing is posted while the state is unchanged. The board
 _informs_ — the separate "queue is filling" ping at 4/10 is what actually
 alerts people.
 
-Because the site is lazy (no cron), the board updates while someone has a page
-open or an uptime monitor calls `/api/sync`. If literally nobody touches the
-site, the count can freeze. The admin card exposes the live-vs-posted state,
-last successful edit, and consecutive failures; configure the uptime monitor
-below to put an overnight bound on staleness.
+The authenticated maintenance runner attempts a board repaint every minute
+even when nobody has the site open. Inhouse room reads can also advance
+interactive room state, but public page traffic is not the production clock.
+The admin panel
+exposes both the board's live-vs-posted state and the persisted automation
+runner health; a stale or failed runner is an operator incident, not something
+an uptime monitor should repair by calling a public mutation endpoint.
 
 Removing the board webhook or pointing it at a different channel attempts to
 delete the old message first. If Discord cannot confirm that deletion, the
@@ -195,11 +200,20 @@ calculation is unavailable — never to `updatedAt`.
 
 Inhouse result and void-correction messages use a durable database outbox. The
 exact payload commits with the lobby change, then a leased worker sends outside
-the transaction; failures remain pending with backoff and `/api/sync` drains
-them even after the room empties. Discord webhooks have no idempotency key, so
-a process crash after Discord accepts a message but before the worker records
-`SENT` can still produce one duplicate on lease recovery. Queue alerts and the
-live board use their separate best-effort/reservation workflows.
+the transaction; failures remain pending with backoff and the authenticated
+maintenance runner drains them even after the room empties. Recovery also
+reconstructs a missing result outbox row and Elo snapshot from a completed
+lobby if a process died between the source-state commit and finalization.
+
+League-channel announcements use a second durable, globally ordered outbox.
+Series results, champions, reminders, and weekly honors pair a 90-second marker
+lease with a stable dedupe key, so a crash before enqueue is reclaimable and a
+crash after enqueue does not create another database event. Both outboxes use
+token-fenced 30-second delivery claims and retry backoff. Discord webhooks have
+no idempotency key, so a process crash after Discord accepts a message but
+before the worker records `SENT` can still produce one duplicate on lease
+recovery: delivery is deliberately at-least-once, not exactly-once. Queue
+alerts and the live board use their separate best-effort/reservation workflows.
 
 ### Match data (OpenDota)
 
@@ -271,6 +285,9 @@ src/
     api/
       auth/             # steam, dev, logout, callback
       draft/            # tick (poll), nominate, bid
+      cron/automation/  # authenticated one-minute maintenance entry point
+      health/           # dependency-free live and database-ready probes
+      sync/             # read-only browser cursor/watch snapshot
   components/           # ui kit, site header, draft room
   lib/
     draft.ts            # pure auction rules (tested)
@@ -278,9 +295,11 @@ src/
     schedule.ts         # pure round-robin/bracket (tested)
     capacity.ts         # pure signup capacity (tested)
     draft-service.ts    # transactional draft engine (DB)
+    automation-service.ts result-sync-service.ts
+    league-announcement-outbox.ts inhouse-announcement-outbox.ts
     auth.ts steam.ts users.ts season.ts queries.ts prisma.ts
 prisma/
-  schema.prisma  seed.ts
+  schema.prisma  migrations/  seed.ts
 e2e/                    # Playwright tests
 ```
 
@@ -307,28 +326,52 @@ e2e/                    # Playwright tests
   refuse non-local hosts. Never point `PG_TEST_URL` at production or a shared
   database. Always run `pg:down`; it restores the committed SQLite provider.
 
-## Deployment (Vercel + Neon — free)
+## Deployment (Vercel + Neon)
 
 Local dev stays on SQLite; production runs on Postgres via a build-time provider
 swap (`scripts/switch-db-provider.mjs`, wired up in `vercel.json`) — you don't
 change any code. The draft uses HTTP polling (no websockets), so it runs fine on
-serverless.
+serverless. Unattended league work uses an authenticated one-minute scheduler;
+the repository's `vercel.json` registers `GET /api/cron/automation` on
+`* * * * *`.
+
+The repository as committed requires **Vercel Pro or Enterprise**. Vercel Hobby
+cron is limited to one run per day, with broad timing tolerance, and is not a
+safe clock for draft deadlines, result recovery, reminders, or Discord queues;
+a more-frequent Hobby cron also fails deployment. See Vercel's current
+[cron usage and pricing](https://vercel.com/docs/cron-jobs/usage-and-pricing).
+A trusted external scheduler that sends the same bearer-authenticated request
+every minute is also supported, but a Vercel Hobby deployment must use a
+reviewed deployment configuration that omits the unsupported Vercel cron
+registration. A five-minute uptime monitor is not a scheduler substitute.
 
 The supported runtime is **Node.js 22.x**. Run `nvm use` locally (the repository
 includes `.nvmrc`), keep Vercel's Project Settings → Node.js Version on 22.x,
 and do not promote a build produced with another Node major. `package.json`
 declares the same runtime line used by every CI job.
 
-1. **Create a free Neon Postgres DB** at [neon.tech](https://neon.tech). From the
+1. **Create a Neon Postgres DB** at [neon.tech](https://neon.tech). From the
    connection details, copy **two** strings:
    - the **pooled** one (host contains `-pooler`) → use for `DATABASE_URL`
    - the **direct** one (no `-pooler`) → use for `DIRECT_URL`
+
+   This release requires both URLs to use the same PostgreSQL username. Hosts,
+   ports, and passwords may differ. The migration history does not provision a
+   second runtime role, and a restore made with `--no-owner --no-privileges`
+   cannot attest grants for one.
 2. **Push this repo to GitHub.** Keep connection strings, API keys, and session
    secrets in the deployment platform or a password manager — never in a
    command, commit, issue, screenshot, or chat. `.env` is gitignored as a
    convenience, not a substitute for checking what you commit.
-3. **Import the repo at [vercel.com](https://vercel.com)** (New Project → pick the
-   repo). It auto-detects Next.js; the build command is already in `vercel.json`.
+3. **Import the repo at [vercel.com](https://vercel.com)** (New Project → pick
+   the repo) under a Pro or Enterprise project. It auto-detects Next.js; the
+   build command and one-minute cron are already in `vercel.json`. Protect
+   production with a manual promotion/deployment check before connecting the
+   live database: `build:vercel` applies additive migrations before compilation,
+   so an automatic production build is already a database change even when the
+   candidate is not promoted. If a trusted external scheduler is used instead,
+   configure the equivalent one-minute request and retain the authentication
+   boundary described below. Enable exactly one scheduler, never both.
 4. **Set Environment Variables** (Vercel → Project → Settings → Environment
    Variables):
 
@@ -338,6 +381,7 @@ declares the same runtime line used by every CI job.
    | `DIRECT_URL`                                  | Neon **direct** PostgreSQL URL                                       |
    | `AUTH_SECRET`                                 | unique password-manager-generated secret of at least 32 characters  |
    | `BACKUP_RECEIPT_SECRET`                       | separate random secret of at least 32 characters for backup receipts |
+   | `CRON_SECRET`                                 | third, distinct 32–512 character random secret with no whitespace            |
    | `STEAM_API_KEY`                               | your **rotated** Steam Web API key                                   |
    | `APP_URL`                                     | canonical HTTPS origin, e.g. `https://league.example`                |
    | `NEXT_PUBLIC_SITE_URL`                        | the same canonical HTTPS origin as `APP_URL`                         |
@@ -349,6 +393,11 @@ declares the same runtime line used by every CI job.
    Leave `ALLOW_DEV_LOGIN` unset or set it exactly to `false`. Production does
    not support a first-user admin bootstrap: `ADMIN_STEAM_IDS` must already
    contain at least one trusted administrator before the first deployment.
+   `CRON_SECRET` must be 32–512 characters, contain no whitespace, and be
+   distinct from both other secrets. Vercel Cron sends it
+   as `Authorization: Bearer <CRON_SECRET>`; an external scheduler must do the
+   same. Never put this value in a URL, query string, source file, or copied
+   shell command.
 
    > **`ADMIN_STEAM_IDS` is authoritative.** Exactly those accounts are admins;
    > authorization is recomputed on every authenticated request, so removing an
@@ -364,7 +413,8 @@ declares the same runtime line used by every CI job.
    > preview that shares production credentials could still read or write live
    > league data after it starts.
 
-5. **Deploy.** Vercel and PostgreSQL CI both run the canonical
+5. **Deploy only the reviewed commit through a manual approval.** Vercel and
+   PostgreSQL CI both run the canonical
    `npm run build:vercel` pipeline. Production uses this fail-fast sequence:
 
    1. validate production environment values;
@@ -398,9 +448,11 @@ declares the same runtime line used by every CI job.
    `ld2l_restore_test`; the scripts refuse remote or similarly named targets.
 
    Environment validation rejects missing/non-PostgreSQL database URLs,
-   different database or schema names, mismatched managed-provider projects,
+   different database, schema, or PostgreSQL usernames, mismatched managed-provider projects,
    recognizable direct URLs used as the runtime pool, recognizable pooler URLs
-   used for migrations, placeholder or short auth/backup-receipt secrets,
+   used for migrations, placeholder or short auth/backup-receipt secrets, a
+   missing/placeholder Steam API key, an unusable cron secret, incomplete
+   Discord OAuth or bot/guild pairs, a production `DISCORD_API_BASE` test seam,
    missing/invalid/duplicate admin SteamIDs, non-HTTPS or divergent site
    origins, enabled dev login, and configured test-only or obsolete release
    overrides. Runtime and migration URLs may legitimately use different
@@ -419,14 +471,18 @@ declares the same runtime line used by every CI job.
 
    **One-time baseline for a database created by the old `db push` process:**
 
-   1. create a full backup, verify it, and complete a restore rehearsal;
+   1. create a full backup, verify it, and complete the guarded legacy restore
+      rehearsal with `npm run db:backup:rehearse -- --legacy-baseline
+      backups/<backup-file>.sql`;
    2. run `npm run db:migrate:baseline-check` with trusted production
       `DIRECT_URL`/`DATABASE_URL` environment variables;
    3. with production `DIRECT_URL` set (the resolver intentionally has no
       pooled-URL fallback), run
       `npm run db:migrate:baseline-resolve -- --apply` only if that read-only
       fingerprint passes;
-   4. deploy normally so `20260804010000_release_readiness` is applied.
+   4. deploy normally so `20260804010000_release_readiness`,
+      `20260804020000_automation_run_state`, and any later committed migrations
+      are applied.
 
    Stop and reconcile the database if the baseline check reports any
    difference. Never mark the baseline applied merely to get past a failed
@@ -436,11 +492,81 @@ declares the same runtime line used by every CI job.
    writing migration metadata, keeps credentials out of process arguments, and
    never changes the committed SQLite schema or generated client. Omitting
    `--apply` fails before any database mutation.
-6. **Sign in with an allowlisted Steam account.** Then go to **/admin**, create
+6. **Prove health before promotion, then prove the real scheduler immediately
+   after promotion.** Use the candidate deployment URL and a non-production
+   database first:
+
+   ```bash
+   export LEAGUE_SITE_ORIGIN="https://candidate.example"
+   curl -fsS "$LEAGUE_SITE_ORIGIN/api/health/live"
+   curl -fsS "$LEAGUE_SITE_ORIGIN/api/health/ready"
+   curl -sS "$LEAGUE_SITE_ORIGIN/api/health/automation"
+   test "$(curl -sS -o /dev/null -w '%{http_code}' \
+     "$LEAGUE_SITE_ORIGIN/api/cron/automation")" = "401"
+   test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+     "$LEAGUE_SITE_ORIGIN/api/sync")" = "405"
+   curl -fsS "$LEAGUE_SITE_ORIGIN/api/sync"
+   unset LEAGUE_SITE_ORIGIN
+   ```
+
+   `live` must return HTTP 200 without touching the database; `ready` must
+   return 200 only when PostgreSQL answers. `automation` must be 200 only when
+   the restored/candidate state contains a fresh clean success; before its first
+   success it must fail closed with 503. The unauthenticated
+   cron request must be 401, POST `/api/sync` must be 405, and GET `/api/sync`
+   must return only the read-only `updated`, `watch`, and `cursor` snapshot.
+
+   A Vercel preview does not receive Vercel Cron. Before promotion, exercise an
+   Admin manual run or a reviewed external staging invocation against the
+   non-production database. After the controlled production promotion, enable
+   exactly one scheduler using its stored secret—do not paste the secret into a
+   terminal command—and observe **two consecutive one-minute invocations
+   complete with HTTP 200 and `status: "SUCCEEDED"`**. Require
+   `/api/health/automation` to return HTTP 200. In Admin →
+   Automation, verify Last attempt and Last success advance, Source says
+   **Scheduled cron**, the lease clears after each pass, and the failure streak
+   remains zero. Exercise **Run maintenance now** once while idle and verify it
+   records an Admin manual run; if cron owns the lease, the control must refuse
+   to overlap it. Alert on cron non-2xx responses, readiness failures, or four
+   minutes without a completed pass. The complete pinned-commit promotion,
+   evidence, freeze, rollback, recovery, and secret-rotation procedure is in
+   [`docs/PRODUCTION-OPERATIONS.md`](docs/PRODUCTION-OPERATIONS.md).
+
+7. **Sign in with an allowlisted Steam account.** Then go to **/admin**, create
    the season, and set the MMR cap. Steam pulls names and avatars automatically.
 
-Update `APP_URL` if you add a custom domain, so Steam login redirects back
-correctly.
+If you add or change a custom domain, update both `APP_URL` and
+`NEXT_PUBLIC_SITE_URL` to the identical canonical HTTPS origin, redeploy, and
+update the exact Discord OAuth callback. Then repeat Steam and Discord login
+smoke tests before moving traffic.
+
+### Application rollback order
+
+Database migrations are forward-only and additive. Rolling the application
+back means promoting a previously tested application build, not running SQL
+down migrations. Vercel rollback does not reliably reconcile cron
+configuration, so use this sequence explicitly:
+
+1. Pause or remove the one-minute schedule and confirm new cron requests have
+   stopped. Do this before promoting code that may not expose the authenticated
+   worker route.
+2. Wait at least 90 seconds, then confirm Admin → Automation shows no active
+   lease. Do not bypass or delete a live lease row.
+3. Promote the previous application build. Leave all committed migrations and
+   newly added tables in place; the release migrations are designed so the old
+   binary can keep serving against the expanded schema.
+4. Verify Steam sign-in, the current schedule, and another known database-backed
+   read. Verify `/api/health/live` and `/api/health/ready` only if the rollback
+   build exposes them. Do **not** use `/api/sync` as a rollback health check: a
+   build predating this release may still mutate state on GET. Keep the
+   scheduler paused if that build predates `/api/cron/automation`, and point
+   platform probes at endpoints that actually exist in that release.
+5. After the repaired forward build is deployed, re-enable the authenticated
+   one-minute schedule and repeat the two-consecutive-success check above.
+
+If an incident is caused by data rather than code, stop here and restore only
+through the rehearsed database recovery procedure below; do not improvise a
+destructive schema rollback.
 
 ### Backups
 
@@ -513,6 +639,23 @@ It requires compatible `psql`, `dropdb`, and `createdb` clients and a local role
 that may recreate that scratch database. Remote hosts and similarly named
 databases are rejected before a client runs.
 
+An old production database created by `prisma db push` has no
+`_prisma_migrations` table, so use the explicit legacy mode for that backup:
+
+```bash
+export PG_RESTORE_TEST_URL="postgresql://${USER}@localhost:5432/ld2l_restore_test"
+npm run db:backup:rehearse -- --legacy-baseline backups/<backup-file>.sql
+unset PG_RESTORE_TEST_URL
+```
+
+That mode never infers intent from a missing table. It requires the flag,
+discovers exactly one table-bearing application schema, requires the immutable
+baseline and no migration history, records the baseline only inside the exact
+localhost scratch database, applies the checksum-pinned current migrations,
+and runs full postflight. An ambiguous, partial, already-migrated, remote, or
+similarly named target fails closed. Complete this rehearsal before recording
+the baseline on the actual hosted database.
+
 Also run a provider-level recovery drill periodically into a new, disposable,
 non-production hosted database. Load its connection as separate libpq
 environment fields from a secret manager so the credential is not exposed in
@@ -531,17 +674,27 @@ date/result, then destroy the scratch database. For SQLite, copy the `.db` to a
 disposable path and open/test that copy; never overwrite the live file during a
 drill.
 
-### Uptime monitor (recommended)
+### Health monitoring and scheduler (required)
 
-Point a free uptime monitor (UptimeRobot etc., 5-minute interval) at
-`GET https://<your-site>/api/sync`. That buys two things at once: you're
-alerted if the site goes down, and the automatic result sync gets a heartbeat
-even when nobody has a page open (it's lazy by design — a match finishing at
-1am with zero visitors would otherwise wait for the morning's first page view).
+Monitor `GET /api/health/live` for process reachability,
+`GET /api/health/ready` for application/database readiness, and
+`GET /api/health/automation` as the public dead-man signal. Keep those alerts
+separate: `live` deliberately does no dependency work, `ready` returns 503 when
+PostgreSQL is unavailable, and `automation` returns 503 for never-run, stale,
+failed, degraded, expired-lease, or database-unavailable state. The automation
+body exposes only a bounded status enum; detailed failure/backlog state remains
+in Admin. Also alert on non-2xx `/api/cron/automation` responses.
 
-If you use the **live inhouse queue board**, treat this as required rather than
-recommended: the board can only repaint when some request runs, so without a
-heartbeat a queue that empties out overnight leaves a stale count in Discord.
+Do **not** point a monitor at `/api/sync` to run maintenance. It is a public,
+read-only cursor/watch snapshot used by visible browser tabs; it never imports
+games, advances phases, sends Discord messages, or drains an outbox. The
+bearer-authenticated one-minute scheduler is the only unattended worker
+trigger. An administrator can explicitly request the same bounded worker from
+Admin → Automation, under the same lease.
+Vercel does not retry a failed cron invocation, so the next minute's run plus
+the persisted leases/outboxes provide recovery; monitoring must still surface
+the failed pass. See Vercel's [cron management
+guidance](https://vercel.com/docs/cron-jobs/manage-cron-jobs).
 
 ### Alternatives (keep SQLite, no DB change)
 

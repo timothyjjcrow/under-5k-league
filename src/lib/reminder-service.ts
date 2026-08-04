@@ -8,7 +8,7 @@ import {
 import {
   getWebhookUrl,
   sendDiscordMessage,
-  weekReminderMessage,
+  weekReminderAnnouncement,
 } from "./discord";
 import {
   expectedSideSize,
@@ -18,15 +18,23 @@ import {
 import { weekReminderKey } from "./settings";
 import { raceHook } from "./race-hook";
 import { mentionsOf } from "./discord-mentions";
+import {
+  announcementDedupeKey,
+  claimAnnouncementMarker,
+  markAnnouncementFailed,
+  markAnnouncementSent,
+  recoverableAnnouncementMarker,
+  releaseAnnouncementClaim,
+} from "./announcement-marker";
 
 /**
- * Lazy match-night reminder: the first page load after a league night enters
- * the reminder window announces the week's fixtures (with reader-local
+ * Scheduled match-night reminder: the first automation pass after a league
+ * night enters the reminder window announces the week's fixtures (with reader-local
  * <t:…:R> kickoffs and per-team check-in counts) to Discord — attendance
  * stops depending on an admin remembering to post.
  *
- * Runs from dashboard/schedule renders and the externally-pingable /api/sync
- * heartbeat. The no-op path is two cheap reads: the webhook setting and one
+ * Runs only from the authenticated, leased automation worker. The no-op path
+ * is two cheap reads: the webhook setting and one
  * indexed Match query. Announced at most once per kickoff cluster: the marker
  * row is CREATED atomically (Setting.key is the id), so concurrent triggers
  * race to a P2002 instead of double-sending — deliberately stronger than
@@ -56,7 +64,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
   const candidates = await prisma.match.findMany({
     where: {
       seasonId: season.id,
-      status: { not: MATCH_STATUS.COMPLETED },
+      status: MATCH_STATUS.SCHEDULED,
       scheduledAt: {
         gte: new Date(now - WEEK_REMINDER.BEHIND_HOURS * 3600_000),
         lte: new Date(now + WEEK_REMINDER.AHEAD_HOURS * 3600_000),
@@ -80,19 +88,21 @@ export async function maybeAnnounceUpcomingWeek(season: {
   const markerKeys = clusters.map((m) =>
     weekReminderKey(season.id, m.week, m.scheduledAt!.getTime()),
   );
-  const existing = new Set(
+  const existing = new Map(
     (
       await prisma.setting.findMany({
         where: { key: { in: markerKeys } },
-        select: { key: true },
+        select: { key: true, value: true },
       })
-    ).map((row) => row.key),
+    ).map((row) => [row.key, row.value]),
   );
   const next = clusters.find(
-    (m) =>
-      !existing.has(
+    (m) => {
+      const value = existing.get(
         weekReminderKey(season.id, m.week, m.scheduledAt!.getTime()),
-      ),
+      );
+      return value === undefined || recoverableAnnouncementMarker(value, now);
+    },
   );
   if (!next) return false;
   const markerKey = weekReminderKey(
@@ -101,18 +111,11 @@ export async function maybeAnnounceUpcomingWeek(season: {
     next.scheduledAt!.getTime(),
   );
 
-  // Claim before building the message — one winner per season+week.
-  try {
-    await prisma.setting.create({
-      data: {
-        key: markerKey,
-        value: new Date().toISOString(),
-      },
-    });
-  } catch (e) {
-    if ((e as { code?: string }).code === "P2002") return false; // already sent
-    throw e;
-  }
+  // Claim before building the message — one winner per kickoff cluster. The
+  // lease recovers a process death before enqueue, while its stable event id
+  // deduplicates a death after enqueue but before marker finalization.
+  const claim = await claimAnnouncementMarker(markerKey, now);
+  if (!claim) return false;
 
   // Test seam: the gap between the claim above and the fetch below is where
   // an auto-sync completion (any page view) can empty the week.
@@ -122,7 +125,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     where: {
       seasonId: season.id,
       week: next.week,
-      status: { not: MATCH_STATUS.COMPLETED },
+      status: MATCH_STATUS.SCHEDULED,
       scheduledAt: next.scheduledAt,
     },
     include: {
@@ -138,9 +141,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     // fixtures back. No loop risk: probe and fetch share predicates, so no
     // consistent DB state satisfies one and empties the other — the next
     // call stops at the probe without claiming.
-    await prisma.setting.deleteMany({
-      where: { key: markerKey },
-    });
+    await releaseAnnouncementClaim(claim);
     return false;
   }
 
@@ -221,23 +222,26 @@ export async function maybeAnnounceUpcomingWeek(season: {
     }),
   }));
 
+  const announcement = weekReminderAnnouncement({
+    week: next.week,
+    isPlayoff: next.phase !== MATCH_PHASE.REGULAR,
+    fixtures,
+  });
   const sent = await sendDiscordMessage(
-    weekReminderMessage({
-      week: next.week,
-      isPlayoff: next.phase !== MATCH_PHASE.REGULAR,
-      fixtures,
-    }),
+    announcement.content,
     // Only these exact ids may ring a phone — parse:[] still blocks everything
-    // else, so a team name or persona in the same message stays inert.
-    mentionsOf(fixtures.flatMap((f) => f.waitingOn).map((p) => p.discordId)),
+    // else, so a team name or persona in the same message stays inert. The
+    // builder omits these ids whenever their fixture/waiter line cannot fit in
+    // Discord's 2,000-character body limit.
+    mentionsOf(announcement.mentionUserIds),
+    {
+      dedupeKey: announcementDedupeKey("reminder", claim),
+      marker: { key: claim.key, eventId: claim.eventId },
+    },
   );
   if (!sent) {
-    // A Discord blip must not eat the week's reminder — release the claim so
-    // the next page load inside the window retries.
-    await prisma.setting.deleteMany({
-      where: { key: markerKey },
-    });
+    await markAnnouncementFailed(claim);
     return false;
   }
-  return true;
+  return markAnnouncementSent(claim);
 }

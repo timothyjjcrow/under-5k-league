@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
-import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
+import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 import { makeSeason, makeTeam, makeUser } from "./factories";
 
@@ -14,7 +14,11 @@ vi.mock("@/lib/discord", async (importOriginal) => {
     sendDiscordMessage: vi.fn(async () => true),
   };
 });
-import { getWebhookUrl, sendDiscordMessage } from "@/lib/discord";
+import {
+  getWebhookUrl,
+  materializeAllowedMentions,
+  sendDiscordMessage,
+} from "@/lib/discord";
 
 const mockSend = vi.mocked(sendDiscordMessage);
 const mockHook = vi.mocked(getWebhookUrl);
@@ -121,6 +125,22 @@ describe("week reminder (integration)", () => {
     expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
     expect(mockSend).not.toHaveBeenCalled();
   });
+
+  it("never calls an already-live series upcoming", async () => {
+    const { season, match } = await setupWeek(4);
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: MATCH_STATUS.LIVE, homeScore: 1 },
+    });
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(
+      await prisma.setting.count({
+        where: { key: { startsWith: `weekReminder:${season.id}:` } },
+      }),
+    ).toBe(0);
+  });
 });
 
 describe("week reminder — reaching the people who owe an answer", () => {
@@ -202,6 +222,79 @@ describe("week reminder — reaching the people who owe an answer", () => {
     expect(mentions?.users ?? []).toHaveLength(0);
     expect(content).toContain("NL0");
     expect(content).not.toContain("<@null>");
+  });
+
+  it("keeps a 32-team kickoff deliverable and never allowlists hidden waiters", async () => {
+    const { season, home, away, match } = await setupWeek(4);
+    const kickoff = match.scheduledAt!;
+    const teams = [home, away];
+    for (let i = 2; i < 32; i += 1) {
+      teams.push(
+        await makeTeam(
+          season.id,
+          `League Team ${String(i + 1).padStart(2, "0")} Long Name`,
+          i,
+        ),
+      );
+    }
+    for (let i = 2; i < teams.length; i += 2) {
+      await prisma.match.create({
+        data: {
+          seasonId: season.id,
+          week: 1,
+          phase: MATCH_PHASE.REGULAR,
+          homeTeamId: teams[i].id,
+          awayTeamId: teams[i + 1].id,
+          scheduledAt: kickoff,
+        },
+      });
+    }
+
+    const discordIds: string[] = [];
+    for (let i = 0; i < teams.length; i += 1) {
+      const user = await makeUser(
+        `Waiting Player ${String(i + 1).padStart(2, "0")}`,
+      );
+      const discordId = (
+        BigInt("800000000000000000") + BigInt(i)
+      ).toString();
+      discordIds.push(discordId);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { discordId },
+      });
+      await prisma.teamMember.create({
+        data: {
+          seasonId: season.id,
+          teamId: teams[i].id,
+          userId: user.id,
+          price: 0,
+        },
+      });
+    }
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [content, mentions, options] = mockSend.mock.calls[0];
+    const delivered = materializeAllowedMentions(content, mentions);
+    expect(delivered).toBe(content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+
+    const visibleIds = [...content.matchAll(/<@(\d{17,20})>/g)].map(
+      (item) => item[1],
+    );
+    expect(new Set(mentions?.users ?? [])).toEqual(new Set(visibleIds));
+    const shownFixtures = content
+      .split("\n")
+      .filter((line) => line.startsWith("🆚")).length;
+    const summary = content.match(/…and (\d+) more fixtures? at this kickoff/);
+    expect(summary).not.toBeNull();
+    expect(shownFixtures + Number(summary?.[1])).toBe(16);
+    expect(content).toContain("/schedule>");
+    expect(mentions?.users ?? []).not.toContain(discordIds.at(-1));
+    expect(options?.marker).toEqual({
+      key: expect.stringMatching(`^weekReminder:${season.id}:1:`),
+      eventId: expect.any(String),
+    });
   });
 });
 

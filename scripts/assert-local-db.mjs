@@ -1,8 +1,9 @@
 // Refuse to let a destructive local command touch a non-local database.
 //
-// `npm run db:seed` deletes every row before inserting demo data, and
+// `npm run db:seed` deletes every row before inserting demo data,
 // `npm run db:reset` runs `prisma db push --force-reset` first, which DROPS the
-// schema. Neither asked a question or checked where it was pointing. Meanwhile
+// schema, and an accidental `db:push` can mutate a remote schema. These commands
+// must check where they are pointing. Meanwhile
 // the README teaches the operator to put the PRODUCTION url on a command line
 // (`DATABASE_URL="postgres://…" npm run db:backup`), so a shell-history recall
 // is all it takes to wipe the live league with a zero exit code.
@@ -33,6 +34,23 @@ function resolveUrl() {
   return "";
 }
 
+/**
+ * Keep the refusal useful without ever echoing URL credentials or parameters.
+ * A malformed value is still treated as configured, but none of it is printed.
+ */
+function sanitizedTarget(url) {
+  if (!url) return "(unset)";
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname
+      ? `//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}`
+      : "";
+    return `${parsed.protocol}${host} (credentials, path, and parameters redacted)`;
+  } catch {
+    return "(set; value redacted)";
+  }
+}
+
 /** Exit the process unless the target database is local (or explicitly waived). */
 export function assertLocalDatabase(action = "This command") {
   if (process.env[OVERRIDE] === "1") return;
@@ -40,7 +58,7 @@ export function assertLocalDatabase(action = "This command") {
   if (url.startsWith("file:")) return;
   console.error(
     `\nRefusing to continue: DATABASE_URL is not a local SQLite file.\n` +
-      `  DATABASE_URL = ${url || "(unset)"}\n\n` +
+      `  DATABASE_URL = ${sanitizedTarget(url)}\n\n` +
       `${action} DESTROYS the data in that database. If you really mean to, re-run with:\n` +
       `  ${OVERRIDE}=1 <your command>\n`,
   );

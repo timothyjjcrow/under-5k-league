@@ -23,9 +23,11 @@ and nav links exist; zero active rows is the real offseason), and **inhouses** �
 season-independent pick-up mode with its own queue, lobby state machine, Elo
 ladder, and play-money betting, coupled to the league only through the shared
 identity and opportunistic reuse of the latest trusted `Registration.mmr`; it
-has no `seasonId` or league-phase gate. There is no cron and no websocket
-anywhere: all live behavior is HTTP polling plus lazy resolvers that run on
-reads.
+has no `seasonId` or league-phase gate. There is no websocket. Interactive
+rooms still use HTTP polling and guarded read-time resolvers, while sitewide
+background work runs once per minute through the bearer-authenticated
+`GET /api/cron/automation` boundary. Public page traffic observes automation
+state but does not serve as its clock.
 
 ## 2. The league lifecycle, end to end
 
@@ -142,9 +144,11 @@ Clocks (30s bid, 90s nomination — `DEFAULTS` in `src/lib/constants.ts`) are
 server-authoritative and resolve **lazily**: `getDraftState` runs both
 resolvers before every read, every route
 (`/api/draft/tick|bid|nominate|admin-nominate`) funnels through it, and the
-root `/api/sync` heartbeat also calls the two resolvers after a cheap due-clock
-preflight. A visible site tab discovers activity on its up-to-300s idle poll,
-then stays on the 60s watch cadence while an auction clock remains live.
+authenticated maintenance worker also calls the two resolvers after a cheap
+due-clock preflight. A visible site tab discovers activity from the read-only
+`GET /api/sync` snapshot on its up-to-300s idle poll, then stays on the 60s
+watch cadence while an auction clock remains live; those browser reads refresh
+the UI but never advance the clock themselves.
 The client is `src/components/draft-room.tsx`, a ~1.2s poll loop whose cadence,
 sequence ordering, expiry observation, outbid latch, feed recovery, and title
 flags are extracted into tested pure modules (`src/lib/room-poll.ts`,
@@ -235,9 +239,8 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   cascade delta; `setWeekNight` and `setMatchTime` only retime `SCHEDULED`
   rows, preserve no-ops, and atomically clear affected RSVPs, pending proposals,
   auto-sync claims, and reminder clusters.
-- _Week reminder_: `src/lib/reminder-service.ts`, fired lazily by the
-  invisible `<WeekReminderPing>` on the dashboard and `/schedule` and after
-  each `/api/sync` run, mentions exactly the players who haven't RSVP'd. Each
+- _Week reminder_: `src/lib/reminder-service.ts`, invoked by the authenticated
+  maintenance pass, mentions exactly the players who haven't RSVP'd. Each
   exact `(season, week, kickoff)` cluster has its own claim, so a split week can
   announce both nights; exact-or-colon-delimited cleanup prevents week 1 from
   colliding with week 10.
@@ -499,8 +502,8 @@ completion, and the real no-active-season offseason.
 Lazy resolution mirrors the draft. A state read runs heartbeat → abandoned-
 lobby sweep → bet sweep → formation → ready check → captain vote → stalled
 pick → auto-detect → board repaint; the tenth join also attempts formation
-synchronously. `/api/sync` runs the equivalent chain sitewide so an unwatched
-lobby still resolves. Inhouse result and void Discord messages use the durable
+synchronously. The authenticated maintenance worker runs the equivalent chain
+sitewide so an unwatched lobby still resolves. Inhouse result and void Discord messages use the durable
 `InhouseAnnouncement` outbox: the exact payload commits with the state change,
 then a leased/tokened worker sends outside the transaction and retries with
 backoff even when the room is idle. The webhook API has no idempotency key, so
@@ -525,15 +528,19 @@ Rules that follow from the layering:
   be thin transactions over pure decisions; the room components have had every
   behavioral rule extracted into pure modules precisely because there is no
   jsdom (`vitest.config.mts` is `environment: "node"`).
-- **Lazy resolution, no cron.** Expired clocks and pending work resolve on the
-  next read: `getDraftState` and `getInhouseState` run resolvers before every
-  read, and `POST/GET /api/sync` — pinged by the invisible `<ResultSyncPing>`
-  in the root layout on every page view and seeded with that render's result
-  cursor — is the de-facto global cron. One
-  sync run can import league results, advance a bracket, crown a champion,
-  resolve an inhouse lobby, settle bets, retry failed announcements, and
-  repaint the Discord board. An external uptime monitor on `GET /api/sync`
-  bounds the nobody-on-site window (README).
+- **One authenticated worker, public observation only.** `getDraftState` and
+  `getInhouseState` retain guarded resolvers so interactive rooms can respond
+  immediately. Sitewide work is different: a one-minute scheduler calls
+  `GET /api/cron/automation` with `Authorization: Bearer <CRON_SECRET>`.
+  `runAutomation` elects one runner across all instances with a tokened,
+  database-global 90-second lease, fences finalization with the same token,
+  and gives `runResultSync` a 45-second deadline/abort budget. The persisted
+  `AutomationRunState` records safe status, cadence, duration, source, failure
+  streak, and bounded machine-code summary. Browser `<ResultSyncPing>` calls
+  **read-only GET** `/api/sync` to learn `watch` and the result cursor; there is
+  no POST handler and no page-render notification component. Thus visitors can
+  refresh after committed changes without importing results, advancing a
+  phase, calling OpenDota/Discord, or multiplying worker executions.
 - **Concurrency doctrine** (two sentences; the full treatment with worked
   examples is CLAUDE.md's "Concurrency: the two rules"): a read-time
   precondition is not a guard — re-assert it in the WHERE of the write
@@ -615,7 +622,7 @@ directly.
 | `/features`        | Phase-aware feature tour with honest live/locked destinations                                  | Always                                                                                             | `featureAvailability`, live counts, viewer-aware closing CTA                                                  |
 | `/admin`           | The control panel (§8)                                                                         | Admin only                                                                                         | `loadSeasonAdminData`                                                                                         |
 
-API routes (15): `/api/auth/steam` + `/callback`, `/api/auth/discord` +
+API routes (16): `/api/auth/steam` + `/callback`, `/api/auth/discord` +
 `/callback`, `/api/auth/dev`, `/api/auth/logout` — auth (§2);
 `/api/draft/tick|bid|nominate|admin-nominate` — the auction. Every draft POST
 requires an `application/json` media type and canonical same-origin `Origin`;
@@ -628,8 +635,14 @@ explicit action required. Every call requires the JSON media type. Public state
 reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
 attempts fall back to IP);
-`/api/sync` — the lazy sync trigger (POST from `<ResultSyncPing>`, GET for
-uptime monitors, 30/min); `/api/calendar` — the .ics feed;
+`/api/sync` — public, read-only GET snapshot for `<ResultSyncPing>` (`watch` +
+result cursor; no POST/mutation path); `/api/cron/automation` — the
+`CRON_SECRET` bearer-authenticated one-minute worker route (Node runtime,
+60-second route ceiling); `/api/health/live` — dependency-free process
+liveness; `/api/health/ready` — database readiness (`SELECT 1`, 503 on
+failure); `/api/health/automation` — public, read-only dead-man probe with only
+a bounded status enum (200 for fresh clean success, 503 otherwise);
+`/api/calendar` — the .ics feed;
 `/api/admin/season-export` — the non-restorable season JSON audit archive; `/api/test/cache` —
 fixture-only cache expiry, gated behind non-production + dev login + an
 e2e/fixture database URL and otherwise 404. Rate limiting
@@ -642,7 +655,7 @@ gating fetched per request), `error/global-error/loading/not-found.tsx`, `sitema
 
 ## 6. Database models
 
-25 models in `prisma/schema.prisma`, committed on the sqlite provider
+27 models in `prisma/schema.prisma`, committed on the sqlite provider
 (`scripts/switch-db-provider.mjs` swaps to postgresql at build). SQLite has no
 enums, so every status column is a string whose allowed values live in
 `src/lib/constants.ts`. Uniques double as concurrency guards throughout.
@@ -665,8 +678,8 @@ enums, so every status column is a string whose allowed values live in
   while Prisma's signed 32-bit `Int` cannot represent the full Dota range.
 - `NewsPost` — admin announcements; author `SetNull` so posts outlive users.
   Creation request UUIDs are durable `Setting` receipts, making browser replay
-  idempotent across the post, audit log, and Discord effect. Delivery remains
-  awaited best-effort rather than a transactional outbox.
+  idempotent across the post and audit log. League Discord delivery persists in
+  `LeagueAnnouncement`; a temporary transport failure cannot discard it.
 
 **Season core**
 
@@ -740,6 +753,20 @@ enums, so every status column is a string whose allowed values live in
 
 **Infrastructure**
 
+- `AutomationRunState` — singleton operational record for the unattended
+  worker. `leaseToken` + `leaseOwner` + `leaseExpiresAt` form the 90-second
+  database-global election/fencing boundary. Attempts, starts, finishes,
+  success/failure timestamps, source, duration, failure streak, safe error
+  code, and a bounded non-identifying summary drive operator health without
+  exposing the token or secret.
+- `LeagueAnnouncement` — globally ordered durable league-channel outbox. A
+  nullable unique `dedupeKey` binds marker-backed events to one row; ordinary
+  events remain distinct. PENDING/SENDING/SENT/CANCELLED state, a tokened
+  30-second delivery claim, bounded drain, and exponential backoff keep work
+  recoverable. Earlier non-terminal rows block later rows so related messages
+  cannot intentionally overtake one another. Discord has no idempotency key,
+  so a crash after webhook acceptance but before `SENT` commits retains the
+  unavoidable at-least-once duplicate gap.
 - `AdminAction` — append-only audit log; deliberately no FKs (records outlive
   what they describe; every table wipe must name it explicitly). Coverage
   includes phase/draft/playoff recovery, session revocation, league and Discord
@@ -754,11 +781,13 @@ enums, so every status column is a string whose allowed values live in
   `claimThrottle` (conditional `updateMany` on an ISO-string value, then
   create-with-P2002-catch) — `leagueAutoSyncAt`, `rosterAutoSyncAt`,
   `announceRetryAt`, `inhouseBoardAt`, `outPing:<matchId>:<userId>`;
-  (3) exactly-once markers claimed by raw `setting.create` (P2002 = already
-  done) — `resultAnnounced:<matchId>` (re-claimable when stamped
-  `failed:<iso>`), `weekReminder:<season>:<week>:<kickoffMs>`,
-  `honorsAnnounced:<season>:<week>`, `playoffRoundBuilt:<season>:<round>`,
-  `championAnnounced:<season>` (also re-claimable after `failed:`);
+  (3) once-only domain markers — series, champion, and reminder markers use
+  tokened 90-second `claim:v2:` leases and preserve an event generation across
+  stale/failed recovery; that generation becomes the `LeagueAnnouncement`
+  dedupe key, closing the claim/enqueue/finalize crash gaps. Honors use the
+  equivalent generation-preserving CAS state machine for initial, stale,
+  corrected, and failed awards. `playoffRoundBuilt:<season>:<round>` remains a
+  transactionally revalidated round-build marker;
   (4) JSON state blobs written by compare-and-swap — `inhouseBoard` (a live
   message state or leased pre-POST reservation; a row means on or posting),
   `importSkip:<seasonId>`,
@@ -773,26 +802,48 @@ enums, so every status column is a string whose allowed values live in
 
 ## 7. Background/automatic processes
 
-All lazy — each runs inside some request. Triggers, throttles, and homes:
+The production clock is explicit. `vercel.json` schedules
+`GET /api/cron/automation` once per minute; a trusted external scheduler may
+call the same route. `src/lib/cron-auth.ts` accepts only a header bearer token
+matching a non-placeholder `CRON_SECRET` and compares fixed-length digests in
+constant time. Query strings and browser cookies are not credential sources.
+The route returns 401 before worker work on bad auth, 202 when another owner
+holds the lease, 200 only for a healthy completed pass, and non-2xx for a
+degraded, failed, or unavailable pass.
 
-| Process                                                                                                           | What it does                                                                                                                        | Trigger                                                                                                                                  | Throttle / idempotency                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Draft clock resolver (`src/lib/result-sync-service.ts` → `resolveExpiredNomination` / `resolveStalledNomination`) | Resolves an expired nomination or bid clock when no draft-room client remains open                                                  | The visible root `<ResultSyncPing>` POSTs `/api/sync`; idle discovery is ≤300s, then `watch` keeps a 60s cadence while the clock is live | Cheap season/Draft due-time preflight; service phase/turn/lot claims make duplicate heartbeat/room-poll resolution harmless                                                                                                   |
-| Result sync, roster-scan path (`src/lib/result-sync-service.ts` `syncDueMatches`)                                 | Claims ONE due match (in the 25min–48h post-kickoff window, stalest first) and roster-scans OpenDota via `autoDetectGamesForMatch`  | `<ResultSyncPing>` POSTs `/api/sync` on page view + heartbeat (60s while `watch`, 300s idle); GET for uptime monitors                    | Global `rosterAutoSyncAt` claim (45s); per-match atomic claim on `Match.autoSyncedAt` re-asserting not-COMPLETED; exponential empty-scan backoff on `autoSyncAttempts` (cap ≈4.3h), rolled back when OpenDota was unreachable |
-| Result sync, league-feed path (`syncLeagueGames({auto:true})`)                                                    | With `Season.dotaLeagueId`, one feed fetch covers everything                                                                        | Same run, preferred over roster scans                                                                                                    | `leagueAutoSyncAt` claim (180s); ≤25 unknown match fetches/run; per-season `leagueSyncSkip:` memory (admin's manual button bypasses both)                                                                                     |
-| Playoff reconciliation (`runResultSync` → `advancePlayoffBracket`)                                                | Repairs a committed playoff result whose immediate next-round/crown handoff was interrupted                                         | Every `/api/sync` run while an active season is in PLAYOFFS                                                                              | Idempotent round Setting claims; current-round inputs and the exact final/winner are revalidated in Serializable transactions                                                                                                 |
-| Inhouse resolver chain (`syncInhouse` + `getInhouseState`)                                                        | Abandoned-lobby sweep, bet sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint                            | Every `/api/inhouse` state read AND every `/api/sync` run (so parked lobbies resolve)                                                    | Each resolver is its own guarded claim; auto-detect throttled by `detectedAt` with an age-grown interval                                                                                                                      |
-| Bet sweeper (`resolveUnsettledBets`, `src/lib/inhouse-bet-service.ts`)                                            | Settle / refund / reverse stranded pots                                                                                             | Both resolver chains above the empty-queue early return; cancel/void also target their own lobby immediately                             | Targeted calls attempt that lobby; global calls attempt ≤25 `[updatedAt asc, id asc]`; per-row transactions isolate failures, which rotate to the back; `completedAt` remains immutable result recency                        |
-| League announce retry (`retryFailedAnnouncements`)                                                                | Re-sends failed league-series/champion announcements and delivers the active champion if Discord was configured only after crowning | Every `/api/sync` run                                                                                                                    | `announceRetryAt` claim plus the league Setting-marker recovery contracts                                                                                                                                                     |
-| Inhouse outbox delivery (`deliverInhouseAnnouncements`)                                                           | Sends durable RESULT/RESULT_VOIDED payloads outside transactions and preserves per-lobby result-before-correction order             | Immediate post-commit attempt after result/void; every sitewide `syncInhouse` before its empty-room return and again after a new result | Unique `(lobbyId, kind)`, sequence, tokened 30s claim lease, and exponential backoff; at-least-once if the process dies after Discord accepts but before `SENT` commits                                                     |
-| Week reminder (`maybeAnnounceUpcomingWeek`, `src/lib/reminder-service.ts`)                                        | Announces each in-window kickoff cluster + un-RSVP'd mentions, 24h ahead                                                            | `<WeekReminderPing>` on dashboard + `/schedule`, and every `/api/sync` run                                                               | Atomic `weekReminder:<season>:<week>:<kickoffMs>` claim; released on failed/empty fetch and by every retime path; exact delimiter cleanup avoids week-prefix collisions                                                       |
-| Weekly honors (`maybeAnnounceWeekHonors`, `src/lib/honors-service.ts`)                                            | Player/Team of the Week after every final is backed by valid attributed 5v5 evidence                                                | `recomputeSeries`, manual results, correction paths, and retry sweep                                                                     | Shared regular-week readiness evaluator; CAS marker supports initial, stale, corrected, and failed states; reopen/remove atomically mark prior awards stale                                                                   |
-| Board repaint (`syncInhouseBoard`, `src/lib/inhouse-board-service.ts`)                                            | PATCHes the pinned Discord queue board when its semantic digest changed                                                             | Poll-path `getInhouseState` and both `syncInhouse` paths (never on mutations — `syncBoard:false`)                                        | Pre-POST CAS reservation + 30s lease; ambiguous/no-id POST becomes immediately stuck until admin review/clear; digest gate; `inhouseBoardAt` claim (10s); CAS write-back; 404/401/403 = permanent "gone"                      |
-| Session epoch (`src/lib/session-epoch.ts`)                                                                        | Global token invalidation counter checked on every `getSessionUser`                                                                 | Admin `revokeAllSessions` bumps it                                                                                                       | 30s in-process cache; tokens carry the epoch they were minted under                                                                                                                                                           |
+`src/lib/automation-service.ts` wraps every scheduled and admin-requested pass
+in the same database-global 90-second owner/token lease. Work gets a 45-second
+deadline and abort signal inside the route's 60-second maximum. Finalization is
+fenced by owner + token, so an expired process cannot clear or overwrite its
+replacement. `AutomationRunState` persists RUNNING/SUCCEEDED/DEGRADED/FAILED,
+attempt/start/finish/success/failure times, source, duration, consecutive
+failures, a safe code, and a bounded summary. A replacement counts and reports
+an expired RUNNING lease before taking ownership.
+
+| Process | What it does | Trigger | Bound / recovery contract |
+| ------- | ------------ | ------- | ------------------------- |
+| Scheduled maintenance (`runAutomation` → `runResultSync`) | Owns unattended league, draft, inhouse, reminder, playoff, Discord, and cursor work | Authenticated cron every minute; Admin → Automation → **Run maintenance now** uses the same election path | One global 90s tokened lease; 45s work budget; independent steps report stable issue/deferred codes instead of suppressing unrelated work |
+| Draft clock resolver (`resolveExpiredNomination` / `resolveStalledNomination`) | Resolves an expired nomination or bid clock when no draft-room client remains open | Every maintenance pass; draft-room reads also resolve immediately | Cheap due-time preflight plus phase/turn/lot write claims; duplicate room/worker attempts are harmless |
+| Result sync, roster scan (`syncDueMatches` → `autoDetectGamesForMatch`) | Claims one due fixture and roster-scans OpenDota | Every pass in REGULAR_SEASON/PLAYOFFS when the match throttle permits | Global `rosterAutoSyncAt`, per-match compare-and-set, exponential empty-scan backoff; recent-list and match calls receive the worker deadline/abort signal, and an unreachable/deadline scan releases its throttle for recovery |
+| Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, per-season skip memory, and the same deadline/abort propagation; manual admin sync remains a bounded override |
+| Playoff reconciliation (`advancePlayoffBracket`) | Repairs a committed result whose immediate round-build/crown handoff was interrupted | Every maintenance pass while PLAYOFFS | Round claims plus Serializable revalidation of current source winners/final; committed work is idempotently rediscovered |
+| Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, bet sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; `/api/inhouse` state reads retain immediate interactive resolution | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor |
+| Bet sweeper (`resolveUnsettledBets`) | Settles, refunds, or reverses stranded pots | Maintenance/inhouse resolver chains; cancel/void also target their own lobby immediately | Global calls attempt ≤25 oldest-first, isolate failures per row, and rotate a failed row; immutable `completedAt` remains result chronology |
+| League marker reconciliation | Recovers series, champion, reminder, and honor announcement generations | Immediate domain path plus bounded maintenance retry sweep | 90s marker leases recover pre-enqueue death; stable generation/dedupe keys reuse the same `LeagueAnnouncement` after enqueue-before-finalize death; exact-value finalization cannot overwrite a newer claim |
+| League outbox (`deliverLeagueAnnouncements`) | Sends all league-channel webhook work in global creation order | One immediate bounded attempt after enqueue; maintenance drains existing work before creating/retrying later marker events | PENDING/SENDING/SENT/CANCELLED, tokened 30s claims, bounded batches, exponential backoff; an earlier non-terminal row blocks later rows. Discord accept-before-`SENT` death can still duplicate once on recovery (at-least-once) |
+| Inhouse result recovery/outbox (`reconcileMissingInhouseResultAnnouncements` / `deliverInhouseAnnouncements`) | Reconstructs missing completion-derived Elo/result work, then sends RESULT/RESULT_VOIDED in per-lobby order | Maintenance/inhouse reconciliation plus an immediate post-commit delivery attempt | Source completion and `dotaMatchId` are revalidated; unique `(lobbyId, kind)`, sequence, tokened 30s claims, cancellation of invalidated unsent results, and backoff. The same unavoidable Discord accept/commit duplicate gap applies |
+| Week reminder (`maybeAnnounceUpcomingWeek`) | Announces each kickoff cluster in the 24-hour window and mentions only linked players who still owe an RSVP | Maintenance pass only | Exact `(season, week, kickoff)` key, 90s recoverable marker lease, stable outbox dedupe generation, and exact-delimiter cleanup on retime |
+| Weekly honors (`maybeAnnounceWeekHonors`) | Announces Player/Team of the Week only from publication-ready attributed 5v5 evidence | Result recomputation/correction plus maintenance retry | Generation-preserving CAS supports initial, stale, corrected, failed, and expired-claim recovery; reopen/remove marks previous awards stale |
+| Board repaint (`syncInhouseBoard`) | PATCHes the pinned Discord queue board when its semantic digest changes | Inhouse state reads and scheduled `syncInhouse` | Pre-POST CAS reservation + 30s lease; ambiguous/no-id POST requires explicit admin recovery; digest gate; `inhouseBoardAt` (10s); permanent gone handling |
+| Session epoch (`src/lib/session-epoch.ts`) | Invalidates all signed sessions | Admin `revokeAllSessions` | 30s in-process cache; tokens carry the epoch minted into them |
+
+`GET /api/sync` is intentionally absent from this table: it only reads
+`watch`/cursor state for browser refresh cadence. It cannot invoke any process
+above, and POST is not implemented.
 
 ## 8. Admin tools
 
-`/admin` (`src/app/admin/page.tsx`) is 14 anchored cards behind a sticky jump
+`/admin` (`src/app/admin/page.tsx`) is a set of anchored cards behind a sticky jump
 bar, with the set-once cards collapsed as `<details>` and the three slow cards
 Suspense-streamed. An `adminNextStep` banner (`src/lib/admin-next-step.ts`,
 pure, tested) says what to do next per phase — it exists because several
@@ -809,6 +860,7 @@ season/team name) — reserved for exactly the five actions with no in-app undo.
 | Playoffs                   | Start (confirm) vs **Reset (DangerSubmit)** with explicit intent + revision claims; **Return to regular season (DangerSubmit)** removes the bracket/champion through the shared teardown; postseason-game archive listing. The result card separately supports grand-final-only reopen/import correction without discarding earlier rounds.                                                                                                                                            |
 | Roster moves               | `signFreeAgent`, `promoteStandinToPlayer`, `releasePlayer` (confirm — names refund + cover effects), REGULAR-only `withdrawTeam`/`reinstateTeam`                                                                                                                                                                                                                                                                                                                                   |
 | Standins                   | `assignStandin` (incl. empty-seat `seat:<teamId>` form), `removeStandin` (confirm)                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Automation runner (evergreen) | Persisted last attempt/success/source/duration, failure streak, safe issue/deferred codes, active/expired lease signal, and expected one-minute/four-minute-stale cadence. **Run maintenance now** is admin-only and uses the same lease as cron: it can recover an expired owner but is visibly disabled and cannot force or overlap an active run. This card remains available in every phase and offseason. |
 | Auto-sync health           | Read-only: per-match scan state, league throttle, cursor, skip memory                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Dota league integration    | `setLeagueId`, `syncLeagueAction`, `enrichGamesAction`, `syncAllRanks`                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Discord (streamed)         | Webhook set/clear ×3 (league / inhouse board / inhouse alerts; board-webhook moves attempt teardown, alert moves never touch it), ping role, test sends, board post/remove/interrupted-post recovery, ping-health checklist + reach count                                                                                                                                                                                                                                              |
@@ -855,9 +907,11 @@ newer link or snapshot wins.
 commands):
 
 1. _Webhooks_ (`src/lib/discord.ts`): ~24 pure, tested message formatters +
-   the transport (`sendTo`, 5s timeout, resolves false and never throws —
-   which is why services return announcement payloads and the action layer
-   sends _after_ the write commits). Three webhooks form a fallback chain:
+   the transport (`sendTo`, 5s timeout, resolves false and never throws).
+   `sendDiscordMessage` validates and persists league-channel work before a
+   bounded immediate transport attempt; returning true means durable queue
+   acceptance, not proof that Discord already rendered it. Three webhooks form
+   a fallback chain:
    league (`discordWebhookUrl`) ← inhouse board channel ← inhouse alerts
    channel, so an alert can never scroll the pinned board out of view. Every
    send pins API v10 and `allowed_mentions: {parse: []}` — mentions happen
@@ -876,12 +930,22 @@ commands):
    parameters and a session swap are rejected before token exchange.
 
 The overarching failure-tolerance rule: **a Discord failure can never fail or
-roll back a database write.** Inhouse result/correction events use a durable
-at-least-once outbox; announcements needing once-only application semantics use
-Setting markers with a documented recovery shape (delete-marker-on-failure for
-reminders, CAS stale/corrected/failed states for honors,
-`failed:`-stamp-and-sweep for series results). The remaining low-collateral
-notifications are fire-and-forget.
+roll back a database write.** League-channel work uses the globally ordered
+`LeagueAnnouncement` outbox; inhouse result/correction work uses the
+per-lobby-ordered `InhouseAnnouncement` outbox. Both retry with tokened leases
+and backoff and both are at-least-once across the unavoidable Discord
+accept/our-commit gap. Series, champion, reminder, and honor markers add
+90-second recoverable claims plus stable generation dedupe, closing death
+before enqueue and between enqueue/finalization. Inhouse completion
+reconciliation similarly rebuilds a missing RESULT event/Elo snapshot from the
+committed lobby source.
+
+Ordinary low-collateral league actions enqueue immediately after their domain
+transaction rather than in that same transaction. Once enqueued they are
+durable and ordered, but a process death in the narrow domain-commit-before-
+enqueue call gap can still omit one of those non-marker-backed notices. Queue
+alerts and the live board use their separate best-effort/reservation contracts;
+they must not be described as outbox-exact.
 
 ## 10. Testing model
 
@@ -945,7 +1009,8 @@ Five layers (depth and the doctrine behind each in CLAUDE.md):
 CI (`.github/workflows/ci.yml`) runs: types + unit + SQLite integration; the
 integration suite on a Postgres service container; the 4-shard mutation
 matrix; and all three Playwright suites sequentially. Destructive local
-commands are gated by `scripts/assert-local-db.mjs` and per-script URL guards;
+commands (including `db:push`) are gated by `scripts/assert-local-db.mjs` and
+per-script URL guards; refusal output redacts credentials, path, and parameters;
 the fixture/e2e databases and guarded Postgres databases are deliberately
 separate. CI's ordinary SQLite job uses `file:./ci.db`, while Playwright's base
 job starts from its dedicated `prisma/e2e.db`; neither can inherit or target a
@@ -955,15 +1020,18 @@ remote connection, and the browser fixture never touches `dev.db`.
 
 **Environment gate.** `scripts/validate-prod-env.mjs` runs first for a
 production Vercel build. It requires PostgreSQL `DATABASE_URL` and `DIRECT_URL`
-that name the same logical database and schema (and, for recognized managed
-providers, the same project), while permitting the pooled runtime and direct
-migration connections to use separate least-privilege roles. It rejects a
+that name the same logical database, schema, username (and, for recognized managed
+providers, the same project). The initial release intentionally does not claim
+to provision or attest grants for a separate runtime role. It rejects a
 custom-provider pair unless hostname and effective port also match; only the
 reviewed Neon and Supabase forms normalize distinct pool/direct endpoints. It
 rejects a pooler as `DIRECT_URL`, a known direct endpoint as `DATABASE_URL`,
-and the obsolete `PRISMA_ACCEPT_DATA_LOSS` escape hatch. It also requires distinct,
-non-placeholder `AUTH_SECRET` and `BACKUP_RECEIPT_SECRET` values of at least 32
-characters; at least one valid, unique individual SteamID64 in
+and the obsolete `PRISMA_ACCEPT_DATA_LOSS` escape hatch. It also requires
+distinct, non-placeholder `AUTH_SECRET`, `BACKUP_RECEIPT_SECRET`, and
+`CRON_SECRET` values of at least 32 characters (the cron credential is capped
+at 512 characters and may not contain whitespace); a configured non-placeholder
+`STEAM_API_KEY`; complete-or-absent Discord OAuth and bot/guild pairs; no
+production `DISCORD_API_BASE`; at least one valid, unique individual SteamID64 in
 `ADMIN_STEAM_IDS`; identical canonical HTTPS origins in `APP_URL` and
 `NEXT_PUBLIC_SITE_URL`; and dev login unset or exactly `false`.
 `BUILD_DB_DRY_RUN` is reserved for unit tests running with `NODE_ENV=test` and
@@ -990,18 +1058,65 @@ the deployment step. Production has no data-loss override and never uses
 
 **Migration history and existing databases.** The first committed migration is
 an immutable baseline of the last production schema managed with `db push`;
-the next migration is the additive release change. A fresh database applies
-both in order. An existing untracked database must first pass
+the second is the additive release-readiness change, and the third adds
+`AutomationRunState` plus the league announcement outbox. A fresh database
+applies all three in order. An existing untracked database must first pass
 `db:migrate:baseline-check`: its semantic Prisma schema and every relevant
 public-schema object must exactly match the pinned baseline, and the current
 data must pass the release preflight. Only then may an operator run the guarded
 `db:migrate:baseline-resolve`, which records the baseline as applied before
-`migrate deploy` adds the release migration. A database with an existing,
+`migrate deploy` adds the later migrations. A database with an existing,
 partial, failed, or unexpected migration history is rejected instead of being
 silently adopted. The release migration preserves the legacy Dota column and
 old-writer compatibility triggers for one rollback window; rollback means
 promoting the previous application build, not attempting a destructive SQL
-down migration.
+down migration. The automation/outbox tables are additive and safe for that
+older binary to ignore.
+
+**Scheduler and health launch gate.** The repository's `vercel.json` registers
+`/api/cron/automation` on `* * * * *`. This requires Vercel Pro/Enterprise;
+Hobby's once-daily, broad-window cron cannot meet the application's lifecycle
+or recovery contract. A trusted external one-minute scheduler is compatible
+with the route if it sends the same Authorization bearer, but a Hobby
+deployment must omit the unsupported Vercel cron registration through an
+explicitly reviewed deployment configuration. `CRON_SECRET` is a machine
+boundary, never a browser credential: Vercel injects it as a bearer header and
+external schedulers must do the same. The route returns non-2xx for degraded or
+failed work because Vercel does not retry a failed cron request; the next
+minute's invocation and persisted recovery primitives own retry, while
+observability owns alerting.
+
+Before promotion, a production-like candidate on a non-production database must prove: `/api/health/live` returns 200
+without dependency work; `/api/health/ready` returns 200 with the target
+database and 503 when that probe fails; unauthenticated/incorrect-auth cron is
+401; POST `/api/sync` is 405; GET `/api/sync` is a read-only
+`updated`/`watch`/`cursor` response; and a manual Admin run or reviewed external
+staging invocation can complete. Vercel Cron does not target preview
+deployments. Immediately after a controlled production promotion, exactly one
+authoritative scheduler must produce two consecutive authenticated one-minute
+200/SUCCEEDED invocations, and `/api/health/automation` must return 200. The evergreen Admin →
+Automation card must show those attempts and successes, Source = Scheduled
+cron, cleared leases, and zero consecutive failures. The manual control must
+complete under Source = Admin manual run while idle and refuse to overlap an
+active scheduled lease. Alert on live/ready failure, cron non-2xx, or four
+minutes without a completed pass. The pinned-commit promotion, launch evidence,
+traffic freeze, rollback, PITR recovery, and secret-rotation contract lives in
+`docs/PRODUCTION-OPERATIONS.md`.
+
+**Application rollback sequencing.** Vercel rollback does not reliably update
+cron configuration, so pause/remove the schedule first and confirm invocations
+have stopped. Wait at least the 90-second lease duration and verify the admin
+health card shows no active owner; never delete or overwrite a live lease.
+Promote the previous tested application build while leaving the additive
+migrations/tables intact, then verify Steam login, the current schedule, and a
+known database-backed read. Verify live/ready only if that release exposes
+those probes. Never use `/api/sync` as a rollback health check: an older build
+may still mutate state on GET. Keep scheduling disabled if that build predates
+the authenticated route and point platform probes at endpoints that exist in
+the rollback release. After the forward repair is deployed, re-enable the
+one-minute bearer-authenticated schedule and repeat the two-consecutive-success
+gate. A data incident follows the rehearsed restore path below, never an
+improvised SQL down migration.
 
 **Database backups.** `npm run db:backup` prefers `DIRECT_URL`, translates the
 connection into dedicated libpq environment fields rather than passing a URI

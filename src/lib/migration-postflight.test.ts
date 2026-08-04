@@ -41,8 +41,8 @@ describe("migration postflight attestation", () => {
   it("accepts only the reviewed migration and native-object snapshot", () => {
     expect(validatePostflightSnapshot(validSnapshot())).toEqual({
       schema: "league_data",
-      migrationCount: 2,
-      nativeObjectCount: 12,
+      migrationCount: 3,
+      nativeObjectCount: 14,
     });
   });
 
@@ -86,7 +86,7 @@ describe("migration postflight attestation", () => {
       rolledBack: true,
     });
 
-    expect(validatePostflightSnapshot(snapshot).migrationCount).toBe(2);
+    expect(validatePostflightSnapshot(snapshot).migrationCount).toBe(3);
   });
 
   it("rejects a missing or unexpected native object", () => {

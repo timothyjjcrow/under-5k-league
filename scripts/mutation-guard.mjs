@@ -190,6 +190,26 @@ const EQUIVALENT = new Set([
   // state while the capability token invariant holds.
   "src/lib/inhouse-announcement-outbox.ts::deliverInhouseAnnouncements::status#1",
   "src/lib/inhouse-announcement-outbox.ts::deliverInhouseAnnouncements::status#2",
+  // reconcileOneResult reads the exact InhouseLobby source and performs this
+  // claim in one SERIALIZABLE transaction. Any change to the copied result,
+  // completion, box-score or settlement fields is either visible to the fresh
+  // preflight or creates a same-row write conflict and P2034; the retry then
+  // re-reads and skips or rebuilds. Removing these copied predicates therefore
+  // cannot commit stale Elo or content. The separate RESULT-row claim is NOT
+  // equivalent: an already-SENDING row is valid at a fresh snapshot, and its
+  // PENDING guard is what keeps the leased payload immutable.
+  "src/lib/inhouse-announcement-outbox.ts::reconcileOneResult::betSettlement+boxScore+completedAt+direScore+durationSecs+radiantScore+radiantTeam+status+winnerTeam#1",
+  // Every league-outbox transition below retains the exact random claimToken
+  // created atomically with SENDING. Success, retry, source cancellation and
+  // lease recovery always clear or replace that token; no reachable row in a
+  // different status can still match `(id, claimToken)`. These predicates are
+  // useful state-machine documentation and corruption defense, but the token
+  // alone fences a stale worker in all five transitions.
+  "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#1",
+  "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#2",
+  "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#3",
+  "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#4",
+  "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#5",
   // applyPick's ADVANCE claim re-asserts `status: DRAFTING`. It cannot be
   // falsified: the TURN claim a few statements earlier UPDATEs the same lobby
   // row inside the same interactive transaction, so Postgres holds that row's
@@ -247,7 +267,10 @@ const FILES = [
   "src/app/actions/news.ts",
   "src/app/actions/registration.ts",
   "src/lib/honors-service.ts",
+  "src/lib/announcement-marker.ts",
+  "src/lib/automation-service.ts",
   "src/lib/inhouse-announcement-outbox.ts",
+  "src/lib/league-announcement-outbox.ts",
   "src/lib/side-game-claims.ts",
   "src/lib/users.ts",
 ];

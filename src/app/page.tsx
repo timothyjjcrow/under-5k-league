@@ -70,7 +70,6 @@ import {
 } from "@/components/ui";
 import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
 import { queuePresentCutoff } from "@/lib/inhouse";
-import { WeekReminderPing } from "@/components/week-reminder-ping";
 import { DiscordSetupPrompt } from "@/components/discord-setup";
 import {
   AUTO_SYNC,
@@ -486,10 +485,6 @@ export default async function Home() {
       {season.status === "DRAFT" && <DraftPhaseView snapshot={snapshot} />}
       {(season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS") && (
         <>
-          {/* Lazy match-night Discord reminder — invisible, never blocks paint. */}
-          <Suspense fallback={null}>
-            <WeekReminderPing season={season} />
-          </Suspense>
           {/* MyNextMatch is NOT rendered here any more — it lives in the hero's
               control slot, which is the whole point: the RSVP a captain depends
               on used to be the lowest-contrast strip on the page. */}

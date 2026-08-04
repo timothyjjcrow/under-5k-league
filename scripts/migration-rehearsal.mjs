@@ -15,6 +15,7 @@ const BASELINE_SQL = new URL(
 const PRISMA_CLI = new URL("node_modules/prisma/build/index.js", ROOT);
 const BASELINE_MIGRATION = "20260804000000_baseline";
 const RELEASE_MIGRATION = "20260804010000_release_readiness";
+const AUTOMATION_MIGRATION = "20260804020000_automation_run_state";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -134,16 +135,26 @@ async function rehearseFreshDatabase(url) {
   await withClient(url, async (client) => {
     assert(
       JSON.stringify(await migrationNames(client)) ===
-        JSON.stringify([BASELINE_MIGRATION, RELEASE_MIGRATION]),
-      "fresh deploy must finish baseline and release migrations in order",
+        JSON.stringify([
+          BASELINE_MIGRATION,
+          RELEASE_MIGRATION,
+          AUTOMATION_MIGRATION,
+        ]),
+      "fresh deploy must finish every reviewed migration in order",
     );
     const [{ count }] = await client.$queryRawUnsafe(
       `SELECT COUNT(*)::integer AS count
        FROM information_schema.tables
        WHERE table_schema = current_schema()
-         AND table_name IN ('User', 'Season', 'Setting', 'InhouseAnnouncement')`,
+         AND table_name IN (
+           'User', 'Season', 'Setting', 'InhouseAnnouncement',
+           'AutomationRunState', 'LeagueAnnouncement'
+         )`,
     );
-    assert(count === 4, "fresh deploy must create core and outbox tables");
+    assert(
+      count === 6,
+      "fresh deploy must create core, outbox, and operational-state tables",
+    );
   });
 
   await inspectPostflightDatabase({
@@ -281,10 +292,16 @@ VALUES
   ('legacy-team-a', 'legacy-season', 'Radiant', 'legacy-user-a', 0),
   ('legacy-team-b', 'legacy-season', 'Dire', 'legacy-user-b', 1);
 
+UPDATE "Season"
+SET "status" = 'COMPLETE', "championTeamId" = 'legacy-team-a'
+WHERE "id" = 'legacy-season';
+
 INSERT INTO "Match" (
-  "id", "seasonId", "week", "homeTeamId", "awayTeamId"
+  "id", "seasonId", "week", "homeTeamId", "awayTeamId", "status",
+  "homeScore", "awayScore", "winnerTeamId"
 ) VALUES (
-  'legacy-match', 'legacy-season', 1, 'legacy-team-a', 'legacy-team-b'
+  'legacy-match', 'legacy-season', 1, 'legacy-team-a', 'legacy-team-b',
+  'COMPLETED', 1, 0, 'legacy-team-a'
 );
 
 INSERT INTO "Game" (
@@ -359,8 +376,12 @@ async function rehearseExistingLegacyDatabase(url) {
   await withClient(url, async (client) => {
     assert(
       JSON.stringify(await migrationNames(client)) ===
-        JSON.stringify([BASELINE_MIGRATION, RELEASE_MIGRATION]),
-      "legacy path must resolve baseline and finish release migration",
+        JSON.stringify([
+          BASELINE_MIGRATION,
+          RELEASE_MIGRATION,
+          AUTOMATION_MIGRATION,
+        ]),
+      "legacy path must resolve baseline and finish every release migration",
     );
 
     const [user] = await client.$queryRawUnsafe(
@@ -505,6 +526,45 @@ async function rehearseExistingLegacyDatabase(url) {
       backfills.queuedAt.getTime() === backfills.createdAt.getTime(),
       "historical lobby queue order must backfill from createdAt",
     );
+    const championMarkers = await client.$queryRawUnsafe(
+      `SELECT "key" FROM "Setting"
+       WHERE "key" = 'championAnnounced:legacy-season'`,
+    );
+    assert(
+      championMarkers.length === 0,
+      "the migration must not race a live old-binary crown by manufacturing a champion marker",
+    );
+    const [historicalMatch] = await client.$queryRawUnsafe(
+      `SELECT "completedAt" FROM "Match" WHERE "id" = 'legacy-match'`,
+    );
+    assert(
+      historicalMatch.completedAt === null,
+      "historical completed matches must remain unstamped to prevent announcement replay",
+    );
+    await client.$executeRawUnsafe(
+      `UPDATE "Match" SET "status" = 'COMPLETED'
+       WHERE "id" = 'legacy-match'`,
+    );
+    const [untouchedHistoricalMatch] = await client.$queryRawUnsafe(
+      `SELECT "completedAt" FROM "Match" WHERE "id" = 'legacy-match'`,
+    );
+    assert(
+      untouchedHistoricalMatch.completedAt === null,
+      "a no-op write must not make an untouched historical result recoverable",
+    );
+    await client.$executeRawUnsafe(
+      `UPDATE "Match"
+       SET "homeScore" = 0, "awayScore" = 1,
+           "winnerTeamId" = 'legacy-team-b'
+       WHERE "id" = 'legacy-match'`,
+    );
+    const [correctedHistoricalMatch] = await client.$queryRawUnsafe(
+      `SELECT "completedAt" FROM "Match" WHERE "id" = 'legacy-match'`,
+    );
+    assert(
+      correctedHistoricalMatch.completedAt instanceof Date,
+      "a post-migration correction to a historical result must receive a recovery receipt",
+    );
 
     await client.$executeRawUnsafe(
       `INSERT INTO "InhouseQueueEntry" (
@@ -567,6 +627,32 @@ async function rehearseExistingLegacyDatabase(url) {
        ) VALUES (
          'trigger-match', 'trigger-season', 1, 'trigger-team-a', 'trigger-team-b'
        )`,
+    );
+    await client.$executeRawUnsafe(
+      `UPDATE "Match"
+       SET "status" = 'COMPLETED', "homeScore" = 1, "awayScore" = 0,
+           "winnerTeamId" = 'trigger-team-a'
+       WHERE "id" = 'trigger-match'`,
+    );
+    const [completedMatch] = await client.$queryRawUnsafe(
+      `SELECT "completedAt" FROM "Match" WHERE "id" = 'trigger-match'`,
+    );
+    assert(
+      completedMatch.completedAt instanceof Date,
+      "new completion transitions must stamp Match.completedAt",
+    );
+    await client.$executeRawUnsafe(
+      `UPDATE "Match"
+       SET "status" = 'SCHEDULED', "homeScore" = 0, "awayScore" = 0,
+           "winnerTeamId" = NULL
+       WHERE "id" = 'trigger-match'`,
+    );
+    const [reopenedMatch] = await client.$queryRawUnsafe(
+      `SELECT "completedAt" FROM "Match" WHERE "id" = 'trigger-match'`,
+    );
+    assert(
+      reopenedMatch.completedAt === null,
+      "reopening a result must clear Match.completedAt",
     );
     await client.$executeRawUnsafe(
       `INSERT INTO "Game" (

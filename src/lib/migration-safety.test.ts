@@ -128,6 +128,7 @@ describe("migration SQL safety gate", () => {
     expect(validateMigrations()).toEqual([
       BASELINE_MIGRATION,
       "20260804010000_release_readiness",
+      "20260804020000_automation_run_state",
     ]);
   });
 
@@ -143,5 +144,11 @@ describe("migration SQL safety gate", () => {
     ).toThrow(
       /immutable migration checksum mismatch/,
     );
+  });
+
+  it("fails closed when the automation-state migration changes", () => {
+    expect(() =>
+      validateMigrations(migrationFixture("20260804020000_automation_run_state")),
+    ).toThrow(/immutable migration checksum mismatch/);
   });
 });

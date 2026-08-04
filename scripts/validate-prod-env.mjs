@@ -9,6 +9,9 @@ import { postgresDatabaseIdentity } from "../src/lib/postgres-identity.mjs";
 // group IDs and impossible account values, so pin the actual individual range.
 const STEAM_ID_64_MIN = 76561197960265728n;
 const STEAM_ID_64_MAX = 76561202255233023n;
+// Keep this in step with src/lib/cron-auth.ts. The production build must reject
+// a scheduler credential that the runtime will refuse after deployment.
+const CRON_SECRET_MAX_LENGTH = 512;
 const KNOWN_AUTH_SECRET_PLACEHOLDERS = new Set([
   "change-me-to-a-long-random-string-min-32-chars",
   "insecure-dev-secret-please-change-0123456789abcd",
@@ -53,6 +56,7 @@ function postgresTarget(value) {
 
   return {
     database: identity.database,
+    username: identity.user,
     // Prisma defaults to `public` when no schema query parameter is present.
     schema: url.searchParams.get("schema") ?? "public",
     hostname,
@@ -107,6 +111,9 @@ export function validateProductionEnv(env) {
       "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK must be unset; production migrations require Prisma advisory locking",
     );
   }
+  if (env.DISCORD_API_BASE !== undefined) {
+    errors.push("DISCORD_API_BASE is test-only and must be unset in production");
+  }
 
   const pooledTarget = postgresTarget(env.DATABASE_URL);
   const directTarget = postgresTarget(env.DIRECT_URL);
@@ -117,6 +124,11 @@ export function validateProductionEnv(env) {
     errors.push("DIRECT_URL must be a direct PostgreSQL connection URL with a database name");
   }
   if (pooledTarget && directTarget) {
+    if (pooledTarget.username !== directTarget.username) {
+      errors.push(
+        "DATABASE_URL and DIRECT_URL must use the same PostgreSQL username for this release",
+      );
+    }
     if (
       pooledTarget.database !== directTarget.database ||
       pooledTarget.schema !== directTarget.schema
@@ -172,6 +184,23 @@ export function validateProductionEnv(env) {
     errors.push("BACKUP_RECEIPT_SECRET must be different from AUTH_SECRET");
   }
 
+  const cronSecret = env.CRON_SECRET ?? "";
+  if (cronSecret.length < 32) {
+    errors.push("CRON_SECRET must contain at least 32 characters");
+  } else if (cronSecret.length > CRON_SECRET_MAX_LENGTH) {
+    errors.push("CRON_SECRET must contain at most 512 characters");
+  } else if (/\s/.test(cronSecret)) {
+    errors.push("CRON_SECRET must not contain whitespace");
+  } else if (placeholderSecret(cronSecret)) {
+    errors.push("CRON_SECRET must not be a documented or recognizable placeholder");
+  }
+  if (cronSecret && secret && cronSecret === secret) {
+    errors.push("CRON_SECRET must be different from AUTH_SECRET");
+  }
+  if (cronSecret && receiptSecret && cronSecret === receiptSecret) {
+    errors.push("CRON_SECRET must be different from BACKUP_RECEIPT_SECRET");
+  }
+
   const adminIds = (env.ADMIN_STEAM_IDS ?? "")
     .split(",")
     .map((value) => value.trim())
@@ -206,6 +235,33 @@ export function validateProductionEnv(env) {
 
   if (env.ALLOW_DEV_LOGIN && env.ALLOW_DEV_LOGIN !== "false") {
     errors.push("ALLOW_DEV_LOGIN must be unset or exactly false in production");
+  }
+
+  const steamApiKey = env.STEAM_API_KEY?.trim() ?? "";
+  if (
+    !steamApiKey ||
+    /\s/.test(steamApiKey) ||
+    /^(change|replace|your[-_ ]?key|placeholder)/i.test(steamApiKey)
+  ) {
+    errors.push(
+      "STEAM_API_KEY must be a configured non-placeholder credential without whitespace",
+    );
+  }
+
+  const discordOauthConfigured = !!env.DISCORD_CLIENT_ID;
+  const discordOauthSecretConfigured = !!env.DISCORD_CLIENT_SECRET;
+  if (discordOauthConfigured !== discordOauthSecretConfigured) {
+    errors.push(
+      "DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET must either both be set or both be unset",
+    );
+  }
+
+  const discordBotConfigured = !!env.DISCORD_BOT_TOKEN;
+  const discordGuildConfigured = !!env.DISCORD_GUILD_ID;
+  if (discordBotConfigured !== discordGuildConfigured) {
+    errors.push(
+      "DISCORD_BOT_TOKEN and DISCORD_GUILD_ID must either both be set or both be unset",
+    );
   }
 
   return errors;

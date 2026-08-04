@@ -2,13 +2,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// SOURCE-LEVEL PARITY GUARD for the inhouse lazy resolver chain, which lives
+// SOURCE-LEVEL PARITY GUARD for the inhouse resolver chain, which lives
 // in TWO places on purpose:
 //
 //   - getInhouseState (inhouse-service.ts) — the room's own poll path
-//   - syncInhouse (result-sync-service.ts) — /api/sync, i.e. any page view
-//     anywhere on the site, which is the only thing that reaches a lobby
-//     NOBODY is polling
+//   - syncInhouse (result-sync-service.ts) — the authenticated one-minute
+//     automation worker, which reaches a lobby NOBODY is polling
 //
 // A resolver added to one chain but not the other fails SILENTLY: tsc is
 // happy, the resolver's own unit tests pass, and the forgotten chain just

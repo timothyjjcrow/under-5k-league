@@ -23,13 +23,16 @@ const ROOT = new URL("../", import.meta.url);
 const ROOT_PATH = fileURLToPath(ROOT);
 const APP_SCHEMA = new URL("prisma/schema.prisma", ROOT);
 const PRISMA_CLI = new URL("node_modules/prisma/build/index.js", ROOT);
-const RELEASE_SQL = readFileSync(
-  new URL(
-    "prisma/migrations/20260804010000_release_readiness/migration.sql",
-    ROOT,
-  ),
-  "utf8",
-);
+const RELEASE_SQL = Object.keys(MIGRATION_SHA256)
+  .filter((name) => name !== "20260804000000_baseline")
+  .sort()
+  .map((name) =>
+    readFileSync(
+      new URL(`prisma/migrations/${name}/migration.sql`, ROOT),
+      "utf8",
+    ),
+  )
+  .join("\n");
 
 export function normalizeSqlDefinition(value) {
   return value
@@ -56,6 +59,7 @@ const functionNames = [
   "ld2l_lock_fantasy_after_game",
   "ld2l_preserve_inhouse_queue_time",
   "ld2l_stamp_inhouse_completion",
+  "ld2l_stamp_match_completion",
   "ld2l_sync_legacy_dota_account_id",
 ];
 
@@ -118,6 +122,27 @@ export const EXPECTED_RELEASE_NATIVE = Object.freeze({
       onDelete: false,
       onTruncate: false,
       updateColumns: Object.freeze(["status"]),
+      argumentCount: 0,
+      whenExpression: null,
+      enabled: "O",
+    }),
+    ld2l_stamp_match_completion_trigger: Object.freeze({
+      table: "Match",
+      functionName: "ld2l_stamp_match_completion",
+      functionSchema: "current",
+      timing: "BEFORE",
+      rowLevel: true,
+      onInsert: true,
+      onUpdate: true,
+      onDelete: false,
+      onTruncate: false,
+      updateColumns: Object.freeze([
+        "status",
+        "homeScore",
+        "awayScore",
+        "winnerTeamId",
+        "forfeit",
+      ]),
       argumentCount: 0,
       whenExpression: null,
       enabled: "O",

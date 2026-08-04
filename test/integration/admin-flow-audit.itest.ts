@@ -57,9 +57,16 @@ import { loadImportSkips } from "@/lib/match-import";
 import {
   getSetting,
   honorsAnnouncedKey,
+  resultAnnouncedKey,
   setSetting,
   SETTING_KEYS,
+  weekReminderKey,
 } from "@/lib/settings";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+} from "@/lib/league-announcement-outbox";
 import {
   DRAFT_STATUS,
   MATCH_PHASE,
@@ -2009,6 +2016,75 @@ describe("recordResult — lifecycle and imported-game authority", () => {
 });
 
 describe("recordResult — the forfeit flag rides the ruling end to end", () => {
+  it("treats an identical resubmission as a no-op without a second event", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+    const form = () =>
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0" });
+
+    expect((await recordResult(empty, form()))?.error).toBeUndefined();
+    const before = await prisma.match.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    const markerBefore = await prisma.setting.findUniqueOrThrow({
+      where: { key: resultAnnouncedKey(target.id) },
+    });
+    const second = await recordResult(empty, form());
+
+    expect(second).toMatchObject({
+      message: expect.stringMatching(/already saved.*no changes/i),
+    });
+    const after = await prisma.match.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    expect(after.completedAt?.getTime()).toBe(before.completedAt?.getTime());
+    expect(
+      await prisma.setting.findUniqueOrThrow({
+        where: { key: resultAnnouncedKey(target.id) },
+      }),
+    ).toEqual(markerBefore);
+    expect(
+      await prisma.adminAction.count({ where: { action: "recordResult" } }),
+    ).toBe(1);
+  });
+
+  it("uses one source-owned v2 event for a manual result", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+    vi.mocked(getWebhookUrl).mockResolvedValueOnce(
+      "https://discord.test/api/webhooks/1/token",
+    );
+    vi.mocked(sendDiscordMessage).mockClear();
+
+    expect(
+      (
+        await recordResult(
+          empty,
+          fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+        )
+      )?.error,
+    ).toBeUndefined();
+
+    const resultSend = vi
+      .mocked(sendDiscordMessage)
+      .mock.calls.find(([content]) => String(content).startsWith("⚔️"));
+    expect(resultSend?.[2]).toMatchObject({
+      dedupeKey: expect.stringMatching(/^series:/),
+      marker: {
+        key: resultAnnouncedKey(target.id),
+        eventId: expect.any(String),
+      },
+    });
+    const eventId = resultSend?.[2]?.marker?.eventId;
+    expect(
+      (
+        await prisma.setting.findUniqueOrThrow({
+          where: { key: resultAnnouncedKey(target.id) },
+        })
+      ).value,
+    ).toMatch(new RegExp(`^sent:v2:${eventId}:`));
+  });
+
   it("stamps forfeit on the CAS write, logs it, and reopen un-rules it", async () => {
     const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
     const target = matches[0];
@@ -2060,6 +2136,112 @@ describe("recordResult — the forfeit flag rides the ruling end to end", () => 
     expect(row.forfeit).toBe(false);
     expect(row.homeScore).toBe(2);
     expect(row.awayScore).toBe(0);
+  });
+});
+
+describe("recordResult — queued publications follow their source state", () => {
+  it("cancels an undelivered kickoff reminder when the fixture becomes final", async () => {
+    const { season, matches } = await seasonWithSchedule(
+      SEASON_STATUS.REGULAR_SEASON,
+    );
+    const kickoff = new Date(Date.now() + 4 * 60 * 60_000);
+    const target = await prisma.match.update({
+      where: { id: matches[0].id },
+      data: { scheduledAt: kickoff },
+    });
+    const key = weekReminderKey(season.id, target.week, kickoff.getTime());
+    const eventId = "11111111-1111-4111-8111-111111111111";
+    await prisma.setting.create({
+      data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+    });
+    const queued = await enqueueLeagueAnnouncement({
+      content: "obsolete kickoff reminder",
+      dedupeKey: `reminder-source-${target.id}`,
+      marker: { key, eventId },
+    });
+
+    expect(
+      (
+        await recordResult(
+          empty,
+          fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+        )
+      )?.error,
+    ).toBeUndefined();
+    expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
+
+    const send = vi.fn(async () => true);
+    expect(await deliverLeagueAnnouncements({ send, limit: 1 })).toEqual({
+      attempted: 1,
+      delivered: 0,
+      pending: false,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      await prisma.leagueAnnouncement.findUniqueOrThrow({
+        where: { id: queued.id },
+      }),
+    ).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "STALE_SOURCE",
+    });
+  });
+
+  it("cancels queued weekly honors when an administrator corrects the score", async () => {
+    const { season, matches } = await seasonWithSchedule(
+      SEASON_STATUS.REGULAR_SEASON,
+    );
+    const target = await prisma.match.update({
+      where: { id: matches[0].id },
+      data: {
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 2,
+        awayScore: 0,
+        winnerTeamId: matches[0].homeTeamId,
+        completedAt: new Date(),
+      },
+    });
+    const key = honorsAnnouncedKey(season.id, target.week);
+    const eventId = "22222222-2222-4222-8222-222222222222";
+    await prisma.setting.create({
+      data: {
+        key,
+        value: `sent:honors:v2:${eventId}:old-digest:${new Date().toISOString()}`,
+      },
+    });
+    const queued = await enqueueLeagueAnnouncement({
+      content: "obsolete weekly honors",
+      dedupeKey: `honors-source-${target.id}`,
+      marker: { key, eventId },
+    });
+
+    expect(
+      (
+        await recordResult(
+          empty,
+          fd({ matchId: target.id, homeScore: "1", awayScore: "1" }),
+        )
+      )?.error,
+    ).toBeUndefined();
+    expect((await prisma.setting.findUniqueOrThrow({ where: { key } })).value).toMatch(
+      /^stale:/,
+    );
+
+    const send = vi.fn(async () => true);
+    expect(await deliverLeagueAnnouncements({ send, limit: 1 })).toEqual({
+      attempted: 1,
+      delivered: 0,
+      pending: false,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      await prisma.leagueAnnouncement.findUniqueOrThrow({
+        where: { id: queued.id },
+      }),
+    ).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "STALE_SOURCE",
+    });
   });
 });
 

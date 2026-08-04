@@ -266,6 +266,12 @@ test("captain setup and draft preflight fit a phone viewport", async ({
   await expect(
     page.getByRole("button", { name: "Start draft" }),
   ).toBeDisabled();
+  await expect(
+    page.getByRole("heading", { name: "Automation runner", level: 3 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Run maintenance now" }),
+  ).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

@@ -33,10 +33,66 @@ import {
   standinAssignedMessage,
   standinRemovedMessage,
   teamWithdrewMessage,
+  weekReminderAnnouncement,
   weekReminderMessage,
   weeklyHonorsMessage,
+  materializeAllowedMentions,
   type InhouseBetSlip,
 } from "./discord";
+
+describe("Discord mention materialization", () => {
+  it("adds every allowlisted user and role that is absent from the message", () => {
+    expect(
+      materializeAllowedMentions("Captain, please respond.", {
+        users: ["123456789012345678", "223456789012345678"],
+        roles: ["323456789012345678"],
+      }),
+    ).toBe(
+      "<@123456789012345678> <@223456789012345678> <@&323456789012345678> Captain, please respond.",
+    );
+  });
+
+  it("does not duplicate modern, legacy, or role mention tokens", () => {
+    const content =
+      "<@123456789012345678> <@!223456789012345678> <@&323456789012345678> Match found";
+    expect(
+      materializeAllowedMentions(content, {
+        users: ["123456789012345678", "223456789012345678"],
+        roles: ["323456789012345678"],
+      }),
+    ).toBe(content);
+    expect(
+      materializeAllowedMentions(
+        materializeAllowedMentions("Match found", {
+          users: ["123456789012345678"],
+          roles: ["323456789012345678"],
+        }),
+        {
+          users: ["123456789012345678"],
+          roles: ["323456789012345678"],
+        },
+      ),
+    ).toBe(
+      "<@123456789012345678> <@&323456789012345678> Match found",
+    );
+  });
+
+  it("deduplicates ids and refuses to interpolate malformed values", () => {
+    expect(
+      materializeAllowedMentions("@everyone stays inert", {
+        users: [
+          " 123456789012345678 ",
+          "123456789012345678",
+          "not-an-id",
+          "1><@everyone",
+        ],
+        roles: ["223456789012345678", "223456789012345678"],
+      }),
+    ).toBe(
+      "<@123456789012345678> <@&223456789012345678> @everyone stays inert",
+    );
+  });
+});
 
 describe("discord message formatters", () => {
   it("counts down remaining signups", () => {
@@ -676,6 +732,62 @@ describe("weekReminderMessage", () => {
     expect(msg).toContain("+2 more");
     expect(msg).not.toContain("P8");
   });
+
+  it("bounds a realistic 32-team slate and allowlists only visible waiters", () => {
+    const fixtures = Array.from({ length: 16 }, (_, fixtureIndex) => ({
+      matchId: `match-${fixtureIndex + 1}`,
+      homeName: `Long Radiant Team Name ${fixtureIndex * 2 + 1}`,
+      awayName: `Long Dire Team Name ${fixtureIndex * 2 + 2}`,
+      scheduledAt: 1_800_000_000_000,
+      homeIn: 0,
+      homeSize: 5,
+      awayIn: 0,
+      awaySize: 5,
+      waitingOn: Array.from({ length: 10 }, (_, playerIndex) => ({
+        name: `Player ${fixtureIndex + 1}-${playerIndex + 1}`,
+        discordId: (
+          BigInt("800000000000000000") +
+          BigInt(fixtureIndex * 10 + playerIndex)
+        ).toString(),
+      })),
+    }));
+
+    const announcement = weekReminderAnnouncement({
+      week: 4,
+      isPlayoff: false,
+      fixtures,
+    });
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+
+    // Every allowed id already appears in a visible waiter row, so central
+    // transport materialization cannot prepend hidden/omitted users.
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    const visibleMentions = [
+      ...delivered.matchAll(/<@(\d{17,20})>/g),
+    ].map((match) => match[1]);
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions),
+    );
+
+    const shownFixtures = delivered
+      .split("\n")
+      .filter((line) => line.startsWith("🆚")).length;
+    const summary = delivered.match(/…and (\d+) more fixtures? at this kickoff/);
+    expect(shownFixtures).toBeGreaterThan(0);
+    expect(shownFixtures).toBeLessThan(fixtures.length);
+    expect(summary).not.toBeNull();
+    expect(shownFixtures + Number(summary?.[1])).toBe(fixtures.length);
+    expect(delivered).toContain("/schedule>");
+
+    // A player from the final summarized fixture is neither rendered nor
+    // allowlisted; they cannot be materialized anonymously ahead of the body.
+    const hiddenId = fixtures.at(-1)!.waitingOn[0].discordId!;
+    expect(delivered).not.toContain(`<@${hiddenId}>`);
+    expect(announcement.mentionUserIds).not.toContain(hiddenId);
+  });
 });
 
 describe("rescheduleMessage", () => {
@@ -1230,11 +1342,11 @@ describe("no player-supplied name can inject markdown", () => {
             homeSize: 5,
             awayIn: 5,
             awaySize: 5,
-            waitingOn: [{ name: "x", discordId: "456" }],
+            waitingOn: [{ name: "x", discordId: "456789012345678901" }],
           },
         ],
       }),
-    ).toContain("<@456>");
+    ).toContain("<@456789012345678901>");
   });
 
   it("leaves ordinary names alone", () => {

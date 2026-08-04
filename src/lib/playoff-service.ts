@@ -10,7 +10,6 @@ import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { championMessage, getWebhookUrl, sendDiscordMessage } from "./discord";
 import { raceHook } from "./race-hook";
 import {
-  ANNOUNCE_FAILED_PREFIX,
   championAnnouncedKey,
   playoffGamesArchiveKey,
   resultAnnouncedKey,
@@ -19,6 +18,13 @@ import {
 } from "./settings";
 import { regularSeasonStatus } from "./schedule-status";
 import { resolveChampionPresentation } from "./champion-presentation";
+import {
+  announcementDedupeKey,
+  claimAnnouncementMarker,
+  markAnnouncementFailed,
+  markAnnouncementSent,
+  releaseAnnouncementClaim,
+} from "./announcement-marker";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -519,20 +525,8 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
   // rule: a league that wires Discord up later must still get its champion).
   if (!(await getWebhookUrl())) return false;
   const marker = championAnnouncedKey(seasonId);
-  try {
-    await prisma.setting.create({
-      data: { key: marker, value: new Date().toISOString() },
-    });
-  } catch (e) {
-    if ((e as { code?: string }).code !== "P2002") throw e;
-    // Only a FAILED marker may be re-claimed — otherwise a retry would
-    // re-announce a champion the channel already has.
-    const reclaimed = await prisma.setting.updateMany({
-      where: { key: marker, value: { startsWith: ANNOUNCE_FAILED_PREFIX } },
-      data: { value: new Date().toISOString() },
-    });
-    if (reclaimed.count === 0) return false;
-  }
+  const claim = await claimAnnouncementMarker(marker);
+  if (!claim) return false;
   const [season, matches] = await Promise.all([
     prisma.season.findUnique({
       where: { id: seasonId },
@@ -566,20 +560,22 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
   // starve real failures out of its take-window — the orphan lesson already
   // learned in retryFailedAnnouncements.
   if (!season || !champion) {
-    await prisma.setting.deleteMany({ where: { key: marker } });
+    await releaseAnnouncementClaim(claim);
     return false;
   }
   const sent = await sendDiscordMessage(
     championMessage(season.name, champion.name, seasonId),
+    undefined,
+    {
+      dedupeKey: announcementDedupeKey("champion", claim),
+      marker: { key: claim.key, eventId: claim.eventId },
+    },
   );
   if (!sent) {
-    await prisma.setting.updateMany({
-      where: { key: marker },
-      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
-    });
+    await markAnnouncementFailed(claim);
     return false;
   }
-  return true;
+  return markAnnouncementSent(claim);
 }
 
 /** Returns true only when this caller committed a new round or champion. */
@@ -587,10 +583,7 @@ export async function advancePlayoffBracket(
   seasonId: string,
 ): Promise<boolean> {
   const season = await prisma.season.findUnique({ where: { id: seasonId } });
-  if (
-    !season?.isActive ||
-    season.status !== SEASON_STATUS.PLAYOFFS
-  )
+  if (!season?.isActive || season.status !== SEASON_STATUS.PLAYOFFS)
     return false;
 
   const playoff = await prisma.match.findMany({
@@ -713,11 +706,11 @@ export async function advancePlayoffBracket(
     // transport exception must not erase this caller's truthful mutation signal.
     try {
       await announceChampionOnce(seasonId);
-    } catch (error) {
-      console.error(
-        "[playoffs] champion announcement failed after crown:",
-        error,
-      );
+    } catch {
+      // The crown is already durable. Log only a stable code: transport and
+      // database exceptions can embed webhook URLs or player-controlled text,
+      // while the persisted automation/outbox state is the operator detail.
+      console.error("[playoffs] CHAMPION_ANNOUNCEMENT_FAILED");
     }
     return true;
   }

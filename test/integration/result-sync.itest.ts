@@ -15,8 +15,12 @@ import {
 import { steamIdToAccountId } from "@/lib/dota";
 import { runResultSync } from "@/lib/result-sync-service";
 import { nominatePlayer } from "@/lib/draft-service";
-import { syncLeagueGames } from "@/lib/match-import";
-import { SETTING_KEYS } from "@/lib/settings";
+import { importGameForMatch, syncLeagueGames } from "@/lib/match-import";
+import { SETTING_KEYS, weekReminderKey } from "@/lib/settings";
+import {
+  claimAnnouncementMarker,
+  markAnnouncementSent,
+} from "@/lib/announcement-marker";
 import {
   expireClock,
   expireNominationClock,
@@ -25,6 +29,7 @@ import {
   makeSeason,
   makeTeam,
   makeUser,
+  ON_POSTGRES,
   sessionFor,
   startDraftState,
 } from "./factories";
@@ -54,9 +59,15 @@ vi.mock("@/lib/discord", async (importOriginal) => {
     getWebhookUrl: vi.fn(async () => "https://discord.test/hook"),
     sendDiscordMessage: vi.fn(async () => true),
     sendInhouseDiscordMessage: vi.fn(async () => true),
+    deliverPendingLeagueAnnouncements: vi.fn(async () => ({
+      attempted: 0,
+      delivered: 0,
+      pending: false,
+    })),
   };
 });
 import {
+  deliverPendingLeagueAnnouncements,
   sendDiscordMessage,
   sendInhouseDiscordMessage,
 } from "@/lib/discord";
@@ -70,6 +81,7 @@ const mockMatch = vi.mocked(fetchOpenDotaMatch);
 const mockLeague = vi.mocked(fetchLeagueMatchIds);
 const mockSend = vi.mocked(sendDiscordMessage);
 const mockInhouseSend = vi.mocked(sendInhouseDiscordMessage);
+const mockLeagueDrain = vi.mocked(deliverPendingLeagueAnnouncements);
 
 beforeEach(() => {
   mockRecent.mockReset();
@@ -81,6 +93,12 @@ beforeEach(() => {
   mockSend.mockClear();
   mockInhouseSend.mockReset();
   mockInhouseSend.mockResolvedValue(true);
+  mockLeagueDrain.mockReset();
+  mockLeagueDrain.mockResolvedValue({
+    attempted: 0,
+    delivered: 0,
+    pending: false,
+  });
 });
 
 /** Series-result announcements only (honors etc. use different formatters). */
@@ -181,6 +199,59 @@ function odGame(
 }
 
 describe("result sync — league matches (integration)", () => {
+  it("does not start work after the automation deadline", async () => {
+    const out = await runResultSync({ deadlineMs: Date.now() - 1 });
+
+    expect(out).toEqual({
+      imported: 0,
+      inhouse: false,
+      draft: false,
+      playoff: false,
+      watch: false,
+      cursor: null,
+      issues: [],
+      skipped: [
+        "LEAGUE_BUDGET_EXHAUSTED",
+        "INHOUSE_BUDGET_EXHAUSTED",
+        "DRAFT_BUDGET_EXHAUSTED",
+        "PLAYOFF_BUDGET_EXHAUSTED",
+        "REMINDER_BUDGET_EXHAUSTED",
+        "NOTIFICATIONS_BUDGET_EXHAUSTED",
+        "CURSOR_BUDGET_EXHAUSTED",
+      ],
+    });
+    expect(mockRecent).not.toHaveBeenCalled();
+    expect(mockMatch).not.toHaveBeenCalled();
+    expect(mockLeague).not.toHaveBeenCalled();
+    expect(mockLeagueDrain).not.toHaveBeenCalled();
+  });
+
+  it("bounds the durable league drain and reports a rejected transport", async () => {
+    mockLeagueDrain.mockResolvedValue({
+      attempted: 1,
+      delivered: 0,
+      pending: true,
+    });
+
+    const out = await runResultSync();
+
+    expect(mockLeagueDrain).toHaveBeenCalledWith({ limit: 1 });
+    expect(out.issues).toContain("LEAGUE_NOTIFICATION_DELIVERY_FAILED");
+  });
+
+  it("reports durable league work blocked by a missing webhook", async () => {
+    mockLeagueDrain.mockResolvedValue({
+      attempted: 0,
+      delivered: 0,
+      pending: true,
+      blocked: "WEBHOOK_UNAVAILABLE",
+    });
+
+    const out = await runResultSync();
+
+    expect(out.issues).toContain("LEAGUE_NOTIFICATION_DELIVERY_FAILED");
+  });
+
   it("imports a due match's game with no human input and announces it once", async () => {
     const { home, match, homeAccts, awayAccts } = await setupNight({
       offsetMs: -2 * HOUR,
@@ -281,6 +352,8 @@ describe("result sync — league matches (integration)", () => {
       playoff: false,
       watch: false,
       cursor: null,
+      issues: [],
+      skipped: [],
     });
 
     // Window long closed (3 days ago).
@@ -323,6 +396,58 @@ describe("result sync — league matches (integration)", () => {
     expect(a.imported + b.imported).toBe(1);
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
     expect(seriesAnnouncements()).toHaveLength(1);
+  });
+
+  // This seam needs two simultaneous writers against an MVCC database.
+  // SQLite holds the outer writer lock until the interactive transaction
+  // times out, so it cannot model the production serialization retry.
+  it.runIf(ON_POSTGRES)("retries when a reminder finalizes during the atomic first-game write", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -2 * HOUR,
+    });
+    const marker = await claimAnnouncementMarker(
+      weekReminderKey(season.id, match.week, match.scheduledAt!.getTime()),
+    );
+    expect(marker).not.toBeNull();
+    if (!marker) throw new Error("Reminder marker claim was not created");
+
+    const G = 8880778;
+    mockMatch.mockResolvedValue(
+      odGame(G, homeAccts, awayAccts, Date.now() - HOUR),
+    );
+
+    let invalidationAttempts = 0;
+    let reminderFinalized = false;
+    setRaceHook(async (label) => {
+      if (label !== "match-import.importGame.beforeReminderInvalidation") {
+        return;
+      }
+      invalidationAttempts++;
+      if (invalidationAttempts === 1) {
+        // A different connection performs the reminder writer's real CAS
+        // after import's Serializable snapshot, before its marker delete.
+        reminderFinalized = await markAnnouncementSent(marker);
+      }
+    });
+
+    let result: Awaited<ReturnType<typeof importGameForMatch>>;
+    try {
+      result = await importGameForMatch(match.id, String(G));
+    } finally {
+      setRaceHook(null);
+    }
+
+    expect(reminderFinalized).toBe(true);
+    expect(invalidationAttempts).toBe(2); // first snapshot aborted, retry won
+    expect(result).toMatchObject({ ok: true, decided: true });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
+    expect(
+      (
+        await prisma.setting.findUniqueOrThrow({
+          where: { key: marker.key },
+        })
+      ).value,
+    ).toMatch(/^sent:v2:/);
   });
 
   it("backs off exponentially on empty scans and resets on a productive one", async () => {
@@ -557,6 +682,8 @@ describe("result sync — draft clocks (integration)", () => {
       playoff: false,
       watch: true,
       cursor: null,
+      issues: [],
+      skipped: [],
     });
 
     const after = await prisma.draft.findUniqueOrThrow({
@@ -577,6 +704,8 @@ describe("result sync — draft clocks (integration)", () => {
       playoff: false,
       watch: true,
       cursor: null,
+      issues: [],
+      skipped: [],
     });
 
     const draft = await prisma.draft.findUniqueOrThrow({
@@ -612,6 +741,8 @@ describe("result sync — draft clocks (integration)", () => {
       playoff: false,
       watch: false,
       cursor: null,
+      issues: [],
+      skipped: [],
     });
 
     expect(
@@ -648,6 +779,8 @@ describe("result sync — draft clocks (integration)", () => {
       playoff: false,
       watch: false,
       cursor: null,
+      issues: [],
+      skipped: [],
     });
     expect(
       await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }),
@@ -730,15 +863,14 @@ describe("result sync — inhouse (integration)", () => {
         resultMatchId: "7770999",
       },
     });
-    mockInhouseSend
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+    mockInhouseSend.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     // Nothing else is active, but the durable backlog keeps the heartbeat on
     // its retry cadence instead of disappearing behind syncInhouse's idle exit.
     expect(await runResultSync()).toMatchObject({
       inhouse: false,
       watch: true,
+      issues: ["INHOUSE_NOTIFICATION_DELIVERY_FAILED"],
     });
     const failed = await prisma.inhouseAnnouncement.findUniqueOrThrow({
       where: { id: event.id },
@@ -775,6 +907,36 @@ describe("result sync — inhouse (integration)", () => {
     expect(out.inhouse).toBe(false);
     expect(out.watch).toBe(true); // live lobby → fast client polling
     expect(mockRecent).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an aborted inhouse scan and restores its exact throttle claim", async () => {
+    const { lobby } = await setupLobby(INHOUSE.DETECT_MIN_MINUTES + 5);
+    const previousDetectedAt = new Date(Date.now() - 60 * 60_000);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { detectedAt: previousDetectedAt },
+    });
+    const controller = new AbortController();
+    mockRecent.mockImplementation(async () => {
+      controller.abort();
+      return [];
+    });
+
+    const out = await runResultSync({
+      deadlineMs: Date.now() + 30_000,
+      signal: controller.signal,
+    });
+
+    expect(out.skipped).toContain("INHOUSE_BUDGET_EXHAUSTED");
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+          select: { detectedAt: true },
+        })
+      ).detectedAt,
+    ).toEqual(previousDetectedAt);
+    expect(mockMatch).not.toHaveBeenCalled();
   });
 
   it("resolves an EXPIRED ready check from any page view (frees the active slot)", async () => {
@@ -833,6 +995,50 @@ describe("result sync — inhouse (integration)", () => {
 // ---------------------------------------------------------------------------
 describe("result sync — a claim that needs a staged interleaving", () => {
   afterEach(() => setRaceHook(null));
+
+  it("an aborted scan cannot roll back a newer worker's match cursor", async () => {
+    const { match } = await setupNight({ offsetMs: -2 * HOUR });
+    const controller = new AbortController();
+    mockRecent.mockImplementation(async () => {
+      controller.abort();
+      return [];
+    });
+    const newerSyncedAt = new Date(Date.now() + 60_000);
+    const newerAttempts = 7;
+    let rivalCommitted = false;
+    setRaceHook(
+      onceAt("resultSync.syncDueMatches.beforeDeadlineRollback", async () => {
+        await prisma.match.update({
+          where: { id: match.id },
+          data: {
+            autoSyncedAt: newerSyncedAt,
+            autoSyncAttempts: newerAttempts,
+          },
+        });
+        rivalCommitted = true;
+      }),
+    );
+
+    const out = await runResultSync({
+      deadlineMs: Date.now() + 30_000,
+      signal: controller.signal,
+    });
+
+    expect(rivalCommitted).toBe(true);
+    expect(out.skipped).toContain("LEAGUE_BUDGET_EXHAUSTED");
+    expect(
+      await prisma.match.findUniqueOrThrow({ where: { id: match.id } }),
+    ).toMatchObject({
+      autoSyncedAt: newerSyncedAt,
+      autoSyncAttempts: newerAttempts,
+    });
+
+    // The newer cursor is not just audit metadata: preserving it prevents an
+    // immediate second full-roster OpenDota fan-out after this aborted call.
+    mockRecent.mockClear();
+    await runResultSync();
+    expect(mockRecent).not.toHaveBeenCalled();
+  });
 
   it("never scans a series DECIDED between the due read and the claim", async () => {
     const { home, match, homeAccts, awayAccts } = await setupNight({
@@ -895,6 +1101,27 @@ describe("syncLeagueGames — the clinch-stop applies to the league feed too", (
   // tiebreak, bogus box score in career stats, wrong Discord post). Candidates
   // are now buffered per fixture and run through pickSeriesGames — the same
   // session-split + clinch-stop the roster-scan path has always had.
+  it("starts no league-feed request when the automation deadline is too close", async () => {
+    const season = await makeSeason();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18184" },
+    });
+    mockLeague.mockClear();
+
+    const result = await syncLeagueGames(season.id, {
+      auto: true,
+      deadlineMs: Date.now() + 100,
+    });
+
+    expect(result).toMatchObject({
+      imported: 0,
+      scanned: 0,
+      deadlineReached: true,
+    });
+    expect(mockLeague).not.toHaveBeenCalled();
+  });
+
   it("drops the bonus game after a decided Bo3, whatever the feed order", async () => {
     const { season, match, home, homeAccts, awayAccts } = await setupNight({
       offsetMs: -2 * HOUR,

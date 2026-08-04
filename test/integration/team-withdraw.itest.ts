@@ -26,6 +26,7 @@ import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { createPlayoffBracket } from "@/lib/playoff-service";
 import { prisma } from "@/lib/prisma";
 import { sendDiscordMessage } from "@/lib/discord";
+import { resultAnnouncedKey } from "@/lib/settings";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
   generateRegularSchedule,
@@ -170,6 +171,13 @@ describe("withdrawTeam", () => {
         m.homeTeamId === quitter.id ? row.awayScore : row.homeScore;
       expect(quitterScore).toBe(0);
       expect(opponentScore).toBe(Math.floor(row.bestOf / 2) + 1);
+      expect(
+        await prisma.setting.findUnique({
+          where: { key: resultAnnouncedKey(m.id) },
+        }),
+      ).toMatchObject({
+        value: expect.stringMatching(/^suppressed:team-withdrawal:/),
+      });
     }
     // The real result was never rewritten.
     const kept = await prisma.match.findUniqueOrThrow({
@@ -177,6 +185,11 @@ describe("withdrawTeam", () => {
     });
     expect(kept.forfeit).toBe(false);
     expect(kept.homeScore).toBe(2);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: resultAnnouncedKey(played.id) },
+      }),
+    ).toBeNull();
     // The stranded proposal was cancelled with its fixture.
     expect(
       (

@@ -1,175 +1,57 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NextRequest } from "next/server";
 
-vi.mock("next/cache", () => ({
-  revalidatePath: vi.fn(),
-  revalidateTag: vi.fn(),
-}));
-vi.mock("@/lib/result-sync-service", () => ({ runResultSync: vi.fn() }));
-vi.mock("@/lib/season", () => ({ getActiveSeason: vi.fn() }));
-vi.mock("@/lib/reminder-service", () => ({
-  maybeAnnounceUpcomingWeek: vi.fn(),
-}));
-vi.mock("@/lib/rate-limit", () => ({
-  clientIp: vi.fn(() => "test-ip"),
-  rateLimit: vi.fn(() => ({ allowed: true, retryAfterMs: 0 })),
+vi.mock("@/lib/result-sync-status", () => ({
+  getResultSyncSnapshot: vi.fn(),
 }));
 
-import { runResultSync } from "@/lib/result-sync-service";
-import { getActiveSeason } from "@/lib/season";
-import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
-import { revalidatePath, revalidateTag } from "next/cache";
-import { POST } from "./route";
+import { getResultSyncSnapshot } from "@/lib/result-sync-status";
+import { GET } from "./route";
 
-const sync = vi.mocked(runResultSync);
-const activeSeason = vi.mocked(getActiveSeason);
-const remind = vi.mocked(maybeAnnounceUpcomingWeek);
+const snapshot = vi.mocked(getResultSyncSnapshot);
 
 beforeEach(() => {
-  sync.mockReset();
-  activeSeason.mockReset();
-  remind.mockReset();
-  vi.mocked(revalidatePath).mockReset();
-  vi.mocked(revalidateTag).mockReset();
-  activeSeason.mockResolvedValue(null);
+  snapshot.mockReset();
 });
 
-const request = () =>
-  new NextRequest("https://league.example/api/sync", { method: "POST" });
-
-describe("sitewide sync route", () => {
-  it("expires game statistics before the first read after an import", async () => {
-    sync.mockResolvedValue({
-      imported: 2,
-      inhouse: false,
-      draft: false,
-      playoff: false,
-      watch: false,
-      cursor: "2026-08-03T12:00:00.000Z",
-    });
-
-    await POST(request());
-
-    expect(revalidateTag).toHaveBeenCalledWith("games", { expire: 0 });
-    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
-  });
-
-  it("does not churn the game cache when no league game was imported", async () => {
-    sync.mockResolvedValue({
-      imported: 0,
-      inhouse: true,
-      draft: false,
-      playoff: false,
-      watch: false,
-      cursor: null,
-    });
-
-    await POST(request());
-
-    expect(revalidateTag).not.toHaveBeenCalled();
-  });
-
-  it("reports updated when this heartbeat advances a draft clock", async () => {
-    sync.mockResolvedValue({
-      imported: 0,
-      inhouse: false,
-      draft: true,
-      playoff: false,
-      watch: false,
-      cursor: null,
-    });
-
-    const res = await POST(request());
-
-    expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(await res.json()).toEqual({
-      updated: true,
-      watch: false,
-      cursor: null,
-    });
-  });
-
-  it("reports updated when this heartbeat repairs the playoff bracket", async () => {
-    sync.mockResolvedValue({
-      imported: 0,
-      inhouse: false,
-      draft: false,
-      playoff: true,
-      watch: false,
-      cursor: "2026-08-03T12:00:00.000Z",
-    });
-
-    const res = await POST(request());
-
-    expect(await res.json()).toEqual({
-      updated: true,
-      watch: false,
-      cursor: "2026-08-03T12:00:00.000Z",
-    });
-  });
-
-  it("keeps the exact response quiet when a live draft has no due clock", async () => {
-    sync.mockResolvedValue({
-      imported: 0,
-      inhouse: false,
-      draft: false,
-      playoff: false,
+describe("public result status route", () => {
+  it("returns the read-only watch snapshot and cursor without caching", async () => {
+    snapshot.mockResolvedValue({
       watch: true,
-      cursor: null,
+      cursor: "2026-08-03T12:00:00.000Z",
     });
 
-    const res = await POST(request());
+    const response = await GET();
 
-    expect(await res.json()).toEqual({
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
       updated: false,
       watch: true,
+      cursor: "2026-08-03T12:00:00.000Z",
+    });
+  });
+
+  it("stays quiet when no workflow needs the fast client cadence", async () => {
+    snapshot.mockResolvedValue({ watch: false, cursor: null });
+
+    expect(await (await GET()).json()).toEqual({
+      updated: false,
+      watch: false,
       cursor: null,
     });
   });
 
-  it("runs the match-night reminder from the externally pingable heartbeat", async () => {
-    sync.mockResolvedValue({
-      imported: 0,
-      inhouse: false,
-      draft: false,
-      playoff: false,
-      watch: false,
-      cursor: null,
-    });
-    const season = {
-      id: "season-1",
-      status: "REGULAR_SEASON",
-      teamSize: 5,
-    };
-    activeSeason.mockResolvedValue(season as never);
-    remind.mockResolvedValue(true);
-
-    const res = await POST(request());
-
-    expect(res.status).toBe(200);
-    expect(remind).toHaveBeenCalledWith(season);
+  it("exports no mutating POST handler", async () => {
+    const route = await import("./route");
+    expect("POST" in route).toBe(false);
   });
 
-  it("keeps sync healthy when the reminder backstop fails", async () => {
-    sync.mockResolvedValue({
-      imported: 0,
-      inhouse: false,
-      draft: false,
-      playoff: false,
-      watch: false,
-      cursor: null,
-    });
-    activeSeason.mockResolvedValue({
-      id: "season-1",
-      status: "REGULAR_SEASON",
-      teamSize: 5,
-    } as never);
-    remind.mockRejectedValue(new Error("Discord unavailable"));
-
-    const res = await POST(request());
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ updated: false });
+  it("cannot regress into importing or invoking the worker from public traffic", () => {
+    const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("runResultSync");
+    expect(source).not.toContain("runAutomation");
+    expect(source).not.toContain("revalidateTag");
+    expect(source).not.toMatch(/export\s+async\s+function\s+POST/);
   });
 });

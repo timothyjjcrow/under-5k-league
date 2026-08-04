@@ -36,11 +36,12 @@ import {
   raceN,
   sessionFor,
 } from "./factories";
-import { SETTING_KEYS, setSetting } from "@/lib/settings";
+import { getSetting, SETTING_KEYS, setSetting } from "@/lib/settings";
 import {
   deliverInhouseAnnouncements,
   INHOUSE_ANNOUNCEMENT_KIND,
   INHOUSE_ANNOUNCEMENT_STATUS,
+  reconcileMissingInhouseResultAnnouncements,
 } from "@/lib/inhouse-announcement-outbox";
 
 // The inhouse result path only ever touches OpenDota — never a Valve league
@@ -659,6 +660,96 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     expect(done.winnerTeam).toBe(1);
   });
 
+  it("restores the exact automatic detection claim when its worker is aborted", async () => {
+    const admin = sessionFor(await makeUser("AdminAbortDetect", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const previousDetectedAt = new Date(Date.now() - 60 * 60_000);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000,
+        ),
+        detectedAt: previousDetectedAt,
+      },
+    });
+
+    const controller = new AbortController();
+    mockRecent.mockImplementation(async () => {
+      controller.abort();
+      return [];
+    });
+    mockMatch.mockClear();
+
+    expect(await maybeAutoDetectResult({ signal: controller.signal })).toEqual({
+      recorded: false,
+      deadlineReached: true,
+    });
+    expect(mockMatch).not.toHaveBeenCalled();
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+          select: { detectedAt: true },
+        })
+      ).detectedAt,
+    ).toEqual(previousDetectedAt);
+  });
+
+  it("does not rewind a newer detection cursor when an older worker aborts", async () => {
+    const admin = sessionFor(await makeUser("AdminAbortDetectRace", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const previousDetectedAt = new Date(Date.now() - 60 * 60_000);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000,
+        ),
+        detectedAt: previousDetectedAt,
+      },
+    });
+
+    const controller = new AbortController();
+    mockRecent.mockImplementation(async () => {
+      controller.abort();
+      return [];
+    });
+    const newerDetectedAt = new Date(Date.now() + 60_000);
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.autoDetect.beforeDeadlineRollback", async () => {
+        fired = true;
+        // A newer poll owns this cursor now. The aborted worker may restore
+        // only the exact timestamp it claimed, never rewind this successor.
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { detectedAt: newerDetectedAt },
+        });
+      }),
+    );
+
+    expect(await maybeAutoDetectResult({ signal: controller.signal })).toEqual({
+      recorded: false,
+      deadlineReached: true,
+    });
+    expect(fired).toBe(true);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+          select: { detectedAt: true },
+        })
+      ).detectedAt,
+    ).toEqual(newerDetectedAt);
+
+    // The preserved successor cursor also prevents an immediate duplicate
+    // OpenDota fan-out after the timed-out request returns.
+    mockRecent.mockClear();
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(mockRecent).not.toHaveBeenCalled();
+  });
+
   it("rejects a match that isn't between these two teams", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
@@ -1225,9 +1316,7 @@ describe("inhouse — ready check", () => {
     expect(order.indexOf(latecomer.id)).toBe(expected.length);
     const byId = new Map(queued.map((q) => [q.userId, q] as const));
     for (const p of expected) {
-      expect(byId.get(p.userId)?.joinedAt.getTime()).toBe(
-        p.queuedAt.getTime(),
-      );
+      expect(byId.get(p.userId)?.joinedAt.getTime()).toBe(p.queuedAt.getTime());
     }
   });
 
@@ -1584,6 +1673,34 @@ describe("inhouse — result vs cancel race guards", () => {
 });
 
 describe("inhouse — Elo deltas + result announcement", () => {
+  async function leaveResultAfterPrimaryCommit(matchId: number) {
+    const admin = sessionFor(await makeUser(`AdminCrash${matchId}`, "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    setRaceHook(
+      onceAt("inhouse.applyResult.afterPrimaryCommit", async () => {
+        throw new Error("simulated process death after result commit");
+      }),
+    );
+    try {
+      await expect(
+        recordMatch(players[0].session, String(matchId)),
+      ).rejects.toThrow("simulated process death after result commit");
+    } finally {
+      setRaceHook(null);
+    }
+    return { players, lobby };
+  }
+
   it("stamps per-player Elo deltas at completion and serves them via lastResult", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
@@ -1714,6 +1831,163 @@ describe("inhouse — Elo deltas + result announcement", () => {
     });
   });
 
+  it("recovers Elo and a missing result event after process death past the primary commit", async () => {
+    const oldCursor = "2000-01-01T00:00:00.000Z";
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, oldCursor);
+    const { lobby } = await leaveResultAfterPrimaryCommit(7000000120);
+
+    const committed = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(committed).toMatchObject({
+      status: INHOUSE_STATUS.COMPLETED,
+      dotaMatchId: "7000000120",
+      eloDeltas: "{}",
+    });
+    const baseEvent = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+      where: {
+        lobbyId_kind: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      },
+    });
+    expect(baseEvent).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      resultMatchId: "7000000120",
+    });
+    expect(baseEvent.content).toMatch(/Radiant win 30–20/);
+    expect(await getSetting(SETTING_KEYS.RESULT_CHANGED_AT)).not.toBe(
+      oldCursor,
+    );
+
+    // Model the row-less state an older binary left in this crash window.
+    await prisma.inhouseAnnouncement.delete({ where: { id: baseEvent.id } });
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, oldCursor);
+    await expect(reconcileMissingInhouseResultAnnouncements()).resolves.toEqual(
+      { scanned: 1, created: 1 },
+    );
+
+    const repaired = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: true },
+    });
+    const deltas = JSON.parse(repaired.eloDeltas) as Record<string, number>;
+    expect(Object.keys(deltas)).toHaveLength(INHOUSE.LOBBY_SIZE);
+    expect(await getSetting(SETTING_KEYS.RESULT_CHANGED_AT)).not.toBe(
+      oldCursor,
+    );
+    const recoveredEvent = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+      where: {
+        lobbyId_kind: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      },
+    });
+    expect(recoveredEvent.content).toMatch(/Radiant win 30–20/);
+    expect(recoveredEvent.content).toContain("opendota.com/matches/7000000120");
+    await expect(reconcileMissingInhouseResultAnnouncements()).resolves.toEqual(
+      { scanned: 0, created: 0 },
+    );
+    await expect(
+      deliverInhouseAnnouncements({ lobbyId: lobby.id }),
+    ).resolves.toEqual({ attempted: 1, delivered: 1, pending: false });
+  });
+
+  it("lets only one concurrent SQLite reconciler create a missing result event", async () => {
+    const { lobby } = await leaveResultAfterPrimaryCommit(7000000121);
+    await prisma.inhouseAnnouncement.deleteMany({
+      where: {
+        lobbyId: lobby.id,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+      },
+    });
+
+    const outcomes = await Promise.all([
+      reconcileMissingInhouseResultAnnouncements(),
+      reconcileMissingInhouseResultAnnouncements(),
+    ]);
+    expect(outcomes.reduce((sum, result) => sum + result.created, 0)).toBe(1);
+    expect(
+      await prisma.inhouseAnnouncement.count({
+        where: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      }),
+    ).toBe(1);
+    const repaired = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(Object.keys(JSON.parse(repaired.eloDeltas))).toHaveLength(
+      INHOUSE.LOBBY_SIZE,
+    );
+  });
+
+  it("never rewrites a result payload after its send lease is live", async () => {
+    const { lobby } = await leaveResultAfterPrimaryCommit(7000000122);
+    const frozenContent = "frozen payload already handed to Discord";
+    const event = await prisma.inhouseAnnouncement.update({
+      where: {
+        lobbyId_kind: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      },
+      data: { content: frozenContent },
+    });
+
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sendStarted = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const send = vi.fn(async () => {
+      entered();
+      await gate;
+      return true;
+    });
+    const delivery = deliverInhouseAnnouncements({
+      lobbyId: lobby.id,
+      now: new Date(event.availableAt.getTime() + 1),
+      send,
+      limit: 1,
+    });
+    await sendStarted;
+
+    try {
+      await expect(
+        reconcileMissingInhouseResultAnnouncements(),
+      ).resolves.toEqual({ scanned: 1, created: 0 });
+      expect(
+        await prisma.inhouseAnnouncement.findUniqueOrThrow({
+          where: { id: event.id },
+        }),
+      ).toMatchObject({
+        status: INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
+        content: frozenContent,
+      });
+    } finally {
+      // Mutation failures must still release the webhook seam so the worker
+      // cannot leak into teardown or leave this test hanging.
+      release();
+      await delivery;
+    }
+    expect(send).toHaveBeenCalledWith(frozenContent);
+    expect(
+      await prisma.inhouseAnnouncement.findUniqueOrThrow({
+        where: { id: event.id },
+      }),
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+      attempts: 1,
+    });
+  });
+
   it("leases one pending announcement to only one concurrent worker", async () => {
     const lobby = await prisma.inhouseLobby.create({
       data: {
@@ -1797,19 +2071,17 @@ describe("inhouse — Elo deltas + result announcement", () => {
     let moved = false;
     const candidateSpy = vi
       .spyOn(prisma.inhouseAnnouncement, "findMany")
-      .mockImplementation(
-        (async (args: Parameters<typeof originalFind>[0]) => {
-          const candidates = await originalFind(args);
-          if (!moved && candidates.length > 0) {
-            moved = true;
-            await prisma.inhouseLobby.update({
-              where: { id: lobby.id },
-              data: { status: INHOUSE_STATUS.CANCELLED, dotaMatchId: null },
-            });
-          }
-          return candidates;
-        }) as never,
-      );
+      .mockImplementation((async (args: Parameters<typeof originalFind>[0]) => {
+        const candidates = await originalFind(args);
+        if (!moved && candidates.length > 0) {
+          moved = true;
+          await prisma.inhouseLobby.update({
+            where: { id: lobby.id },
+            data: { status: INHOUSE_STATUS.CANCELLED, dotaMatchId: null },
+          });
+        }
+        return candidates;
+      }) as never);
 
     let first: Awaited<ReturnType<typeof deliverInhouseAnnouncements>>;
     try {
@@ -1825,7 +2097,10 @@ describe("inhouse — Elo deltas + result announcement", () => {
       await prisma.inhouseAnnouncement.findUniqueOrThrow({
         where: { id: event.id },
       }),
-    ).toMatchObject({ status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING, attempts: 0 });
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      attempts: 0,
+    });
 
     // A fresh candidate snapshot sees the cancellation and retires the stale
     // result without spending a webhook attempt.

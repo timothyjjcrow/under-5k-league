@@ -69,6 +69,11 @@ import {
   resolveUnsettledBets,
   settleInhouseBets,
 } from "@/lib/inhouse-bet-service";
+import {
+  deliverInhouseAnnouncements,
+  INHOUSE_ANNOUNCEMENT_KIND,
+  INHOUSE_ANNOUNCEMENT_STATUS,
+} from "@/lib/inhouse-announcement-outbox";
 import { runResultSync } from "@/lib/result-sync-service";
 import { ON_POSTGRES, makeUser, raceAll, raceN, sessionFor } from "./factories";
 
@@ -1252,6 +1257,87 @@ describe("inhouse betting — the result claim and the played roster", () => {
       });
       await expectLedgerClosed();
       await expectZeroSum();
+    });
+
+    it("never rewrites the wager payload after a sender has leased it", async () => {
+      const ctx = await readyLobby();
+      expect((await placeInhouseBet(ctx.t1[0].session, 100)).ok).toBe(true);
+      expect((await placeInhouseBet(ctx.t2[0].session, 40)).ok).toBe(true);
+      const matchId = await stageGame(ctx, { winner: 1 });
+
+      let releaseSend!: (accepted: boolean) => void;
+      let markSendStarted!: () => void;
+      const heldSend = new Promise<boolean>((resolve) => {
+        releaseSend = resolve;
+      });
+      const sendStarted = new Promise<void>((resolve) => {
+        markSendStarted = resolve;
+      });
+      let capturedContent: string | null = null;
+      let delivery: Promise<Awaited<
+        ReturnType<typeof deliverInhouseAnnouncements>
+      >> | null = null;
+      let fired = false;
+
+      setRaceHook(
+        onceAt("inhouse.applyResult.afterPrimaryCommit", async () => {
+          fired = true;
+          // The primary commit created the truthful base result. Lease it and
+          // hold only the external send; the claim transaction has committed,
+          // so result settlement/finalization can continue without a DB lock.
+          delivery = deliverInhouseAnnouncements({
+            lobbyId: ctx.lobbyId,
+            send: async (content) => {
+              capturedContent = content;
+              markSendStarted();
+              return heldSend;
+            },
+          });
+          await sendStarted;
+        }),
+      );
+
+      let result: Awaited<ReturnType<typeof recordMatch>>;
+      let inFlightContent = "";
+      let inFlightStatus = "";
+      try {
+        result = await recordMatch(ctx.admin, String(matchId));
+        const event = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+          where: {
+            lobbyId_kind: {
+              lobbyId: ctx.lobbyId,
+              kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+            },
+          },
+        });
+        inFlightContent = event.content;
+        inFlightStatus = event.status;
+      } finally {
+        // Never strand the held delivery if recording or an assertion fails.
+        releaseSend(true);
+        if (delivery) await delivery;
+      }
+
+      expect(fired).toBe(true);
+      expect(result.ok).toBe(true);
+      expect(capturedContent).not.toBeNull();
+      expect(inFlightStatus).toBe(INHOUSE_ANNOUNCEMENT_STATUS.SENDING);
+      // A SENDING payload is immutable: changing the durable row here would
+      // make Discord receive one message while recovery records another.
+      expect(inFlightContent).toBe(capturedContent);
+      expect(
+        await prisma.inhouseAnnouncement.findUniqueOrThrow({
+          where: {
+            lobbyId_kind: {
+              lobbyId: ctx.lobbyId,
+              kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+            },
+          },
+        }),
+      ).toMatchObject({
+        status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+        content: capturedContent,
+      });
     });
   });
 });

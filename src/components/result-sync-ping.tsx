@@ -2,10 +2,12 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { AUTO_SYNC, INHOUSE_SCAN_ACTION_TIMEOUT_MS } from "@/lib/constants";
+import { AUTO_SYNC } from "@/lib/constants";
 import { syncPingStep } from "@/lib/result-sync";
 
-// Invisible sitewide trigger for the automatic result sync: POSTs /api/sync on
+const STATUS_READ_TIMEOUT_MS = 10_000;
+
+// Invisible sitewide observer for automatic result sync: reads /api/sync on
 // mount, then keeps a slow heartbeat — fast (WATCH_POLL_SECONDS) while the
 // server says matches are in their detection window or an inhouse game is
 // live, near-free (IDLE_POLL_SECONDS) otherwise. When something landed,
@@ -53,11 +55,10 @@ export function ResultSyncPing({
       let delay = AUTO_SYNC.IDLE_POLL_SECONDS * 1000;
       try {
         const res = await fetch("/api/sync", {
-          method: "POST",
-          // The hung-request freeze class CLAUDE.md pins for the rooms — a
-          // request that connects and never answers latches inFlight forever;
-          // scan-sized, since /api/sync can run an OpenDota roster scan.
-          signal: AbortSignal.timeout(INHOUSE_SCAN_ACTION_TIMEOUT_MS),
+          // A request that connects and never answers must not latch inFlight
+          // forever. This endpoint is read-only now, so a short status-read
+          // budget is enough; OpenDota work runs only in the cron worker.
+          signal: AbortSignal.timeout(STATUS_READ_TIMEOUT_MS),
         });
         if (res.ok) {
           const data = (await res.json()) as {

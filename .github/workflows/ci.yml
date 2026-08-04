@@ -127,6 +127,39 @@ jobs:
               --command="SELECT (SELECT COUNT(*) FROM \"User\" WHERE \"id\" = 'legacy-user-a'), (SELECT COUNT(*) FROM \"Season\" WHERE \"id\" = 'legacy-season')"
           )"
           test "${fixture_counts}" = "1|1"
+      - name: Rehearse a verified legacy backup baseline upgrade
+        shell: bash
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
+          PG_RESTORE_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_restore_test"
+        run: |
+          set -euo pipefail
+          PGHOST=localhost PGPORT=5432 PGUSER=postgres PGPASSWORD=postgres \
+            PGDATABASE=ld2l_pgtest psql -X --set=ON_ERROR_STOP=on \
+            --command='DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO CURRENT_USER; GRANT ALL ON SCHEMA public TO public;'
+          npx prisma db execute \
+            --file prisma/migrations/20260804000000_baseline/migration.sql \
+            --schema prisma/schema.prisma
+          PGHOST=localhost PGPORT=5432 PGUSER=postgres PGPASSWORD=postgres \
+            PGDATABASE=ld2l_pgtest psql -X --set=ON_ERROR_STOP=on \
+            --command="INSERT INTO \"User\" (\"id\", \"steamId\", \"name\", \"updatedAt\") VALUES ('legacy-restore-user', '76561198000000001', 'Legacy Restore', CURRENT_TIMESTAMP); INSERT INTO \"Season\" (\"id\", \"name\", \"isActive\", \"updatedAt\") VALUES ('legacy-restore-season', 'Legacy Restore Season', true, CURRENT_TIMESTAMP);"
+          export BACKUP_DIR="${RUNNER_TEMP}/ld2l-legacy-backup-rehearsal"
+          npm run db:backup
+          backup_file="$(find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'backup-*.sql' -print -quit)"
+          test -n "${backup_file}"
+          npm run db:backup:rehearse -- --legacy-baseline "${backup_file}"
+          restored_counts="$(
+            PGHOST=localhost \
+            PGPORT=5432 \
+            PGUSER=postgres \
+            PGPASSWORD=postgres \
+            PGDATABASE=ld2l_restore_test \
+            psql -X --set=ON_ERROR_STOP=on --tuples-only --no-align \
+              --command="SELECT (SELECT COUNT(*) FROM \"User\" WHERE \"id\" = 'legacy-restore-user'), (SELECT COUNT(*) FROM \"Season\" WHERE \"id\" = 'legacy-restore-season'), (SELECT COUNT(*) FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL)"
+          )"
+          test "${restored_counts}" = "1|1|3"
+          npm run pg:up
       - name: Generate the migrated PostgreSQL client
         run: npx prisma generate
         env:
@@ -146,7 +179,9 @@ jobs:
           DATABASE_URL: ${{ env.PG_TEST_URL }}
           DIRECT_URL: ${{ env.PG_TEST_URL }}
           AUTH_SECRET: "C8kP2vR7xM4qT9wL6nH3dF5sJ0yB1zUa"
+          CRON_SECRET: "N6pT2yK8mW4cR9hL1sD7vF3xB5qJ0zUa"
           BACKUP_RECEIPT_SECRET: "G9mW4rK2pX8cN6tV1hD7sQ3yL5bJ0fZa"
+          STEAM_API_KEY: "0123456789ABCDEF0123456789ABCDEF"
           ADMIN_STEAM_IDS: "76561198000000001"
           APP_URL: "https://ci.ld2l.invalid"
           NEXT_PUBLIC_SITE_URL: "https://ci.ld2l.invalid"

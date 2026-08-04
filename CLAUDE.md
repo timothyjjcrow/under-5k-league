@@ -3,6 +3,13 @@
 A Learn Dota 2 League site. Read the README for the product overview. This file
 is orientation for future work in the codebase.
 
+> **Release-operations notice (August 2026):** this is a long-lived engineering
+> notebook, not a deployment runbook. For production builds, migrations,
+> backups, schedulers, rollback, and launch approval, the source of truth is the
+> current `README.md` deployment section and
+> `docs/PRODUCTION-READINESS-2026-08.md`. Historical notes below must never
+> override those guarded procedures.
+
 ## Mental model
 
 Everything hangs off a **Season** and its `status` (the state machine):
@@ -653,24 +660,20 @@ has to justify it.
 ## Automatic result sync (done)
 
 The league updates itself — results flow in from OpenDota with no captain or
-admin button press. Lazy, no cron/websocket (draft-clock philosophy).
+admin button press. A bearer-authenticated one-minute scheduler runs the
+bounded automation worker; public page traffic is never the application clock.
 
 - **Trigger**: `<ResultSyncPing>` (`src/components/result-sync-ping.tsx`,
-  mounted once in the root layout, renders nothing) POSTs `/api/sync` on page
-  view, then heartbeats — `AUTO_SYNC.WATCH_POLL_SECONDS` while the server says
-  `watch: true` (matches in their detection window or a live inhouse), else
-  `IDLE_POLL_SECONDS`. Hidden tabs don't ping; a visibilitychange → visible
-  syncs immediately. TWO refresh triggers, both required: `updated` (this
-  client's own request performed the import) and the `cursor` advancing — the
-  atomic claims mean exactly ONE request ever "does" an import, so without
-  the cursor every other parked dashboard would poll `updated:false` forever
-  and stay stale. The cursor is the `resultChangedAt` Setting, bumped by
+  mounted once in the root layout, renders nothing) performs read-only GETs to
+  `/api/sync` so open browsers can refresh when the result cursor advances. It
+  does not run maintenance and POST `/api/sync` is deliberately rejected. The
+  cursor is the `resultChangedAt` Setting, bumped by
   `stampResultChange()` (`settings.ts`) from EVERY result path:
   `importGameForMatch`, admin `recordResult`, and inhouse `applyResult`.
-- **Route** (`src/app/api/sync/route.ts`): per-IP `rateLimit` speed bump, runs
-  `runResultSync`, and busts the `"games"` tag on imports — it's a route
-  handler (not a `<WeekReminderPing>`-style server component) precisely
-  because `revalidateTag` is only legal from a request scope.
+- **Worker route** (`src/app/api/cron/automation/route.ts`): validates
+  `Authorization: Bearer <CRON_SECRET>` before acquiring the global lease and
+  running bounded result, reminder, inhouse, playoff, honors, and announcement
+  maintenance. `/api/sync` is a public, read-only status snapshot only.
 - **Service** (`src/lib/result-sync-service.ts` + pure window math in
   `src/lib/result-sync.ts`, both tested;
   `test/integration/result-sync.itest.ts`): a match is due from
@@ -696,7 +699,7 @@ admin button press. Lazy, no cron/websocket (draft-clock philosophy).
   `syncLeagueGames` never touches a COMPLETED match (was: completed-with-0-
   games only) — a decided series or an admin forfeit ruling must not be
   rewritten by a late league-lobby import; amending is per-match admin work.
-- **Inhouse from anywhere**: the same run executes the inhouse lazy resolvers
+- **Inhouse without an open browser**: the same scheduled run executes the inhouse resolvers
   (`maybeFormLobby`/`resolveCaptainVote`/`resolveStalledPick`/
   `maybeAutoDetectResult`) behind a cheap active-lobby/queue gate — while all
   ten players are in the Dota client with /inhouse closed, any page view on
@@ -706,9 +709,10 @@ admin button press. Lazy, no cron/websocket (draft-clock philosophy).
   `announceSeriesResultOnce` posts the result to Discord (see Discord section)
   whichever path — captain, admin, league sync, or auto sync — finished the
   series.
-- **GET /api/sync** exists for external pingers: point a free 5-minute uptime
-  monitor at it (README) — downtime alerting + a sync heartbeat for the
-  nobody-on-site window, without abandoning the lazy no-cron design.
+- **Health probes**: use `/api/health/live` for process liveness,
+  `/api/health/ready` for database readiness, and the dedicated automation
+  freshness probe documented in the README. `GET /api/sync` is not a scheduler
+  or an automation-health signal.
 - **Health surface**: the admin "Automatic result sync" card (`AutoSyncHealth`
   in `admin/page.tsx`) renders each in-window match's last scan / empty-scan
   count / next-scan time (pure `nextAutoSyncAt`, tested), the league-feed
@@ -1921,13 +1925,14 @@ already in the `Setting` table.
   no unread. The separate `INHOUSE.QUEUE_PING_AT` rally (currently 4/10), plus
   the match-found alert at formation, is what can actually reach opted-in
   players — keep board edits mention-free.
-- KNOWN LIMIT: with nobody on the site at all, nothing runs and the board
-  freezes. There is deliberately NO generic "updated <t:…:R>" line: the empty
+- The board is maintained by the authenticated automation worker even when no
+  browser is open. There is deliberately NO generic "updated <t:…:R>" line: the empty
   board would advertise weekend-old staleness even when truth had not changed.
   Semantic timestamps (ready expiry, live start, last lobby) continue in the
   Discord client without PATCHes, while the admin card exposes the last
-  accepted edit, failures and live-vs-posted digest. An uptime monitor on
-  `GET /api/sync` is what actually bounds the no-traffic window.
+  accepted edit, failures and live-vs-posted digest. Monitor scheduler responses
+  and the dedicated automation-freshness probe; never use `/api/sync` as a
+  write heartbeat.
 
 ## Match-night check-in (done)
 
@@ -2963,7 +2968,11 @@ ask it made twice. What that turned into:
   Don't re-add full user rows to snapshot/roster queries — the derived
   `SeasonSnapshot` type makes tsc enforce the narrowed shape.
 
-## Deploy safety & ops (done — keep following these)
+## Deploy safety & ops (historical summary)
+
+The guarded commands and exact operator sequence in `README.md` supersede this
+summary. In particular, production uses committed Prisma migrations; it never
+uses `prisma db push` and has no data-loss override.
 
 - **Production environment validation is a pre-build gate.**
   `scripts/validate-prod-env.mjs` runs first and rejects non-PostgreSQL or
@@ -2976,21 +2985,17 @@ ask it made twice. What that turned into:
   It reports field names, never secret values. Vercel previews deliberately
   skip the production-only validation, but they must use a separate database
   if they need live data. There is no production first-user admin bootstrap.
-- **Deployment order prevents schema mutation before compile success.**
-  `vercel.json` runs validation → PostgreSQL provider switch → `prisma generate`
-  → `next build` → `scripts/build-db.mjs`. The final script is a no-op outside
-  `VERCEL_ENV === "production"`; production runs
-  `prisma db push --skip-generate`, which refuses data-loss warnings by default.
-  `src/lib/build-db.test.ts` pins both the exact order and the gate. Do not move
-  schema push ahead of compile or put a bare push back in `vercel.json`.
-- **Accepting data loss is an exact, one-deploy emergency acknowledgement.**
-  Only
-  `PRISMA_ACCEPT_DATA_LOSS=I_UNDERSTAND_THIS_MAY_DELETE_PRODUCTION_DATA:<VERCEL_GIT_COMMIT_SHA>`
-  adds `--accept-data-loss`. The 40-character suffix must equal the current
-  deployment commit, so a stale/persistent project value cannot approve the
-  next schema change. Set it only after reviewing the Prisma diff, creating and
-  verifying a backup, and completing a restore drill; remove it immediately.
-  Near misses such as `true`, `1`, different casing, or whitespace do nothing.
+- **Deployment order is migration-based and fail-closed.** `vercel.json` runs
+  `npm run build:vercel`, which validates production configuration, switches
+  Prisma to PostgreSQL, validates and preflights committed migrations, applies
+  them with `prisma migrate deploy`, performs postflight attestation, generates
+  the client, and then builds Next.js. Migrations must remain additive and
+  compatible with the previously deployed binary because they run before the
+  candidate build is promoted.
+- **There is no production data-loss override.** `PRISMA_ACCEPT_DATA_LOSS`,
+  `BUILD_DB_DRY_RUN`, and disabled migration advisory locks are rejected by the
+  production environment gate. Never substitute `db push` for the reviewed
+  migration pipeline.
 - **`npm run db:backup` publishes private, verifiable artifacts.**
   `scripts/backup-db.mjs` uses the direct URL when available and supplies it to
   `pg_dump` through `PGDATABASE`, never argv. It writes beside the final target
