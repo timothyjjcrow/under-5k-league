@@ -4,6 +4,7 @@ import { computeStandings } from "@/lib/standings";
 import { recomputeSeries } from "@/lib/match-import";
 import { createPlayoffBracket } from "@/lib/playoff-service";
 import { regularSeasonStatus } from "@/lib/schedule-status";
+import { SEASON_STATUS } from "@/lib/constants";
 import {
   addGameToMatch,
   drivePlayoffsToChampion,
@@ -23,8 +24,10 @@ function seriesResult(homeIdx: number, awayIdx: number): [number, number] {
   const lo = Math.min(homeIdx, awayIdx);
   const hi = Math.max(homeIdx, awayIdx);
   let winnerIdx: number | null;
-  if (lo === 0) winnerIdx = 0; // T0 beats everyone
-  else if (lo === 1 && hi === 2) winnerIdx = 1; // T1 beats T2
+  if (lo === 0)
+    winnerIdx = 0; // T0 beats everyone
+  else if (lo === 1 && hi === 2)
+    winnerIdx = 1; // T1 beats T2
   else winnerIdx = null; // {1,3} and {2,3} draw
   if (winnerIdx === null) return [1, 1];
   return winnerIdx === homeIdx ? [2, 0] : [0, 2];
@@ -45,7 +48,8 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     for (let i = 0; i < 4; i++) {
       captains.push(await makeCaptain(season.id, `Captain ${i}`, 100, i));
     }
-    for (let i = 0; i < 8; i++) await makePlayer(season.id, `Player ${i}`, 3000 - i * 50);
+    for (let i = 0; i < 8; i++)
+      await makePlayer(season.id, `Player ${i}`, 3000 - i * 50);
     await startDraftState(season.id);
     await runDraftToCompletion(season.id);
 
@@ -60,18 +64,24 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     const schedule = await generateRegularSchedule(season.id);
     expect(schedule.every((m) => m.bestOf === 2)).toBe(true); // Bo2 weeks
     for (const m of schedule) {
-      const [hs, as] = seriesResult(idxOf.get(m.homeTeamId)!, idxOf.get(m.awayTeamId)!);
+      const [hs, as] = seriesResult(
+        idxOf.get(m.homeTeamId)!,
+        idxOf.get(m.awayTeamId)!,
+      );
       await recordMatch(m.id, hs, as);
     }
 
     // ---- standings must reflect draws ----
     const standings = computeStandings(
       teams.map((t) => t.id),
-      await prisma.match.findMany({ where: { seasonId: season.id, phase: "REGULAR" } }),
+      await prisma.match.findMany({
+        where: { seasonId: season.id, phase: "REGULAR" },
+      }),
     );
     // Final order: T0 (9) > T1 (4) > T3 (2) > T2 (1)
     expect(standings.map((s) => idxOf.get(s.teamId))).toEqual([0, 1, 3, 2]);
-    const byIdx = (i: number) => standings.find((s) => idxOf.get(s.teamId) === i)!;
+    const byIdx = (i: number) =>
+      standings.find((s) => idxOf.get(s.teamId) === i)!;
     expect(byIdx(0)).toMatchObject({ wins: 3, draws: 0, losses: 0, points: 9 });
     expect(byIdx(1)).toMatchObject({ wins: 1, draws: 1, losses: 1, points: 4 });
     expect(byIdx(3)).toMatchObject({ wins: 0, draws: 2, losses: 1, points: 2 });
@@ -84,8 +94,12 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     });
     const semi0 = r0.find((m) => m.bracketSlot === "R0M0")!;
     const semi1 = r0.find((m) => m.bracketSlot === "R0M1")!;
-    expect([idxOf.get(semi0.homeTeamId), idxOf.get(semi0.awayTeamId)]).toEqual([0, 2]); // 1 v 4
-    expect([idxOf.get(semi1.homeTeamId), idxOf.get(semi1.awayTeamId)]).toEqual([1, 3]); // 2 v 3
+    expect([idxOf.get(semi0.homeTeamId), idxOf.get(semi0.awayTeamId)]).toEqual([
+      0, 2,
+    ]); // 1 v 4
+    expect([idxOf.get(semi1.homeTeamId), idxOf.get(semi1.awayTeamId)]).toEqual([
+      1, 3,
+    ]); // 2 v 3
     expect(r0.every((m) => m.bestOf === 3)).toBe(true); // Bo3 semifinals
 
     // ---- play the bracket out (Bo5 final) → champion is the #1 seed ----
@@ -99,8 +113,18 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
   });
 
   it("advances a playoff series via game imports only once the Bo3 is clinched", async () => {
-    const season = await makeSeason({ teamSize: 3, minTeams: 2, finalBestOf: 3 });
+    const season = await makeSeason({
+      teamSize: 3,
+      minTeams: 2,
+      finalBestOf: 3,
+    });
     for (let i = 0; i < 3; i++) await makeTeam(season.id, `T${i}`, i); // → bracket size 2 (final)
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.REGULAR_SEASON },
+    });
+    const regular = await generateRegularSchedule(season.id);
+    for (const match of regular) await recordMatch(match.id, 2, 0);
     await createPlayoffBracket(season.id);
 
     const final = (
@@ -115,7 +139,10 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     await recomputeSeries(final.id);
     let s = await prisma.season.findUniqueOrThrow({ where: { id: season.id } });
     expect(s.status).toBe("PLAYOFFS"); // still going
-    expect((await prisma.match.findUniqueOrThrow({ where: { id: final.id } })).status).toBe("LIVE");
+    expect(
+      (await prisma.match.findUniqueOrThrow({ where: { id: final.id } }))
+        .status,
+    ).toBe("LIVE");
 
     await addGameToMatch(final.id, "pg2", winner); // 2-0: clinched
     await recomputeSeries(final.id);
@@ -125,16 +152,30 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
   });
 
   it("seeds an all-draws season deterministically (every team tied on points)", async () => {
-    const season = await makeSeason({ teamSize: 3, minTeams: 4, regularBestOf: 2 });
+    const season = await makeSeason({
+      teamSize: 3,
+      minTeams: 4,
+      regularBestOf: 2,
+    });
     for (let i = 0; i < 4; i++) await makeTeam(season.id, `Team ${i}`, i);
-    const ids = (await prisma.team.findMany({ where: { seasonId: season.id } })).map((t) => t.id);
-    await prisma.season.update({ where: { id: season.id }, data: { status: "REGULAR_SEASON" } });
+    const ids = (
+      await prisma.team.findMany({ where: { seasonId: season.id } })
+    ).map((t) => t.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: "REGULAR_SEASON" },
+    });
 
     const schedule = await generateRegularSchedule(season.id);
     for (const m of schedule) await recordMatch(m.id, 1, 1); // every series drawn
 
-    const standings = computeStandings(ids, await prisma.match.findMany({ where: { seasonId: season.id } }));
-    expect(standings.every((s) => s.points === 3 && s.draws === 3 && s.wins === 0)).toBe(true);
+    const standings = computeStandings(
+      ids,
+      await prisma.match.findMany({ where: { seasonId: season.id } }),
+    );
+    expect(
+      standings.every((s) => s.points === 3 && s.draws === 3 && s.wins === 0),
+    ).toBe(true);
     // No crash; bracket still seeds a full field.
     await createPlayoffBracket(season.id);
     const r0 = await prisma.match.findMany({
@@ -147,7 +188,11 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
   });
 
   it("flags an unfinished Bo2 as outstanding (so playoffs stay locked) until it's entered", async () => {
-    const season = await makeSeason({ teamSize: 3, minTeams: 2, regularBestOf: 2 });
+    const season = await makeSeason({
+      teamSize: 3,
+      minTeams: 2,
+      regularBestOf: 2,
+    });
     const a = await makeTeam(season.id, "A", 0);
     await makeTeam(season.id, "B", 1);
     await prisma.season.update({

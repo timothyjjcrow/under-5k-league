@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
   requireAdmin: vi.fn(async () => ({ id: "admin1", name: "Boss" })),
@@ -27,7 +28,7 @@ import {
   removeCaptain,
   setWeekNight,
 } from "@/app/actions/admin";
-import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
+import { SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {
   generateRegularSchedule,
@@ -53,6 +54,17 @@ describe("logAdminAction", () => {
     expect(row.actorName).toBe("Boss");
     expect(row.actorId).toBe("admin1");
     expect(row.action).toBe("testThing");
+  });
+
+  it("can preserve the actor across a break-glass session revocation", async () => {
+    await logAdminAction({
+      action: "revokeAllSessions",
+      summary: "revoked sessions",
+      actor: { id: "admin-before-revoke", name: "Safety Admin" },
+    });
+    const [row] = await recentAdminActions(1);
+    expect(row.actorId).toBe("admin-before-revoke");
+    expect(row.actorName).toBe("Safety Admin");
   });
 
   // Rule 1: a missing log line is a far smaller problem than a mutation that
@@ -84,7 +96,11 @@ describe("logAdminAction", () => {
 describe("destructive actions leave a trail", () => {
   async function seasonWithSchedule() {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
-    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Team ${i + 1}`, i + 1);
+    for (let i = 0; i < 4; i++)
+      await makeTeam(season.id, `Team ${i + 1}`, i + 1);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "COMPLETE" },
+    });
     const matches = await generateRegularSchedule(season.id);
     return { season, matches };
   }
@@ -96,7 +112,10 @@ describe("destructive actions leave a trail", () => {
       data: { matchId: matches[0].id, userId: player.id, status: "IN" },
     });
 
-    await generateSchedule(empty, fd({ firstNight: "" }));
+    await generateSchedule(
+      empty,
+      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+    );
 
     const [row] = await recentAdminActions(1);
     expect(row.action).toBe("generateSchedule");
@@ -106,11 +125,19 @@ describe("destructive actions leave a trail", () => {
 
   it("removeCaptain records that it cleared the whole schedule", async () => {
     const { season } = await seasonWithSchedule();
+    await prisma.draft.delete({ where: { seasonId: season.id } });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.SIGNUPS },
+    });
     const doomed = await prisma.team.findFirstOrThrow({
       where: { seasonId: season.id },
     });
 
-    await removeCaptain(empty, fd({ teamId: doomed.id }));
+    await removeCaptain(
+      empty,
+      fd({ teamId: doomed.id, expectedActiveSeasonId: season.id }),
+    );
 
     const [row] = await recentAdminActions(1);
     expect(row.action).toBe("removeCaptain");
@@ -144,7 +171,8 @@ describe("the activity card's copy is honest about results and week moves", () =
   // single-match, low collateral).
   async function seasonWithSchedule() {
     const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
-    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Team ${i + 1}`, i + 1);
+    for (let i = 0; i < 4; i++)
+      await makeTeam(season.id, `Team ${i + 1}`, i + 1);
     const matches = await generateRegularSchedule(season.id);
     return { season, matches };
   }
@@ -174,6 +202,7 @@ describe("the activity card's copy is honest about results and week moves", () =
     const res = await setWeekNight(
       empty,
       fd({
+        expectedActiveSeasonId: season.id,
         week: String(week),
         night: night.toISOString(),
         nightTs: String(night.getTime()),
@@ -184,7 +213,7 @@ describe("the activity card's copy is honest about results and week moves", () =
     const [row] = await recentAdminActions(1);
     expect(row.action).toBe("setWeekNight");
     expect(row.summary).toMatch(/Moved week 1/);
-    expect(row.summary).toMatch(/cleared check-ins/);
+    expect(row.summary).toMatch(/cleared 0 check-in/);
     // The server-TZ rule: counts only, no formatted datetime.
     expect(row.summary).not.toMatch(/\d{1,2}:\d{2}/);
     expect(row.seasonId).toBe(season.id);

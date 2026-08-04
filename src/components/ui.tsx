@@ -13,11 +13,7 @@ import { NewsMedia } from "./news-media";
 // ---------- Button ----------
 
 export type ButtonVariant =
-  | "primary"
-  | "secondary"
-  | "ghost"
-  | "danger"
-  | "accent";
+  "primary" | "secondary" | "ghost" | "danger" | "accent";
 export type ButtonSize = "sm" | "md" | "lg";
 
 const baseBtn =
@@ -62,7 +58,9 @@ export function Button({
   variant?: ButtonVariant;
   size?: ButtonSize;
 }) {
-  return <button className={buttonClasses(variant, size, className)} {...props} />;
+  return (
+    <button className={buttonClasses(variant, size, className)} {...props} />
+  );
 }
 
 // ---------- Card ----------
@@ -106,13 +104,17 @@ export function CardHeader({
   title,
   subtitle,
   action,
+  headingLevel = 3,
   className,
 }: {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   action?: React.ReactNode;
+  /** Dashboard cards are page sections (`h2`); nested cards default to `h3`. */
+  headingLevel?: 2 | 3;
   className?: string;
 }) {
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
     // flex-wrap + a basis on the title: a header whose `action` is a link
     // ("Full schedule →") keeps it inline as before, but one whose action is a
@@ -127,11 +129,11 @@ export function CardHeader({
       )}
     >
       <div className="min-w-0 flex-1 basis-48">
-        <h3 className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
+        <Heading className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
           {title}
-        </h3>
+        </Heading>
         {subtitle ? (
-          <p className="mt-0.5 text-sm text-muted [overflow-wrap:anywhere]">
+          <p className="mt-1.5 text-sm text-muted [overflow-wrap:anywhere]">
             {subtitle}
           </p>
         ) : null}
@@ -455,11 +457,15 @@ export function Avatar({
 }) {
   const dim = { width: size, height: size };
   if (src) {
-    // eslint-disable-next-line @next/next/no-img-element
     return (
+      // Steam avatars are remote user content with arbitrary hosts, so the
+      // framework image optimizer cannot safely predeclare their domains.
+      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={src}
         alt={name}
+        loading="lazy"
+        decoding="async"
         style={dim}
         className={cn("rounded-full object-cover", className)}
       />
@@ -531,15 +537,24 @@ export function TeamCrest({
 export function Progress({
   value,
   max,
+  label,
   className,
 }: {
   value: number;
   max: number;
+  label: string;
   className?: string;
 }) {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
   return (
-    <div className={cn("h-2.5 w-full rounded-full bg-surface-2", className)}>
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={Math.max(0, max)}
+      aria-valuenow={Math.max(0, Math.min(value, max))}
+      className={cn("h-2.5 w-full rounded-full bg-surface-2", className)}
+    >
       <div
         className="bar-fill h-full rounded-full bg-brand transition-all"
         style={{ width: `${pct}%` }}
@@ -732,10 +747,12 @@ export function LinkifiedText({
   text,
   className,
   images = "inline",
+  mediaLabel,
 }: {
   text: string;
   className?: string;
   images?: "inline" | "hide";
+  mediaLabel?: string;
 }) {
   return (
     <span className={className}>
@@ -755,7 +772,12 @@ export function LinkifiedText({
         }
         if (t.type === "image" || t.type === "video") {
           return images === "hide" ? null : (
-            <NewsMedia key={i} src={t.value} kind={t.type} />
+            <NewsMedia
+              key={i}
+              src={t.value}
+              kind={t.type}
+              label={mediaLabel ?? "Media attached to this announcement"}
+            />
           );
         }
         return <React.Fragment key={i}>{t.value}</React.Fragment>;
@@ -910,7 +932,9 @@ export function SectionTitle({
       <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-accent" />
       <span>{children}</span>
       {aside ? (
-        <span className="font-sans text-sm font-normal text-muted">{aside}</span>
+        <span className="font-sans text-sm font-normal text-muted">
+          {aside}
+        </span>
       ) : null}
     </h2>
   );
@@ -1052,9 +1076,7 @@ export function HeroList({
       {shown.map((hero) => (
         <HeroIcon key={hero.id} hero={hero} size={size} />
       ))}
-      {extra > 0 ? (
-        <span className="text-xs text-muted">+{extra}</span>
-      ) : null}
+      {extra > 0 ? <span className="text-xs text-muted">+{extra}</span> : null}
       {unmatched.length > 0 ? (
         <span className="text-xs text-muted">{unmatched.join(", ")}</span>
       ) : null}
@@ -1118,9 +1140,12 @@ function CalendarIcon({
  */
 export function ScheduleCallout({
   label,
+  description,
   className,
 }: {
   label?: string | null;
+  /** Phase-aware guidance. Signup copy remains the default for other callers. */
+  description?: string;
   className?: string;
 }) {
   return (
@@ -1142,7 +1167,8 @@ export function ScheduleCallout({
           <span className="text-info">{label || MATCH_SCHEDULE.label}</span>
         </div>
         <div className="text-xs text-muted">
-          Games run weekly. Make sure you can play before you sign up.
+          {description ??
+            "Games run weekly. Make sure you can play before you sign up."}
         </div>
       </div>
     </div>
@@ -1220,11 +1246,10 @@ export function SteamSafetyNote({ className }: { className?: string }) {
         Why Steam sign-in?
       </div>
       <p className="mt-2 text-xs leading-relaxed text-muted">
-        Only to get your{" "}
-        <b className="font-medium text-fg">name and profile</b> — nothing else.
-        You log in on Steam&apos;s own site, so we never see your password, and
-        Steam&apos;s API only shares public info — it can&apos;t touch your
-        account.
+        Only to get your <b className="font-medium text-fg">name and profile</b>{" "}
+        — nothing else. You log in on Steam&apos;s own site, so we never see
+        your password, and Steam&apos;s API only shares public info — it
+        can&apos;t touch your account.
       </p>
     </div>
   );

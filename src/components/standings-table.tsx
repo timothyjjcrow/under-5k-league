@@ -31,6 +31,8 @@ export type StandingsRowView = {
   idDecided: boolean;
   /** Quit mid-season — remaining fixtures forfeited, out of seeding. */
   withdrawn: boolean;
+  /** One-based playoff seed, or null when below the cut / ineligible. */
+  playoffSeed: number | null;
 };
 
 type SortKey = "rank" | "wins" | "draws" | "losses" | "gameDiff" | "points";
@@ -51,6 +53,7 @@ export function StandingsTableClient({
   playoffCut,
   viewerTeamId,
   totalTeams,
+  eligibleTeams,
 }: {
   rows: StandingsRowView[];
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
@@ -63,6 +66,8 @@ export function StandingsTableClient({
    * not the rows on screen.
    */
   totalTeams?: number;
+  /** Non-withdrawn teams competing for the playoff places. */
+  eligibleTeams?: number;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [desc, setDesc] = useState(false);
@@ -87,6 +92,8 @@ export function StandingsTableClient({
       });
 
   const hasForm = rows.some((r) => r.form !== null);
+  const hasSeedProjection =
+    playoffCut != null && rows.some((row) => row.playoffSeed != null);
   // Only draw the cut line when some teams actually miss the bracket, and
   // only while the table is in league order.
   const hasCut =
@@ -94,7 +101,7 @@ export function StandingsTableClient({
     !desc &&
     playoffCut != null &&
     playoffCut > 0 &&
-    playoffCut < (totalTeams ?? rows.length);
+    playoffCut < (eligibleTeams ?? totalTeams ?? rows.length);
   const cols = hasForm ? 8 : 7;
 
   const onSort = (key: SortKey) => {
@@ -140,6 +147,18 @@ export function StandingsTableClient({
     // page. Widths MUST live on <col> — fixed layout still hands display:none
     // th/td columns an equal share of the leftover, starving Team on phones.
     <table className="w-full table-fixed text-sm">
+      <caption className="caption-bottom border-t border-line/60 px-4 py-3 text-left text-xs leading-relaxed text-muted sm:px-5">
+        <span className="font-medium text-fg">Scoring:</span> win 3 · draw 1 ·
+        loss 0. <span className="font-medium text-fg">Tiebreaks:</span> game
+        differential · series wins · head-to-head mini-table. Ruled forfeits
+        count for points and record, but not game differential. A “tied” badge
+        means every tiebreak is level and the displayed order is only a stable
+        fallback. Withdrawn teams keep their results in the table but cannot
+        occupy a playoff seed.
+        {hasSeedProjection
+          ? " Each qualifying row is announced with its current playoff seed."
+          : ""}
+      </caption>
       <colgroup>
         <col className="w-10 sm:w-12" />
         <col />
@@ -174,7 +193,7 @@ export function StandingsTableClient({
       </thead>
       <tbody>
         {sorted.map((row) => {
-          const inCut = hasCut && row.rank <= playoffCut!;
+          const inCut = hasCut && row.playoffSeed != null;
           return (
             <Fragment key={row.teamId}>
               <tr
@@ -192,6 +211,24 @@ export function StandingsTableClient({
                 >
                   <span className="whitespace-nowrap">
                     {row.rank}
+                    {hasSeedProjection ? (
+                      <span className="sr-only">
+                        {row.playoffSeed != null
+                          ? `, current playoff seed ${row.playoffSeed}`
+                          : row.withdrawn
+                            ? ", withdrawn and excluded from playoff seeding"
+                            : ", outside the current playoff field"}
+                      </span>
+                    ) : null}
+                    {row.playoffSeed != null && row.playoffSeed !== row.rank ? (
+                      <span
+                        aria-hidden
+                        title={`Current playoff seed ${row.playoffSeed}`}
+                        className="block text-[9px] font-semibold uppercase leading-tight text-success/80"
+                      >
+                        seed {row.playoffSeed}
+                      </span>
+                    ) : null}
                     {/* Weekly movement reads against league order only. */}
                     {leagueOrder && row.move !== 0 ? (
                       <span
@@ -200,7 +237,7 @@ export function StandingsTableClient({
                         title={`${row.move > 0 ? "Up" : "Down"} ${Math.abs(row.move)} from last week`}
                         className={cn(
                           "ml-0.5 align-middle text-[9px] font-semibold",
-                          row.move > 0 ? "text-success" : "text-danger/80",
+                          row.move > 0 ? "text-success" : "text-danger",
                         )}
                       >
                         <span aria-hidden>
@@ -211,7 +248,7 @@ export function StandingsTableClient({
                     ) : null}
                   </span>
                 </td>
-                <td className="px-2 py-2.5 font-medium">
+                <th scope="row" className="px-2 py-2.5 text-left font-medium">
                   <Link
                     href={`/teams/${row.teamId}`}
                     className="flex min-w-0 items-center gap-2 py-1 -my-1 hover:text-info"
@@ -252,12 +289,14 @@ export function StandingsTableClient({
                       </span>
                     ) : null}
                   </Link>
-                </td>
+                </th>
                 <td className="px-1 py-2.5 text-center sm:px-2">{row.wins}</td>
                 <td className="px-1 py-2.5 text-center text-muted sm:px-2">
                   {row.draws}
                 </td>
-                <td className="px-1 py-2.5 text-center sm:px-2">{row.losses}</td>
+                <td className="px-1 py-2.5 text-center sm:px-2">
+                  {row.losses}
+                </td>
                 <td className="hidden px-1 py-2.5 text-center text-muted sm:table-cell sm:px-2">
                   {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
                 </td>
@@ -272,13 +311,23 @@ export function StandingsTableClient({
                   {row.points}
                 </td>
               </tr>
-              {hasCut && row.rank === playoffCut ? (
-                <tr aria-hidden className="bg-success/[0.03]">
+              {hasCut && row.playoffSeed === playoffCut ? (
+                <tr className="bg-success/[0.03]">
                   <td colSpan={cols} className="px-5 py-1">
                     <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-success/80">
-                      <span className="h-px flex-1 bg-gradient-to-r from-transparent to-success/40" />
+                      <span
+                        aria-hidden
+                        className="h-px flex-1 bg-gradient-to-r from-transparent to-success/40"
+                      />
                       Playoff cut
-                      <span className="h-px flex-1 bg-gradient-to-l from-transparent to-success/40" />
+                      <span
+                        aria-hidden
+                        className="h-px flex-1 bg-gradient-to-l from-transparent to-success/40"
+                      />
+                      <span className="sr-only">
+                        . Eligible teams after this row are outside the current
+                        playoff field.
+                      </span>
                     </div>
                   </td>
                 </tr>
@@ -303,7 +352,7 @@ function ClinchMark({ status }: { status: ClinchStatus }) {
       title={label}
       className={cn(
         "shrink-0 text-xs font-semibold",
-        clinched ? "text-success" : "text-danger/70",
+        clinched ? "text-success" : "text-danger",
       )}
     >
       <span aria-hidden>{clinched ? "✓" : "✗"}</span>

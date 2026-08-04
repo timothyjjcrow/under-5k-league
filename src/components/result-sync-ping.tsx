@@ -11,21 +11,27 @@ import { syncPingStep } from "@/lib/result-sync";
 // live, near-free (IDLE_POLL_SECONDS) otherwise. When something landed,
 // router.refresh() re-renders the page's server components, so whoever is
 // parked on the dashboard/standings sees results appear on their own.
-// The refresh/delay/baseline rule is pure `syncPingStep` (result-sync.ts) —
+// The refresh/delay/cursor rule is pure `syncPingStep` (result-sync.ts) —
 // the two-triggers rationale (why `updated` alone strands parked tabs) lives
 // on it. This component keeps only the timer, the inFlight latch, the
 // visibility listener, and the fetch. Mounted once in the root layout;
 // renders nothing.
-export function ResultSyncPing() {
+export function ResultSyncPing({
+  initialCursor,
+}: {
+  initialCursor: string | null;
+}) {
   const router = useRouter();
 
   useEffect(() => {
     let alive = true;
     let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    // resultChangedAt baseline across responses; syncPingStep owns the rule
-    // (first response baselines without a refresh, null keeps the baseline).
-    let lastCursor: string | null = null;
+    // The Server Component render supplies the causality baseline. Starting at
+    // null used to make a losing FIRST concurrent heartbeat silently adopt the
+    // newer cursor and leave its page stale; null here now deliberately means
+    // "there was no result cursor when this page rendered."
+    let lastCursor: string | null = initialCursor;
 
     const schedule = (ms: number) => {
       if (!alive) return;
@@ -86,7 +92,7 @@ export function ResultSyncPing() {
       document.removeEventListener("visibilitychange", onVisibility);
       if (timer) clearTimeout(timer);
     };
-  }, [router]);
+  }, [router, initialCursor]);
 
   return null;
 }

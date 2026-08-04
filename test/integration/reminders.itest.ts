@@ -64,6 +64,32 @@ describe("week reminder (integration)", () => {
     expect(mockSend).toHaveBeenCalledTimes(1);
   });
 
+  it("announces separate kickoff clusters in one numbered week", async () => {
+    const { season } = await setupWeek(4);
+    const lateHome = await makeTeam(season.id, "Late Home", 2);
+    const lateAway = await makeTeam(season.id, "Late Away", 3);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: lateHome.id,
+        awayTeamId: lateAway.id,
+        scheduledAt: new Date(Date.now() + 8 * 3600_000),
+      },
+    });
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(
+      await prisma.setting.count({
+        where: { key: { startsWith: `weekReminder:${season.id}:1:` } },
+      }),
+    ).toBe(2);
+  });
+
   it("stays quiet outside the window, off-season, and without a webhook", async () => {
     const far = await setupWeek(48); // kickoff too far out
     expect(await maybeAnnounceUpcomingWeek(far.season)).toBe(false);
@@ -91,7 +117,12 @@ describe("week reminder (integration)", () => {
 
 describe("week reminder — reaching the people who owe an answer", () => {
   /** Roster `n` players on a team; the first gets a linked Discord account. */
-  async function roster(seasonId: string, teamId: string, n: number, tag: string) {
+  async function roster(
+    seasonId: string,
+    teamId: string,
+    n: number,
+    tag: string,
+  ) {
     const users = [];
     for (let i = 0; i < n; i++) {
       const u = await makeUser(`${tag}${i}`);
@@ -150,7 +181,12 @@ describe("week reminder — reaching the people who owe an answer", () => {
     for (let i = 0; i < 2; i++) {
       const u = await makeUser(`NL${i}`);
       await prisma.teamMember.create({
-        data: { seasonId: season.id, teamId: i === 0 ? home.id : away.id, userId: u.id, price: 0 },
+        data: {
+          seasonId: season.id,
+          teamId: i === 0 ? home.id : away.id,
+          userId: u.id,
+          price: 0,
+        },
       });
     }
     expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
@@ -190,8 +226,8 @@ describe("week reminder — the empty-week race releases the claim", () => {
     expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
     expect(fired).toBe(true); // seam reached — not a vacuous pass
     expect(mockSend).not.toHaveBeenCalled();
-    const marker = await prisma.setting.findUnique({
-      where: { key: `weekReminder:${season.id}:1` },
+    const marker = await prisma.setting.findFirst({
+      where: { key: { startsWith: `weekReminder:${season.id}:1` } },
     });
     expect(marker).toBeNull(); // claim released, not burned
 

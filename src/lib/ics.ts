@@ -5,6 +5,8 @@
 export type CalendarEvent = {
   /** Globally unique id, e.g. `${matchId}@league.example`. */
   uid: string;
+  /** Stable event creation stamp. Do not substitute the feed request time. */
+  stamp: Date;
   start: Date;
   durationMinutes: number;
   summary: string;
@@ -57,10 +59,7 @@ export function foldIcsLine(line: string): string[] {
 }
 
 /** Build a complete VCALENDAR document (CRLF-joined). */
-export function buildCalendar(
-  name: string,
-  events: CalendarEvent[],
-): string {
+export function buildCalendar(name: string, events: CalendarEvent[]): string {
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -74,12 +73,13 @@ export function buildCalendar(
     lines.push(
       "BEGIN:VEVENT",
       `UID:${e.uid}`,
-      `DTSTAMP:${icsDate(new Date())}`,
+      `DTSTAMP:${icsDate(e.stamp)}`,
       `DTSTART:${icsDate(e.start)}`,
       `DTEND:${icsDate(end)}`,
       `SUMMARY:${escapeIcsText(e.summary)}`,
     );
-    if (e.description) lines.push(`DESCRIPTION:${escapeIcsText(e.description)}`);
+    if (e.description)
+      lines.push(`DESCRIPTION:${escapeIcsText(e.description)}`);
     if (e.url) lines.push(`URL:${e.url}`);
     lines.push("END:VEVENT");
   }

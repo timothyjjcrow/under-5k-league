@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
   requireAdmin: vi.fn(),
@@ -111,13 +112,14 @@ describe("standin claims under contention (raced — meaningful on Postgres only
     const s2 = await makeStandin(season.id, "Seat Racer B");
 
     const results = await raceAll(
-      [s1, s2].map((s) => () =>
-        assignStandinGuarded({
-          matchId: match.id,
-          standinUserId: s.id,
-          replacingUserId: covered.id,
-          actingCaptainId: null,
-        }),
+      [s1, s2].map(
+        (s) => () =>
+          assignStandinGuarded({
+            matchId: match.id,
+            standinUserId: s.id,
+            replacingUserId: covered.id,
+            actingCaptainId: null,
+          }),
       ),
     );
 
@@ -138,14 +140,15 @@ describe("standin claims under contention (raced — meaningful on Postgres only
     const s2 = await makeStandin(season.id, "Open Seat B");
 
     const results = await raceAll(
-      [s1, s2].map((s) => () =>
-        assignStandinGuarded({
-          matchId: match.id,
-          standinUserId: s.id,
-          replacingUserId: null,
-          teamId: home.id,
-          actingCaptainId: null,
-        }),
+      [s1, s2].map(
+        (s) => () =>
+          assignStandinGuarded({
+            matchId: match.id,
+            standinUserId: s.id,
+            replacingUserId: null,
+            teamId: home.id,
+            actingCaptainId: null,
+          }),
       ),
     );
 
@@ -178,13 +181,14 @@ describe("standin claims under contention (raced — meaningful on Postgres only
     const s = await makeStandin(a.season.id, "Double Booker");
 
     const results = await raceAll(
-      [a.match.id, match2.id].map((matchId) => () =>
-        assignStandinGuarded({
-          matchId,
-          standinUserId: s.id,
-          replacingUserId: a.rostered[0].id,
-          actingCaptainId: null,
-        }),
+      [a.match.id, match2.id].map(
+        (matchId) => () =>
+          assignStandinGuarded({
+            matchId,
+            standinUserId: s.id,
+            replacingUserId: a.rostered[0].id,
+            actingCaptainId: null,
+          }),
       ),
     );
 
@@ -232,6 +236,15 @@ describe("standin claims under contention (raced — meaningful on Postgres only
       // The release path can legitimately lose (P2034 → clean error, player
       // still rostered, cover fine). What must NEVER happen is both winning.
       if (memberGone) expect(staleCover).toBe(0);
+      // Each loop is an independent season/race repetition. Hand the league
+      // into offseason before creating the next fixture so the test obeys the
+      // same single-active-season invariant as production.
+      if (i < 2) {
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { isActive: false },
+        });
+      }
     }
   });
 
@@ -266,6 +279,12 @@ describe("standin claims under contention (raced — meaningful on Postgres only
       // (ACTIVE + cover, or ACTIVE + no cover after a lost assign, are both
       // legal end states — the invariant is only about the withdrawn+covering
       // combination.)
+      if (i < 2) {
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { isActive: false },
+        });
+      }
     }
   });
 });

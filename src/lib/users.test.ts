@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseAdminSteamIds, resolveRole } from "./users";
+import {
+  parseAdminSteamIds,
+  resolveRole,
+  resolveSessionRole,
+} from "./users";
 
 describe("parseAdminSteamIds", () => {
   it("splits on commas, trims, and drops blanks", () => {
@@ -34,6 +38,17 @@ describe("resolveRole", () => {
     ).toBe("USER");
   });
 
+  it("never bootstraps an administrator when production disables bootstrap", () => {
+    expect(
+      resolveRole({
+        steamId: "a",
+        adminSteamIds: [],
+        isFirstUser: true,
+        bootstrapAllowed: false,
+      }),
+    ).toBe("USER");
+  });
+
   it("lets the dev-login override win (dev only; blocked in production)", () => {
     expect(
       resolveRole({
@@ -41,6 +56,49 @@ describe("resolveRole", () => {
         adminSteamIds: ["someone-else"],
         isFirstUser: false,
         forceAdmin: true,
+      }),
+    ).toBe("ADMIN");
+  });
+});
+
+describe("resolveSessionRole", () => {
+  it("applies grants and revocations from the live allowlist", () => {
+    expect(
+      resolveSessionRole({
+        steamId: "listed",
+        storedRole: "USER",
+        adminSteamIds: ["listed"],
+        production: true,
+      }),
+    ).toBe("ADMIN");
+    expect(
+      resolveSessionRole({
+        steamId: "removed",
+        storedRole: "ADMIN",
+        adminSteamIds: ["listed"],
+        production: true,
+      }),
+    ).toBe("USER");
+  });
+
+  it("fails closed when production has no configured allowlist", () => {
+    expect(
+      resolveSessionRole({
+        steamId: "stored-admin",
+        storedRole: "ADMIN",
+        adminSteamIds: [],
+        production: true,
+      }),
+    ).toBe("USER");
+  });
+
+  it("preserves the local bootstrap role outside production", () => {
+    expect(
+      resolveSessionRole({
+        steamId: "local",
+        storedRole: "ADMIN",
+        adminSteamIds: [],
+        production: false,
       }),
     ).toBe("ADMIN");
   });

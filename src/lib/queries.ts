@@ -8,7 +8,7 @@ export async function getSeasonSnapshot(userId?: string) {
   const season = await getActiveSeason();
   if (!season) return null;
 
-  const [playerCount, standinCount, teams, myReg] = await Promise.all([
+  const [playerCount, standinCount, teams, myReg, draft] = await Promise.all([
     prisma.registration.count({
       where: {
         seasonId: season.id,
@@ -49,6 +49,10 @@ export async function getSeasonSnapshot(userId?: string) {
           where: { seasonId_userId: { seasonId: season.id, userId } },
         })
       : Promise.resolve(null),
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
   ]);
 
   return {
@@ -57,6 +61,7 @@ export async function getSeasonSnapshot(userId?: string) {
     standinCount,
     teams,
     myReg,
+    draftStatus: draft?.status ?? null,
     capacity: capacityInfo(season, playerCount),
   };
 }

@@ -2,12 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { announceSeriesResultOnce } from "@/lib/match-import";
-import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
+import {
+  markWeekHonorsStale,
+  maybeAnnounceWeekHonors,
+} from "@/lib/honors-service";
+import * as honorsReadinessService from "@/lib/honors-readiness-service";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 import { runResultSync } from "@/lib/result-sync-service";
 import { announceChampionOnce } from "@/lib/playoff-service";
 import { championAnnouncedKey } from "@/lib/settings";
-import { makeSeason, makeTeam, makeUser } from "./factories";
+import {
+  makeSeason,
+  makeTeam,
+  makeUser,
+  ON_POSTGRES,
+  raceAll,
+} from "./factories";
 
 // A Discord blip (timeout, 5xx, revoked webhook) must never permanently eat a
 // once-only announcement: every claim-then-send path releases its idempotency
@@ -130,6 +140,15 @@ describe("weekly-honors announcement retry", () => {
     const home = await makeTeam(season.id, "Home", 0);
     const away = await makeTeam(season.id, "Away", 1);
     const star = await makeUser("Star Carry");
+    const homePlayers = [
+      star,
+      ...(await Promise.all(
+        Array.from({ length: 4 }, (_, index) => makeUser(`Home ${index + 2}`)),
+      )),
+    ];
+    const awayPlayers = await Promise.all(
+      Array.from({ length: 5 }, (_, index) => makeUser(`Away ${index + 1}`)),
+    );
     await prisma.teamMember.create({
       data: {
         seasonId: season.id,
@@ -157,31 +176,49 @@ describe("weekly-honors announcement retry", () => {
         matchId: match.id,
         dotaMatchId: `${Date.now()}`,
         radiantWin: true,
+        radiantTeamId: home.id,
+        direTeamId: away.id,
         winnerTeamId: home.id,
         players: JSON.stringify([
-          {
-            userId: star.id,
+          ...homePlayers.map((player, index) => ({
+            accountId: index + 1,
+            userId: player.id,
             teamId: home.id,
             isRadiant: true,
-            heroId: 1,
-            kills: 10,
+            heroId: index + 1,
+            kills: index === 0 ? 10 : 2,
             deaths: 1,
-            assists: 8,
-            gpm: 550,
+            assists: index === 0 ? 8 : 4,
+            gpm: index === 0 ? 550 : 400,
             lastHits: 200,
-          },
+          })),
+          ...awayPlayers.map((player, index) => ({
+            accountId: index + 101,
+            userId: player.id,
+            teamId: away.id,
+            isRadiant: false,
+            heroId: index + 101,
+            kills: 1,
+            deaths: 5,
+            assists: 2,
+            gpm: 300,
+            lastHits: 100,
+          })),
         ]),
       },
     });
-    return season;
+    return { season, match };
   }
 
   it("retries after a failed send, then stays once-only", async () => {
-    const season = await setupCompletedWeek();
+    const { season } = await setupCompletedWeek();
     mockSend.mockResolvedValue(false);
 
     await maybeAnnounceWeekHonors(season.id, 1);
-    expect(await markerCount(`honorsAnnounced:${season.id}:1`)).toBe(0);
+    const failed = await prisma.setting.findUnique({
+      where: { key: `honorsAnnounced:${season.id}:1` },
+    });
+    expect(failed?.value).toMatch(/^failed:honors:initial:/);
 
     mockSend.mockResolvedValue(true);
     await maybeAnnounceWeekHonors(season.id, 1);
@@ -197,6 +234,180 @@ describe("weekly-honors announcement retry", () => {
     await maybeAnnounceWeekHonors(season.id, 1);
     expect(await markerCount(`honorsAnnounced:${season.id}:1`)).toBe(0);
   });
+
+  it("holds a final week until every played series has a valid 5v5 box score", async () => {
+    const { season, match } = await setupCompletedWeek();
+    await prisma.game.updateMany({
+      where: { matchId: match.id },
+      data: { players: "[]" },
+    });
+
+    await maybeAnnounceWeekHonors(season.id, 1);
+
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(await markerCount(`honorsAnnounced:${season.id}:1`)).toBe(0);
+  });
+
+  it("reclaims a stale award once and labels the replacement as a correction", async () => {
+    const { season } = await setupCompletedWeek();
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+
+    await prisma.$transaction((tx) => markWeekHonorsStale(tx, season.id, 1));
+    await raceAll([
+      () => maybeAnnounceWeekHonors(season.id, 1),
+      () => maybeAnnounceWeekHonors(season.id, 1),
+    ]);
+
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockSend.mock.calls[1][0]).toMatch(
+      /Correction: Week 1 honors have been updated/i,
+    );
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  it.skipIf(!ON_POSTGRES)(
+    "lets only one worker claim the same stale award snapshot",
+    async () => {
+      const { season } = await setupCompletedWeek();
+      const marker = `honorsAnnounced:${season.id}:1`;
+      await prisma.setting.create({
+        data: { key: marker, value: "stale:shared-snapshot" },
+      });
+      const originalFind = prisma.setting.findUnique.bind(prisma.setting);
+      let reads = 0;
+      let release!: () => void;
+      const bothRead = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const findSpy = vi.spyOn(prisma.setting, "findUnique").mockImplementation(
+        (async (args: Parameters<typeof originalFind>[0]) => {
+          const row = await originalFind(args);
+          if (args.where.key === marker && reads < 2) {
+            reads += 1;
+            if (reads === 2) release();
+            await bothRead;
+          }
+          return row;
+        }) as never,
+      );
+
+      try {
+        await Promise.all([
+          maybeAnnounceWeekHonors(season.id, 1),
+          maybeAnnounceWeekHonors(season.id, 1),
+        ]);
+      } finally {
+        findSpy.mockRestore();
+      }
+
+      expect(reads).toBe(2);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(mockSend.mock.calls[0][0]).toMatch(/Correction: Week 1 honors/i);
+    },
+  );
+
+  it("keeps a failed correction retryable without posting it twice", async () => {
+    const { season } = await setupCompletedWeek();
+    await maybeAnnounceWeekHonors(season.id, 1);
+    await prisma.$transaction((tx) => markWeekHonorsStale(tx, season.id, 1));
+    mockSend.mockResolvedValueOnce(false);
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `honorsAnnounced:${season.id}:1` },
+      }),
+    ).toMatchObject({
+      value: expect.stringMatching(/^failed:honors:corrected:/),
+    });
+
+    await runResultSync();
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(mockSend).toHaveBeenCalledTimes(3); // initial + failed + one retry
+  });
+
+  it("does not overwrite a newer correction claim when its readiness recheck fails", async () => {
+    const { season } = await setupCompletedWeek();
+    const marker = `honorsAnnounced:${season.id}:1`;
+    const rivalClaim = "claim:honors:corrected:rival-worker";
+    const originalReadiness =
+      honorsReadinessService.getSeasonHonorReadiness.bind(
+        honorsReadinessService,
+      );
+    let reads = 0;
+    const readinessSpy = vi
+      .spyOn(honorsReadinessService, "getSeasonHonorReadiness")
+      .mockImplementation(async (...args) => {
+        const result = await originalReadiness(...args);
+        reads += 1;
+        if (reads === 2) {
+          // Model result repair plus the next heartbeat reclaiming the stale
+          // marker while this worker still holds its old readiness snapshot.
+          await prisma.setting.update({
+            where: { key: marker },
+            data: { value: rivalClaim },
+          });
+          return [];
+        }
+        return result;
+      });
+
+    try {
+      await maybeAnnounceWeekHonors(season.id, 1);
+    } finally {
+      readinessSpy.mockRestore();
+    }
+
+    expect(reads).toBe(2);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(
+      await prisma.setting.findUniqueOrThrow({ where: { key: marker } }),
+    ).toMatchObject({ value: rivalClaim });
+  });
+
+  it.each([
+    [false, "failed send"],
+    [true, "accepted send"],
+  ])(
+    "preserves a repair marker across an in-flight %s",
+    async (accepted) => {
+      const { season } = await setupCompletedWeek();
+      const marker = `honorsAnnounced:${season.id}:1`;
+      let release!: (accepted: boolean) => void;
+      let started!: () => void;
+      const heldSend = new Promise<boolean>((resolve) => {
+        release = resolve;
+      });
+      const sendStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      mockSend.mockImplementationOnce(async () => {
+        started();
+        return heldSend;
+      });
+
+      const announcing = maybeAnnounceWeekHonors(season.id, 1);
+      await sendStarted;
+      await prisma.$transaction((tx) =>
+        markWeekHonorsStale(tx, season.id, 1),
+      );
+      release(accepted);
+      await announcing;
+
+      expect(
+        (
+          await prisma.setting.findUniqueOrThrow({ where: { key: marker } })
+        ).value,
+      ).toMatch(/^stale:/);
+
+      // The next heartbeat owns a correction regardless of whether Discord
+      // accepted or rejected the obsolete in-flight publication.
+      await maybeAnnounceWeekHonors(season.id, 1);
+      expect(mockSend).toHaveBeenCalledTimes(2);
+      expect(mockSend.mock.calls[1][0]).toMatch(/Correction: Week 1 honors/i);
+    },
+  );
 });
 
 describe("week-reminder announcement retry", () => {
@@ -303,7 +514,36 @@ describe("champion announcement retry", () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 
-  it("no webhook configured never burns the marker", async () => {
+  it("does not announce a stored champion that conflicts with the saved final", async () => {
+    const { season, champ: storedChampion } = await crownedSeason();
+    const actualWinner = await makeTeam(season.id, "Actual winners", 1);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: "FINAL",
+        bracketSlot: "R0M0",
+        status: "COMPLETED",
+        homeTeamId: actualWinner.id,
+        awayTeamId: storedChampion.id,
+        homeScore: 3,
+        awayScore: 1,
+        winnerTeamId: actualWinner.id,
+        bestOf: 5,
+      },
+    });
+    mockSend.mockClear();
+
+    expect(await announceChampionOnce(season.id)).toBe(false);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: championAnnouncedKey(season.id) },
+      }),
+    ).toBeNull();
+  });
+
+  it("a webhook configured after crowning announces on the next sync", async () => {
     // The league that wires Discord up later must still get its champion.
     const { season } = await crownedSeason();
     mockHook.mockResolvedValue("");
@@ -314,6 +554,19 @@ describe("champion announcement retry", () => {
         where: { key: championAnnouncedKey(season.id) },
       }),
     ).toBeNull();
+
+    mockHook.mockResolvedValue("https://discord.test/hook");
+    mockSend.mockClear();
+    await runResultSync();
+
+    expect(
+      mockSend.mock.calls.some((call) => String(call[0]).includes("champions")),
+    ).toBe(true);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: championAnnouncedKey(season.id) },
+      }),
+    ).not.toBeNull();
   });
 
   it("drops the marker instead of retrying forever when the season was un-crowned", async () => {

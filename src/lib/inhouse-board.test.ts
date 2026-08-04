@@ -175,24 +175,24 @@ describe("filling — the slot rack is the call to action", () => {
   });
 
   it("spells the count in the header and escalates the colour near the end", () => {
-    expect(renderBoard(snap({ presentNames: names(6) })).embed.description).toContain(
-      "## Four more.",
-    );
-    expect(renderBoard(snap({ presentNames: names(9) })).embed.description).toContain(
-      "## One slot left.",
-    );
+    expect(
+      renderBoard(snap({ presentNames: names(6) })).embed.description,
+    ).toContain("## Four more.");
+    expect(
+      renderBoard(snap({ presentNames: names(9) })).embed.description,
+    ).toContain("## One slot left.");
     const calm = renderBoard(snap({ presentNames: names(7) })).embed.color;
     const hot = renderBoard(snap({ presentNames: names(8) })).embed.color;
     expect(hot).not.toBe(calm);
   });
 
   it("changes the call to action for the last slot", () => {
-    expect(renderBoard(snap({ presentNames: names(9) })).embed.description).toContain(
-      "[Take the last slot →]",
-    );
-    expect(renderBoard(snap({ presentNames: names(4) })).embed.description).toContain(
-      "[Take a slot →]",
-    );
+    expect(
+      renderBoard(snap({ presentNames: names(9) })).embed.description,
+    ).toContain("[Take the last slot →]");
+    expect(
+      renderBoard(snap({ presentNames: names(4) })).embed.description,
+    ).toContain("[Take a slot →]");
   });
 
   it("reports away players without giving them a headline", () => {
@@ -217,7 +217,9 @@ describe("lobby states", () => {
       }),
     );
     expect(embed.title).toBe("Match Found — 2 / 10 accepted");
-    expect(embed.description).toContain(`<t:${Math.floor((T0 + 30_000) / 1000)}:R>`);
+    expect(embed.description).toContain(
+      `<t:${Math.floor((T0 + 30_000) / 1000)}:R>`,
+    );
     expect(embed.fields![0].name).toBe("ACCEPTED — 2");
     expect(embed.fields![1].name).toBe("WAITING ON — 1");
     expect(embed.fields![1].value).toContain("▱ Ana");
@@ -341,7 +343,9 @@ describe("CTAs deep-link into the queue", () => {
       snap({ presentNames: names(9) }),
     ]) {
       const d = renderBoard(s).embed.description;
-      expect(d).toMatch(/\[Take [^\]]+→\]\(https:\/\/ggd2l\.test\/inhouse\?join=1\)/);
+      expect(d).toMatch(
+        /\[Take [^\]]+→\]\(https:\/\/ggd2l\.test\/inhouse\?join=1\)/,
+      );
     }
   });
 
@@ -351,7 +355,9 @@ describe("CTAs deep-link into the queue", () => {
         lobby: lobby({ status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0 }),
       }),
     ).embed.description;
-    expect(d).toContain("[Queue for the next one →](https://ggd2l.test/inhouse?join=1)");
+    expect(d).toContain(
+      "[Queue for the next one →](https://ggd2l.test/inhouse?join=1)",
+    );
   });
 
   it("leaves the TITLE on the plain url — a heading is not a join button", () => {
@@ -361,9 +367,8 @@ describe("CTAs deep-link into the queue", () => {
   });
 
   it("does not deep-link the accept CTA — that's a different action", () => {
-    const d = renderBoard(
-      snap({ lobby: lobby({ acceptedCount: 3 }) }),
-    ).embed.description;
+    const d = renderBoard(snap({ lobby: lobby({ acceptedCount: 3 }) })).embed
+      .description;
     expect(d).toContain("[Accept your match →](https://ggd2l.test/inhouse)");
   });
 });
@@ -454,7 +459,8 @@ describe("digest — the cost model", () => {
 
   it("does not move while a betting window is open", () => {
     // THE ONE THAT MATTERS FOR COST. Betting opens on the DRAFTING→READY flip
-    // and ten taps land inside 45 seconds; if the pot reached the digest here,
+    // and ten taps land inside the result-settlement window; if the pot reached
+    // the digest here,
     // the pinned message would PATCH once per bet — and it would do it in the
     // one phase where every player is looking at Discord.
     const picking = (potCred: number | null) =>
@@ -488,7 +494,9 @@ describe("digest — the cost model", () => {
       snap({
         nowMs: T0,
         lobby: lobby({
-          status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0, potCred: 400,
+          status: INHOUSE_STATUS.IN_PROGRESS,
+          startedAtMs: T0,
+          potCred: 400,
         }),
       }),
     ).digest;
@@ -496,7 +504,9 @@ describe("digest — the cost model", () => {
       snap({
         nowMs: T0 + 3600_000,
         lobby: lobby({
-          status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0, potCred: 400,
+          status: INHOUSE_STATUS.IN_PROGRESS,
+          startedAtMs: T0,
+          potCred: 400,
         }),
       }),
     ).digest;
@@ -549,10 +559,12 @@ describe("escapeMarkdown — this message is pinned forever", () => {
 
 describe("boardStateLabel — the admin's 'is it lying?' line", () => {
   it("states the live queue, away players included", () => {
-    expect(boardStateLabel(snap({ presentNames: names(4) }))).toBe("4/10 queued");
-    expect(boardStateLabel(snap({ presentNames: names(4), awayCount: 2 }))).toBe(
-      "4/10 queued (+2 away)",
+    expect(boardStateLabel(snap({ presentNames: names(4) }))).toBe(
+      "4/10 queued",
     );
+    expect(
+      boardStateLabel(snap({ presentNames: names(4), awayCount: 2 })),
+    ).toBe("4/10 queued (+2 away)");
   });
 
   it("reads a lobby phase in plain words", () => {

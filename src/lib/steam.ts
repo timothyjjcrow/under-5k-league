@@ -32,7 +32,12 @@ export function buildSteamLoginUrl(returnTo: string, realm: string): string {
   return `${STEAM_OPENID}?${params.toString()}`;
 }
 
-/** Same origin + path (ignoring query/trailing slash). Pure — unit-tested. */
+/**
+ * Same origin + path (ignoring a trailing slash). When the expected callback
+ * carries query parameters (the Steam browser-binding state), they must match
+ * exactly; callers without expected query parameters retain the old behavior
+ * of ignoring Steam's incidental query string.
+ */
 export function steamReturnToMatches(
   actual: string | null,
   expected: string,
@@ -41,9 +46,18 @@ export function steamReturnToMatches(
   try {
     const a = new URL(actual);
     const b = new URL(expected);
-    return (
+    const sameEndpoint =
       a.origin === b.origin &&
-      a.pathname.replace(/\/$/, "") === b.pathname.replace(/\/$/, "")
+      a.pathname.replace(/\/$/, "") === b.pathname.replace(/\/$/, "");
+    if (!sameEndpoint) return false;
+    const expectedParams = [...b.searchParams.entries()];
+    if (expectedParams.length === 0) return true;
+    const actualParams = [...a.searchParams.entries()];
+    return (
+      actualParams.length === expectedParams.length &&
+      expectedParams.every(
+        ([key, value]) => a.searchParams.getAll(key).length === 1 && a.searchParams.get(key) === value,
+      )
     );
   } catch {
     return false;
@@ -60,16 +74,53 @@ export async function verifySteamCallback(
   query: URLSearchParams,
   expectedReturnTo: string,
 ): Promise<string | null> {
-  const claimedId = query.get("openid.claimed_id") || "";
-  const idMatch = claimedId.match(/(\d{17})$/);
+  // URLSearchParams#get reads the first duplicate while set() keeps the last.
+  // Never let the identity returned to our app differ from the assertion sent
+  // to Steam for verification: every OpenID key must have one canonical value.
+  const openIdKeys = [...query.keys()].filter((key) =>
+    key.startsWith("openid."),
+  );
+  if (new Set(openIdKeys).size !== openIdKeys.length) return null;
+
+  const claimedId = query.get("openid.claimed_id") ?? "";
+  const identity = query.get("openid.identity") ?? "";
+  const idMatch = claimedId.match(
+    /^https:\/\/steamcommunity\.com\/openid\/id\/(\d{17})$/,
+  );
   if (!idMatch) return null;
+  if (identity !== claimedId) return null;
+  if (query.get("openid.ns") !== "http://specs.openid.net/auth/2.0") {
+    return null;
+  }
+  if (query.get("openid.mode") !== "id_res") return null;
+  if (query.get("openid.op_endpoint") !== STEAM_OPENID) return null;
+
+  const signed = new Set(
+    (query.get("openid.signed") ?? "")
+      .split(",")
+      .map((field) => field.trim())
+      .filter(Boolean),
+  );
+  for (const field of [
+    "op_endpoint",
+    "claimed_id",
+    "identity",
+    "return_to",
+    "response_nonce",
+    "assoc_handle",
+  ]) {
+    if (!signed.has(field) || !query.get(`openid.${field}`)) return null;
+  }
+  if (!query.get("openid.sig")) return null;
 
   if (!steamReturnToMatches(query.get("openid.return_to"), expectedReturnTo)) {
     return null;
   }
 
   const params = new URLSearchParams();
-  for (const [k, v] of query.entries()) params.set(k, v);
+  for (const [key, value] of query.entries()) {
+    if (key.startsWith("openid.")) params.set(key, value);
+  }
   params.set("openid.mode", "check_authentication");
 
   // Bounded like every OpenDota call: Steam is regularly slow, and an
@@ -84,11 +135,12 @@ export async function verifySteamCallback(
       body: params.toString(),
       signal: AbortSignal.timeout(STEAM_TIMEOUT_MS),
     });
+    if (!res.ok) return null;
     text = await res.text();
   } catch {
     return null; // unreachable/slow Steam — the caller sends them back to /login
   }
-  if (!/is_valid\s*:\s*true/i.test(text)) return null;
+  if (!/^is_valid\s*:\s*true\s*$/im.test(text)) return null;
 
   return idMatch[1];
 }

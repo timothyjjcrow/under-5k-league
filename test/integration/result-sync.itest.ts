@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
   AUTO_SYNC,
+  DEFAULTS,
+  DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
   INHOUSE_STATUS,
@@ -12,9 +14,20 @@ import {
 } from "@/lib/constants";
 import { steamIdToAccountId } from "@/lib/dota";
 import { runResultSync } from "@/lib/result-sync-service";
+import { nominatePlayer } from "@/lib/draft-service";
 import { syncLeagueGames } from "@/lib/match-import";
 import { SETTING_KEYS } from "@/lib/settings";
-import { makeSeason, makeTeam, makeUser } from "./factories";
+import {
+  expireClock,
+  expireNominationClock,
+  makeCaptain,
+  makePlayer,
+  makeSeason,
+  makeTeam,
+  makeUser,
+  sessionFor,
+  startDraftState,
+} from "./factories";
 
 // Keep the real module (steamIdToAccountId, parseMatchId) but stub the network.
 vi.mock("@/lib/dota", async (importOriginal) => {
@@ -40,14 +53,23 @@ vi.mock("@/lib/discord", async (importOriginal) => {
     ...actual,
     getWebhookUrl: vi.fn(async () => "https://discord.test/hook"),
     sendDiscordMessage: vi.fn(async () => true),
+    sendInhouseDiscordMessage: vi.fn(async () => true),
   };
 });
-import { sendDiscordMessage } from "@/lib/discord";
+import {
+  sendDiscordMessage,
+  sendInhouseDiscordMessage,
+} from "@/lib/discord";
+import {
+  INHOUSE_ANNOUNCEMENT_KIND,
+  INHOUSE_ANNOUNCEMENT_STATUS,
+} from "@/lib/inhouse-announcement-outbox";
 
 const mockRecent = vi.mocked(fetchRecentMatchIds);
 const mockMatch = vi.mocked(fetchOpenDotaMatch);
 const mockLeague = vi.mocked(fetchLeagueMatchIds);
 const mockSend = vi.mocked(sendDiscordMessage);
+const mockInhouseSend = vi.mocked(sendInhouseDiscordMessage);
 
 beforeEach(() => {
   mockRecent.mockReset();
@@ -57,6 +79,8 @@ beforeEach(() => {
   mockLeague.mockReset();
   mockLeague.mockResolvedValue([]);
   mockSend.mockClear();
+  mockInhouseSend.mockReset();
+  mockInhouseSend.mockResolvedValue(true);
 });
 
 /** Series-result announcements only (honors etc. use different formatters). */
@@ -253,6 +277,8 @@ describe("result sync — league matches (integration)", () => {
     expect(await runResultSync()).toEqual({
       imported: 0,
       inhouse: false,
+      draft: false,
+      playoff: false,
       watch: false,
       cursor: null,
     });
@@ -505,6 +531,133 @@ describe("result sync — league feed outage (integration)", () => {
   });
 });
 
+describe("result sync — draft clocks (integration)", () => {
+  async function setupDraft(playerMmrs: number[]) {
+    const season = await makeSeason({ teamSize: 2 });
+    const first = await makeCaptain(season.id, "First", 10, 0);
+    await makeCaptain(season.id, "Second", 10, 1);
+    const players = [];
+    for (const [i, mmr] of playerMmrs.entries()) {
+      players.push(await makePlayer(season.id, `Pool${i}`, mmr));
+    }
+    await startDraftState(season.id);
+    return { season, first, players };
+  }
+
+  it("keeps the site heartbeat fast while a future auction clock is live", async () => {
+    const { season } = await setupDraft([4000]);
+    const before = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+
+    expect(await runResultSync()).toEqual({
+      imported: 0,
+      inhouse: false,
+      draft: false,
+      playoff: false,
+      watch: true,
+      cursor: null,
+    });
+
+    const after = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(after.nominationEndsAt).toEqual(before.nominationEndsAt);
+    expect(after.nominatedUserId).toBeNull();
+  });
+
+  it("auto-nominates when the nomination clock expires with no draft room open", async () => {
+    const { season, players } = await setupDraft([3500, 4500]);
+    await expireNominationClock(season.id);
+
+    expect(await runResultSync()).toEqual({
+      imported: 0,
+      inhouse: false,
+      draft: true,
+      playoff: false,
+      watch: true,
+      cursor: null,
+    });
+
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.status).toBe(DRAFT_STATUS.IN_PROGRESS);
+    expect(draft.nominatedUserId).toBe(players[1].id); // highest-MMR available
+    expect(draft.currentBid).toBe(DEFAULTS.MIN_BID);
+    expect(draft.bidEndsAt?.getTime()).toBeGreaterThan(Date.now());
+    expect(
+      await prisma.bid.count({
+        where: { draftId: draft.id, userId: players[1].id },
+      }),
+    ).toBe(1);
+  });
+
+  it("settles an expired lot and reports completion without a draft room open", async () => {
+    const { season, first, players } = await setupDraft([4000]);
+    expect(
+      await nominatePlayer(
+        season.id,
+        sessionFor(first.user),
+        players[0].id,
+        DEFAULTS.MIN_BID,
+      ),
+    ).toEqual({ ok: true });
+    await expireClock(season.id);
+
+    expect(await runResultSync()).toEqual({
+      imported: 0,
+      inhouse: false,
+      draft: true,
+      playoff: false,
+      watch: false,
+      cursor: null,
+    });
+
+    expect(
+      await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }),
+    ).toMatchObject({ status: DRAFT_STATUS.COMPLETE, nominatedUserId: null });
+    expect(
+      await prisma.teamMember.findUniqueOrThrow({
+        where: {
+          seasonId_userId: { seasonId: season.id, userId: players[0].id },
+        },
+      }),
+    ).toMatchObject({
+      teamId: first.team.id,
+      price: DEFAULTS.MIN_BID,
+      isCaptain: false,
+    });
+    expect(
+      await prisma.team.findUniqueOrThrow({ where: { id: first.team.id } }),
+    ).toMatchObject({ budget: 10 - DEFAULTS.MIN_BID });
+  });
+
+  it("does not advance an orphaned live Draft row outside the Draft phase", async () => {
+    const { season } = await setupDraft([4000]);
+    await expireNominationClock(season.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.REGULAR_SEASON },
+    });
+
+    expect(await runResultSync()).toEqual({
+      imported: 0,
+      inhouse: false,
+      draft: false,
+      playoff: false,
+      watch: false,
+      cursor: null,
+    });
+    expect(
+      await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }),
+    ).toMatchObject({
+      status: DRAFT_STATUS.IN_PROGRESS,
+      nominatedUserId: null,
+    });
+  });
+});
+
 describe("result sync — inhouse (integration)", () => {
   /** Hand-build an IN_PROGRESS 5v5 lobby (team 1 = Radiant). */
   async function setupLobby(startedMinutesAgo: number) {
@@ -557,6 +710,61 @@ describe("result sync — inhouse (integration)", () => {
     expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
     expect(done.winnerTeam).toBe(1); // team 1 was Radiant, radiant_win
     expect(done.boxScore).not.toBeNull();
+  });
+
+  it("retries a failed durable inhouse announcement with no room or queue open", async () => {
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.COMPLETED,
+        winnerTeam: 1,
+        dotaMatchId: "7770999",
+        completedAt: new Date(),
+      },
+    });
+    const event = await prisma.inhouseAnnouncement.create({
+      data: {
+        lobbyId: lobby.id,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        sequence: 1,
+        content: "retry me",
+        resultMatchId: "7770999",
+      },
+    });
+    mockInhouseSend
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    // Nothing else is active, but the durable backlog keeps the heartbeat on
+    // its retry cadence instead of disappearing behind syncInhouse's idle exit.
+    expect(await runResultSync()).toMatchObject({
+      inhouse: false,
+      watch: true,
+    });
+    const failed = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+      where: { id: event.id },
+    });
+    expect(failed).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      attempts: 1,
+    });
+
+    await prisma.inhouseAnnouncement.update({
+      where: { id: event.id },
+      data: { availableAt: new Date(Date.now() - 1) },
+    });
+    expect(await runResultSync()).toMatchObject({
+      inhouse: false,
+      watch: false,
+    });
+    expect(
+      await prisma.inhouseAnnouncement.findUniqueOrThrow({
+        where: { id: event.id },
+      }),
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+      attempts: 2,
+    });
+    expect(mockInhouseSend).toHaveBeenCalledTimes(2);
   });
 
   it("waits out the minimum game length but keeps watching a live lobby", async () => {
@@ -774,5 +982,103 @@ describe("syncLeagueGames — the clinch-stop applies to the league feed too", (
       String(G1),
       String(G2),
     ]);
+  });
+});
+
+describe("result sync — playoff reconciliation", () => {
+  it("builds the next round when a committed result lost its post-commit effect", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const teams = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        makeTeam(season.id, `Reconcile ${index}`, index),
+      ),
+    );
+    await prisma.match.createMany({
+      data: [
+        {
+          seasonId: season.id,
+          week: 8,
+          phase: MATCH_PHASE.PLAYOFF,
+          bracketSlot: "R0M0",
+          homeTeamId: teams[0].id,
+          awayTeamId: teams[3].id,
+          status: MATCH_STATUS.COMPLETED,
+          homeScore: 2,
+          winnerTeamId: teams[0].id,
+          bestOf: 3,
+        },
+        {
+          seasonId: season.id,
+          week: 8,
+          phase: MATCH_PHASE.PLAYOFF,
+          bracketSlot: "R0M1",
+          homeTeamId: teams[1].id,
+          awayTeamId: teams[2].id,
+          status: MATCH_STATUS.COMPLETED,
+          homeScore: 2,
+          winnerTeamId: teams[1].id,
+          bestOf: 3,
+        },
+      ],
+    });
+
+    const out = await runResultSync();
+
+    expect(out.playoff).toBe(true);
+    expect(out.cursor).not.toBeNull();
+
+    const final = await prisma.match.findFirst({
+      where: { seasonId: season.id, bracketSlot: "R1M0" },
+    });
+    expect(final).toMatchObject({
+      phase: MATCH_PHASE.FINAL,
+      homeTeamId: teams[0].id,
+      awayTeamId: teams[1].id,
+      status: MATCH_STATUS.SCHEDULED,
+    });
+
+    const again = await runResultSync();
+    expect(again.playoff).toBe(false);
+    expect(again.cursor).toBe(out.cursor);
+  });
+
+  it("reports a crown even when its post-commit announcement throws", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const champion = await makeTeam(season.id, "Crown winner", 0);
+    const runnerUp = await makeTeam(season.id, "Crown runner-up", 1);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 9,
+        phase: MATCH_PHASE.FINAL,
+        bracketSlot: "R0M0",
+        homeTeamId: champion.id,
+        awayTeamId: runnerUp.id,
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 3,
+        winnerTeamId: champion.id,
+        bestOf: 5,
+      },
+    });
+    mockSend.mockRejectedValueOnce(new Error("transport exploded"));
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    let out!: Awaited<ReturnType<typeof runResultSync>>;
+
+    try {
+      out = await runResultSync();
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(out.playoff).toBe(true);
+    expect(out.cursor).not.toBeNull();
+    expect(
+      await prisma.season.findUniqueOrThrow({ where: { id: season.id } }),
+    ).toMatchObject({
+      status: SEASON_STATUS.COMPLETE,
+      championTeamId: champion.id,
+    });
   });
 });

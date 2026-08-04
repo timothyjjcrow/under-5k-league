@@ -16,7 +16,9 @@ describe("inhousePollCadence", () => {
   it("polls FAST for anyone with a stake — in a lobby OR in the queue", () => {
     // The people a filling queue / forming lobby matter to are in it. Seconds
     // decide accepts, votes and picks.
-    expect(inhousePollCadence({ ...base, hidden: false, hasStake: true })).toEqual({
+    expect(
+      inhousePollCadence({ ...base, hidden: false, hasStake: true }),
+    ).toEqual({
       skip: false,
       delayMs: FAST,
     });
@@ -25,7 +27,9 @@ describe("inhousePollCadence", () => {
   it("polls IDLE-slow for a spectator, however busy the lobby is", () => {
     // Membership, not existence: five people watching a 45-minute game were
     // each firing 40 req/min because a lobby existed.
-    expect(inhousePollCadence({ ...base, hidden: false, hasStake: false })).toEqual({
+    expect(
+      inhousePollCadence({ ...base, hidden: false, hasStake: false }),
+    ).toEqual({
       skip: false,
       delayMs: IDLE,
     });
@@ -34,7 +38,9 @@ describe("inhousePollCadence", () => {
   it("keeps a HIDDEN tab with a stake on the keepalive", () => {
     // That poll IS the presence heartbeat, and it carries the ready check's
     // chime + tab title. Stop it and the spot is dropped as "away".
-    expect(inhousePollCadence({ ...base, hidden: true, hasStake: true })).toEqual({
+    expect(
+      inhousePollCadence({ ...base, hidden: true, hasStake: true }),
+    ).toEqual({
       skip: false,
       delayMs: INHOUSE.POLL_KEEPALIVE_MS,
     });
@@ -49,29 +55,50 @@ describe("inhousePollCadence", () => {
     );
   });
 
+  it("the keepalive leaves time to act in every pre-draft deadline", () => {
+    // A lobby can form immediately after this player's hidden-tab poll. The
+    // next poll has to arrive before the accept clock expires, and an accepted
+    // player must not sleep through the entire shorter captain vote either.
+    expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThan(
+      INHOUSE.ACCEPT_SECONDS * 1000,
+    );
+    expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThan(INHOUSE.VOTE_SECONDS * 1000);
+  });
+
   it("stops fetching entirely in a HIDDEN tab with nothing at stake", () => {
     // Browsers throttle background timers anyway, and the sitewide /api/sync
     // ping advances lobbies without this tab's help.
-    expect(inhousePollCadence({ ...base, hidden: true, hasStake: false })).toEqual({
+    expect(
+      inhousePollCadence({ ...base, hidden: true, hasStake: false }),
+    ).toEqual({
       skip: true,
       delayMs: IDLE,
     });
   });
 
   it("eases OFF after a 429 instead of hammering — even mid-lobby", () => {
-    // The route's speed bump is per-IP and a queued tab polls 40/min, so one
-    // household or NAT crosses it just by having a lobby. Retrying at the fast
-    // rate kept the fixed window saturated so it never cleared, and ACCEPT
-    // (which shares the bucket) stayed unreachable for the whole ready check.
+    // Backing off prevents a temporary state-read limit from being held open
+    // by the room's fast poll cadence. Mutations now have a separate bucket,
+    // but the UI still needs a readable recovery path for its next state read.
     expect(
-      inhousePollCadence({ ...base, hidden: false, hasStake: true, rateLimited: true }),
+      inhousePollCadence({
+        ...base,
+        hidden: false,
+        hasStake: true,
+        rateLimited: true,
+      }),
     ).toEqual({ skip: false, delayMs: IDLE });
   });
 
   it("a 429 outranks even the hidden-tab rules", () => {
     for (const hasStake of [true, false]) {
       expect(
-        inhousePollCadence({ ...base, hidden: true, hasStake, rateLimited: true }),
+        inhousePollCadence({
+          ...base,
+          hidden: true,
+          hasStake,
+          rateLimited: true,
+        }),
       ).toEqual({ skip: false, delayMs: IDLE });
     }
   });
@@ -80,13 +107,19 @@ describe("inhousePollCadence", () => {
     // Sustained failures are what flip `disconnected` (pollHealthAfter);
     // backing off would delay both the recovery and the diagnosis.
     expect(
-      inhousePollCadence({ ...base, hidden: false, hasStake: false, reached: false }),
+      inhousePollCadence({
+        ...base,
+        hidden: false,
+        hasStake: false,
+        reached: false,
+      }),
     ).toEqual({ skip: false, delayMs: FAST });
   });
 
   it("defaults the idle rate to the INHOUSE constant", () => {
     expect(
-      inhousePollCadence({ hidden: false, hasStake: false, activeMs: FAST }).delayMs,
+      inhousePollCadence({ hidden: false, hasStake: false, activeMs: FAST })
+        .delayMs,
     ).toBe(INHOUSE.POLL_IDLE_MS);
   });
 });
@@ -109,7 +142,8 @@ describe("draftPollCadence", () => {
     // PAUSED and ten captains stare at a parked strip for up to 3s after the
     // admin resumes — on a 30s lot clock.
     expect(
-      draftPollCadence({ ...base, hidden: false, hasStake: true, live: true }).delayMs,
+      draftPollCadence({ ...base, hidden: false, hasStake: true, live: true })
+        .delayMs,
     ).toBe(FAST);
   });
 
@@ -137,7 +171,13 @@ describe("draftPollCadence", () => {
     // limit — and /api/draft/bid isn't limited, so the bid would have landed.
     for (const hidden of [false, true]) {
       expect(
-        draftPollCadence({ ...base, hidden, hasStake: true, live: true, rateLimited: true }),
+        draftPollCadence({
+          ...base,
+          hidden,
+          hasStake: true,
+          live: true,
+          rateLimited: true,
+        }),
       ).toEqual({ skip: false, delayMs: DRAFT_ROOM.POLL_RATE_LIMITED_MS });
     }
   });
@@ -256,9 +296,12 @@ describe("where the two rooms deliberately differ", () => {
     ).toBe(INHOUSE.POLL_IDLE_MS);
   });
 
-  it("the draft keepalives faster, because its clocks are shorter", () => {
-    // 30s lot clock vs a 45s ready check: the hidden-tab rates are sized to
-    // the thing each room can miss.
-    expect(DRAFT_ROOM.POLL_KEEPALIVE_MS).toBeLessThan(INHOUSE.POLL_KEEPALIVE_MS);
+  it("keeps the draft's auction cadence tighter than the inhouse keepalive", () => {
+    // Both rooms can surface second-sensitive actions in a hidden tab. The
+    // auction deliberately wakes more often; the inhouse still stays inside
+    // its own shorter 25s vote window (asserted above).
+    expect(DRAFT_ROOM.POLL_KEEPALIVE_MS).toBeLessThan(
+      INHOUSE.POLL_KEEPALIVE_MS,
+    );
   });
 });

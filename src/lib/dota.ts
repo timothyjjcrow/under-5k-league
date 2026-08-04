@@ -6,13 +6,13 @@ import type { PubStats } from "./pub-stats";
 
 const BASE = "https://api.opendota.com/api";
 const STEAM64_BASE = BigInt("76561197960265728");
-const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_DOTA_ACCOUNT_ID = BigInt(0xffffffff);
 
 /** Convert a 64-bit SteamID to a 32-bit Dota account id (or null if invalid). */
 export function steamIdToAccountId(steamId64: string): number | null {
   try {
     const v = BigInt(steamId64) - STEAM64_BASE;
-    return v > BigInt(0) && v < MAX_SAFE ? Number(v) : null;
+    return v > BigInt(0) && v <= MAX_DOTA_ACCOUNT_ID ? Number(v) : null;
   } catch {
     return null;
   }
@@ -309,4 +309,3 @@ export async function fetchLeagueMatchIds(
     return null;
   }
 }
-

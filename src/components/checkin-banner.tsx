@@ -82,7 +82,9 @@ export function CheckinBanner({
                   )}
                 </span>
               ) : null}
-              {whenTs ? <Countdown targetMs={whenTs} /> : null}
+              {whenTs ? (
+                <Countdown targetMs={whenTs} passedLabel="kickoff passed" />
+              ) : null}
               {detailsHref ? (
                 <>
                   {" "}
@@ -108,7 +110,9 @@ export function CheckinBanner({
                 )}
               </span>
             ) : null}
-            {whenTs ? <Countdown targetMs={whenTs} /> : null}
+            {whenTs ? (
+              <Countdown targetMs={whenTs} passedLabel="kickoff passed" />
+            ) : null}
             {detailsHref ? (
               <Link
                 href={detailsHref}
@@ -134,10 +138,7 @@ export function CheckinBanner({
             : "flex shrink-0 gap-2"
         }
       >
-        <ActionForm
-          action={setAvailability}
-          hidden={{ matchId, status: "IN" }}
-        >
+        <ActionForm action={setAvailability} hidden={{ matchId, status: "IN" }}>
           <SubmitButton
             variant={myRsvp === "IN" ? "primary" : "secondary"}
             size={panel ? "md" : "sm"}

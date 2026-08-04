@@ -15,12 +15,13 @@ import { setAvailability } from "@/app/actions/availability";
 import { requireUser } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
-import { MATCH_STATUS } from "@/lib/constants";
+import { DRAFT_STATUS, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
   generateRegularSchedule,
   makeSeason,
   makeTeam,
   makeUser,
+  raceN,
   sessionFor,
 } from "./factories";
 
@@ -35,7 +36,10 @@ function rsvpForm(matchId: string, status: string): FormData {
 
 /** Two rostered teams + one scheduled match; returns a home roster player. */
 async function setupMatch() {
-  const season = await makeSeason({ teamSize: 3 });
+  const season = await makeSeason({
+    teamSize: 3,
+    status: SEASON_STATUS.REGULAR_SEASON,
+  });
   const home = await makeTeam(season.id, "Home", 0);
   const away = await makeTeam(season.id, "Away", 1);
   const player = await makeUser("Roster Player");
@@ -48,7 +52,11 @@ async function setupMatch() {
       price: 0,
     },
   });
-  const [match] = await generateRegularSchedule(season.id);
+  const [created] = await generateRegularSchedule(season.id);
+  const match = await prisma.match.update({
+    where: { id: created.id },
+    data: { scheduledAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000) },
+  });
   return { season, home, away, match, player };
 }
 
@@ -95,6 +103,90 @@ describe("setAvailability", () => {
     expect(res?.error).toMatch(/already finished/i);
   });
 
+  it("refuses a LIVE match — availability must be decided before play starts", async () => {
+    const { match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: MATCH_STATUS.LIVE },
+    });
+
+    const res = await setAvailability({}, rsvpForm(match.id, "OUT"));
+    expect(res?.error).toMatch(/closed.*live/i);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+  });
+
+  it("refuses an unscheduled match — IN/OUT needs a concrete night", async () => {
+    const { match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { scheduledAt: null },
+    });
+
+    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    expect(res?.error).toMatch(/does not have a kickoff/i);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+  });
+
+  it("refuses a stale unreported match — it needs a result, not a new RSVP", async () => {
+    const { match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { scheduledAt: new Date(Date.now() - 49 * 60 * 60 * 1000) },
+    });
+
+    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    expect(res?.error).toMatch(/kickoff has passed.*result.*outstanding/i);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+  });
+
+  it.each([
+    [SEASON_STATUS.SIGNUPS, null],
+    [SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS],
+    [SEASON_STATUS.COMPLETE, null],
+  ])("refuses check-in during %s / %s", async (seasonStatus, draftStatus) => {
+    const { season, match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: seasonStatus },
+    });
+    if (draftStatus) {
+      await prisma.draft.create({
+        data: { seasonId: season.id, status: draftStatus },
+      });
+    }
+
+    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    expect(res?.error).toMatch(/not open.*league phase/i);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+  });
+
+  it("allows check-in during DRAFT only after the auction is complete", async () => {
+    const { season, match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.DRAFT },
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+
+    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    expect(res?.message).toMatch(/confirmed/i);
+  });
+
   it("refuses an archived season's match — an RSVP is about the active season", async () => {
     // An OUT here would ping a captain (with a mention) about a fixture nobody
     // is playing; the season turned over and this match is history.
@@ -110,6 +202,26 @@ describe("setAvailability", () => {
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
     ).toBe(0);
+  });
+
+  it("maps a simultaneous RSVP contention loss to a retryable result", async () => {
+    const { match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    const results = await raceN(3, () =>
+      setAvailability({}, rsvpForm(match.id, "IN")),
+    );
+    expect(results.some((result) => result?.message)).toBe(true);
+    expect(
+      results.every(
+        (result) =>
+          Boolean(result?.message) ||
+          /reload.*try.*again/i.test(result?.error ?? ""),
+      ),
+    ).toBe(true);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(1);
   });
 });
 
@@ -172,14 +284,34 @@ describe("setAvailability — assigned standins", () => {
     expect(row?.status).toBe("IN");
   });
 
+  it("refuses the roster player whose named seat a standin replaced", async () => {
+    const { match, home, player } = await setupMatch();
+    const standin = await makeUser("Replacement Cover");
+    await assign(match.id, home.id, standin.id, player.id);
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    expect(res?.error).toMatch(/standin is covering your seat/i);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+  });
+
   // Pins: cover is per-MATCH. A booking elsewhere in the season must not open
   // this fixture's RSVP — the guard reads match.standins, never a season scan.
   it("refuses a standin whose assignment is on a DIFFERENT match", async () => {
-    const season = await makeSeason({ teamSize: 3 });
+    const season = await makeSeason({
+      teamSize: 3,
+      status: SEASON_STATUS.REGULAR_SEASON,
+    });
     await makeTeam(season.id, "Alpha", 0);
     await makeTeam(season.id, "Bravo", 1);
     await makeTeam(season.id, "Charlie", 2);
     const [first, second] = await generateRegularSchedule(season.id);
+    await prisma.match.updateMany({
+      where: { id: { in: [first.id, second.id] } },
+      data: { scheduledAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000) },
+    });
     const standin = await makeUser("Elsewhere Cover");
     await assign(second.id, second.homeTeamId, standin.id, null);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));

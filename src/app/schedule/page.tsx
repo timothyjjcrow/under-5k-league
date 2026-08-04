@@ -6,6 +6,7 @@ import { WeekReminderPing } from "@/components/week-reminder-ping";
 import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
+import { projectPlayoffField } from "@/lib/playoff-field";
 import type { ScenarioReport } from "@/lib/scenarios";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
@@ -27,10 +28,14 @@ import {
   pendingResultsMessage,
 } from "@/lib/schedule-status";
 import {
+  expectedSideSize,
   matchNightRoster,
   teamAvailability,
   type TeamAvailability,
 } from "@/lib/availability";
+import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { AUTO_SYNC } from "@/lib/constants";
 import { CheckinBanner } from "@/components/checkin-banner";
 import {
   ScheduleWeeks,
@@ -48,13 +53,21 @@ import {
   ScheduleCallout,
   SectionTitle,
   TeamCrest,
+  buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import {
+  canViewAvailabilitySummary,
+  hasActiveLeagueParticipation,
+} from "@/lib/visibility";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
 export const metadata = { title: "Schedule" };
 
-type MatchStandin = StandinAssignment & { standin: User; replaced: User | null };
+type MatchStandin = StandinAssignment & {
+  standin: User;
+  replaced: User | null;
+};
 
 // Both delegate to formatMatchTime — these strings are LocalTime hydration
 // snapshots, so drifting from the client's formatter causes flicker.
@@ -69,8 +82,57 @@ function fmtWhenShort(d: Date): string {
 }
 
 // Strip the RSVP summary to the two numbers the row badge shows.
-function pickRsvp(side: TeamAvailability): RsvpSide {
-  return { confirmed: side.confirmed, out: side.out };
+function pickRsvp(side: TeamAvailability, expected: number): RsvpSide {
+  return { confirmed: side.confirmed, out: side.out, expected };
+}
+
+function calloutDescription(status: string): string {
+  if (status === "SIGNUPS")
+    return "Games run weekly. Confirm this slot works before you sign up.";
+  if (status === "DRAFT")
+    return "This is the default weekly slot. Exact kickoffs appear once the schedule is published.";
+  if (status === "REGULAR_SEASON")
+    return "Use the exact kickoffs below, then check in for the next match you're playing.";
+  if (status === "PLAYOFFS")
+    return "Playoff nights may move by round. Use the exact kickoff shown for each match.";
+  return "The season is complete. The fixtures and results below are read-only history.";
+}
+
+function emptyScheduleCopy(status: string, draftStatus?: string | null) {
+  if (status === "SIGNUPS")
+    return {
+      title: "Schedule opens after the draft",
+      description:
+        "Teams and rosters are still forming. Fixtures can be published once the auction is complete.",
+    };
+  if (status === "DRAFT" && draftStatus !== "COMPLETE")
+    return {
+      title: "Draft in progress",
+      description:
+        "The regular-season schedule stays locked until every auction result is final.",
+    };
+  if (status === "DRAFT")
+    return {
+      title: "Schedule not published yet",
+      description:
+        "The auction is complete. An administrator now needs to choose the first match night and generate the fixtures.",
+    };
+  if (status === "REGULAR_SEASON")
+    return {
+      title: "Regular-season schedule missing",
+      description:
+        "The season is underway, but no regular fixtures are published. An administrator should generate them before players check in.",
+    };
+  if (status === "PLAYOFFS")
+    return {
+      title: "No regular-season fixtures available",
+      description:
+        "The playoff bracket is shown above. The regular-season history is unavailable for this season.",
+    };
+  return {
+    title: "No regular-season history",
+    description: "This completed season has no regular fixtures to display.",
+  };
 }
 
 export default async function SchedulePage() {
@@ -79,31 +141,78 @@ export default async function SchedulePage() {
     return (
       <div>
         <PageTitle title="Schedule" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="No active season"
+          description="There is no live league schedule right now. Browse past seasons or join an inhouse game while the next season is prepared."
+          action={
+            <div className="flex flex-wrap justify-center gap-2 text-sm">
+              <Link href="/seasons" className="text-info hover:underline">
+                Browse past seasons →
+              </Link>
+              <Link href="/inhouse" className="text-info hover:underline">
+                Find an inhouse →
+              </Link>
+            </div>
+          }
+        />
       </div>
     );
   }
 
   const viewer = await getSessionUser();
-  const [teams, matches, assignments, members, rsvps] = await Promise.all([
-    prisma.team.findMany({ where: { seasonId: season.id } }),
-    prisma.match.findMany({
-      where: { seasonId: season.id },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
-    }),
-    prisma.standinAssignment.findMany({
-      where: { match: { seasonId: season.id } },
-      include: { standin: true, replaced: true },
-    }),
-    prisma.teamMember.findMany({
-      where: { seasonId: season.id },
-      select: { teamId: true, userId: true },
-    }),
-    prisma.matchAvailability.findMany({
-      where: { match: { seasonId: season.id } },
-      select: { matchId: true, userId: true, status: true },
-    }),
-  ]);
+  const [viewerRegistration, viewerTeamRole] = viewer
+    ? await Promise.all([
+        prisma.registration.findUnique({
+          where: {
+            seasonId_userId: { seasonId: season.id, userId: viewer.id },
+          },
+          select: { status: true },
+        }),
+        prisma.team.findFirst({
+          where: {
+            seasonId: season.id,
+            OR: [
+              { captainId: viewer.id },
+              { members: { some: { userId: viewer.id } } },
+            ],
+          },
+          select: { id: true },
+        }),
+      ])
+    : [null, null];
+  const showRsvpSummaries = canViewAvailabilitySummary(
+    viewer,
+    hasActiveLeagueParticipation(
+      viewerRegistration?.status === "ACTIVE",
+      !!viewerTeamRole,
+    ),
+  );
+  const [teams, matches, assignments, members, rsvps, draft] =
+    await Promise.all([
+      prisma.team.findMany({ where: { seasonId: season.id } }),
+      prisma.match.findMany({
+        where: { seasonId: season.id },
+        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+      }),
+      prisma.standinAssignment.findMany({
+        where: { match: { seasonId: season.id } },
+        include: { standin: true, replaced: true },
+      }),
+      prisma.teamMember.findMany({
+        where: { seasonId: season.id },
+        select: { teamId: true, userId: true },
+      }),
+      showRsvpSummaries
+        ? prisma.matchAvailability.findMany({
+            where: { match: { seasonId: season.id } },
+            select: { matchId: true, userId: true, status: true },
+          })
+        : Promise.resolve([]),
+      prisma.draft.findUnique({
+        where: { seasonId: season.id },
+        select: { status: true },
+      }),
+    ]);
   const pendingReschedules = await prisma.rescheduleRequest.findMany({
     where: {
       // A proposal on a finished match can't be answered — no chip for it.
@@ -147,44 +256,59 @@ export default async function SchedulePage() {
       rosterByTeam.get(teamId) ?? [],
       assignments.filter((a) => a.matchId === m.id && a.teamId === teamId),
     );
-  const rsvpFor = (m: Match) =>
-    m.status === "COMPLETED"
-      ? undefined
-      : {
-          home: teamAvailability(
-            sideRoster(m, m.homeTeamId),
-            rsvpsByMatch.get(m.id) ?? [],
-          ),
-          away: teamAvailability(
-            sideRoster(m, m.awayTeamId),
-            rsvpsByMatch.get(m.id) ?? [],
-          ),
-        };
+  const rsvpFor = (m: Match) => {
+    if (!showRsvpSummaries) return undefined;
+    if (
+      !matchCheckinOpen(season.status, draft?.status, m.status, m.scheduledAt)
+    )
+      return undefined;
+    const homeRoster = sideRoster(m, m.homeTeamId);
+    const awayRoster = sideRoster(m, m.awayTeamId);
+    return {
+      home: {
+        summary: teamAvailability(homeRoster, rsvpsByMatch.get(m.id) ?? []),
+        expected: expectedSideSize(season.teamSize, homeRoster.length),
+      },
+      away: {
+        summary: teamAvailability(awayRoster, rsvpsByMatch.get(m.id) ?? []),
+        expected: expectedSideSize(season.teamSize, awayRoster.length),
+      },
+    };
+  };
 
   // The viewer's next unplayed match (rostered players only) for the check-in card.
   const myTeamIds = new Set(
-    members.filter((m) => viewer && m.userId === viewer.id).map((m) => m.teamId),
+    members
+      .filter((m) => viewer && m.userId === viewer.id)
+      .map((m) => m.teamId),
   );
-  // Chronological (unscheduled last), not week order — reschedules can move a
-  // match past the next week's night; point at whatever plays first.
+  // Chronological, not week order — reschedules can move a fixture past the
+  // next week's night. Only a timed, still-actionable match gets a check-in
+  // prompt. An unreported old fixture is called out as overdue below instead
+  // of trapping the player on a stale RSVP forever.
+  // Async server component: Date.now is request-time state, not render replay.
+  // eslint-disable-next-line react-hooks/purity
+  const freshFrom = Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000;
   const myNextMatch = viewer
     ? [...matches]
         .sort(byKickoff)
         .find(
           (m) =>
-            m.status !== "COMPLETED" &&
-            (myTeamIds.has(m.homeTeamId) ||
-              myTeamIds.has(m.awayTeamId) ||
-              // Assigned standins are participants for their match too.
-              assignments.some(
-                (a) => a.matchId === m.id && a.standinUserId === viewer!.id,
-              )),
+            matchCheckinOpen(
+              season.status,
+              draft?.status,
+              m.status,
+              m.scheduledAt,
+            ) &&
+            m.scheduledAt!.getTime() >= freshFrom &&
+            (sideRoster(m, m.homeTeamId).includes(viewer.id) ||
+              sideRoster(m, m.awayTeamId).includes(viewer.id)),
         )
     : undefined;
   const myRsvp = myNextMatch
-    ? (rsvpsByMatch.get(myNextMatch.id) ?? []).find(
+    ? ((rsvpsByMatch.get(myNextMatch.id) ?? []).find(
         (r) => r.userId === viewer!.id,
-      )?.status ?? null
+      )?.status ?? null)
     : null;
   const standinsByMatch = new Map<string, MatchStandin[]>();
   for (const a of assignments) {
@@ -192,10 +316,8 @@ export default async function SchedulePage() {
     arr.push(a);
     standinsByMatch.set(a.matchId, arr);
   }
-  const standings = computeStandings(
-    teams.map((t) => t.id),
-    matches,
-  );
+  const playoffField = projectPlayoffField(teams, matches);
+  const standings = playoffField.standings;
   const teamForm = formByTeam(
     teams.map((t) => t.id),
     matches,
@@ -204,7 +326,11 @@ export default async function SchedulePage() {
   // playoff-race notes — only a live regular season has a race to compute.
   const stakesReport =
     season.status === "REGULAR_SEASON"
-      ? seasonScenarioReport(standings, matches, teams.length)
+      ? seasonScenarioReport(
+          playoffField.eligibleStandings,
+          matches,
+          playoffField.eligibleTeamIds.length,
+        )
       : null;
 
   const regular = matches.filter((m) => m.phase === "REGULAR");
@@ -213,16 +339,31 @@ export default async function SchedulePage() {
   const status = regularSeasonStatus(matches);
   const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
   const pendingMsg = pendingResultsMessage(status);
-  // The first week still missing results is "this week" — the one visitors
-  // scroll past completed weeks to find.
+  const untimedOpen = matches.filter(
+    (m) => m.status === "SCHEDULED" && m.scheduledAt == null,
+  );
+  const scheduleEditingOpen = postAuctionWorkOpen(season.status, draft?.status);
+  // "This week" is the first live/fresh slate, not simply the oldest missing
+  // result. A stale week stays visible with an explicit overdue badge but no
+  // longer mislabels itself as tonight's games.
   const currentWeek =
     season.status === "REGULAR_SEASON"
-      ? weeks.find((w) => (weekStatus.get(w)?.pending ?? 0) > 0)
+      ? weeks.find((w) =>
+          regular.some(
+            (m) =>
+              m.week === w &&
+              m.status !== "COMPLETED" &&
+              (m.status === "LIVE" ||
+                (m.scheduledAt?.getTime() ?? -Infinity) >= freshFrom),
+          ),
+        )
       : undefined;
 
+  const championPresentation = resolveChampionPresentation(season, matches);
   const champion =
-    season.championTeamId && teamName.get(season.championTeamId)
-      ? teamName.get(season.championTeamId)
+    championPresentation.championTeamId &&
+    teamName.get(championPresentation.championTeamId)
+      ? teamName.get(championPresentation.championTeamId)
       : null;
 
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
@@ -259,8 +400,8 @@ export default async function SchedulePage() {
           : `${a.standin.name} filling an open seat · ${teamName.get(a.teamId) ?? "?"}`,
       ),
       rsvp: rsvp && {
-        home: pickRsvp(rsvp.home),
-        away: pickRsvp(rsvp.away),
+        home: pickRsvp(rsvp.home.summary, rsvp.home.expected),
+        away: pickRsvp(rsvp.away.summary, rsvp.away.expected),
       },
       reschedulePending: rescheduleByMatch.get(m.id) ?? null,
     };
@@ -286,6 +427,16 @@ export default async function SchedulePage() {
       completed: ws?.completed ?? 0,
       total: ws?.total ?? raw.length,
       isCurrent: week === currentWeek,
+      isOverdue:
+        (ws?.pending ?? 0) > 0 &&
+        raw
+          .filter((m) => m.status !== "COMPLETED")
+          .every(
+            (m) =>
+              m.status !== "LIVE" &&
+              m.scheduledAt != null &&
+              m.scheduledAt.getTime() < freshFrom,
+          ),
       matches: raw.map(toMatchView),
       byes: (byesByWeek.get(week) ?? []).map((id) => ({
         id,
@@ -308,6 +459,7 @@ export default async function SchedulePage() {
       completed: r.matches.filter((m) => m.status === "COMPLETED").length,
       total: r.matches.length,
       isCurrent: false,
+      isOverdue: false,
       matches: r.matches.map(toMatchView),
       byes: [],
       nightTs: night?.getTime() ?? null,
@@ -324,6 +476,59 @@ export default async function SchedulePage() {
     seedsFromFirstRound(playoff),
     (d) => fmtWhen(d) ?? "",
   );
+  const postseasonPhase =
+    season.status === "PLAYOFFS" || season.status === "COMPLETE";
+  const postseasonSection = postseasonPhase ? (
+    <section id="playoff-bracket" className="scroll-mt-20 space-y-4">
+      <SectionTitle>Playoff bracket</SectionTitle>
+      {playoff.length > 0 ? (
+        <>
+          {/* Bracket owns horizontal scrolling; the card clips its intrinsic
+              desktop width so phones never gain document-level overflow. */}
+          <Card className="overflow-hidden">
+            <CardBody className="p-0 pt-4">
+              <Bracket
+                rounds={bracketRoundsView}
+                championTeamId={championPresentation.championTeamId}
+              />
+            </CardBody>
+          </Card>
+          {playoffRoundViews.length > 0 ? (
+            <ScheduleWeeks weeks={playoffRoundViews} teams={[]} />
+          ) : null}
+        </>
+      ) : (
+        <EmptyState
+          title={
+            season.status === "COMPLETE"
+              ? "No playoff bracket is recorded"
+              : "The playoff bracket needs recovery"
+          }
+          description={
+            season.status === "COMPLETE"
+              ? championPresentation.championTeamId
+                ? "This completed season does not include saved playoff fixtures. Its recorded champion and regular-season results remain available below."
+                : "This season is marked complete without playoff fixtures. An administrator must return it to Regular season, verify the table, and use Start playoffs to create an authoritative bracket."
+              : "The league is in Playoffs without first-round fixtures. An administrator must return it to Regular season, verify the table, and use Start playoffs so seeding and the phase change happen together."
+          }
+          action={
+            viewer?.role === "ADMIN" &&
+            !(
+              season.status === "COMPLETE" &&
+              championPresentation.championTeamId
+            ) ? (
+              <Link
+                href="/admin#playoffs"
+                className={buttonClasses("secondary", "sm")}
+              >
+                Open playoff controls →
+              </Link>
+            ) : undefined
+          }
+        />
+      )}
+    </section>
+  ) : null;
 
   return (
     <div className="space-y-8">
@@ -332,27 +537,41 @@ export default async function SchedulePage() {
         <WeekReminderPing season={season} />
       </Suspense>
       <PageTitle
-        title="Schedule & Standings"
+        title={
+          season.status === "COMPLETE"
+            ? "Season results"
+            : season.status === "PLAYOFFS"
+              ? "Playoffs"
+              : "Schedule & Standings"
+        }
         subtitle={season.name}
         action={
           <div className="flex items-center gap-3">
             {currentWeek != null ? (
-              <a href="#this-week" className="py-1 -my-1 text-xs text-muted hover:text-info">
+              <a
+                href="#this-week"
+                className="py-1 -my-1 text-xs text-muted hover:text-info"
+              >
                 This week ↓
               </a>
             ) : null}
-            <a
-              href="/api/calendar"
-              className="py-1 -my-1 text-xs text-muted hover:text-info"
-              title="Subscribe to scheduled matches from your calendar app"
-            >
-              📅 Calendar (.ics)
-            </a>
+            {matches.some((m) => m.scheduledAt) ? (
+              <a
+                href="/api/calendar"
+                className="py-1 -my-1 text-xs text-muted hover:text-info"
+                title="Download the active season's calendar feed"
+              >
+                📅 Calendar feed (.ics)
+              </a>
+            ) : null}
           </div>
         }
       />
 
-      <ScheduleCallout label={season.matchSchedule} />
+      <ScheduleCallout
+        label={season.matchSchedule}
+        description={calloutDescription(season.status)}
+      />
 
       {myNextMatch ? (
         <CheckinBanner
@@ -363,6 +582,32 @@ export default async function SchedulePage() {
           myRsvp={myRsvp}
           detailsHref={`/matches/${myNextMatch.id}`}
         />
+      ) : null}
+
+      {scheduleEditingOpen && untimedOpen.length > 0 ? (
+        <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+          <span aria-hidden className="text-lg leading-none">
+            🕒
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">Kickoff times still needed</div>
+            <div className="text-muted">
+              {untimedOpen.length} fixture
+              {untimedOpen.length === 1 ? " has" : "s have"} no published time.
+              Check-ins, reminders, automatic result sync and pick&apos;em locks
+              stay off until {untimedOpen.length === 1 ? "it is" : "they are"}{" "}
+              scheduled.
+            </div>
+          </div>
+          {viewer?.role === "ADMIN" ? (
+            <Link
+              href="/admin#schedule"
+              className="shrink-0 text-xs text-info hover:underline"
+            >
+              Set times →
+            </Link>
+          ) : null}
+        </div>
       ) : null}
 
       {pendingMsg && season.status === "REGULAR_SEASON" ? (
@@ -377,29 +622,47 @@ export default async function SchedulePage() {
         </div>
       ) : null}
 
-      {champion && season.championTeamId ? (
+      {champion && championPresentation.championTeamId ? (
         <ChampionBanner
-          teamId={season.championTeamId}
+          teamId={championPresentation.championTeamId}
           teamName={champion}
           seasonName={season.name}
         />
       ) : null}
 
+      {season.status === "COMPLETE" && !championPresentation.championTeamId ? (
+        <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+          <div className="font-medium">Champion state needs review</div>
+          <p className="mt-1 text-muted">
+            This season is marked complete without an authoritative champion.
+            The results remain visible, but no title is attributed until
+            administrators{" "}
+            {playoff.length > 0
+              ? "return it to Playoffs and reconcile the existing grand final."
+              : "return it to Regular season, verify the table, and seed a new playoff bracket."}
+          </p>
+        </div>
+      ) : null}
+
+      {postseasonSection}
+
       <Card>
-        <CardHeader title="Standings" />
+        <CardHeader headingLevel={2} title="Standings" />
         <CardBody className="p-0">
           <StandingsTable
             standings={standings}
             teamName={teamName}
+            eligibleTeams={playoffField.eligibleTeamIds.length}
             withdrawnIds={
               new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
             }
             formByTeam={teamForm}
             playoffCut={
               season.status === "REGULAR_SEASON"
-                ? pickBracketSize(teams.length)
+                ? playoffField.bracketSize
                 : undefined
             }
+            playoffSeedByTeam={playoffField.seedByTeam}
             clinch={clinchFromReport(stakesReport)}
             viewerTeamId={[...myTeamIds][0]}
             movement={standingsMovement(
@@ -411,72 +674,65 @@ export default async function SchedulePage() {
       </Card>
 
       {season.status === "REGULAR_SEASON" &&
-      teams.length > 2 &&
+      playoffField.eligibleTeamIds.length > 2 &&
       standings.some((s) => s.played > 0) ? (
         <>
           <PlayoffPicture
-            standings={standings}
+            standings={playoffField.eligibleStandings}
             teamName={teamName}
             report={stakesReport}
           />
           <RunIn
-            standings={standings}
+            standings={playoffField.eligibleStandings}
             teamName={teamName}
-            remaining={remainingSchedule(
-              teams.map((t) => t.id),
-              matches,
-            )}
-            playoffCut={pickBracketSize(teams.length)}
+            remaining={remainingSchedule(playoffField.eligibleTeamIds, matches)}
+            playoffCut={playoffField.bracketSize}
           />
         </>
       ) : null}
 
-      {playoff.length > 0 ? (
+      <div id="fixtures" className="scroll-mt-20 space-y-8">
         <section className="space-y-4">
-          <SectionTitle>Playoff bracket</SectionTitle>
-          {/* overflow-hidden: Bracket scrolls horizontally inside itself, and
-              without this the card leaks that width into the page scroll. */}
-          <Card className="overflow-hidden">
-            <CardBody className="p-0 pt-4">
-              <Bracket
-                rounds={bracketRoundsView}
-                championTeamId={season.championTeamId}
+          <SectionTitle>Regular season</SectionTitle>
+          {regular.length === 0 ? (
+            (() => {
+              const copy = emptyScheduleCopy(season.status, draft?.status);
+              return (
+                <EmptyState
+                  title={copy.title}
+                  description={copy.description}
+                  action={
+                    viewer?.role === "ADMIN" ? (
+                      <Link
+                        href="/admin#schedule"
+                        className="text-sm text-info hover:underline"
+                      >
+                        Open schedule controls →
+                      </Link>
+                    ) : undefined
+                  }
+                />
+              );
+            })()
+          ) : (
+            <>
+              {teams.length > 1 ? (
+                <SeasonGrid
+                  standings={standings}
+                  teamName={teamName}
+                  matches={matches}
+                />
+              ) : null}
+              <ScheduleWeeks
+                weeks={weekViews}
+                teams={[...teams]
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((t) => ({ id: t.id, name: t.name }))}
               />
-            </CardBody>
-          </Card>
-          {playoffRoundViews.length > 0 ? (
-            // teams={[]} suppresses the filter chips — a bracket is too small
-            // to need filtering, but the rows keep RSVP/standin/⏳ chips.
-            <ScheduleWeeks weeks={playoffRoundViews} teams={[]} />
-          ) : null}
+            </>
+          )}
         </section>
-      ) : null}
-
-      <section className="space-y-4">
-        <SectionTitle>Regular season</SectionTitle>
-        {regular.length === 0 ? (
-          <EmptyState
-            title="No matches scheduled yet"
-            description="The schedule is generated once teams are drafted."
-          />
-        ) : (
-          <>
-            {teams.length > 1 ? (
-              <SeasonGrid
-                standings={standings}
-                teamName={teamName}
-                matches={matches}
-              />
-            ) : null}
-            <ScheduleWeeks
-              weeks={weekViews}
-              teams={[...teams]
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map((t) => ({ id: t.id, name: t.name }))}
-            />
-          </>
-        )}
-      </section>
+      </div>
     </div>
   );
 }
@@ -514,8 +770,10 @@ function SeasonGrid({
         title={label}
         className={cn(
           "block rounded px-1 py-1.5 font-mono text-[11px] tabular-nums transition-colors",
-          cell.result === "W" && "bg-success/15 text-success hover:bg-success/25",
-          cell.result === "L" && "bg-danger/10 text-danger/90 hover:bg-danger/20",
+          cell.result === "W" &&
+            "bg-success/15 text-success hover:bg-success/25",
+          cell.result === "L" &&
+            "bg-danger/10 text-danger hover:bg-danger/20",
           cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
           !cell.played && "text-muted hover:text-info",
         )}
@@ -590,7 +848,9 @@ function SeasonGrid({
                       size={20}
                       className="shrink-0 rounded"
                     />
-                    <span className="truncate">{teamName.get(rowId) ?? "?"}</span>
+                    <span className="truncate">
+                      {teamName.get(rowId) ?? "?"}
+                    </span>
                   </Link>
                 </th>
                 {order.map((colId) => {
@@ -615,7 +875,7 @@ function SeasonGrid({
                         <span
                           role="img"
                           aria-label="No meeting scheduled"
-                          className="text-xs text-muted/50"
+                          className="text-xs text-muted"
                         >
                           <span aria-hidden>—</span>
                         </span>
@@ -661,7 +921,8 @@ function PlayoffPicture({
       const bits: string[] = [];
       if (s.nextMatchId === null) {
         // Fate open with nothing left to play — other results (and maybe
-        // tiebreakers) decide; the scenario bit below carries the odds.
+        // tiebreakers) decide; the scenario bit below carries the equal-weight
+        // outcome share, not a predictive probability.
         bits.push("done playing — waiting on other results");
       } else {
         if (s.winAndIn && s.loseAndOut)
@@ -676,7 +937,9 @@ function PlayoffPicture({
           // Guard on madeCount, not the rounded percent — a sub-0.5% path is
           // still a real points-only path, not "no scenario".
           const pct = Math.round((s.madeCount / s.leafCount) * 100);
-          bits.push(`in ${pct > 0 ? `${pct}%` : "<1%"} of scenarios`);
+          bits.push(
+            `safe in ${pct > 0 ? `${pct}%` : "<1%"} of equal-weight result combinations`,
+          );
         } else {
           // Never safe on points alone ≠ doomed — ties could still save them.
           bits.push("needs tiebreaks to fall right");
@@ -690,6 +953,7 @@ function PlayoffPicture({
   return (
     <Card>
       <CardHeader
+        headingLevel={2}
         title="Playoff picture"
         subtitle="First-round matchups if the season ended today"
       />
@@ -699,9 +963,19 @@ function PlayoffPicture({
             key={p.home}
             className="flex items-center gap-2 rounded-lg border border-line/70 bg-surface-2/30 px-3 py-2 text-sm"
           >
-            <ProjectedSide teamId={p.home} seed={seedOf.get(p.home)} teamName={teamName} align="right" />
+            <ProjectedSide
+              teamId={p.home}
+              seed={seedOf.get(p.home)}
+              teamName={teamName}
+              align="right"
+            />
             <span className="shrink-0 text-xs text-muted">vs</span>
-            <ProjectedSide teamId={p.away} seed={seedOf.get(p.away)} teamName={teamName} align="left" />
+            <ProjectedSide
+              teamId={p.away}
+              seed={seedOf.get(p.away)}
+              teamName={teamName}
+              align="left"
+            />
           </div>
         ))}
         {raceNotes.length > 0 ? (
@@ -733,6 +1007,11 @@ function PlayoffPicture({
                 </li>
               ))}
             </ul>
+            <p className="mt-2 text-xs text-muted">
+              Scenario shares count every remaining win, loss, and draw
+              combination equally; they are not forecasts or betting odds.
+              “Safe” counts a tied cutoff against the team.
+            </p>
           </div>
         ) : null}
       </CardBody>
@@ -763,7 +1042,12 @@ function ProjectedSide({
       <span className="w-4 shrink-0 text-center font-mono text-[10px] tabular-nums text-muted">
         {seed}
       </span>
-      <TeamCrest name={name} seed={teamId} size={20} className="shrink-0 rounded" />
+      <TeamCrest
+        name={name}
+        seed={teamId}
+        size={20}
+        className="shrink-0 rounded"
+      />
       <span className="truncate">{name}</span>
     </Link>
   );
@@ -791,6 +1075,7 @@ function RunIn({
   return (
     <Card>
       <CardHeader
+        headingLevel={2}
         title="Run-in"
         subtitle="Remaining opponents in week order — #rank shows current form"
       />

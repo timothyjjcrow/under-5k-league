@@ -34,7 +34,10 @@ async function act(
   ctx: APIRequestContext,
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; json: Record<string, unknown> }> {
-  const res = await ctx.post("/api/inhouse", { data: body });
+  const res = await ctx.post("/api/inhouse", {
+    data: body,
+    headers: { Origin: "http://localhost:3210" },
+  });
   return { ok: res.ok(), json: await res.json() };
 }
 
@@ -80,8 +83,9 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
 
 test("full lobby lifecycle: accept → vote → draft → ready → in progress", async ({
   page,
+  browser,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const errors = trackPageErrors(page);
   page.on("dialog", (d) => d.accept()); // the Start-game confirm
 
@@ -103,10 +107,23 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await page.getByRole("button", { name: /Join queue/ }).click();
 
   // Ready check opens — the observer accepts through the real UI…
-  await expect(
-    page.getByText("Match found — accept to play!"),
-  ).toBeVisible();
+  await expect(page.getByText("Match found — accept to play!")).toBeVisible();
   await expect(page.getByRole("timer")).toBeVisible();
+
+  // A signed-out spectator sees the separate next-game path and is never told
+  // they are "next in line" for a queue they have not joined.
+  const spectatorBrowser = await browser.newContext({ baseURL: BASE });
+  const spectatorPage = await spectatorBrowser.newPage();
+  const spectatorErrors = trackPageErrors(spectatorPage);
+  await spectatorPage.goto("/inhouse");
+  await expect(
+    spectatorPage.getByRole("heading", { name: "Queue for the next game" }),
+  ).toBeVisible();
+  await expect(
+    spectatorPage.getByText(/you're spectating — sign in above/i),
+  ).toBeVisible();
+  await expect(spectatorPage.getByText(/you're next in line/i)).toHaveCount(0);
+
   await page.getByRole("button", { name: "ACCEPT MATCH" }).click();
   await expect(page.getByText(/Accepted — waiting/)).toBeVisible();
 
@@ -150,13 +167,32 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     .click();
   await page.getByRole("button", { name: /^Draft / }).click();
 
-  // Drive the remaining picks as an admin (admins may pick for whichever
-  // captain is on the clock; the final pool player auto-assigns, so READY
-  // arrives without a last dead-air clock).
-  const admin = await pwRequest.newContext({ baseURL: BASE });
-  await admin.get(
+  // Administrators have a browser recovery control for a captain whose tab is
+  // disconnected or stuck. It is deliberately NOT `isOnClock`: the admin can
+  // act, but must not receive the captain's chime/title/"Your pick" alert.
+  const adminBrowser = await browser.newContext({ baseURL: BASE });
+  const adminPage = await adminBrowser.newPage();
+  const adminErrors = trackPageErrors(adminPage);
+  await adminPage.goto(
     "/api/auth/dev?name=IH+Admin&steamId=76561190000002999&admin=1&redirect=/inhouse",
   );
+  await expect(adminPage.getByText(/Admin recovery:/)).toBeVisible();
+  expect(await adminPage.title()).not.toContain("(!) Your pick");
+  await adminPage
+    .getByRole("button", { name: /^Select .* to draft$/ })
+    .first()
+    .click();
+  const adminDraft = adminPage.getByRole("button", {
+    name: /^Admin: draft .* for /,
+  });
+  await adminDraft.click();
+  // Wait for the mutation response before issuing another pick through the API
+  // context, otherwise the two recovery actions can race for the same turn.
+  await expect(adminDraft).toHaveCount(0);
+
+  // Drive the remaining picks through the same signed-in admin context; the
+  // final pool player auto-assigns, so READY arrives without dead-air clock.
+  const admin = adminBrowser.request;
   for (let guard = 0; guard < 10; guard++) {
     const s = await act(admin, { action: "state" });
     const l = s.json.lobby as null | {
@@ -164,7 +200,10 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
       pool: { userId: string }[];
     };
     if (!l || l.status !== "DRAFTING") break;
-    const picked = await act(admin, { action: "pick", userId: l.pool[0].userId });
+    const picked = await act(admin, {
+      action: "pick",
+      userId: l.pool[0].userId,
+    });
     expect(picked.ok).toBe(true);
   }
 
@@ -226,9 +265,49 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
 
   // Live view: pulsing banner, elapsed clock, auto-detect controls, rosters.
   await expect(page.getByText("Game in progress")).toBeVisible();
-  await expect(page.getByRole("button", { name: /Auto-detect result/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Auto-detect result/ }),
+  ).toBeVisible();
   await expect(page.getByText("Radiant").first()).toBeVisible();
   await expect(page.getByText("Dire").first()).toBeVisible();
+
+  // A normal bystander can still line up while this game is live. Signed-out
+  // visitors get a sign-in path; after signing in they can join, see an honest
+  // NEXT-game queue, and leave again without touching the active lobby.
+  await expect(
+    spectatorPage.getByRole("heading", { name: "Queue for the next game" }),
+  ).toBeVisible();
+  const signInForNext = spectatorPage.getByRole("link", {
+    name: "Sign in for next game",
+  });
+  await expect(signInForNext).toHaveAttribute("href", "/login?next=/inhouse");
+
+  await spectatorPage.goto(
+    "/api/auth/dev?name=IH+Next+Player&steamId=76561190000002997&redirect=/inhouse",
+  );
+  await spectatorPage.getByLabel("MMR").fill("4200");
+  await spectatorPage
+    .getByRole("button", { name: /Join next-game queue/ })
+    .click();
+  await expect(
+    spectatorPage.getByRole("heading", { name: "Next-game queue" }),
+  ).toBeVisible();
+  await expect(
+    spectatorPage.getByText(
+      /ready check starts only after the current lobby closes/i,
+    ),
+  ).toBeVisible();
+  await expect(
+    spectatorPage.getByRole("progressbar", {
+      name: "Next-game queue progress",
+    }),
+  ).toBeVisible();
+  await spectatorPage.getByRole("button", { name: "Leave queue" }).click();
+  await expect(
+    spectatorPage.getByRole("heading", { name: "Queue for the next game" }),
+  ).toBeVisible();
+  expect(spectatorErrors).toEqual([]);
+  await spectatorBrowser.close();
 
   // Clean up: admin scraps the lobby so a re-run starts from a clean queue.
   // A PLAIN cancel is now refused — this lobby is IN_PROGRESS with confirmed
@@ -262,23 +341,45 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   // The confirm has to state what dies — the /admin rule. It names the real pot.
-  await expect(dialog.getByText(/Cred across .* refunded in full/)).toBeVisible();
+  await expect(
+    dialog.getByText(/Cred across .* refunded in full/),
+  ).toBeVisible();
 
   const confirmBtn = dialog.getByRole("button", {
     name: /Force-cancel|Scrap/i,
   });
   await expect(confirmBtn).toBeDisabled();
 
+  // Focus starts inside the dialog, wraps in both directions, Escape restores
+  // the trigger, and the document cannot scroll behind the destructive choice.
+  const field = dialog.getByRole("textbox");
+  const keepGame = dialog.getByRole("button", { name: "Keep the game" });
+  await expect(field).toBeFocused();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe(
+    "hidden",
+  );
+  await field.press("Shift+Tab");
+  await expect(keepGame).toBeFocused();
+  await keepGame.press("Tab");
+  await expect(field).toBeFocused();
+  await field.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(forceTrigger).toBeFocused();
+  expect(await page.evaluate(() => document.body.style.overflow)).not.toBe(
+    "hidden",
+  );
+
+  // Reopen to exercise the typed destructive action itself.
+  await forceTrigger.click();
+  await expect(dialog).toBeVisible();
+
   // The token is the lobby's own code, quoted in the prompt. A wrong code must
   // not arm it, and Enter must not complete it — reflex-confirming a control
   // that refunds ten people's stakes is the exact thing being prevented.
-  const prompt = await dialog
-    .getByText(/Type the lobby code/)
-    .innerText();
+  const prompt = await dialog.getByText(/Type the lobby code/).innerText();
   const code = /(\d{3,})/.exec(prompt)?.[1] ?? "";
   expect(code).not.toEqual("");
 
-  const field = dialog.getByRole("textbox");
   await field.fill(code.slice(0, -1) + (code.endsWith("0") ? "1" : "0"));
   await expect(confirmBtn).toBeDisabled();
   await field.fill(code);
@@ -295,7 +396,8 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   expect(after.json.lobby).toBeNull();
 
   expect(errors).toEqual([]);
+  expect(adminErrors).toEqual([]);
 
   for (const ctx of players) await ctx.dispose();
-  await admin.dispose();
+  await adminBrowser.close();
 });

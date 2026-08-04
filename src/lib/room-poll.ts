@@ -25,13 +25,11 @@ import { DRAFT_ROOM, INHOUSE } from "./constants";
  *
  * The four rules, in the order they take precedence:
  *
- * 1. **429 is not a failure — it is a signal to ease off.** These routes'
- *    speed bumps are per-IP and a queued tab polls 40/min, so one household or
- *    one NAT'd office crosses the limit just by having a lobby. Treating it as
- *    a disconnect greyed out ACCEPT MATCH mid-ready-check, and retrying at the
- *    fast rate kept the fixed window saturated so it never cleared. Easing off
- *    is what actually drains the bucket — which the mutations share, so this is
- *    how the next ACCEPT or bid gets through.
+ * 1. **429 is not a failure — it is a signal to ease off.** Public polling
+ *    buckets can be shared by a household/NAT, and deployments can apply
+ *    additional upstream limits. Treating back-pressure as a disconnect
+ *    greys out second-sensitive actions while retrying fast can keep the
+ *    window saturated. Easing off is what lets the next request through.
  * 2. **A hidden tab WITH a stake keepalives; without one it does not fetch.**
  *    Queued or in a lobby, the poll IS the presence heartbeat (and carries the
  *    ready-check chime and the tab title), so it must outrun QUEUE_AWAY_SECONDS
@@ -67,7 +65,7 @@ export type RoomPollInput = {
   hasStake: boolean;
   /** Is the ROOM in a second-sensitive phase? Defaults to `hasStake`. */
   active?: boolean;
-  /** The response was a 429 from the route's per-IP speed bump. */
+  /** The response was a 429 from the route's applicable state/action bucket. */
   rateLimited?: boolean;
   /** A payload came back (false = failed, aborted, or not attempted). */
   reached?: boolean;

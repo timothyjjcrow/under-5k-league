@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
+import { assertPostgresTestUrl } from "./scripts/test-db-safety.mjs";
 
 // Same integration suite, pointed at a real POSTGRES database — the production
 // engine. SQLite serializes writers, which masks the read-then-write races the
@@ -8,7 +9,7 @@ import path from "node:path";
 // Requires the schema to already be on the postgresql provider + pushed
 // (scripts/switch-db-provider.mjs postgresql && prisma db push).
 const url = process.env.PG_TEST_URL;
-if (!url) throw new Error("Set PG_TEST_URL to the throwaway Postgres database.");
+assertPostgresTestUrl(url);
 
 export default defineConfig({
   resolve: {

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  allHeroesKnown,
   bestWinRates,
   heroMeta,
+  heroPoolSeenPercent,
   metaMinPicks,
+  type HeroMetaRow,
   type MetaGame,
   type MetaLine,
 } from "./hero-meta";
@@ -78,15 +81,11 @@ describe("heroMeta", () => {
     const games: MetaGame[] = [
       {
         radiantWin: true,
-        lines: [
-          line({ heroId: 1, kills: 10, deaths: 2, assists: 4 }),
-        ],
+        lines: [line({ heroId: 1, kills: 10, deaths: 2, assists: 4 })],
       },
       {
         radiantWin: true,
-        lines: [
-          line({ heroId: 1, kills: 0, deaths: 0, assists: 1 }),
-        ],
+        lines: [line({ heroId: 1, kills: 0, deaths: 0, assists: 1 })],
       },
     ];
     const [row] = heroMeta(games).rows;
@@ -114,6 +113,20 @@ describe("heroMeta", () => {
     expect(row.topPlayer).toEqual({ userId: "a", games: 1, wins: 1 });
   });
 
+  it("uses a stable user id tiebreak for identical signature-player records", () => {
+    const players = [
+      line({ heroId: 1, isRadiant: true, userId: "z-player" }),
+      line({ heroId: 1, isRadiant: true, userId: "a-player" }),
+    ];
+    const first = heroMeta([{ radiantWin: true, lines: players }]).rows[0];
+    const reversed = heroMeta([
+      { radiantWin: true, lines: [...players].reverse() },
+    ]).rows[0];
+
+    expect(first.topPlayer?.userId).toBe("a-player");
+    expect(reversed.topPlayer).toEqual(first.topPlayer);
+  });
+
   it("counts pick rate once per game even if the hero appears twice", () => {
     // Shouldn't happen in a real lobby, but bad imports must not exceed 100%.
     const games: MetaGame[] = [
@@ -130,6 +143,27 @@ describe("heroMeta", () => {
     expect(row.pickRate).toBe(100);
     expect(row.wins).toBe(1);
     expect(row.losses).toBe(1);
+  });
+});
+
+describe("catalogue boundary", () => {
+  const known = new Set([1, 2, 3]);
+
+  it("rejects a whole game's hero lines when even one id is unknown", () => {
+    expect(allHeroesKnown([line({ heroId: 1 })], known)).toBe(true);
+    expect(
+      allHeroesKnown([line({ heroId: 1 }), line({ heroId: 99 })], known),
+    ).toBe(false);
+    expect(allHeroesKnown([], known)).toBe(false);
+  });
+
+  it("computes pool coverage from known unique ids only", () => {
+    const rows = [{ heroId: 1 }, { heroId: 1 }, { heroId: 99 }] as Pick<
+      HeroMetaRow,
+      "heroId"
+    >[];
+    expect(heroPoolSeenPercent(rows, known)).toBe(33);
+    expect(heroPoolSeenPercent(rows, new Set())).toBe(0);
   });
 });
 

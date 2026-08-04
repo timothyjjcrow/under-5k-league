@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
  * placeholder reading "Match ID or URL" beside a button reading "Add game"),
  * two webhook fields pointing at a "Remove" that only exists on a third one,
  * and a next-step banner naming "Start next season" for a section called
- * "Create a new season". An admin following one of those is hunting for a
+ * "Season handoff". An admin following one of those is hunting for a
  * button that was never there, in the middle of fixing something.
  *
  * A parse test is the only thing that can catch it: tsc is happy, every unit
@@ -40,7 +40,7 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Auto-fetch games", rendered: "Auto-fetch games" },
   { quoted: "Add game", rendered: "Add game" },
   { quoted: "Match ID or URL", rendered: "Match ID or URL" },
-  { quoted: "Create a new season", rendered: "Create a new season" },
+  { quoted: "Season handoff", rendered: "Season handoff" },
   { quoted: "Remove webhook", rendered: "Remove webhook" },
   { quoted: "Use the league channel instead", rendered: "Use the league channel instead" },
   {
@@ -88,7 +88,7 @@ describe("admin copy names only controls that exist", () => {
     },
     {
       text: "Start next season",
-      why: 'the section is called "Create a new season"',
+      why: 'the section is called "Season handoff"',
     },
     {
       text: "or use Remove.",

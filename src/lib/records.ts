@@ -4,7 +4,8 @@
 // decides who holds what. Ties keep the first achiever, so records must be
 // fed in chronological order (a record is only *broken*, never shared).
 
-import { parseGamePlayers } from "./player-stats";
+import { decodeGamePlayers, trustedGamePlayers } from "./player-stats";
+import { heroById } from "./heroes";
 
 export type RecordLine = {
   /** Mapped league user, or null for an unmapped account (skipped). */
@@ -153,44 +154,105 @@ export type StoredRecordGame = {
   match: { seasonId: string };
 };
 
+const MAX_STORED_GAME_METRIC = 1_000_000;
+
+function safeStoredGameMetric(value: number): boolean {
+  return (
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_STORED_GAME_METRIC
+  );
+}
+
+/** Diagnostic boundary shared by the record mapper and its public page. */
+export function recordGameMetricsValid(game: StoredRecordGame): boolean {
+  return (
+    safeStoredGameMetric(game.durationSecs) &&
+    safeStoredGameMetric(game.radiantScore) &&
+    safeStoredGameMetric(game.direScore)
+  );
+}
+
+export type RecordGameDiagnostics = {
+  invalidLines: number;
+  malformedGames: number;
+  unusableGames: number;
+  unknownHeroLines: number;
+  unmappedLines: number;
+  invalidGameMetrics: number;
+};
+
+export type RecordGameAnalysis = {
+  games: RecordGame[];
+  diagnostics: RecordGameDiagnostics;
+};
+
 /**
  * Map stored Game rows (chronological — keep the caller's order) into
  * RecordGames. Extracted from the /records page so the profile's record-holder
- * chips can't drift from the record book's own parsing: a malformed players
- * JSON yields an empty line list (parseGamePlayers' contract), and optional
- * economy fields normalize to null rather than 0 so a legacy import can never
- * hold an economy record with a fabricated value.
+ * chips can't drift from the record book's own parsing. A malformed, partial,
+ * or duplicated box score omits the whole Game: its duration/kill score is not
+ * allowed to become a league record while its player evidence is untrusted.
+ * Optional economy fields normalize to null rather than 0 so a legacy import
+ * can never hold an economy record with a fabricated value.
  */
+export function analyzeRecordGames(
+  rows: StoredRecordGame[],
+): RecordGameAnalysis {
+  const diagnostics: RecordGameDiagnostics = {
+    invalidLines: 0,
+    malformedGames: 0,
+    unusableGames: 0,
+    unknownHeroLines: 0,
+    unmappedLines: 0,
+    invalidGameMetrics: 0,
+  };
+  const games: RecordGame[] = [];
+  for (const g of rows) {
+    const decoded = decodeGamePlayers(g.players);
+    diagnostics.invalidLines += decoded.invalidLines;
+    if (decoded.malformed) diagnostics.malformedGames += 1;
+    else if (!decoded.completeRoster) diagnostics.unusableGames += 1;
+    diagnostics.unmappedLines += decoded.players.filter(
+      (player) => !player.userId,
+    ).length;
+    const players = trustedGamePlayers(decoded);
+    diagnostics.unknownHeroLines += players.filter(
+      (player) => !heroById(player.heroId),
+    ).length;
+    if (!recordGameMetricsValid(g)) diagnostics.invalidGameMetrics += 1;
+    if (players.length !== 10) continue;
+    const durationSecs = safeStoredGameMetric(g.durationSecs)
+      ? g.durationSecs
+      : 0;
+    const scoresValid =
+      safeStoredGameMetric(g.radiantScore) &&
+      safeStoredGameMetric(g.direScore);
+    games.push({
+      matchId: g.matchId,
+      seasonId: g.match.seasonId,
+      radiantWin: g.radiantWin,
+      durationSecs,
+      radiantScore: scoresValid ? g.radiantScore : 0,
+      direScore: scoresValid ? g.direScore : 0,
+      lines: players.map((p) => ({
+        userId: p.userId ?? null,
+        heroId: p.heroId,
+        kills: p.kills,
+        deaths: p.deaths,
+        assists: p.assists,
+        netWorth: p.netWorth ?? null,
+        gpm: p.gpm ?? null,
+        lastHits: p.lastHits ?? null,
+        isRadiant: p.isRadiant,
+      })),
+    });
+  }
+  return { games, diagnostics };
+}
+
 export function toRecordGames(rows: StoredRecordGame[]): RecordGame[] {
-  return rows.map((g) => ({
-    matchId: g.matchId,
-    seasonId: g.match.seasonId,
-    radiantWin: g.radiantWin,
-    durationSecs: g.durationSecs,
-    radiantScore: g.radiantScore,
-    direScore: g.direScore,
-    lines: parseGamePlayers<{
-      userId?: string | null;
-      heroId: number;
-      kills: number;
-      deaths: number;
-      assists: number;
-      netWorth?: number | null;
-      gpm?: number | null;
-      lastHits?: number | null;
-      isRadiant: boolean;
-    }>(g.players).map((p) => ({
-      userId: p.userId ?? null,
-      heroId: p.heroId,
-      kills: p.kills,
-      deaths: p.deaths,
-      assists: p.assists,
-      netWorth: p.netWorth ?? null,
-      gpm: p.gpm ?? null,
-      lastHits: p.lastHits ?? null,
-      isRadiant: p.isRadiant,
-    })),
-  }));
+  return analyzeRecordGames(rows).games;
 }
 
 /** Compute the record book. `games` must be in chronological order. */

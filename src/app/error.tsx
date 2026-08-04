@@ -1,15 +1,23 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { buttonClasses } from "@/components/ui";
 
 export default function Error({
   error,
-  reset,
+  unstable_retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  unstable_retry: () => void;
 }) {
+  useEffect(() => {
+    // Server-render failures are already logged server-side; this also keeps
+    // client-only render failures diagnosable without exposing their message
+    // in the UI.
+    console.error(error);
+  }, [error]);
+
   return (
     <div className="mx-auto max-w-lg py-16">
       <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40">
@@ -26,20 +34,24 @@ export default function Error({
             !
           </div>
           <div>
-            <div className="font-display text-2xl font-bold">
+            <h1 className="font-display text-2xl font-bold">
               Something went wrong
-            </div>
+            </h1>
             <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted">
-              {error.message || "An unexpected error occurred."}
+              We couldn&apos;t load this page. Try again; if the problem keeps
+              happening, share the reference below with a league administrator.
             </p>
             {error.digest ? (
-              <p className="mt-1.5 font-mono text-[11px] text-muted/70">
+              <p className="mt-1.5 font-mono text-[11px] text-muted">
                 ref: {error.digest}
               </p>
             ) : null}
           </div>
           <div className="flex flex-wrap justify-center gap-2">
-            <button onClick={reset} className={buttonClasses("primary")}>
+            <button
+              onClick={unstable_retry}
+              className={buttonClasses("primary")}
+            >
               Try again
             </button>
             <Link href="/" className={buttonClasses("secondary")}>

@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The actions are request-scoped: stub revalidation + auth (rank-sync pattern)
 // so we can drive them against the test DB.
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+  revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
+}));
 vi.mock("@/lib/auth", () => ({
   requireAdmin: vi.fn(),
   requireUser: vi.fn(),
@@ -27,7 +31,10 @@ import { makeUser, sessionFor } from "./factories";
 
 const mockRequireUser = vi.mocked(requireUser);
 
-const PROFILE = { discordId: "80351110224678912", discordName: "dendi_official" };
+const PROFILE = {
+  discordId: "80351110224678912",
+  discordName: "dendi_official",
+};
 
 /**
  * Deps whose exchange/identity calls succeed unless overridden. joinGuild
@@ -44,13 +51,17 @@ function happyDeps(overrides: Partial<CallbackDeps> = {}): CallbackDeps {
   };
 }
 
-function callbackInput(userId: string | null, extra: Record<string, unknown> = {}) {
+function callbackInput(
+  userId: string | null,
+  extra: Record<string, unknown> = {},
+) {
+  const initiatingUserId = userId ?? "signed-out-initiator";
   return {
     userId,
     code: "auth-code",
     state: "the-state",
     errorParam: null,
-    cookie: packOauthCookie("the-state", "the-verifier"),
+    cookie: packOauthCookie("the-state", "the-verifier", initiatingUserId),
     clientId: "cid",
     clientSecret: "csecret",
     redirectUri: "http://localhost:3000/api/auth/discord/callback",
@@ -81,7 +92,10 @@ describe("linkDiscordAccount", () => {
     expect(res).toEqual({ ok: false, error: "taken" });
     // Neither account was touched: first keeps the link, second stays clean.
     expect(await discordOf(first.id)).toEqual(PROFILE);
-    expect(await discordOf(second.id)).toEqual({ discordId: null, discordName: "" });
+    expect(await discordOf(second.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
   });
 
   it("re-linking a different Discord account overwrites the user's own link — and reports the replaced id", async () => {
@@ -174,7 +188,7 @@ describe("the return path — where a link lands", () => {
   // that only /me can render and scrub.
   const withNext = (userId: string, next: string) =>
     callbackInput(userId, {
-      cookie: packOauthCookie("the-state", "the-verifier", next),
+      cookie: packOauthCookie("the-state", "the-verifier", userId, next),
     });
 
   it("a full success lands back where the player clicked", async () => {
@@ -297,7 +311,10 @@ describe("unlinkDiscordAccount", () => {
 
     await unlinkDiscordAccount(prisma, user.id);
 
-    expect(await discordOf(user.id)).toEqual({ discordId: null, discordName: "" });
+    expect(await discordOf(user.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
   });
 });
 
@@ -305,7 +322,7 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
   it("signed-out session → back through login", async () => {
     const deps = happyDeps();
     const res = await handleDiscordCallback(prisma, callbackInput(null), deps);
-    expect(res.redirect).toBe("/login?next=/me");
+    expect(res.redirect).toBe("/login?next=%2Fme%3Fdiscord%3Dsession");
     expect(deps.exchange).not.toHaveBeenCalled();
   });
 
@@ -339,14 +356,41 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
     const res = await handleDiscordCallback(
       prisma,
       callbackInput(user.id, {
-        cookie: packOauthCookie("browser-state", "v"),
+        cookie: packOauthCookie("browser-state", "v", user.id),
         state: "attacker-state",
       }),
       deps,
     );
     expect(res.redirect).toBe("/me?discord=state");
     expect(deps.exchange).not.toHaveBeenCalled();
-    expect(await discordOf(user.id)).toEqual({ discordId: null, discordName: "" });
+    expect(await discordOf(user.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
+  });
+
+  it("session changed mid-round-trip → rejects before linking to the replacement user", async () => {
+    const initiator = await makeUser("OAuthInitiator");
+    const replacement = await makeUser("ReplacementSession");
+    const deps = happyDeps();
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(replacement.id, {
+        cookie: packOauthCookie("the-state", "the-verifier", initiator.id),
+      }),
+      deps,
+    );
+
+    expect(res.redirect).toBe("/me?discord=state");
+    expect(deps.exchange).not.toHaveBeenCalled();
+    expect(await discordOf(initiator.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
+    expect(await discordOf(replacement.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
   });
 
   it("missing code → error", async () => {
@@ -367,7 +411,10 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
       happyDeps({ exchange: vi.fn().mockResolvedValue(null) }),
     );
     expect(res.redirect).toBe("/me?discord=error");
-    expect(await discordOf(user.id)).toEqual({ discordId: null, discordName: "" });
+    expect(await discordOf(user.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
   });
 
   it("identity fetch failure → error, nothing persisted", async () => {
@@ -378,19 +425,29 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
       happyDeps({ fetchIdentity: vi.fn().mockResolvedValue(null) }),
     );
     expect(res.redirect).toBe("/me?discord=error");
-    expect(await discordOf(user.id)).toEqual({ discordId: null, discordName: "" });
+    expect(await discordOf(user.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
   });
 
   it("success → linked, with the verifier fed to the exchange (PKCE)", async () => {
     const user = await makeUser("Winner");
     const deps = happyDeps();
 
-    const res = await handleDiscordCallback(prisma, callbackInput(user.id), deps);
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      deps,
+    );
 
     expect(res.redirect).toBe("/me?discord=linked");
     expect(await discordOf(user.id)).toEqual(PROFILE);
     expect(deps.exchange).toHaveBeenCalledWith(
-      expect.objectContaining({ codeVerifier: "the-verifier", code: "auth-code" }),
+      expect.objectContaining({
+        codeVerifier: "the-verifier",
+        code: "auth-code",
+      }),
     );
   });
 
@@ -406,7 +463,10 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
     );
 
     expect(res.redirect).toBe("/me?discord=taken");
-    expect(await discordOf(late.id)).toEqual({ discordId: null, discordName: "" });
+    expect(await discordOf(late.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
   });
 });
 
@@ -415,7 +475,11 @@ describe("handleDiscordCallback — the guilds.join half", () => {
     const user = await makeUser("Joiner");
     const deps = happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined") });
 
-    const res = await handleDiscordCallback(prisma, callbackInput(user.id), deps);
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      deps,
+    );
 
     expect(res.redirect).toBe("/me?discord=joined");
     expect(deps.joinGuild).toHaveBeenCalledWith(PROFILE.discordId, "tok-123");
@@ -475,7 +539,11 @@ describe("handleDiscordCallback — the guilds.join half", () => {
     const late = await makeUser("JoinLate");
     const deps = happyDeps({ joinGuild: vi.fn().mockResolvedValue("joined") });
 
-    const res = await handleDiscordCallback(prisma, callbackInput(late.id), deps);
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(late.id),
+      deps,
+    );
 
     expect(res.redirect).toBe("/me?discord=taken");
     expect(deps.joinGuild).not.toHaveBeenCalled();
@@ -523,6 +591,9 @@ describe("actions — manual handle vs the verified link", () => {
     const res = await unlinkDiscord({}, new FormData());
 
     expect(res?.message).toMatch(/unlinked/i);
-    expect(await discordOf(user.id)).toEqual({ discordId: null, discordName: "" });
+    expect(await discordOf(user.id)).toEqual({
+      discordId: null,
+      discordName: "",
+    });
   });
 });

@@ -22,7 +22,11 @@ const AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
 const TOKEN_URL = "https://discord.com/api/v10/oauth2/token";
 const ME_URL = "https://discord.com/api/v10/users/@me";
 
-// One-shot httpOnly cookie carrying `state.verifier` across the round-trip.
+// One-shot httpOnly cookie carrying `state`, PKCE verifier, and the initiating
+// site user across the round-trip. Binding the browser state to that user is
+// important: a person can sign out and into a different site account in
+// another tab while Discord's consent screen is open. The callback must never
+// attach the proven Discord identity to that replacement session.
 // Scoped to /api/auth/discord so it never rides other requests.
 export const DISCORD_OAUTH_COOKIE = "ld2l_discord_oauth";
 export const DISCORD_OAUTH_COOKIE_PATH = "/api/auth/discord";
@@ -50,34 +54,60 @@ export function codeChallengeS256(verifier: string): string {
 export function packOauthCookie(
   state: string,
   verifier: string,
+  userId: string,
   next?: string | null,
 ): string {
   const safe = safeReturnPath(next);
-  if (!safe) return `${state}.${verifier}`;
-  return `${state}.${verifier}.${Buffer.from(safe).toString("base64url")}`;
+  const user = Buffer.from(userId).toString("base64url");
+  const prefix = `v2.${state}.${verifier}.${user}`;
+  if (!safe) return prefix;
+  return `${prefix}.${Buffer.from(safe).toString("base64url")}`;
 }
 
-/** Unpack the cookie; null on anything malformed. A bad THIRD part only
- *  drops the return path — the state/verifier halves still work, so a stale
- *  two-part cookie from before this format keeps round-tripping. Pure —
- *  unit-tested. */
-export function unpackOauthCookie(
-  value: string | null | undefined,
-): { state: string; verifier: string; next: string | null } | null {
+/** Unpack the cookie; null on anything malformed. A bad optional return-path
+ * part only drops that path. The explicit version intentionally rejects
+ * cookies issued before site-user binding was added: those in-flight links
+ * must be restarted instead of being allowed to attach to a different
+ * session. Pure — unit-tested. */
+export function unpackOauthCookie(value: string | null | undefined): {
+  state: string;
+  verifier: string;
+  userId: string;
+  next: string | null;
+} | null {
   if (!value) return null;
   const parts = value.split(".");
-  if (parts.length < 2 || parts.length > 3 || !parts[0] || !parts[1]) {
+  if (
+    (parts.length !== 4 && parts.length !== 5) ||
+    parts[0] !== "v2" ||
+    !parts[1] ||
+    !parts[2] ||
+    !parts[3]
+  ) {
     return null;
   }
+  let userId: string;
+  try {
+    userId = Buffer.from(parts[3], "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+  // Prisma ids are printable application identifiers. Reject replacement
+  // characters/control bytes produced by malformed base64 instead of letting
+  // them participate in an identity comparison.
+  if (!userId || userId.length > 128 || /[^\x21-\x7E]/.test(userId))
+    return null;
   let next: string | null = null;
-  if (parts.length === 3 && parts[2]) {
+  if (parts.length === 5 && parts[4]) {
     try {
-      next = safeReturnPath(Buffer.from(parts[2], "base64url").toString("utf8"));
+      next = safeReturnPath(
+        Buffer.from(parts[4], "base64url").toString("utf8"),
+      );
     } catch {
       next = null;
     }
   }
-  return { state: parts[0], verifier: parts[1], next };
+  return { state: parts[1], verifier: parts[2], userId, next };
 }
 
 /**

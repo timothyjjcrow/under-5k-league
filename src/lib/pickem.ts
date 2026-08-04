@@ -16,6 +16,16 @@ export type PickemMatchLike = {
   scheduledAt: Date | null;
 };
 
+export type PickemMatchBuckets<T extends PickemMatchLike> = {
+  open: T[];
+  /** Started/live but not decided yet. */
+  locked: T[];
+  /** Completed with a winner, so predictions are graded. */
+  graded: T[];
+  /** Completed draw/no-contest; predictions are void. */
+  voided: T[];
+};
+
 /** Whether a match still accepts (new or changed) predictions. */
 export function predictionOpen(m: PickemMatchLike, now = new Date()): boolean {
   if (m.status === MATCH_STATUS.COMPLETED) return false;
@@ -25,6 +35,30 @@ export function predictionOpen(m: PickemMatchLike, now = new Date()): boolean {
   if (m.status === MATCH_STATUS.LIVE) return false;
   if (m.scheduledAt && m.scheduledAt.getTime() <= now.getTime()) return false;
   return true;
+}
+
+/** Exhaustive lifecycle partition used by the page so locked-but-ungraded
+ * picks never disappear between the open cards and the final results. */
+export function partitionPickemMatches<T extends PickemMatchLike>(
+  matches: T[],
+  now = new Date(),
+): PickemMatchBuckets<T> {
+  const out: PickemMatchBuckets<T> = {
+    open: [],
+    locked: [],
+    graded: [],
+    voided: [],
+  };
+  for (const match of matches) {
+    if (match.status === MATCH_STATUS.COMPLETED) {
+      (match.winnerTeamId ? out.graded : out.voided).push(match);
+    } else if (predictionOpen(match, now)) {
+      out.open.push(match);
+    } else {
+      out.locked.push(match);
+    }
+  }
+  return out;
 }
 
 /**
@@ -109,16 +143,24 @@ export function pickSplit(
  * collapses the rest — a flat season-long grid buried "locks tonight" among
  * "locks in six weeks".
  */
-export function groupOpenByWeek<T extends { week: number }>(
+export function groupOpenByWeek<
+  T extends { week: number; scheduledAt: Date | null },
+>(
   open: T[],
 ): { week: number; matches: T[] }[] {
+  // Urgency beats the nominal round number: a week-6 fixture rescheduled to
+  // tonight must lead a week-5 fixture still a week away. TBD kickoffs sort
+  // last, then week provides a deterministic tie-break.
+  const urgent = [...open].sort((a, b) => {
+    const aAt = a.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY;
+    const bAt = b.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY;
+    return aAt - bAt || a.week - b.week;
+  });
   const byWeek = new Map<number, T[]>();
-  for (const m of open) {
+  for (const m of urgent) {
     const arr = byWeek.get(m.week) ?? [];
     arr.push(m);
     byWeek.set(m.week, arr);
   }
-  return [...byWeek.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([week, matches]) => ({ week, matches }));
+  return [...byWeek.entries()].map(([week, matches]) => ({ week, matches }));
 }

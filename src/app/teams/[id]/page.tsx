@@ -7,8 +7,8 @@ import { getSessionUser } from "@/lib/auth";
 import { DiscordTag } from "@/components/discord-tag";
 import { shareMetadata } from "@/lib/share-metadata";
 import { LocalTime } from "@/components/local-time";
-import { computeStandings } from "@/lib/standings";
 import { seasonScenarioReport } from "@/lib/stakes";
+import { projectPlayoffField } from "@/lib/playoff-field";
 import type { TeamScenario } from "@/lib/scenarios";
 import { headToHead, recentForm } from "@/lib/team-matches";
 import { matchPhaseLabel } from "@/lib/schedule";
@@ -16,11 +16,20 @@ import { roleCoverage } from "@/lib/pool-stats";
 import {
   summarizePlayerGames,
   type PlayerGameLine,
-  parseGamePlayers,
+  decodeGamePlayers,
+  trustedGamePlayers,
 } from "@/lib/player-stats";
-import type { PlayerStat } from "@/lib/match-import";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { cn } from "@/lib/utils";
+import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
+import { draftSetupOpen } from "@/lib/draft-setup";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { canViewLeagueContact } from "@/lib/visibility";
+import {
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import {
   Avatar,
   Badge,
@@ -75,42 +84,94 @@ export default async function TeamPage({
   const team = await prisma.team.findUnique({
     where: { id },
     include: {
-      season: true,
+      season: {
+        include: { draft: { select: { status: true } } },
+      },
       captain: true,
       members: { include: { user: true }, orderBy: { price: "desc" } },
     },
   });
   if (!team) notFound();
-  const viewer = await getSessionUser(); // contact chips are members-only
+  const viewer = await getSessionUser();
 
   const memberIds = team.members.map((m) => m.userId);
-  const [allTeams, allMatches, myMatches, rosterRegs, seasonGames] =
-    await Promise.all([
-      prisma.team.findMany({ where: { seasonId: team.seasonId } }),
-      prisma.match.findMany({ where: { seasonId: team.seasonId } }),
-      prisma.match.findMany({
-        where: {
-          seasonId: team.seasonId,
-          OR: [{ homeTeamId: id }, { awayTeamId: id }],
-        },
-        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
-      }),
-      memberIds.length
-        ? prisma.registration.findMany({
-            where: { seasonId: team.seasonId, userId: { in: memberIds } },
-            select: { userId: true, roles: true, favoriteHeroes: true, mmr: true },
-          })
-        : Promise.resolve([]),
-      memberIds.length
-        ? getSeasonGameScores(team.seasonId)
-        : Promise.resolve([]),
-    ]);
+  const shouldProjectBudget =
+    team.season.isActive &&
+    draftSetupOpen(team.season.status, team.season.draft?.status);
+  const [
+    allTeams,
+    allMatches,
+    myMatches,
+    rosterRegs,
+    seasonGames,
+    captainRegs,
+    viewerRegistration,
+  ] = await Promise.all([
+    prisma.team.findMany({ where: { seasonId: team.seasonId } }),
+    prisma.match.findMany({ where: { seasonId: team.seasonId } }),
+    prisma.match.findMany({
+      where: {
+        seasonId: team.seasonId,
+        OR: [{ homeTeamId: id }, { awayTeamId: id }],
+      },
+      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+    }),
+    memberIds.length
+      ? prisma.registration.findMany({
+          where: { seasonId: team.seasonId, userId: { in: memberIds } },
+          select: {
+            userId: true,
+            roles: true,
+            favoriteHeroes: true,
+            mmr: true,
+          },
+        })
+      : Promise.resolve([]),
+    memberIds.length ? getSeasonGameScores(team.seasonId) : Promise.resolve([]),
+    shouldProjectBudget
+      ? prisma.registration.findMany({
+          where: {
+            seasonId: team.seasonId,
+            status: REGISTRATION_STATUS.ACTIVE,
+            type: REGISTRATION_TYPE.PLAYER,
+          },
+          select: { userId: true, mmr: true },
+        })
+      : Promise.resolve([]),
+    viewer
+      ? prisma.registration.findUnique({
+          where: {
+            seasonId_userId: { seasonId: team.seasonId, userId: viewer.id },
+          },
+          select: { status: true },
+        })
+      : null,
+  ]);
+  const viewerHasActiveRegistration =
+    team.season.isActive &&
+    viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE;
+
+  const displayBudgets = draftBudgetsForDisplay({
+    seasonIsActive: team.season.isActive,
+    seasonStatus: team.season.status,
+    draftStatus: team.season.draft?.status,
+    baseBudget: team.season.draftBudget,
+    budgetMmrWeight: team.season.budgetMmrWeight,
+    teamSize: team.season.teamSize,
+    teams: allTeams,
+    captainMmrs: captainRegs,
+  });
+  const displayBudget = displayBudgets.byTeam.get(team.id) ?? team.budget;
+  const championPresentation = resolveChampionPresentation(
+    team.season,
+    allMatches,
+  );
 
   // Aggregate every rostered player's game lines into the team's hero pool.
   const memberIdSet = new Set(memberIds);
   const teamLines: PlayerGameLine[] = [];
   for (const g of seasonGames) {
-    for (const pl of parseGamePlayers<PlayerStat>(g.players)) {
+    for (const pl of trustedGamePlayers(decodeGamePlayers(g.players))) {
       if (pl.userId && memberIdSet.has(pl.userId)) {
         teamLines.push({
           isRadiant: pl.isRadiant,
@@ -127,19 +188,23 @@ export default async function TeamPage({
   }
   const teamHeroes = summarizePlayerGames(teamLines).topHeroes;
 
-  const standings = computeStandings(
-    allTeams.map((t) => t.id),
-    allMatches,
-  );
+  const playoffField = projectPlayoffField(allTeams, allMatches);
+  const standings = playoffField.standings;
   const rank = standings.findIndex((s) => s.teamId === id) + 1;
   const row = standings.find((s) => s.teamId === id);
   const teamName = new Map(allTeams.map((t) => [t.id, t.name]));
   // "What we need": this team's playoff scenario, from the exact engine.
   const stakesReport =
     team.season.status === "REGULAR_SEASON"
-      ? seasonScenarioReport(standings, allMatches, allTeams.length)
+      ? seasonScenarioReport(
+          playoffField.eligibleStandings,
+          allMatches,
+          playoffField.eligibleTeamIds.length,
+        )
       : null;
-  const myScenario = stakesReport?.teams.get(id) ?? null;
+  const myScenario = team.withdrawn
+    ? null
+    : (stakesReport?.teams.get(id) ?? null);
 
   const form = recentForm(id, myMatches);
   // Game differential per completed match (chronological) → a form trend.
@@ -204,9 +269,9 @@ export default async function TeamPage({
               <a
                 href={`/api/calendar?team=${team.id}`}
                 className="text-xs text-muted hover:text-info"
-                title="This team's scheduled matches as an .ics calendar"
+                title="Download this team's active-season .ics calendar feed"
               >
-                📅 Calendar
+                📅 Calendar feed
               </a>
             ) : null}
             {team.season.isActive && team.season.status === "DRAFT" ? (
@@ -214,10 +279,7 @@ export default async function TeamPage({
                 Draft room →
               </Link>
             ) : team.season.isActive ? (
-              <Link
-                href="/schedule"
-                className={textLink("text-sm")}
-              >
+              <Link href="/schedule" className={textLink("text-sm")}>
                 Standings →
               </Link>
             ) : (
@@ -225,7 +287,12 @@ export default async function TeamPage({
                 href={`/seasons/${team.seasonId}`}
                 className={textLink("text-sm")}
               >
-                Final standings →
+                {team.season.status === SEASON_STATUS.COMPLETE
+                  ? "Final standings →"
+                  : team.season.status === SEASON_STATUS.REGULAR_SEASON ||
+                      team.season.status === SEASON_STATUS.PLAYOFFS
+                    ? "Standings at archive →"
+                    : "Season overview →"}
               </Link>
             )}
           </span>
@@ -276,6 +343,10 @@ export default async function TeamPage({
                     #{rank} of {allTeams.length}
                   </Badge>
                 ) : null}
+                {championPresentation.championTeamId === team.id ? (
+                  <Badge tone="accent">🏆 Champion</Badge>
+                ) : null}
+                {team.withdrawn ? <Badge tone="danger">Withdrawn</Badge> : null}
               </div>
               <div className="mt-1 text-sm text-muted">{team.season.name}</div>
               <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
@@ -307,6 +378,17 @@ export default async function TeamPage({
         </div>
       </div>
 
+      {team.withdrawn ? (
+        <div className="rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm">
+          <div className="font-medium">Withdrawn from this season</div>
+          <p className="mt-1 text-muted">
+            Played results remain in the standings, and the team no longer
+            occupies a playoff seed. Remaining fixtures are recorded as league
+            rulings for its opponents.
+          </p>
+        </div>
+      ) : null}
+
       {played ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat
@@ -328,7 +410,17 @@ export default async function TeamPage({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Budget left" value={`$${team.budget}`} />
+          <Stat
+            label={
+              displayBudgets.isProjected ? "Projected budget" : "Budget left"
+            }
+            value={`$${displayBudget}`}
+            hint={
+              displayBudgets.isProjected
+                ? "Finalized when the auction starts"
+                : undefined
+            }
+          />
           <Stat label="Spent" value={`$${spent}`} />
           <Stat
             label="Roster"
@@ -363,7 +455,9 @@ export default async function TeamPage({
           title="Roster"
           subtitle={
             spent > 0
-              ? `Spent $${spent} · $${team.budget} left`
+              ? displayBudgets.isProjected
+                ? `Recorded $${spent} · projected start $${displayBudget}`
+                : `Spent $${spent} · $${displayBudget} left`
               : undefined
           }
         />
@@ -381,7 +475,11 @@ export default async function TeamPage({
                   <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
                   {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
                   <RankBadge rankTier={m.user.rankTier} />
-                  {viewer ? (
+                  {canViewLeagueContact(
+                    viewer,
+                    m.userId,
+                    viewerHasActiveRegistration,
+                  ) ? (
                     <DiscordTag
                       name={m.user.discordName}
                       verified={!!m.user.discordId}
@@ -421,7 +519,9 @@ export default async function TeamPage({
                   )}
                   title={r.label}
                 >
-                  <div className="text-xs font-medium text-muted">{r.short}</div>
+                  <div className="text-xs font-medium text-muted">
+                    {r.short}
+                  </div>
                   <div
                     className={cn(
                       "mt-1 text-lg font-semibold tabular-nums",
@@ -431,7 +531,11 @@ export default async function TeamPage({
                     {r.count}
                   </div>
                   <div className="text-[10px] uppercase tracking-wide text-muted">
-                    {r.count === 0 ? "gap" : r.count === 1 ? "player" : "players"}
+                    {r.count === 0
+                      ? "gap"
+                      : r.count === 1
+                        ? "player"
+                        : "players"}
                   </div>
                 </div>
               ))}
@@ -454,13 +558,20 @@ export default async function TeamPage({
 
       {h2h.length > 0 ? (
         <Card>
-          <CardHeader title="Head-to-head" subtitle="Completed series by opponent" />
+          <CardHeader
+            title="Head-to-head"
+            subtitle="Completed series by opponent"
+          />
           <CardBody className="p-0">
             <ul className="divide-y divide-line/60">
               {h2h.map((r) => {
                 const record = `${r.wins}–${r.losses}${r.draws > 0 ? `–${r.draws}` : ""}`;
                 const edge =
-                  r.wins > r.losses ? "success" : r.losses > r.wins ? "danger" : "neutral";
+                  r.wins > r.losses
+                    ? "success"
+                    : r.losses > r.wins
+                      ? "danger"
+                      : "neutral";
                 return (
                   <li
                     key={r.opponentId}
@@ -575,12 +686,18 @@ export default async function TeamPage({
 
 /**
  * "What we need": the team's live playoff scenario from the exact engine —
- * win-and-in / lose-and-out, magic number, scenario odds, and the possible
- * finishing range. Regular season only; conservative on ties throughout.
+ * win-and-in / lose-and-out, magic number, equal-weight scenario shares, and
+ * the possible finishing range. Regular season only; conservative on ties.
  */
-function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) {
+function WhatWeNeed({
+  scenario,
+  cut,
+}: {
+  scenario: TeamScenario;
+  cut: number;
+}) {
   const s = scenario;
-  const odds =
+  const scenarioShare =
     s.exact && s.madeCount != null && s.leafCount
       ? Math.round((s.madeCount / s.leafCount) * 100)
       : null;
@@ -591,7 +708,7 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
     if (nothingLeft) {
       // Fate open with nothing left to play: the rest of the league (and
       // possibly the tiebreakers) decides — the scenario line below still
-      // carries the real odds, so don't editorialize beyond that.
+      // carries the equal-weight result share, so don't editorialize beyond it.
       facts.push({
         icon: "⏳",
         text: "Their matches are done — the rest of the league decides it from here.",
@@ -643,7 +760,7 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
         // real points-only path, not "no scenario".
         facts.push({
           icon: "📊",
-          text: `Safely top-${cut} in ${odds && odds > 0 ? `${odds}%` : "<1%"} of the ${s.leafCount.toLocaleString()} remaining scenarios (ties counted against them).`,
+          text: `Safely top-${cut} in ${scenarioShare && scenarioShare > 0 ? `${scenarioShare}%` : "<1%"} of ${s.leafCount.toLocaleString()} equal-weight result combinations. This is not a forecast; ties count against them.`,
         });
       } else {
         facts.push({
@@ -697,4 +814,3 @@ function WhatWeNeed({ scenario, cut }: { scenario: TeamScenario; cut: number }) 
     </Card>
   );
 }
-

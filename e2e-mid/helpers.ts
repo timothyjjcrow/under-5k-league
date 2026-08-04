@@ -198,13 +198,7 @@ export async function expectNoCollapsedTruncation(page: Page, label: string) {
 export async function expectNoOverlappingTargets(
   page: Page,
   label: string,
-  /**
-   * Optional root to scope the scan to. Page-wide is the goal, but `CardHeader`
-   * currently overlaps its own title link with a TAP_SAFE PlayerLink in its
-   * subtitle by 2px (its subtitle is `mt-0.5`, i.e. 2px against TAP_SAFE's 4px
-   * outdent), which is a defect in a 22-call-site primitive and its own
-   * decision. Scope to the region under test rather than deleting the check.
-   */
+  /** Optional root for a deliberately narrower component-level assertion. */
   within?: string,
 ) {
   const overlaps = await page.evaluate((root: string | undefined) => {

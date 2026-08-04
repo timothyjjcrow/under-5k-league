@@ -15,22 +15,34 @@ import {
   textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import type { SeasonStatus } from "@/lib/constants";
+import {
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+  type SeasonStatus,
+} from "@/lib/constants";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import {
+  featureAvailability,
+  featuresClosingPresentation,
+  type FeatureAvailability,
+  type FeatureGate,
+} from "@/lib/features-lifecycle";
+import { draftPhasePresentation } from "@/lib/season-copy";
 
 export const metadata = shareMetadata(
   "Features",
   "Everything waiting inside the league — auction draft night, hero report cards, scouting dossiers, a playoff scenario engine, fantasy, pick'em, inhouses, and a record book that never forgets.",
+  "/features",
 );
 
-// The tour is static content. Phases where a feature's page actually has
-// something to show are listed so we can mark what's "open now" for the
-// current season (an empty list = always available).
+// The tour is static content, but its destinations are not. Each linked
+// feature declares the lifecycle gate that makes its real page useful.
 type Feature = {
   icon: string;
   title: string;
   desc: string;
   href?: string;
-  livePhases?: SeasonStatus[];
+  gate?: FeatureGate;
 };
 
 type Section = {
@@ -41,15 +53,6 @@ type Section = {
   phases: SeasonStatus[]; // which season phases this chapter covers
   features: Feature[];
 };
-
-const MID_SEASON: SeasonStatus[] = ["REGULAR_SEASON", "PLAYOFFS"];
-const MID_PLUS: SeasonStatus[] = ["REGULAR_SEASON", "PLAYOFFS", "COMPLETE"];
-const POST_DRAFT: SeasonStatus[] = [
-  "DRAFT",
-  "REGULAR_SEASON",
-  "PLAYOFFS",
-  "COMPLETE",
-];
 
 const SECTIONS: Section[] = [
   {
@@ -92,7 +95,7 @@ const SECTIONS: Section[] = [
       {
         icon: "📣",
         title: "Discord integration",
-        desc: "Signups, draft sales, results, playoffs, champions, league news — announced automatically. No one misses anything.",
+        desc: "Signups, draft sales, results, playoffs, champions, and league news can be announced automatically to keep the league channel in the loop.",
       },
     ],
   },
@@ -138,7 +141,7 @@ const SECTIONS: Section[] = [
         title: "Live bidding",
         desc: "A server-authoritative auction clock. Every nomination matters; every bid changes the room.",
         href: "/draft",
-        livePhases: ["DRAFT"],
+        gate: "DRAFT_ROOM",
       },
       {
         icon: "⚖️",
@@ -155,7 +158,7 @@ const SECTIONS: Section[] = [
         title: "Draft recap",
         desc: "Biggest spend. Best value steal. Budget disasters. The draft remembers everything.",
         href: "/teams",
-        livePhases: POST_DRAFT,
+        gate: "POST_AUCTION",
       },
     ],
   },
@@ -172,84 +175,84 @@ const SECTIONS: Section[] = [
         title: "Automatic box scores",
         desc: "Heroes, KDA, net worth, MVP of every game — pulled straight from Dota. Nobody types in results.",
         href: "/schedule",
-        livePhases: MID_PLUS,
+        gate: "REGULAR_RESULTS",
       },
       {
         icon: "🎓",
         title: "Hero report cards",
         desc: "Every performance graded S to D against the world's players on that hero. Know exactly what to work on.",
         href: "/leaders",
-        livePhases: MID_PLUS,
+        gate: "REGULAR_RESULTS",
       },
       {
         icon: "🕵️",
         title: "Scouting reports",
         desc: "Before every match: the enemy's comfort heroes, a ban board, and how fast their games run. Know your enemy.",
         href: "/schedule",
-        livePhases: MID_SEASON,
+        gate: "ACTIVE_SEASON",
       },
       {
         icon: "🎯",
         title: "The scenario engine",
-        desc: "\"Win and you're in.\" Magic numbers, elimination math, and playoff odds computed across every possible remaining outcome.",
+        desc: '"Win and you\'re in." Magic numbers, elimination math, and transparent scenario shares across every possible remaining outcome — not predictive odds.',
         href: "/schedule",
-        livePhases: ["REGULAR_SEASON"],
+        gate: "REGULAR_ONLY",
       },
       {
         icon: "🗺️",
         title: "The season grid",
         desc: "Who's played who, at a glance — every meeting's result in one map of the season.",
         href: "/schedule",
-        livePhases: MID_PLUS,
+        gate: "REGULAR_RESULTS",
       },
       {
         icon: "📈",
         title: "Power rankings",
         desc: "Standings tell you who won. Elo-based power rankings tell everyone who looks dangerous.",
         href: "/teams",
-        livePhases: MID_PLUS,
+        gate: "REGULAR_RESULTS",
       },
       {
         icon: "🥇",
         title: "Weekly honors & leaders",
         desc: "Player and Team of the Week crowned automatically, plus leaderboards for every stat that matters.",
         href: "/leaders",
-        livePhases: MID_PLUS,
+        gate: "REGULAR_RESULTS",
       },
       {
         icon: "🧙",
         title: "Fantasy",
         desc: "Draft your fantasy five under an MMR salary cap. Score points from real league games all season.",
         href: "/fantasy",
-        livePhases: MID_PLUS,
+        gate: "POST_AUCTION",
       },
       {
         icon: "🔮",
         title: "Pick'em",
         desc: "Predict every result, watch the community split, climb the oracle board. Trash talk included.",
         href: "/pickem",
-        livePhases: MID_PLUS,
+        gate: "POST_AUCTION",
       },
       {
         icon: "🧪",
         title: "Hero meta report",
         desc: "The league's own meta: pick rates, win rates, most-contested heroes, and who owns each one.",
         href: "/meta",
-        livePhases: MID_PLUS,
+        gate: "REGULAR_RESULTS",
       },
       {
         icon: "✅",
         title: "Match-night logistics",
         desc: "One-click check-ins, standins for no-shows, captain-to-captain rescheduling. The admin never has to chase anyone.",
         href: "/schedule",
-        livePhases: MID_SEASON,
+        gate: "ACTIVE_SEASON",
       },
       {
         icon: "📅",
-        title: "Calendar sync",
-        desc: "Subscribe once. Every match lands in your calendar, in your timezone.",
+        title: "Calendar feed",
+        desc: "Download the active season's .ics feed for every scheduled match, with stable event IDs for calendar imports.",
         href: "/schedule",
-        livePhases: MID_SEASON,
+        gate: "ACTIVE_SEASON",
       },
     ],
   },
@@ -257,22 +260,33 @@ const SECTIONS: Section[] = [
     id: "playoffs",
     kicker: "4 — Playoffs",
     title: "Win — or your season is over",
-    blurb: "Single elimination. Seeds locked from the final table. No second chances.",
-    phases: ["PLAYOFFS", "COMPLETE"],
+    blurb:
+      "Single elimination. Seeds locked from the final table. No second chances.",
+    phases: ["PLAYOFFS"],
     features: [
       {
         icon: "🏆",
         title: "The bracket",
         desc: "A classic tournament tree — two wings converging on the grand final, updating live as winners advance. Tap a team to trace its run.",
         href: "/schedule",
-        livePhases: ["PLAYOFFS", "COMPLETE"],
+        gate: "PLAYOFF_RESULTS",
       },
+    ],
+  },
+  {
+    id: "history",
+    kicker: "5 — League history",
+    title: "A champion joins league history",
+    blurb:
+      "The final result stays readable after the live season ends — for returning players and future rivals.",
+    phases: ["COMPLETE"],
+    features: [
       {
         icon: "🎬",
         title: "Season recap",
         desc: "Awards, superlatives, the championship run — one page that tells the season's story.",
         href: "/recap",
-        livePhases: ["COMPLETE"],
+        gate: "COMPLETE",
       },
       {
         icon: "📚",
@@ -298,15 +312,15 @@ const OBSESSIONS: {
   icon: string;
   title: string;
   desc: string;
-  links: { label: string; href: string }[];
+  links: { label: string; href: string; gate?: FeatureGate }[];
 }[] = [
   {
     icon: "🏅",
     title: "The competitor",
     desc: "Standings, clinch marks, and exactly what your team needs tonight.",
     links: [
-      { label: "Standings", href: "/schedule" },
-      { label: "Teams", href: "/teams" },
+      { label: "Standings", href: "/schedule", gate: "POST_AUCTION" },
+      { label: "Teams", href: "/teams", gate: "POST_AUCTION" },
     ],
   },
   {
@@ -314,8 +328,8 @@ const OBSESSIONS: {
     title: "The stat nerd",
     desc: "Report cards, leaderboards, the league meta, and all-time records.",
     links: [
-      { label: "Leaders", href: "/leaders" },
-      { label: "Meta", href: "/meta" },
+      { label: "Leaders", href: "/leaders", gate: "REGULAR_RESULTS" },
+      { label: "Meta", href: "/meta", gate: "REGULAR_RESULTS" },
       { label: "Records", href: "/records" },
     ],
   },
@@ -324,8 +338,8 @@ const OBSESSIONS: {
     title: "The oracle",
     desc: "Call every series in pick'em and run a fantasy five on the side.",
     links: [
-      { label: "Pick'em", href: "/pickem" },
-      { label: "Fantasy", href: "/fantasy" },
+      { label: "Pick'em", href: "/pickem", gate: "POST_AUCTION" },
+      { label: "Fantasy", href: "/fantasy", gate: "POST_AUCTION" },
     ],
   },
   {
@@ -340,23 +354,107 @@ const OBSESSIONS: {
 ];
 
 export default async function FeaturesPage() {
-  const [season, user, players, games, seasonsRun, champions] =
+  const [season, user] = await Promise.all([
+    getActiveSeason(),
+    getSessionUser(),
+  ]);
+  const [players, games, seasonsRun, seasonRecords, draft, registration] =
     await Promise.all([
-      getActiveSeason(),
-      getSessionUser(),
-      prisma.user.count(),
+      // A Steam account is not automatically a league player. Count people
+      // who have actually signed up as a player, joined a roster, or played an
+      // inhouse so the tour's social proof stays truthful.
+      prisma.user.count({
+        where: {
+          OR: [
+            { registrations: { some: { type: REGISTRATION_TYPE.PLAYER } } },
+            { teamMemberships: { some: {} } },
+            { inhouseLobbies: { some: {} } },
+          ],
+        },
+      }),
       prisma.game.count(),
-      prisma.season.count(),
-      prisma.season.count({ where: { championTeamId: { not: null } } }),
+      // Ignore a just-created signup shell or abandoned setup. A season has
+      // run once it reached COMPLETE or retained at least one imported game.
+      prisma.season.count({
+        where: {
+          OR: [
+            { status: "COMPLETE" },
+            { matches: { some: { games: { some: {} } } } },
+          ],
+        },
+      }),
+      prisma.season.findMany({
+        select: {
+          status: true,
+          championTeamId: true,
+          matches: {
+            where: { phase: { not: "REGULAR" } },
+            select: {
+              id: true,
+              phase: true,
+              bracketSlot: true,
+              status: true,
+              winnerTeamId: true,
+              homeTeamId: true,
+              awayTeamId: true,
+            },
+          },
+        },
+      }),
+      season
+        ? prisma.draft.findUnique({
+            where: { seasonId: season.id },
+            select: { status: true },
+          })
+        : Promise.resolve(null),
+      season && user
+        ? prisma.registration.findUnique({
+            where: {
+              seasonId_userId: { seasonId: season.id, userId: user.id },
+            },
+            select: { status: true, type: true },
+          })
+        : Promise.resolve(null),
     ]);
+  const champions = seasonRecords.filter(
+    (record) =>
+      resolveChampionPresentation(record, record.matches).championTeamId !=
+      null,
+  ).length;
   const phase = (season?.status ?? null) as SeasonStatus | null;
+  const draftStatus = draft?.status ?? null;
+  const hasActivePlayerSignup =
+    registration?.status === REGISTRATION_STATUS.ACTIVE &&
+    registration.type === REGISTRATION_TYPE.PLAYER;
 
-  const isLive = (f: Feature) =>
-    !!f.href && (!f.livePhases || (!!phase && f.livePhases.includes(phase)));
+  const accessFor = (feature: Feature) =>
+    feature.href
+      ? featureAvailability(feature.gate ?? "ALWAYS", phase, draftStatus)
+      : { available: false };
+  const reportCardShowcase = featureAvailability(
+    "REGULAR_RESULTS",
+    phase,
+    draftStatus,
+  );
+  const stakesShowcase = featureAvailability(
+    "REGULAR_ONLY",
+    phase,
+    draftStatus,
+  );
+  const bracketShowcase = featureAvailability(
+    "PLAYOFF_RESULTS",
+    phase,
+    draftStatus,
+  );
+  const closing = featuresClosingPresentation(
+    phase,
+    !!user,
+    hasActivePlayerSignup,
+  );
 
   const numbers = [
     { label: "seasons", value: seasonsRun },
-    { label: "players", value: players },
+    { label: "league players", value: players },
     { label: "games on record", value: games },
     { label: "champions crowned", value: champions },
   ].filter((n) => n.value > 0);
@@ -395,6 +493,14 @@ export default async function FeaturesPage() {
                 Sign in with Steam →
               </Link>
             ) : null}
+            {user && phase === "SIGNUPS" && closing.action ? (
+              <Link
+                href={closing.action.href}
+                className={buttonClasses("primary")}
+              >
+                {closing.action.label}
+              </Link>
+            ) : null}
             <Link href="/inhouse" className={buttonClasses("accent")}>
               Play an inhouse
             </Link>
@@ -427,7 +533,7 @@ export default async function FeaturesPage() {
           return (
             <li key={step.label} className="flex items-center gap-1">
               {i > 0 ? (
-                <span aria-hidden className="px-1 text-muted/50">
+                <span aria-hidden className="px-1 text-muted">
                   →
                 </span>
               ) : null}
@@ -457,13 +563,14 @@ export default async function FeaturesPage() {
             Not your average league site
           </h2>
           <p className="mt-1 text-sm text-muted">
-            A taste of what match night looks like here.
+            Illustrative previews of what match night can look like. Links
+            appear when the current season has reached each feature.
           </p>
         </div>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <ShowcaseReportCard />
-          <ShowcaseStakes />
-          <ShowcaseBracket />
+          <ShowcaseReportCard availability={reportCardShowcase} />
+          <ShowcaseStakes availability={stakesShowcase} />
+          <ShowcaseBracket availability={bracketShowcase} />
         </div>
       </section>
 
@@ -471,6 +578,11 @@ export default async function FeaturesPage() {
       <div className="space-y-12 pb-4">
         {SECTIONS.map((section) => {
           const current = !!phase && section.phases.includes(phase);
+          const currentLabel = current
+            ? section.id === "draft"
+              ? draftPhasePresentation(draftStatus).badge
+              : "Happening now"
+            : null;
           return (
             <div key={section.id} className="space-y-12">
               {/* The season chapters get their own act break. */}
@@ -480,7 +592,7 @@ export default async function FeaturesPage() {
                     The season
                   </div>
                   <div className="mt-1 font-display text-2xl font-semibold">
-                    Four phases. One champion.
+                    Five phases. One champion.
                   </div>
                 </div>
               ) : null}
@@ -490,8 +602,17 @@ export default async function FeaturesPage() {
                     <span className="text-xs font-medium uppercase tracking-wide text-accent">
                       {section.kicker}
                     </span>
-                    {current ? (
-                      <Badge tone="success">Happening now</Badge>
+                    {currentLabel ? (
+                      <Badge
+                        tone={
+                          section.id === "draft" &&
+                          currentLabel !== "Draft live"
+                            ? "info"
+                            : "success"
+                        }
+                      >
+                        {currentLabel}
+                      </Badge>
                     ) : null}
                   </div>
                   <h2
@@ -504,7 +625,11 @@ export default async function FeaturesPage() {
                 </div>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   {section.features.map((f) => (
-                    <FeatureCard key={f.title} feature={f} live={isLive(f)} />
+                    <FeatureCard
+                      key={f.title}
+                      feature={f}
+                      availability={accessFor(f)}
+                    />
                   ))}
                 </div>
               </section>
@@ -538,16 +663,35 @@ export default async function FeaturesPage() {
                 </h3>
               </div>
               <p className="mt-1.5 text-sm text-muted">{o.desc}</p>
-              <div className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 text-sm">
-                {o.links.map((l) => (
-                  <Link
-                    key={l.href}
-                    href={l.href}
-                    className={textLink("font-medium")}
-                  >
-                    {l.label} →
-                  </Link>
-                ))}
+              <div className="mt-2.5 space-y-2 text-sm">
+                {o.links.map((l) => {
+                  const availability = featureAvailability(
+                    l.gate ?? "ALWAYS",
+                    phase,
+                    draftStatus,
+                  );
+                  return availability.available ? (
+                    <Link
+                      key={l.href}
+                      href={l.href}
+                      className={textLink("block font-medium")}
+                    >
+                      {l.label} →
+                    </Link>
+                  ) : (
+                    <div key={l.href} className="text-muted">
+                      <span className="font-medium">
+                        <span aria-hidden>🔒 </span>
+                        {l.label}
+                      </span>
+                      {availability.unavailableReason ? (
+                        <span className="block text-[11px] leading-snug">
+                          {availability.unavailableReason}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             </Card>
           ))}
@@ -556,21 +700,17 @@ export default async function FeaturesPage() {
 
       {/* Closing CTA */}
       <div className="mb-4 rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-10 text-center">
-        <h2 className="font-display text-2xl font-semibold">
-          Ready for next season?
-        </h2>
+        <h2 className="font-display text-2xl font-semibold">{closing.title}</h2>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          {phase === "SIGNUPS"
-            ? "Signups take a minute. Grab a spot before draft night."
-            : "You'll hear it first in the Discord."}
+          {closing.detail}
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-3">
-          {phase === "SIGNUPS" ? (
+          {closing.action ? (
             <Link
-              href={user ? "/me" : "/login"}
+              href={closing.action.href}
               className={buttonClasses("primary")}
             >
-              {user ? "Join the season →" : "Sign up with Steam →"}
+              {closing.action.label}
             </Link>
           ) : null}
           <DiscordButton />
@@ -588,25 +728,38 @@ function ShowcaseFrame({
   title,
   caption,
   href,
+  availability,
   children,
 }: {
   title: string;
   caption: string;
   href: string;
+  availability: FeatureAvailability;
   children: React.ReactNode;
 }) {
   return (
     <Card className="flex min-w-0 flex-col p-4">
-      <h3 className="font-display text-base font-semibold">{title}</h3>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-display text-base font-semibold">{title}</h3>
+        <Badge tone="neutral">Illustrative preview</Badge>
+      </div>
       <div className="my-3 flex-1 rounded-lg border border-line/70 bg-surface-2/30 p-3">
         {children}
       </div>
-      <p className="text-sm text-muted">
-        {caption}{" "}
-        <Link href={href} className={textLink("whitespace-nowrap font-medium")}>
-          See yours →
+      <p className="text-sm text-muted">{caption}</p>
+      {availability.available ? (
+        <Link
+          href={href}
+          className={textLink("mt-2 inline-block text-sm font-medium")}
+        >
+          Open this feature →
         </Link>
-      </p>
+      ) : availability.unavailableReason ? (
+        <p className="mt-2 text-xs font-medium text-muted">
+          <span aria-hidden>🔒 </span>
+          {availability.unavailableReason}
+        </p>
+      ) : null}
     </Card>
   );
 }
@@ -618,13 +771,18 @@ const DEMO_GRADES: { short: string; grade: string; tone: string }[] = [
   { short: "HD/min", grade: "C", tone: "border-line text-fg/80" },
 ];
 
-function ShowcaseReportCard() {
+function ShowcaseReportCard({
+  availability,
+}: {
+  availability: FeatureAvailability;
+}) {
   const hero = heroById(8); // Juggernaut
   return (
     <ShowcaseFrame
       title="Every game gets graded"
       caption="OpenDota percentiles turn each performance into a report card vs the world."
       href="/leaders"
+      availability={availability}
     >
       <div className="flex items-center gap-2.5">
         {hero ? <HeroIcon hero={hero} size={30} /> : null}
@@ -662,12 +820,17 @@ function ShowcaseReportCard() {
   );
 }
 
-function ShowcaseStakes() {
+function ShowcaseStakes({
+  availability,
+}: {
+  availability: FeatureAvailability;
+}) {
   return (
     <ShowcaseFrame
       title="The math of match night"
       caption="An exact scenario engine turns the run-in into stakes everyone can feel."
       href="/schedule"
+      availability={availability}
     >
       <div className="text-[11px] font-medium uppercase tracking-wider text-muted">
         Tonight&apos;s stakes
@@ -684,9 +847,16 @@ function ShowcaseStakes() {
             key={t.name}
             className="flex min-w-0 items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-2.5 py-1.5"
           >
-            <TeamCrest name={t.name} seed={t.name} size={20} className="shrink-0 rounded-md" />
+            <TeamCrest
+              name={t.name}
+              seed={t.name}
+              size={20}
+              className="shrink-0 rounded-md"
+            />
             <span className="min-w-0">
-              <span className="block truncate text-sm font-medium">{t.name}</span>
+              <span className="block truncate text-sm font-medium">
+                {t.name}
+              </span>
               <span className="block text-xs text-muted">{t.note}</span>
             </span>
           </div>
@@ -698,7 +868,11 @@ function ShowcaseStakes() {
 
 // A miniature of the real bracket's centered shape: two semis flanking the
 // grand final, trophy on top. Decorative — the live one is interactive.
-function ShowcaseBracket() {
+function ShowcaseBracket({
+  availability,
+}: {
+  availability: FeatureAvailability;
+}) {
   const pill = (name: string, win?: boolean) => (
     <div
       className={cn(
@@ -706,7 +880,12 @@ function ShowcaseBracket() {
         win ? "border-amber-400/40" : "border-line",
       )}
     >
-      <TeamCrest name={name} seed={name} size={16} className="shrink-0 rounded" />
+      <TeamCrest
+        name={name}
+        seed={name}
+        size={16}
+        className="shrink-0 rounded"
+      />
       <span
         className={cn(
           "min-w-0 truncate text-[11px]",
@@ -727,6 +906,7 @@ function ShowcaseBracket() {
       title="A bracket worth printing"
       caption="Playoffs draw the classic tree — wings converging on the grand final."
       href="/schedule"
+      availability={availability}
     >
       <div
         role="img"
@@ -759,7 +939,14 @@ function ShowcaseBracket() {
   );
 }
 
-function FeatureCard({ feature, live }: { feature: Feature; live: boolean }) {
+function FeatureCard({
+  feature,
+  availability,
+}: {
+  feature: Feature;
+  availability: FeatureAvailability;
+}) {
+  const available = availability.available;
   const body = (
     <div className="flex h-full min-w-0 items-start gap-3 p-4">
       <span
@@ -773,10 +960,15 @@ function FeatureCard({ feature, live }: { feature: Feature; live: boolean }) {
           {feature.title}
         </h3>
         <p className="mt-1 text-sm text-muted">{feature.desc}</p>
-        {live ? (
+        {available ? (
           <span className="mt-2 inline-block text-sm font-medium text-accent">
-            See it live →
+            Open feature →
           </span>
+        ) : feature.href && availability.unavailableReason ? (
+          <p className="mt-2 text-xs font-medium text-muted">
+            <span aria-hidden>🔒 </span>
+            {availability.unavailableReason}
+          </p>
         ) : null}
       </div>
     </div>
@@ -784,7 +976,7 @@ function FeatureCard({ feature, live }: { feature: Feature; live: boolean }) {
 
   // Only link the card when the destination actually has something to show
   // for the current phase — a tour full of empty states sells nothing.
-  return live && feature.href ? (
+  return available && feature.href ? (
     <Link
       href={feature.href}
       className="block min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"

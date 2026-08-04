@@ -492,22 +492,38 @@ async function applyFloor(
 /**
  * The lazy sweeper — the ONE refund rule, instead of a refund leg bolted into
  * each of the four already-hardened paths that can kill a lobby.
- * `cancelLobby`, `resolveAbandonedLobby`, `failReadyCheck` and `voidLastResult`
- * all flip the lobby into a state one of the branches below recognises, so none
- * of them needed a line of betting code. (`failReadyCheck` cannot even produce
- * a pot: the window opens at READY, four phases later.)
+ * Every terminal path flips the lobby into a state one of the branches below
+ * recognises. `cancelLobby` and `voidLastResult` then target this shared resolver
+ * before returning for immediate consistency; abandoned games rely on the next
+ * global sweep. (`failReadyCheck` cannot even produce a pot: the window opens at
+ * READY, four phases later.)
  *
- * ONE indexed probe per resolver run — `betSettlement` is indexed and is null
- * on every lobby in a league that never bets, so the cost of the whole feature
- * being switched off is a single index probe.
+ * ONE bounded indexed probe per global run — `betSettlement` is indexed and is
+ * null on every lobby in a league that never bets, so the cost of the whole
+ * feature being switched off is a single index probe. Eligible rows are oldest
+ * first and every row in the batch is attempted even if one is poisoned. A
+ * failed row is best-effort moved to the back through updatedAt, so one broken
+ * account cannot monopolize all future sweeps; `InhouseLobby.completedAt` is the
+ * immutable result clock, so that retry cursor cannot reorder game banners.
+ * The bound caps work on a hot sitewide poll without starving a larger backlog:
+ * after the first 25 failures rotate, the next oldest rows lead the next poll.
+ * A database-wide outage can also prevent that rotation, but no writes can make
+ * progress in that state anyway.
+ *
+ * Pass a lobby id from a destructive admin action. That target form never lets
+ * an older stranded pot consume the one immediate refund/reversal attempt that
+ * the action promises its own players.
  *
  * CALLERS MUST WRAP THIS IN try/catch. It runs inside resolver chains that
  * `/api/sync` executes on every page view of the entire site: a bet bug must
  * never be able to stop ten people playing Dota.
  */
-export async function resolveUnsettledBets(): Promise<boolean> {
-  const lobby = await prisma.inhouseLobby.findFirst({
+export async function resolveUnsettledBets(
+  lobbyId?: string,
+): Promise<boolean> {
+  const lobbies = await prisma.inhouseLobby.findMany({
     where: {
+      ...(lobbyId ? { id: lobbyId } : {}),
       OR: [
         {
           betSettlement: INHOUSE_BET_STATUS.PENDING,
@@ -522,17 +538,56 @@ export async function resolveUnsettledBets(): Promise<boolean> {
         },
       ],
     },
+    orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+    take: lobbyId ? 1 : 25,
     select: { id: true, status: true, betSettlement: true },
   });
-  if (!lobby) return false;
+  if (lobbies.length === 0) return false;
 
-  if (lobby.betSettlement === INHOUSE_BET_STATUS.PENDING) {
-    if (lobby.status === INHOUSE_STATUS.COMPLETED) {
-      return (await settleInhouseBets(lobby.id)) !== null;
+  // Deterministically line concurrent pollers up AFTER their shared read and
+  // BEFORE any settlement claim. Tests use this seam as a barrier to prove the
+  // private refund/reversal guards elect exactly one winner; in production it
+  // is a null check (see race-hook.ts).
+  await raceHook("inhouseBet.resolveUnsettled.beforeApply");
+
+  let resolved = false;
+  const failures: unknown[] = [];
+  for (const lobby of lobbies) {
+    try {
+      const changed =
+        lobby.betSettlement === INHOUSE_BET_STATUS.PENDING
+          ? lobby.status === INHOUSE_STATUS.COMPLETED
+            ? (await settleInhouseBets(lobby.id)) !== null
+            : await refundLobbyBets(lobby.id)
+          : await reverseLobbyBets(lobby.id);
+      resolved = changed || resolved;
+    } catch (error) {
+      failures.push(error);
+      // Retry rotation, best-effort and deliberately NOT a guarded claim: if a
+      // rival resolved the lobby after our read, touching its generic updatedAt
+      // is harmless, while another guarded update would itself need a new race
+      // contract. completedAt, not updatedAt, owns result chronology now.
+      try {
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { updatedAt: new Date() },
+        });
+      } catch {
+        // A database-wide failure can prevent both settlement and rotation. Keep
+        // the original error — it is the useful one for the caller's log.
+      }
     }
-    return refundLobbyBets(lobby.id);
   }
-  return reverseLobbyBets(lobby.id);
+
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `${failures.length} inhouse bet settlement${
+        failures.length === 1 ? "" : "s"
+      } failed`,
+    );
+  }
+  return resolved;
 }
 
 /**

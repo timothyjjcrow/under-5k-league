@@ -20,6 +20,7 @@ import { formatMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
 import { credProfitBoard } from "@/lib/inhouse-bet-service";
+import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { HeroVideo } from "@/components/hero-video";
 import { LocalTime } from "@/components/local-time";
@@ -58,7 +59,9 @@ export default async function InhousePage() {
   const [lastReg, dbUser] = user
     ? await Promise.all([
         prisma.registration.findFirst({
-          where: { userId: user.id },
+          // Match joinQueue's trust rule exactly: the newest positive league
+          // MMR is the number the server will actually seed with.
+          where: { userId: user.id, mmr: { gt: 0 } },
           orderBy: { createdAt: "desc" },
           select: { mmr: true },
         }),
@@ -186,7 +189,9 @@ async function SceneStats() {
           label="Top of the ladder"
           tone="accent"
           value={<span className="truncate">{stats.ladderName}</span>}
-          hint={stats.ladderRating != null ? `${stats.ladderRating} Elo` : undefined}
+          hint={
+            stats.ladderRating != null ? `${stats.ladderRating} Elo` : undefined
+          }
         />
       ) : null}
     </StatStrip>
@@ -208,6 +213,8 @@ async function RecentResults() {
       radiantScore: true,
       direScore: true,
       boxScore: true,
+      matchStartTime: true,
+      startedAt: true,
       createdAt: true,
     },
   });
@@ -240,10 +247,7 @@ async function RecentResults() {
         <SectionTitle aside="· newest game in full, the rest one tap away">
           Recent results
         </SectionTitle>
-        <Link
-          href="/inhouse/history"
-          className={textLink("shrink-0 text-sm")}
-        >
+        <Link href="/inhouse/history" className={textLink("shrink-0 text-sm")}>
           All results →
         </Link>
       </div>
@@ -295,6 +299,8 @@ function ResultSummaryLine({
     radiantScore: number | null;
     direScore: number | null;
     durationSecs: number | null;
+    matchStartTime: Date | null;
+    startedAt: Date | null;
     createdAt: Date;
   };
   players: BoxPlayer[];
@@ -304,6 +310,7 @@ function ResultSummaryLine({
   const mvpId = gameMvp(players, radiantWin);
   const mvp = players.find((p) => p.userId === mvpId);
   const dur = lobby.durationSecs ?? 0;
+  const playedAt = inhousePlayedAt(lobby);
   return (
     <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       <span className="flex shrink-0 items-center gap-2">
@@ -336,9 +343,9 @@ function ResultSummaryLine({
           </span>
         ) : null}
         <LocalTime
-          ts={lobby.createdAt.getTime()}
+          ts={playedAt.getTime()}
           variant="short"
-          initial={formatMatchTime(lobby.createdAt, "short")}
+          initial={formatMatchTime(playedAt, "short")}
         />
       </span>
     </span>
@@ -546,26 +553,27 @@ function OpenDotaGuide({ open }: { open: boolean }) {
           <li className="flex gap-3">
             <GuideStep n={2} />
             <span>
-              Link your Dota account on your{" "}
+              Your Steam sign-in verifies the Dota account shown on your{" "}
               <Link href="/me" className={textLink()}>
                 profile
-              </Link>{" "}
-              so we can match you in games — or we derive it from your Steam ID.
+              </Link>
+              . Check it once so we can match you in games.
             </span>
           </li>
           <li className="flex gap-3">
             <GuideStep n={3} />
             <span>
-              Play your inhouse. When it ends, the result is fetched from OpenDota
-              automatically (usually within a few minutes) — or anyone in the game
-              can paste the match ID.
+              Play your inhouse. When it ends, the result is fetched from
+              OpenDota automatically (usually within a few minutes) — or anyone
+              in the game can paste the match ID.
             </span>
           </li>
         </ol>
         <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs text-muted">
-          Not everyone needs this on — a few players per side is enough — but the
-          more the better. It only exposes games played <b>after</b> you enable
-          it, and OpenDota can take a few minutes to index a finished game.
+          Not everyone needs this on — a few players per side is enough — but
+          the more the better. It only exposes games played <b>after</b> you
+          enable it, and OpenDota can take a few minutes to index a finished
+          game.
         </p>
       </div>
     </details>
@@ -600,7 +608,8 @@ function GameResultCard({
   players: BoxPlayer[];
   avatarMap: Map<string, string | null>;
 }) {
-  const radiantWin = lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
+  const radiantWin =
+    lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
   const radiant = players.filter((p) => p.isRadiant);
   const dire = players.filter((p) => !p.isRadiant);
   // Best line of the game — same tested MVP math the league box scores use.
@@ -678,7 +687,9 @@ function InhouseNetWorthBar({
             : `${lead > 0 ? "Radiant" : "Dire"} +${formatNetWorth(Math.abs(lead))}`}
         </span>
         <span className="flex items-center gap-1.5 font-medium text-danger">
-          <span className="font-mono text-muted">{formatNetWorth(direNet)}</span>
+          <span className="font-mono text-muted">
+            {formatNetWorth(direNet)}
+          </span>
           Dire
           <span className="h-2 w-2 rounded-full bg-danger" />
         </span>
@@ -730,7 +741,12 @@ function SideBox({
     >
       <div className="mb-2 flex items-center justify-between">
         <span className="flex items-center gap-2 text-sm font-semibold">
-          <span className={cn("h-2.5 w-2.5 rounded-full", isRadiant ? "bg-success" : "bg-danger")} />
+          <span
+            className={cn(
+              "h-2.5 w-2.5 rounded-full",
+              isRadiant ? "bg-success" : "bg-danger",
+            )}
+          />
           {label}
         </span>
         <Badge tone={win ? "success" : "neutral"}>{win ? "Win" : "Loss"}</Badge>
@@ -759,7 +775,10 @@ function SideBox({
                         src={avatarMap.get(p.userId) ?? null}
                         size={18}
                       />
-                      <PlayerLink userId={p.userId} className="truncate text-sm">
+                      <PlayerLink
+                        userId={p.userId}
+                        className="truncate text-sm"
+                      >
                         {p.name ?? "Unknown"}
                       </PlayerLink>
                       {p.userId === mvpId ? (
@@ -966,189 +985,191 @@ function Leaderboard({
   }));
   return (
     <div className="overflow-x-auto">
-    {/* table-fixed + widths on <col>, per CLAUDE.md's StandingsTable rule: with
+      {/* table-fixed + widths on <col>, per CLAUDE.md's StandingsTable rule: with
         fixed layout a `hidden` column STILL takes an equal share of the leftover
         width unless its <col> is w-0 until the breakpoint that shows it. Without
         this the nine mostly-1-character columns starved the Player name. */}
-    <table className="w-full table-fixed text-sm">
-      <colgroup>
-        <col className="w-11" />
-        <col />
-        {/* Wide enough for "1045" plus its "+18" delta on ONE line — at 4.5rem
+      <table className="w-full table-fixed text-sm">
+        <colgroup>
+          <col className="w-11" />
+          <col />
+          {/* Wide enough for "1045" plus its "+18" delta on ONE line — at 4.5rem
             the delta wrapped and every top row rendered two lines tall. */}
-        <col className="w-[5.75rem]" />
-        {/* Cred sits immediately beside Elo — skill then nerve, read as a
+          <col className="w-[5.75rem]" />
+          {/* Cred sits immediately beside Elo — skill then nerve, read as a
             pair. It is the FIRST thing a phone gives up (w-0 until sm): six
             fixed columns at 390px starve the Player name to a couple of
             characters, which is the trap the widths above already document.
             Phones get the figure under the name instead, so the second board
             is never invisible on the majority device. */}
-        {showCred ? <col className="w-0 sm:w-[5.5rem]" /> : null}
-        <col className="w-9" />
-        <col className="w-9" />
-        {/* Form moved ahead of Win%/Streak/GP: it is the one at-a-glance signal
+          {showCred ? <col className="w-0 sm:w-[5.5rem]" /> : null}
+          <col className="w-9" />
+          <col className="w-9" />
+          {/* Form moved ahead of Win%/Streak/GP: it is the one at-a-glance signal
             in the table, so it is the first extra column a wider screen buys. */}
-        <col className="w-0 sm:w-[6.5rem]" />
-        <col className="w-0 md:w-14" />
-        <col className="w-0 md:w-16" />
-        <col className="w-0 lg:w-14" />
-      </colgroup>
-      <thead>
-        <tr className="border-b border-line text-left text-xs uppercase text-muted">
-          <th className="px-4 py-2.5 font-medium sm:px-5">#</th>
-          <th className="px-2 py-2.5 font-medium">Player</th>
-          <th className="px-2 py-2.5 text-right font-medium">Elo</th>
-          {showCred ? (
-            <th
-              className="hidden px-2 py-2.5 text-right font-medium sm:table-cell"
-              title="Net Cred won or lost betting on your own games — never your balance"
-            >
-              Cred
+          <col className="w-0 sm:w-[6.5rem]" />
+          <col className="w-0 md:w-14" />
+          <col className="w-0 md:w-16" />
+          <col className="w-0 lg:w-14" />
+        </colgroup>
+        <thead>
+          <tr className="border-b border-line text-left text-xs uppercase text-muted">
+            <th className="px-4 py-2.5 font-medium sm:px-5">#</th>
+            <th className="px-2 py-2.5 font-medium">Player</th>
+            <th className="px-2 py-2.5 text-right font-medium">Elo</th>
+            {showCred ? (
+              <th
+                className="hidden px-2 py-2.5 text-right font-medium sm:table-cell"
+                title="Net Cred won or lost betting on your own games — never your balance"
+              >
+                Cred
+              </th>
+            ) : null}
+            <th className="px-2 py-2.5 text-center font-medium">W</th>
+            <th className="px-2 py-2.5 text-center font-medium">L</th>
+            <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+              Form
             </th>
-          ) : null}
-          <th className="px-2 py-2.5 text-center font-medium">W</th>
-          <th className="px-2 py-2.5 text-center font-medium">L</th>
-          <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
-            Form
-          </th>
-          <th className="hidden px-2 py-2.5 text-center font-medium md:table-cell">
-            Win%
-          </th>
-          <th className="hidden px-2 py-2.5 text-center font-medium md:table-cell">
-            Streak
-          </th>
-          <th className="hidden px-4 py-2.5 text-right font-medium lg:table-cell sm:px-5">
-            GP
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {rowsView.map(({ r, net, credRank }, i) => (
-          <tr
-            key={r.userId}
-            className={cn(
-              "border-b border-line/50 last:border-0",
-              r.userId === meId ? "bg-accent/5" : "",
-            )}
-          >
-            <td className="px-4 py-2.5 text-muted tabular-nums sm:px-5">
-              {i < ranked.length ? (
-                i < 3 ? (
-                  <span role="img" aria-label={`Rank ${i + 1}`}>
-                    {["🥇", "🥈", "🥉"][i]}
-                  </span>
-                ) : (
-                  i + 1
-                )
-              ) : (
-                <span
-                  title={`Provisional — under ${PROVISIONAL_GAMES} games, not ranked yet`}
-                  aria-label="Unranked (provisional)"
-                >
-                  —
-                </span>
+            <th className="hidden px-2 py-2.5 text-center font-medium md:table-cell">
+              Win%
+            </th>
+            <th className="hidden px-2 py-2.5 text-center font-medium md:table-cell">
+              Streak
+            </th>
+            <th className="hidden px-4 py-2.5 text-right font-medium lg:table-cell sm:px-5">
+              GP
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rowsView.map(({ r, net, credRank }, i) => (
+            <tr
+              key={r.userId}
+              className={cn(
+                "border-b border-line/50 last:border-0",
+                r.userId === meId ? "bg-accent/5" : "",
               )}
-            </td>
-            <td className="px-2 py-2.5">
-              <span className="flex min-w-0 items-center gap-2">
-                <Avatar name={r.name} src={r.avatar} size={24} />
-                <PlayerLink userId={r.userId} className="min-w-6 truncate font-medium">
-                  {r.name}
-                </PlayerLink>
-              </span>
-              {/* The phone's Cred column, stacked under the name because there
+            >
+              <td className="px-4 py-2.5 text-muted tabular-nums sm:px-5">
+                {i < ranked.length ? (
+                  i < 3 ? (
+                    <span role="img" aria-label={`Rank ${i + 1}`}>
+                      {["🥇", "🥈", "🥉"][i]}
+                    </span>
+                  ) : (
+                    i + 1
+                  )
+                ) : (
+                  <span
+                    title={`Provisional — under ${PROVISIONAL_GAMES} games, not ranked yet`}
+                    aria-label="Unranked (provisional)"
+                  >
+                    —
+                  </span>
+                )}
+              </td>
+              <td className="px-2 py-2.5">
+                <span className="flex min-w-0 items-center gap-2">
+                  <Avatar name={r.name} src={r.avatar} size={24} />
+                  <PlayerLink
+                    userId={r.userId}
+                    className="min-w-6 truncate font-medium"
+                  >
+                    {r.name}
+                  </PlayerLink>
+                </span>
+                {/* The phone's Cred column, stacked under the name because there
                   is no width for a sixth track (see the colgroup). Rendered
                   ONLY for players who have actually bet, so it costs nothing
                   until the economy is used and never grows a row to two lines
                   to say "—". pl-8 = avatar + gap, so it hangs under the name. */}
-              {showCred && net != null ? (
-                <span className="mt-0.5 block pl-8 text-[11px] sm:hidden">
-                  <span className="text-muted">Cred </span>
-                  <CredFigure net={net} />
-                  {credRank && credRank <= 3 ? (
-                    <span className="ml-1 text-accent">#{credRank}</span>
-                  ) : null}
-                </span>
-              ) : null}
-            </td>
-            <td className="whitespace-nowrap px-2 py-2.5 text-right">
-              <span
-                className={cn(
-                  "font-semibold tabular-nums",
-                  r.games < PROVISIONAL_GAMES ? "text-muted" : "",
-                )}
-                title={
-                  r.games < PROVISIONAL_GAMES
-                    ? `Provisional — under ${PROVISIONAL_GAMES} games (peak ${r.peak})`
-                    : `Peak ${r.peak}`
-                }
-              >
-                {r.rating}
-              </span>
-              {r.lastChange !== 0 ? (
+                {showCred && net != null ? (
+                  <span className="mt-0.5 block pl-8 text-[11px] sm:hidden">
+                    <span className="text-muted">Cred </span>
+                    <CredFigure net={net} />
+                    {credRank && credRank <= 3 ? (
+                      <span className="ml-1 text-accent">#{credRank}</span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </td>
+              <td className="whitespace-nowrap px-2 py-2.5 text-right">
                 <span
                   className={cn(
-                    "ml-1 text-[10px] font-medium tabular-nums",
-                    r.lastChange > 0 ? "text-success" : "text-danger",
+                    "font-semibold tabular-nums",
+                    r.games < PROVISIONAL_GAMES ? "text-muted" : "",
                   )}
-                  title="Elo change from their last game"
+                  title={
+                    r.games < PROVISIONAL_GAMES
+                      ? `Provisional — under ${PROVISIONAL_GAMES} games (peak ${r.peak})`
+                      : `Peak ${r.peak}`
+                  }
                 >
-                  {r.lastChange > 0 ? `+${r.lastChange}` : r.lastChange}
+                  {r.rating}
                 </span>
-              ) : null}
-            </td>
-            {showCred ? (
-              <td className="hidden whitespace-nowrap px-2 py-2.5 text-right sm:table-cell">
-                <CredFigure net={net} />
-                {/* The divergence chip, and the whole reason Cred is a column
+                {r.lastChange !== 0 ? (
+                  <span
+                    className={cn(
+                      "ml-1 text-[10px] font-medium tabular-nums",
+                      r.lastChange > 0 ? "text-success" : "text-danger",
+                    )}
+                    title="Elo change from their last game"
+                  >
+                    {r.lastChange > 0 ? `+${r.lastChange}` : r.lastChange}
+                  </span>
+                ) : null}
+              </td>
+              {showCred ? (
+                <td className="hidden whitespace-nowrap px-2 py-2.5 text-right sm:table-cell">
+                  <CredFigure net={net} />
+                  {/* The divergence chip, and the whole reason Cred is a column
                     on this table rather than a board of its own: a plain "8" in
                     the rank column beside a "#1" here is a player who is
                     mid-table at Dota and top of the league at nerve, legible in
                     one glance. Top three only — a chip on every row is
                     wallpaper. `cred.rank` holds established players alone, so
                     a number built out of one game is never medalled. */}
-                {credRank && credRank <= 3 ? (
-                  <span
-                    className="ml-1 text-[10px] font-semibold tabular-nums text-accent"
-                    title={`#${credRank} of ${cred.ranked} by net Cred profit — ranked separately from Elo`}
-                  >
-                    #{credRank}
-                  </span>
-                ) : null}
-              </td>
-            ) : null}
-            <td className="px-2 py-2.5 text-center text-success">{r.wins}</td>
-            <td className="px-2 py-2.5 text-center text-muted">{r.losses}</td>
-            <td className="hidden px-2 py-2.5 sm:table-cell">
-              <span className="flex justify-center">
-                <FormStrip form={r.form} size={4} />
-              </span>
-            </td>
-            <td className="hidden px-2 py-2.5 text-center tabular-nums md:table-cell">
-              {Math.round(r.winRate * 100)}%
-            </td>
-            <td className="hidden px-2 py-2.5 text-center md:table-cell">
-              {r.streak !== 0 ? (
-                <span
-                  className={cn(
-                    "font-medium tabular-nums",
-                    r.streak > 0 ? "text-success" : "text-danger",
-                  )}
-                >
-                  {r.streak > 0 ? `W${r.streak}` : `L${-r.streak}`}
+                  {credRank && credRank <= 3 ? (
+                    <span
+                      className="ml-1 text-[10px] font-semibold tabular-nums text-accent"
+                      title={`#${credRank} of ${cred.ranked} by net Cred profit — ranked separately from Elo`}
+                    >
+                      #{credRank}
+                    </span>
+                  ) : null}
+                </td>
+              ) : null}
+              <td className="px-2 py-2.5 text-center text-success">{r.wins}</td>
+              <td className="px-2 py-2.5 text-center text-muted">{r.losses}</td>
+              <td className="hidden px-2 py-2.5 sm:table-cell">
+                <span className="flex justify-center">
+                  <FormStrip form={r.form} size={4} />
                 </span>
-              ) : (
-                <span className="text-muted">—</span>
-              )}
-            </td>
-            <td className="hidden px-4 py-2.5 text-right tabular-nums lg:table-cell sm:px-5">
-              {r.games}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+              </td>
+              <td className="hidden px-2 py-2.5 text-center tabular-nums md:table-cell">
+                {Math.round(r.winRate * 100)}%
+              </td>
+              <td className="hidden px-2 py-2.5 text-center md:table-cell">
+                {r.streak !== 0 ? (
+                  <span
+                    className={cn(
+                      "font-medium tabular-nums",
+                      r.streak > 0 ? "text-success" : "text-danger",
+                    )}
+                  >
+                    {r.streak > 0 ? `W${r.streak}` : `L${-r.streak}`}
+                  </span>
+                ) : (
+                  <span className="text-muted">—</span>
+                )}
+              </td>
+              <td className="hidden px-4 py-2.5 text-right tabular-nums lg:table-cell sm:px-5">
+                {r.games}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
-

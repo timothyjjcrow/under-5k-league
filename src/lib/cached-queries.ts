@@ -14,9 +14,10 @@ import { prisma } from "./prisma";
 // unstable_cache needs the Next server runtime and can't run under vitest) and
 // a `get*` cache wrapper. Pages import the `get*` versions.
 //
-// Every entry is tagged "games" so an import path can `revalidateTag("games")`
-// for instant freshness later; until then the TTL bounds staleness to a minute
-// (games import infrequently, so this is imperceptible in practice).
+// Every entry is tagged "games". Server Actions expire it with updateTag for
+// read-your-own-writes; the sync Route Handler uses revalidateTag with
+// `{ expire: 0 }`, the blocking Route Handler equivalent. The TTL remains a
+// defensive bound if an out-of-band database writer bypasses those paths.
 
 const REVALIDATE_SECONDS = 60;
 const CACHE_TAGS = ["games"];
@@ -26,40 +27,61 @@ const CACHE_TAGS = ["games"];
 export function fetchAllGameLines() {
   return prisma.game.findMany({ select: { id: true, players: true } });
 }
-export const getAllGameLines = unstable_cache(fetchAllGameLines, ["all-game-lines"], {
-  revalidate: REVALIDATE_SECONDS,
-  tags: CACHE_TAGS,
-});
+export const getAllGameLines = unstable_cache(
+  fetchAllGameLines,
+  ["all-game-lines"],
+  {
+    revalidate: REVALIDATE_SECONDS,
+    tags: CACHE_TAGS,
+  },
+);
 
 /** Every game's box score + win flag, all seasons — Hall of Fame. */
 export function fetchAllGameScores() {
   return prisma.game.findMany({ select: { players: true, radiantWin: true } });
 }
-export const getAllGameScores = unstable_cache(fetchAllGameScores, ["all-game-scores"], {
-  revalidate: REVALIDATE_SECONDS,
-  tags: CACHE_TAGS,
-});
+export const getAllGameScores = unstable_cache(
+  fetchAllGameScores,
+  ["all-game-scores"],
+  {
+    revalidate: REVALIDATE_SECONDS,
+    tags: CACHE_TAGS,
+  },
+);
 
 /** Every game with matchup context, chronological — the record book. */
 export function fetchAllGamesForRecords() {
-  return prisma.game.findMany({
-    orderBy: [{ startTime: "asc" }, { fetchedAt: "asc" }],
-    select: {
-      matchId: true,
-      radiantWin: true,
-      durationSecs: true,
-      radiantScore: true,
-      direScore: true,
-      players: true,
-      match: {
-        select: {
-          seasonId: true,
-          homeTeam: { select: { name: true } },
-          awayTeam: { select: { name: true } },
+  return prisma.game
+    .findMany({
+      select: {
+        id: true,
+        startTime: true,
+        matchId: true,
+        radiantWin: true,
+        durationSecs: true,
+        radiantScore: true,
+        direScore: true,
+        players: true,
+        match: {
+          select: {
+            seasonId: true,
+            homeTeam: { select: { name: true } },
+            awayTeam: { select: { name: true } },
+          },
         },
       },
-    },
-  });
+    })
+    .then((games) =>
+      games.sort((a, b) => {
+        // OpenDota time is the authoritative chronology. Legacy 0 means
+        // unknown, so it belongs after every dated game rather than becoming
+        // the league's fictional first achiever. CUID is a stable/import-time
+        // final key and cannot be rewritten by a later enrichment fetch.
+        const aTime = a.startTime > 0 ? a.startTime : Number.MAX_SAFE_INTEGER;
+        const bTime = b.startTime > 0 ? b.startTime : Number.MAX_SAFE_INTEGER;
+        return aTime - bTime || a.id.localeCompare(b.id);
+      }),
+    );
 }
 export const getAllGamesForRecords = unstable_cache(
   fetchAllGamesForRecords,
@@ -99,12 +121,12 @@ export const getSeasonGameScores = unstable_cache(
   { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
 );
 
-/** One season's games with scores/duration — the recap/awards page. No
- *  orderBy on purpose: computeSeasonAwards' tie behavior follows row order,
- *  and the wrapper must feed it exactly what the inline query did. */
+/** One season's games with scores/duration — the recap/awards page. Stable
+ *  ordering makes equal-margin award ties deterministic across databases. */
 export function fetchSeasonGamesForRecap(seasonId: string) {
   return prisma.game.findMany({
     where: { match: { seasonId } },
+    orderBy: [{ fetchedAt: "asc" }, { id: "asc" }],
     select: {
       matchId: true,
       radiantWin: true,

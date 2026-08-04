@@ -71,6 +71,12 @@ const code = (file: string) =>
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join("\n");
 
+const appCode = (file: string) =>
+  readFileSync(path.join(process.cwd(), "src/app", file), "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+
 describe("live-room fetch deadlines", () => {
   for (const file of ROOMS) {
     it(`${file}: every fetch carries an AbortSignal`, () => {
@@ -108,6 +114,21 @@ describe("result-sync ping fetch deadline", () => {
           `signal: AbortSignal.timeout(...). Call was: ${call.slice(0, 120)}`,
       ).toBe(true);
     }
+  });
+
+  it("seeds the first heartbeat with the server-rendered result cursor", () => {
+    const ping = code("result-sync-ping.tsx");
+    const layout = appCode("layout.tsx");
+
+    // The pure interleaving test only protects the comparison rule. This
+    // contract guard proves the root Server Component actually supplies the
+    // render-time causality boundary and the client uses it on its first tick.
+    expect(layout).toContain("getSetting(SETTING_KEYS.RESULT_CHANGED_AT)");
+    expect(layout).toMatch(
+      /<ResultSyncPing\s+initialCursor=\{[A-Za-z_$][\w$]*\}\s*\/>/,
+    );
+    expect(ping).toContain("initialCursor: string | null");
+    expect(ping).toContain("let lastCursor: string | null = initialCursor");
   });
 });
 

@@ -76,6 +76,81 @@ test("inhouse room's poll loop survives a request that never answers", async ({
     .toBeGreaterThan(1);
 });
 
+test("inhouse cold-start failure becomes an accessible retry state and recovers", async ({
+  page,
+}) => {
+  let failing = true;
+  let attempts = 0;
+  await page.route("**/api/inhouse", async (route) => {
+    attempts += 1;
+    if (failing) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "temporary outage" }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/inhouse");
+
+  // Before the fix, the disconnected banner lived below `if (!state) return`
+  // and could never render: a first-load outage said "Loading inhouse…"
+  // forever, with no action the user could take.
+  const alert = page.getByRole("alert", {
+    name: "We can't load the inhouse room",
+  });
+  await expect(alert).toBeVisible({ timeout: 20_000 });
+  await expect(alert).toContainText("reconnecting automatically");
+  const retry = alert.getByRole("button", { name: "Try again now" });
+  await expect(retry).toBeVisible();
+
+  const beforeRetry = attempts;
+  await retry.click();
+  failing = false;
+  await expect
+    .poll(() => attempts, { timeout: 10_000 })
+    .toBeGreaterThan(beforeRetry);
+
+  // A successful state payload replaces the cold error instead of leaving a
+  // sticky failure panel behind. The sound control only mounts after state.
+  await expect(alert).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Sound on|Muted/ }),
+  ).toBeVisible();
+});
+
+test("inhouse treats an unreadable successful action response as unknown", async ({
+  page,
+}) => {
+  await page.route("**/api/inhouse", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (body.includes('"action":"state"')) {
+      await route.continue();
+      return;
+    }
+    // Simulate a proxy truncating/replacing the JSON body after the origin has
+    // returned success. The client cannot safely claim the mutation failed.
+    await route.fulfill({ status: 200, contentType: "text/plain", body: "ok" });
+  });
+
+  await page.goto(
+    "/api/auth/dev?name=Unreadable+Action&steamId=76561190000009002&redirect=/inhouse",
+  );
+  const join = page.getByRole("button", { name: /Join queue/ });
+  await expect(join).toBeEnabled({ timeout: 20_000 });
+  await join.click();
+
+  await expect(
+    page.getByText(
+      "The response was incomplete — checking the current room state",
+    ),
+  ).toBeVisible();
+  await expect(join).toBeEnabled();
+});
+
 // The other half of the same freeze: both rooms flip `pending` on before an
 // ACTION fetch and off in its `finally`, so a hung mutation left EVERY control
 // disabled until the player reloaded — a captain locked out of bidding under a

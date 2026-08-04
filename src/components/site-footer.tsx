@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Badge, DiscordButton } from "@/components/ui";
+import { scheduleDestinationLabel } from "@/lib/season-copy";
 
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups open",
@@ -36,9 +37,7 @@ export function SiteFooter({
     phase === "PLAYOFFS" ||
     phase === "COMPLETE";
   const midSeason =
-    phase === "REGULAR_SEASON" ||
-    phase === "PLAYOFFS" ||
-    phase === "COMPLETE";
+    phase === "REGULAR_SEASON" || phase === "PLAYOFFS" || phase === "COMPLETE";
 
   // "League" — the surfaces tied to the current season. The PHASE GATING
   // mirrors site-header.tsx; labels and extra links (calendar, Features)
@@ -49,9 +48,17 @@ export function SiteFooter({
     { href: "/inhouse", label: "Inhouse" },
   ];
   if (teamsExist) leagueLinks.push({ href: "/teams", label: "Teams" });
-  if (phase === "DRAFT") leagueLinks.push({ href: "/draft", label: "Draft" });
-  if (midSeason) {
+  if (phase === "DRAFT") {
+    leagueLinks.push({ href: "/draft", label: "Draft" });
     leagueLinks.push({ href: "/schedule", label: "Schedule" });
+    leagueLinks.push({ href: "/fantasy", label: "Fantasy" });
+    leagueLinks.push({ href: "/pickem", label: "Pick'em" });
+  }
+  if (midSeason) {
+    leagueLinks.push({
+      href: "/schedule",
+      label: scheduleDestinationLabel(phase),
+    });
     leagueLinks.push({ href: "/leaders", label: "Leaders" });
     leagueLinks.push({ href: "/meta", label: "Hero meta" });
     leagueLinks.push({ href: "/fantasy", label: "Fantasy" });
@@ -88,7 +95,7 @@ export function SiteFooter({
               <Link
                 key={l.href}
                 href={l.href}
-                className="text-muted transition-colors hover:text-fg"
+                className="-my-1 rounded py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
               >
                 {l.label}
               </Link>
@@ -96,9 +103,9 @@ export function SiteFooter({
             {showCalendar ? (
               <a
                 href="/api/calendar"
-                className="text-muted transition-colors hover:text-fg"
+                className="-my-1 rounded py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
               >
-                <span aria-hidden="true">📅</span> Calendar (.ics)
+                <span aria-hidden="true">📅</span> Calendar feed (.ics)
               </a>
             ) : null}
           </nav>
@@ -106,7 +113,7 @@ export function SiteFooter({
           <Link
             href="/"
             aria-label="GGD2L — home"
-            className="order-1 flex justify-center md:order-2"
+            className="order-1 flex rounded-lg justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 md:order-2"
           >
             {/* Tight-cropped emblem (shared with the nav) — no baked-in
                 transparent margin, so it reads compact at a smaller height. */}
@@ -131,7 +138,7 @@ export function SiteFooter({
               <Link
                 key={l.href}
                 href={l.href}
-                className="text-muted transition-colors hover:text-fg"
+                className="-my-1 rounded py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
               >
                 {l.label}
               </Link>

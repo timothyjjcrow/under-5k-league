@@ -5,7 +5,7 @@
 // (with their real rank) when they didn't crack it. The server precomputes
 // every row and label; this component only expands/collapses.
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Avatar,
   Card,
@@ -15,6 +15,7 @@ import {
   RankBadge,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { competitionRanks } from "@/lib/leader-ranking";
 
 export type LeaderBoardRow = {
   id: string;
@@ -22,11 +23,15 @@ export type LeaderBoardRow = {
   avatar: string | null;
   rankTier: number | null;
   value: number;
+  /** Value at the same precision as valueLabel, used for visible ties. */
+  rankValue?: number;
   valueLabel: string;
   hint: string;
   isViewer: boolean;
   /** The player's team this season, when known — shown as a muted suffix. */
   team?: string | null;
+  /** False for a historical line whose User row no longer exists. */
+  hasProfile?: boolean;
 };
 
 const TOP = 5;
@@ -35,29 +40,37 @@ export function LeaderBoard({
   title,
   subtitle,
   rows,
+  headingLevel = 3,
 }: {
   title: string;
   subtitle?: string;
   rows: LeaderBoardRow[];
+  headingLevel?: 2 | 3;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const listId = useId();
   const max = rows.length ? Math.max(...rows.map((r) => r.value)) : 0;
   const visible = showAll ? rows : rows.slice(0, TOP);
+  const ranks = competitionRanks(rows.map((row) => row.rankValue ?? row.value));
   const viewerIdx = rows.findIndex((r) => r.isViewer);
   const pinnedViewer =
     !showAll && viewerIdx >= TOP ? rows[viewerIdx] : undefined;
 
   return (
     <Card>
-      <CardHeader title={title} subtitle={subtitle} />
+      <CardHeader
+        title={title}
+        subtitle={subtitle}
+        headingLevel={headingLevel}
+      />
       <CardBody className="p-0">
         {rows.length === 0 ? (
           <p className="px-5 py-4 text-sm text-muted">Not enough games yet.</p>
         ) : (
           <>
-            <ul className="divide-y divide-line/60">
+            <ul id={listId} className="divide-y divide-line/60">
               {visible.map((r, i) => (
-                <BoardRow key={r.id} row={r} rank={i + 1} max={max} />
+                <BoardRow key={r.id} row={r} rank={ranks[i]} max={max} />
               ))}
               {pinnedViewer ? (
                 <>
@@ -69,7 +82,7 @@ export function LeaderBoard({
                   </li>
                   <BoardRow
                     row={pinnedViewer}
-                    rank={viewerIdx + 1}
+                    rank={ranks[viewerIdx]}
                     max={max}
                   />
                 </>
@@ -79,8 +92,10 @@ export function LeaderBoard({
               <button
                 type="button"
                 aria-expanded={showAll}
+                aria-controls={listId}
+                aria-label={`${showAll ? "Show top 5" : `Show all ${rows.length}`} ${title} leaders`}
                 onClick={() => setShowAll((v) => !v)}
-                className="w-full border-t border-line/60 px-5 py-2 text-center text-xs text-muted transition-colors hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+                className="min-h-11 w-full border-t border-line/60 px-5 py-2 text-center text-xs text-muted transition-colors hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
               >
                 {showAll ? "Show top 5 ↑" : `Show all ${rows.length} ↓`}
               </button>
@@ -114,12 +129,18 @@ function BoardRow({
         <LeaderRank rank={rank} />
         <Avatar name={r.name} src={r.avatar} size={26} />
         <span className="min-w-0 flex-1 truncate">
-          <PlayerLink
-            userId={r.id}
-            className={cn("font-medium", rank === 1 && "font-semibold")}
-          >
-            {r.name}
-          </PlayerLink>
+          {r.hasProfile === false ? (
+            <span className={cn("font-medium", rank === 1 && "font-semibold")}>
+              {r.name}
+            </span>
+          ) : (
+            <PlayerLink
+              userId={r.id}
+              className={cn("font-medium", rank === 1 && "font-semibold")}
+            >
+              {r.name}
+            </PlayerLink>
+          )}
           {r.isViewer ? (
             <span className="ml-1.5 rounded bg-info/20 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info">
               You
@@ -158,7 +179,9 @@ function BoardRow({
 function LeaderRank({ rank }: { rank: number }) {
   if (rank > 3) {
     return (
-      <span className="w-6 shrink-0 text-center text-xs text-muted">{rank}</span>
+      <span className="w-6 shrink-0 text-center text-xs text-muted">
+        {rank}
+      </span>
     );
   }
   const tone =

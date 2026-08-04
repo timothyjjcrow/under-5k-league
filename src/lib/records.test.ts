@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   formatGameDuration,
+  analyzeRecordGames,
   leagueRecords,
+  recordGameMetricsValid,
   toRecordGames,
   type RecordGame,
   type RecordLine,
@@ -76,7 +78,13 @@ describe("leagueRecords", () => {
       game({
         lines: [
           line({ userId: null, kills: 99, netWorth: 99999 }),
-          line({ userId: "a", kills: 3, netWorth: null, gpm: null, lastHits: null }),
+          line({
+            userId: "a",
+            kills: 3,
+            netWorth: null,
+            gpm: null,
+            lastHits: null,
+          }),
         ],
       }),
     ];
@@ -131,25 +139,32 @@ describe("formatGameDuration", () => {
 });
 
 describe("toRecordGames", () => {
-  const row = (overrides: Partial<StoredRecordGame> = {}): StoredRecordGame => ({
+  const storedRoster = (
+    first: Record<string, unknown> = {},
+  ): Record<string, unknown>[] =>
+    Array.from({ length: 10 }, (_, index) => ({
+      accountId: 1000 + index,
+      userId: `u${index + 1}`,
+      heroId: index + 20,
+      kills: index === 0 ? 9 : 1,
+      deaths: 2,
+      assists: index === 0 ? 14 : 3,
+      netWorth: index === 0 ? 21000 : 10000,
+      gpm: index === 0 ? 512 : 350,
+      lastHits: index === 0 ? 230 : 100,
+      isRadiant: index < 5,
+      ...(index === 0 ? first : {}),
+    }));
+
+  const row = (
+    overrides: Partial<StoredRecordGame> = {},
+  ): StoredRecordGame => ({
     matchId: "m1",
     radiantWin: true,
     durationSecs: 2400,
     radiantScore: 30,
     direScore: 20,
-    players: JSON.stringify([
-      {
-        userId: "u1",
-        heroId: 7,
-        kills: 9,
-        deaths: 2,
-        assists: 14,
-        netWorth: 21000,
-        gpm: 512,
-        lastHits: 230,
-        isRadiant: true,
-      },
-    ]),
+    players: JSON.stringify(storedRoster({ heroId: 7 })),
     match: { seasonId: "s1" },
     ...overrides,
   });
@@ -164,27 +179,35 @@ describe("toRecordGames", () => {
       radiantScore: 30,
       direScore: 20,
     });
-    expect(g.lines).toEqual([
-      {
-        userId: "u1",
-        heroId: 7,
-        kills: 9,
-        deaths: 2,
-        assists: 14,
-        netWorth: 21000,
-        gpm: 512,
-        lastHits: 230,
-        isRadiant: true,
-      },
-    ]);
+    expect(g.lines).toHaveLength(10);
+    expect(g.lines[0]).toEqual({
+      userId: "u1",
+      heroId: 7,
+      kills: 9,
+      deaths: 2,
+      assists: 14,
+      netWorth: 21000,
+      gpm: 512,
+      lastHits: 230,
+      isRadiant: true,
+    });
   });
 
   it("normalizes missing economy fields and userId to null, never 0", () => {
     const [g] = toRecordGames([
       row({
-        players: JSON.stringify([
-          { heroId: 3, kills: 1, deaths: 1, assists: 1, isRadiant: false },
-        ]),
+        players: JSON.stringify(
+          storedRoster({
+            userId: null,
+            heroId: 3,
+            kills: 1,
+            deaths: 1,
+            assists: 1,
+            netWorth: undefined,
+            gpm: undefined,
+            lastHits: undefined,
+          }),
+        ),
       }),
     ]);
     expect(g.lines[0]).toMatchObject({
@@ -194,16 +217,63 @@ describe("toRecordGames", () => {
       lastHits: null,
     });
     // …and leagueRecords therefore never crowns an economy record from it.
-    const book = leagueRecords(toRecordGames([row({ players: JSON.stringify([
-      { userId: "u9", heroId: 3, kills: 1, deaths: 1, assists: 1, isRadiant: false },
-    ]) })]));
+    const noEconomyRoster = storedRoster({
+      heroId: 3,
+      kills: 1,
+      deaths: 1,
+      assists: 1,
+    }).map((player) => ({
+      ...player,
+      netWorth: undefined,
+      gpm: undefined,
+      lastHits: undefined,
+    }));
+    const book = leagueRecords(
+      toRecordGames([
+        row({
+          players: JSON.stringify(noEconomyRoster),
+        }),
+      ]),
+    );
     expect(book.players.find((r) => r.key === "netWorth")).toBeUndefined();
     expect(book.players.find((r) => r.key === "gpm")).toBeUndefined();
   });
 
-  it("degrades malformed players JSON to an empty line list", () => {
-    const [g] = toRecordGames([row({ players: "not json" })]);
-    expect(g.lines).toEqual([]);
+  it("omits a malformed box score from player and game records", () => {
+    expect(toRecordGames([row({ players: "not json" })])).toEqual([]);
+    expect(
+      analyzeRecordGames([row({ players: "not json" })]).diagnostics,
+    ).toMatchObject({ malformedGames: 1, unusableGames: 0 });
+  });
+
+  it("omits a partial box score from player and game records", () => {
+    expect(
+      toRecordGames([
+        row({ players: JSON.stringify(storedRoster().slice(0, 9)) }),
+      ]),
+    ).toEqual([]);
+    expect(
+      analyzeRecordGames([
+        row({ players: JSON.stringify(storedRoster().slice(0, 9)) }),
+      ]).diagnostics,
+    ).toMatchObject({ malformedGames: 0, unusableGames: 1 });
+  });
+
+  it("neutralizes unsafe game-level metrics without discarding valid player lines", () => {
+    const [g] = toRecordGames([
+      row({ durationSecs: -1, radiantScore: 2_000_000, direScore: 10 }),
+    ]);
+    expect(g.lines).toHaveLength(10);
+    expect(g).toMatchObject({
+      durationSecs: 0,
+      radiantScore: 0,
+      direScore: 0,
+    });
+    expect(recordGameMetricsValid(row())).toBe(true);
+    expect(recordGameMetricsValid(row({ durationSecs: -1 }))).toBe(false);
+    const book = leagueRecords([g]);
+    expect(book.players.length).toBeGreaterThan(0);
+    expect(book.games).toEqual([]);
   });
 
   it("keeps the caller's row order (records are first-achiever-keeps-tie)", () => {

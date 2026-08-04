@@ -20,6 +20,12 @@ import {
 } from "@/lib/player-pool";
 import { poolPubRecord } from "@/lib/pub-stats";
 import { heroById } from "@/lib/heroes";
+import { REGISTRATION_STATUS } from "@/lib/constants";
+import { playerDirectoryPresentation } from "@/lib/player-directory-lifecycle";
+import {
+  canViewLeagueContact,
+  canViewLeagueDirectoryContact,
+} from "@/lib/visibility";
 import {
   Avatar,
   Badge,
@@ -47,47 +53,74 @@ export default async function PlayersPage() {
   const season = await getActiveSeason();
   if (!season) {
     return (
-      <div>
+      <div className="space-y-6">
         <PageTitle title="Players" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="League offseason"
+          description="There is no active player pool right now. Browse past rosters and careers, compare league players, or join an inhouse while the next season is organized."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Link href="/seasons" className={buttonClasses("secondary", "sm")}>
+                Season history
+              </Link>
+              <Link
+                href="/players/compare"
+                className={buttonClasses("secondary", "sm")}
+              >
+                Compare players
+              </Link>
+              <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
+                Play an inhouse →
+              </Link>
+            </div>
+          }
+        />
       </div>
     );
   }
 
   const viewer = await getSessionUser();
 
-  const [players, standins, teams, viewerReg, ladder] = await Promise.all([
-    prisma.registration.findMany({
-      where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
-      include: { user: true },
-      orderBy: { mmr: "desc" },
-    }),
-    prisma.registration.findMany({
-      where: { seasonId: season.id, status: "ACTIVE", type: "STANDIN" },
-      include: { user: true },
-      orderBy: { mmr: "desc" },
-    }),
-    prisma.team.findMany({
-      where: { seasonId: season.id },
-      orderBy: { draftOrder: "asc" },
-      include: {
-        captain: true,
-        members: { include: { user: true }, orderBy: { price: "desc" } },
-      },
-    }),
-    viewer
-      ? prisma.registration.findUnique({
-          where: {
-            seasonId_userId: { seasonId: season.id, userId: viewer.id },
-          },
-        })
-      : Promise.resolve(null),
-    // Full-history inhouse ladder — memoised in-process (60s TTL), so this is
-    // one indexed scan per cold minute, not per view.
-    loadInhouseLadder(),
-  ]);
+  const [players, standins, teams, viewerReg, draft, ladder] =
+    await Promise.all([
+      prisma.registration.findMany({
+        where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
+        include: { user: true },
+        orderBy: { mmr: "desc" },
+      }),
+      prisma.registration.findMany({
+        where: { seasonId: season.id, status: "ACTIVE", type: "STANDIN" },
+        include: { user: true },
+        orderBy: { mmr: "desc" },
+      }),
+      prisma.team.findMany({
+        where: { seasonId: season.id },
+        orderBy: { draftOrder: "asc" },
+        include: {
+          captain: true,
+          members: { include: { user: true }, orderBy: { price: "desc" } },
+        },
+      }),
+      viewer
+        ? prisma.registration.findUnique({
+            where: {
+              seasonId_userId: { seasonId: season.id, userId: viewer.id },
+            },
+          })
+        : Promise.resolve(null),
+      prisma.draft.findUnique({
+        where: { seasonId: season.id },
+        select: { status: true },
+      }),
+      // Full-history inhouse ladder — memoised in-process (60s TTL), so this is
+      // one indexed scan per cold minute, not per view.
+      loadInhouseLadder(),
+    ]);
 
-  const draftDone = teams.length > 0 && season.status !== "DRAFT";
+  const directory = playerDirectoryPresentation(
+    season.status,
+    draft?.status,
+  );
   const draftedUserIds = new Set(
     teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
@@ -106,7 +139,17 @@ export default async function PlayersPage() {
   // During SIGNUPS this is where shared links land — offer a join affordance
   // unless the viewer already holds an ACTIVE registration (/me covers login).
   const canSignUp =
-    season.status === "SIGNUPS" && viewerReg?.status !== "ACTIVE";
+    season.status === "SIGNUPS" &&
+    viewerReg?.status !== REGISTRATION_STATUS.ACTIVE &&
+    viewerReg?.status !== REGISTRATION_STATUS.REMOVED;
+  const signupRemoved =
+    viewerReg?.status === REGISTRATION_STATUS.REMOVED;
+  const viewerHasActiveRegistration =
+    viewerReg?.status === REGISTRATION_STATUS.ACTIVE;
+  const viewerCanViewLeagueDirectory = canViewLeagueDirectoryContact(
+    viewer,
+    viewerHasActiveRegistration,
+  );
   const poolPlayers = players.map((p) => ({
     userId: p.userId,
     name: p.user.name,
@@ -120,11 +163,21 @@ export default async function PlayersPage() {
     drafted: draftedUserIds.has(p.userId),
     accountId: p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId),
     // Contact info is for league members, not the public internet.
-    discordName: viewer ? p.user.discordName : "",
-    discordVerified: viewer ? !!p.user.discordId : false,
+    discordName: canViewLeagueContact(
+      viewer,
+      p.userId,
+      viewerHasActiveRegistration,
+    )
+      ? p.user.discordName
+      : "",
+    discordVerified:
+      canViewLeagueContact(
+        viewer,
+        p.userId,
+        viewerHasActiveRegistration,
+      ) && !!p.user.discordId,
   }));
   const captainHopefuls = players.filter((p) => p.wantsCaptain);
-  const preDraft = season.status === "SIGNUPS" || season.status === "DRAFT";
   const freeAgents = players.filter((p) => !draftedUserIds.has(p.userId));
   const avgMmr = averageMmr(players);
 
@@ -167,7 +220,11 @@ export default async function PlayersPage() {
         subtitle={`${season.name} · every signup, standin and roster in one place`}
         action={
           <span className="flex flex-wrap items-center gap-3">
-            {canSignUp ? (
+            {signupRemoved ? (
+              <Link href="/me" className={buttonClasses("secondary", "sm")}>
+                Signup removed — see details
+              </Link>
+            ) : canSignUp ? (
               <Link href="/me" className={buttonClasses("primary", "sm")}>
                 Join the season →
               </Link>
@@ -205,18 +262,18 @@ export default async function PlayersPage() {
               hint="last 30 days"
             />
           ) : null}
-          {draftDone ? (
+          {directory.captainSelectionOpen ? (
             <StatCell
-              label="Free agents"
-              value={freeAgents.length}
-              tone={freeAgents.length > 0 ? "accent" : "muted"}
-              hint="undrafted"
+              label={directory.availabilityLabel}
+              value={captainHopefuls.length}
+              tone={captainHopefuls.length > 0 ? "accent" : "muted"}
             />
           ) : (
             <StatCell
-              label="Want to captain"
-              value={captainHopefuls.length}
-              tone={captainHopefuls.length > 0 ? "accent" : "muted"}
+              label={directory.availabilityLabel}
+              value={freeAgents.length}
+              tone={freeAgents.length > 0 ? "accent" : "muted"}
+              hint={directory.availabilityHint}
             />
           )}
           <StatCell
@@ -235,15 +292,13 @@ export default async function PlayersPage() {
           still available" is the question that brings a captain here. The
           rosters below are the reference copy — /teams is their real home. */}
       <section className="space-y-4">
-        <SectionTitle
-          aside={draftDone ? "· sort, filter and scout the field" : undefined}
-        >
-          {draftDone ? "Player pool" : "Signed up to play"}
+        <SectionTitle aside={directory.poolAside}>
+          {directory.poolTitle}
         </SectionTitle>
         {players.length === 0 ? (
           <EmptyState
             title="No players yet"
-            description="Signups will appear here."
+            description={directory.emptyDescription}
           />
         ) : (
           // Suspense: PlayerPool seeds its filters from useSearchParams, which
@@ -253,17 +308,17 @@ export default async function PlayersPage() {
           >
             <PlayerPool
               players={poolPlayers}
-              showDraftStatus={season.status !== "SIGNUPS"}
+              showDraftStatus={directory.showDraftStatus}
               draftInfo={draftInfo}
               scout={scout}
               now={nowMs}
-              showContact={!!viewer}
+              showContact={viewerCanViewLeagueDirectory}
             />
           </Suspense>
         )}
       </section>
 
-      {preDraft && captainHopefuls.length > 0 ? (
+      {directory.captainSelectionOpen && captainHopefuls.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle
             aside={`· ${captainHopefuls.length} volunteered to lead a team`}
@@ -464,14 +519,18 @@ export default async function PlayersPage() {
                   {/* Standins are the people a captain has to find at 7pm on a
                       match night — they get the same roles/MMR legibility as
                       the pool, not a bare name in a pill. Contact rides along
-                      for SIGNED-IN viewers only (the showContact rule): the
-                      whole point of this list is "who can I actually reach
-                      tonight", and it made captains open profiles one by one.
+                      for active league participants, the subject, and admins:
+                      the whole point of this list is "who can I actually
+                      reach tonight", and it made captains open profiles one by one.
                       Plain text, not the copy-chip — the card is one link and
                       a button inside a link is a tap-target trap. */}
                   <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
                     <RoleBadges roles={s.roles} />
-                    {viewer ? (
+                    {canViewLeagueContact(
+                      viewer,
+                      s.userId,
+                      viewerHasActiveRegistration,
+                    ) ? (
                       s.user.discordName || s.user.discordId ? (
                         <span className="truncate text-xs text-muted">
                           {s.user.discordName
@@ -480,7 +539,7 @@ export default async function PlayersPage() {
                           {s.user.discordId ? " ✓" : ""}
                         </span>
                       ) : (
-                        <span className="text-xs text-muted/70">
+                        <span className="text-xs text-muted">
                           no Discord
                         </span>
                       )

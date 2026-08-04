@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { parseGamePlayers } from "@/lib/player-stats";
+import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
 import { getAllGameScores } from "@/lib/cached-queries";
 import { careerCounts, topCounts, type HofRow } from "@/lib/hall-of-fame";
-import { pointsByPlayer, type FantasyGame } from "@/lib/fantasy";
+import { pointsByPlayer } from "@/lib/fantasy";
 import { pickemStandings } from "@/lib/pickem";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   Avatar,
   Card,
@@ -18,17 +19,23 @@ import {
 
 export const metadata = { title: "Hall of Fame" };
 
-
 export default async function HallOfFamePage() {
   const [seasons, memberships, matches, games, predictions] =
     await Promise.all([
-      prisma.season.findMany({ select: { id: true, championTeamId: true } }),
+      prisma.season.findMany({
+        select: { id: true, status: true, championTeamId: true },
+      }),
       prisma.teamMember.findMany({ select: { userId: true, teamId: true } }),
       prisma.match.findMany({
         select: {
           id: true,
+          seasonId: true,
+          phase: true,
+          bracketSlot: true,
           status: true,
           winnerTeamId: true,
+          homeTeamId: true,
+          awayTeamId: true,
           scheduledAt: true,
         },
       }),
@@ -38,11 +45,20 @@ export default async function HallOfFamePage() {
       }),
     ]);
 
-  // Careers from the archive: titles + series wins.
-  const titles = careerCounts(
-    memberships,
-    seasons.map((s) => s.championTeamId),
+  const matchesBySeason = new Map<string, typeof matches>();
+  for (const match of matches) {
+    const seasonMatches = matchesBySeason.get(match.seasonId) ?? [];
+    seasonMatches.push(match);
+    matchesBySeason.set(match.seasonId, seasonMatches);
+  }
+  const championTeamIds = seasons.map(
+    (season) =>
+      resolveChampionPresentation(season, matchesBySeason.get(season.id) ?? [])
+        .championTeamId,
   );
+
+  // Careers from the archive: authoritative titles + series wins.
+  const titles = careerCounts(memberships, championTeamIds);
   const seriesWins = careerCounts(
     memberships,
     matches
@@ -52,7 +68,10 @@ export default async function HallOfFamePage() {
 
   // Career fantasy points from every imported game, ever.
   const fantasy = pointsByPlayer(
-    games.map((g) => ({ radiantWin: g.radiantWin, players: parseGamePlayers<FantasyGame["players"][number]>(g.players) })),
+    games.map((g) => ({
+      radiantWin: g.radiantWin,
+      players: trustedGamePlayers(decodeGamePlayers(g.players)),
+    })),
   );
   const fantasyCounts = new Map(
     [...fantasy.entries()].map(([id, pts]) => [id, Math.round(pts)]),
@@ -192,7 +211,9 @@ export default async function HallOfFamePage() {
       </div>
 
       <p className="text-center text-xs text-muted">
-        Every season counts — records here survive season resets.
+        Archived seasons keep contributing to these records. A permanent season
+        deletion removes that history and should be reserved for test runs or
+        genuine misfires.
       </p>
     </div>
   );

@@ -1,9 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
 // syncPlayerRanks is an admin action: stub the request-scope bits and the
 // network fetch so we can drive it against the test DB and control each
 // player's OpenDota outcome.
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+  revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
+}));
 vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
 vi.mock("@/lib/dota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dota")>()),
@@ -12,13 +16,29 @@ vi.mock("@/lib/dota", async (importOriginal) => ({
 }));
 
 import { syncPlayerRanks, syncAllRanks } from "@/app/actions/admin";
-import { updateDotaAccount } from "@/app/actions/registration";
+import {
+  refreshRank,
+  setInhousePingOptIn,
+  updateDotaAccount,
+} from "@/app/actions/registration";
 import { ensurePubStats, ensureRankTier, upsertLeagueUser } from "@/lib/users";
 import { requireUser } from "@/lib/auth";
-import { fetchPubStats, fetchRankTier } from "@/lib/dota";
+import {
+  accountIdToSteamId64,
+  fetchPubStats,
+  fetchRankTier,
+  steamIdToAccountId,
+} from "@/lib/dota";
 import type { PubStats } from "@/lib/pub-stats";
 import { prisma } from "@/lib/prisma";
-import { makeSeason, makePlayer, makeUser, sessionFor } from "./factories";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
+import {
+  makeSeason,
+  makePlayer,
+  makeUser,
+  raceAll,
+  sessionFor,
+} from "./factories";
 
 const mockFetch = vi.mocked(fetchRankTier);
 const mockPubFetch = vi.mocked(fetchPubStats);
@@ -32,6 +52,8 @@ beforeEach(() => {
   mockPubFetch.mockResolvedValue({ ok: false, stats: null });
 });
 
+afterEach(() => setRaceHook(null));
+
 const PUB_FIXTURE: PubStats = {
   recentWins: 60,
   recentLosses: 40,
@@ -39,6 +61,19 @@ const PUB_FIXTURE: PubStats = {
   lastPlayedAt: 1_722_000_000,
   topHeroes: [{ heroId: 14, games: 120, wins: 66 }],
 };
+
+describe("identity actions — expired sessions", () => {
+  it("returns actionable feedback for the inhouse ping toggle", async () => {
+    mockRequireUser.mockReset();
+    mockRequireUser.mockRejectedValueOnce(new Error("UNAUTHORIZED"));
+    const fd = new FormData();
+    fd.set("on", "1");
+
+    await expect(setInhousePingOptIn({}, fd)).resolves.toEqual({
+      error: "Sign in required",
+    });
+  });
+});
 
 async function medalOf(userId: string) {
   return (await prisma.user.findUnique({ where: { id: userId } }))?.rankTier;
@@ -75,6 +110,41 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
 
     expect(await medalOf(user.id)).toBe(71);
     expect(res?.message).toMatch(/1 ranked/);
+  });
+
+  it("drops bulk-sync metadata fetched for an account relinked mid-request", async () => {
+    const season = await makeSeason();
+    const user = await makePlayer(season.id, "Bulk Relink Racer", 3000);
+    const newerStats: PubStats = { ...PUB_FIXTURE, recentWins: 99 };
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 223301 },
+    });
+    mockPubFetch.mockResolvedValueOnce({ ok: true, stats: PUB_FIXTURE });
+    mockFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          dotaAccountId: 223302,
+          rankTier: 73,
+          fhUnavailable: false,
+          pubStats: JSON.stringify(newerStats),
+          pubStatsAt: new Date("2026-08-01T00:00:00Z"),
+        },
+      });
+      return { ok: true, rankTier: 41, fhUnavailable: true };
+    });
+
+    await syncPlayerRanks({}, new FormData());
+
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+    ).toMatchObject({
+      dotaAccountId: 223302,
+      rankTier: 73,
+      fhUnavailable: false,
+      pubStats: JSON.stringify(newerStats),
+    });
   });
 
   it("doesn't overwrite a medal when OpenDota answers with no rank", async () => {
@@ -218,6 +288,35 @@ describe("ensureRankTier — medals for accounts that never signed up", () => {
 
     expect(await medalOf(user.id)).toBeNull();
   });
+
+  it("drops a medal fetched for an account that was relinked mid-request", async () => {
+    const user = await makeUser("Login Relink Racer");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: null, dotaAccountId: 557 },
+    });
+    mockFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { dotaAccountId: 558 },
+      });
+      return { ok: true, rankTier: 71, fhUnavailable: false };
+    });
+
+    await ensureRankTier(prisma, {
+      id: user.id,
+      steamId: user.steamId,
+      dotaAccountId: 557,
+      rankTier: null,
+    });
+
+    const current = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(current.dotaAccountId).toBe(558);
+    expect(current.rankTier).toBeNull();
+    expect(current.fhUnavailable).toBeNull();
+  });
 });
 
 describe("syncAllRanks — backfill every account, registered or not", () => {
@@ -358,22 +457,28 @@ describe("account changes reset the private-data flag", () => {
     mockRequireUser.mockReset();
   });
 
-  it("linking a NEW account clears a stale fhUnavailable when OpenDota omits it", async () => {
+  it("switching a legacy link back to verified Steam clears stale privacy metadata", async () => {
     const user = await makeUser("Fresh Start");
-    await prisma.user.update({
+    const verifiedUser = await prisma.user.update({
       where: { id: user.id },
-      data: { fhUnavailable: true, rankTier: 40 }, // old private account
+      data: {
+        steamId: accountIdToSteamId64(123456789),
+        dotaAccountId: 123456788,
+        fhUnavailable: true,
+        rankTier: 40,
+      }, // old private account
     });
-    mockRequireUser.mockResolvedValue(sessionFor(user));
+    mockRequireUser.mockResolvedValue(sessionFor(verifiedUser));
     // The new account: OpenDota answers but doesn't state the flag.
     mockFetch.mockResolvedValue({ ok: true, rankTier: 55, fhUnavailable: null });
 
     const fd = new FormData();
     fd.set("dotaAccountId", "123456789");
     const res = await updateDotaAccount({}, fd);
-    expect(res?.message).toContain("Account linked");
+    expect(res?.message).toContain("Steam account verified");
 
     const db = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(db.dotaAccountId).toBeNull(); // Steam-derived identity stays canonical.
     expect(db.fhUnavailable).toBeNull(); // unknown for the NEW account, not sticky
     expect(db.rankTier).toBe(55);
   });
@@ -438,6 +543,125 @@ describe("upsertLeagueUser — Steam outages never overwrite a real profile", ()
     });
     expect(updated.name).toBe("Dendi");
     expect(updated.avatar).toBe("a.jpg");
+  });
+});
+
+describe("upsertLeagueUser — verified Steam ownership retires legacy claims", () => {
+  it("leaves unrelated Dota links and their fetched metadata untouched", async () => {
+    const claimedAccountId = 225566777;
+    const unrelatedAccountId = 225566776;
+    const legacyHolder = await makeUser("Scoped Legacy Holder");
+    const unrelated = await makeUser("Unrelated Account");
+    await prisma.user.update({
+      where: { id: legacyHolder.id },
+      data: { dotaAccountId: claimedAccountId, rankTier: 73 },
+    });
+    await prisma.user.update({
+      where: { id: unrelated.id },
+      data: {
+        dotaAccountId: unrelatedAccountId,
+        rankTier: 61,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+        pubStatsAt: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+
+    await upsertLeagueUser(prisma, {
+      steamId: accountIdToSteamId64(claimedAccountId),
+      profile: null,
+    });
+
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: unrelated.id } }),
+    ).toMatchObject({
+      dotaAccountId: unrelatedAccountId,
+      rankTier: 61,
+      pubStats: JSON.stringify(PUB_FIXTURE),
+      pubStatsAt: new Date("2026-07-01T00:00:00Z"),
+    });
+  });
+
+  it("clears an attacker-before-owner override and its account-derived metadata", async () => {
+    const accountId = 225566778;
+    const legacyHolder = await makeUser("Legacy Holder");
+    await prisma.user.update({
+      where: { id: legacyHolder.id },
+      data: {
+        dotaAccountId: accountId,
+        rankTier: 73,
+        fhUnavailable: false,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+        pubStatsAt: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+
+    const owner = await upsertLeagueUser(prisma, {
+      steamId: accountIdToSteamId64(accountId),
+      profile: null,
+    });
+
+    expect(owner.dotaAccountId).toBeNull();
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: legacyHolder.id } }),
+    ).toMatchObject({
+      dotaAccountId: null,
+      rankTier: null,
+      fhUnavailable: null,
+      pubStats: null,
+      pubStatsAt: null,
+    });
+    const effectiveHolders = (await prisma.user.findMany()).filter(
+      (candidate) =>
+        (candidate.dotaAccountId ?? steamIdToAccountId(candidate.steamId)) ===
+        accountId,
+    );
+    expect(effectiveHolders.map((candidate) => candidate.id)).toEqual([
+      owner.id,
+    ]);
+  });
+
+  it("is idempotent when verified-owner logins are retried or overlap", async () => {
+    const accountId = 225566779;
+    const legacyHolder = await makeUser("Retry Legacy Holder");
+    await prisma.user.update({
+      where: { id: legacyHolder.id },
+      data: { dotaAccountId: accountId, rankTier: 61 },
+    });
+    const steamId = accountIdToSteamId64(accountId);
+
+    const owners = await raceAll([
+      () => upsertLeagueUser(prisma, { steamId, profile: null }),
+      () => upsertLeagueUser(prisma, { steamId, profile: null }),
+    ]);
+
+    expect(new Set(owners.map((owner) => owner.id)).size).toBe(1);
+    expect(await prisma.user.count({ where: { steamId } })).toBe(1);
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: legacyHolder.id } }),
+    ).toMatchObject({ dotaAccountId: null, rankTier: null });
+  });
+});
+
+describe("upsertLeagueUser — zero-config admin bootstrap", () => {
+  it("uses one atomic claim so competing first logins create one admin", async () => {
+    vi.stubEnv("ADMIN_STEAM_IDS", "");
+    const steamIds = ["76561199000001001", "76561199000001002"];
+    try {
+      const users = await raceAll(
+        steamIds.map((steamId) => () =>
+          upsertLeagueUser(prisma, { steamId, profile: null }),
+        ),
+      );
+
+      const admins = users.filter((user) => user.role === "ADMIN");
+      expect(admins).toHaveLength(1);
+      const claim = await prisma.setting.findUniqueOrThrow({
+        where: { key: "bootstrapAdminSteamId" },
+      });
+      expect(claim.value).toBe(admins[0]?.steamId);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -510,7 +734,7 @@ describe("syncPlayerRanks — flags signups a new medal proves ineligible", () =
   });
 });
 
-describe("updateDotaAccount — one account id, one league player", () => {
+describe("updateDotaAccount — verified ownership and race safety", () => {
   // A collision puts the same account in both teams' import sets, and
   // classifyGame then fails or mis-attributes every match containing both.
   beforeEach(() => {
@@ -525,7 +749,20 @@ describe("updateDotaAccount — one account id, one league player", () => {
     return fd;
   }
 
-  it("refuses an id another user has stored as an override", async () => {
+  it("round-trips the full unsigned 32-bit account boundary exactly", async () => {
+    const user = await makeUser("Uint32 Account");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 0xffffffff },
+    });
+
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .dotaAccountId,
+    ).toBe(0xffffffff);
+  });
+
+  it("refuses an unproved id another user has stored as an override", async () => {
     const holder = await makeUser("Holder");
     await prisma.user.update({
       where: { id: holder.id },
@@ -536,19 +773,18 @@ describe("updateDotaAccount — one account id, one league player", () => {
 
     const res = await updateDotaAccount({}, accountForm(987654));
 
-    expect(res?.error).toMatch(/already linked to Holder/);
+    expect(res?.error).toMatch(/does not match the Steam account/i);
     expect(
       (await prisma.user.findUniqueOrThrow({ where: { id: claimant.id } }))
         .dotaAccountId,
     ).toBeNull();
   });
 
-  it("refuses an id another user holds via their DERIVED steam account", async () => {
+  it("refuses an unproved id another user holds via their derived Steam account", async () => {
     // The mistake the error copy anticipates: B pastes teammate A's Dotabuff
     // URL. A never set an override, so their effective account id comes from
     // their SteamID64 — the old override-only check found nothing and stored
     // the duplicate.
-    const { accountIdToSteamId64 } = await import("@/lib/dota");
     // A realistic 9-digit account id — the factory's sequential steamIds
     // derive single-digit account ids, which parseAccountId's junk floor
     // rejects before the collision check can even run.
@@ -563,38 +799,247 @@ describe("updateDotaAccount — one account id, one league player", () => {
 
     const res = await updateDotaAccount({}, accountForm(ownerAccount));
 
-    expect(res?.error).toMatch(/already linked to Derived Owner/);
+    expect(res?.error).toMatch(/does not match the Steam account/i);
     expect(
       (await prisma.user.findUniqueOrThrow({ where: { id: claimant.id } }))
         .dotaAccountId,
     ).toBeNull();
   });
 
-  it("the @unique is the write-time re-assert: two concurrent claims, one id, one winner", async () => {
-    // Both read-checks see a free id; the constraint decides. Meaningful on
-    // SQLite already (the reads interleave ahead of the serialized writes);
-    // real contention under `npm run test:pg`.
-    const a = await makeUser("Racer A");
-    const b = await makeUser("Racer B");
-    const claim = async (user: { id: string }) => {
-      mockRequireUser.mockResolvedValue(
-        sessionFor(
-          await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
-        ),
-      );
-      return updateDotaAccount({}, accountForm(555111));
-    };
-    // Sequential stand-in for the race on SQLite's single writer: the second
-    // submit must hit the constraint path, not silently double-link.
-    const first = await claim(a);
-    expect(first?.error).toBeUndefined();
-    const second = await claim(b);
-    expect(second?.error).toMatch(/already linked/i);
+  it("blocks an attacker before the verified owner has ever logged in", async () => {
+    const accountId = 155511100;
+    const attacker = await makeUser("Early Claim Attacker");
+    mockRequireUser.mockResolvedValue(sessionFor(attacker));
 
-    const holders = await prisma.user.findMany({
-      where: { dotaAccountId: 555111 },
+    const attemptedClaim = await updateDotaAccount(
+      {},
+      accountForm(accountId),
+    );
+    expect(attemptedClaim?.error).toMatch(/does not match the Steam account/i);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    const owner = await upsertLeagueUser(prisma, {
+      steamId: accountIdToSteamId64(accountId),
+      profile: null,
     });
-    expect(holders.map((h) => h.id)).toEqual([a.id]);
+    expect(owner.dotaAccountId).toBeNull();
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: attacker.id } }))
+        .dotaAccountId,
+    ).toBeNull();
+  });
+
+  it("doesn't stamp an old account's medal onto a newer link", async () => {
+    const user = await makeUser("Relink Mid Fetch");
+    const newerStats: PubStats = { ...PUB_FIXTURE, recentWins: 98 };
+    const verifiedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { steamId: accountIdToSteamId64(111333) },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(verifiedUser));
+    mockPubFetch.mockResolvedValueOnce({ ok: true, stats: PUB_FIXTURE });
+    mockFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          dotaAccountId: 222333,
+          pubStats: JSON.stringify(newerStats),
+          pubStatsAt: new Date("2026-08-01T00:00:00Z"),
+        },
+      });
+      return { ok: true, rankTier: 71, fhUnavailable: false };
+    });
+
+    const res = await updateDotaAccount({}, accountForm(111333));
+
+    expect(res?.error).toMatch(/changed in another tab/i);
+    const current = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(current.dotaAccountId).toBe(222333);
+    expect(current.rankTier).toBeNull();
+    expect(current.fhUnavailable).toBeNull();
+    expect(current.pubStats).toBe(JSON.stringify(newerStats));
+  });
+
+  it("doesn't replace an account linked by another tab before the link claim", async () => {
+    const user = await makeUser("Link Claim Racer");
+    const newerStats: PubStats = { ...PUB_FIXTURE, recentWins: 97 };
+    const verifiedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        steamId: accountIdToSteamId64(111993),
+        dotaAccountId: 111991,
+        rankTier: 42,
+      },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(verifiedUser));
+    setRaceHook(
+      onceAt("registration.updateDotaAccount.beforeLinkClaim", async () => {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            dotaAccountId: 111992,
+            rankTier: 73,
+            fhUnavailable: false,
+            pubStats: JSON.stringify(newerStats),
+            pubStatsAt: new Date("2026-08-01T00:00:00Z"),
+          },
+        });
+      }),
+    );
+
+    const res = await updateDotaAccount({}, accountForm(111993));
+
+    expect(res?.error).toMatch(/changed in another tab/i);
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+    ).toMatchObject({
+      dotaAccountId: 111992,
+      rankTier: 73,
+      fhUnavailable: false,
+      pubStats: JSON.stringify(newerStats),
+    });
+  });
+
+  it("doesn't clear metadata from an account linked in another tab", async () => {
+    const user = await makeUser("Clear Relink Racer");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        steamId: `not-numeric-${user.id}`,
+        dotaAccountId: null,
+        rankTier: 42,
+        fhUnavailable: true,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+        pubStatsAt: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    mockRequireUser.mockResolvedValue(
+      sessionFor(
+        await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+      ),
+    );
+    setRaceHook(
+      onceAt(
+        "registration.updateDotaAccount.beforeClearMetadata",
+        async () => {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: {
+              dotaAccountId: 999888,
+              rankTier: 73,
+              fhUnavailable: false,
+              pubStats: JSON.stringify(PUB_FIXTURE),
+              pubStatsAt: new Date("2026-08-01T00:00:00Z"),
+            },
+          });
+        },
+      ),
+    );
+
+    const res = await updateDotaAccount({}, new FormData());
+
+    expect(res?.error).toMatch(/changed in another tab/i);
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+    ).toMatchObject({
+      dotaAccountId: 999888,
+      rankTier: 73,
+      fhUnavailable: false,
+      pubStats: JSON.stringify(PUB_FIXTURE),
+    });
+  });
+
+  it("doesn't refresh metadata for an account relinked in another tab", async () => {
+    const user = await makeUser("Refresh Relink Racer");
+    const newerStats: PubStats = { ...PUB_FIXTURE, recentWins: 96 };
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 333111, rankTier: 42 },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(user));
+    mockPubFetch.mockResolvedValueOnce({ ok: true, stats: PUB_FIXTURE });
+    mockFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          dotaAccountId: 333222,
+          rankTier: null,
+          pubStats: JSON.stringify(newerStats),
+          pubStatsAt: new Date("2026-08-01T00:00:00Z"),
+        },
+      });
+      return { ok: true, rankTier: 72, fhUnavailable: false };
+    });
+
+    const res = await refreshRank({}, new FormData());
+
+    expect(res?.error).toMatch(/changed in another tab/i);
+    const current = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(current.dotaAccountId).toBe(333222);
+    expect(current.rankTier).toBeNull();
+    expect(current.fhUnavailable).toBeNull();
+    expect(current.pubStats).toBe(JSON.stringify(newerStats));
+  });
+
+  it("clears metadata from the old account even when the new fetch fails", async () => {
+    const user = await makeUser("New Account Fetch Failure");
+    const verifiedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        steamId: accountIdToSteamId64(444222),
+        dotaAccountId: 444111,
+        rankTier: 53,
+        fhUnavailable: true,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+        pubStatsAt: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(verifiedUser));
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      rankTier: null,
+      fhUnavailable: null,
+    });
+
+    const res = await updateDotaAccount({}, accountForm(444222));
+
+    expect(res?.message).toMatch(/couldn't fetch medal/i);
+    const current = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(current.dotaAccountId).toBeNull();
+    expect(current.rankTier).toBeNull();
+    expect(current.fhUnavailable).toBeNull();
+    expect(current.pubStats).toBeNull();
+    expect(current.pubStatsAt).toBeNull();
+  });
+
+  it("preserves valid metadata when retrying the same account during an outage", async () => {
+    const user = await makeUser("Same Account Fetch Failure");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 555222, rankTier: 53, fhUnavailable: false },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(user));
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      rankTier: null,
+      fhUnavailable: null,
+    });
+
+    const res = await updateDotaAccount({}, accountForm(555222));
+
+    const current = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(res?.message).toMatch(/legacy account refreshed/i);
+    expect(current.dotaAccountId).toBe(555222);
+    expect(current.rankTier).toBe(53);
+    expect(current.fhUnavailable).toBe(false);
   });
 });
 
@@ -701,6 +1146,41 @@ describe("pub-scouting snapshot capture (User.pubStats)", () => {
     const { raw, at } = await pubOf(user.id);
     expect(raw).toBeNull();
     expect(at).toBeNull();
+  });
+
+  it("doesn't overwrite a newer same-account snapshot that won the race", async () => {
+    const now = Date.UTC(2026, 7, 1);
+    const newerStats: PubStats = { ...PUB_FIXTURE, recentWins: 99 };
+    const user = await makeUser("Snapshot Racer");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dotaAccountId: 787 },
+    });
+    mockPubFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          pubStats: JSON.stringify(newerStats),
+          pubStatsAt: new Date(now + 1_000),
+        },
+      });
+      return { ok: true, stats: PUB_FIXTURE };
+    });
+
+    await ensurePubStats(
+      prisma,
+      {
+        id: user.id,
+        steamId: user.steamId,
+        dotaAccountId: 787,
+        pubStatsAt: null,
+      },
+      now,
+    );
+
+    const current = await pubOf(user.id);
+    expect(current.raw && JSON.parse(current.raw)).toEqual(newerStats);
+    expect(current.at?.getTime()).toBe(now + 1_000);
   });
 
   it("ensurePubStats writes nothing when OpenDota is unreachable", async () => {

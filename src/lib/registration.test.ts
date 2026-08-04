@@ -11,6 +11,7 @@ import {
 const soft = { maxMmr: 4500, status: "SIGNUPS" };
 const signups = { maxMmr: 0, status: "SIGNUPS" };
 const regular = { maxMmr: 0, status: "REGULAR_SEASON" };
+const complete = { maxMmr: 0, status: "COMPLETE" };
 
 describe("registrationGate — MMR limits", () => {
   it("rejects MMR above the hard ceiling", () => {
@@ -156,7 +157,7 @@ describe("registrationGate — phase rules", () => {
       }),
     ).toBeNull();
   });
-  it("lets a player downgrade to standin any time", () => {
+  it("lets a player downgrade to standin after signups while the season is running", () => {
     expect(
       registrationGate({
         season: regular,
@@ -166,6 +167,26 @@ describe("registrationGate — phase rules", () => {
         existingType: "PLAYER",
       }),
     ).toBeNull();
+  });
+  it("freezes both new signups and existing registration edits when the season is complete", () => {
+    expect(
+      registrationGate({
+        season: complete,
+        type: "STANDIN",
+        mmr: 3000,
+        hasExisting: false,
+      }),
+    ).toMatch(/season is complete.*closed/i);
+    expect(
+      registrationGate({
+        season: complete,
+        type: "PLAYER",
+        mmr: 3000,
+        hasExisting: true,
+        existingType: "PLAYER",
+        existingStatus: "ACTIVE",
+      }),
+    ).toMatch(/season is complete.*closed/i);
   });
 });
 

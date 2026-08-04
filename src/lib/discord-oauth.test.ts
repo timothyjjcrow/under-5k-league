@@ -94,11 +94,12 @@ describe("randomOauthValue", () => {
 });
 
 describe("oauth cookie pack/unpack", () => {
-  it("round-trips state + verifier", () => {
-    const packed = packOauthCookie("abc", "def");
+  it("round-trips state + verifier + initiating site user", () => {
+    const packed = packOauthCookie("abc", "def", "site-user-1");
     expect(unpackOauthCookie(packed)).toEqual({
       state: "abc",
       verifier: "def",
+      userId: "site-user-1",
       next: null,
     });
   });
@@ -106,25 +107,40 @@ describe("oauth cookie pack/unpack", () => {
   it("round-trips real random values (base64url never contains the separator)", () => {
     const state = randomOauthValue();
     const verifier = randomOauthValue();
-    expect(unpackOauthCookie(packOauthCookie(state, verifier))).toEqual({
+    expect(
+      unpackOauthCookie(packOauthCookie(state, verifier, "site-user-2")),
+    ).toEqual({
       state,
       verifier,
+      userId: "site-user-2",
       next: null,
     });
   });
 
-  it.each(["", "no-separator", ".leading", "trailing.", "a.b.c.d", null, undefined])(
-    "rejects malformed cookie %j",
-    (v) => {
-      expect(unpackOauthCookie(v as string | null | undefined)).toBeNull();
-    },
-  );
+  it.each([
+    "",
+    "no-separator",
+    ".leading",
+    "trailing.",
+    "a.b.c.d",
+    "abc.def", // pre-user-binding cookie; restart the flow safely
+    null,
+    undefined,
+  ])("rejects malformed or legacy cookie %j", (v) => {
+    expect(unpackOauthCookie(v as string | null | undefined)).toBeNull();
+  });
 
-  it("round-trips a validated return path as an opaque third part", () => {
-    const packed = packOauthCookie("abc", "def", "/players?pos=1");
+  it("round-trips a validated return path as an opaque final part", () => {
+    const packed = packOauthCookie(
+      "abc",
+      "def",
+      "site-user-3",
+      "/players?pos=1",
+    );
     expect(unpackOauthCookie(packed)).toEqual({
       state: "abc",
       verifier: "def",
+      userId: "site-user-3",
       next: "/players?pos=1",
     });
   });
@@ -132,28 +148,40 @@ describe("oauth cookie pack/unpack", () => {
   it("refuses to pack an unsafe return path at all", () => {
     // Validation happens at pack time too — an attacker-supplied ?next= must
     // not even ride the cookie.
-    for (const evil of ["https://evil.test", "//evil.test", "/ok\nSet-Cookie: x", "\\evil"]) {
-      expect(packOauthCookie("abc", "def", evil)).toBe("abc.def");
+    for (const evil of [
+      "https://evil.test",
+      "//evil.test",
+      "/ok\nSet-Cookie: x",
+      "\\evil",
+    ]) {
+      expect(packOauthCookie("abc", "def", "site-user-4", evil)).toBe(
+        `v2.abc.def.${Buffer.from("site-user-4").toString("base64url")}`,
+      );
     }
   });
 
-  it("a tampered third part degrades to no-return-path, never a redirect", () => {
+  it("a tampered return-path part degrades to no return path", () => {
     // The cookie is client-held bytes. "https://evil.test" base64url'd is a
-    // structurally valid third part — safeReturnPath at unpack is what stops
+    // structurally valid final part — safeReturnPath at unpack is what stops
     // it becoming an open redirect.
     const evil = Buffer.from("https://evil.test").toString("base64url");
-    expect(unpackOauthCookie(`abc.def.${evil}`)).toEqual({
+    const user = Buffer.from("site-user-5").toString("base64url");
+    expect(unpackOauthCookie(`v2.abc.def.${user}.${evil}`)).toEqual({
       state: "abc",
       verifier: "def",
+      userId: "site-user-5",
       next: null,
     });
-    // ...and garbage that isn't decodable text just drops the path, keeping
-    // the state/verifier halves working.
-    expect(unpackOauthCookie("abc.def.!!!")).toMatchObject({
+    expect(unpackOauthCookie(`v2.abc.def.${user}.!!!`)).toMatchObject({
       state: "abc",
       verifier: "def",
+      userId: "site-user-5",
       next: null,
     });
+  });
+
+  it("rejects a malformed initiating user instead of weakening the binding", () => {
+    expect(unpackOauthCookie("v2.abc.def.!!!")).toBeNull();
   });
 });
 
@@ -164,7 +192,13 @@ describe("oauthLandingPath", () => {
   });
 
   it("routes every note-carrying outcome to /me, where the copy lives", () => {
-    for (const code of ["join_failed", "joined_pending", "taken", "error", "denied"]) {
+    for (const code of [
+      "join_failed",
+      "joined_pending",
+      "taken",
+      "error",
+      "denied",
+    ]) {
       expect(oauthLandingPath(code, "/")).toBe(`/me?discord=${code}`);
     }
   });
@@ -193,7 +227,10 @@ describe("discordProfileFromMe", () => {
         discriminator: "0",
         global_name: "Dendi",
       }),
-    ).toEqual({ discordId: "80351110224678912", discordName: "dendi_official" });
+    ).toEqual({
+      discordId: "80351110224678912",
+      discordName: "dendi_official",
+    });
   });
 
   it("keeps the legacy name#1234 form for old accounts", () => {

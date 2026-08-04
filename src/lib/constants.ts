@@ -25,7 +25,8 @@ export const REGISTRATION_TYPE = {
   PLAYER: "PLAYER",
   STANDIN: "STANDIN",
 } as const;
-export type RegistrationType = (typeof REGISTRATION_TYPE)[keyof typeof REGISTRATION_TYPE];
+export type RegistrationType =
+  (typeof REGISTRATION_TYPE)[keyof typeof REGISTRATION_TYPE];
 
 export const REGISTRATION_STATUS = {
   ACTIVE: "ACTIVE",
@@ -186,7 +187,8 @@ export const INHOUSE_STATUS = {
   COMPLETED: "COMPLETED",
   CANCELLED: "CANCELLED",
 } as const;
-export type InhouseStatus = (typeof INHOUSE_STATUS)[keyof typeof INHOUSE_STATUS];
+export type InhouseStatus =
+  (typeof INHOUSE_STATUS)[keyof typeof INHOUSE_STATUS];
 
 // A lobby is "active" (occupies the single live slot) until it ends.
 export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
@@ -196,7 +198,6 @@ export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.READY,
   INHOUSE_STATUS.IN_PROGRESS,
 ];
-
 
 export const INHOUSE = {
   TEAM_SIZE: 5,
@@ -219,10 +220,12 @@ export const INHOUSE = {
   // lobby) doesn't fetch at all — the sitewide /api/sync ping keeps lobbies
   // advancing, and it re-syncs on refocus. But a hidden tab that's IN THE QUEUE
   // (or a lobby) keeps a slow keepalive so its presence heartbeat holds the
-  // spot and a forming ready check's chime/title still reaches it. 45s keeps
-  // lastSeenAt inside QUEUE_AWAY_SECONDS (90) even after Chrome clamps hidden
-  // timers toward once a minute — which is exactly why that window is generous.
-  POLL_KEEPALIVE_MS: 45000,
+  // spot and a forming ready check's chime/title still reaches it. It must also
+  // be shorter than BOTH action windows: a lobby can form just after a queued
+  // player's poll, and a long keepalive could otherwise consume the entire
+  // 45s accept window (and skip the 25s captain vote altogether). 10s leaves time
+  // to notice and act while remaining comfortably inside the 90s away cutoff.
+  POLL_KEEPALIVE_MS: 10000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
   // Generous vs. the client's ~10s: web players may be in another tab — the
   // chime + "(!)" tab title have to reach them first.
@@ -265,11 +268,11 @@ export const INHOUSE = {
   //
   // MUST comfortably exceed POLL_KEEPALIVE_MS, and this is the binding case:
   // during a live game all ten tabs are HIDDEN (everyone is in the Dota
-  // client), so they re-confirm on the 45s keepalive — which Chrome clamps
-  // toward once a minute. At 45s of slack the admin's own 1.5s poll ran
-  // maybeFormLobby's prune (lastSeenAt < now-180s) BEFORE a single player's
-  // keepalive landed, so "Lobby cancelled — players re-queued" silently
-  // emptied the queue instead. 75s leaves room for the clamp; it still
+  // client), so they re-confirm on the keepalive — which Chrome can still clamp
+  // toward once a minute. The admin's own fast poll can run maybeFormLobby's
+  // prune BEFORE a player's clamped keepalive lands, so this window must leave
+  // room or "Lobby cancelled — players re-queued" silently empties the queue.
+  // 75s leaves room for the clamp; it still
   // backdates past QUEUE_AWAY_SECONDS (90), so a cancelled lobby can't
   // instantly re-form around ghosts, and past QUEUE_HEARTBEAT_SECONDS (30),
   // so a present player's very next poll writes the refresh.

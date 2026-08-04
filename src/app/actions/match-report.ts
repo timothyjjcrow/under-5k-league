@@ -3,7 +3,7 @@
 // Thin auth/toast wrappers around match-report-service (which holds the
 // integration-tested captain guards) — the reschedule-actions pattern.
 
-import { revalidatePath, revalidateTag } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import {
@@ -15,7 +15,7 @@ import type { ActionResult } from "@/lib/action-result";
 // Game imports must also clear the unstable_cache "games" tag (CLAUDE.md:
 // bust the tag from a request scope) — mirrors admin.ts's refreshGames.
 function refreshGames() {
-  revalidateTag("games", "max");
+  updateTag("games");
   revalidatePath("/", "layout");
 }
 
@@ -38,7 +38,9 @@ export async function captainImportGame(
       str(formData, "dotaMatchRef"),
     );
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Couldn't report the result" };
+    return {
+      error: e instanceof Error ? e.message : "Couldn't report the result",
+    };
   }
   if (!res.ok) return { error: res.error };
   refreshGames();
@@ -60,7 +62,9 @@ export async function captainAutoDetect(
   try {
     res = await detectInService(user.id, str(formData, "matchId"));
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Couldn't report the result" };
+    return {
+      error: e instanceof Error ? e.message : "Couldn't report the result",
+    };
   }
   if (!res.ok) return { error: res.error };
   refreshGames();

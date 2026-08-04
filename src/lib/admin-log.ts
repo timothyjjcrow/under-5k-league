@@ -29,13 +29,15 @@ export async function logAdminAction(opts: {
   action: string;
   summary: string;
   seasonId?: string | null;
+  /** Preserve the actor for break-glass actions that revoke their own cookie. */
+  actor?: { id: string; name: string };
 }): Promise<void> {
   try {
     // Resolved here rather than threaded through every call site: each of these
     // actions has already passed `requireAdmin()`, so the session IS the actor,
     // and adding a parameter to sixteen signatures is exactly the kind of churn
     // that makes people skip the log on the seventeenth.
-    const actor = await getSessionUser();
+    const actor = opts.actor ?? (await getSessionUser());
     await prisma.adminAction.create({
       data: {
         actorId: actor?.id ?? "unknown",

@@ -4,19 +4,42 @@ import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 // and — for new signups — fetchPlayerRankTier (network). Stub all three so we
 // can drive the real saveRegistration end-to-end against the test DB.
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ requireUser: vi.fn(), requireAdmin: vi.fn() }));
+vi.mock("@/lib/auth", () => ({
+  requireUser: vi.fn(),
+  requireAdmin: vi.fn(),
+  getSessionUser: vi.fn(async () => ({
+    id: "registration-audit-admin",
+    name: "Registration Audit Admin",
+  })),
+}));
 vi.mock("@/lib/dota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dota")>()),
   fetchPlayerRankTier: vi.fn(async () => null),
 }));
+vi.mock("@/lib/discord", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/discord")>()),
+  sendDiscordMessage: vi.fn(async () => true),
+}));
 
 import { leaveLeague, saveRegistration } from "@/app/actions/registration";
-import { setRegistrationMmr, withdrawSignup } from "@/app/actions/admin";
+import {
+  setRegistrationMmr,
+  startDraft,
+  withdrawSignup,
+} from "@/app/actions/admin";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { fetchPlayerRankTier } from "@/lib/dota";
+import { sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
-import { makeUser, makeSeason, sessionFor } from "./factories";
+import {
+  makeCaptain,
+  makePlayer,
+  makeUser,
+  makeSeason,
+  ON_POSTGRES,
+  sessionFor,
+} from "./factories";
 
 function form(fields: Record<string, string | number>): FormData {
   const fd = new FormData();
@@ -29,6 +52,251 @@ async function regFor(seasonId: string, userId: string) {
     where: { seasonId_userId: { seasonId, userId } },
   });
 }
+
+describe("saveRegistration — submission integrity", () => {
+  beforeEach(() => {
+    vi.mocked(requireUser).mockReset();
+    vi.mocked(requireAdmin).mockReset();
+    vi.mocked(requireAdmin).mockResolvedValue({
+      id: "registration-audit-admin",
+      steamId: "76561190000990000",
+      name: "Registration Audit Admin",
+      avatar: null,
+      role: "ADMIN",
+    });
+    vi.mocked(fetchPlayerRankTier).mockReset();
+    vi.mocked(fetchPlayerRankTier).mockResolvedValue(null);
+    vi.mocked(sendDiscordMessage).mockReset();
+    vi.mocked(sendDiscordMessage).mockResolvedValue(true);
+  });
+  afterEach(() => setRaceHook(null));
+
+  async function startableSeason() {
+    const season = await makeSeason({ status: "SIGNUPS", teamSize: 2 });
+    await makeCaptain(season.id, "Signup Race Captain A", 100, 0);
+    await makeCaptain(season.id, "Signup Race Captain B", 100, 1);
+    await makePlayer(season.id, "Existing Auction Player", 3000);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "NOT_STARTED" },
+    });
+    return season;
+  }
+
+  it("turns two concurrent first submits into one signup and one Discord announcement", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Double Click");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    let arrivals = 0;
+    let release = () => {};
+    const bothRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setRaceHook(async (label) => {
+      if (label !== "registration.saveRegistration.afterExistingRead") return;
+      arrivals += 1;
+      if (arrivals === 2) release();
+      await bothRead;
+    });
+
+    const [first, second] = await Promise.all([
+      saveRegistration({}, form({ type: "PLAYER", mmr: 3000, roles: "1" })),
+      saveRegistration({}, form({ type: "PLAYER", mmr: 3000, roles: "1" })),
+    ]);
+
+    expect(first?.error).toBeUndefined();
+    expect(second?.error).toBeUndefined();
+    expect(
+      await prisma.registration.count({
+        where: { seasonId: season.id, userId: user.id },
+      }),
+    ).toBe(1);
+    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a full-player signup when startDraft wins before the final snapshot", async () => {
+    const season = await startableSeason();
+    const late = await makeUser("Late Auction Injection");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(late));
+    let draftResult: Awaited<ReturnType<typeof startDraft>> | null = null;
+    let fired = false;
+    setRaceHook(
+      onceAt("registration.saveRegistration.beforeWrite", async () => {
+        fired = true;
+        draftResult = await startDraft(
+          {},
+          form({ expectedActiveSeasonId: season.id }),
+        );
+      }),
+    );
+
+    const result = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3200, roles: "1" }),
+    );
+
+    expect(fired).toBe(true);
+    expect(draftResult).toHaveProperty("message");
+    expect(result?.error).toMatch(/season or draft changed/i);
+    expect(await regFor(season.id, late.id)).toBeNull();
+    expect(
+      await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }),
+    ).toMatchObject({ status: "IN_PROGRESS" });
+  });
+
+  it.skipIf(!ON_POSTGRES)(
+    "loses cleanly when startDraft commits after the final lifecycle snapshot",
+    async () => {
+      const season = await startableSeason();
+      const late = await makeUser("Serializable Auction Injection");
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(late));
+      let draftResult: Awaited<ReturnType<typeof startDraft>> | null = null;
+      let fired = false;
+      setRaceHook(
+        onceAt("registration.saveRegistration.afterLifecycleGate", async () => {
+          fired = true;
+          draftResult = await startDraft(
+            {},
+            form({ expectedActiveSeasonId: season.id }),
+          );
+        }),
+      );
+
+      const result = await saveRegistration(
+        {},
+        form({ type: "PLAYER", mmr: 3300, roles: "2" }),
+      );
+
+      expect(fired).toBe(true);
+      expect(draftResult).toHaveProperty("message");
+      expect(result?.error).toMatch(/season or draft changed/i);
+      expect(await regFor(season.id, late.id)).toBeNull();
+      expect(
+        await prisma.draft.findUniqueOrThrow({
+          where: { seasonId: season.id },
+        }),
+      ).toMatchObject({ status: "IN_PROGRESS" });
+    },
+  );
+
+  it("does not revive a signup an admin removes during a first-submit race", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Removed During First Submit");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    setRaceHook(
+      onceAt("registration.saveRegistration.beforeWrite", async () => {
+        await prisma.registration.create({
+          data: {
+            seasonId: season.id,
+            userId: user.id,
+            type: "PLAYER",
+            status: "REMOVED",
+            mmr: 2800,
+            roles: "support",
+          },
+        });
+      }),
+    );
+
+    const result = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 4100, roles: "carry" }),
+    );
+
+    expect(result?.error).toMatch(/changed while you submitted/i);
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      status: "REMOVED",
+      mmr: 2800,
+      roles: "support",
+    });
+    expect(vi.mocked(sendDiscordMessage)).not.toHaveBeenCalled();
+  });
+
+  it("does not attach a slow rank lookup to a Dota account linked in another tab", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Relinked Mid Fetch");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    vi.mocked(fetchPlayerRankTier).mockResolvedValue(54);
+    setRaceHook(
+      onceAt("registration.saveRegistration.beforeRankWrite", async () => {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { dotaAccountId: 123456, rankTier: 33 },
+        });
+      }),
+    );
+
+    const result = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 1700 }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .rankTier,
+    ).toBe(33);
+    expect((await regFor(season.id, user.id))?.mmr).not.toBe(3119);
+  });
+
+  it("ignores captain volunteering for standins and preserves it after signups close", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const standin = await makeUser("Standin Volunteer");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+    await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 2000, wantsCaptain: "on" }),
+    );
+    expect((await regFor(season.id, standin.id))?.wantsCaptain).toBe(false);
+
+    const player = await makeUser("Already Volunteered");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: player.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 2500,
+        wantsCaptain: true,
+      },
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: "REGULAR_SEASON" },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    await saveRegistration({}, form({ type: "PLAYER", mmr: 2500 }));
+    expect((await regFor(season.id, player.id))?.wantsCaptain).toBe(true);
+  });
+
+  it("freezes signup creation, edits and withdrawal once the season is complete", async () => {
+    const season = await makeSeason({ status: "COMPLETE" });
+    const late = await makeUser("Too Late");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(late));
+
+    const join = await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 2000 }),
+    );
+    expect(join?.error).toMatch(/season is complete.*closed/i);
+    expect(await regFor(season.id, late.id)).toBeNull();
+    expect(vi.mocked(fetchPlayerRankTier)).not.toHaveBeenCalled();
+
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: late.id,
+        type: "STANDIN",
+        status: "ACTIVE",
+        mmr: 2000,
+      },
+    });
+    expect((await leaveLeague({}, new FormData()))?.error).toMatch(
+      /season is complete.*closed/i,
+    );
+    expect((await regFor(season.id, late.id))?.status).toBe("ACTIVE");
+  });
+});
 
 describe("saveRegistration — MMR soft limit / hard ceiling", () => {
   beforeEach(() => vi.mocked(requireUser).mockReset());
@@ -157,7 +425,10 @@ describe("saveRegistration — medal MMR validation", () => {
     ] as const) {
       const user = await medaled(name, tier);
       vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
-      const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+      const res = await saveRegistration(
+        {},
+        form({ type: "PLAYER", mmr: 3000 }),
+      );
       expect(res?.error).toMatch(/medal puts you above/);
       expect(await regFor(season.id, user.id)).toBeNull();
     }
@@ -168,7 +439,10 @@ describe("saveRegistration — medal MMR validation", () => {
     const user = await medaled("Standin Fibber", 54);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
 
-    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 4900 }));
+    const res = await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 4900 }),
+    );
 
     expect(res?.error).toBeUndefined();
     const reg = await regFor(season.id, user.id);
@@ -308,11 +582,14 @@ describe("saveRegistration — an admin REMOVAL is not self-reversible", () => {
   });
 
   it("does not let them slip back in as a STANDIN either", async () => {
-    // Standins are accepted in every phase, so this is the open door if the
-    // refusal were keyed off anything but the row's own status.
+    // Standins are accepted after full-player signups close, so this is the
+    // open door if the refusal were keyed off anything but the row's status.
     const { season, user } = await removedPlayer();
 
-    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 2000 }));
+    const res = await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 2000 }),
+    );
 
     expect(res?.error).toMatch(/admin removed your signup/i);
     const reg = await regFor(season.id, user.id);
@@ -416,21 +693,50 @@ describe("leaveLeague — a standin can't walk out on cover they owe", () => {
     const capA = await makeUser("Cap A");
     const capB = await makeUser("Cap B");
     const alpha = await prisma.team.create({
-      data: { seasonId: season.id, name: "Alpha", captainId: capA.id, budget: 100, draftOrder: 0 },
+      data: {
+        seasonId: season.id,
+        name: "Alpha",
+        captainId: capA.id,
+        budget: 100,
+        draftOrder: 0,
+      },
     });
     const bravo = await prisma.team.create({
-      data: { seasonId: season.id, name: "Bravo", captainId: capB.id, budget: 100, draftOrder: 1 },
+      data: {
+        seasonId: season.id,
+        name: "Bravo",
+        captainId: capB.id,
+        budget: 100,
+        draftOrder: 1,
+      },
     });
     const covered = await makeUser("Covered Player");
     await prisma.registration.create({
-      data: { seasonId: season.id, userId: covered.id, type: "PLAYER", status: "ACTIVE", mmr: 3000 },
+      data: {
+        seasonId: season.id,
+        userId: covered.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
     });
     await prisma.teamMember.create({
-      data: { seasonId: season.id, teamId: alpha.id, userId: covered.id, price: 10 },
+      data: {
+        seasonId: season.id,
+        teamId: alpha.id,
+        userId: covered.id,
+        price: 10,
+      },
     });
     const standin = await makeUser("The Standin");
     await prisma.registration.create({
-      data: { seasonId: season.id, userId: standin.id, type: "STANDIN", status: "ACTIVE", mmr: 2500 },
+      data: {
+        seasonId: season.id,
+        userId: standin.id,
+        type: "STANDIN",
+        status: "ACTIVE",
+        mmr: 2500,
+      },
     });
     const match = await prisma.match.create({
       data: {
@@ -556,6 +862,34 @@ describe("leaveLeague — an admin removal in the gap is not overwritten", () =>
 
     expect(res?.error).toBeUndefined();
     expect((await regFor(season.id, user.id))?.status).toBe("WITHDRAWN");
+  });
+
+  it("refuses when the season closes between the page gate and the write", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Late Withdrawal");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    setRaceHook(
+      onceAt("registration.leaveLeague.beforeWithdraw", async () => {
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { status: "COMPLETE" },
+        });
+      }),
+    );
+
+    const res = await leaveLeague({}, new FormData());
+
+    expect(res?.error).toMatch(/season is complete/i);
+    expect((await regFor(season.id, user.id))?.status).toBe("ACTIVE");
   });
 });
 
@@ -697,21 +1031,30 @@ describe("saveRegistration — no player/standin flips while the auction runs", 
 
   it("refuses PLAYER→STANDIN while the draft is IN_PROGRESS", async () => {
     const { season, user } = await liveDraftSeason("IN_PROGRESS");
-    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+    const res = await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 3000 }),
+    );
     expect(res?.error).toMatch(/draft is running/i);
     expect((await regFor(season.id, user.id))?.type).toBe("PLAYER");
   });
 
   it("refuses while PAUSED too — parked is still live", async () => {
     const { season, user } = await liveDraftSeason("PAUSED");
-    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+    const res = await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 3000 }),
+    );
     expect(res?.error).toMatch(/draft is running/i);
     expect((await regFor(season.id, user.id))?.type).toBe("PLAYER");
   });
 
   it("allows the flip again once the draft is COMPLETE (if unrostered)", async () => {
     const { season, user } = await liveDraftSeason("COMPLETE");
-    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+    const res = await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 3000 }),
+    );
     expect(res?.error).toBeUndefined();
     expect((await regFor(season.id, user.id))?.type).toBe("STANDIN");
   });
@@ -965,7 +1308,10 @@ describe("saveRegistration — draft-night lock scope", () => {
     });
     vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
 
-    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3200 }));
+    const res = await saveRegistration(
+      {},
+      form({ type: "STANDIN", mmr: 3200 }),
+    );
 
     expect(res?.error).toBeUndefined();
     expect(res?.message).not.toMatch(/MMR is locked/);

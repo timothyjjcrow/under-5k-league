@@ -37,6 +37,7 @@ export function DangerSubmit({
   consequences,
   /** Optional: what CAN be recovered afterwards, so the note is honest. */
   recovery,
+  evidence,
   disabled,
 }: {
   children: React.ReactNode;
@@ -46,45 +47,99 @@ export function DangerSubmit({
   title: string;
   consequences: string[];
   recovery?: string;
+  /** Additional operator evidence required before the destructive submit. */
+  evidence?: {
+    name: string;
+    label: string;
+    description?: string;
+    placeholder?: string;
+  };
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
+  const [evidenceValue, setEvidenceValue] = useState("");
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef(false);
   const ctxPending = useContext(PendingContext);
   const { pending: nativePending } = useFormStatus();
   const pending = ctxPending || nativePending;
   // Trim only — matching is otherwise EXACT, including case. A token the admin
   // has to reproduce exactly is the whole mechanism; a fuzzy match would let a
   // half-read team name through.
-  const armed = typed.trim() === token.trim();
+  const armed =
+    typed.trim() === token.trim() &&
+    (!evidence || evidenceValue.trim().length > 0);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+    if (open) {
+      inputRef.current?.focus();
+      return;
+    }
+    // A submitted action can leave the trigger disabled while it is pending;
+    // wait until it is focusable again rather than dropping focus onto <body>.
+    if (returnFocusRef.current && !pending) {
+      returnFocusRef.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [open, pending]);
 
-  // Escape closes, and closing always disarms — reopening must start from a
-  // blank field so a previously-typed token can't linger and auto-arm.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setOpen(false);
-        setTyped("");
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  const closeDialog = () => {
+    returnFocusRef.current = true;
+    setOpen(false);
+    setTyped("");
+    setEvidenceValue("");
+  };
+
+  // Keep keyboard focus inside the modal. aria-modal tells assistive technology
+  // the background is inactive; this makes the same promise true for Tab/Shift
+  // +Tab users and returns focus to the destructive-action trigger on close.
+  const onDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (e.key !== "Tab") return;
+
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (focusable.length === 0) {
+      e.preventDefault();
+      dialog.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !dialog.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !dialog.contains(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         disabled={pending || disabled}
         onClick={() => {
           setTyped("");
+          setEvidenceValue("");
+          returnFocusRef.current = false;
           setOpen(true);
         }}
         className={buttonClasses("danger", size, className)}
@@ -93,43 +148,77 @@ export function DangerSubmit({
       </button>
 
       {open ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={`${inputId}-title`}
-        >
-          <div className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl border border-danger/40 bg-surface-1 p-5 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${inputId}-title`}
+            aria-describedby={`${inputId}-description`}
+            tabIndex={-1}
+            onKeyDown={onDialogKeyDown}
+            className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl border border-danger/40 bg-surface p-5 shadow-xl"
+          >
             <h2
               id={`${inputId}-title`}
               className="text-lg font-semibold text-danger"
             >
               {title}
             </h2>
-            <ul className="mt-3 space-y-1 text-sm text-fg">
-              {consequences.map((c) => (
-                <li key={c} className="flex gap-2">
-                  <span aria-hidden className="text-danger">
-                    •
-                  </span>
-                  <span className="min-w-0">{c}</span>
-                </li>
-              ))}
-            </ul>
-            {recovery ? (
-              <p className="mt-3 rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-xs text-muted">
-                {recovery}
-              </p>
+            <div id={`${inputId}-description`}>
+              <ul className="mt-3 space-y-1 text-sm text-fg">
+                {consequences.map((c) => (
+                  <li key={c} className="flex gap-2">
+                    <span aria-hidden className="text-danger">
+                      •
+                    </span>
+                    <span className="min-w-0">{c}</span>
+                  </li>
+                ))}
+              </ul>
+              {recovery ? (
+                <p className="mt-3 rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-xs text-muted">
+                  {recovery}
+                </p>
+              ) : null}
+            </div>
+            {evidence ? (
+              <div className="mt-4">
+                <label
+                  htmlFor={`${inputId}-evidence`}
+                  className="block text-sm text-muted"
+                >
+                  {evidence.label}
+                </label>
+                {evidence.description ? (
+                  <p className="mt-1 text-xs text-muted">
+                    {evidence.description}
+                  </p>
+                ) : null}
+                <textarea
+                  id={`${inputId}-evidence`}
+                  name={evidence.name}
+                  value={evidenceValue}
+                  onChange={(event) => setEvidenceValue(event.target.value)}
+                  placeholder={evidence.placeholder}
+                  required
+                  rows={3}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="mt-2 w-full resize-y rounded-lg border border-line bg-surface-2/50 px-3 py-2 font-mono text-xs outline-none focus:border-danger/60 focus-visible:ring-2 focus-visible:ring-danger/40"
+                />
+              </div>
             ) : null}
-            <label
-              htmlFor={inputId}
-              className="mt-4 block text-sm text-muted"
-            >
+            <label htmlFor={inputId} className="mt-4 block text-sm text-muted">
               Type <b className="text-fg">{token}</b> to confirm:
             </label>
             <input
               id={inputId}
               ref={inputRef}
+              // The server must verify the same token. A client-only disabled
+              // button is useful UX, not authorization: direct POSTs and
+              // modified markup never pass through `armed`.
+              name="confirmationName"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               // Enter must not submit the enclosing form from here — the whole
@@ -139,15 +228,12 @@ export function DangerSubmit({
               }}
               autoComplete="off"
               spellCheck={false}
-              className="mt-1 h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-danger/60"
+              className="mt-1 h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-danger/60 focus-visible:ring-2 focus-visible:ring-danger/40"
             />
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setTyped("");
-                }}
+                onClick={closeDialog}
                 className={buttonClasses("secondary", "md")}
               >
                 Cancel
@@ -165,9 +251,11 @@ export function DangerSubmit({
                   e.preventDefault();
                   const form = e.currentTarget.form;
                   if (!form) return;
+                  returnFocusRef.current = true;
                   form.requestSubmit(e.currentTarget);
                   setOpen(false);
                   setTyped("");
+                  setEvidenceValue("");
                 }}
                 className={buttonClasses("danger", "md")}
               >

@@ -175,15 +175,24 @@ export async function handleDiscordCallback(
   input: CallbackInput,
   deps: CallbackDeps = DEFAULT_DEPS,
 ): Promise<{ redirect: string }> {
-  // Session gone → sign in and retry (login lands them back on /me).
-  if (!input.userId) return { redirect: "/login?next=/me" };
+  // Session gone → sign in and retry. Carry a one-shot explanation through
+  // the validated return path so landing back on /me doesn't look like the
+  // Discord link silently did nothing.
+  if (!input.userId) {
+    return { redirect: "/login?next=%2Fme%3Fdiscord%3Dsession" };
+  }
 
   // User clicked Cancel on Discord's consent screen — a normal outcome.
   if (input.errorParam) return { redirect: "/me?discord=denied" };
 
   // CSRF gate: the state must round-trip AND match this browser's cookie.
   const packed = unpackOauthCookie(input.cookie);
-  if (!packed || !input.state || !safeEqual(packed.state, input.state)) {
+  if (
+    !packed ||
+    !input.state ||
+    !safeEqual(packed.state, input.state) ||
+    !safeEqual(packed.userId, input.userId)
+  ) {
     return { redirect: "/me?discord=state" };
   }
 

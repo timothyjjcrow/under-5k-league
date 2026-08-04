@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Prisma } from "@prisma/client";
 
 // signFreeAgent is a server action: stub the request-scope bits so it can be
 // driven against the test DB.
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
 }));
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
+vi.mock("@/lib/auth", () => ({
+  requireAdmin: vi.fn(),
+  requireUser: vi.fn(),
+  getSessionUser: vi.fn(async () => ({ id: "audit-admin", name: "Audit Admin" })),
+}));
 vi.mock("@/lib/discord", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/discord")>()),
   getWebhookUrl: vi.fn(async () => ""),
@@ -20,6 +26,7 @@ import {
   promoteStandinToPlayer,
   releasePlayer,
   signFreeAgent,
+  startDraft,
   withdrawSignup,
 } from "@/app/actions/admin";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
@@ -30,7 +37,14 @@ import {
   REGISTRATION_TYPE,
   SEASON_STATUS,
 } from "@/lib/constants";
-import { makePlayer, makeSeason, makeTeam, makeUser } from "./factories";
+import {
+  makeCaptain,
+  makePlayer,
+  makeSeason,
+  makeTeam,
+  makeUser,
+  ON_POSTGRES,
+} from "./factories";
 
 // Roster top-ups after the draft. These guards are what keep a season's
 // rosters legal once the auction is over — and signFreeAgent had no coverage
@@ -885,11 +899,34 @@ describe("releasePlayer — a double release fails clean and refunds once", () =
 describe("promoteStandinToPlayer — the write is a guarded claim", () => {
   afterEach(() => setRaceHook(null));
 
-  // Seam admin.promoteStandin.beforeWrite: the standin self-withdraws on /me
-  // (leaveLeague) between the gate's reads and the write. The old blind update
-  // stamped PLAYER over the WITHDRAWN row — a promotable ghost; the claim
-  // re-asserts ACTIVE + STANDIN and must lose.
-  it("refuses when the signup changes between the gate and the write", async () => {
+  async function draftReadyStandin(name = "Draft-edge Standin") {
+    const season = await makeSeason({
+      teamSize: 2,
+      status: SEASON_STATUS.DRAFT,
+    });
+    await makeCaptain(season.id, "Captain Alpha", 100, 0);
+    await makeCaptain(season.id, "Captain Bravo", 100, 1);
+    await makePlayer(season.id, "Existing Draft Player", 3100);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.NOT_STARTED },
+    });
+    const standin = await makeUser(name);
+    const registration = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: standin.id,
+        type: REGISTRATION_TYPE.STANDIN,
+        status: "ACTIVE",
+        mmr: 2800,
+      },
+    });
+    return { season, standin, registration };
+  }
+
+  // SQLite cannot run a second writer inside an open interactive transaction,
+  // so this seam commits the rival immediately before the authoritative
+  // snapshot. The transaction must observe the changed signup and refuse it.
+  it("refuses when the signup changes immediately before its snapshot", async () => {
     const season = await makeSeason({
       teamSize: 5,
       status: SEASON_STATUS.REGULAR_SEASON,
@@ -907,7 +944,7 @@ describe("promoteStandinToPlayer — the write is a guarded claim", () => {
 
     let fired = false;
     setRaceHook(
-      onceAt("admin.promoteStandin.beforeWrite", async () => {
+      onceAt("admin.promoteStandin.beforeTx", async () => {
         fired = true;
         await prisma.registration.update({
           where: { id: reg.id },
@@ -919,14 +956,255 @@ describe("promoteStandinToPlayer — the write is a guarded claim", () => {
     const res = await promoteStandinToPlayer({}, fd({ userId: standin.id }));
 
     expect(fired, "the seam must fire — a drifted label is a vacuous test").toBe(true);
-    expect(res).toMatchObject({ error: expect.stringMatching(/just changed/) });
+    expect(res).toEqual({ error: "This signup isn't active." });
     const after = await prisma.registration.findUniqueOrThrow({
       where: { id: reg.id },
     });
     expect(after.status).toBe("WITHDRAWN");
     // The blind write used to stamp PLAYER here.
     expect(after.type).toBe(REGISTRATION_TYPE.STANDIN);
+    expect(
+      await prisma.adminAction.count({
+        where: { action: "promoteStandinToPlayer" },
+      }),
+    ).toBe(0);
   });
+
+  it.skipIf(!ON_POSTGRES)(
+    "re-asserts ACTIVE standin state at the write, not only at the gate read",
+    async () => {
+      const season = await makeSeason({
+        teamSize: 5,
+        status: SEASON_STATUS.REGULAR_SEASON,
+      });
+      const standin = await makeUser("Claim Predicate Standin");
+      const registration = await prisma.registration.create({
+        data: {
+          seasonId: season.id,
+          userId: standin.id,
+          type: REGISTRATION_TYPE.STANDIN,
+          status: "ACTIVE",
+          mmr: 2800,
+        },
+      });
+
+      // A genuine second-connection update after the gate read makes PostgreSQL
+      // abort this same-row Serializable write with P2034 whether or not the
+      // copied predicate exists. That is a useful product invariant but a
+      // vacuous mutation tripwire. Wrap only this action's REAL PostgreSQL
+      // transaction client and inject the drift on that same client immediately
+      // before its Registration updateMany. This isolates the claim predicate:
+      // with it, zero rows match; if mutation testing strips `status: ACTIVE,
+      // type: STANDIN`, the blind identity write promotes the WITHDRAWN row.
+      type InteractiveOptions = {
+        maxWait?: number;
+        timeout?: number;
+        isolationLevel?: Prisma.TransactionIsolationLevel;
+      };
+      type InteractiveTransaction = <Result>(
+        callback: (tx: Prisma.TransactionClient) => Promise<Result>,
+        options?: InteractiveOptions,
+      ) => Promise<Result>;
+      const realTransaction = prisma.$transaction.bind(
+        prisma,
+      ) as InteractiveTransaction;
+      const wrappedTransaction: InteractiveTransaction = (callback, options) =>
+        realTransaction(async (tx) => {
+          const originalUpdateMany = tx.registration.updateMany.bind(
+            tx.registration,
+          );
+          let injected = false;
+          const registrationWithDrift = new Proxy(tx.registration, {
+            get(target, property, receiver) {
+              if (property !== "updateMany") {
+                return Reflect.get(target, property, receiver);
+              }
+              return async (args: Prisma.RegistrationUpdateManyArgs) => {
+                if (!injected) {
+                  injected = true;
+                  await tx.registration.update({
+                    where: { id: registration.id },
+                    data: { status: "WITHDRAWN" },
+                  });
+                }
+                return originalUpdateMany(args);
+              };
+            },
+          });
+          const txWithDrift = new Proxy(tx, {
+            get(target, property, receiver) {
+              if (property === "registration") return registrationWithDrift;
+              return Reflect.get(target, property, receiver);
+            },
+          }) as Prisma.TransactionClient;
+          return callback(txWithDrift);
+        }, options);
+      vi.spyOn(prisma, "$transaction").mockImplementationOnce(
+        wrappedTransaction as typeof prisma.$transaction,
+      );
+
+      const result = await promoteStandinToPlayer(
+        {},
+        fd({ userId: standin.id }),
+      );
+      const after = await prisma.registration.findUniqueOrThrow({
+        where: { id: registration.id },
+      });
+
+      expect(result).toEqual({
+        error:
+          "Claim Predicate Standin's signup just changed — reload and check it before promoting",
+      });
+      expect(after).toMatchObject({
+        status: "WITHDRAWN",
+        type: REGISTRATION_TYPE.STANDIN,
+      });
+      expect(
+        await prisma.adminAction.count({
+          where: { action: "promoteStandinToPlayer" },
+        }),
+      ).toBe(0);
+    },
+  );
+
+  // This is the former defect in a deterministic, SQLite-safe ordering:
+  // startDraft commits after the old action's gate read and before its blind
+  // update. With the gate inside the transaction, the live draft is visible
+  // and the unchanged product copy is returned instead of injecting a player.
+  it("refuses promotion when startDraft wins immediately before its snapshot", async () => {
+    const { season, standin, registration } = await draftReadyStandin();
+    let draftResult: Awaited<ReturnType<typeof startDraft>> | null = null;
+    setRaceHook(
+      onceAt("admin.promoteStandin.beforeTx", async () => {
+        draftResult = await startDraft(
+          {},
+          fd({ expectedActiveSeasonId: season.id }),
+        );
+      }),
+    );
+
+    const result = await promoteStandinToPlayer(
+      {},
+      fd({ userId: standin.id }),
+    );
+
+    expect(draftResult).toHaveProperty("message");
+    expect(result).toEqual({
+      error: "The draft is live — promote before it starts or after it completes.",
+    });
+    expect(
+      await prisma.registration.findUniqueOrThrow({
+        where: { id: registration.id },
+      }),
+    ).toMatchObject({
+      status: "ACTIVE",
+      type: REGISTRATION_TYPE.STANDIN,
+    });
+  });
+
+  it("audits only a successful promotion", async () => {
+    const season = await makeSeason({
+      status: SEASON_STATUS.REGULAR_SEASON,
+    });
+    const standin = await makeUser("Audited Late Joiner");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: standin.id,
+        type: REGISTRATION_TYPE.STANDIN,
+        status: "ACTIVE",
+        mmr: 2700,
+      },
+    });
+
+    const result = await promoteStandinToPlayer(
+      {},
+      fd({ userId: standin.id }),
+    );
+
+    expect(result).toHaveProperty("message");
+    expect(
+      await prisma.adminAction.findMany({
+        where: { action: "promoteStandinToPlayer" },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        actorId: "audit-admin",
+        actorName: "Audit Admin",
+        seasonId: season.id,
+        summary: "Promoted Audited Late Joiner from standin to full player",
+      }),
+    ]);
+  });
+
+  it("maps a Serializable conflict to reload guidance without auditing", async () => {
+    const { standin } = await draftReadyStandin("Conflict Standin");
+    vi.spyOn(prisma, "$transaction").mockRejectedValueOnce(
+      Object.assign(new Error("write conflict"), { code: "P2034" }),
+    );
+
+    const result = await promoteStandinToPlayer(
+      {},
+      fd({ userId: standin.id }),
+    );
+
+    expect(result).toEqual({
+      error:
+        "The season, draft, or signup just changed — reload and check it before promoting",
+    });
+    expect(
+      await prisma.adminAction.count({
+        where: { action: "promoteStandinToPlayer" },
+      }),
+    ).toBe(0);
+  });
+
+  it.skipIf(!ON_POSTGRES)(
+    "loses cleanly when startDraft commits after the promotion gate snapshot",
+    async () => {
+      const { season, standin, registration } = await draftReadyStandin(
+        "Postgres Race Standin",
+      );
+      let draftResult: Awaited<ReturnType<typeof startDraft>> | null = null;
+      setRaceHook(
+        onceAt("admin.promoteStandin.afterGate", async () => {
+          draftResult = await startDraft(
+            {},
+            fd({ expectedActiveSeasonId: season.id }),
+          );
+        }),
+      );
+
+      const result = await promoteStandinToPlayer(
+        {},
+        fd({ userId: standin.id }),
+      );
+
+      expect(draftResult).toHaveProperty("message");
+      expect(result).toEqual({
+        error:
+          "Postgres Race Standin's signup just changed — reload and check it before promoting",
+      });
+      expect(
+        await prisma.registration.findUniqueOrThrow({
+          where: { id: registration.id },
+        }),
+      ).toMatchObject({
+        status: "ACTIVE",
+        type: REGISTRATION_TYPE.STANDIN,
+      });
+      expect(
+        await prisma.draft.findUniqueOrThrow({
+          where: { seasonId: season.id },
+        }),
+      ).toMatchObject({ status: DRAFT_STATUS.IN_PROGRESS });
+      expect(
+        await prisma.adminAction.count({
+          where: { action: "promoteStandinToPlayer" },
+        }),
+      ).toBe(0);
+    },
+  );
 });
 
 describe("roster moves stay open through the PLAYOFFS", () => {

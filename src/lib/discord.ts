@@ -53,7 +53,27 @@ export function draftScheduledMessage(
   seasonName: string,
   whenMs: number,
 ): string {
-  return `🗓️ **The ${seasonName} draft is set for <t:${Math.floor(whenMs / 1000)}:F>** — captains and players, be there: <${resolveSiteUrl()}/draft>`;
+  return `🗓️ **The ${seasonName} draft is set for <t:${Math.floor(whenMs / 1000)}:F>** — players and captains, confirm you can make it: <${resolveSiteUrl()}/me>`;
+}
+
+export function draftRescheduledMessage(
+  seasonName: string,
+  whenMs: number,
+): string {
+  return `🔄 **The ${seasonName} draft moved to <t:${Math.floor(whenMs / 1000)}:F>.** Previous confirmations expired — confirm the new time: <${resolveSiteUrl()}/me>`;
+}
+
+export function draftCancelledMessage(seasonName: string): string {
+  return `⚠️ **The scheduled ${seasonName} draft night was cleared.** The league admin will post a new time — watch the league dashboard for the update: <${resolveSiteUrl()}>`;
+}
+
+export function captainAssignedMessage(
+  captainName: string,
+  teamName: string,
+  discordId?: string | null,
+): string {
+  const captain = discordId ? `<@${discordId}>` : `**${name(captainName)}**`;
+  return `🧭 ${captain}, **you now captain ${name(teamName)}.** Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
 }
 
 export function draftStartedMessage(seasonName: string): string {
@@ -61,7 +81,43 @@ export function draftStartedMessage(seasonName: string): string {
 }
 
 export function draftCompleteMessage(seasonName: string): string {
-  return `✅ **The ${seasonName} draft is complete!** Rosters are locked — see the teams at <${resolveSiteUrl()}/teams>`;
+  return `✅ **The ${seasonName} draft is complete — the auction has closed.** See every roster — including any open seats still needing free agents or standins — at <${resolveSiteUrl()}/teams>`;
+}
+
+export function regularSeasonStartedMessage(seasonName: string): string {
+  return `⚔️ **The ${name(seasonName)} Regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
+}
+
+export function draftPausedMessage(seasonName: string): string {
+  return `⏸️ **The ${seasonName} auction is paused.** Clocks are parked; stay in the draft room for the restart: <${resolveSiteUrl()}/draft>`;
+}
+
+export function draftResumedMessage(seasonName: string): string {
+  return `▶️ **The ${seasonName} auction has resumed.** A fresh clock is running now: <${resolveSiteUrl()}/draft>`;
+}
+
+export function draftLotVoidedMessage(
+  seasonName: string,
+  playerName: string,
+): string {
+  return `↩️ **The live lot for ${name(playerName)} was voided by an admin.** No sale was recorded; ${seasonName} remains paused until the admin resumes it.`;
+}
+
+export function draftSaleUndoneMessage(
+  seasonName: string,
+  playerName: string,
+  teamName: string,
+  price: number,
+): string {
+  return `↩️ **The ${seasonName} sale of ${name(playerName)} to ${name(teamName)} for $${price} was undone.** The player is back in the pool and the auction must finish again: <${resolveSiteUrl()}/draft>`;
+}
+
+export function draftAbortedMessage(
+  seasonName: string,
+  playersReturned: number,
+  matchesRemoved: number,
+): string {
+  return `🛑 **The ${seasonName} auction was aborted and the season is back in Signups.** ${playersReturned} non-captain roster member(s) returned to the pool${matchesRemoved ? `; ${matchesRemoved} unplayed fixture(s) were cleared` : ""}. Wait for the admin to announce the restart: <${resolveSiteUrl()}>`;
 }
 
 /** Draft-night superlatives, appended right after the complete message. */
@@ -71,7 +127,9 @@ export function draftRecapMessage(r: {
   topSpender: { teamName: string; spent: number } | null;
   totalSpent: number;
 }): string {
-  const lines = [`📊 **Draft night in numbers** — $${r.totalSpent} changed hands.`];
+  const lines = [
+    `📊 **Draft night in numbers** — $${r.totalSpent} changed hands.`,
+  ];
   if (r.biggestSpend) {
     lines.push(
       `💰 Biggest buy: **${name(r.biggestSpend.name)}** to ${name(r.biggestSpend.teamName)} for $${r.biggestSpend.price}`,
@@ -115,11 +173,7 @@ export function matchResultMessage(m: {
   const home = name(m.homeName);
   const away = name(m.awayName);
   const winner =
-    m.homeScore > m.awayScore
-      ? home
-      : m.awayScore > m.homeScore
-        ? away
-        : null;
+    m.homeScore > m.awayScore ? home : m.awayScore > m.homeScore ? away : null;
   const line = `⚔️ **${label}:** ${home} ${m.homeScore}–${m.awayScore} ${away}`;
   const tail = winner
     ? m.forfeit
@@ -133,15 +187,23 @@ export function playoffsStartedMessage(
   seasonName: string,
   pairings: { home: string; away: string }[],
 ): string {
-  const lines = pairings.map((p) => `• ${name(p.home)} vs ${name(p.away)}`).join("\n");
+  const lines = pairings
+    .map((p) => `• ${name(p.home)} vs ${name(p.away)}`)
+    .join("\n");
   return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
+}
+
+export function playoffsReturnedToRegularMessage(seasonName: string): string {
+  return `↩️ **${name(seasonName)} playoffs have been withdrawn for a standings correction.** The current bracket is void and the league is back in the Regular season phase. A fresh bracket will be posted after the results are corrected: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function championMessage(
   seasonName: string,
   teamName: string,
+  seasonId: string,
 ): string {
-  return `👑 **${name(teamName)}** are the **${seasonName}** champions! GG everyone — recap at <${resolveSiteUrl()}/recap>`;
+  const recap = `${resolveSiteUrl()}/recap?${new URLSearchParams({ season: seasonId })}`;
+  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — recap at <${recap}>`;
 }
 
 export function freeAgentSignedMessage(
@@ -408,9 +470,7 @@ export function playerOutMessage(m: {
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
   // page with the assign form, not on the front door (the week-reminder shape).
-  const link = m.matchId
-    ? ` <${resolveSiteUrl()}/matches/${m.matchId}>`
-    : "";
+  const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
   return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
 }
 
@@ -440,9 +500,7 @@ export function standinAssignedMessage(m: {
     : `fills an open roster seat for **${name(m.teamName)}**`;
   // "check in on the match page" without the page is a scavenger hunt for
   // someone who arrived from a phone ping — link the page (week-reminder shape).
-  const link = m.matchId
-    ? `: <${resolveSiteUrl()}/matches/${m.matchId}>`
-    : ".";
+  const link = m.matchId ? `: <${resolveSiteUrl()}/matches/${m.matchId}>` : ".";
   return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page${link}`;
 }
 
@@ -542,8 +600,14 @@ export function weeklyHonorsMessage(honors: {
   heroName: string | null;
   teamName: string | null;
   teamGameWins: number;
+  /** A prior award was retracted by a result/box-score correction. */
+  corrected?: boolean;
 }): string {
-  const lines = [`🏅 **Week ${honors.week} honors are in!**`];
+  const lines = [
+    honors.corrected
+      ? `🏅 **Correction: Week ${honors.week} honors have been updated.**`
+      : `🏅 **Week ${honors.week} honors are in!**`,
+  ];
   if (honors.playerName) {
     lines.push(
       `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} fantasy pts${honors.heroName ? ` on ${honors.heroName}` : ""}`,
@@ -552,6 +616,11 @@ export function weeklyHonorsMessage(honors: {
   if (honors.teamName) {
     lines.push(
       `🛡️ Team of the Week: **${name(honors.teamName)}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
+    );
+  }
+  if (honors.corrected && !honors.playerName && !honors.teamName) {
+    lines.push(
+      "The previous honors are withdrawn; no eligible box-score award remains for this week.",
     );
   }
   lines.push(`Full leaderboards: <${resolveSiteUrl()}/leaders>`);
@@ -603,7 +672,8 @@ export function newsMessage(title: string, body: string, id?: string): string {
     .join("")
     .replace(/\s+/g, " ")
     .trim();
-  const snippet = prose.length > 200 ? `${prose.slice(0, 199).trimEnd()}…` : prose;
+  const snippet =
+    prose.length > 200 ? `${prose.slice(0, 199).trimEnd()}…` : prose;
   const link = `${resolveSiteUrl()}/news${id ? `#${id}` : ""}`;
   const lines = [`📣 **${title}**`];
   if (snippet) lines.push(snippet);
@@ -652,10 +722,10 @@ export async function getInhousePingRoleId(): Promise<string | null> {
 }
 
 /**
- * Where INHOUSE traffic goes: the queue board, "match found", the two-short
- * ping and inhouse results. A Discord webhook is bound to the channel it was
- * created in, so routing these separately is the only way to keep an evening
- * of pick-up games out of the channel carrying league signups and results.
+ * Where the persistent INHOUSE BOARD goes. Alerts have their own resolver
+ * (`getInhouseAlertWebhookUrl`) and fall back here when no alert channel is
+ * configured. A Discord webhook is bound to the channel it was created in, so
+ * this separation can keep a quiet board-only channel even on a busy night.
  *
  * FALLS BACK to the league webhook when unset, which is what every league that
  * never configures this keeps getting — one channel, exactly as before.
@@ -822,9 +892,9 @@ export async function sendDiscordMessage(
 }
 
 /**
- * Announce to the INHOUSE channel (see getInhouseWebhookUrl). Everything the
- * inhouse mode posts goes through here so a league can keep pick-up traffic
- * out of its league-announcement channel with one setting.
+ * Announce an inhouse EVENT through the alerts resolver. Queue/match/result
+ * alerts can live apart from the persistent board; when unset they fall back
+ * to the board channel, then ultimately the league channel.
  */
 export async function sendInhouseDiscordMessage(
   content: string,

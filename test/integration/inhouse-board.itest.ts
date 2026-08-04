@@ -3,10 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { SETTING_KEYS, getSetting, setSetting } from "@/lib/settings";
 import {
+  INHOUSE_BOARD_POST_LEASE_MS,
   createInhouseBoard,
   removeInhouseBoard,
   syncInhouseBoard,
   getInhouseBoardStatus,
+  loadBoardStats,
   resetBoardStatsCache,
 } from "@/lib/inhouse-board-service";
 import { runResultSync } from "@/lib/result-sync-service";
@@ -105,6 +107,46 @@ describe("inhouse board — off by default", () => {
   });
 });
 
+describe("inhouse board — stable last-game chronology", () => {
+  it("does not let an older lobby's retry timestamp replace the latest game", async () => {
+    const now = Date.now();
+    const older = await prisma.inhouseLobby.create({
+      data: {
+        status: "COMPLETED",
+        createdAt: new Date(now - 2 * 60 * 60_000),
+        completedAt: new Date(now - 50 * 60_000),
+        matchStartTime: new Date(now - 90 * 60_000),
+        durationSecs: 40 * 60,
+        winnerTeam: 1,
+        radiantTeam: 1,
+      },
+    });
+    const newer = await prisma.inhouseLobby.create({
+      data: {
+        status: "COMPLETED",
+        createdAt: new Date(now - 60 * 60_000),
+        completedAt: new Date(now - 20 * 60_000),
+        matchStartTime: new Date(now - 50 * 60_000),
+        durationSecs: 30 * 60,
+        winnerTeam: 2,
+        radiantTeam: 1,
+      },
+    });
+
+    // A delayed settlement/reversal rotates its generic retry cursor. The
+    // board must still choose the newer formed game and show its played end.
+    await prisma.inhouseLobby.update({
+      where: { id: older.id },
+      data: { updatedAt: new Date(now + 60_000) },
+    });
+
+    const stats = await loadBoardStats(now);
+    expect(stats.lastLobbyId).toBe(newer.id);
+    expect(stats.lastEndedAtMs).toBe(now - 20 * 60_000);
+    expect(stats.lastWinnerSide).toBe("Dire");
+  });
+});
+
 describe("inhouse board — creation", () => {
   it("posts once and remembers the message id and webhook", async () => {
     await enqueue(3);
@@ -140,9 +182,172 @@ describe("inhouse board — creation", () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
-  it("stores nothing when Discord rejects the post", async () => {
+  it("retains a visible recovery state when Discord does not confirm an id", async () => {
     mockPost.mockResolvedValue(null);
-    expect((await createInhouseBoard()).ok).toBe(false);
+    await expect(createInhouseBoard()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/didn't confirm.*message id/i),
+    });
+
+    const stored = JSON.parse((await boardRow())!);
+    expect(stored).toMatchObject({
+      webhookId: "1111",
+      messageId: "",
+      reservedAt: null,
+    });
+    await expect(getInhouseBoardStatus()).resolves.toMatchObject({
+      posted: false,
+      posting: true,
+      postingStuck: true,
+    });
+  });
+
+  it("also treats a response without a usable message id as ambiguous", async () => {
+    mockPost.mockResolvedValue({ id: "" });
+
+    await expect(createInhouseBoard()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/didn't confirm.*message id/i),
+    });
+    await expect(getInhouseBoardStatus()).resolves.toMatchObject({
+      posted: false,
+      posting: true,
+      postingStuck: true,
+    });
+    expect(await boardRow()).not.toBeNull();
+  });
+
+  it("does not overwrite newer board state when an ambiguous response arrives late", async () => {
+    const replacement = JSON.stringify({
+      webhookId: "1111",
+      messageId: "1379009999999999999",
+      digest: "replacement-after-post-started",
+    });
+    mockPost.mockImplementation(async () => {
+      // Another admin recovered/replaced the reservation while Discord's POST
+      // was in flight. The late request may report ambiguity, but it no longer
+      // owns the Setting row and must not turn this tracked board into a stuck
+      // reservation.
+      await setSetting(SETTING_KEYS.INHOUSE_BOARD, replacement);
+      return null;
+    });
+
+    await expect(createInhouseBoard()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/state changed/i),
+    });
+    expect(await boardRow()).toBe(replacement);
+    await expect(getInhouseBoardStatus()).resolves.toMatchObject({
+      posted: true,
+      posting: false,
+      postingStuck: false,
+    });
+  });
+
+  it("blocks a retry until an admin clears the possible orphan", async () => {
+    mockPost.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: MSG_ID });
+    await createInhouseBoard();
+
+    await expect(createInhouseBoard()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/interrupted/i),
+    });
+    expect(mockPost).toHaveBeenCalledTimes(1);
+
+    await expect(removeInhouseBoard()).resolves.toEqual({
+      ok: true,
+      orphaned: true,
+    });
+    expect(await boardRow()).toBeNull();
+
+    await expect(createInhouseBoard()).resolves.toEqual({ ok: true });
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(JSON.parse((await boardRow())!).messageId).toBe(MSG_ID);
+  });
+
+  it("removes a message that finishes posting after its reservation was cleared", async () => {
+    mockPost.mockImplementation(async () => {
+      await setSetting(SETTING_KEYS.INHOUSE_BOARD, "");
+      return { id: MSG_ID };
+    });
+
+    const res = await createInhouseBoard();
+
+    expect(res).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/cancelled/i),
+    });
+    expect(mockDelete).toHaveBeenCalledWith(HOOK, MSG_ID);
+    expect(await boardRow()).toBeNull();
+  });
+});
+
+describe("inhouse board — interrupted post recovery", () => {
+  async function reserveBoard(reservedAt?: string) {
+    await setSetting(
+      SETTING_KEYS.INHOUSE_BOARD,
+      JSON.stringify({
+        webhookId: "1111",
+        messageId: "",
+        digest: "posting:1111",
+        ...(reservedAt ? { reservedAt } : {}),
+      }),
+    );
+  }
+
+  it("keeps a fresh reservation locked while Discord may still be posting", async () => {
+    await reserveBoard(new Date().toISOString());
+
+    await expect(getInhouseBoardStatus()).resolves.toMatchObject({
+      posted: false,
+      posting: true,
+      postingStuck: false,
+    });
+    await expect(createInhouseBoard()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/already being posted/i),
+    });
+    await expect(removeInhouseBoard()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/still posting/i),
+    });
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(await boardRow()).not.toBeNull();
+  });
+
+  it("surfaces an expired reservation and clears it only as a possible orphan", async () => {
+    await reserveBoard(
+      new Date(Date.now() - INHOUSE_BOARD_POST_LEASE_MS - 1).toISOString(),
+    );
+
+    await expect(getInhouseBoardStatus()).resolves.toMatchObject({
+      posted: false,
+      posting: true,
+      postingStuck: true,
+    });
+    await expect(createInhouseBoard()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/interrupted/i),
+    });
+    await expect(removeInhouseBoard()).resolves.toEqual({
+      ok: true,
+      orphaned: true,
+    });
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(await boardRow()).toBeNull();
+  });
+
+  it("treats a pre-lease reservation as interrupted and supports explicit recovery", async () => {
+    await reserveBoard();
+
+    await expect(getInhouseBoardStatus()).resolves.toMatchObject({
+      posting: true,
+      postingStuck: true,
+    });
+    await expect(removeInhouseBoard({ force: true })).resolves.toEqual({
+      ok: true,
+      orphaned: true,
+    });
     expect(await boardRow()).toBeNull();
   });
 });
@@ -326,7 +531,9 @@ describe("inhouse board — webhook moved to another channel", () => {
     await createInhouseBoard();
     await expireThrottle();
 
-    mockHook.mockResolvedValue("https://discord.com/api/webhooks/1111/NEW-token");
+    mockHook.mockResolvedValue(
+      "https://discord.com/api/webhooks/1111/NEW-token",
+    );
     await enqueue(1, "z");
     await syncInhouseBoard();
     expect(mockPatch).toHaveBeenCalledTimes(1);
@@ -543,6 +750,25 @@ describe("inhouse board — removal is honest", () => {
     await createInhouseBoard();
     expect(await removeInhouseBoard()).toEqual({ ok: true, orphaned: false });
   });
+
+  it("does not erase a newer board recorded while the old message is deleting", async () => {
+    await createInhouseBoard();
+    const replacement = JSON.stringify({
+      webhookId: "1111",
+      messageId: "1379009999999999999",
+      digest: "replacement",
+    });
+    mockDelete.mockImplementation(async () => {
+      await setSetting(SETTING_KEYS.INHOUSE_BOARD, replacement);
+      return true;
+    });
+
+    await expect(removeInhouseBoard()).resolves.toEqual({
+      ok: true,
+      orphaned: false,
+    });
+    expect(await boardRow()).toBe(replacement);
+  });
 });
 
 describe("inhouse board — wiring into the sitewide sync", () => {
@@ -562,7 +788,9 @@ describe("inhouse board — wiring into the sitewide sync", () => {
 
     expect(mockPatch).toHaveBeenCalledTimes(1);
     const [, , payload] = mockPatch.mock.calls[0];
-    expect((payload.embeds as { title: string }[])[0].title).toContain("slots open");
+    expect((payload.embeds as { title: string }[])[0].title).toContain(
+      "slots open",
+    );
   });
 
   it("repaints from a page view while a queue is filling", async () => {
@@ -575,7 +803,9 @@ describe("inhouse board — wiring into the sitewide sync", () => {
 
     expect(mockPatch).toHaveBeenCalledTimes(1);
     const [, , payload] = mockPatch.mock.calls[0];
-    expect((payload.embeds as { title: string }[])[0].title).toContain("5 / 10");
+    expect((payload.embeds as { title: string }[])[0].title).toContain(
+      "5 / 10",
+    );
   });
 
   it("tells parked clients to poll fast while a queue is FILLING, not just during a lobby", async () => {

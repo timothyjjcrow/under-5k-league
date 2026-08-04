@@ -61,7 +61,10 @@ describe("draft auction — full lifecycle", () => {
       const nominatorId = state.nominatorTeamId!;
       const session = captainSession.get(nominatorId)!;
       const pick = state.available[0];
-      expect(pick, "a player should be available while the draft is live").toBeTruthy();
+      expect(
+        pick,
+        "a player should be available while the draft is live",
+      ).toBeTruthy();
 
       const nom = await nominatePlayer(season.id, session, pick.userId, 1);
       expect(nom.ok).toBe(true);
@@ -96,8 +99,12 @@ describe("draft auction — full lifecycle", () => {
     const star = await makePlayer(season.id, "Star", 5000);
     await startDraftState(season.id);
 
-    expect((await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5)).ok).toBe(true);
-    expect((await placeBid(season.id, sessionFor(capB.user), 20)).ok).toBe(true);
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5)).ok,
+    ).toBe(true);
+    expect((await placeBid(season.id, sessionFor(capB.user), 20)).ok).toBe(
+      true,
+    );
 
     await expireClock(season.id);
     await resolveExpiredNomination(season.id);
@@ -118,7 +125,9 @@ describe("draft auction — full lifecycle", () => {
     await startDraftState(season.id);
 
     await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5);
-    expect((await placeBid(season.id, sessionFor(capA.user), 10)).ok).toBe(false);
+    expect((await placeBid(season.id, sessionFor(capA.user), 10)).ok).toBe(
+      false,
+    );
   });
 
   it("won't let a captain overspend below the reserve for their empty slots", async () => {
@@ -129,8 +138,12 @@ describe("draft auction — full lifecycle", () => {
     await startDraftState(season.id);
 
     // 2 empty slots → must reserve 1 for the last slot → max opening bid is 99.
-    expect((await nominatePlayer(season.id, sessionFor(capA.user), star.id, 100)).ok).toBe(false);
-    expect((await nominatePlayer(season.id, sessionFor(capA.user), star.id, 99)).ok).toBe(true);
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 100)).ok,
+    ).toBe(false);
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 99)).ok,
+    ).toBe(true);
   });
 
   it("won't nominate an already-drafted player", async () => {
@@ -144,7 +157,12 @@ describe("draft auction — full lifecycle", () => {
     await expireClock(season.id);
     await resolveExpiredNomination(season.id); // capA now owns Star; nominator -> capB
 
-    const dup = await nominatePlayer(season.id, sessionFor(capB.user), star.id, 5);
+    const dup = await nominatePlayer(
+      season.id,
+      sessionFor(capB.user),
+      star.id,
+      5,
+    );
     expect(dup.ok).toBe(false);
   });
 
@@ -180,6 +198,130 @@ describe("draft auction — full lifecycle", () => {
 
     const state = await getDraftState(season.id, null);
     expect(state?.status).toBe(DRAFT_STATUS.COMPLETE);
+  });
+});
+
+describe("draft snapshot — contact visibility", () => {
+  it("does not expose a nominated player's Discord to an unregistered account", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    const captain = await makeCaptain(season.id, "Captain", 100, 0);
+    await makeCaptain(season.id, "Other Captain", 100, 1);
+    const nominee = await makePlayer(season.id, "Nominee", 4200);
+    const participant = await makePlayer(season.id, "Participant", 3500);
+    const outsider = await makeUser("Signed-in Outsider");
+    await prisma.user.update({
+      where: { id: nominee.id },
+      data: { discordName: "nominee_handle", discordId: "80351110224678912" },
+    });
+    await startDraftState(season.id);
+    expect(
+      (
+        await nominatePlayer(
+          season.id,
+          sessionFor(captain.user),
+          nominee.id,
+          1,
+        )
+      ).ok,
+    ).toBe(true);
+
+    const outsiderState = await getDraftState(
+      season.id,
+      sessionFor(outsider),
+    );
+    expect(outsiderState?.nominatedPlayer).toMatchObject({
+      discordName: "",
+      discordVerified: false,
+    });
+
+    const participantState = await getDraftState(
+      season.id,
+      sessionFor(participant),
+    );
+    expect(participantState?.nominatedPlayer).toMatchObject({
+      discordName: "nominee_handle",
+      discordVerified: true,
+    });
+  });
+});
+
+describe("draft auction — archived-season clock guards", () => {
+  it("does not sell an expired live lot from an inactive Draft season", async () => {
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    const captain = await makeCaptain(season.id, "Archived Cap A", 100, 0);
+    await makeCaptain(season.id, "Archived Cap B", 100, 1);
+    const player = await makePlayer(season.id, "Archived Lot", 4200);
+    await startDraftState(season.id);
+    expect(
+      (
+        await nominatePlayer(
+          season.id,
+          sessionFor(captain.user),
+          player.id,
+          11,
+        )
+      ).ok,
+    ).toBe(true);
+    await expireClock(season.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { isActive: false },
+    });
+    const before = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+
+    expect(await resolveExpiredNomination(season.id)).toBe(false);
+
+    const after = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(after).toMatchObject({
+      status: DRAFT_STATUS.IN_PROGRESS,
+      nominatedUserId: player.id,
+      currentBidTeamId: captain.team.id,
+      currentBid: 11,
+    });
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+    expect(
+      await prisma.teamMember.count({
+        where: { seasonId: season.id, userId: player.id },
+      }),
+    ).toBe(0);
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: captain.team.id } }))
+        .budget,
+    ).toBe(100);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-nominate after an inactive season's turn clock expires", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    await makeCaptain(season.id, "Archived Nom A", 100, 0);
+    await makeCaptain(season.id, "Archived Nom B", 100, 1);
+    await makePlayer(season.id, "Should Stay Available", 4300);
+    await startDraftState(season.id);
+    await expireNominationClock(season.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { isActive: false },
+    });
+    const before = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+
+    expect(await resolveStalledNomination(season.id)).toBe(false);
+
+    const after = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(after.nominatedUserId).toBeNull();
+    expect(after.nominationEndsAt?.getTime()).toBe(
+      before.nominationEndsAt?.getTime(),
+    );
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+    expect(await prisma.bid.count({ where: { seasonId: season.id } })).toBe(0);
+    expect(mockSend).not.toHaveBeenCalled();
   });
 });
 
@@ -254,8 +396,15 @@ describe("draft auction — claim guards", () => {
     const p2 = await makePlayer(season.id, "P2", 2900);
     await startDraftState(season.id);
 
-    expect((await nominatePlayer(season.id, sessionFor(capA.user), p1.id, 1)).ok).toBe(true);
-    const second = await nominatePlayer(season.id, sessionFor(capA.user), p2.id, 1);
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capA.user), p1.id, 1)).ok,
+    ).toBe(true);
+    const second = await nominatePlayer(
+      season.id,
+      sessionFor(capA.user),
+      p2.id,
+      1,
+    );
     expect(second.ok).toBe(false);
     const draft = await prisma.draft.findUniqueOrThrow({
       where: { seasonId: season.id },
@@ -394,7 +543,9 @@ describe("draft auction — clocks, rotation, pause", () => {
     expect((await pauseDraft(season.id, admin)).ok).toBe(true);
 
     // Paused: bids rejected, resolvers no-op, the lot survives.
-    expect((await placeBid(season.id, sessionFor(capB.user), 9)).ok).toBe(false);
+    expect((await placeBid(season.id, sessionFor(capB.user), 9)).ok).toBe(
+      false,
+    );
     expect(await resolveExpiredNomination(season.id)).toBe(false);
     const paused = await prisma.draft.findUniqueOrThrow({
       where: { seasonId: season.id },
@@ -404,7 +555,9 @@ describe("draft auction — clocks, rotation, pause", () => {
     expect(paused.bidEndsAt).toBeNull();
 
     // Non-admin can't pause or resume.
-    expect((await resumeDraft(season.id, sessionFor(capA.user))).ok).toBe(false);
+    expect((await resumeDraft(season.id, sessionFor(capA.user))).ok).toBe(
+      false,
+    );
 
     // Resume: fresh bid clock for the live lot, bidding works again.
     expect((await resumeDraft(season.id, admin)).ok).toBe(true);
@@ -431,6 +584,28 @@ describe("draft auction — bid trail + undo", () => {
     const state = await getDraftState(season.id, null);
     expect(state?.lotBids.map((b) => b.amount)).toEqual([6, 2]);
     expect(state?.lotBids[0].teamId).toBe(capB.team.id);
+  });
+
+  it("bounds a long bid trail and tells the room it was truncated", async () => {
+    const season = await makeSeason({ teamSize: 3, draftBudget: 100 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    const a = sessionFor(capA.user);
+    const b = sessionFor(capB.user);
+    await startDraftState(season.id);
+
+    await nominatePlayer(season.id, a, star.id, 1);
+    for (let amount = 2; amount <= 10; amount++) {
+      const bidder = amount % 2 === 0 ? b : a;
+      expect((await placeBid(season.id, bidder, amount)).ok).toBe(true);
+    }
+
+    const state = await getDraftState(season.id, null);
+    expect(state?.lotBids.map((bid) => bid.amount)).toEqual([
+      10, 9, 8, 7, 6, 5, 4, 3,
+    ]);
+    expect(state?.lotBidsTruncated).toBe(true);
   });
 
   it("undoLastSale refunds the buyer, frees the player, and hands them the nomination", async () => {
@@ -564,7 +739,9 @@ describe("draft auction — bid trail + undo", () => {
     expect(reopened.status).toBe(DRAFT_STATUS.IN_PROGRESS);
     expect(reopened.nominatorTeamId).toBe(capA.team.id);
     // Non-admin can't touch it.
-    expect((await undoLastSale(season.id, sessionFor(capB.user))).ok).toBe(false);
+    expect((await undoLastSale(season.id, sessionFor(capB.user))).ok).toBe(
+      false,
+    );
   });
 });
 
@@ -594,7 +771,8 @@ describe("draft auction — claims fire exactly once under contention", () => {
     const res = await raceN(3, () => pauseDraft(season.id, admin));
     expect(res.filter((r) => r.ok)).toHaveLength(1);
     expect(
-      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }))
+        .status,
     ).toBe(DRAFT_STATUS.PAUSED);
   });
 
@@ -605,7 +783,8 @@ describe("draft auction — claims fire exactly once under contention", () => {
     const res = await raceN(3, () => resumeDraft(season.id, admin));
     expect(res.filter((r) => r.ok)).toHaveLength(1);
     expect(
-      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }))
+        .status,
     ).toBe(DRAFT_STATUS.IN_PROGRESS);
   });
 
@@ -665,7 +844,8 @@ describe("draft auction — claims fire exactly once under contention", () => {
     const res = await raceN(4, () => resolveStalledNomination(season.id));
     expect(res.filter(Boolean)).toHaveLength(1);
     expect(
-      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }))
+        .status,
     ).toBe(DRAFT_STATUS.COMPLETE);
   });
 
@@ -673,7 +853,9 @@ describe("draft auction — claims fire exactly once under contention", () => {
     const { season, pool } = await liveDraft("Abort");
     const admin = sessionFor(await makeUser("AdminAb", "ADMIN"));
     // Land a sale so the teardown has budget to credit back.
-    expect((await nominatePlayer(season.id, admin, pool[0].id, 5)).ok).toBe(true);
+    expect((await nominatePlayer(season.id, admin, pool[0].id, 5)).ok).toBe(
+      true,
+    );
     await expireClock(season.id);
     expect(await resolveExpiredNomination(season.id)).toBe(true);
 
@@ -685,7 +867,9 @@ describe("draft auction — claims fire exactly once under contention", () => {
     });
     expect(draft.status).toBe(DRAFT_STATUS.NOT_STARTED);
     // Credited back ONCE, not once per aborting admin.
-    const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
+    const teams = await prisma.team.findMany({
+      where: { seasonId: season.id },
+    });
     for (const t of teams) expect(t.budget).toBe(100);
   });
 
@@ -699,11 +883,14 @@ describe("draft auction — claims fire exactly once under contention", () => {
     const res = await raceN(4, () => resolveStalledNomination(season.id));
     expect(res.filter(Boolean)).toHaveLength(1);
     expect(
-      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }))
+        .status,
     ).toBe(DRAFT_STATUS.COMPLETE);
     // One completion means one announcement.
     expect(
-      mockSend.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("draft")),
+      mockSend.mock.calls
+        .map((c) => String(c[0]))
+        .filter((m) => m.includes("draft")),
     ).not.toHaveLength(0);
   });
 });
@@ -807,7 +994,9 @@ describe("undoLastSale — two racing undos stay a toast, never a crash", () => 
     const res = await raceN(2, () => undoLastSale(season.id, admin));
     expect(res.filter((r) => r.ok)).toHaveLength(1);
     const loser = res.find((r) => !r.ok) as { ok: false; error: string };
-    expect(loser.error).toMatch(/already undone|No sale to undo/);
+    expect(loser.error).toMatch(
+      /already undone|No sale to undo|phase, roster, or auction just changed/i,
+    );
 
     // Refunded exactly once.
     const teamA = await prisma.team.findUniqueOrThrow({
@@ -873,7 +1062,11 @@ describe.skipIf(!ON_POSTGRES)(
 
       expect(fired).toBe(true);
       expect(res.ok).toBe(false);
-      if (!res.ok) expect(res.error).toMatch(/draft just changed/i);
+      if (!res.ok) {
+        expect(res.error).toMatch(
+          /draft just changed|player pool or nomination turn just changed/i,
+        );
+      }
 
       const draft = await prisma.draft.findUniqueOrThrow({
         where: { seasonId: season.id },
@@ -884,7 +1077,9 @@ describe.skipIf(!ON_POSTGRES)(
       expect(draft.nominatorTeamId).toBe(capA.team.id);
       // And the refused nomination left no opening-bid audit row behind.
       expect(
-        await prisma.bid.count({ where: { seasonId: season.id, userId: next.id } }),
+        await prisma.bid.count({
+          where: { seasonId: season.id, userId: next.id },
+        }),
       ).toBe(0);
     });
   },

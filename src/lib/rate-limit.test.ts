@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { rateLimit, clientIp, __resetRateLimits } from "./rate-limit";
+import {
+  rateLimit,
+  clientIp,
+  __rateLimitBucketCount,
+  __resetRateLimits,
+} from "./rate-limit";
 
 describe("rateLimit", () => {
   beforeEach(() => __resetRateLimits());
@@ -26,6 +31,17 @@ describe("rateLimit", () => {
     expect(rateLimit("a", opts, 0).allowed).toBe(true);
     expect(rateLimit("b", opts, 0).allowed).toBe(true);
     expect(rateLimit("a", opts, 0).allowed).toBe(false);
+  });
+
+  it("bounds high-cardinality live buckets with oldest-window eviction", () => {
+    const opts = { limit: 1, windowMs: 60_000 };
+    for (let i = 0; i < 6_000; i += 1) {
+      expect(rateLimit(`source-${i}`, opts, 0).allowed).toBe(true);
+    }
+    expect(__rateLimitBucketCount()).toBe(5_000);
+    expect(rateLimit("source-5999", opts, 1).allowed).toBe(false);
+    expect(rateLimit("source-0", opts, 1).allowed).toBe(true);
+    expect(__rateLimitBucketCount()).toBe(5_000);
   });
 });
 

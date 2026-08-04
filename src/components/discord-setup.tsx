@@ -34,10 +34,14 @@ export function DiscordSetupCard({
   linkAvailable,
   autoJoins,
   next,
+  isCaptain = false,
 }: {
   linkAvailable: boolean;
   autoJoins: boolean;
   next?: string;
+  /** Captain copy addresses the team they lead instead of inventing a
+   * different captain who supposedly needs to reach them. */
+  isCaptain?: boolean;
 }) {
   // Nothing configured at all: the invite still works, so still worth asking.
   const oneClick = linkAvailable && autoJoins;
@@ -59,8 +63,10 @@ export function DiscordSetupCard({
           </h2>
           <p className="mt-1 text-sm text-muted">
             The league runs on Discord: scheduling, match-night check-ins and
-            standin scrambles all happen there. Right now your captain has no
-            way to reach you.
+            standin scrambles all happen there.{" "}
+            {isCaptain
+              ? "As a captain, you coordinate the whole team there; right now your players and league admins have no reliable way to reach you."
+              : "Right now your captain has no way to reach you."}
           </p>
         </div>
 
@@ -193,7 +199,7 @@ export async function DiscordSetupPrompt({
   userId: string;
   seasonId: string;
 }) {
-  const [reg, user] = await Promise.all([
+  const [reg, user, member] = await Promise.all([
     prisma.registration.findUnique({
       where: { seasonId_userId: { seasonId, userId } },
       select: { status: true },
@@ -201,6 +207,10 @@ export async function DiscordSetupPrompt({
     prisma.user.findUnique({
       where: { id: userId },
       select: { discordId: true, discordName: true },
+    }),
+    prisma.teamMember.findUnique({
+      where: { seasonId_userId: { seasonId, userId } },
+      select: { isCaptain: true },
     }),
   ]);
   if (reg?.status !== REGISTRATION_STATUS.ACTIVE) return null;
@@ -217,6 +227,7 @@ export async function DiscordSetupPrompt({
         linkAvailable={linkAvailable}
         autoJoins={!!guildCfg}
         next="/"
+        isCaptain={!!member?.isCaptain}
       />
     );
   }

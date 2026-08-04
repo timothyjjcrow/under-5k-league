@@ -13,6 +13,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  EmptyState,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -22,6 +23,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { Match } from "@prisma/client";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
 
 export async function generateMetadata({
   params,
@@ -35,7 +37,7 @@ export async function generateMetadata({
   });
   // notFound() in metadata runs before the shell streams → real 404 status.
   if (!season) notFound();
-  return { title: `${season.name} · Season archive` };
+  return { title: `${season.name} · Season` };
 }
 
 function ResultRow({
@@ -63,6 +65,7 @@ function ResultRow({
       </div>
       <Link
         href={`/matches/${m.id}`}
+        aria-label={`View ${teamName.get(m.homeTeamId) ?? "unknown home team"} vs ${teamName.get(m.awayTeamId) ?? "unknown away team"}: ${done ? `${m.homeScore} to ${m.awayScore}` : "not played"}`}
         className="shrink-0 rounded-md bg-surface-2 px-2 py-0.5 font-mono text-xs tabular-nums transition-colors hover:bg-surface-2/80 hover:text-info"
       >
         {done ? `${m.homeScore} – ${m.awayScore}` : "not played"}
@@ -113,6 +116,10 @@ export default async function SeasonArchivePage({
   );
   const regular = season.matches.filter((m) => m.phase === "REGULAR");
   const playoff = season.matches.filter((m) => m.phase !== "REGULAR");
+  const championPresentation = resolveChampionPresentation(
+    season,
+    season.matches,
+  );
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
   // Same interactive bracket the live schedule uses — seeds derive from the
   // archived first-round pairings themselves.
@@ -128,20 +135,22 @@ export default async function SeasonArchivePage({
         minute: "2-digit",
       }),
   );
-  const champion = season.championTeamId
-    ? season.teams.find((t) => t.id === season.championTeamId)
+  const champion = championPresentation.championTeamId
+    ? season.teams.find((t) => t.id === championPresentation.championTeamId)
     : null;
 
   return (
     <div className="space-y-8">
       <PageTitle
         title={season.name}
-        subtitle="Season archive"
+        subtitle={season.isActive ? "Current season" : "Season archive"}
         action={
           season.isActive ? (
             <Badge tone="brand">Current season</Badge>
           ) : (
-            <Badge tone="neutral">{PHASE_LABEL[season.status] ?? season.status}</Badge>
+            <Badge tone="neutral">
+              {PHASE_LABEL[season.status] ?? season.status}
+            </Badge>
           )
         }
       />
@@ -149,44 +158,56 @@ export default async function SeasonArchivePage({
         <Link href="/seasons" className="text-muted hover:text-info">
           ← All seasons
         </Link>
-        {gameCount > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href={`/leaders?season=${season.id}`}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Leaders
-            </Link>
-            <Link
-              href={`/meta?season=${season.id}`}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Hero meta
-            </Link>
-            {/* The two side games conclude with a winner nobody could see
-                once the season was archived — their pages are season-aware
-                now, so link them from the archive that owns the season. */}
-            <Link
-              href={`/fantasy?season=${season.id}`}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Fantasy
-            </Link>
-            <Link
-              href={`/pickem?season=${season.id}`}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Pick&rsquo;em
-            </Link>
-            <Link
-              href={`/recap?season=${season.id}`}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Season recap →
-            </Link>
-          </div>
-        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {gameCount > 0 ? (
+            <>
+              <Link
+                href={`/leaders?season=${season.id}`}
+                className={buttonClasses("secondary", "sm")}
+              >
+                Leaders
+              </Link>
+              <Link
+                href={`/meta?season=${season.id}`}
+                className={buttonClasses("secondary", "sm")}
+              >
+                Hero meta
+              </Link>
+            </>
+          ) : null}
+          {/* Recap, fantasy, and pick'em can all have useful season state even
+              when no OpenDota Game rows were imported. */}
+          <Link
+            href={`/fantasy?season=${season.id}`}
+            className={buttonClasses("secondary", "sm")}
+          >
+            Fantasy
+          </Link>
+          <Link
+            href={`/pickem?season=${season.id}`}
+            className={buttonClasses("secondary", "sm")}
+          >
+            Pick&rsquo;em
+          </Link>
+          <Link
+            href={`/recap?season=${season.id}`}
+            className={buttonClasses("secondary", "sm")}
+          >
+            Season recap →
+          </Link>
+        </div>
       </div>
+
+      {season.teams.length === 0 && season.matches.length === 0 ? (
+        <EmptyState
+          title="No competitive history on record"
+          description={
+            season.isActive
+              ? "This season has not created teams or fixtures yet."
+              : "This archived season was closed before teams or fixtures were created. Its saved phase and configuration remain available to administrators."
+          }
+        />
+      ) : null}
 
       {champion ? (
         <ChampionBanner
@@ -196,11 +217,40 @@ export default async function SeasonArchivePage({
         />
       ) : null}
 
+      {season.status === "COMPLETE" && !champion ? (
+        <div className="rounded-xl border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+          <div className="font-medium">Champion state needs review</div>
+          <p className="mt-1 text-muted">
+            This season was closed without an authoritative champion. Results
+            remain historical, but no team is labelled champion until the grand
+            final is reconciled.
+          </p>
+        </div>
+      ) : null}
+
       {season.teams.length > 0 ? (
         <Card>
-          <CardHeader title="Final standings" />
+          <CardHeader
+            title={
+              season.status === "COMPLETE"
+                ? "Final standings"
+                : season.isActive
+                  ? "Current standings"
+                  : "Standings at archive"
+            }
+          />
           <CardBody className="p-0">
-            <StandingsTable standings={standings} teamName={teamName} />
+            <StandingsTable
+              standings={standings}
+              teamName={teamName}
+              withdrawnIds={
+                new Set(
+                  season.teams
+                    .filter((team) => team.withdrawn)
+                    .map((team) => team.id),
+                )
+              }
+            />
           </CardBody>
         </Card>
       ) : null}
@@ -214,7 +264,7 @@ export default async function SeasonArchivePage({
             <CardBody className="p-0 pt-4">
               <Bracket
                 rounds={bracketRoundsView}
-                championTeamId={season.championTeamId}
+                championTeamId={championPresentation.championTeamId}
               />
             </CardBody>
           </Card>
@@ -251,7 +301,7 @@ export default async function SeasonArchivePage({
                   title={
                     <Link
                       href={`/teams/${t.id}`}
-                      className="flex items-center gap-2 hover:text-info"
+                      className="flex min-w-0 items-center gap-2 hover:text-info"
                     >
                       <TeamCrest
                         name={t.name}
@@ -259,8 +309,11 @@ export default async function SeasonArchivePage({
                         size={24}
                         className="rounded-md"
                       />
-                      {t.name}
-                      {t.id === season.championTeamId ? <span>🏆</span> : null}
+                      <span className="truncate">{t.name}</span>
+                      {t.id === championPresentation.championTeamId ? (
+                        <span>🏆</span>
+                      ) : null}
+                      {t.withdrawn ? <Badge>Withdrawn</Badge> : null}
                     </Link>
                   }
                   subtitle={`Captain: ${t.captain.name}`}
@@ -269,15 +322,26 @@ export default async function SeasonArchivePage({
                   {t.members.map((m) => (
                     <div
                       key={m.id}
-                      className="flex items-center justify-between text-sm"
+                      className="flex min-w-0 items-center justify-between gap-2 text-sm"
                     >
-                      <span className="flex items-center gap-2">
-                        <Avatar name={m.user.name} src={m.user.avatar} size={24} />
-                        <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
-                        {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Avatar
+                          name={m.user.name}
+                          src={m.user.avatar}
+                          size={24}
+                        />
+                        <PlayerLink
+                          userId={m.userId}
+                          className="min-w-0 truncate"
+                        >
+                          {m.user.name}
+                        </PlayerLink>
+                        {m.isCaptain ? (
+                          <Badge tone="accent">Captain</Badge>
+                        ) : null}
                         <RankBadge rankTier={m.user.rankTier} />
                       </span>
-                      <span className="text-muted">
+                      <span className="shrink-0 text-muted">
                         {m.isCaptain ? "—" : `$${m.price}`}
                       </span>
                     </div>

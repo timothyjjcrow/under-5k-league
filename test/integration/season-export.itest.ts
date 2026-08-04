@@ -10,7 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { GET } from "@/app/api/admin/season-export/route";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
-import { makePlayer, makeSeason, makeTeam } from "./factories";
+import { makePlayer, makeSeason, makeTeam, makeUser } from "./factories";
 
 function exportReq(seasonId?: string): NextRequest {
   const url = new URL("http://localhost:3000/api/admin/season-export");
@@ -54,7 +54,51 @@ async function stageSeason(name: string) {
       players,
     },
   });
-  return { season, home, away, player, match, game, players };
+  const outsider = await makeUser(`${name} Oracle`);
+  await prisma.prediction.create({
+    data: {
+      matchId: match.id,
+      userId: outsider.id,
+      pickedTeamId: home.id,
+    },
+  });
+  await prisma.fantasyRoster.create({
+    data: {
+      seasonId: season.id,
+      userId: outsider.id,
+      picks: { create: { userId: player.id } },
+    },
+  });
+  await prisma.setting.createMany({
+    data: [
+      { key: `championAnnounced:${season.id}`, value: "sent" },
+      { key: `resultAnnounced:${match.id}`, value: "sent" },
+    ],
+  });
+  await prisma.setting.upsert({
+    where: { key: "discordWebhookUrl" },
+    create: { key: "discordWebhookUrl", value: "global-secret" },
+    update: { value: "global-secret" },
+  });
+  await prisma.adminAction.create({
+    data: {
+      actorId: outsider.id,
+      actorName: outsider.name,
+      action: "recordResult",
+      summary: `Recorded ${name}'s result`,
+      seasonId: season.id,
+    },
+  });
+  return {
+    season,
+    home,
+    away,
+    player,
+    outsider,
+    match,
+    game,
+    players,
+  };
 }
 
 describe("GET /api/admin/season-export", () => {
@@ -70,12 +114,19 @@ describe("GET /api/admin/season-export", () => {
     // The filename slugs the season name and appends the id — the browser
     // download is the only artifact this route produces.
     expect(res.headers.get("content-disposition")).toBe(
-      `attachment; filename="ld2l-alpha-${a.season.id}.json"`,
+      `attachment; filename="ld2l-audit-archive-alpha-${a.season.id}.json"`,
     );
     expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-ld2l-artifact-purpose")).toBe(
+      "audit-only-not-restorable",
+    );
 
     const body = await res.json();
-    expect(body.formatVersion).toBe(1);
+    expect(body.formatVersion).toBe(2);
+    expect(body.artifactPurpose).toBe("AUDIT_ARCHIVE_ONLY");
+    expect(body.restorable).toBe(false);
+    expect(body.recoveryWarning).toMatch(/cannot restore/i);
+    expect(body.archiveDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(body.season.id).toBe(a.season.id);
     expect(body.season.name).toBe("Alpha");
 
@@ -101,11 +152,40 @@ describe("GET /api/admin/season-export", () => {
     expect(body.games[0].players).toBe(a.players);
     expect(JSON.parse(body.games[0].players)[0].kills).toBe(7);
 
+    // Identity references that do not have a Registration (predictors,
+    // fantasy managers, standins, admins) are still self-contained.
+    expect(body.users.map((u: { id: string }) => u.id)).toContain(a.outsider.id);
+    expect(body.users).toHaveLength(4); // two captains + player + outsider
+    expect(body.users[0]).not.toHaveProperty("discordId");
+    expect(body.users[0]).not.toHaveProperty("role");
+    expect(body.predictions).toHaveLength(1);
+    expect(body.fantasyRosters[0].picks).toHaveLength(1);
+
+    // Relationless season/match state and audit history are part of v2, but
+    // global secrets are not.
+    expect(body.settings.map((s: { key: string }) => s.key).sort()).toEqual(
+      [
+        `championAnnounced:${a.season.id}`,
+        `resultAnnounced:${a.match.id}`,
+      ].sort(),
+    );
+    expect(body.settings.map((s: { key: string }) => s.key)).not.toContain(
+      "discordWebhookUrl",
+    );
+    expect(body.adminActions).toHaveLength(1);
+    expect(body.adminActions[0].summary).toContain("Alpha");
+
     expect(body.counts).toEqual({
+      users: 4,
       registrations: 1,
       teams: 2,
+      teamMembers: 0,
       matches: 1,
       games: 1,
+      predictions: 1,
+      fantasyRosters: 1,
+      settings: 2,
+      adminActions: 1,
     });
   });
 

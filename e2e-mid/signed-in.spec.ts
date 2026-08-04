@@ -26,10 +26,49 @@ test("fantasy renders standings for a signed-in viewer (league locked)", async (
   assertNoErrors();
 });
 
-test("pick'em renders the oracle board and match cards", async ({ page }) => {
+test("pick'em hides open splits and saves a call", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/pickem");
   await expect(page.getByRole("heading", { name: "Pick'em" })).toBeVisible();
+
+  const upcoming = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /Upcoming matches/ }),
+  });
+  await expect(upcoming).toBeVisible();
+  await expect(
+    upcoming
+      .getByText("Community split stays hidden until picks lock.")
+      .first(),
+  ).toBeVisible();
+  await expect(upcoming.getByText(/^crowd:/i)).toHaveCount(0);
+
+  const choices = upcoming.locator('button[aria-pressed="false"]');
+  await expect(choices.first()).toBeEnabled();
+  await choices.first().click();
+  await expect(
+    upcoming.getByRole("heading", { name: /you've picked 1 of/i }),
+  ).toBeVisible();
+  await expect(upcoming.locator('button[aria-pressed="true"]')).toHaveCount(1);
+  await page.reload();
+  await expect(upcoming.locator('button[aria-pressed="true"]')).toHaveCount(1);
+  assertNoErrors();
+});
+
+test("Fantasy and Pick'em fit a narrow phone", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+
+  for (const [path, heading] of [
+    ["/fantasy", "Fantasy"],
+    ["/pickem", "Pick'em"],
+  ] as const) {
+    await page.goto(path);
+    await expect(
+      page.getByRole("heading", { name: heading, exact: true }),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page, path);
+  }
+
   assertNoErrors();
 });
 

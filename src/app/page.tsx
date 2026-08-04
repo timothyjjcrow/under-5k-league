@@ -1,6 +1,6 @@
 import { Fragment, Suspense, type ReactNode } from "react";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
-import { parseGamePlayers } from "@/lib/player-stats";
+import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
@@ -11,14 +11,19 @@ import {
   type ClinchStatus,
 } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
-import { matchStakes, stakesHeadline, type ScenarioReport } from "@/lib/scenarios";
+import { projectPlayoffField } from "@/lib/playoff-field";
+import {
+  matchStakes,
+  stakesHeadline,
+  type ScenarioReport,
+} from "@/lib/scenarios";
 import {
   bracketRounds,
   byKickoff,
   matchPhaseAbbrev,
   matchPhaseLabel,
   focusSlate,
-  pickBracketSize,
+  isRelevantOpenMatch,
   roundName,
   slotRound,
 } from "@/lib/schedule";
@@ -31,9 +36,13 @@ import {
   teamAvailability,
 } from "@/lib/availability";
 import { weeklyHonors } from "@/lib/honors";
+import {
+  HONOR_WEEK_STATE,
+  isNoPerformanceHonorWeek,
+} from "@/lib/honors-readiness";
+import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
 import { heroMeta } from "@/lib/hero-meta";
 import { heroById } from "@/lib/heroes";
-import type { PlayerStat } from "@/lib/match-import";
 import type { Match } from "@prisma/client";
 import {
   Avatar,
@@ -69,6 +78,7 @@ import {
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
   GAME_SERVER_REGION,
+  REGISTRATION_STATUS,
 } from "@/lib/constants";
 import { predictionOpen } from "@/lib/pickem";
 import { HeroVideo } from "@/components/hero-video";
@@ -78,13 +88,25 @@ import { StandingsTable } from "@/components/standings-table-server";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { InviteLink } from "@/components/invite-link";
-import { DRAFT_PASSED_LABEL, phaseSubtitle } from "@/lib/season-copy";
-import projectStats from "@/lib/project-stats.json";
+import {
+  DRAFT_PASSED_LABEL,
+  HISTORY_PHASE_LABEL,
+  draftPhasePresentation,
+  phaseSubtitle,
+} from "@/lib/season-copy";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
 import { firstMedia } from "@/lib/linkify";
-import { sortNews } from "@/lib/news";
 import { cn } from "@/lib/utils";
+import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
+import {
+  resolveChampionPresentation,
+  type ChampionPresentation,
+} from "@/lib/champion-presentation";
+import {
+  canViewAvailabilitySummary,
+  hasActiveLeagueParticipation,
+} from "@/lib/visibility";
 
 const PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups open",
@@ -124,57 +146,74 @@ function fmtWhen(d: Date | null): string | null {
   return d ? formatMatchTime(d, "full") : null;
 }
 
-/**
- * Whole days from the repo's first commit to now, or null when git couldn't say.
- *
- * A plain module function, NOT inlined into `ProjectScale`, and deliberately not
- * baked into project-stats.json either. Inlined it is a render-phase `Date.now()`
- * that fails lint; baked, the figure freezes at whichever build last ran, which
- * is exactly the "abandoned project" reading the footnote exists to avoid.
- * Called from the async server component below, so it re-evaluates per request.
- */
-function daysSinceFirstCommit(): number | null {
-  const { firstCommit } = projectStats;
-  if (!firstCommit) return null;
-  const started = new Date(firstCommit).getTime();
-  if (!Number.isFinite(started)) return null;
-  return Math.max(1, Math.round((Date.now() - started) / 86_400_000));
-}
-
 export default async function Home() {
   const user = await getSessionUser();
   const snapshot = await getSeasonSnapshot(user?.id);
 
   if (!snapshot) {
+    const latestSeason = await prisma.season.findFirst({
+      where: { isActive: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, status: true },
+    });
     return (
       <div className="mx-auto max-w-2xl py-10">
         <Hero
           phase={null}
-          title="No season is running yet"
-          subtitle="Check back soon — a new season will open for signups shortly. In the meantime, jump into an inhouse."
+          title="League offseason"
+          subtitle={
+            latestSeason
+              ? latestSeason.status === "COMPLETE"
+                ? `${latestSeason.name} has wrapped up. Browse the completed season or play an inhouse while the next league is organized.`
+                : `${latestSeason.name} was archived before completion during the ${PHASE_STEP[latestSeason.status] ?? HISTORY_PHASE_LABEL[latestSeason.status] ?? latestSeason.status} phase. Browse its saved state or play an inhouse while administrators organize what comes next.`
+              : "There isn't an active season yet. Explore how the league works or play an inhouse while the first season is organized."
+          }
         />
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href="/inhouse" className={buttonClasses("accent")}>
             Play an inhouse →
           </Link>
-          <Link href="/features" className={buttonClasses("secondary")}>
-            See what the league offers
-          </Link>
+          {latestSeason ? (
+            <Link
+              href={`/seasons/${latestSeason.id}`}
+              className={buttonClasses("secondary")}
+            >
+              Review {latestSeason.name} →
+            </Link>
+          ) : (
+            <Link href="/features" className={buttonClasses("secondary")}>
+              See what the league offers
+            </Link>
+          )}
           <DiscordButton />
           {user?.role === "ADMIN" ? (
             <Link href="/admin" className={buttonClasses("secondary")}>
-              Create the first season
+              Create a season
             </Link>
           ) : null}
         </div>
+        {/* Inhouse is the only live play surface during the offseason. Keep its
+            actual queue/lobby state visible here too, rather than replacing a
+            useful "4/10 queued" signal with a generic hero button. */}
+        <Suspense
+          fallback={
+            <div className="mt-5 skeleton h-12 rounded-[var(--radius)]" />
+          }
+        >
+          <div className="mt-5">
+            <InhouseStrip />
+          </div>
+        </Suspense>
       </div>
     );
   }
 
   const { season } = snapshot;
+  const draftPresentation = draftPhasePresentation(snapshot.draftStatus);
 
   // Primary call-to-action, surfaced right in the hero during signups.
   const isActiveReg = snapshot.myReg?.status === "ACTIVE";
+  const isRemovedReg = snapshot.myReg?.status === REGISTRATION_STATUS.REMOVED;
   let heroAction: ReactNode = null;
   if (season.status === "SIGNUPS") {
     // The feature tour rides along during signups — new visitors can't see
@@ -192,6 +231,13 @@ export default async function Home() {
         </Link>
         {tourLink}
       </>
+    ) : isRemovedReg ? (
+      <>
+        <Link href="/me" className={buttonClasses("secondary", "lg")}>
+          Signup removed — see details
+        </Link>
+        {tourLink}
+      </>
     ) : !isActiveReg ? (
       <>
         <Link href="/me" className={buttonClasses("primary", "lg")}>
@@ -205,7 +251,7 @@ export default async function Home() {
   } else if (season.status === "DRAFT") {
     heroAction = (
       <Link href="/draft" className={buttonClasses("accent", "lg")}>
-        Enter the draft room →
+        {draftPresentation.action}
       </Link>
     );
   }
@@ -225,6 +271,7 @@ export default async function Home() {
         prisma.game.count({ where: { match: { seasonId: season.id } } }),
       ])
     : [[] as Match[], 0];
+  const championPresentation = resolveChampionPresentation(season, matches);
 
   // Live, animated figures surfaced right in the hero for a sense of momentum.
   let heroMeta: ReactNode = null;
@@ -238,8 +285,8 @@ export default async function Home() {
         />
         {/* Both states carry an ASK, because signups never close on a count —
             minTeams is a floor (see capacity.ts). Past it the badge alone was
-            the whole story, and "Ready to draft" is a full stop: it answers
-            "can the league run?" and says nothing to the person still deciding
+            the whole story, and "Player minimum met" answers only whether the
+            pool floor is covered; it says nothing to the person still deciding
             whether to be in it. The ask keeps the same HeroStat shape as the
             under-minimum one so the marquee reads identically either side of
             the threshold — only what it's counting toward changes. Which team
@@ -247,7 +294,7 @@ export default async function Home() {
             be true forever, and "another team" can't go stale. */}
         {capacity.canDraft ? (
           <>
-            <Badge tone="success">Ready to draft</Badge>
+            <Badge tone="success">Player minimum met</Badge>
             <HeroStat
               value={capacity.toNextTeam}
               label="more for another team"
@@ -257,7 +304,7 @@ export default async function Home() {
         ) : (
           <HeroStat
             value={capacity.needed}
-            label="more to start the draft"
+            label="more to reach the player minimum"
             tone="accent"
           />
         )}
@@ -282,7 +329,11 @@ export default async function Home() {
     heroMeta = (
       <HeroStat
         value={snapshot.teams.length}
-        label={snapshot.teams.length === 1 ? "team drafting" : "teams drafting"}
+        label={
+          snapshot.teams.length === 1
+            ? draftPresentation.teamLabelSingular
+            : draftPresentation.teamLabel
+        }
       />
     );
   } else if (season.status === "REGULAR_SEASON") {
@@ -291,9 +342,7 @@ export default async function Home() {
     const openWeeks = regular
       .filter((m) => m.status !== "COMPLETED")
       .map((m) => m.week);
-    const currentWeek = openWeeks.length
-      ? Math.min(...openWeeks)
-      : totalWeeks;
+    const currentWeek = openWeeks.length ? Math.min(...openWeeks) : totalWeeks;
     heroMeta = (
       <>
         {totalWeeks > 0 ? (
@@ -339,7 +388,7 @@ export default async function Home() {
     );
   } else if (season.status === "COMPLETE") {
     const champion = snapshot.teams.find(
-      (t) => t.id === season.championTeamId,
+      (team) => team.id === championPresentation.championTeamId,
     );
     heroMeta = champion ? (
       <span className="flex items-center gap-2">
@@ -377,7 +426,9 @@ export default async function Home() {
   // had no control behind it anywhere on the site.
   const heroAside =
     showsMatches && user && !heroAction ? (
-      <Suspense fallback={<Skeleton className="h-32 w-full rounded-[var(--radius)]" />}>
+      <Suspense
+        fallback={<Skeleton className="h-32 w-full rounded-[var(--radius)]" />}
+      >
         <MyNextMatch seasonId={season.id} userId={user.id} />
       </Suspense>
     ) : season.status === "SIGNUPS" && isActiveReg ? (
@@ -388,9 +439,15 @@ export default async function Home() {
     <div className="space-y-8">
       <Hero
         phase={season.status}
+        phaseLabel={
+          season.status === "DRAFT" ? draftPresentation.badge : undefined
+        }
+        active={season.status === "DRAFT" ? draftPresentation.live : undefined}
         title={season.name}
         subtitle={phaseSubtitle(season.status, {
           canDraft: snapshot.capacity.canDraft,
+          draftStatus: snapshot.draftStatus,
+          hasChampion: championPresentation.championTeamId != null,
         })}
         action={heroAction}
         meta={heroMeta}
@@ -416,7 +473,9 @@ export default async function Home() {
       <Suspense fallback={null}>
         <LeagueNews />
       </Suspense>
-      <Suspense fallback={<div className="skeleton h-12 rounded-[var(--radius)]" />}>
+      <Suspense
+        fallback={<div className="skeleton h-12 rounded-[var(--radius)]" />}
+      >
         <InhouseStrip />
       </Suspense>
       {season.status === "SIGNUPS" && (
@@ -435,20 +494,38 @@ export default async function Home() {
               control slot, which is the whole point: the RSVP a captain depends
               on used to be the lowest-contrast strip on the page. */}
           <Suspense fallback={<SeasonViewSkeleton />}>
-            <SeasonView snapshot={snapshot} userId={user?.id} matches={matches} />
+            <SeasonView
+              snapshot={snapshot}
+              userId={user?.id}
+              matches={matches}
+              championTeamId={championPresentation.championTeamId}
+              showCheckins={canViewAvailabilitySummary(
+                user,
+                hasActiveLeagueParticipation(
+                  snapshot.myReg?.status === REGISTRATION_STATUS.ACTIVE,
+                  !!user &&
+                    snapshot.teams.some(
+                      (team) =>
+                        team.captain.id === user.id ||
+                        team.members.some(
+                          (member) => member.user.id === user.id,
+                        ),
+                    ),
+                ),
+              )}
+            />
           </Suspense>
         </>
       )}
       {season.status === "COMPLETE" && (
         <Suspense fallback={<CardSkeleton rows={4} />}>
-          <CompleteView snapshot={snapshot} matches={matches} />
+          <CompleteView
+            snapshot={snapshot}
+            matches={matches}
+            championPresentation={championPresentation}
+          />
         </Suspense>
       )}
-      {/* Last band in every phase — it is context about the site, not about
-          the season, so it sits under whatever the season is doing. No
-          Suspense: the figures are a static import, so there is nothing to
-          wait for. */}
-      <ProjectScale days={daysSinceFirstCommit()} />
     </div>
   );
 }
@@ -497,13 +574,16 @@ function currentRoundLabel(playoff: Match[]): string | null {
 // Latest admin announcements — pinned first, capped at three with a link to
 // the full /news archive. Renders nothing when the league has no news.
 async function LeagueNews() {
-  // News volume is tiny — fetch all so an old pinned post still surfaces.
-  const posts = sortNews(await prisma.newsPost.findMany()).slice(0, 3);
+  const posts = await prisma.newsPost.findMany({
+    orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    take: 3,
+  });
   if (posts.length === 0) return null;
 
   return (
     <Card>
       <CardHeader
+        headingLevel={2}
         title="League news"
         subtitle="The latest from the admins"
         action={
@@ -542,6 +622,7 @@ async function LeagueNews() {
                 <NewsMedia
                   src={media.value}
                   kind={media.kind}
+                  label={`Media attached to “${p.title}”`}
                   className="mt-2 block max-h-40 max-w-full rounded-lg border border-line"
                 />
               )}
@@ -570,9 +651,16 @@ async function MyNextMatch({
 
   // Assigned standins are participants too — without this they'd get no
   // check-in prompt anywhere but the match page itself.
+  // A check-in answers for an exact future match night. LIVE, untimed and
+  // stale-unreported fixtures remain visible elsewhere, but none can become
+  // the player's primary RSVP prompt.
+  // Async server component: Date.now is request-time state, not render replay.
+  // eslint-disable-next-line react-hooks/purity
+  const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
   const mine = {
     seasonId,
-    status: { not: "COMPLETED" as const },
+    status: "SCHEDULED" as const,
+    scheduledAt: { gte: freshFrom },
     OR: [
       ...(teamIds.length
         ? [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }]
@@ -581,38 +669,31 @@ async function MyNextMatch({
     ],
   };
   // Chronological, not week order — an accepted reschedule can legally move a
-  // match past the next week's night, and the banner should always point at
-  // whatever plays first. Unscheduled matches sort last.
+  // match past the next week's night, and the banner should point at whatever
+  // actionable fixture plays first.
   const order = [
     { scheduledAt: { sort: "asc" as const, nulls: "last" as const } },
     { week: "asc" as const },
     { createdAt: "asc" as const },
   ];
-  // A match nobody ever reported stays un-COMPLETED forever. Ordering purely by
-  // kickoff then pinned every participant's banner to that dead week-1 fixture
-  // for the rest of the season — they'd check in against it while the match
-  // they were actually playing that night got no check-ins at all. Prefer the
-  // earliest fixture that is still plausibly ahead of (or during) tonight, and
-  // fall back to the stale one only when there's nothing else left.
-  // async server component (renders once per request); see admin/page.tsx.
-  // eslint-disable-next-line react-hooks/purity
-  const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
-  const next =
-    (await prisma.match.findFirst({
-      where: { ...mine, scheduledAt: { gte: freshFrom } },
-      orderBy: order,
-      include: { homeTeam: true, awayTeam: true },
-    })) ??
-    (await prisma.match.findFirst({
-      where: { ...mine, scheduledAt: null },
-      orderBy: order,
-      include: { homeTeam: true, awayTeam: true },
-    })) ??
-    (await prisma.match.findFirst({
-      where: mine,
-      orderBy: order,
-      include: { homeTeam: true, awayTeam: true },
-    }));
+  const candidates = await prisma.match.findMany({
+    where: mine,
+    orderBy: order,
+    include: { homeTeam: true, awayTeam: true, standins: true },
+  });
+  // A named standin replaces the roster seat for this match. The replaced
+  // player must not get a success toast for an RSVP that every readiness count
+  // intentionally ignores; the assigned standin gets the prompt instead.
+  const next = candidates.find((match) => {
+    if (match.standins.some((a) => a.standinUserId === userId)) return true;
+    const rosterTeamId = teamIds.find(
+      (id) => id === match.homeTeamId || id === match.awayTeamId,
+    );
+    if (!rosterTeamId) return false;
+    return !match.standins.some(
+      (a) => a.teamId === rosterTeamId && a.replacingUserId === userId,
+    );
+  });
   // The hero's control slot must never be an empty 23rem column, so an
   // unrostered viewer (or a player whose season is done) gets the spectator
   // form of the same thing rather than nothing at all.
@@ -625,7 +706,7 @@ async function MyNextMatch({
           games are still worth watching.
         </p>
         <Link
-          href="/schedule#this-week"
+          href="/schedule#fixtures"
           className={buttonClasses("secondary", "sm", "mt-3 w-full")}
         >
           See this week&apos;s schedule →
@@ -668,20 +749,20 @@ async function MyNextMatch({
         <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm">
           <span aria-hidden>⏳</span>
           <span className="min-w-0 flex-1">
-            <strong>{pendingReschedule.proposedBy.name}</strong> proposed
-            moving this match to{" "}
+            <strong>{pendingReschedule.proposedBy.name}</strong> proposed moving
+            this match to{" "}
             <strong>
               <LocalTime
                 ts={pendingReschedule.proposedTime.getTime()}
                 variant="full"
-                initial={formatMatchTime(pendingReschedule.proposedTime, "full")}
+                initial={formatMatchTime(
+                  pendingReschedule.proposedTime,
+                  "full",
+                )}
               />
             </strong>
           </span>
-          <Link
-            href={`/matches/${next.id}`}
-            className={textLink("shrink-0")}
-          >
+          <Link href={`/matches/${next.id}`} className={textLink("shrink-0")}>
             Respond →
           </Link>
         </div>
@@ -739,6 +820,8 @@ function HeroStat({
  */
 function Hero({
   phase,
+  phaseLabel,
+  active,
   title,
   subtitle,
   action,
@@ -747,6 +830,8 @@ function Hero({
   rail,
 }: {
   phase: string | null;
+  phaseLabel?: string;
+  active?: boolean;
   title: string;
   subtitle: string;
   action?: ReactNode;
@@ -754,8 +839,9 @@ function Hero({
   aside?: ReactNode;
   rail?: ReactNode;
 }) {
-  const live = !!phase && phase !== "COMPLETE";
-  const control = aside ?? (action ? <HeroActions>{action}</HeroActions> : null);
+  const live = active ?? (!!phase && phase !== "COMPLETE");
+  const control =
+    aside ?? (action ? <HeroActions>{action}</HeroActions> : null);
   return (
     <section className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40">
       {/* Looping background video — fades in/out at the loop seam to hide the jump. */}
@@ -802,7 +888,7 @@ function Hero({
                     className="animate-live-pulse mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-current"
                   />
                 ) : null}
-                {PHASE_LABEL[phase] ?? phase}
+                {phaseLabel ?? PHASE_LABEL[phase] ?? phase}
               </Badge>
             ) : null}
             {/* Persistent league fact: the Dota region every game is played on.
@@ -947,11 +1033,17 @@ async function InhouseStrip() {
   ]);
 
   const label = liveLobby
-    ? "An inhouse is being played right now"
+    ? queued > 0
+      ? `An inhouse is live · ${queued} / ${INHOUSE.LOBBY_SIZE} queued next`
+      : "An inhouse is live — the next-game queue is open"
     : queued > 0
       ? `${queued} / ${INHOUSE.LOBBY_SIZE} queued for the next inhouse`
       : "The inhouse queue is open";
-  const cta = liveLobby ? "Watch" : queued > 0 ? "Jump in" : "Start the queue";
+  const cta = liveLobby
+    ? "Watch or queue"
+    : queued > 0
+      ? "Jump in"
+      : "Start the queue";
 
   return (
     <Link
@@ -978,48 +1070,6 @@ async function InhouseStrip() {
 // ---------- SIGNUPS ----------
 
 /**
- * "How much went into this" — one quiet line at the foot of the dashboard.
- *
- * Every figure is measured, never typed: `scripts/project-stats.mjs` recounts
- * the tree on each build (`prebuild`) into `project-stats.json`. Hand-written
- * numbers here would be a claim, and a stale one within a week.
- *
- * It reports COMMITS, not pull requests. This repo has never opened one — the
- * GitHub API says zero — and "0 PRs" beside 294 commits in three weeks would
- * describe an abandoned project rather than a busy one. The stat has to match
- * how the work actually happened.
- *
- * `days` is derived per REQUEST rather than baked into project-stats.json, so it
- * keeps counting between deploys instead of freezing at whenever the last build
- * ran. It arrives as a prop from `Home` via `daysSinceFirstCommit` rather than
- * being computed here: `Date.now()` in a component body is an impure render-
- * phase call and the linter fails the build on it (react-hooks purity rule),
- * which is correct in general even though a server component re-renders per
- * request. A plain helper called from the async component keeps the behaviour
- * and drops the violation — do not inline it back.
- */
-function ProjectScale({ days }: { days: number | null }) {
-  const { codeLines, testLines, tests, commits } = projectStats;
-  const n = (v: number) => v.toLocaleString("en-US");
-  // A footnote, not a section. Every figure is a plain fact and none of them
-  // is the reason anyone came to the page, so it gets one quiet line under
-  // everything rather than a card competing with the league itself.
-  const parts = [
-    `${n(codeLines + testLines)} lines of code`,
-    `${n(tests)} tests`,
-    // "over N days" qualifies the commit count, so it must NOT be another
-    // comma-separated item — "294 commits, over 23 days" reads as a list that
-    // lost its way.
-    commits ? `${n(commits)} commits${days ? ` over ${n(days)} days` : ""}` : null,
-  ].filter(Boolean);
-  return (
-    <p className="px-1 pt-2 text-center text-xs text-muted">
-      This league runs on software built for it — {parts.join(", ")}.
-    </p>
-  );
-}
-
-/**
  * The hero's control slot for a player who has already signed up.
  *
  * MUST always render something — the Hero drops its identity column to full
@@ -1032,7 +1082,7 @@ function ProjectScale({ days }: { days: number | null }) {
  * it's the next whole team.
  */
 function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
-  const { season, capacity, playerCount } = snapshot;
+  const { capacity, playerCount } = snapshot;
   const short = !capacity.canDraft;
   const n = short ? capacity.needed : capacity.toNextTeam;
   return (
@@ -1074,9 +1124,13 @@ async function SignupsView({
   loggedIn: boolean;
 }) {
   const { season, playerCount, standinCount, capacity, myReg } = snapshot;
-  const isActivePlayer =
-    myReg?.status === "ACTIVE" && myReg.type === "PLAYER";
+  const isActivePlayer = myReg?.status === "ACTIVE" && myReg.type === "PLAYER";
   const isStandin = myReg?.status === "ACTIVE" && myReg.type === "STANDIN";
+  const isRemoved = myReg?.status === REGISTRATION_STATUS.REMOVED;
+  const myDraftReadiness =
+    isActivePlayer && season.draftAt
+      ? draftReadiness(myReg, season.draftRevision)
+      : null;
 
   // Teams need captains as much as they need players — surface how many
   // have volunteered so the "can we actually draft?" picture is complete.
@@ -1112,18 +1166,16 @@ async function SignupsView({
             <h2 className="min-w-0 font-medium">
               {capacity.canDraft
                 ? `${playerCount} player${playerCount === 1 ? "" : "s"} signed up`
-                : `${playerCount} / ${capacity.minPlayers} players to start`}
+                : `${playerCount} / ${capacity.minPlayers} player minimum`}
               <span className="font-normal text-muted">
                 {" "}
                 · teams of {season.teamSize}
-                {season.maxMmr > 0
-                  ? ` · ${season.maxMmr} MMR soft limit`
-                  : ""}
+                {season.maxMmr > 0 ? ` · ${season.maxMmr} MMR soft limit` : ""}
               </span>
             </h2>
             <span className="shrink-0 text-muted">
               {capacity.canDraft
-                ? "Ready to draft — still open"
+                ? "Player minimum met — still open"
                 : `${capacity.needed} more needed`}
             </span>
           </div>
@@ -1139,8 +1191,7 @@ async function SignupsView({
               </strong>
               {/* This line PRINTS the date, so it owns saying the date has
                   gone. Before, a slipped draft night read "🗓️ Draft night:
-                  Sun, Jul 26" with no chip — a past date rendered as a plan,
-                  under "Ready to draft". */}
+                  Sun, Jul 26" with no chip — a past date rendered as a plan. */}
               <Countdown
                 targetMs={season.draftAt.getTime()}
                 eventLabel="Draft"
@@ -1156,24 +1207,30 @@ async function SignupsView({
                   narrowing from a team's worth down to one. Not
                   leftover/teamSize: that renders empty at an exact multiple,
                   which is the healthiest the league gets. */}
-              <Progress value={playerCount} max={capacity.nextTeamTarget} />
+              <Progress
+                value={playerCount}
+                max={capacity.nextTeamTarget}
+                label="Player signup capacity"
+              />
               <p className="text-sm text-muted">
-                The {season.minTeams}-team minimum is covered — signups stay open,
-                and every {season.teamSize} more players is another team.{" "}
-                <strong className="text-fg">
-                  {capacity.toNextTeam} more
-                </strong>{" "}
+                The {season.minTeams}-team minimum is covered — signups stay
+                open, and every {season.teamSize} more players is another team.{" "}
+                <strong className="text-fg">{capacity.toNextTeam} more</strong>{" "}
                 would make it {capacity.teamsFormable + 1} full teams.
               </p>
             </div>
           ) : (
-            <Progress value={playerCount} max={capacity.minPlayers} />
+            <Progress
+              value={playerCount}
+              max={capacity.minPlayers}
+              label="Players needed to run the league"
+            />
           )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Players" value={playerCount} />
             <Stat label="Standins" value={standinCount} />
             <Stat
-              label="Teams ready"
+              label="Full teams possible"
               value={capacity.teamsFormable}
               hint={
                 capacity.canDraft
@@ -1201,9 +1258,29 @@ async function SignupsView({
               </Link>
             ) : isActivePlayer ? (
               <div className="flex flex-wrap items-center gap-3">
-                <Badge tone="success">You&apos;re signed up to play</Badge>
+                <Badge
+                  tone={
+                    myDraftReadiness === DRAFT_READINESS.STALE
+                      ? "danger"
+                      : myDraftReadiness === DRAFT_READINESS.AWAITING
+                        ? "accent"
+                        : "success"
+                  }
+                >
+                  {myDraftReadiness === DRAFT_READINESS.READY
+                    ? "Draft night confirmed"
+                    : myDraftReadiness === DRAFT_READINESS.STALE
+                      ? "Draft confirmation expired"
+                      : myDraftReadiness === DRAFT_READINESS.AWAITING
+                        ? "Confirm draft night"
+                        : "You’re signed up to play"}
+                </Badge>
                 <Link href="/me" className={buttonClasses("secondary")}>
-                  Edit your signup
+                  {myDraftReadiness === DRAFT_READINESS.STALE
+                    ? "Reconfirm draft night →"
+                    : myDraftReadiness === DRAFT_READINESS.AWAITING
+                      ? "Confirm draft night →"
+                      : "Review your signup"}
                 </Link>
               </div>
             ) : isStandin ? (
@@ -1211,6 +1288,13 @@ async function SignupsView({
                 <Badge tone="info">You&apos;re registered as a standin</Badge>
                 <Link href="/me" className={buttonClasses("secondary")}>
                   Switch to full player
+                </Link>
+              </div>
+            ) : isRemoved ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge tone="danger">Your signup was removed</Badge>
+                <Link href="/me" className={buttonClasses("secondary")}>
+                  See status and next steps
                 </Link>
               </div>
             ) : (
@@ -1225,7 +1309,9 @@ async function SignupsView({
                 instructions, three identical discord.gg links on one screen
                 (the footer has the third). Registered viewers are exactly the
                 cohort that prompt covers; everyone else still needs this. */}
-            {!isActivePlayer && !isStandin ? <DiscordButton size="lg" /> : null}
+            {!isActivePlayer && !isStandin && !isRemoved ? (
+              <DiscordButton size="lg" />
+            ) : null}
           </div>
 
           {!loggedIn ? <SteamSafetyNote /> : null}
@@ -1240,6 +1326,7 @@ async function SignupsView({
       {snapshot.teams.length > 0 ? (
         <Card>
           <CardHeader
+            headingLevel={2}
             title="Captains so far"
             subtitle={`${snapshot.teams.length} team${snapshot.teams.length === 1 ? "" : "s"} lined up — more captains can still be named before the draft`}
           />
@@ -1251,7 +1338,11 @@ async function SignupsView({
                   userId={t.captain.id}
                   className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
                 >
-                  <Avatar name={t.captain.name} src={t.captain.avatar} size={26} />
+                  <Avatar
+                    name={t.captain.name}
+                    src={t.captain.avatar}
+                    size={26}
+                  />
                   <span className="text-sm">{t.captain.name}</span>
                   <RankBadge rankTier={t.captain.rankTier} />
                 </PlayerLink>
@@ -1267,6 +1358,7 @@ async function SignupsView({
 
       <Card>
         <CardHeader
+          headingLevel={2}
           title="Who's in"
           /* Named the count: the chip list is capped at 12, so a 30-player
              season silently hid 18 people behind a "View all →" that gave no
@@ -1322,7 +1414,9 @@ async function RecentSignups({ seasonId }: { seasonId: string }) {
           <span className="text-sm">{r.user.name}</span>
           <RankBadge rankTier={r.user.rankTier} />
           <RoleBadges roles={r.roles} />
-          {r.mmr > 0 ? <span className="text-xs text-muted">{r.mmr}</span> : null}
+          {r.mmr > 0 ? (
+            <span className="text-xs text-muted">{r.mmr}</span>
+          ) : null}
         </PlayerLink>
       ))}
     </div>
@@ -1345,6 +1439,7 @@ async function PoolComposition({ seasonId }: { seasonId: string }) {
   return (
     <Card>
       <CardHeader
+        headingLevel={2}
         title="Pool composition"
         subtitle={`Role coverage & MMR spread · avg ${avg} MMR`}
       />
@@ -1456,6 +1551,7 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
   return (
     <Card>
       <CardHeader
+        headingLevel={2}
         title="Live from the draft room"
         action={
           <Link href="/draft" className={buttonClasses("accent", "sm")}>
@@ -1480,7 +1576,9 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
                 </PlayerLink>
                 <div className="truncate text-xs text-muted">
                   ${draft.currentBid}
-                  {leadingTeam ? ` — ${leadingTeam.name} leads` : " opening bid"}
+                  {leadingTeam
+                    ? ` — ${leadingTeam.name} leads`
+                    : " opening bid"}
                 </div>
               </div>
             </div>
@@ -1504,7 +1602,10 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
           {sales.length > 0 ? (
             <ul className="mt-2 space-y-1 text-sm">
               {sales.map((s) => (
-                <li key={s.id} className="flex items-center justify-between gap-2">
+                <li
+                  key={s.id}
+                  className="flex items-center justify-between gap-2"
+                >
                   <PlayerLink userId={s.userId} className="min-w-6 truncate">
                     {s.user.name}
                   </PlayerLink>
@@ -1543,6 +1644,7 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
           return (
             <Card key={t.id} interactive>
               <CardHeader
+                headingLevel={2}
                 title={
                   <Link
                     href={`/teams/${t.id}`}
@@ -1577,7 +1679,11 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
                       {t.members.length}/{season.teamSize} roster
                     </span>
                   </div>
-                  <Progress value={spent} max={startingBudget} />
+                  <Progress
+                    value={spent}
+                    max={startingBudget}
+                    label={`${t.name} draft budget spent`}
+                  />
                 </div>
                 <RosterList members={t.members} teamSize={season.teamSize} />
               </CardBody>
@@ -1622,7 +1728,7 @@ function RosterList({
                 </span>
               </>
             ) : (
-              <span className="text-muted/60">Empty slot</span>
+              <span className="text-muted">Empty slot</span>
             )}
           </li>
         );
@@ -1637,16 +1743,18 @@ async function SeasonView({
   snapshot,
   userId,
   matches,
+  championTeamId,
+  showCheckins,
 }: {
   snapshot: SeasonSnapshot;
   userId?: string;
   matches: Match[];
+  championTeamId: string | null;
+  showCheckins: boolean;
 }) {
   const { season, teams } = snapshot;
-  const standings = computeStandings(
-    teams.map((t) => t.id),
-    matches,
-  );
+  const playoffField = projectPlayoffField(teams, matches);
+  const standings = playoffField.standings;
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const teamForm = formByTeam(
     teams.map((t) => t.id),
@@ -1657,7 +1765,11 @@ async function SeasonView({
   // stakes chips, and the your-team one-liner — computed once.
   const report =
     season.status === "REGULAR_SEASON"
-      ? seasonScenarioReport(standings, matches, teams.length)
+      ? seasonScenarioReport(
+          playoffField.eligibleStandings,
+          matches,
+          playoffField.eligibleTeamIds.length,
+        )
       : null;
 
   const myTeam = userId
@@ -1674,10 +1786,14 @@ async function SeasonView({
   // "Next up" must be the SAME match the stake line's "next series" is about
   // (the engine orders by kickoff when times exist) — falling back to
   // chronological order, like the MyNextMatch banner above.
+  // Keep this compact team tile on the same freshness policy as the hero:
+  // stale unreported fixtures are results debt, not the team's next opponent.
+  // eslint-disable-next-line react-hooks/purity
+  const seasonViewNow = Date.now();
   const myOpen = myTeam
     ? matches.filter(
         (m) =>
-          m.status !== "COMPLETED" &&
+          isRelevantOpenMatch(m, seasonViewNow) &&
           (m.homeTeamId === myTeam.id || m.awayTeamId === myTeam.id),
       )
     : [];
@@ -1717,10 +1833,10 @@ async function SeasonView({
   // wants here is what comes AFTER tonight, which is only definable against
   // the same focusSlate the band above used.
   const slateIds = new Set(
-    focusSlate(season.status, matches).slate.map((m) => m.id),
+    focusSlate(season.status, matches, seasonViewNow).slate.map((m) => m.id),
   );
   const upcoming = matches
-    .filter((m) => m.status !== "COMPLETED" && !slateIds.has(m.id))
+    .filter((m) => isRelevantOpenMatch(m, seasonViewNow) && !slateIds.has(m.id))
     .sort(byKickoff)
     .slice(0, 4);
   const openPickemIds = matches
@@ -1735,7 +1851,7 @@ async function SeasonView({
         })
       : 0,
   ]);
-  const fantasyLocked = seasonGames > 0;
+  const fantasyLocked = season.fantasyLockedAt != null || seasonGames > 0;
   const picksMissing = pickemOpen - picksMade;
 
   // The side-game band renders BELOW the table now. It used to sit above both
@@ -1790,10 +1906,11 @@ async function SeasonView({
         // four <Bracket> call sites were missing it.
         <Card className="overflow-hidden">
           <CardHeader
+            headingLevel={2}
             title="Playoff bracket"
             action={
               <Link
-                href="/schedule"
+                href="/schedule#playoff-bracket"
                 className={textLink("text-sm")}
               >
                 Full bracket →
@@ -1803,7 +1920,25 @@ async function SeasonView({
           <CardBody className="p-0 pt-4">
             <Bracket
               rounds={bracketRoundsView}
-              championTeamId={season.championTeamId}
+              championTeamId={championTeamId}
+            />
+          </CardBody>
+        </Card>
+      ) : season.status === "PLAYOFFS" ? (
+        <Card>
+          <CardHeader headingLevel={2} title="Playoff bracket" />
+          <CardBody>
+            <EmptyState
+              title="Waiting for the bracket"
+              description="The league is in Playoffs, but the first-round fixtures have not been seeded yet. Final standings remain below while administrators prepare the bracket."
+              action={
+                <Link
+                  href="/schedule#playoff-bracket"
+                  className={buttonClasses("secondary", "sm")}
+                >
+                  Open playoff schedule →
+                </Link>
+              }
             />
           </CardBody>
         </Card>
@@ -1816,6 +1951,7 @@ async function SeasonView({
           teams={teams}
           teamName={teamName}
           report={report}
+          showCheckins={showCheckins}
         />
       </Suspense>
 
@@ -1837,20 +1973,29 @@ async function SeasonView({
         >
           <Card>
             <CardHeader
+              headingLevel={2}
               title="Standings"
               action={
-                <Link
-                  href="/schedule#this-week"
-                  className={textLink("text-sm")}
-                >
+                <Link href="/schedule#fixtures" className={textLink("text-sm")}>
                   Full schedule →
                 </Link>
               }
             />
             <CardBody className="p-0">
               <StandingsTable
-                standings={standings.slice(0, 8)}
+                standings={standings.slice(
+                  0,
+                  Math.max(
+                    8,
+                    standings.findIndex(
+                      (row) =>
+                        playoffField.seedByTeam.get(row.teamId) ===
+                        playoffField.bracketSize,
+                    ) + 1,
+                  ),
+                )}
                 totalTeams={standings.length}
+                eligibleTeams={playoffField.eligibleTeamIds.length}
                 teamName={teamName}
                 withdrawnIds={
                   new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
@@ -1858,9 +2003,10 @@ async function SeasonView({
                 formByTeam={teamForm}
                 playoffCut={
                   season.status === "REGULAR_SEASON"
-                    ? pickBracketSize(teams.length)
+                    ? playoffField.bracketSize
                     : undefined
                 }
+                playoffSeedByTeam={playoffField.seedByTeam}
                 clinch={clinchFromReport(report)}
                 viewerTeamId={myTeam?.id}
                 movement={standingsMovement(
@@ -1877,6 +2023,7 @@ async function SeasonView({
           <div className="order-first min-w-0 lg:order-none">
             <Card tone="feature">
               <CardHeader
+                headingLevel={2}
                 title="Your team"
                 subtitle={myTeam.name}
                 action={
@@ -1888,7 +2035,11 @@ async function SeasonView({
               <CardBody className="space-y-3">
                 {myRow && myRow.played > 0 ? (
                   <div className="grid grid-cols-3 gap-2">
-                    <Stat label="Rank" value={`#${myRank}`} hint={`of ${teams.length}`} />
+                    <Stat
+                      label="Rank"
+                      value={`#${myRank}`}
+                      hint={`of ${teams.length}`}
+                    />
                     <Stat
                       label="Record"
                       size="md"
@@ -1969,112 +2120,113 @@ async function SeasonView({
           the empty track instead, so two cards share the width and three split
           it, with no conditional spans to keep in sync. */}
       <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
-          {upcoming.length > 0 ? (
-            <Card className="min-w-0">
-              <CardHeader
-                title="Coming up"
-                subtitle="After this week's slate"
-              />
-              <CardBody className="p-0">
-                <ul className="divide-y divide-line/60">
-                  {upcoming.map((m) => (
-                    <li key={m.id}>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
-                      >
-                        <div className="text-xs uppercase text-muted">
-                          {matchPhaseLabel(m.phase, m.week)}
-                          {m.scheduledAt ? (
-                            <>
-                              {" · "}
-                              <LocalTime
-                                ts={m.scheduledAt.getTime()}
-                                variant="full"
-                                initial={fmtWhen(m.scheduledAt) ?? ""}
-                              />
-                            </>
-                          ) : null}
-                        </div>
-                        <div className="mt-0.5 truncate font-medium">
-                          {teamName.get(m.homeTeamId) ?? "?"}{" "}
-                          <span className="font-normal text-muted">vs</span>{" "}
-                          {teamName.get(m.awayTeamId) ?? "?"}
-                        </div>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </CardBody>
-            </Card>
-          ) : null}
+        {upcoming.length > 0 ? (
+          <Card className="min-w-0">
+            <CardHeader
+              headingLevel={2}
+              title="Coming up"
+              subtitle="After this week's slate"
+            />
+            <CardBody className="p-0">
+              <ul className="divide-y divide-line/60">
+                {upcoming.map((m) => (
+                  <li key={m.id}>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
+                    >
+                      <div className="text-xs uppercase text-muted">
+                        {matchPhaseLabel(m.phase, m.week)}
+                        {m.scheduledAt ? (
+                          <>
+                            {" · "}
+                            <LocalTime
+                              ts={m.scheduledAt.getTime()}
+                              variant="full"
+                              initial={fmtWhen(m.scheduledAt) ?? ""}
+                            />
+                          </>
+                        ) : null}
+                      </div>
+                      <div className="mt-0.5 truncate font-medium">
+                        {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                        <span className="font-normal text-muted">vs</span>{" "}
+                        {teamName.get(m.awayTeamId) ?? "?"}
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </CardBody>
+          </Card>
+        ) : null}
 
-          {recentResults.length > 0 ? (
-            <Card className="min-w-0">
-              <CardHeader title="Recent results" />
-              <CardBody className="p-0">
-                <ul className="divide-y divide-line/60">
-                  {recentResults.map((m) => (
-                    <li key={m.id}>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-surface-2/40"
+        {recentResults.length > 0 ? (
+          <Card className="min-w-0">
+            <CardHeader headingLevel={2} title="Recent results" />
+            <CardBody className="p-0">
+              <ul className="divide-y divide-line/60">
+                {recentResults.map((m) => (
+                  <li key={m.id}>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-surface-2/40"
+                    >
+                      <span
+                        className="w-7 shrink-0 font-mono text-[10px] uppercase tabular-nums text-muted"
+                        title={matchPhaseLabel(m.phase, m.week)}
                       >
+                        {matchPhaseAbbrev(m.phase, m.week)}
+                      </span>
+                      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <TeamCrest
+                          name={teamName.get(m.homeTeamId) ?? "?"}
+                          seed={m.homeTeamId}
+                          size={16}
+                          className="rounded"
+                        />
                         <span
-                          className="w-7 shrink-0 font-mono text-[10px] uppercase tabular-nums text-muted"
-                          title={matchPhaseLabel(m.phase, m.week)}
+                          className={cn(
+                            "min-w-0 flex-1 truncate",
+                            m.winnerTeamId === m.homeTeamId
+                              ? "font-semibold"
+                              : "text-muted",
+                          )}
                         >
-                          {matchPhaseAbbrev(m.phase, m.week)}
+                          {teamName.get(m.homeTeamId) ?? "?"}
                         </span>
-                        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                          <TeamCrest
-                            name={teamName.get(m.homeTeamId) ?? "?"}
-                            seed={m.homeTeamId}
-                            size={16}
-                            className="rounded"
-                          />
-                          <span
-                            className={cn(
-                              "min-w-0 flex-1 truncate",
-                              m.winnerTeamId === m.homeTeamId
-                                ? "font-semibold"
-                                : "text-muted",
-                            )}
-                          >
-                            {teamName.get(m.homeTeamId) ?? "?"}
-                          </span>
-                          <span className="shrink-0 text-xs text-muted">v</span>
-                          <TeamCrest
-                            name={teamName.get(m.awayTeamId) ?? "?"}
-                            seed={m.awayTeamId}
-                            size={16}
-                            className="rounded"
-                          />
-                          <span
-                            className={cn(
-                              "min-w-0 flex-1 truncate",
-                              m.winnerTeamId === m.awayTeamId
-                                ? "font-semibold"
-                                : "text-muted",
-                            )}
-                          >
-                            {teamName.get(m.awayTeamId) ?? "?"}
-                          </span>
+                        <span className="shrink-0 text-xs text-muted">v</span>
+                        <TeamCrest
+                          name={teamName.get(m.awayTeamId) ?? "?"}
+                          seed={m.awayTeamId}
+                          size={16}
+                          className="rounded"
+                        />
+                        <span
+                          className={cn(
+                            "min-w-0 flex-1 truncate",
+                            m.winnerTeamId === m.awayTeamId
+                              ? "font-semibold"
+                              : "text-muted",
+                          )}
+                        >
+                          {teamName.get(m.awayTeamId) ?? "?"}
                         </span>
-                        <span className="shrink-0 font-mono text-xs tabular-nums">
-                          {m.homeScore}–{m.awayScore}
-                        </span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </CardBody>
-            </Card>
-          ) : null}
+                      </span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums">
+                        {m.homeScore}–{m.awayScore}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </CardBody>
+          </Card>
+        ) : null}
 
-          <Suspense fallback={null}>
-            <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
-          </Suspense>
+        <Suspense fallback={null}>
+          <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
+        </Suspense>
       </div>
 
       {sideGames}
@@ -2090,7 +2242,8 @@ function stakeOneLiner(s: {
   magicNumber: number | null;
   nextMatchId: string | null;
 }): string | null {
-  if (s.status === "CLINCHED") return "✓ Playoff spot locked — play for seeding.";
+  if (s.status === "CLINCHED")
+    return "✓ Playoff spot locked — play for seeding.";
   if (s.status === "ELIMINATED") return "Out of the race — play for pride.";
   if (s.nextMatchId === null) return null; // done playing; the table decides
   if (s.winAndIn && s.loseAndOut)
@@ -2113,43 +2266,48 @@ async function ThisWeek({
   teams,
   teamName,
   report,
+  showCheckins,
 }: {
   season: SeasonSnapshot["season"];
   matches: Match[];
   teams: SeasonSnapshot["teams"];
   teamName: Map<string, string>;
   report: ScenarioReport | null;
+  showCheckins: boolean;
 }) {
   // Same helper the "Coming up" card partitions against — see focusSlate.
   const { slate: focus, title } = focusSlate(season.status, matches);
   if (focus.length === 0) return null;
 
   const [avail, standinRows] = await Promise.all([
-    prisma.matchAvailability.findMany({
-      where: { matchId: { in: focus.map((m) => m.id) } },
-      select: { matchId: true, userId: true, status: true },
-    }),
-    prisma.standinAssignment.findMany({
-      where: { matchId: { in: focus.map((m) => m.id) } },
-      select: {
-        matchId: true,
-        teamId: true,
-        standinUserId: true,
-        replacingUserId: true,
-      },
-    }),
+    showCheckins
+      ? prisma.matchAvailability.findMany({
+          where: { matchId: { in: focus.map((m) => m.id) } },
+          select: { matchId: true, userId: true, status: true },
+        })
+      : Promise.resolve([]),
+    showCheckins
+      ? prisma.standinAssignment.findMany({
+          where: { matchId: { in: focus.map((m) => m.id) } },
+          select: {
+            matchId: true,
+            teamId: true,
+            standinUserId: true,
+            replacingUserId: true,
+          },
+        })
+      : Promise.resolve([]),
   ]);
   const rosterOf = new Map(
     teams.map((t) => [t.id, t.members.map((m) => m.userId)]),
   );
   const checkins = (matchId: string, teamId: string) => {
+    if (!showCheckins) return null;
     // Standin-aware, same helper as /schedule — a covered player's absence
     // isn't a gap, and the standin's own RSVP is the one that counts.
     const roster = matchNightRoster(
       rosterOf.get(teamId) ?? [],
-      standinRows.filter(
-        (a) => a.matchId === matchId && a.teamId === teamId,
-      ),
+      standinRows.filter((a) => a.matchId === matchId && a.teamId === teamId),
     );
     if (roster.length === 0) return null;
     const a = teamAvailability(
@@ -2168,13 +2326,11 @@ async function ThisWeek({
   return (
     <Card>
       <CardHeader
+        headingLevel={2}
         title={title}
         subtitle="Check in, scout the enemy, call the winner"
         action={
-          <Link
-            href="/schedule#this-week"
-            className={textLink("text-sm")}
-          >
+          <Link href="/schedule#fixtures" className={textLink("text-sm")}>
             Full schedule →
           </Link>
         }
@@ -2211,7 +2367,7 @@ async function ThisWeek({
                     className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-1.5 py-0.5 font-mono text-xs tabular-nums text-danger"
                   >
                     <span aria-hidden className="relative flex h-1.5 w-1.5">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
                       <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-danger" />
                     </span>
                     <span aria-hidden>
@@ -2289,7 +2445,9 @@ async function ThisWeek({
 
 /**
  * A taste of the league's stat life: the latest weekly honors and the
- * most-contested hero, teasing /leaders and /meta. Hidden until games exist.
+ * most-contested hero, teasing /leaders and /meta. A pending honors status can
+ * still render before usable games exist so a final-but-broken box score is
+ * never presented as merely an in-progress week.
  */
 async function LeaguePulse({
   seasonId,
@@ -2302,29 +2460,45 @@ async function LeaguePulse({
 }) {
   // Shared, tag-busted scan (cached-queries.ts) rather than a private copy of
   // the same query — an all-games roll-up repeated per request per viewer.
-  const games = await getSeasonGameLeaders(seasonId);
-  if (games.length === 0) return null;
+  const [games, honorReadiness] = await Promise.all([
+    getSeasonGameLeaders(seasonId),
+    getSeasonHonorReadiness(seasonId),
+  ]);
+  if (games.length === 0 && honorReadiness.length === 0) return null;
 
-  const parsed = games.map((g) => ({
-    ...g,
-    lines: parseGamePlayers<PlayerStat>(g.players),
-  }));
+  const parsed = games.map((g) => {
+    const decoded = decodeGamePlayers(g.players);
+    return { ...g, decoded, lines: trustedGamePlayers(decoded) };
+  });
+  const hasBoxScoreIssue = parsed.some(
+    (game) => game.decoded.malformed || !game.decoded.completeRoster,
+  );
+  const hasUnknownHero = parsed.some(
+    (game) =>
+      game.lines.length === 10 &&
+      game.lines.some((player) => !heroById(player.heroId)),
+  );
+  const hasDataIssue = hasBoxScoreIssue || hasUnknownHero;
   const teamOf = new Map(
     teams.flatMap((t) => t.members.map((m) => [m.userId, t.id] as const)),
   );
 
-  // Latest regular week with games in — its honors are the freshest story.
-  const regular = parsed.filter((g) => g.match.phase === "REGULAR");
-  const latestWeek = regular.reduce((max, g) => Math.max(max, g.match.week), 0);
-  const honors =
-    latestWeek > 0
-      ? weeklyHonors(
-          regular
-            .filter((g) => g.match.week === latestWeek)
-            .map((g) => ({ radiantWin: g.radiantWin, players: g.lines })),
-          teamOf,
-        )
-      : { player: null, team: null };
+  // Same readiness rows Discord uses: a final score alone cannot crown an
+  // award while its played games are missing or their 5v5 attribution is bad.
+  const latestReady = honorReadiness.find(
+    (row) => row.state === HONOR_WEEK_STATE.READY && row.games.length > 0,
+  );
+  const latestPending = honorReadiness.find(
+    (row) => row.state !== HONOR_WEEK_STATE.READY,
+  );
+  const newestHonorWeek = honorReadiness[0];
+  const latestNoPerformance = isNoPerformanceHonorWeek(newestHonorWeek)
+    ? newestHonorWeek
+    : null;
+  const latestWeek = latestReady?.week ?? 0;
+  const honors = latestReady
+    ? weeklyHonors(latestReady.games, teamOf)
+    : { player: null, team: null };
   const potw = honors.player
     ? await prisma.user.findUnique({
         where: { id: honors.player.userId },
@@ -2334,24 +2508,47 @@ async function LeaguePulse({
 
   // The league's most-contested hero so far.
   const meta = heroMeta(
-    parsed.map((g) => ({
-      radiantWin: g.radiantWin,
-      lines: g.lines.map((p) => ({
-        userId: p.userId,
-        heroId: p.heroId,
-        isRadiant: p.isRadiant,
-        kills: p.kills,
-        deaths: p.deaths,
-        assists: p.assists,
+    parsed
+      // Keep the dashboard teaser inside the same trust boundary as /meta.
+      // A newly added hero is omitted until the bundled hero catalogue is
+      // updated instead of rendering a misleading partial hero pool.
+      .filter(
+        (game) =>
+          game.lines.length === 10 &&
+          game.lines.every((player) => heroById(player.heroId)),
+      )
+      .map((g) => ({
+        radiantWin: g.radiantWin,
+        lines: g.lines.map((p) => ({
+          userId: p.userId,
+          heroId: p.heroId,
+          isRadiant: p.isRadiant,
+          kills: p.kills,
+          deaths: p.deaths,
+          assists: p.assists,
+        })),
       })),
-    })),
   );
   const topPick = meta.rows[0];
   const topHero = topPick ? heroById(topPick.heroId) : null;
 
+  // Avoid a header-only shell when there is neither publishable league data
+  // nor a state that needs explaining.
+  if (
+    !latestPending &&
+    !latestNoPerformance &&
+    !honors.player &&
+    !honors.team &&
+    !topPick &&
+    !hasDataIssue
+  ) {
+    return null;
+  }
+
   return (
     <Card className="min-w-0">
       <CardHeader
+        headingLevel={2}
         title="League pulse"
         action={
           <Link href="/leaders" className={textLink("text-sm")}>
@@ -2360,6 +2557,41 @@ async function LeaguePulse({
         }
       />
       <CardBody className="space-y-3 text-sm">
+        {hasDataIssue ? (
+          <div className="flex min-w-0 items-start gap-2 text-warning">
+            <span aria-hidden className="shrink-0">
+              ⚠
+            </span>
+            <span>
+              Some imported games are omitted from League pulse. Incomplete or
+              invalid 5v5 box scores must be inspected, removed, and
+              re-imported; unknown hero IDs require a hero-catalogue update.
+            </span>
+          </div>
+        ) : null}
+        {latestPending ? (
+          <div className="flex min-w-0 items-start gap-2 text-muted">
+            <span aria-hidden className="shrink-0">
+              ⏳
+            </span>
+            <span>
+              {latestPending.state === HONOR_WEEK_STATE.IN_PROGRESS
+                ? `Week ${latestPending.week} is still in progress; honors publish after the full slate is final.`
+                : `Week ${latestPending.week} is final, but honors are waiting for complete, valid 5v5 box scores.`}
+            </span>
+          </div>
+        ) : null}
+        {latestNoPerformance ? (
+          <div className="flex min-w-0 items-start gap-2 text-muted">
+            <span aria-hidden className="shrink-0">
+              ◇
+            </span>
+            <span>
+              Week {latestNoPerformance.week} is final with no played games, so
+              no performance honors were awarded.
+            </span>
+          </div>
+        ) : null}
         {potw && honors.player ? (
           <div className="flex min-w-0 items-center gap-2">
             <span aria-hidden className="shrink-0">
@@ -2396,7 +2628,7 @@ async function LeaguePulse({
         ) : null}
         {topPick ? (
           <div className="flex min-w-0 items-center gap-2">
-            {/* Unknown hero ids still render — "Hero #N" fallback per /meta. */}
+            {/* Unknown hero ids are omitted above until the catalogue updates. */}
             {topHero ? (
               <HeroIcon hero={topHero} size={22} />
             ) : (
@@ -2455,12 +2687,17 @@ function SideGameLink({
 async function CompleteView({
   snapshot,
   matches,
+  championPresentation,
 }: {
   snapshot: SeasonSnapshot;
   matches: Match[];
+  championPresentation: ChampionPresentation;
 }) {
   const { teams, season } = snapshot;
-  const champion = teams.find((t) => t.id === season.championTeamId);
+  const champion = teams.find(
+    (team) => team.id === championPresentation.championTeamId,
+  );
+  const hasPostseason = championPresentation.hasPostseason;
   const standings = computeStandings(
     teams.map((t) => t.id),
     matches,
@@ -2475,12 +2712,9 @@ async function CompleteView({
     : undefined;
 
   // The final's scoreline turns "champion: X" into a story.
-  const finalMatch = champion
+  const finalMatch = championPresentation.authoritativeFinalId
     ? matches.find(
-        (m) =>
-          m.phase === "FINAL" &&
-          m.status === "COMPLETED" &&
-          m.winnerTeamId === champion.id,
+        (match) => match.id === championPresentation.authoritativeFinalId,
       )
     : undefined;
   const finalLine = finalMatch
@@ -2506,7 +2740,9 @@ async function CompleteView({
         />
         <CardBody className="relative flex flex-col items-center gap-3 py-10 text-center">
           <div className="text-xs font-medium uppercase tracking-[0.2em] text-amber-300/90">
-            {season.name} Champion
+            {champion
+              ? `${season.name} Champion`
+              : `${season.name} · review needed`}
           </div>
           {champion ? (
             <div className="relative">
@@ -2524,7 +2760,9 @@ async function CompleteView({
               </span>
             </div>
           ) : (
-            <div className="text-5xl">🏆</div>
+            <div aria-hidden className="text-4xl">
+              ⚠️
+            </div>
           )}
           <div className="text-2xl font-bold">
             {champion ? (
@@ -2532,9 +2770,17 @@ async function CompleteView({
                 {champion.name}
               </Link>
             ) : (
-              "To be crowned"
+              "Champion needs review"
             )}
           </div>
+          {!champion ? (
+            <p className="max-w-xl text-sm text-muted">
+              This season is marked complete without an authoritative champion.
+              {hasPostseason
+                ? " League administrators need to return it to Playoffs and reconcile the existing grand final before a title is shown."
+                : " No playoff bracket exists, so league administrators need to return it to Regular season, verify the table, and start a newly seeded bracket before a title is shown."}
+            </p>
+          ) : null}
           {finalLine ? (
             <div className="text-sm text-muted">
               Won the grand final{" "}
@@ -2575,7 +2821,7 @@ async function CompleteView({
       <CompleteBracket
         matches={matches}
         teamName={teamName}
-        championTeamId={season.championTeamId}
+        championTeamId={championPresentation.championTeamId}
       />
 
       {/* items-start, not the default stretch: the "season lives on" card is a
@@ -2586,12 +2832,10 @@ async function CompleteView({
         <div className="min-w-0 lg:col-span-2">
           <Card>
             <CardHeader
+              headingLevel={2}
               title="Final standings"
               action={
-                <Link
-                  href="/schedule#this-week"
-                  className={textLink("text-sm")}
-                >
+                <Link href="/schedule#fixtures" className={textLink("text-sm")}>
                   Full schedule →
                 </Link>
               }
@@ -2610,11 +2854,15 @@ async function CompleteView({
         </div>
         <div className="min-w-0">
           <Card>
-            <CardHeader title="The season lives on" />
+            <CardHeader
+              headingLevel={2}
+              title={champion ? "The season lives on" : "Season record"}
+            />
             <CardBody className="space-y-3 text-sm">
               <p className="text-muted">
-                Relive it — awards and superlatives, the stat boards, and the
-                records this season may have etched into league history.
+                {champion
+                  ? "Relive it — awards and superlatives, the stat boards, and the records this season may have etched into league history."
+                  : "Results remain available while administrators repair the championship state. No team is presented as champion until the grand final is authoritative."}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Link
@@ -2662,7 +2910,7 @@ function CompleteBracket({
   if (rounds.length === 0) return null;
   return (
     <Card className="overflow-hidden">
-      <CardHeader title="How it was won" />
+      <CardHeader headingLevel={2} title="How it was won" />
       <CardBody className="p-0 pt-4">
         <Bracket rounds={rounds} championTeamId={championTeamId} />
       </CardBody>

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
   requireUser: vi.fn(),
@@ -25,10 +26,12 @@ import {
 import {
   reinstateSignup,
   setDraftNight,
+  setRegistrationMmr,
   withdrawSignup,
 } from "@/app/actions/admin";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
+import { sendDiscordMessage } from "@/lib/discord";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
 import { makeSeason, makeUser, sessionFor } from "./factories";
@@ -64,8 +67,16 @@ async function readyPlayer() {
   return { season, user, registration };
 }
 
-function confirmation(revision = 1, at = DRAFT_ONE) {
-  return fd({ draftRevision: revision, draftAtTs: at.getTime() });
+function confirmation(
+  expectedActiveSeasonId: string,
+  revision = 1,
+  at = DRAFT_ONE,
+) {
+  return fd({
+    expectedActiveSeasonId,
+    draftRevision: revision,
+    draftAtTs: at.getTime(),
+  });
 }
 
 describe("draft readiness confirmation", () => {
@@ -76,9 +87,9 @@ describe("draft readiness confirmation", () => {
   afterEach(() => setRaceHook(null));
 
   it("stores an acknowledgement for the exact current schedule", async () => {
-    const { registration } = await readyPlayer();
+    const { season, registration } = await readyPlayer();
 
-    const result = await confirmDraftReadiness({}, confirmation());
+    const result = await confirmDraftReadiness({}, confirmation(season.id));
 
     expect(result?.error).toBeUndefined();
     expect(result?.message).toMatch(/ready for draft confirmed/i);
@@ -92,11 +103,11 @@ describe("draft readiness confirmation", () => {
   });
 
   it("derives identity and refuses a different user or a standin", async () => {
-    const { registration } = await readyPlayer();
+    const { season, registration } = await readyPlayer();
     const stranger = await makeUser("Different User");
     vi.mocked(requireUser).mockResolvedValue(sessionFor(stranger));
 
-    const wrongUser = await confirmDraftReadiness({}, confirmation());
+    const wrongUser = await confirmDraftReadiness({}, confirmation(season.id));
     expect(wrongUser?.error).toMatch(/signup.*changed|reload/i);
 
     await prisma.registration.update({
@@ -108,7 +119,7 @@ describe("draft readiness confirmation", () => {
       include: { user: true },
     });
     vi.mocked(requireUser).mockResolvedValue(sessionFor(owner.user));
-    const standin = await confirmDraftReadiness({}, confirmation());
+    const standin = await confirmDraftReadiness({}, confirmation(season.id));
     expect(standin?.error).toMatch(/signup.*changed|reload/i);
 
     const stored = await prisma.registration.findUniqueOrThrow({
@@ -118,18 +129,23 @@ describe("draft readiness confirmation", () => {
   });
 
   it("rejects malformed and stale browser values without changing the row", async () => {
-    const { registration } = await readyPlayer();
+    const { season, registration } = await readyPlayer();
 
     expect(
       (
         await confirmDraftReadiness(
           {},
-          fd({ draftRevision: "x", draftAtTs: 1 }),
+          fd({
+            expectedActiveSeasonId: season.id,
+            draftRevision: "x",
+            draftAtTs: 1,
+          }),
         )
       )?.error,
     ).toMatch(/reload/i);
     expect(
-      (await confirmDraftReadiness({}, confirmation(0, DRAFT_ONE)))?.error,
+      (await confirmDraftReadiness({}, confirmation(season.id, 0, DRAFT_ONE)))
+        ?.error,
     ).toMatch(/draft time changed/i);
 
     const stored = await prisma.registration.findUniqueOrThrow({
@@ -154,7 +170,7 @@ describe("draft readiness confirmation", () => {
       }),
     );
 
-    const result = await confirmDraftReadiness({}, confirmation());
+    const result = await confirmDraftReadiness({}, confirmation(season.id));
 
     expect(fired).toBe(true);
     expect(result?.error).toMatch(/changed|reload/i);
@@ -168,13 +184,19 @@ describe("draft readiness confirmation", () => {
     const { season, registration } = await readyPlayer();
     const admin = await makeUser("Admin", "ADMIN");
     vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
-    await confirmDraftReadiness({}, confirmation());
+    vi.mocked(sendDiscordMessage).mockClear();
+    await confirmDraftReadiness({}, confirmation(season.id));
 
     const same = await setDraftNight(
       {},
-      fd({ draftAt: "2026-08-08T15:00", draftAtTs: DRAFT_ONE.getTime() }),
+      fd({
+        expectedActiveSeasonId: season.id,
+        draftAt: "2026-08-08T15:00",
+        draftAtTs: DRAFT_ONE.getTime(),
+      }),
     );
     expect(same?.error).toBeUndefined();
+    expect(sendDiscordMessage).not.toHaveBeenCalled();
     expect(
       (await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
         .draftRevision,
@@ -182,9 +204,16 @@ describe("draft readiness confirmation", () => {
 
     const changed = await setDraftNight(
       {},
-      fd({ draftAt: "2026-08-08T18:00", draftAtTs: DRAFT_TWO.getTime() }),
+      fd({
+        expectedActiveSeasonId: season.id,
+        draftAt: "2026-08-08T18:00",
+        draftAtTs: DRAFT_TWO.getTime(),
+      }),
     );
     expect(changed?.message).toMatch(/need to confirm/i);
+    expect(sendDiscordMessage).toHaveBeenLastCalledWith(
+      expect.stringMatching(/previous confirmations expired.*\/me/i),
+    );
     let current = await prisma.season.findUniqueOrThrow({
       where: { id: season.id },
     });
@@ -200,7 +229,11 @@ describe("draft readiness confirmation", () => {
     // dates alone would incorrectly revive the old confirmation here.
     await setDraftNight(
       {},
-      fd({ draftAt: "2026-08-08T15:00", draftAtTs: DRAFT_ONE.getTime() }),
+      fd({
+        expectedActiveSeasonId: season.id,
+        draftAt: "2026-08-08T15:00",
+        draftAtTs: DRAFT_ONE.getTime(),
+      }),
     );
     current = await prisma.season.findUniqueOrThrow({
       where: { id: season.id },
@@ -212,11 +245,32 @@ describe("draft readiness confirmation", () => {
     expect(draftReadiness(stored, current.draftRevision)).toBe(
       DRAFT_READINESS.STALE,
     );
+    expect(sendDiscordMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("announces when a scheduled draft night is cleared", async () => {
+    const { season } = await readyPlayer();
+    const admin = await makeUser("Cancellation Admin", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    vi.mocked(sendDiscordMessage).mockClear();
+
+    const result = await setDraftNight(
+      {},
+      fd({ expectedActiveSeasonId: season.id, draftAt: "", draftAtTs: "" }),
+    );
+
+    expect(result?.message).toMatch(/cleared/i);
+    expect(sendDiscordMessage).toHaveBeenCalledWith(
+      expect.stringMatching(/scheduled.*draft night was cleared/i),
+    );
+    expect(
+      await prisma.season.findUniqueOrThrow({ where: { id: season.id } }),
+    ).toMatchObject({ draftAt: null, draftRevision: 2 });
   });
 
   it("preserves confirmation through normal edits but clears it on type changes and withdrawal", async () => {
-    const { registration, user } = await readyPlayer();
-    await confirmDraftReadiness({}, confirmation());
+    const { season, registration, user } = await readyPlayer();
+    await confirmDraftReadiness({}, confirmation(season.id));
 
     const edited = await saveRegistration(
       {},
@@ -261,10 +315,10 @@ describe("draft readiness confirmation", () => {
   });
 
   it("clears confirmation across admin removal and reinstatement", async () => {
-    const { registration } = await readyPlayer();
+    const { season, registration } = await readyPlayer();
     const admin = await makeUser("Admin", "ADMIN");
     vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
-    await confirmDraftReadiness({}, confirmation());
+    await confirmDraftReadiness({}, confirmation(season.id));
 
     const removed = await withdrawSignup(
       {},
@@ -287,5 +341,189 @@ describe("draft readiness confirmation", () => {
     });
     expect(stored.status).toBe("ACTIVE");
     expect(stored.draftConfirmedAt).toBeNull();
+  });
+});
+
+describe("signup administration phase locks", () => {
+  beforeEach(async () => {
+    vi.mocked(requireAdmin).mockReset();
+    const admin = await makeUser("Signup Admin", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+  });
+  afterEach(() => setRaceHook(null));
+
+  it("refuses to move draft night after the auction starts", async () => {
+    const season = await makeSeason({
+      status: "DRAFT",
+      draftAt: DRAFT_ONE,
+      draftRevision: 2,
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "IN_PROGRESS" },
+    });
+
+    const result = await setDraftNight(
+      {},
+      fd({
+        expectedActiveSeasonId: season.id,
+        draftAt: "2026-08-08T18:00",
+        draftAtTs: DRAFT_TWO.getTime(),
+      }),
+    );
+
+    expect(result?.error).toMatch(/auction is live.*locked/i);
+    const stored = await prisma.season.findUniqueOrThrow({
+      where: { id: season.id },
+    });
+    expect(stored.draftAt?.getTime()).toBe(DRAFT_ONE.getTime());
+    expect(stored.draftRevision).toBe(2);
+  });
+
+  it("does not inject a removed full player into a live auction", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    const user = await makeUser("Removed During Draft");
+    const registration = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "REMOVED",
+        mmr: 3000,
+      },
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "PAUSED" },
+    });
+
+    const result = await reinstateSignup(
+      {},
+      fd({ registrationId: registration.id }),
+    );
+
+    expect(result?.error).toMatch(/live draft.*player pool/i);
+    expect(
+      (
+        await prisma.registration.findUniqueOrThrow({
+          where: { id: registration.id },
+        })
+      ).status,
+    ).toBe("REMOVED");
+  });
+
+  it("refuses reinstatement after completion for either registration type", async () => {
+    const season = await makeSeason({ status: "COMPLETE" });
+    const user = await makeUser("Historical Standin");
+    const registration = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "STANDIN",
+        status: "REMOVED",
+        mmr: 2000,
+      },
+    });
+
+    const result = await reinstateSignup(
+      {},
+      fd({ registrationId: registration.id }),
+    );
+    expect(result?.error).toMatch(/season is complete.*historical/i);
+    expect(
+      (
+        await prisma.registration.findUniqueOrThrow({
+          where: { id: registration.id },
+        })
+      ).status,
+    ).toBe("REMOVED");
+  });
+
+  it("does not overwrite a signup status that changes before reinstatement writes", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Changed In The Gap");
+    const registration = await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "REMOVED",
+        mmr: 3000,
+      },
+    });
+    setRaceHook(
+      onceAt("admin.reinstateSignup.beforeWrite", async () => {
+        await prisma.registration.update({
+          where: { id: registration.id },
+          data: { status: "WITHDRAWN" },
+        });
+      }),
+    );
+
+    const result = await reinstateSignup(
+      {},
+      fd({ registrationId: registration.id }),
+    );
+    expect(result?.error).toMatch(/just changed.*reload/i);
+    expect(
+      (
+        await prisma.registration.findUniqueOrThrow({
+          where: { id: registration.id },
+        })
+      ).status,
+    ).toBe("WITHDRAWN");
+  });
+
+  it("locks full-player MMR during the auction but keeps standin corrections available", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    const player = await makeUser("Live Player MMR");
+    const standin = await makeUser("Live Standin MMR");
+    const [playerReg, standinReg] = await Promise.all([
+      prisma.registration.create({
+        data: {
+          seasonId: season.id,
+          userId: player.id,
+          type: "PLAYER",
+          status: "ACTIVE",
+          mmr: 3000,
+        },
+      }),
+      prisma.registration.create({
+        data: {
+          seasonId: season.id,
+          userId: standin.id,
+          type: "STANDIN",
+          status: "ACTIVE",
+          mmr: 2000,
+        },
+      }),
+    ]);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "IN_PROGRESS" },
+    });
+
+    const blocked = await setRegistrationMmr(
+      {},
+      fd({ registrationId: playerReg.id, mmr: 3500 }),
+    );
+    const allowed = await setRegistrationMmr(
+      {},
+      fd({ registrationId: standinReg.id, mmr: 2300 }),
+    );
+
+    expect(blocked?.error).toMatch(/auction is live.*locked/i);
+    expect(allowed?.error).toBeUndefined();
+    expect(
+      (
+        await prisma.registration.findUniqueOrThrow({
+          where: { id: playerReg.id },
+        })
+      ).mmr,
+    ).toBe(3000);
+    expect(
+      (
+        await prisma.registration.findUniqueOrThrow({
+          where: { id: standinReg.id },
+        })
+      ).mmr,
+    ).toBe(2300);
   });
 });

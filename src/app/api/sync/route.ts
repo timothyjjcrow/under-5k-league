@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { runResultSync } from "@/lib/result-sync-service";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { getActiveSeason } from "@/lib/season";
+import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 
 export const dynamic = "force-dynamic";
 // One roster scan is up to ~22 sequential OpenDota fetches; on a slow night
@@ -11,9 +13,10 @@ export const dynamic = "force-dynamic";
 // match-import.ts) — this just gives it room to finish and return cleanly.
 export const maxDuration = 60;
 
-// The automatic-result-sync trigger, POSTed by the sitewide <ResultSyncPing>
-// on page views (and slow-polled on match nights). A route handler — not a
-// server-component ping like <WeekReminderPing> — because imported games must
+// The sitewide automation trigger, POSTed by <ResultSyncPing> on page views
+// (and polled faster while a match, inhouse lobby, or draft clock is live). A
+// route handler — not a server-component ping like <WeekReminderPing> —
+// because imported games must
 // bust the unstable_cache "games" tag, and revalidateTag is only legal from a
 // request scope (CLAUDE.md), never mid-render.
 async function handleSync(req: NextRequest) {
@@ -34,16 +37,31 @@ async function handleSync(req: NextRequest) {
   const out = await runResultSync();
   if (out.imported > 0) {
     // New games change every cached stat roll-up — mirror refreshGames().
-    revalidateTag("games", "max");
+    // Route Handlers cannot call updateTag. A zero-expiry profile gives the
+    // next stats request a blocking fresh read instead of stale-while-refresh.
+    revalidateTag("games", { expire: 0 });
     revalidatePath("/", "layout");
   }
-  // `updated` = THIS request performed the import (its claim won). `cursor`
-  // moves for every viewer whenever ANY path lands a result — the client
-  // refreshes on either, so parked dashboards that lost the claim race (or
-  // never raced) still repaint.
+  // The same endpoint external uptime monitors already ping is the durable
+  // backstop for match-night reminders. Page-render triggers remain useful,
+  // but attendance cannot depend on somebody visiting / or /schedule during a
+  // narrow 24-hour window. This side effect is best-effort: a Discord/DB issue
+  // must not turn a healthy result-sync heartbeat into a 500.
+  try {
+    const season = await getActiveSeason();
+    if (season) await maybeAnnounceUpcomingWeek(season);
+  } catch {
+    // The reminder service retains/releases its own idempotency marker. A later
+    // heartbeat or page render can retry without changing this route contract.
+  }
+  // `updated` = THIS request imported a result, recorded an inhouse result,
+  // advanced a due draft clock, or repaired the playoff bracket/champion (its
+  // claim won). `cursor` moves for every viewer whenever ANY result path lands
+  // a result — the client refreshes on either, so parked dashboards that lost
+  // a result claim race still repaint.
   return NextResponse.json(
     {
-      updated: out.imported > 0 || out.inhouse,
+      updated: out.imported > 0 || out.inhouse || out.draft || out.playoff,
       watch: out.watch,
       cursor: out.cursor,
     },

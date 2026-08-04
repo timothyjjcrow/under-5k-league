@@ -63,6 +63,21 @@ export type WithdrawGateInput = {
 };
 
 /**
+ * A completed season is historical data, not another late-signup window.
+ * Profile/Discord details remain editable on /me, but the season-specific
+ * registration (including its MMR and questionnaire) is frozen for everyone.
+ * Keep this rule shared by the action and the page so a replayed Server Action
+ * and the visible UI cannot disagree about the phase lock.
+ */
+export function registrationSeasonClosedError(
+  seasonStatus: string,
+): string | null {
+  return seasonStatus === SEASON_STATUS.COMPLETE
+    ? "This season is complete — signups and signup edits are closed."
+    : null;
+}
+
+/**
  * Whether a signup can be withdrawn (by the player or an admin). Rostered
  * players and captains must be released/replaced first — withdrawing them
  * would silently orphan a team. Returns an error message, or null when OK.
@@ -112,9 +127,11 @@ export function withdrawGateError({
  * only *begin* during SIGNUPS. The soft limit (`season.maxMmr`) does NOT block
  * signup — players above it join and are reviewed before the draft; only the
  * `HARD_MMR_CEILING` (no 5K+/Immortals) is a firm reject. Standins may sign up
- * any time; an existing registrant may always update their signup — but a
- * standin can't upgrade themselves to a full player once signups have closed
- * (that would sneak past the closed-signups rule).
+ * during the draft, regular season and playoffs, when emergency cover is still
+ * useful. COMPLETE freezes the season record for every registration type. An
+ * existing registrant may update before then, but a standin can't upgrade
+ * themselves to a full player once signups have closed (that would sneak past
+ * the closed-signups rule).
  *
  * The two ceiling rules are asymmetric ON PURPOSE. The TYPED MMR is re-judged
  * on every submit — it is a number the player controls, so the ceiling has to
@@ -133,6 +150,8 @@ export function registrationGate({
   existingType,
   existingStatus,
 }: RegistrationGateInput): string | null {
+  const seasonClosed = registrationSeasonClosedError(season.status);
+  if (seasonClosed) return seasonClosed;
   // The soft limit (season.maxMmr) is a review threshold, not a block — only
   // the hard ceiling turns anyone away (keeps out 5K+ players and Immortals).
   if (mmr > HARD_MMR_CEILING) {

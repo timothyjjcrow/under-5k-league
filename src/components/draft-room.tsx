@@ -36,6 +36,7 @@ import {
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
   FEED_MAX,
+  draftFeedInvalidated,
   draftFeedDiff,
   seedDraftFeed,
   type FeedLine,
@@ -55,6 +56,8 @@ import {
 } from "@/lib/constants";
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
+import { ActionForm, SubmitButton } from "@/components/action-form";
+import type { ActionResult } from "@/lib/action-result";
 
 // A single line in the live feed: the tested content (see @/lib/draft-feed)
 // plus the React key this component hands out.
@@ -110,7 +113,7 @@ function BidClock({
     >
       {seconds <= 5 ? (
         <span className="relative flex h-2.5 w-2.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
           <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
         </span>
       ) : null}
@@ -146,22 +149,101 @@ function NomClock({
   );
 }
 
+/**
+ * Reconciles a client clock reaching zero with the server authority. Keeping
+ * this as a leaf preserves the room's render isolation while immediately
+ * disabling time-sensitive controls at the boundary the viewer can see.
+ */
+function ClockExpiryObserver({
+  endsAtMs,
+  offsetMs,
+  onExpire,
+}: {
+  endsAtMs: number | null;
+  offsetMs: number;
+  onExpire: () => void;
+}) {
+  const seconds = useSecondsLeft(endsAtMs, offsetMs);
+  useEffect(() => {
+    if (endsAtMs && seconds <= 0) onExpire();
+  }, [endsAtMs, onExpire, seconds]);
+  return null;
+}
+
+function ExactBidControl({
+  currentBid,
+  maxBid,
+  pending,
+  submit,
+}: {
+  currentBid: number;
+  maxBid: number;
+  pending: boolean;
+  submit: (amount: number) => void;
+}) {
+  const [amount, setAmount] = useState(Math.min(currentBid + 1, maxBid));
+  const valid =
+    Number.isSafeInteger(amount) && amount > currentBid && amount <= maxBid;
+
+  return (
+    <label className="col-span-2 flex items-center gap-2 sm:ml-1">
+      <span className="text-xs text-muted">Exact bid</span>
+      <input
+        type="number"
+        min={currentBid + 1}
+        max={maxBid}
+        value={amount}
+        onChange={(event) => setAmount(Number(event.target.value))}
+        className="h-9 min-w-0 flex-1 rounded-md border border-line bg-surface-2/50 px-2 text-center text-sm sm:w-20 sm:flex-none"
+        aria-label="Exact bid amount"
+      />
+      <button
+        type="button"
+        disabled={pending || !valid}
+        onClick={() => submit(amount)}
+        className={buttonClasses("accent", "sm")}
+      >
+        Bid ${amount}
+      </button>
+    </label>
+  );
+}
+
 export function DraftRoom({
   pollMs = 1200,
-  draftAtMs = null,
+  seasonId,
+  pauseAction,
+  resumeAction,
+  undoAction,
+  voidLotAction,
 }: {
   pollMs?: number;
-  /** Scheduled draft night (server-passed) — shown in the waiting room. */
-  draftAtMs?: number | null;
+  seasonId: string;
+  pauseAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  resumeAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  undoAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  voidLotAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
   // While there's no active season the tick 404s forever — terminal state.
   const [noSeason, setNoSeason] = useState(false);
+  const [seasonChanged, setSeasonChanged] = useState(false);
+  const [syncDelayed, setSyncDelayed] = useState(false);
+  const [initialError, setInitialError] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [settlingClockKey, setSettlingClockKey] = useState<string | null>(null);
+  const currentClockKey = `${state?.status ?? "loading"}:${
+    state?.nominatedPlayer?.userId ?? "no-lot"
+  }:${state?.bidEndsAt ?? "no-bid-clock"}:${
+    state?.nominationEndsAt ?? "no-nomination-clock"
+  }`;
+  const clockSettling = settlingClockKey === currentClockKey;
+  const [pollKick, setPollKick] = useState(0);
   const [reqPending, setPending] = useState(false);
   // Disconnected = every action disabled: a bid against stale state would
   // either fail or, worse, look accepted while the real auction moved on.
-  const pending = reqPending || disconnected;
+  const pending = reqPending || disconnected || clockSettling;
   const [soundOn, setSoundOn] = usePersistedFlag("draftSound");
   // Latched while the viewer's team has lost the high bid on the live
   // nomination — cleared by the poll once it's stale (re-took the bid, the
@@ -214,11 +296,18 @@ export function DraftRoom({
   // before my bid must not overwrite the bid's fresher state when it finally
   // lands (the flash of stale auction mid-bid confused captains).
   const seqRef = useRef(ROOM_SEQUENCE_START);
+  const hadIdentityRef = useRef(false);
 
   const apply = useCallback((s: DraftState, seq: number) => {
     const { accept, next } = acceptSequence(seqRef.current, seq);
     seqRef.current = next;
     if (!accept) return; // lost the response race — stale
+    if (s.me.userId) {
+      hadIdentityRef.current = true;
+      setSessionExpired(false);
+    } else if (hadIdentityRef.current) {
+      setSessionExpired(true);
+    }
     setOffsetMs((prev) => nextClockOffset(prev, s.now, Date.now()));
     setState(s);
   }, []);
@@ -288,6 +377,8 @@ export function DraftRoom({
       try {
         const res = await fetch("/api/draft/tick", {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seasonId }),
           // See ROOM_POLL_TIMEOUT_MS: without a deadline a request that never
           // answers freezes this loop for good, with `disconnected` false and
           // every bid control still live on stale state.
@@ -295,8 +386,14 @@ export function DraftRoom({
         });
         if (res.ok) {
           const next = (await res.json()) as DraftState;
+          if (next.seasonId !== seasonId) {
+            setSeasonChanged(true);
+            return;
+          }
           apply(next, seq);
           pollOk();
+          setInitialError(false);
+          setSyncDelayed(false);
           reached = true;
           live = next.status === "IN_PROGRESS" || next.status === "PAUSED";
         } else if (res.status === 404) {
@@ -308,10 +405,16 @@ export function DraftRoom({
           // captain most needs to act — and /api/draft/bid isn't rate limited,
           // so their bid would still land. Just ease off and keep the room live.
           rateLimited = true;
+          setSyncDelayed(true);
+        } else if (res.status === 409) {
+          setSeasonChanged(true);
+          return;
         } else {
+          setInitialError(true);
           pollFail();
         }
       } catch {
+        setInitialError(true);
         pollFail(); // network blip; next poll retries
       } finally {
         inFlight = false;
@@ -341,7 +444,7 @@ export function DraftRoom({
       document.removeEventListener("visibilitychange", onVisibility);
       if (timer) clearTimeout(timer);
     };
-  }, [apply, pollOk, pollFail, pollMs]);
+  }, [apply, pollKick, pollOk, pollFail, pollMs, seasonId]);
 
   // Diff each new state against the previous one to build the live feed +
   // trigger the SOLD! flash. Read-only — never mutates draft state. What the
@@ -354,6 +457,23 @@ export function DraftRoom({
     // The first state seeds the feed during RENDER (see `seeded` below); here
     // we only take the bookkeeping snapshot so the next poll can diff.
     if (!prev) return;
+
+    // Undo removes an authoritative roster sale and Abort returns the entire
+    // run to NOT_STARTED. An append-only client log cannot represent either;
+    // rebuild it from the new snapshot so a voided sale is never presented as
+    // live history.
+    if (draftFeedInvalidated(prev, state)) {
+      eventIdRef.current = 0;
+      setEvents(
+        seedDraftFeed(state).map((line, index) => ({
+          ...line,
+          id: -1 - index,
+        })),
+      );
+      setSoldFlash(null);
+      setOutbid(null);
+      return;
+    }
 
     const { lines, sale, alerts } = draftFeedDiff(prev, state);
     if (sale) setSoldFlash(sale);
@@ -400,6 +520,22 @@ export function DraftRoom({
     }
   }, [state, soundOn, selected]);
 
+  const turnRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!state) return;
+    if (turnRef.current && turnRef.current !== state.nominatorTeamId) {
+      setSelected(null);
+      setNomAmount(state.minBid);
+    }
+    turnRef.current = state.nominatorTeamId;
+  }, [state]);
+
+  const reconcileExpiredClock = useCallback(() => {
+    if (settlingClockKey === currentClockKey) return;
+    setSettlingClockKey(currentClockKey);
+    setPollKick((value) => value + 1);
+  }, [currentClockKey, settlingClockKey]);
+
   useEffect(() => {
     if (!soldFlash) return;
     const id = setTimeout(() => setSoldFlash(null), 3600);
@@ -435,45 +571,87 @@ export function DraftRoom({
     useBannerOffscreen(draftLive);
 
   async function act(url: string, body: Record<string, unknown>) {
+    if (!state) return;
     unlockAudio(); // this click is a user gesture — prime audio for later
     const { seq, next: seqNext } = issueSequence(seqRef.current);
     seqRef.current = seqNext;
     setPending(true);
+    const expectation = url === "/api/draft/bid"
+      ? {
+          draftVersion: state.draftVersion,
+          nominatedUserId: state.nominatedUserId,
+          currentBid: state.currentBid,
+          currentBidTeamId: state.currentBidTeamId,
+          bidEndsAt: state.bidEndsAt,
+        }
+      : {
+          draftVersion: state.draftVersion,
+          nominatorTeamId: state.nominatorTeamId,
+          nominationEndsAt: state.nominationEndsAt,
+        };
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, seasonId, ...expectation }),
         // `pending` is released in the finally below, so a request that never
         // answers left every bid control disabled until the captain reloaded —
         // under a 30s lot clock. See ROOM_ACTION_TIMEOUT_MS.
         signal: AbortSignal.timeout(ROOM_ACTION_TIMEOUT_MS),
       });
-      const data = await res.json();
+      const data = (await res.json().catch(() => ({}))) as
+        | DraftState
+        | { error?: string };
       if (!res.ok) {
         // Toast, not an inline banner: race rejections ("Another bid just
         // landed") arrive exactly while the captain is scrolled deep in the
         // pool, where a top-of-room banner is invisible — a silently lost
         // bid under a 30s clock. The global toaster is fixed-position.
-        pushToast("error", data.error || "Action failed");
+        if (res.status === 401) setSessionExpired(true);
+        pushToast(
+          "error",
+          "error" in data && data.error
+            ? data.error
+            : "The server couldn't confirm that action — check the live lot before trying again.",
+        );
+        setPollKick((value) => value + 1);
       } else {
-        apply(data, seq);
+        apply(data as DraftState, seq);
         setSelected(null);
       }
-    } catch (e) {
-      // A timeout is NOT proof the bid failed — the server kept going and may
-      // have taken it. Telling a captain it didn't go through would have them
-      // re-bid against themselves. The poll is already running and repaints
-      // the real auction state within `pollMs`.
+    } catch {
+      // A lost response is never proof that a mutation failed: the server can
+      // commit before the connection drops. Reconcile before inviting a retry.
       pushToast(
         "error",
-        (e as Error)?.name === "TimeoutError"
-          ? "That's taking a while — watch the lot to see if it landed"
-          : "Network error — that didn't go through",
+        "Connection interrupted — check the live lot to see whether the action landed before trying again.",
       );
+      setPollKick((value) => value + 1);
     } finally {
       setPending(false);
     }
+  }
+
+  if (seasonChanged) {
+    return (
+      <div
+        role="alert"
+        className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
+      >
+        <div className="text-lg font-semibold">This draft room is out of date</div>
+        <p className="mt-1 text-sm text-muted">
+          The active season changed. This tab will not send actions to the new
+          auction until you reload it.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className={buttonClasses("primary", "sm", "mt-4")}
+        >
+          Reload draft room
+        </button>
+      </div>
+    );
   }
 
   if (noSeason) {
@@ -491,6 +669,29 @@ export function DraftRoom({
   }
 
   if (!state) {
+    if (initialError || disconnected || syncDelayed) {
+      return (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
+        >
+          <div className="text-lg font-semibold">The draft room hasn&apos;t loaded</div>
+          <p className="mt-1 text-sm text-muted">
+            {syncDelayed
+              ? "Live updates are temporarily delayed. Your place is safe; try syncing again."
+              : "The server could not provide the live auction yet. Check your connection and retry."}
+          </p>
+          <button
+            type="button"
+            onClick={() => setPollKick((value) => value + 1)}
+            className={buttonClasses("secondary", "sm", "mt-4")}
+          >
+            Retry now
+          </button>
+        </div>
+      );
+    }
     return <div className="py-10 text-center text-muted">Loading draft…</div>;
   }
 
@@ -505,6 +706,51 @@ export function DraftRoom({
       server; actions are paused until we&apos;re back.
     </div>
   ) : null;
+
+  const syncDelayedStrip = syncDelayed ? (
+    <div
+      role="status"
+      aria-live="polite"
+      className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning"
+    >
+      Live updates are delayed by traffic — the room is retrying at a slower
+      pace. Check the lot before acting.
+    </div>
+  ) : null;
+
+  const sessionExpiredStrip = sessionExpired ? (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
+    >
+      <span>
+        Your sign-in expired. You are watching as a visitor and cannot nominate,
+        bid, or use admin controls.
+      </span>
+      <Link href="/login?next=/draft" className={buttonClasses("secondary", "sm")}>
+        Sign in again
+      </Link>
+    </div>
+  ) : null;
+
+  const settlingStrip = clockSettling ? (
+    <div
+      role="status"
+      aria-live="polite"
+      className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
+    >
+      Time is up — confirming the sale or next nomination turn with the server…
+    </div>
+  ) : null;
+
+  const roomAlerts = (
+    <>
+      {disconnectedStrip}
+      {syncDelayedStrip}
+      {sessionExpiredStrip}
+      {settlingStrip}
+    </>
+  );
 
   const { me } = state;
   // The countdowns tick inside <BidClock>/<NomClock> leaves (see below) so the
@@ -539,6 +785,30 @@ export function DraftRoom({
   const pricedOut =
     !!me.myTeamId && !rosterFull && me.myMaxBid <= state.currentBid;
 
+  const viewerTeamBanner = me.rosterTeamId ? (
+    <div
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-info/30 bg-info/5 px-4 py-2 text-sm"
+    >
+      <span>
+        <strong>Your team: {me.rosterTeamName}</strong>
+        {me.rosterIsCaptain
+          ? " · captain"
+          : me.rosterPrice != null
+            ? ` · drafted for $${me.rosterPrice}`
+            : ""}
+      </span>
+      <Link
+        href={`/teams/${me.rosterTeamId}`}
+        target={state.status === "COMPLETE" ? undefined : "_blank"}
+        rel={state.status === "COMPLETE" ? undefined : "noreferrer"}
+        className={textLink()}
+      >
+        View roster{state.status === "COMPLETE" ? "" : " ↗"}
+      </Link>
+    </div>
+  ) : null;
+
   const quickBid = (delta: number) => {
     const amount = state.currentBid + delta;
     if (amount > me.myMaxBid) return;
@@ -546,13 +816,38 @@ export function DraftRoom({
   };
 
   if (state.status === "NOT_STARTED") {
+    if (state.seasonStatus !== "SIGNUPS" && state.seasonStatus !== "DRAFT") {
+      return (
+        <div className="space-y-6">
+          {roomAlerts}
+          {viewerTeamBanner}
+          <div className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-6 text-center">
+            <div className="text-lg font-semibold">The auction is not available</div>
+            <p className="mt-1 text-sm text-muted">
+              {state.seasonName} is currently in {state.seasonStatus.toLowerCase().replaceAll("_", " ")}. An admin must review the missing or reset draft record before this room can be used.
+            </p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <Link href="/teams" className={buttonClasses("secondary", "sm")}>
+                View teams
+              </Link>
+              {me.isAdmin ? (
+                <Link href="/admin" className={buttonClasses("accent", "sm")}>
+                  Review league controls
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      );
+    }
     // Waiting room, not a dead end: the poll flips this live the moment the
     // admin starts — nobody has to hand-refresh into a running clock. The
     // admin CTA renders only for admins (everyone else used to get bounced
     // off /admin with no explanation).
     return (
       <div className="space-y-6">
-        {disconnectedStrip}
+        {roomAlerts}
+        {viewerTeamBanner}
         <div className="rounded-[var(--radius)] border border-line bg-surface/60 p-6 text-center">
           <div className="text-2xl" aria-hidden>
             ⏳
@@ -563,13 +858,13 @@ export function DraftRoom({
           <div className="text-sm text-muted">
             This page goes live automatically — no need to refresh.
           </div>
-          {draftAtMs ? (
+          {state.draftAtMs ? (
             <div className="mt-2 text-sm text-muted">
               🗓️ Draft night:{" "}
               {/* Client component — this branch never SSRs (state loads via
                   poll first), so browser-local formatting can't mismatch. */}
               <strong className="text-fg">
-                {new Date(draftAtMs).toLocaleString(undefined, {
+                {new Date(state.draftAtMs).toLocaleString(undefined, {
                   weekday: "short",
                   month: "short",
                   day: "numeric",
@@ -578,12 +873,17 @@ export function DraftRoom({
                 })}
               </strong>
               <Countdown
-                targetMs={draftAtMs}
+                targetMs={state.draftAtMs}
                 eventLabel="Draft"
                 passedLabel={DRAFT_PASSED_LABEL}
               />
             </div>
-          ) : null}
+          ) : (
+            <p className="mt-2 text-sm text-muted">
+              Draft night has not been scheduled yet. The league admin will set
+              the time before the auction starts.
+            </p>
+          )}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <Link href="/players" className={buttonClasses("secondary", "sm")}>
               Scout the player pool
@@ -609,16 +909,43 @@ export function DraftRoom({
   }
 
   if (state.status === "COMPLETE") {
+    const shortTeams = state.teams.filter((team) => team.need > 0);
     return (
       <div className="space-y-6">
         {/* Same strip as every other branch — undoLastSale can re-open a
             draft from COMPLETE, and only the poll delivers that flip. */}
-        {disconnectedStrip}
-        <div className="rounded-[var(--radius)] border border-success/40 bg-success/10 p-6 text-center">
+        {roomAlerts}
+        {viewerTeamBanner}
+        {me.isAdmin ? (
+          <DraftAdminToolbar
+            state={state}
+            seasonId={seasonId}
+            pauseAction={pauseAction}
+            resumeAction={resumeAction}
+            undoAction={undoAction}
+            voidLotAction={voidLotAction}
+          />
+        ) : null}
+        <div role="status" aria-live="polite" className="rounded-[var(--radius)] border border-success/40 bg-success/10 p-6 text-center">
           <div className="text-2xl">✅</div>
           <div className="mt-1 text-lg font-semibold">The draft is complete!</div>
           <div className="text-sm text-muted">
-            All rosters are set. Standings and the schedule are next.
+            {shortTeams.length === 0
+              ? "All roster seats were filled. Schedule setup is next."
+              : `${shortTeams.length} team${shortTeams.length === 1 ? "" : "s"} still ${shortTeams.length === 1 ? "has" : "have"} open seats; admins can use free-agent signings after advancing the league.`}
+          </div>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <Link href="/teams" className={buttonClasses("secondary", "sm")}>
+              View teams
+            </Link>
+            <Link href="/schedule" className={buttonClasses("secondary", "sm")}>
+              View schedule
+            </Link>
+            {me.isAdmin ? (
+              <Link href="/admin" className={buttonClasses("accent", "sm")}>
+                Continue league setup
+              </Link>
+            ) : null}
           </div>
         </div>
         <TeamsGrid state={state} />
@@ -630,7 +957,27 @@ export function DraftRoom({
 
   return (
     <div className="space-y-6">
-      {disconnectedStrip}
+      {roomAlerts}
+      {viewerTeamBanner}
+      {!paused ? (
+        <ClockExpiryObserver
+          endsAtMs={
+            state.nominatedPlayer ? state.bidEndsAt : state.nominationEndsAt
+          }
+          offsetMs={offsetMs}
+          onExpire={reconcileExpiredClock}
+        />
+      ) : null}
+      {me.isAdmin ? (
+        <DraftAdminToolbar
+          state={state}
+          seasonId={seasonId}
+          pauseAction={pauseAction}
+          resumeAction={resumeAction}
+          undoAction={undoAction}
+          voidLotAction={voidLotAction}
+        />
+      ) : null}
       {paused ? (
         <div
           role="status"
@@ -736,7 +1083,15 @@ export function DraftRoom({
                 screen readers — the content itself is the announcement. */}
             <button
               type="button"
-              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              onClick={() =>
+                window.scrollTo({
+                  top: 0,
+                  behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                    .matches
+                    ? "auto"
+                    : "smooth",
+                })
+              }
               title="Back to the auction clock"
               className="flex h-full min-w-0 flex-1 items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
             >
@@ -837,12 +1192,12 @@ export function DraftRoom({
         )}
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
-          <div className="min-w-0 text-sm text-muted">
+          <h2 className="min-w-0 text-sm font-normal text-muted">
             On the clock: <span className="text-fg">{nominatorName}</span>
             {nextNominatorName ? (
               <span className="hidden sm:inline"> · next: {nextNominatorName}</span>
             ) : null}
-          </div>
+          </h2>
           {paused ? (
             <span className="font-mono text-sm font-semibold text-info">
               ⏸ paused
@@ -947,7 +1302,9 @@ export function DraftRoom({
                 // The lot's audit trail (newest first) — kills "who bid
                 // what?" disputes without leaving the banner.
                 <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 border-t border-line pt-3 text-xs text-muted">
-                  <span className="shrink-0">Bid trail:</span>
+                  <span className="shrink-0">
+                    {state.lotBidsTruncated ? "Latest 8 bids:" : "Bid trail:"}
+                  </span>
                   {state.lotBids.map((b, i) => (
                     <span key={b.at + "-" + i} className="flex items-center gap-2">
                       {i > 0 ? <span aria-hidden>‹</span> : null}
@@ -966,7 +1323,10 @@ export function DraftRoom({
               ) : null}
 
               {me.canBid ? (
-                <div className="flex w-full flex-wrap items-center gap-2 border-t border-line pt-4">
+                <div
+                  aria-busy={reqPending}
+                  className="flex w-full flex-wrap items-center gap-2 border-t border-line pt-4"
+                >
                   <span className="text-sm text-muted">
                     Your max ${me.myMaxBid} · budget ${me.myBudget}
                     {myTeam && myTeam.need > 1
@@ -977,7 +1337,7 @@ export function DraftRoom({
                         }`
                       : ""}
                   </span>
-                  <div className="ml-auto flex gap-2">
+                  <div className="ml-auto grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
                     {[1, 5, 10].map((d) => (
                       <button
                         key={d}
@@ -1009,10 +1369,17 @@ export function DraftRoom({
                     >
                       Max ${me.myMaxBid}
                     </button>
+                    <ExactBidControl
+                      key={`${state.nominatedPlayer.userId}:${state.currentBid}:${me.myMaxBid}`}
+                      currentBid={state.currentBid}
+                      maxBid={me.myMaxBid}
+                      pending={pending}
+                      submit={(amount) => act("/api/draft/bid", { amount })}
+                    />
                   </div>
                 </div>
               ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
-                <div className="w-full border-t border-line pt-3 text-sm text-success">
+                <div role="status" className="w-full border-t border-line pt-3 text-sm text-success">
                   You hold the high bid.
                 </div>
               ) : rosterFull ? (
@@ -1024,7 +1391,12 @@ export function DraftRoom({
                   Priced out — your max bid is ${me.myMaxBid} (reserving $
                   {state.minBid} per remaining slot).
                 </div>
-              ) : null}
+              ) : (
+                <div className="w-full border-t border-line pt-3 text-sm text-muted">
+                  You&apos;re watching this lot. Only captains with an open roster
+                  seat and enough reserved budget can bid.
+                </div>
+              )}
             </div>
           ) : me.canNominate ? (
             <NominateBar
@@ -1107,6 +1479,109 @@ export function DraftRoom({
   );
 }
 
+function DraftAdminToolbar({
+  state,
+  seasonId,
+  pauseAction,
+  resumeAction,
+  undoAction,
+  voidLotAction,
+}: {
+  state: DraftState;
+  seasonId: string;
+  pauseAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  resumeAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  undoAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  voidLotAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+}) {
+  const hidden = { expectedActiveSeasonId: seasonId };
+  const paused = state.status === "PAUSED";
+  const live = state.status === "IN_PROGRESS";
+  const canUndo =
+    state.seasonStatus === "DRAFT" &&
+    !state.nominatedPlayer &&
+    state.recentSales.length > 0;
+
+  return (
+    <section
+      aria-label="Live draft administration"
+      className="rounded-[var(--radius)] border border-info/30 bg-info/5 p-4"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Admin controls</h2>
+          <p className="text-xs text-muted">
+            These controls follow the polled live state. Pause before correcting
+            a mistaken nomination.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {live ? (
+            <ActionForm action={pauseAction} hidden={hidden}>
+              <SubmitButton variant="secondary" size="sm">
+                Pause auction
+              </SubmitButton>
+            </ActionForm>
+          ) : null}
+          {paused ? (
+            <ActionForm action={resumeAction} hidden={hidden}>
+              <SubmitButton variant="primary" size="sm">
+                Resume auction
+              </SubmitButton>
+            </ActionForm>
+          ) : null}
+          {paused && state.nominatedPlayer ? (
+            <ActionForm action={voidLotAction} hidden={hidden}>
+              <SubmitButton
+                variant="danger"
+                size="sm"
+                confirm={`Void the paused lot for ${state.nominatedPlayer.name}? Bids on this lot will be removed and the same team keeps the nomination turn.`}
+              >
+                Void live lot
+              </SubmitButton>
+            </ActionForm>
+          ) : null}
+          {canUndo ? (
+            <ActionForm action={undoAction} hidden={hidden}>
+              <SubmitButton
+                variant="secondary"
+                size="sm"
+                confirm={`Undo the most recent sale (${state.recentSales[0]?.name} → ${state.recentSales[0]?.teamName})?`}
+              >
+                Undo last sale
+              </SubmitButton>
+            </ActionForm>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title={
+                state.recentSales.length === 0
+                  ? "No completed sale is available to undo."
+                  : state.nominatedPlayer
+                    ? "Pause and void the current lot before undoing a prior sale."
+                    : "Undo is available only during the draft phase."
+              }
+              className={buttonClasses("secondary", "sm")}
+            >
+              Undo last sale
+            </button>
+          )}
+          <Link href="/admin" className={buttonClasses("secondary", "sm")}>
+            Full recovery controls
+          </Link>
+        </div>
+      </div>
+      {state.nominatedPlayer && !paused ? (
+        <p className="mt-2 text-xs text-muted">
+          Undo is unavailable while a lot is live. Pause, then void this lot if
+          the nomination or bidding state is wrong.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 // The auction's shopping list. Draft night runs on a clock, so captains get
 // search, position filters, and sorting instead of one long MMR-sorted list.
 function AvailableList({
@@ -1127,9 +1602,9 @@ function AvailableList({
 
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/80">
-      <div className="border-b border-line px-5 py-3 text-sm font-semibold">
+      <h2 className="border-b border-line px-5 py-3 text-sm font-semibold">
         Available · {state.available.length}
-      </div>
+      </h2>
       {state.available.length > 0 ? (
         <div className="space-y-2 border-b border-line/60 p-3">
           <input
@@ -1150,7 +1625,7 @@ function AvailableList({
                 onClick={() => setRole(null)}
                 aria-pressed={role === null}
                 className={cn(
-                  "rounded-md px-2 py-0.5 text-xs",
+                  "min-h-9 rounded-md px-2 py-1 text-xs",
                   role === null
                     ? "bg-accent/20 text-fg ring-1 ring-accent/40"
                     : "text-muted hover:bg-surface-2",
@@ -1166,7 +1641,7 @@ function AvailableList({
                   aria-pressed={role === r.key}
                   onClick={() => setRole(role === r.key ? null : r.key)}
                   className={cn(
-                    "rounded-md px-2 py-0.5 text-xs tabular-nums",
+                    "min-h-9 rounded-md px-2 py-1 text-xs tabular-nums",
                     role === r.key
                       ? "bg-accent/20 text-fg ring-1 ring-accent/40"
                       : "text-muted hover:bg-surface-2",
@@ -1184,7 +1659,7 @@ function AvailableList({
                 aria-pressed={sort === s}
                 onClick={() => setSort(s)}
                 className={cn(
-                  "rounded-md px-2 py-0.5 text-xs capitalize",
+                  "min-h-9 rounded-md px-2 py-1 text-xs capitalize",
                   sort === s
                     ? "bg-accent/20 text-fg ring-1 ring-accent/40"
                     : "text-muted hover:bg-surface-2",
@@ -1198,6 +1673,19 @@ function AvailableList({
       ) : null}
       <div className="max-h-[30rem] space-y-1 overflow-y-auto p-3">
         {shown.map((p) => {
+          const rowContent = (
+            <>
+              <span className="flex min-w-0 items-center gap-2">
+                <Avatar name={p.name} src={p.avatar} size={20} />
+                <span className="truncate">{p.name}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
+                <RoleBadges roles={p.roles} />
+                <RankBadge rankTier={p.rankTier} />
+                {p.mmr > 0 ? <span>{p.mmr}</span> : null}
+              </span>
+            </>
+          );
           return (
             // The row body is the nominate button; the profile link is a
             // sibling anchor (never nested inside the button).
@@ -1208,27 +1696,20 @@ function AvailableList({
                 selected === p.userId ? "bg-accent/15 ring-1 ring-accent/40" : "",
               )}
             >
-              <button
-                disabled={!canNominate}
-                onClick={() => onPick(p.userId)}
-                aria-pressed={selected === p.userId}
-                className={cn(
-                  "flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                  canNominate
-                    ? "hover:bg-surface-2"
-                    : "cursor-default opacity-90",
-                )}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <Avatar name={p.name} src={p.avatar} size={20} />
-                  <span className="truncate">{p.name}</span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
-                  <RoleBadges roles={p.roles} />
-                  <RankBadge rankTier={p.rankTier} />
-                  {p.mmr > 0 ? <span>{p.mmr}</span> : null}
-                </span>
-              </button>
+              {canNominate ? (
+                <button
+                  type="button"
+                  onClick={() => onPick(p.userId)}
+                  aria-pressed={selected === p.userId}
+                  className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-2"
+                >
+                  {rowContent}
+                </button>
+              ) : (
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm">
+                  {rowContent}
+                </div>
+              )}
               <Link
                 href={`/players/${p.userId}`}
                 target="_blank"
@@ -1257,11 +1738,16 @@ function AvailableList({
 function BidFeed({ events }: { events: FeedEvent[] }) {
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/80">
-      <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-sm font-semibold">
+      <h2 className="flex items-center gap-2 border-b border-line px-5 py-3 text-sm font-semibold">
         <span className="animate-live-pulse inline-block h-1.5 w-1.5 rounded-full bg-danger" />
         Live feed
-      </div>
-      <div className="max-h-64 space-y-0.5 overflow-y-auto p-3">
+      </h2>
+      <div
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        className="max-h-64 space-y-0.5 overflow-y-auto p-3"
+      >
         {events.length === 0 ? (
           <p className="p-2 text-sm text-muted">
             Nominations, bids, and picks appear here…
@@ -1352,9 +1838,10 @@ function NominateBar({
             nomAmount > state.me.myMaxBid
           }
           onClick={() => selected && onNominate(selected, nomAmount)}
+          aria-busy={pending}
           className={buttonClasses("accent", "sm")}
         >
-          Nominate
+          {pending ? "Submitting…" : "Nominate"}
         </button>
       </div>
     </div>
@@ -1387,8 +1874,8 @@ function AuctionPrimer({
       <ul className="space-y-2 border-t border-line/60 px-5 py-4 text-sm text-muted">
         <li>
           <strong className="text-fg">Captains take turns nominating</strong>{" "}
-          a player from the pool — the order rotates until every roster is
-          full. Non-captains: sit back, you&apos;re the merchandise.
+          a player from the pool — the order rotates while eligible teams and
+          players remain. Players and visitors can follow every lot here.
         </li>
         <li>
           <strong className="text-fg">
@@ -1405,7 +1892,8 @@ function AuctionPrimer({
         </li>
         <li>
           <strong className="text-fg">Your max bid is capped</strong> — the
-          room reserves ${minBid} for each seat you&apos;d still have to fill
+          room reserves ${minBid} {" "}
+          for each seat you&apos;d still have to fill
           afterwards, so you can always finish your roster.
         </li>
         <li>
@@ -1462,6 +1950,8 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   />
                   <Link
                     href={`/teams/${t.id}`}
+                    target={state.status === "COMPLETE" ? undefined : "_blank"}
+                    rel={state.status === "COMPLETE" ? undefined : "noreferrer"}
                     className="truncate hover:text-info hover:underline"
                   >
                     {t.name}
@@ -1487,16 +1977,26 @@ function TeamsGrid({ state }: { state: DraftState }) {
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
-                <Badge tone="accent">${t.budget}</Badge>
+                <Badge
+                  tone="accent"
+                  title={
+                    state.budgetsProjected
+                      ? "Projected starting budget; finalized when the auction starts"
+                      : "Remaining auction budget"
+                  }
+                >
+                  ${t.budget}
+                  {state.budgetsProjected ? " projected" : null}
+                </Badge>
                 {t.need === 0 ? (
-                  <span className="text-[10px] text-muted/70">full</span>
+                  <span className="text-[10px] text-muted">full</span>
                 ) : (
                   <span
                     className={cn(
                       "text-[10px] tabular-nums",
                       nominationLive && cap <= state.currentBid
-                        ? "text-danger/80"
-                        : "text-muted/70",
+                        ? "text-danger"
+                        : "text-muted",
                     )}
                   >
                     max ${cap}
@@ -1529,7 +2029,7 @@ function TeamsGrid({ state }: { state: DraftState }) {
                     </span>
                   </div>
                 ) : (
-                  <div key={i} className="py-1 text-sm text-muted/50">
+                  <div key={i} className="py-1 text-sm text-muted">
                     Empty slot
                   </div>
                 );

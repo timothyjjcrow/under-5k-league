@@ -718,7 +718,9 @@ describe("clashesAfterRetime", () => {
       data: { scheduledAt: match.scheduledAt },
     });
 
-    expect(await clashesAfterRetime(season.id, [match.id, other.id])).toHaveLength(1);
+    expect(
+      await clashesAfterRetime(season.id, [match.id, other.id]),
+    ).toHaveLength(1);
   });
 
   it("ignores cover on a match that has already been played", async () => {
@@ -743,7 +745,11 @@ describe("bulk teardowns stand their standins down", () => {
   // REGENERATE both delete bookings wholesale. Every ordinary removal path
   // sends standinRemovedMessage; these two dropped a live @-mentioned
   // instruction to turn up for a fixture that no longer exists, in silence.
-  async function bookedStandin(seasonId: string, matchId: string, teamId: string) {
+  async function bookedStandin(
+    seasonId: string,
+    matchId: string,
+    teamId: string,
+  ) {
     const standin = await makeUser("Doomed Cover");
     await prisma.user.update({
       where: { id: standin.id },
@@ -759,7 +765,12 @@ describe("bulk teardowns stand their standins down", () => {
       },
     });
     await prisma.standinAssignment.create({
-      data: { matchId, teamId, standinUserId: standin.id, replacingUserId: null },
+      data: {
+        matchId,
+        teamId,
+        standinUserId: standin.id,
+        replacingUserId: null,
+      },
     });
     return standin;
   }
@@ -768,6 +779,18 @@ describe("bulk teardowns stand their standins down", () => {
     const season = await makeSeason({ status: "PLAYOFFS", teamSize: 3 });
     const a = await makeTeam(season.id, "Alpha", 0);
     const b = await makeTeam(season.id, "Bravo", 1);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: a.id,
+        awayTeamId: b.id,
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 2,
+        winnerTeamId: a.id,
+      },
+    });
     const final = await prisma.match.create({
       data: {
         seasonId: season.id,
@@ -1066,7 +1089,7 @@ describe("standin MMR advisory", () => {
 
   it("an empty-seat fill with no threshold set stays silent", async () => {
     // maxMmr 0 = no review threshold — there is nothing to measure against.
-    const { season, home, sub, match } = await setup();
+    const { home, sub, match } = await setup();
     await prisma.registration.updateMany({
       where: { userId: sub.id },
       data: { mmr: 4000 },

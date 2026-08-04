@@ -23,9 +23,15 @@ export default function NotFound() {
             className="animate-hero-float h-20 w-auto"
           />
           <div>
-            <div className="font-display text-6xl font-bold tracking-tight">
+            <div
+              aria-hidden
+              className="font-display text-6xl font-bold tracking-tight"
+            >
               404
             </div>
+            <h1 className="mt-2 font-display text-2xl font-bold">
+              Page not found
+            </h1>
             <p className="mt-2 text-muted">
               This page is lost in the fog of war.
             </p>

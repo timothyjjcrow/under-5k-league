@@ -11,6 +11,7 @@ import {
   roundName,
   nextRoundPairings,
   slotRound,
+  hasLaterBracketRound,
   slotIndex,
   bracketSkeleton,
   groupPlayoffRounds,
@@ -154,10 +155,10 @@ describe("bracketRounds", () => {
 
 describe("roundName", () => {
   it("names rounds relative to the final", () => {
-    expect(roundName(1, 2)).toBe("Final");
+    expect(roundName(1, 2)).toBe("Grand final");
     expect(roundName(0, 2)).toBe("Semifinals");
     expect(roundName(0, 3)).toBe("Quarterfinals");
-    expect(roundName(2, 3)).toBe("Final");
+    expect(roundName(2, 3)).toBe("Grand final");
   });
 });
 
@@ -176,6 +177,26 @@ describe("slotRound", () => {
     expect(slotRound("R2M3")).toBe(2);
     expect(slotRound(null)).toBe(0);
     expect(slotRound("weird")).toBe(0);
+  });
+});
+
+describe("hasLaterBracketRound", () => {
+  it("locks an earlier series once a later playoff round exists", () => {
+    const matches = [
+      { bracketSlot: "R0M0" },
+      { bracketSlot: "R0M1" },
+      { bracketSlot: "R1M0" },
+    ];
+
+    expect(hasLaterBracketRound(matches, "R0M0")).toBe(true);
+    expect(hasLaterBracketRound(matches, "R1M0")).toBe(false);
+  });
+
+  it("keeps every series in the latest round correctable", () => {
+    const matches = [{ bracketSlot: "R1M0" }, { bracketSlot: "R1M1" }];
+
+    expect(hasLaterBracketRound(matches, "R1M0")).toBe(false);
+    expect(hasLaterBracketRound(matches, "R1M1")).toBe(false);
   });
 });
 
@@ -426,6 +447,20 @@ describe("focusSlate", () => {
       m("c", 5),
     ]);
     expect(slate.map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("labels a future slate current instead of an older unreported fixture", () => {
+    const now = new Date("2026-08-03T12:00:00Z").getTime();
+    const { slate, title } = focusSlate(
+      "REGULAR_SEASON",
+      [
+        { ...m("stale", 1), scheduledAt: new Date("2026-07-01T12:00:00Z") },
+        { ...m("next", 2), scheduledAt: new Date("2026-08-04T12:00:00Z") },
+      ],
+      now,
+    );
+    expect(slate.map((x) => x.id)).toEqual(["next"]);
+    expect(title).toBe("This week · Week 2");
   });
 
   it("takes every open bracket match during playoffs, whatever the week", () => {

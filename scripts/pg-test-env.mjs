@@ -14,25 +14,30 @@
 // Safe by construction: it only ever creates/drops a database whose name
 // contains "pgtest", so it cannot be aimed at dev, prod or the e2e databases
 // (same discipline as scripts/assert-local-db.mjs).
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import { assertLocalManagedPostgresUrl } from "./test-db-safety.mjs";
 
 const DB = "ld2l_pgtest";
 const URL_FOR = (db) => `postgresql://${process.env.USER}@localhost:5432/${db}`;
 const url = process.env.PG_TEST_URL ?? URL_FOR(DB);
-
-if (!/pgtest/.test(url)) {
-  console.error(
-    `Refusing to touch ${url} — this script only manages a database whose\n` +
-      `name contains "pgtest". Unset PG_TEST_URL to use the default.`,
-  );
+let parsed;
+try {
+  parsed = assertLocalManagedPostgresUrl(url);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Unsafe PG_TEST_URL");
   process.exit(2);
 }
 
 const run = (cmd, env = {}) =>
   execSync(cmd, { stdio: "inherit", env: { ...process.env, ...env } });
-const quiet = (cmd) => {
+const adminUrl = new URL(parsed);
+adminUrl.pathname = "/postgres";
+const databaseToolEnv = { ...process.env, PGDATABASE: adminUrl.toString() };
+delete databaseToolEnv.DATABASE_URL;
+delete databaseToolEnv.DIRECT_URL;
+const quietDatabaseTool = (command, args) => {
   try {
-    execSync(cmd, { stdio: "pipe" });
+    execFileSync(command, args, { stdio: "pipe", env: databaseToolEnv });
   } catch {
     /* best effort */
   }
@@ -42,22 +47,26 @@ const mode = process.argv[2];
 const dbEnv = { DATABASE_URL: url, DIRECT_URL: url };
 
 if (mode === "up") {
-  quiet(`psql -d postgres -c "DROP DATABASE IF EXISTS ${DB}"`);
-  run(`psql -d postgres -c "CREATE DATABASE ${DB}"`);
+  quietDatabaseTool("dropdb", ["--if-exists", "--force", DB]);
+  execFileSync("createdb", [DB], { stdio: "inherit", env: databaseToolEnv });
   run("node scripts/switch-db-provider.mjs postgresql");
   run("npx prisma db push --skip-generate --accept-data-loss", dbEnv);
   run("npx prisma generate", dbEnv);
-  console.log(`\nReady. Export this, then run the suite or the guard:\n`);
-  console.log(`  export PG_TEST_URL="${url}"`);
-  console.log(`  npm run test:pg                    # the 402-test suite`);
+  console.log(`\nReady. Keep PG_TEST_URL pointed at ${DB}, then run:\n`);
+  if (!process.env.PG_TEST_URL) {
+    console.log(`  export PG_TEST_URL="${url}"`);
+  } else {
+    console.log("  # PG_TEST_URL was supplied; keep that same value in this shell");
+  }
+  console.log(`  npm run test:pg                    # full Postgres suite`);
   console.log(`  npm run test:mutation              # verify the baseline`);
-  console.log(`  npm run test:mutation -- --only X  # probe one claim`);
+  console.log(`  npm run test:mutation:discover -- --only X  # probe one claim`);
   console.log(`\nWhen you're done: npm run pg:down`);
 } else if (mode === "down") {
   // Provider first: even if the drop fails, the repo is left usable.
   run("node scripts/switch-db-provider.mjs sqlite");
   run("npx prisma generate");
-  quiet(`psql -d postgres -c "DROP DATABASE IF EXISTS ${DB}"`);
+  quietDatabaseTool("dropdb", ["--if-exists", "--force", DB]);
   console.log(`\nBack on sqlite, ${DB} dropped. Check: git status --short`);
 } else {
   console.error("Usage: node scripts/pg-test-env.mjs <up|down>");

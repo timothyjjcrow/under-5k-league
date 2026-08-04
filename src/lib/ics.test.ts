@@ -18,6 +18,7 @@ describe("icsDate", () => {
 describe("buildCalendar", () => {
   const event = {
     uid: "m1@league.test",
+    stamp: new Date("2026-06-01T12:30:00.000Z"),
     start: new Date("2026-07-12T02:00:00.000Z"),
     durationMinutes: 120,
     summary: "Week 1: Raiders vs Wolves",
@@ -32,6 +33,7 @@ describe("buildCalendar", () => {
     expect(cal).toContain("X-WR-CALNAME:League");
     expect(cal).toContain("BEGIN:VEVENT");
     expect(cal).toContain("UID:m1@league.test");
+    expect(cal).toContain("DTSTAMP:20260601T123000Z");
     expect(cal).toContain("DTSTART:20260712T020000Z");
     expect(cal).toContain("DTEND:20260712T040000Z");
     expect(cal).toContain("SUMMARY:Week 1: Raiders vs Wolves");
@@ -45,10 +47,14 @@ describe("buildCalendar", () => {
   });
 
   it("escapes summaries", () => {
-    const cal = buildCalendar("L", [
-      { ...event, summary: "A; B, C" },
-    ]);
+    const cal = buildCalendar("L", [{ ...event, summary: "A; B, C" }]);
     expect(cal).toContain("SUMMARY:A\\; B\\, C");
+  });
+
+  it("is byte-for-byte stable across requests for the same events", () => {
+    expect(buildCalendar("League", [event])).toBe(
+      buildCalendar("League", [event]),
+    );
   });
 });
 
@@ -79,13 +85,20 @@ describe("foldIcsLine", () => {
       // Every piece must re-encode/decode cleanly (no torn codepoints).
       expect(Buffer.from(l, "utf8").toString("utf8")).toBe(l);
     }
-    expect(folded[0] + folded.slice(1).map((l) => l.slice(1)).join("")).toBe(line);
+    expect(
+      folded[0] +
+        folded
+          .slice(1)
+          .map((l) => l.slice(1))
+          .join(""),
+    ).toBe(line);
   });
 
   it("keeps every emitted calendar line within 75 octets", () => {
     const doc = buildCalendar("League", [
       {
         uid: "m1@ld2l",
+        stamp: new Date("2026-06-01T12:30:00Z"),
         start: new Date("2026-07-15T01:00:00Z"),
         durationMinutes: 150,
         summary:

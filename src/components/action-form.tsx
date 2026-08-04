@@ -52,14 +52,27 @@ export function ActionForm({
 }) {
   const safeAction = useCallback(
     async (prev: ActionResult, fd: FormData): Promise<ActionResult> => {
+      let result: ActionResult;
       try {
-        return await action(prev, fd);
+        result = await action(prev, fd);
       } catch {
-        return {
+        result = {
           error:
-            "Couldn't reach the server — nothing was saved. Check your connection and try again.",
+            "The connection ended before we could confirm the result. The action may have completed — check the current page state before trying again.",
         };
       }
+      // Emit feedback from the promise continuation, not a state effect. A
+      // successful server action can revalidate away the form that submitted
+      // it (accepting a reschedule removes the pending-response form); an
+      // unmounted form never runs its effect and used to lose the confirmation
+      // even though the database commit succeeded. The global Toaster remains
+      // mounted, so dispatching here survives that RSC replacement.
+      if (result?.error) {
+        pushToast("error", result.error);
+      } else if (result?.message) {
+        pushToast("success", result.message);
+      }
+      return result;
     },
     [action],
   );
@@ -67,14 +80,9 @@ export function ActionForm({
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
-    if (!state) return;
-    if (state.error) {
-      pushToast("error", state.error);
-    } else {
-      if (state.message) pushToast("success", state.message);
-      // Success: clear the form (manual dispatch skipped React's auto-reset).
-      formRef.current?.reset();
-    }
+    if (!state || state.error) return;
+    // Success: clear the form (manual dispatch skipped React's auto-reset).
+    formRef.current?.reset();
   }, [state]);
 
   return (
@@ -114,6 +122,9 @@ export function SubmitButton({
   className,
   confirm,
   disabled,
+  name,
+  value,
+  formNoValidate,
   "aria-pressed": ariaPressed,
 }: {
   children: React.ReactNode;
@@ -122,6 +133,9 @@ export function SubmitButton({
   className?: string;
   confirm?: string;
   disabled?: boolean;
+  name?: string;
+  value?: string;
+  formNoValidate?: boolean;
   /** Toggle-state pass-through for pick-one button groups (e.g. pick'em). */
   "aria-pressed"?: boolean;
 }) {
@@ -133,6 +147,9 @@ export function SubmitButton({
   return (
     <button
       type="submit"
+      name={name}
+      value={value}
+      formNoValidate={formNoValidate}
       aria-pressed={ariaPressed}
       disabled={pending || disabled}
       onClick={
@@ -148,7 +165,7 @@ export function SubmitButton({
         <>
           <span
             aria-hidden
-            className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-current/30 border-t-current"
+            className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-current/30 border-t-current motion-reduce:animate-none"
           />
           Working…
         </>

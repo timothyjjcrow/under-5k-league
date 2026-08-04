@@ -11,7 +11,12 @@ import { Badge, Card, CardBody, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
 
-export type RsvpSide = { confirmed: number; out: number };
+export type RsvpSide = {
+  confirmed: number;
+  out: number;
+  /** Expected match-night side size, including any unfilled roster seat. */
+  expected: number;
+};
 
 export type MatchView = {
   id: string;
@@ -53,6 +58,8 @@ export type WeekView = {
   completed: number;
   total: number;
   isCurrent: boolean;
+  /** Every unreported fixture is older than the result-sync window. */
+  isOverdue: boolean;
   matches: MatchView[];
   /** Teams sitting out this week (odd team counts rotate a bye). */
   byes: { id: string; name: string }[];
@@ -84,18 +91,20 @@ export function ScheduleWeeks({
 
   const visibleWeeks = useMemo(() => {
     if (!filterTeam) return weeks;
-    return weeks
-      .map((w) => ({
-        ...w,
-        matches: w.matches.filter(
-          (m) => m.homeTeamId === filterTeam || m.awayTeamId === filterTeam,
-        ),
-      }))
-      // A bye week is part of the team's season — keep it visible.
-      .filter(
-        (w) =>
-          w.matches.length > 0 || w.byes.some((b) => b.id === filterTeam),
-      );
+    return (
+      weeks
+        .map((w) => ({
+          ...w,
+          matches: w.matches.filter(
+            (m) => m.homeTeamId === filterTeam || m.awayTeamId === filterTeam,
+          ),
+        }))
+        // A bye week is part of the team's season — keep it visible.
+        .filter(
+          (w) =>
+            w.matches.length > 0 || w.byes.some((b) => b.id === filterTeam),
+        )
+    );
   }, [weeks, filterTeam]);
 
   return (
@@ -137,7 +146,7 @@ export function ScheduleWeeks({
           // collapsing weeks would just hide what they asked for.
           const collapsed = filterTeam
             ? false
-            : collapsedOverride[w.week] ?? defaultCollapsed(w);
+            : (collapsedOverride[w.week] ?? defaultCollapsed(w));
           const canToggle = !filterTeam;
           return (
             <div
@@ -187,6 +196,9 @@ export function ScheduleWeeks({
                   />
                 ) : null}
                 {w.isCurrent ? <Badge tone="accent">This week</Badge> : null}
+                {w.isOverdue ? (
+                  <Badge tone="accent">Results overdue</Badge>
+                ) : null}
                 <span className={incomplete ? "text-accent" : "text-success"}>
                   {w.completed}/{w.total} results in
                 </span>
@@ -198,8 +210,7 @@ export function ScheduleWeeks({
                       <MatchRow key={m.id} match={m} />
                     ))}
                     {w.byes.length > 0 &&
-                    (!filterTeam ||
-                      w.byes.some((b) => b.id === filterTeam)) ? (
+                    (!filterTeam || w.byes.some((b) => b.id === filterTeam)) ? (
                       <div className="flex items-center gap-2 px-4 py-2 text-xs text-muted sm:px-5">
                         <span aria-hidden>😴</span>
                         <span>
@@ -252,8 +263,8 @@ function FilterChip({
 }
 
 function RsvpBadge({ side }: { side: RsvpSide }) {
-  if (side.confirmed === 0 && side.out === 0) return null;
-  const spoken = `${side.confirmed} confirmed${side.out > 0 ? `, ${side.out} unavailable` : ""}`;
+  const waiting = Math.max(0, side.expected - side.confirmed - side.out);
+  const spoken = `${side.confirmed} of ${side.expected} confirmed${side.out > 0 ? `, ${side.out} unavailable` : ""}${waiting > 0 ? `, ${waiting} waiting` : ""}`;
   return (
     <span
       role="img"
@@ -261,10 +272,17 @@ function RsvpBadge({ side }: { side: RsvpSide }) {
       title={spoken}
       // Hidden on phones — the row needs the width for team names; the
       // same RSVP detail lives one tap away on the match page.
-      className="hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-muted sm:inline"
+      className={cn(
+        "hidden whitespace-nowrap font-mono text-[11px] tabular-nums sm:inline",
+        side.confirmed >= side.expected && side.out === 0
+          ? "text-success"
+          : side.out > 0
+            ? "text-danger"
+            : "text-accent",
+      )}
     >
-      <span aria-hidden className="text-success">
-        ✓{side.confirmed}
+      <span aria-hidden>
+        ✓{side.confirmed}/{side.expected}
       </span>
       {side.out > 0 ? (
         <span aria-hidden className="text-danger">
@@ -302,7 +320,11 @@ function MatchRow({ match: m }: { match: MatchView }) {
           {m.done ? (
             <span
               className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm tabular-nums"
-              title={m.forfeit ? "Forfeit — this score was ruled, not played" : undefined}
+              title={
+                m.forfeit
+                  ? "Forfeit — this score was ruled, not played"
+                  : undefined
+              }
             >
               <span
                 className={m.homeWin ? "font-semibold text-fg" : "text-muted"}
@@ -329,7 +351,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
               className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-danger/10 px-2 py-0.5 font-mono text-sm tabular-nums text-danger"
             >
               <span aria-hidden className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-danger" />
               </span>
               <span aria-hidden>
@@ -352,7 +374,12 @@ function MatchRow({ match: m }: { match: MatchView }) {
               />
             </span>
           ) : (
-            <span className="text-xs text-muted">vs</span>
+            <span
+              className="whitespace-nowrap text-[11px] text-accent"
+              title="Kickoff time has not been set"
+            >
+              time TBD
+            </span>
           )}
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">

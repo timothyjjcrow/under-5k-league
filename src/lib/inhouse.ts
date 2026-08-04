@@ -36,7 +36,9 @@ const byUserId = (a: Seedable, b: Seedable) => a.userId.localeCompare(b.userId);
 export function seedOrder<T extends Seedable>(players: T[]): T[] {
   return [...players].sort(
     (a, b) =>
-      b.mmr - a.mmr || joinMs(a.joinedAt) - joinMs(b.joinedAt) || byUserId(a, b),
+      b.mmr - a.mmr ||
+      joinMs(a.joinedAt) - joinMs(b.joinedAt) ||
+      byUserId(a, b),
   );
 }
 
@@ -239,11 +241,7 @@ export function autoJoinDecision(me: {
  * flip keeps `inLobby` true, and so does a poll that skips the vote entirely.
  */
 export type InhouseAlert =
-  | "lobby-formed"
-  | "vote-opened"
-  | "my-turn"
-  | "teams-ready"
-  | "game-ended";
+  "lobby-formed" | "vote-opened" | "my-turn" | "teams-ready" | "game-ended";
 
 /**
  * What the room knows about the viewer, per poll. The room keeps ONE ref
@@ -283,7 +281,7 @@ export function inhouseAlerts(
   if (!prev) return [];
   const alerts: InhouseAlert[] = [];
   // Keyed on the lobby appearing, NOT on status === READY_CHECK: a hidden tab
-  // on the 45s keepalive can first SEE the lobby already in CAPTAIN_VOTE or
+  // on its keepalive can first SEE the lobby already in CAPTAIN_VOTE or
   // DRAFTING, and that player still needs the bell.
   if (next.status !== null && prev.status === null && next.inLobby) {
     alerts.push("lobby-formed");
@@ -339,14 +337,17 @@ export type InhouseTitleSnapshot = {
   hasVoted: boolean;
 };
 
-export function inhouseTitleFlag(s: InhouseTitleSnapshot | null): string | null {
+export function inhouseTitleFlag(
+  s: InhouseTitleSnapshot | null,
+): string | null {
   if (!s) return null;
   // isOnClock is safe without an inLobby guard because the server derives it as
   // DRAFTING && isCaptain && myTeam === pickTeam — all of which imply
   // membership. Recompute it client-side and the guard has to come back.
   if (s.isOnClock) return "(!) Your pick";
   if (!s.inLobby) return null;
-  if (s.status === "READY_CHECK" && !s.hasAccepted) return "(!) Accept your match";
+  if (s.status === "READY_CHECK" && !s.hasAccepted)
+    return "(!) Accept your match";
   // Dropped once they have voted, the same way the accept nag is dropped once
   // they have accepted: a "(!)" that survives the action it is asking for
   // teaches people to ignore the "(!)".

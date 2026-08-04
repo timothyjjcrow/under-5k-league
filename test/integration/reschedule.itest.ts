@@ -14,6 +14,7 @@ import {
   raceN,
   recordMatch,
 } from "./factories";
+import { DRAFT_STATUS, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 
 // RELATIVE to now, never a literal date. This was hard-coded to
 // 2026-08-01T19:00Z and went off like a time bomb the moment the wall clock
@@ -21,13 +22,18 @@ import {
 // started failing on a file nobody had touched. A proposal is inherently a
 // future time, so the fixture has to be one too.
 const NIGHT = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+const ORIGINAL_NIGHT = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
 
 /** A two-team season with one scheduled match; returns captains + match. */
 async function setupMatch() {
-  const season = await makeSeason();
+  const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
   const home = await makeTeam(season.id, "Home", 0);
   const away = await makeTeam(season.id, "Away", 1);
-  const [match] = await generateRegularSchedule(season.id);
+  const [created] = await generateRegularSchedule(season.id);
+  const match = await prisma.match.update({
+    where: { id: created.id },
+    data: { scheduledAt: ORIGINAL_NIGHT },
+  });
   return { season, home, away, match };
 }
 
@@ -72,9 +78,9 @@ describe("reschedule service (integration)", () => {
   it("rejects proposals from non-captains and on played matches", async () => {
     const { home, away, match } = await setupMatch();
     const rando = await makeUser("Rando");
-    await expect(
-      proposeReschedule(rando.id, match.id, NIGHT),
-    ).rejects.toThrow(/two captains/);
+    await expect(proposeReschedule(rando.id, match.id, NIGHT)).rejects.toThrow(
+      /two captains/,
+    );
 
     await recordMatch(match.id, 2, 0);
     await expect(
@@ -83,16 +89,90 @@ describe("reschedule service (integration)", () => {
     void away;
   });
 
+  it("rejects a LIVE match — captains negotiate before the series starts", async () => {
+    const { home, match } = await setupMatch();
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: MATCH_STATUS.LIVE },
+    });
+
+    await expect(
+      proposeReschedule(home.captainId, match.id, NIGHT),
+    ).rejects.toThrow(/already live/i);
+    expect(await pendingFor(match.id)).toBeNull();
+  });
+
+  it.each([
+    [SEASON_STATUS.SIGNUPS, null],
+    [SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS],
+    [SEASON_STATUS.COMPLETE, null],
+  ])("rejects a proposal during %s / %s", async (seasonStatus, draftStatus) => {
+    const { season, home, match } = await setupMatch();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: seasonStatus },
+    });
+    if (draftStatus) {
+      await prisma.draft.create({
+        data: { seasonId: season.id, status: draftStatus },
+      });
+    }
+
+    await expect(
+      proposeReschedule(home.captainId, match.id, NIGHT),
+    ).rejects.toThrow(/not open.*league phase/i);
+    expect(await pendingFor(match.id)).toBeNull();
+  });
+
+  it("allows a DRAFT-phase proposal only after the auction completes", async () => {
+    const { season, home, match } = await setupMatch();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.DRAFT },
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+
+    await expect(
+      proposeReschedule(home.captainId, match.id, NIGHT),
+    ).resolves.toMatchObject({ proposedTime: NIGHT });
+  });
+
+  it("rejects proposing the kickoff that is already published", async () => {
+    const { home, match } = await setupMatch();
+
+    await expect(
+      proposeReschedule(home.captainId, match.id, ORIGINAL_NIGHT),
+    ).rejects.toThrow(/already this match's kickoff/i);
+    expect(await pendingFor(match.id)).toBeNull();
+  });
+
+  it("lets an unscheduled fixture receive its first kickoff by agreement", async () => {
+    const { home, away, match } = await setupMatch();
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { scheduledAt: null },
+    });
+
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    const accepted = await respondReschedule(away.captainId, pending!.id, true);
+
+    expect(accepted.accepted).toBe(true);
+    expect(
+      (
+        await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
+      ).scheduledAt?.getTime(),
+    ).toBe(NIGHT.getTime());
+  });
+
   it("opposing captain accepts → match retimed, request ACCEPTED", async () => {
     const { home, away, match } = await setupMatch();
     await proposeReschedule(home.captainId, match.id, NIGHT);
     const pending = await pendingFor(match.id);
 
-    const accepted = await respondReschedule(
-      away.captainId,
-      pending!.id,
-      true,
-    );
+    const accepted = await respondReschedule(away.captainId, pending!.id, true);
     expect(accepted.accepted).toBe(true);
     if (!accepted.accepted) throw new Error("expected an acceptance");
     expect(accepted.newTime.getTime()).toBe(NIGHT.getTime());
@@ -109,6 +189,97 @@ describe("reschedule service (integration)", () => {
     expect(request?.status).toBe("ACCEPTED");
   });
 
+  it("rejects a no-op accept if an admin already moved the match there", async () => {
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { scheduledAt: NIGHT },
+    });
+    await prisma.matchAvailability.create({
+      data: { matchId: match.id, userId: home.captainId, status: "IN" },
+    });
+
+    await expect(
+      respondReschedule(away.captainId, pending!.id, true),
+    ).rejects.toThrow(/already this match's kickoff/i);
+    expect(
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: pending!.id },
+        })
+      ).status,
+    ).toBe("PENDING");
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: match.id } }),
+    ).toBe(1);
+  });
+
+  it("rechecks phase before ACCEPT but still allows DECLINE cleanup", async () => {
+    const { season, home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.COMPLETE },
+    });
+
+    await expect(
+      respondReschedule(away.captainId, pending!.id, true),
+    ).rejects.toThrow(/not open.*league phase/i);
+    expect(
+      (
+        await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
+      ).scheduledAt?.getTime(),
+    ).toBe(ORIGINAL_NIGHT.getTime());
+
+    const declined = await respondReschedule(
+      away.captainId,
+      pending!.id,
+      false,
+    );
+    expect(declined.accepted).toBe(false);
+  });
+
+  it("rechecks match status before ACCEPT but still allows DECLINE cleanup", async () => {
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: MATCH_STATUS.LIVE },
+    });
+
+    await expect(
+      respondReschedule(away.captainId, pending!.id, true),
+    ).rejects.toThrow(/already live/i);
+    const declined = await respondReschedule(
+      away.captainId,
+      pending!.id,
+      false,
+    );
+    expect(declined.accepted).toBe(false);
+  });
+
+  it("rechecks the opposing captain inside the response transaction", async () => {
+    const { home, away, match } = await setupMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    const replacementCaptain = await makeUser("Replacement Away Captain");
+    await prisma.team.update({
+      where: { id: away.id },
+      data: { captainId: replacementCaptain.id },
+    });
+
+    await expect(
+      respondReschedule(away.captainId, pending!.id, false),
+    ).rejects.toThrow(/opposing captain/i);
+    await expect(
+      respondReschedule(replacementCaptain.id, pending!.id, false),
+    ).resolves.toMatchObject({ accepted: false });
+  });
+
   it("proposer cannot accept their own proposal", async () => {
     const { home, match } = await setupMatch();
     await proposeReschedule(home.captainId, match.id, NIGHT);
@@ -120,9 +291,8 @@ describe("reschedule service (integration)", () => {
 
   it("decline keeps the current time and closes the request", async () => {
     const { home, away, match } = await setupMatch();
-    const before = (
-      await prisma.match.findUnique({ where: { id: match.id } })
-    )?.scheduledAt;
+    const before = (await prisma.match.findUnique({ where: { id: match.id } }))
+      ?.scheduledAt;
     await proposeReschedule(home.captainId, match.id, NIGHT);
     const pending = await pendingFor(match.id);
 
@@ -139,8 +309,11 @@ describe("reschedule service (integration)", () => {
       before?.getTime() ?? null,
     );
     expect(
-      (await prisma.rescheduleRequest.findUnique({ where: { id: pending!.id } }))
-        ?.status,
+      (
+        await prisma.rescheduleRequest.findUnique({
+          where: { id: pending!.id },
+        })
+      )?.status,
     ).toBe("DECLINED");
   });
 
@@ -154,8 +327,11 @@ describe("reschedule service (integration)", () => {
     ).rejects.toThrow(/proposer/);
     await cancelReschedule(away.captainId, pending!.id, true); // admin override
     expect(
-      (await prisma.rescheduleRequest.findUnique({ where: { id: pending!.id } }))
-        ?.status,
+      (
+        await prisma.rescheduleRequest.findUnique({
+          where: { id: pending!.id },
+        })
+      )?.status,
     ).toBe("CANCELLED");
   });
 });
@@ -174,7 +350,8 @@ describe("reschedule — claims fire exactly once under contention", () => {
     // can accept days later, retiming the match out from under everyone.
     const { home, away, match } = await setupMatch();
     const res = await raceAll([
-      () => proposeReschedule(home.captainId, match.id, NIGHT).catch(() => null),
+      () =>
+        proposeReschedule(home.captainId, match.id, NIGHT).catch(() => null),
       () =>
         proposeReschedule(
           away.captainId,
@@ -200,11 +377,18 @@ describe("reschedule — claims fire exactly once under contention", () => {
     const first = (await pendingFor(match.id))!;
     await respondReschedule(away.captainId, first.id, false); // DECLINED
 
-    await proposeReschedule(home.captainId, match.id, new Date(NIGHT.getTime() + 864e5));
+    await proposeReschedule(
+      home.captainId,
+      match.id,
+      new Date(NIGHT.getTime() + 864e5),
+    );
 
     expect(
-      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: first.id } }))
-        .status,
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: first.id },
+        })
+      ).status,
     ).toBe("DECLINED");
     expect(
       await prisma.rescheduleRequest.count({
@@ -219,6 +403,9 @@ describe("reschedule — claims fire exactly once under contention", () => {
     // visitor's page view. Stamping a future kickoff on a finished series also
     // wipes its RSVPs and pushes it outside its own detection window.
     for (let run = 0; run < 6; run++) {
+      // Each repetition is a new league fixture; preserve the production
+      // invariant instead of accumulating six active test seasons.
+      await prisma.season.updateMany({ data: { isActive: false } });
       const { home, away, match } = await setupMatch();
       await proposeReschedule(home.captainId, match.id, NIGHT);
       const open = (await pendingFor(match.id))!;
@@ -232,7 +419,8 @@ describe("reschedule — claims fire exactly once under contention", () => {
       // series finishes, then a stale accept tries to move it.
       await raceAll<unknown>([
         () => recordMatch(match.id, 2, 0),
-        () => respondReschedule(away.captainId, open.id, true).catch(() => null),
+        () =>
+          respondReschedule(away.captainId, open.id, true).catch(() => null),
       ]);
 
       const after = await prisma.match.findUniqueOrThrow({
@@ -255,12 +443,16 @@ describe("reschedule — claims fire exactly once under contention", () => {
     );
     expect(res.filter(Boolean)).toHaveLength(1);
     expect(
-      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: open.id } }))
-        .status,
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: open.id },
+        })
+      ).status,
     ).toBe("ACCEPTED");
     expect(
-      (await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
-        .scheduledAt?.getTime(),
+      (
+        await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
+      ).scheduledAt?.getTime(),
     ).toBe(NIGHT.getTime());
   });
 
@@ -276,8 +468,11 @@ describe("reschedule — claims fire exactly once under contention", () => {
     );
     expect(res.filter(Boolean)).toHaveLength(1);
     expect(
-      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: open.id } }))
-        .status,
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: open.id },
+        })
+      ).status,
     ).toBe("DECLINED");
   });
 
@@ -372,6 +567,29 @@ describe("accepting a reschedule reports what it invalidated", () => {
     expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
   });
 
+  it("releases only the retimed week's stamped markers", async () => {
+    const { home, away, match, season } = await withRsvps(1);
+    const weekOneKey = `weekReminder:${season.id}:${match.week}:${match.scheduledAt!.getTime()}`;
+    const weekTenKey = `weekReminder:${season.id}:10:${match.scheduledAt!.getTime()}`;
+    await prisma.setting.createMany({
+      data: [
+        { key: weekOneKey, value: "already-sent" },
+        { key: weekTenKey, value: "unrelated-week" },
+      ],
+    });
+
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await respondReschedule(away.captainId, pending!.id, true);
+
+    expect(
+      await prisma.setting.findUnique({ where: { key: weekOneKey } }),
+    ).toBeNull();
+    expect(
+      await prisma.setting.findUnique({ where: { key: weekTenKey } }),
+    ).not.toBeNull();
+  });
+
   it("leaves the marker alone when the proposal is DECLINED", async () => {
     const { home, away, match, season } = await withRsvps(2);
     const key = `weekReminder:${season.id}:${match.week}`;
@@ -396,11 +614,7 @@ describe("reschedule — archived seasons are read-only for captains", () => {
   // would RETIME it and wipe its RSVPs. Decline stays legal — cleaning up a
   // proposal stranded by the archival only touches the request row.
   async function archivedMatch() {
-    const season = await makeSeason();
-    const home = await makeTeam(season.id, "Home", 0);
-    const away = await makeTeam(season.id, "Away", 1);
-    const [match] = await generateRegularSchedule(season.id);
-    return { season, home, away, match };
+    return setupMatch();
   }
 
   it("refuses a proposal on an archived season's match", async () => {
@@ -440,6 +654,25 @@ describe("reschedule — archived seasons are read-only for captains", () => {
         })
       ).status,
     ).toBe("DECLINED");
+  });
+
+  it("allows the proposer to withdraw a proposal stranded by archival", async () => {
+    const { season, home, match } = await archivedMatch();
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { isActive: false },
+    });
+
+    await cancelReschedule(home.captainId, pending!.id, false);
+    expect(
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: pending!.id },
+        })
+      ).status,
+    ).toBe("CANCELLED");
   });
 });
 

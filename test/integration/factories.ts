@@ -62,6 +62,10 @@ export async function resetDb() {
   // Same relationless shape, and it was already missing — an AdminAction row
   // written by one test was visible to the next.
   await prisma.adminAction.deleteMany();
+  // News survives author deletion by design (onDelete: SetNull), so it must be
+  // cleared explicitly before User or fixture resets leak announcements into
+  // the next lifecycle state.
+  await prisma.newsPost.deleteMany();
   await prisma.game.deleteMany();
   await prisma.standinAssignment.deleteMany();
   await prisma.bid.deleteMany();
@@ -108,6 +112,7 @@ type SeasonOverrides = Partial<{
   teamSize: number;
   minTeams: number;
   draftBudget: number;
+  budgetMmrWeight: number;
   maxMmr: number;
   status: string;
   isActive: boolean;

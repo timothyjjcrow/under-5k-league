@@ -69,6 +69,17 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
       .first(),
   ).toBeVisible();
 
+  // DRAFT is the league chapter, not proof that the auction is already live.
+  // Before Start draft, the dashboard must say setup/waiting rather than tell
+  // every visitor that captains are actively bidding.
+  await page.goto("/");
+  await expect(page.getByText("Draft setup", { exact: true })).toBeVisible();
+  await expect(page.getByText(/draft is being prepared/i)).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "View the draft room →" }),
+  ).toBeVisible();
+  await page.goto("/admin");
+
   const playerContext = await browser.newContext();
   const playerPage = await playerContext.newPage();
   await playerPage.goto(
@@ -110,6 +121,10 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(page.getByText(/Available ·/)).toBeVisible();
   // The auction has the same persisted sound toggle as the inhouse room.
   await expect(page.getByRole("button", { name: /Sound on|Muted/ })).toBeVisible();
+  // Admin recovery travels with the live room; an operator should not have to
+  // leave the clock to pause or correct the auction.
+  await expect(page.getByRole("button", { name: "Pause auction" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Undo last sale" })).toBeVisible();
 
   // --- The live auction, driven from the captains' own browsers ------------
 
@@ -142,12 +157,22 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await capOnePage.getByRole("button", { name: "Nominate", exact: true }).click();
   await expect(capOnePage.getByText("You hold the high bid.")).toBeVisible();
 
-  // Cap Two sees the lot and raises via the quick-bid stepper (which shows
-  // the absolute amount it will submit).
+  // Cap Two sees the lot on a phone-sized room. The bid controls fit without
+  // horizontal overflow, and an exact amount is available alongside quick
+  // raises for captains coordinating a deliberate budget.
+  await capTwoPage.setViewportSize({ width: 375, height: 812 });
   await expect(capTwoPage.getByText(/high bid|opening/).first()).toBeVisible();
-  await capTwoPage
-    .getByRole("button", { name: /Bid \$2/ })
-    .first()
+  const exactBid = capTwoPage.getByLabel("Exact bid amount");
+  await expect(exactBid).toBeVisible();
+  expect(
+    await capTwoPage.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await exactBid.fill("2");
+  await exactBid
+    .locator("..")
+    .getByRole("button", { name: "Bid $2", exact: true })
     .click();
   await expect(capTwoPage.getByText("You hold the high bid.")).toBeVisible();
 

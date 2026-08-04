@@ -1,79 +1,328 @@
-// Back up the league database — the entire multi-season history (games, box
-// scores, Elo, seasons) lives in one database with no other copy, so run this
-// before schema changes and on a habit cadence. Postgres URLs (production /
-// Neon) go through pg_dump; file: URLs (local SQLite) are copied. Output is a
-// timestamped file under backups/ (gitignored).
-//
-//   npm run db:backup                          # backs up DATABASE_URL from .env
-//   DATABASE_URL="postgres://…" npm run db:backup   # back up production
-//
-// For production, paste the Neon DIRECT_URL (not the pooled URL) — pg_dump
-// needs a direct connection. Restore: psql "$URL" < backups/<file>.sql, or for
-// SQLite just copy the .db file back.
+// Back up the complete league database. A backup is assembled under a private
+// temporary name, checksummed, and only then atomically renamed into place, so
+// an interrupted copy/dump cannot masquerade as a usable backup.
+import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createReadStream } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
+import { postgresDatabaseIdentity } from "../src/lib/postgres-identity.mjs";
 
-// Plain `node` doesn't read .env (prisma does its own loading) — parse the two
-// URL keys out ourselves so the documented `npm run db:backup` works from a
-// bare checkout. Explicit env vars always win. (--env-file would be cleaner,
-// but on Node 20 it hard-fails when .env doesn't exist.)
+const LIBPQ_QUERY_ENV = new Map([
+  ["application_name", "PGAPPNAME"],
+  ["channel_binding", "PGCHANNELBINDING"],
+  ["client_encoding", "PGCLIENTENCODING"],
+  ["connect_timeout", "PGCONNECT_TIMEOUT"],
+  ["fallback_application_name", "PGAPPNAME"],
+  ["gssencmode", "PGGSSENCMODE"],
+  ["gsslib", "PGGSSLIB"],
+  ["keepalives", "PGKEEPALIVES"],
+  ["keepalives_count", "PGKEEPALIVESCOUNT"],
+  ["keepalives_idle", "PGKEEPALIVESIDLE"],
+  ["keepalives_interval", "PGKEEPALIVESINTERVAL"],
+  ["krbsrvname", "PGKRBSRVNAME"],
+  ["load_balance_hosts", "PGLOADBALANCEHOSTS"],
+  ["options", "PGOPTIONS"],
+  ["passfile", "PGPASSFILE"],
+  ["requirepeer", "PGREQUIREPEER"],
+  ["sslcert", "PGSSLCERT"],
+  ["sslcrl", "PGSSLCRL"],
+  ["sslcrldir", "PGSSLCRLDIR"],
+  ["sslidentity", "PGSSLKEY"],
+  ["sslkey", "PGSSLKEY"],
+  ["sslmode", "PGSSLMODE"],
+  ["sslrootcert", "PGSSLROOTCERT"],
+  ["sslsni", "PGSSLSNI"],
+  ["ssl_max_protocol_version", "PGSSLMAXPROTOCOLVERSION"],
+  ["ssl_min_protocol_version", "PGSSLMINPROTOCOLVERSION"],
+  ["target_session_attrs", "PGTARGETSESSIONATTRS"],
+  ["tcp_user_timeout", "PGTCPUSERTIMEOUT"],
+]);
+
+// Prisma-only URL parameters do not affect pg_dump. All other parameters must
+// be understood rather than silently producing a backup from the wrong target.
+const PRISMA_ONLY_QUERY_PARAMS = new Set([
+  "connection_limit",
+  "pgbouncer",
+  "pool_timeout",
+  "schema",
+  "socket_timeout",
+  "sslaccept",
+  "sslpassword",
+]);
+
+// Plain `node` does not load .env. Read only the two connection keys needed by
+// this script; explicit process environment variables remain authoritative.
 if (!process.env.DIRECT_URL && !process.env.DATABASE_URL) {
   try {
     const env = readFileSync(path.resolve(process.cwd(), ".env"), "utf8");
     for (const line of env.split("\n")) {
-      const m = line.match(
+      const match = line.match(
         /^\s*(DATABASE_URL|DIRECT_URL)\s*=\s*"?([^"#]+?)"?\s*$/,
       );
-      if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+      if (match && !process.env[match[1]]) process.env[match[1]] = match[2];
     }
   } catch {
-    // no .env — the explicit-env error path below explains what to do
+    // The explicit missing-configuration error below is the useful message.
   }
 }
 
-const raw = process.env.DIRECT_URL || process.env.DATABASE_URL;
-if (!raw) {
+const databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+if (!databaseUrl) {
   console.error("Set DATABASE_URL (or DIRECT_URL) to the database to back up.");
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  try {
+    await createBackup(databaseUrl);
+  } catch (error) {
+    if (error?.code === "ENOENT" && databaseUrl.startsWith("file:")) {
+      console.error(
+        "sqlite3 not found — install the SQLite command-line client to create a consistent online snapshot.",
+      );
+    } else if (error?.code === "ENOENT") {
+      console.error(
+        "pg_dump not found — install a PostgreSQL client at least as new as the server and retry.",
+      );
+    } else {
+      console.error(
+        `Backup failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+    }
+    process.exitCode = 1;
+  }
 }
 
-const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const outDir = process.env.BACKUP_DIR || path.resolve(process.cwd(), "backups");
-mkdirSync(outDir, { recursive: true });
+async function createBackup(raw) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 23);
+  const outDir = process.env.BACKUP_DIR || path.resolve(process.cwd(), "backups");
+  mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  // mkdir's mode is umask-sensitive and does not change an existing directory.
+  chmodSync(outDir, 0o700);
+  normalizeExistingBackupModes(outDir);
 
-if (raw.startsWith("file:")) {
-  // SQLite: the database IS a file — copy it (plus nothing else; WAL is
-  // checkpointed on clean close, and a dev backup doesn't need to be atomic).
-  const dbPath = path.resolve(
+  const sqlite = raw.startsWith("file:");
+  const base = `backup-${stamp}-${process.pid}.${sqlite ? "db" : "sql"}`;
+  const output = path.join(outDir, base);
+  const checksum = `${output}.sha256`;
+  const metadata = `${output}.metadata.json`;
+  const nonce = randomBytes(6).toString("hex");
+  const temporary = path.join(outDir, `.${base}.${nonce}.tmp`);
+  const checksumTemporary = `${temporary}.sha256.tmp`;
+  const metadataTemporary = `${temporary}.metadata.tmp`;
+
+  try {
+    if (sqlite) {
+      const source = sqlitePath(raw);
+      if (!existsSync(source)) throw new Error(`SQLite file not found: ${source}`);
+      // SQLite may be in WAL mode and accepting writes. A byte copy can miss
+      // committed WAL pages or capture files from different instants. The
+      // online backup API takes one coherent snapshot while the source stays
+      // live; then integrity_check validates the artifact, not the source.
+      execFileSync(
+        "sqlite3",
+        ["-cmd", ".timeout 10000", source, `.backup ${JSON.stringify(temporary)}`],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      const integrity = execFileSync(
+        "sqlite3",
+        [temporary, "PRAGMA integrity_check;"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+      if (integrity !== "ok") {
+        throw new Error("SQLite snapshot failed PRAGMA integrity_check");
+      }
+    } else {
+      // Keep credentials out of argv/process listings. PostgreSQL's command-line
+      // clients do not consistently treat a URI stored in PGDATABASE as a
+      // connection string, so translate the URI into libpq's dedicated
+      // environment variables instead.
+      const childEnv = postgresCliEnv(raw);
+      execFileSync(
+        "pg_dump",
+        ["--no-owner", "--no-privileges", `--file=${temporary}`],
+        { stdio: "inherit", env: childEnv },
+      );
+    }
+
+    chmodSync(temporary, 0o600);
+    if (statSync(temporary).size === 0) {
+      throw new Error("the backup command produced an empty file");
+    }
+
+    const digest = await sha256File(temporary);
+    writeFileSync(checksumTemporary, `${digest}  ${base}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    chmodSync(checksumTemporary, 0o600);
+    const databaseIdentity = sqlite
+      ? `sqlite:${createHash("sha256").update(sqlitePath(raw)).digest("hex")}`
+      : postgresDatabaseIdentity(raw);
+    if (!databaseIdentity) {
+      throw new Error("could not identify the database target");
+    }
+    writeFileSync(
+      metadataTemporary,
+      `${JSON.stringify(
+        {
+          formatVersion: 1,
+          artifact: base,
+          artifactType: sqlite
+            ? "sqlite-full-database"
+            : "postgres-full-database",
+          artifactSha256: digest,
+          createdAt: new Date().toISOString(),
+          databaseIdentity,
+        },
+        null,
+        2,
+      )}\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+    chmodSync(metadataTemporary, 0o600);
+
+    // Both temporary files live beside their final names, so each rename is an
+    // atomic publication on the same filesystem. The catch removes a published
+    // first half if the second rename unexpectedly fails.
+    renameSync(temporary, output);
+    renameSync(checksumTemporary, checksum);
+    renameSync(metadataTemporary, metadata);
+
+    console.log(`${sqlite ? "SQLite" : "Postgres"} backup written: ${output}`);
+    console.log(`SHA-256 checksum written: ${checksum}`);
+    console.log(`Backup metadata written: ${metadata}`);
+  } catch (error) {
+    for (const file of [
+      temporary,
+      checksumTemporary,
+      metadataTemporary,
+      output,
+      checksum,
+      metadata,
+    ]) {
+      try {
+        unlinkSync(file);
+      } catch {
+        // Missing is the expected state for whichever publication step did not run.
+      }
+    }
+    throw error;
+  }
+}
+
+function postgresCliEnv(raw) {
+  const parsed = new URL(raw);
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
+    throw new Error("PostgreSQL backup URL must use postgres:// or postgresql://");
+  }
+  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+  if (!parsed.hostname || !parsed.username || !database) {
+    throw new Error("PostgreSQL backup URL must include host, user, and database");
+  }
+
+  const env = { ...process.env };
+  delete env.DATABASE_URL;
+  delete env.DIRECT_URL;
+  for (const variable of [
+    "PGAPPNAME",
+    "PGCHANNELBINDING",
+    "PGCLIENTENCODING",
+    "PGCONNECT_TIMEOUT",
+    "PGDATABASE",
+    "PGGSSENCMODE",
+    "PGGSSLIB",
+    "PGHOST",
+    "PGKEEPALIVES",
+    "PGKEEPALIVESCOUNT",
+    "PGKEEPALIVESIDLE",
+    "PGKEEPALIVESINTERVAL",
+    "PGKRBSRVNAME",
+    "PGLOADBALANCEHOSTS",
+    "PGOPTIONS",
+    "PGPASSFILE",
+    "PGPASSWORD",
+    "PGPORT",
+    "PGREQUIREPEER",
+    "PGSSLCERT",
+    "PGSSLCRL",
+    "PGSSLCRLDIR",
+    "PGSSLKEY",
+    "PGSSLMAXPROTOCOLVERSION",
+    "PGSSLMINPROTOCOLVERSION",
+    "PGSSLMODE",
+    "PGSSLSNI",
+    "PGSSLROOTCERT",
+    "PGTARGETSESSIONATTRS",
+    "PGTCPUSERTIMEOUT",
+    "PGUSER",
+  ]) {
+    delete env[variable];
+  }
+
+  env.PGHOST = parsed.hostname;
+  env.PGDATABASE = database;
+  env.PGUSER = decodeURIComponent(parsed.username);
+  if (parsed.port) env.PGPORT = parsed.port;
+  if (parsed.password) env.PGPASSWORD = decodeURIComponent(parsed.password);
+
+  for (const [key, value] of parsed.searchParams) {
+    const variable = LIBPQ_QUERY_ENV.get(key);
+    if (variable) {
+      env[variable] = value;
+    } else if (!PRISMA_ONLY_QUERY_PARAMS.has(key)) {
+      throw new Error(`unsupported PostgreSQL backup URL parameter: ${key}`);
+    }
+  }
+  return env;
+}
+
+function normalizeExistingBackupModes(outDir) {
+  for (const entry of readdirSync(outDir)) {
+    if (!/^backup-.+\.(?:db|sql)(?:\.sha256|\.metadata\.json)?$/.test(entry)) {
+      continue;
+    }
+    const file = path.join(outDir, entry);
+    const info = lstatSync(file);
+    if (!info.isFile()) {
+      throw new Error(
+        `refusing non-regular backup path ${file}; remove it before retrying`,
+      );
+    }
+    chmodSync(file, 0o600);
+  }
+}
+
+function sqlitePath(raw) {
+  const value = decodeURIComponent(raw.replace(/^file:/, "").split("?")[0]);
+  const prismaRelative = path.resolve(
     process.cwd(),
     "prisma",
-    raw.replace(/^file:/, "").replace(/^\.\//, ""),
+    value.replace(/^\.\//, ""),
   );
-  const src = existsSync(dbPath)
-    ? dbPath
-    : path.resolve(process.cwd(), raw.replace(/^file:/, ""));
-  if (!existsSync(src)) {
-    console.error(`SQLite file not found: ${src}`);
-    process.exit(1);
-  }
-  const out = path.join(outDir, `backup-${stamp}.db`);
-  copyFileSync(src, out);
-  console.log(`SQLite backup written: ${out}`);
-} else {
-  const out = path.join(outDir, `backup-${stamp}.sql`);
-  try {
-    execFileSync("pg_dump", ["--no-owner", "--no-privileges", `--file=${out}`, raw], {
-      stdio: "inherit",
-    });
-  } catch (e) {
-    if (e.code === "ENOENT") {
-      console.error(
-        "pg_dump not found — install postgresql (brew install postgresql) and retry.",
-      );
-      process.exit(1);
-    }
-    throw e;
-  }
-  console.log(`Postgres backup written: ${out}`);
+  return existsSync(prismaRelative)
+    ? prismaRelative
+    : path.resolve(process.cwd(), value);
+}
+
+async function sha256File(file) {
+  const hash = createHash("sha256");
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream(file);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+  return hash.digest("hex");
 }

@@ -3,6 +3,7 @@ import {
   clinchStatuses,
   computeStandings,
   headToHeadRanks,
+  playedSeriesFinalError,
   standingsMovement,
   seriesScoreError,
   type MatchLike,
@@ -128,13 +129,43 @@ describe("seriesScoreError", () => {
   });
 });
 
+describe("playedSeriesFinalError", () => {
+  it.each([
+    [1, 1, 0],
+    [2, 1, 1],
+    [2, 2, 0],
+    [3, 2, 0],
+    [3, 2, 1],
+    [5, 3, 2],
+  ])("accepts a completed best-of-%i at %i-%i", (bestOf, home, away) => {
+    expect(playedSeriesFinalError(bestOf, home, away)).toBeNull();
+  });
+
+  it.each([
+    [2, 1, 0],
+    [2, 0, 0],
+    [3, 1, 0],
+    [3, 1, 1],
+    [5, 2, 1],
+  ])("rejects an unfinished best-of-%i at %i-%i", (bestOf, home, away) => {
+    expect(playedSeriesFinalError(bestOf, home, away)).toMatch(
+      /forfeit|ruling/i,
+    );
+  });
+});
+
 describe("clinchStatuses", () => {
   // 4 teams, top 2 make playoffs. Helper: unplayed match.
   const open = (home: string, away: string) =>
     match(home, away, 0, 0, { status: "SCHEDULED" });
 
   it("marks nothing early in the season", () => {
-    const matches = [match("a", "b", 2, 0), open("c", "d"), open("a", "c"), open("b", "d")];
+    const matches = [
+      match("a", "b", 2, 0),
+      open("c", "d"),
+      open("a", "c"),
+      open("b", "d"),
+    ];
     const s = computeStandings(["a", "b", "c", "d"], matches);
     const c = clinchStatuses(s, matches, 2);
     for (const id of ["a", "b", "c", "d"]) expect(c.get(id)).toBeNull();
@@ -205,7 +236,12 @@ describe("clinchStatuses", () => {
     // size, nobody can miss the bracket, so every team "clinches" on day one.
     // The UI relies on the adapters' cutIsReal/totalTeams guard to hide this —
     // see StandingsTable in src/app/page.tsx.
-    const matches = [open("a", "b"), open("c", "d"), open("a", "c"), open("b", "d")];
+    const matches = [
+      open("a", "b"),
+      open("c", "d"),
+      open("a", "c"),
+      open("b", "d"),
+    ];
     const s = computeStandings(["a", "b", "c", "d"], matches);
     const c = clinchStatuses(s, matches, 4);
     for (const id of ["a", "b", "c", "d"]) expect(c.get(id)).toBe("CLINCHED");
@@ -543,10 +579,7 @@ describe("computeStandings — forfeits are ruled, not played", () => {
     // forfeit) but the ruled scores never feed the mini-diff.
     const ranks = headToHeadRanks(
       ["a", "b"],
-      [
-        { ...match("a", "b", 2, 0), forfeit: true },
-        match("b", "a", 1, 1),
-      ],
+      [{ ...match("a", "b", 2, 0), forfeit: true }, match("b", "a", 1, 1)],
     );
     expect(ranks.get("a")).toBe(0); // forfeit WIN still orders the pair…
     expect(ranks.get("b")).toBe(1);

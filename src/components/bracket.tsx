@@ -4,13 +4,14 @@
 // wings converge on a center grand final crowned by the trophy. Server pages
 // build a serializable BracketRound[] via bracketSkeleton() and pass it down;
 // mirrorLayout() splits it into wings, this component draws the connectors
-// (TBD slots for rounds that don't exist yet) and lets the viewer tap/hover a
-// team to light up its path to the final.
+// (TBD slots for rounds that don't exist yet) and lets the viewer select,
+// hover, or focus a team to light up its path to the final.
 
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import Link from "next/link";
 import { TeamCrest } from "@/components/ui";
 import { LocalTime } from "@/components/local-time";
+import { MATCH_STATUS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import {
   mirrorLayout,
@@ -22,7 +23,10 @@ import {
 type TraceProps = {
   championTeamId: string | null;
   tracedTeam: string | null;
-  onTrace: (teamId: string | null) => void;
+  selectedTeam: string | null;
+  onSelect: (teamId: string | null) => void;
+  onHover: (teamId: string | null) => void;
+  onFocus: (teamId: string | null) => void;
 };
 
 export function Bracket({
@@ -32,15 +36,63 @@ export function Bracket({
   rounds: BracketRound[];
   championTeamId: string | null;
 }) {
-  // Tap/hover a team anywhere to trace its run through the bracket.
-  const [tracedTeam, setTracedTeam] = useState<string | null>(null);
+  // Selection persists after a tap/click. Pointer and keyboard previews are
+  // tracked separately so leaving one input mode restores the other instead
+  // of unexpectedly clearing a deliberate selection.
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+  const [hoveredTeam, setHoveredTeam] = useState<string | null>(null);
+  const [focusedTeam, setFocusedTeam] = useState<string | null>(null);
+  const tracedTeam = hoveredTeam ?? focusedTeam ?? selectedTeam;
+  const cueId = useId();
+  const scrollRef = useRef<HTMLDivElement>(null);
   const layout = mirrorLayout(rounds);
   if (!layout) return null;
   const { left, right, final, finalName } = layout;
-  const trace: TraceProps = { championTeamId, tracedTeam, onTrace: setTracedTeam };
+  // Treat the id as a claim, not proof. Public pages resolve it against the
+  // raw bracket first; this client-side boundary repeats the final-series
+  // invariant so a stale caller cannot light the trophy or badge a finalist
+  // who did not actually win this completed grand final.
+  const presentedChampionTeamId =
+    championTeamId != null &&
+    final?.completed === true &&
+    final.winnerTeamId === championTeamId &&
+    (final.home?.teamId === championTeamId ||
+      final.away?.teamId === championTeamId)
+      ? championTeamId
+      : null;
+  const trace: TraceProps = {
+    championTeamId: presentedChampionTeamId,
+    tracedTeam,
+    selectedTeam,
+    onSelect: setSelectedTeam,
+    onHover: setHoveredTeam,
+    onFocus: (teamId) => {
+      setFocusedTeam(teamId);
+      // A stationary pointer must not mask the team reached by keyboard tab.
+      if (teamId != null) setHoveredTeam(null);
+    },
+  };
 
   return (
-    <div className="overflow-x-auto pb-2">
+    <div
+      ref={scrollRef}
+      role="region"
+      aria-label="Playoff bracket"
+      aria-describedby={cueId}
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const reduceMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+        scrollRef.current?.scrollBy({
+          left: event.key === "ArrowLeft" ? -240 : 240,
+          behavior: reduceMotion ? "auto" : "smooth",
+        });
+      }}
+      className="overflow-x-auto rounded-lg pb-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+    >
       <div className="flex min-w-max items-stretch">
         {left.map((round, c) => (
           <WingColumn
@@ -72,8 +124,9 @@ export function Bracket({
           );
         })}
       </div>
-      <p className="mt-1 px-4 text-center text-xs text-muted">
-        Tap a team to trace its bracket run.
+      <p id={cueId} className="mt-1 px-4 text-center text-xs text-muted">
+        Swipe or scroll sideways to explore every round. Keyboard: focus the
+        bracket, then use ← and →. Focus or select a team to trace its run.
       </p>
     </div>
   );
@@ -121,7 +174,10 @@ function WingColumn({
             {receives ? (
               <span
                 aria-hidden
-                className={cn("absolute top-1/2 w-4 border-t border-line", inEdge)}
+                className={cn(
+                  "absolute top-1/2 w-4 border-t border-line",
+                  inEdge,
+                )}
               />
             ) : null}
             {m ? (
@@ -131,7 +187,10 @@ function WingColumn({
             )}
             <span
               aria-hidden
-              className={cn("absolute top-1/2 w-4 border-t border-line", outEdge)}
+              className={cn(
+                "absolute top-1/2 w-4 border-t border-line",
+                outEdge,
+              )}
             />
             {!inner ? (
               // Half-height vertical that meets the sibling's half at the pair
@@ -193,7 +252,9 @@ function FinalColumn({
             title={crowned ? "Champion crowned" : "The trophy awaits"}
             className={cn(
               "pointer-events-none absolute inset-x-0 bottom-[calc(50%+3.1rem)] text-center text-4xl transition-all",
-              crowned ? "drop-shadow-[0_0_14px_rgba(251,191,36,0.45)]" : "opacity-40 grayscale",
+              crowned
+                ? "drop-shadow-[0_0_14px_rgba(251,191,36,0.45)]"
+                : "opacity-40 grayscale",
             )}
           >
             🏆
@@ -212,11 +273,11 @@ function FinalColumn({
 function TbdCard() {
   return (
     <div className="min-w-0 flex-1 rounded-lg border border-dashed border-line/80 px-3 py-2">
-      <div className="space-y-1 text-sm italic text-muted/70">
+      <div className="space-y-1 text-sm italic text-muted">
         <div>TBD</div>
         <div>TBD</div>
       </div>
-      <div className="pt-1 text-xs text-muted/60">Winners advance</div>
+      <div className="pt-1 text-xs text-muted">Winners advance</div>
     </div>
   );
 }
@@ -232,7 +293,19 @@ function MatchCard({
 }) {
   const traced =
     trace.tracedTeam != null &&
-    (m.home?.teamId === trace.tracedTeam || m.away?.teamId === trace.tracedTeam);
+    (m.home?.teamId === trace.tracedTeam ||
+      m.away?.teamId === trace.tracedTeam);
+  const live = m.status === MATCH_STATUS.LIVE;
+  const homeName = m.home?.name ?? "TBD";
+  const awayName = m.away?.name ?? "TBD";
+  const matchState = live
+    ? `live at ${m.homeScore} to ${m.awayScore}`
+    : m.completed
+      ? `final at ${m.homeScore} to ${m.awayScore}`
+      : m.when
+        ? `scheduled for ${m.when}`
+        : "details available";
+  const matchLinkLabel = `${isFinal ? "Grand final" : "Playoff match"}: ${homeName} versus ${awayName}, ${matchState}, best of ${m.bestOf}. View match details`;
   return (
     <div
       className={cn(
@@ -245,6 +318,7 @@ function MatchCard({
         side={m.home}
         score={m.homeScore}
         completed={m.completed}
+        showScore={m.completed || live}
         won={m.home != null && m.winnerTeamId === m.home.teamId}
         isChampion={
           m.home != null && m.home.teamId === trace.championTeamId && isFinal
@@ -255,6 +329,7 @@ function MatchCard({
         side={m.away}
         score={m.awayScore}
         completed={m.completed}
+        showScore={m.completed || live}
         won={m.away != null && m.winnerTeamId === m.away.teamId}
         isChampion={
           m.away != null && m.away.teamId === trace.championTeamId && isFinal
@@ -263,15 +338,28 @@ function MatchCard({
       />
       <Link
         href={`/matches/${m.id}`}
-        className="flex items-center justify-between gap-2 px-1 pt-1 text-xs text-muted hover:text-info"
+        aria-label={matchLinkLabel}
+        className="flex items-center justify-between gap-2 rounded px-1 pt-1 text-xs text-muted hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
       >
         <span className="truncate">
-          {m.completed ? (
+          {live ? (
+            <span
+              role="status"
+              aria-label={`Live series — ${m.homeScore}–${m.awayScore}`}
+              className="inline-flex items-center gap-1.5 font-medium text-danger"
+            >
+              <span aria-hidden className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-danger" />
+              </span>
+              LIVE
+            </span>
+          ) : m.completed ? (
             "Box score"
           ) : m.when && m.whenTs != null ? (
             <LocalTime ts={m.whenTs} variant="short" initial={m.when} />
           ) : (
-            m.when ?? "Details"
+            (m.when ?? "Details")
           )}
         </span>
         <span className="shrink-0">Bo{m.bestOf} →</span>
@@ -284,6 +372,7 @@ function TeamRow({
   side,
   score,
   completed,
+  showScore,
   won,
   isChampion,
   trace,
@@ -291,27 +380,32 @@ function TeamRow({
   side: BracketSide | null;
   score: number;
   completed: boolean;
+  showScore: boolean;
   won: boolean;
   isChampion: boolean;
   trace: TraceProps;
 }) {
   if (!side) {
     return (
-      <div className="flex items-center gap-2 rounded-md px-1 py-1 text-sm italic text-muted/70">
+      <div className="flex items-center gap-2 rounded-md px-1 py-1 text-sm italic text-muted">
         <span className="w-4 shrink-0" />
         TBD
       </div>
     );
   }
   const traced = trace.tracedTeam === side.teamId;
+  const selected = trace.selectedTeam === side.teamId;
   return (
     <button
       type="button"
-      aria-pressed={traced}
+      aria-pressed={selected}
+      aria-label={`${selected ? "Stop tracing" : "Trace"} ${side.name}${side.seed != null ? `, seed ${side.seed}` : ""}${showScore ? `, score ${score}` : ""}${isChampion ? ", champion" : completed && won ? ", match winner" : ""} through the playoff bracket`}
       title={`Trace ${side.name}'s bracket run`}
-      onClick={() => trace.onTrace(traced ? null : side.teamId)}
-      onMouseEnter={() => trace.onTrace(side.teamId)}
-      onMouseLeave={() => trace.onTrace(null)}
+      onClick={() => trace.onSelect(selected ? null : side.teamId)}
+      onMouseEnter={() => trace.onHover(side.teamId)}
+      onMouseLeave={() => trace.onHover(null)}
+      onFocus={() => trace.onFocus(side.teamId)}
+      onBlur={() => trace.onFocus(null)}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-sm",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60",
@@ -336,7 +430,7 @@ function TeamRow({
           🏆
         </span>
       ) : null}
-      {completed ? (
+      {showScore ? (
         <span
           className={cn(
             "shrink-0 font-mono text-xs tabular-nums",

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
   requireAdmin: vi.fn(),
@@ -31,6 +32,7 @@ import {
   makeSeason,
   makeTeam,
   makeUser,
+  ON_POSTGRES,
   recordMatch,
 } from "./factories";
 
@@ -42,6 +44,13 @@ function fd(fields: Record<string, string>): FormData {
   return f;
 }
 
+function teamFd(team: { id: string; seasonId: string }): FormData {
+  return fd({
+    teamId: team.id,
+    expectedActiveSeasonId: team.seasonId,
+  });
+}
+
 async function midSeason(teamCount = 4) {
   const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
   const teams = [];
@@ -50,6 +59,67 @@ async function midSeason(teamCount = 4) {
   }
   const matches = await generateRegularSchedule(season.id);
   return { season, teams, matches };
+}
+
+const WITHDRAW_STATUS_TRIGGER = "test_withdraw_status_claim";
+const WITHDRAW_STATUS_FUNCTION = "test_withdraw_status_claim_fn";
+
+function safePgId(value: string): string {
+  if (!/^[a-z0-9_-]+$/i.test(value)) {
+    throw new Error("test fixture id is not safe for PostgreSQL DDL");
+  }
+  return value;
+}
+
+async function dropWithdrawStatusTrigger() {
+  await prisma.$executeRawUnsafe(
+    `DROP TRIGGER IF EXISTS "${WITHDRAW_STATUS_TRIGGER}" ON "Team"`,
+  );
+  await prisma.$executeRawUnsafe(
+    `DROP FUNCTION IF EXISTS "${WITHDRAW_STATUS_FUNCTION}"()`,
+  );
+}
+
+/**
+ * Deterministically change one Match inside withdrawTeam's transaction after
+ * its open-match read but before its per-match updateMany claim. An AFTER
+ * trigger on the preceding Team flag write is a PostgreSQL-only test seam: it
+ * avoids timing sleeps and makes the final status predicate independently
+ * observable rather than relying on the earlier read filter.
+ */
+async function installWithdrawStatusTrigger(input: {
+  teamId: string;
+  matchId: string;
+  winnerTeamId: string;
+  homeScore: number;
+  awayScore: number;
+}) {
+  const teamId = safePgId(input.teamId);
+  const matchId = safePgId(input.matchId);
+  const winnerTeamId = safePgId(input.winnerTeamId);
+  await dropWithdrawStatusTrigger();
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION "${WITHDRAW_STATUS_FUNCTION}"() RETURNS trigger
+    LANGUAGE plpgsql AS $body$
+    BEGIN
+      IF NEW."id" = '${teamId}' AND NEW."withdrawn" = TRUE AND OLD."withdrawn" = FALSE THEN
+        UPDATE "Match"
+        SET "status" = '${MATCH_STATUS.COMPLETED}',
+            "forfeit" = FALSE,
+            "homeScore" = ${input.homeScore},
+            "awayScore" = ${input.awayScore},
+            "winnerTeamId" = '${winnerTeamId}'
+        WHERE "id" = '${matchId}';
+      END IF;
+      RETURN NEW;
+    END;
+    $body$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER "${WITHDRAW_STATUS_TRIGGER}"
+    AFTER UPDATE OF "withdrawn" ON "Team"
+    FOR EACH ROW EXECUTE FUNCTION "${WITHDRAW_STATUS_FUNCTION}"()
+  `);
 }
 
 describe("withdrawTeam", () => {
@@ -76,7 +146,7 @@ describe("withdrawTeam", () => {
     });
     mockSend.mockClear();
 
-    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+    const res = await withdrawTeam(null, teamFd(quitter));
 
     expect(res).toMatchObject({
       message: expect.stringMatching(/withdrawn · 2 fixture\(s\) forfeited/),
@@ -131,17 +201,80 @@ describe("withdrawTeam", () => {
   it("is REGULAR_SEASON-only, with the right pointer per phase", async () => {
     const { teams } = await midSeason();
     await prisma.season.updateMany({ data: { status: SEASON_STATUS.SIGNUPS } });
-    const early = await withdrawTeam(null, fd({ teamId: teams[0].id }));
+    const early = await withdrawTeam(null, teamFd(teams[0]));
     expect(early).toMatchObject({
       error: expect.stringMatching(/remove the captain/i),
     });
     await prisma.season.updateMany({
       data: { status: SEASON_STATUS.PLAYOFFS },
     });
-    const late = await withdrawTeam(null, fd({ teamId: teams[0].id }));
+    const late = await withdrawTeam(null, teamFd(teams[0]));
     expect(late).toMatchObject({
       error: expect.stringMatching(/Save as final/),
     });
+  });
+
+  it("refuses a stale control after the active season changes", async () => {
+    const { teams } = await midSeason();
+    const staleTeam = teams[0];
+    await prisma.season.update({
+      where: { id: staleTeam.seasonId },
+      data: { isActive: false },
+    });
+    await makeSeason({
+      name: "Replacement season",
+      status: SEASON_STATUS.REGULAR_SEASON,
+    });
+
+    const res = await withdrawTeam(null, teamFd(staleTeam));
+
+    expect(res).toMatchObject({
+      error: expect.stringMatching(/active season changed/i),
+    });
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: staleTeam.id } }))
+        .withdrawn,
+    ).toBe(false);
+    expect(
+      await prisma.adminAction.count({ where: { action: "withdrawTeam" } }),
+    ).toBe(0);
+  });
+
+  it("a phase change before the write refuses the stale withdrawal atomically", async () => {
+    const { season, teams, matches } = await midSeason();
+    const quitter = teams[0];
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.withdrawTeam.beforeTx", async () => {
+        fired = true;
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { status: SEASON_STATUS.PLAYOFFS },
+        });
+      }),
+    );
+
+    const res = await withdrawTeam(null, teamFd(quitter));
+
+    expect(fired).toBe(true);
+    expect(res).toMatchObject({
+      error: expect.stringMatching(/phase changed/i),
+    });
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: quitter.id } }))
+        .withdrawn,
+    ).toBe(false);
+    expect(
+      await prisma.match.count({
+        where: {
+          id: { in: matches.map((match) => match.id) },
+          forfeit: true,
+        },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.adminAction.count({ where: { action: "withdrawTeam" } }),
+    ).toBe(0);
   });
 
   it("a withdrawn team is excluded from playoff seeding, whatever it banked", async () => {
@@ -154,7 +287,7 @@ describe("withdrawTeam", () => {
       if (home) await recordMatch(m.id, 2, 0);
       else if (away) await recordMatch(m.id, 0, 2);
     }
-    await withdrawTeam(null, fd({ teamId: quitter.id }));
+    await withdrawTeam(null, teamFd(quitter));
     // Finish the rest of the slate for real.
     for (const m of matches) {
       const row = await prisma.match.findUniqueOrThrow({ where: { id: m.id } });
@@ -179,11 +312,11 @@ describe("withdrawTeam", () => {
   it("reinstateTeam flips the flag back (and only when withdrawn)", async () => {
     const { teams } = await midSeason();
     const target = teams[1];
-    expect(await reinstateTeam(null, fd({ teamId: target.id }))).toMatchObject({
+    expect(await reinstateTeam(null, teamFd(target))).toMatchObject({
       error: expect.stringMatching(/isn't withdrawn/i),
     });
-    await withdrawTeam(null, fd({ teamId: target.id }));
-    const res = await reinstateTeam(null, fd({ teamId: target.id }));
+    await withdrawTeam(null, teamFd(target));
+    const res = await reinstateTeam(null, teamFd(target));
     expect(res).toMatchObject({
       message: expect.stringMatching(/reinstated/i),
     });
@@ -191,6 +324,68 @@ describe("withdrawTeam", () => {
       (await prisma.team.findUniqueOrThrow({ where: { id: target.id } }))
         .withdrawn,
     ).toBe(false);
+    expect(
+      await prisma.adminAction.count({ where: { action: "reinstateTeam" } }),
+    ).toBe(1);
+  });
+
+  it("keeps reinstatement locked after playoff seeding", async () => {
+    const { season, teams } = await midSeason();
+    const target = teams[0];
+    await prisma.team.update({
+      where: { id: target.id },
+      data: { withdrawn: true },
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.PLAYOFFS },
+    });
+
+    const res = await reinstateTeam(null, teamFd(target));
+
+    expect(res).toMatchObject({
+      error: expect.stringMatching(/bracket is already seeded/i),
+    });
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: target.id } }))
+        .withdrawn,
+    ).toBe(true);
+    expect(
+      await prisma.adminAction.count({ where: { action: "reinstateTeam" } }),
+    ).toBe(0);
+  });
+
+  it("a phase change before the write refuses stale reinstatement atomically", async () => {
+    const { season, teams } = await midSeason();
+    const target = teams[0];
+    await prisma.team.update({
+      where: { id: target.id },
+      data: { withdrawn: true },
+    });
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.reinstateTeam.beforeTx", async () => {
+        fired = true;
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { status: SEASON_STATUS.COMPLETE },
+        });
+      }),
+    );
+
+    const res = await reinstateTeam(null, teamFd(target));
+
+    expect(fired).toBe(true);
+    expect(res).toMatchObject({
+      error: expect.stringMatching(/phase changed/i),
+    });
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: target.id } }))
+        .withdrawn,
+    ).toBe(true);
+    expect(
+      await prisma.adminAction.count({ where: { action: "reinstateTeam" } }),
+    ).toBe(0);
   });
 
   it("a REAL result landing mid-withdrawal wins — the forfeit claim is skipped", async () => {
@@ -215,7 +410,7 @@ describe("withdrawTeam", () => {
       }),
     );
 
-    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+    const res = await withdrawTeam(null, teamFd(quitter));
 
     expect(fired).toBe(true);
     // The real result STANDS — not overwritten by the forfeit ruling.
@@ -230,6 +425,49 @@ describe("withdrawTeam", () => {
     });
   });
 
+  it.runIf(ON_POSTGRES)(
+    "the per-match status claim preserves a result written after the open-set read",
+    async () => {
+      // The existing beforeTx seam completes the match before `open` is read,
+      // so that test remains green if the final updateMany status predicate is
+      // deleted. This trigger fires on the preceding Team flag update: `open`
+      // already contains the match, but the claim must now observe COMPLETED.
+      const { teams, matches } = await midSeason();
+      const quitter = teams[0];
+      const sniped = matches.find(
+        (match) =>
+          match.homeTeamId === quitter.id || match.awayTeamId === quitter.id,
+      )!;
+      const asHome = sniped.homeTeamId === quitter.id;
+      await installWithdrawStatusTrigger({
+        teamId: quitter.id,
+        matchId: sniped.id,
+        winnerTeamId: quitter.id,
+        homeScore: asHome ? 2 : 0,
+        awayScore: asHome ? 0 : 2,
+      });
+
+      let result;
+      try {
+        result = await withdrawTeam(null, teamFd(quitter));
+      } finally {
+        await dropWithdrawStatusTrigger();
+      }
+
+      const preserved = await prisma.match.findUniqueOrThrow({
+        where: { id: sniped.id },
+      });
+      expect(preserved.status).toBe(MATCH_STATUS.COMPLETED);
+      expect(preserved.forfeit).toBe(false);
+      expect(preserved.winnerTeamId).toBe(quitter.id);
+      expect(preserved.homeScore).toBe(asHome ? 2 : 0);
+      expect(preserved.awayScore).toBe(asHome ? 0 : 2);
+      expect(result).toMatchObject({
+        message: expect.stringMatching(/completed for real while you clicked/),
+      });
+    },
+  );
+
   it("withdrawing twice is refused by the CLAIM, not a read-time check", async () => {
     // There is deliberately no read-time `if (team.withdrawn)` — it would be
     // strictly weaker (the forfeit legs would still run) and would make the
@@ -237,14 +475,14 @@ describe("withdrawTeam", () => {
     // red, which is the whole point.
     const { teams, matches } = await midSeason();
     const quitter = teams[0];
-    await withdrawTeam(null, fd({ teamId: quitter.id }));
+    await withdrawTeam(null, teamFd(quitter));
     const scoresAfterFirst = await prisma.match.findMany({
       where: { id: { in: matches.map((m) => m.id) } },
       select: { id: true, homeScore: true, awayScore: true, forfeit: true },
       orderBy: { id: "asc" },
     });
 
-    const again = await withdrawTeam(null, fd({ teamId: quitter.id }));
+    const again = await withdrawTeam(null, teamFd(quitter));
 
     expect(again).toMatchObject({
       error: expect.stringMatching(/already withdrawn/i),
@@ -283,7 +521,7 @@ describe("withdrawTeam", () => {
       },
     });
 
-    await withdrawTeam(null, fd({ teamId: quitter.id }));
+    await withdrawTeam(null, teamFd(quitter));
 
     // The ACCEPTED record of what the captains agreed is history — rewriting
     // it to CANCELLED would erase why the fixture moved.
@@ -338,7 +576,7 @@ describe("withdrawTeam — booked standins are stood down with their fixtures", 
     await bookCover(doomed.id, quitter.id, "Moot Cover", "800000000000000001");
     mockSend.mockClear();
 
-    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+    const res = await withdrawTeam(null, teamFd(quitter));
 
     const standDown = mockSend.mock.calls.find(([m]) =>
       String(m).includes("stand down"),
@@ -369,7 +607,7 @@ describe("withdrawTeam — booked standins are stood down with their fixtures", 
     await bookCover(doomed.id, opponentId, "Rival Cover", "800000000000000002");
     mockSend.mockClear();
 
-    await withdrawTeam(null, fd({ teamId: quitter.id }));
+    await withdrawTeam(null, teamFd(quitter));
 
     const standDown = mockSend.mock.calls.find(([m]) =>
       String(m).includes("stand down"),
@@ -396,7 +634,7 @@ describe("withdrawTeam — booked standins are stood down with their fixtures", 
     await bookCover(played.id, quitter.id, "Played Cover", "800000000000000003");
     mockSend.mockClear();
 
-    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+    const res = await withdrawTeam(null, teamFd(quitter));
 
     expect(
       mockSend.mock.calls.some(([m]) => String(m).includes("stand down")),
@@ -435,7 +673,7 @@ describe("withdrawTeam — booked standins are stood down with their fixtures", 
     );
     mockSend.mockClear();
 
-    const res = await withdrawTeam(null, fd({ teamId: quitter.id }));
+    const res = await withdrawTeam(null, teamFd(quitter));
 
     expect(fired).toBe(true);
     const standDowns = mockSend.mock.calls.filter(([m]) =>

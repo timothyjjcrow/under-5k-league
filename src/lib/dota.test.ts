@@ -17,6 +17,9 @@ describe("steamIdToAccountId", () => {
   it("returns null for values below the Steam64 base or non-numeric", () => {
     expect(steamIdToAccountId("123")).toBeNull();
     expect(steamIdToAccountId("not-a-number")).toBeNull();
+    expect(
+      steamIdToAccountId(accountIdToSteamId64(0x100000000)),
+    ).toBeNull();
   });
 });
 
@@ -81,6 +84,9 @@ describe("parseAccountId", () => {
   });
   it("accepts the 32-bit boundary and rejects garbage", () => {
     expect(parseAccountId("4294967295")).toBe(4294967295);
+    expect(
+      steamIdToAccountId(accountIdToSteamId64(0xffffffff)),
+    ).toBe(0xffffffff);
     expect(parseAccountId("no digits here")).toBeNull();
   });
 });

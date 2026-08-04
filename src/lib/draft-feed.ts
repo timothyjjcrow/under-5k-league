@@ -74,11 +74,70 @@ export type FeedSeedSnapshot = FeedSnapshot & {
   recentSales: { name: string; teamName: string; price: number }[];
 };
 
+/** The lifecycle slice used to decide whether an accumulated client feed is
+ * still describing the authoritative auction. */
+export type FeedResetSnapshot = Pick<FeedSnapshot, "teams" | "nominatedPlayer"> & {
+  status: string;
+};
+
+export type DraftFeedResetReason =
+  | "auction-reset"
+  | "auction-reopened"
+  | "lot-voided"
+  | "roster-retracted";
+
 /** How many lines the feed keeps. */
 export const FEED_MAX = 12;
 
 const teamName = (s: FeedSnapshot, id: string | null) =>
   s.teams.find((t) => t.id === id)?.name ?? "—";
+
+/**
+ * Why an append-only feed must be discarded and reconstructed from the latest
+ * server snapshot, or null when it remains valid.
+ *
+ * Ordinary transitions only add facts, but recovery actions do the opposite:
+ * Abort returns the auction to NOT_STARTED, while Undo/roster correction removes
+ * a purchased player. Keeping the old client log then asserts a voided sale is
+ * still real, and an abort followed by Start leaks the previous run's prices
+ * into the new auction. COMPLETE → IN_PROGRESS is called out independently as
+ * defence in depth for a reopened draft, even if a malformed/intermediate
+ * payload does not expose the expected roster removal.
+ */
+export function draftFeedResetReason(
+  prev: FeedResetSnapshot,
+  next: FeedResetSnapshot,
+): DraftFeedResetReason | null {
+  if (next.status === "NOT_STARTED" && prev.status !== "NOT_STARTED") {
+    return "auction-reset";
+  }
+  if (prev.status === "COMPLETE" && next.status === "IN_PROGRESS") {
+    return "auction-reopened";
+  }
+  if (
+    prev.nominatedPlayer &&
+    !next.nominatedPlayer &&
+    next.status === "PAUSED"
+  ) {
+    return "lot-voided";
+  }
+
+  const nextRostered = new Set(
+    next.teams.flatMap((t) => t.members.map((m) => m.userId)),
+  );
+  const purchaseRetracted = prev.teams.some((t) =>
+    t.members.some((m) => !m.isCaptain && !nextRostered.has(m.userId)),
+  );
+  return purchaseRetracted ? "roster-retracted" : null;
+}
+
+/** Boolean convenience for consumers that only need to know whether to reset. */
+export function draftFeedInvalidated(
+  prev: FeedResetSnapshot,
+  next: FeedResetSnapshot,
+): boolean {
+  return draftFeedResetReason(prev, next) !== null;
+}
 
 /**
  * The feed as reconstructed from the FIRST payload after a page load: the live

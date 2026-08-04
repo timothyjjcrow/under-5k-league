@@ -1,9 +1,14 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 
 // Tiny key-value store (the `Setting` model) for league-global config that an
 // admin edits at runtime — anything per-season belongs on `Season` instead.
 
 export const SETTING_KEYS = {
+  // Immutable winner of zero-config admin bootstrap. The atomic upsert is the
+  // concurrency guard: two simultaneous first Steam logins can both observe
+  // an empty User table, but only the SteamID stored here becomes admin.
+  BOOTSTRAP_ADMIN_STEAM_ID: "bootstrapAdminSteamId",
   DISCORD_WEBHOOK_URL: "discordWebhookUrl",
   // OPTIONAL second webhook, for the inhouse channel only. A Discord webhook
   // is locked to the channel it was created in, so one webhook means one
@@ -33,10 +38,12 @@ export const SETTING_KEYS = {
   RESULT_CHANGED_AT: "resultChangedAt",
   // ISO timestamp of the last failed-announcement retry sweep (throttle).
   ANNOUNCE_RETRY_AT: "announceRetryAt",
-  // The pinned Discord inhouse queue board, as JSON
-  // `{webhookId, messageId, digest}`. THE ROW'S EXISTENCE IS THE ON/OFF
-  // SWITCH — absent means the feature is off and the sync path returns after
-  // one PK read. Never write it from anywhere but inhouse-board-service.
+  // The pinned Discord inhouse queue board, as JSON. A live row is
+  // `{webhookId, messageId, digest, ...health}`; creation first stores a
+  // short-lived `{webhookId, messageId:"", digest, reservedAt}` reservation.
+  // THE ROW'S EXISTENCE IS THE ON/OFF SWITCH — absent means the feature is off
+  // and the sync path returns after one PK read. Never write it from anywhere
+  // but inhouse-board-service.
   INHOUSE_BOARD: "inhouseBoard",
   // ISO timestamp of the last board edit (claimThrottle spam floor).
   INHOUSE_BOARD_AT: "inhouseBoardAt",
@@ -51,7 +58,7 @@ export const SETTING_KEYS = {
 // ---------------------------------------------------------------------------
 // The DYNAMIC keyspace. Beyond the fixed keys above, the Setting table hosts
 // per-entity rows: exactly-once markers (resultAnnounced:<matchId>,
-// weekReminder:<season>:<week>, honorsAnnounced:<season>:<week>,
+// weekReminder:<season>:<week>:<kickoffMs>, honorsAnnounced:<season>:<week>,
 // playoffRoundBuilt:<season>:<round>), JSON state blobs
 // (playoffGamesArchive:<season>, importSkip:<season>, leagueSyncSkip:<season>)
 // and per-pair throttles (outPing:<matchId>:<userId>). Multi-file key formats
@@ -95,22 +102,38 @@ export function championAnnouncedKey(seasonId: string): string {
   return `${CHAMPION_ANNOUNCED_PREFIX}${seasonId}`;
 }
 
-/** Exactly-once marker for a week's match-night reminder. */
-export function weekReminderKey(seasonId: string, week: number): string {
-  return `weekReminder:${seasonId}:${week}`;
+/**
+ * Exactly-once marker for one kickoff cluster inside a numbered week.
+ * Without the optional suffix this is the cleanup prefix: admin/captain
+ * retimes must release every cluster marker that quoted that week.
+ */
+export function weekReminderKey(
+  seasonId: string,
+  week: number,
+  kickoffMs?: number,
+): string {
+  const base = `weekReminder:${seasonId}:${week}`;
+  return kickoffMs == null ? base : `${base}:${kickoffMs}`;
 }
 
 export function weekReminderPrefix(seasonId: string): string {
   return `weekReminder:${seasonId}:`;
 }
 
-/** Exactly-once marker for a completed week's honors announcement. */
+/**
+ * Exactly-once marker for a completed week's honors announcement. Its value
+ * is a small state machine owned by honors-service (claim/failed/sent/stale),
+ * because reopening a result needs one explicit corrected announcement rather
+ * than deleting history and pretending the old Discord post never happened.
+ */
+export const HONORS_ANNOUNCED_PREFIX = "honorsAnnounced:";
+
 export function honorsAnnouncedKey(seasonId: string, week: number): string {
-  return `honorsAnnounced:${seasonId}:${week}`;
+  return `${HONORS_ANNOUNCED_PREFIX}${seasonId}:${week}`;
 }
 
 export function honorsAnnouncedPrefix(seasonId: string): string {
-  return `honorsAnnounced:${seasonId}:`;
+  return `${HONORS_ANNOUNCED_PREFIX}${seasonId}:`;
 }
 
 /** Merge-only archive of deleted playoff games' dotaMatchIds (JSON array). */
@@ -121,6 +144,35 @@ export function playoffGamesArchiveKey(seasonId: string): string {
 /** League-feed ids fetched but not imported — never refetched (JSON array). */
 export function leagueSyncSkipKey(seasonId: string): string {
   return `leagueSyncSkip:${seasonId}`;
+}
+
+/**
+ * Every relationless Setting row owned by one season.
+ *
+ * Most season data has a foreign key and therefore follows Season on delete.
+ * These operational markers do not: several are keyed by season id and two
+ * families are keyed by match id. Keep the scope in one place so archive
+ * exports and permanent deletion cannot silently disagree about what belongs
+ * to a season.
+ */
+export function seasonSettingScopeWhere(
+  seasonId: string,
+  matchIds: string[],
+): Prisma.SettingWhereInput {
+  const seasonScope: Prisma.SettingWhereInput[] = [
+    { key: championAnnouncedKey(seasonId) },
+    { key: { startsWith: weekReminderPrefix(seasonId) } },
+    { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
+    { key: playoffGamesArchiveKey(seasonId) },
+    { key: leagueSyncSkipKey(seasonId) },
+    { key: `importSkip:${seasonId}` },
+    { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
+  ];
+  const matchScope = matchIds.flatMap<Prisma.SettingWhereInput>((matchId) => [
+    { key: resultAnnouncedKey(matchId) },
+    { key: { startsWith: `outPing:${matchId}:` } },
+  ]);
+  return { OR: [...seasonScope, ...matchScope] };
 }
 
 /**
@@ -155,25 +207,35 @@ export async function claimThrottle(
   if (updated.count > 0) return true;
 
   // Zero rows means either "exists but still fresh" (not our claim) or "row
-  // isn't there yet" (first ever call — create it, and let a genuine creation
-  // race lose on P2002).
-  const existing = await prisma.setting.findUnique({ where: { key } });
-  if (existing) return false;
-  try {
-    await prisma.setting.create({ data: { key, value } });
-    return true;
-  } catch (e) {
-    if ((e as { code?: string }).code !== "P2002") throw e;
-    return false; // someone else created it in the same instant
-  }
+  // isn't there yet" (first ever call). Claim that first row with the same
+  // conflict-skipping primitive used by bootstrap: both supported databases
+  // implement this standard form, and a losing first-call race stays an
+  // ordinary zero-row result instead of making Prisma print a caught P2002 as
+  // an application error.
+  const created = await prisma.$executeRaw`
+    INSERT INTO "Setting" ("key", "value")
+    VALUES (${key}, ${value})
+    ON CONFLICT ("key") DO NOTHING
+  `;
+  return created > 0;
 }
 
 /**
- * Bump the result change cursor. Called from every path that changes a
- * recorded result; last-write-wins is exactly right for a freshness cursor.
+ * Bump the league change cursor. Its historical name is retained because most
+ * callers are result writers, but lifecycle handoffs use the same parked-tab
+ * refresh channel: changing which season is active is at least as important
+ * as changing a score. Passing a transaction client keeps that cursor atomic
+ * with the mutation that clients must observe.
  */
-export async function stampResultChange(): Promise<void> {
-  await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, new Date().toISOString());
+export async function stampResultChange(
+  db: Pick<Prisma.TransactionClient, "setting"> = prisma,
+): Promise<void> {
+  const value = new Date().toISOString();
+  await db.setting.upsert({
+    where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+    create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value },
+    update: { value },
+  });
 }
 
 export async function getSetting(key: string): Promise<string | null> {

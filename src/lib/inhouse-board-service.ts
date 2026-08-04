@@ -1,9 +1,5 @@
 import { prisma } from "./prisma";
-import {
-  INHOUSE,
-  INHOUSE_ACTIVE_STATUSES,
-  INHOUSE_STATUS,
-} from "./constants";
+import { INHOUSE, INHOUSE_ACTIVE_STATUSES, INHOUSE_STATUS } from "./constants";
 import {
   deleteWebhookMessage,
   getInhouseAlertWebhookUrl,
@@ -23,11 +19,21 @@ import {
 } from "./inhouse-board";
 import { gameMvp } from "./achievements";
 import { heroById } from "./heroes";
-import { rankInhouse, summarizeInhouse, type FinishedLobby } from "./inhouse-stats";
-import { claimThrottle, getSetting, SETTING_KEYS, setSetting } from "./settings";
+import {
+  rankInhouse,
+  summarizeInhouse,
+  type FinishedLobby,
+} from "./inhouse-stats";
+import {
+  claimThrottle,
+  getSetting,
+  SETTING_KEYS,
+  setSetting,
+} from "./settings";
 import { raceHook } from "./race-hook";
 import { resolveSiteUrl } from "./site-url";
 import { pingOptInAvailable } from "./discord-roles";
+import { inhouseEndedAt } from "./inhouse-history";
 
 // The pinned Discord queue board — one message, rewritten in place forever.
 //
@@ -36,8 +42,9 @@ import { pingOptInAvailable } from "./discord-roles";
 // throw into a caller. Two rules make it safe to hang off a 1.5s poll:
 //
 //  1. THE SETTING ROW IS THE ON/OFF SWITCH. No row = feature off, and the cost
-//     of "off" is a single primary-key read. There is no separate toggle to
-//     drift out of sync with the message that actually exists in Discord.
+//     of "off" is a single primary-key read. A temporary row with an empty
+//     message id is the visible POST reservation, not a second toggle. There
+//     is no separate flag to drift out of sync with Discord.
 //  2. NOTHING HAPPENS UNLESS THE RENDER CHANGED. The digest gate means a
 //     motionless queue performs zero writes and zero requests, so the common
 //     case — nobody queued, all night — is free.
@@ -58,6 +65,21 @@ type BoardState = {
    *  a silently parked automation must be visible as parked). */
   failures?: number;
 };
+
+/**
+ * A short-lived claim held while Discord is creating the message. It is a
+ * different state from a live board because there is no message id to edit or
+ * delete yet. The timestamp turns a process death into an explicit admin
+ * recovery state instead of a permanent, invisible lock.
+ */
+type BoardReservation = {
+  webhookId: string;
+  messageId: "";
+  digest: string;
+  reservedAt: string | null;
+};
+
+export const INHOUSE_BOARD_POST_LEASE_MS = 30_000;
 
 function parseState(raw: string | null): BoardState | null {
   if (!raw) return null;
@@ -87,20 +109,68 @@ function parseState(raw: string | null): BoardState | null {
   return null;
 }
 
-async function clearState(): Promise<void> {
-  await setSetting(SETTING_KEYS.INHOUSE_BOARD, "");
+function parseReservation(raw: string | null): BoardReservation | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<BoardReservation>;
+    if (typeof v.webhookId !== "string" || v.messageId !== "") return null;
+    return {
+      webhookId: v.webhookId,
+      messageId: "",
+      digest: typeof v.digest === "string" ? v.digest : "posting",
+      // Older reservations shipped without a timestamp. Treat them as stale,
+      // not fresh forever, so the admin can finally clear the wedged row.
+      reservedAt: typeof v.reservedAt === "string" ? v.reservedAt : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function reservationStuck(
+  reservation: BoardReservation,
+  nowMs = Date.now(),
+): boolean {
+  if (!reservation.reservedAt) return true;
+  const at = new Date(reservation.reservedAt).getTime();
+  return !Number.isFinite(at) || nowMs - at >= INHOUSE_BOARD_POST_LEASE_MS;
 }
 
 /**
  * Clear the board row only if it still holds `expected` — the guarded twin of
- * clearState, for the paths that decide to drop the board BEFORE a network
- * round trip and act on it after. An unconditional delete there would throw
- * away a board an admin posted in the meantime.
+ * a blind delete. An unconditional delete after a Discord round trip would
+ * throw away a board an admin posted in the meantime.
  */
 async function clearStateIf(expected: string): Promise<void> {
   await prisma.setting.deleteMany({
     where: { key: SETTING_KEYS.INHOUSE_BOARD, value: expected },
   });
+}
+
+/**
+ * Turn an in-flight POST lease into an immediately visible interrupted-post
+ * state, but only if this request still owns the reservation.
+ *
+ * `postWebhookMessage()` intentionally collapses HTTP rejection, timeout,
+ * connection loss, and a successful response with no readable message id to
+ * `null`. Some of those outcomes can leave a real Discord message behind. The
+ * reservation therefore must not be deleted or an automatic/admin retry can
+ * create a second pinned board. A null timestamp reuses the existing explicit
+ * recovery path: check Discord, clear the possible orphan, then post again.
+ */
+async function markReservationInterrupted(expected: string): Promise<boolean> {
+  const reservation = parseReservation(expected);
+  if (!reservation) return false;
+  const swapped = await prisma.setting.updateMany({
+    where: { key: SETTING_KEYS.INHOUSE_BOARD, value: expected },
+    data: {
+      value: JSON.stringify({
+        ...reservation,
+        reservedAt: null,
+      } satisfies BoardReservation),
+    },
+  });
+  return swapped.count > 0;
 }
 
 /**
@@ -115,7 +185,8 @@ async function claimBoardRow(webhookId: string): Promise<string | null> {
     webhookId,
     messageId: "",
     digest: `posting:${webhookId}`,
-  } satisfies BoardState);
+    reservedAt: new Date().toISOString(),
+  } satisfies BoardReservation);
   try {
     await prisma.setting.create({
       data: { key: SETTING_KEYS.INHOUSE_BOARD, value: placeholder },
@@ -137,7 +208,11 @@ async function claimBoardRow(webhookId: string): Promise<string | null> {
   if (!current) return null;
   try {
     const raw = JSON.parse(current.value) as Partial<BoardState>;
-    if (raw.messageId === "") return null; // someone else is mid-post
+    // Fresh OR stale, a reservation is never taken over automatically. A
+    // process can die after Discord accepts the POST but before the id is
+    // stored, and auto-retrying would create a second pinned board. The admin
+    // status surface names that uncertainty and offers an explicit clear.
+    if (raw.messageId === "") return null;
     // RE-ASSERT the caller's "already posted in that channel" check here. It
     // was evaluated before this request's Discord round trip, so a rival post
     // that COMPLETED in the gap would otherwise be taken over and posted
@@ -169,11 +244,12 @@ async function claimBoardRow(webhookId: string): Promise<string | null> {
  * the request and written after it, so this is the repo's standard guarded
  * claim rather than a read-modify-write.
  */
-async function swapState(expected: string, next: BoardState): Promise<void> {
-  await prisma.setting.updateMany({
+async function swapState(expected: string, next: BoardState): Promise<boolean> {
+  const swapped = await prisma.setting.updateMany({
     where: { key: SETTING_KEYS.INHOUSE_BOARD, value: expected },
     data: { value: JSON.stringify(next) },
   });
+  return swapped.count > 0;
 }
 
 /**
@@ -185,7 +261,7 @@ export async function loadBoardSnapshot(
 ): Promise<BoardSnapshotInput> {
   const [queue, lobby] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
-      orderBy: { joinedAt: "asc" },
+      orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
       select: { lastSeenAt: true, user: { select: { name: true } } },
     }),
     prisma.inhouseLobby.findFirst({
@@ -217,7 +293,9 @@ export async function loadBoardSnapshot(
     presentNames: present.map((q) => q.user.name),
     awayCount: queue.length - present.length,
     lobbySize: INHOUSE.LOBBY_SIZE,
-    lobby: lobby ? lobbyView(lobby, potFrom(lobby.betsCloseAt, lobby.bets)) : null,
+    lobby: lobby
+      ? lobbyView(lobby, potFrom(lobby.betsCloseAt, lobby.bets))
+      : null,
     siteUrl: resolveSiteUrl(),
     nowMs,
   };
@@ -295,19 +373,27 @@ let statsCache: { at: number; value: BoardStats } | null = null;
 export async function loadBoardStats(
   nowMs: number = Date.now(),
 ): Promise<BoardStats> {
-  if (statsCache && nowMs - statsCache.at < STATS_TTL_MS) return statsCache.value;
+  if (statsCache && nowMs - statsCache.at < STATS_TTL_MS)
+    return statsCache.value;
 
   const [last, lobbiesPlayed, ladderRows] = await Promise.all([
     prisma.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.COMPLETED },
-      orderBy: { updatedAt: "desc" },
+      // Formation order is stable under later settlement/refund retries. Only
+      // one lobby can be active, so the newest formed completed lobby is also
+      // the latest game in this rolling mode.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: {
         id: true,
         winnerTeam: true,
         radiantTeam: true,
         radiantScore: true,
         direScore: true,
-        updatedAt: true,
+        matchStartTime: true,
+        startedAt: true,
+        createdAt: true,
+        completedAt: true,
+        durationSecs: true,
         boxScore: true,
       },
     }),
@@ -319,7 +405,11 @@ export async function loadBoardStats(
         winnerTeam: true,
         createdAt: true,
         players: {
-          select: { userId: true, team: true, user: { select: { name: true } } },
+          select: {
+            userId: true,
+            team: true,
+            user: { select: { name: true } },
+          },
         },
       },
     }),
@@ -366,7 +456,7 @@ export async function loadBoardStats(
 
   const value: BoardStats = {
     lastLobbyId: last?.id ?? null,
-    lastEndedAtMs: last ? last.updatedAt.getTime() : null,
+    lastEndedAtMs: last ? inhouseEndedAt(last).getTime() : null,
     // Label the winning side from what was STORED, never inferred.
     lastWinnerSide:
       last && last.winnerTeam != null && last.radiantTeam != null
@@ -453,7 +543,9 @@ export async function syncInhouseBoard(
     return;
   }
 
-  const res = await patchWebhookMessage(url, state.messageId, { embeds: [embed] });
+  const res = await patchWebhookMessage(url, state.messageId, {
+    embeds: [embed],
+  });
   if (res === "ok") {
     await swapState(raw, {
       ...state,
@@ -489,9 +581,19 @@ export async function createInhouseBoard(): Promise<{
     return { ok: false, error: "That webhook URL doesn't look like Discord's" };
   }
 
-  const existing = parseState(await getSetting(SETTING_KEYS.INHOUSE_BOARD));
+  const currentRaw = await getSetting(SETTING_KEYS.INHOUSE_BOARD);
+  const existing = parseState(currentRaw);
   if (existing && existing.webhookId === webhookId) {
     return { ok: false, error: "The board is already posted in that channel" };
+  }
+  const reservation = parseReservation(currentRaw);
+  if (reservation) {
+    return {
+      ok: false,
+      error: reservationStuck(reservation)
+        ? "A previous board post was interrupted. Check Discord for an untracked message, then clear the interrupted post here before trying again."
+        : "A board is already being posted — reload in a moment to see it",
+    };
   }
 
   const snap = await resolveSnapshot(await loadBoardSnapshot());
@@ -504,20 +606,47 @@ export async function createInhouseBoard(): Promise<{
   // feature has. Claiming first means the loser never reaches Discord.
   const claimed = await claimBoardRow(webhookId);
   if (!claimed) {
-    return { ok: false, error: "A board is already being posted — reload to see it" };
+    return {
+      ok: false,
+      error: "A board is already being posted — reload to see it",
+    };
   }
   const posted = await postWebhookMessage(url, { embeds: [embed] });
-  if (!posted) {
-    // Release the placeholder so a retry isn't locked out by our own claim.
-    await prisma.setting.deleteMany({
-      where: { key: SETTING_KEYS.INHOUSE_BOARD, value: claimed },
-    });
-    return { ok: false, error: "Discord rejected the message — check the webhook" };
+  const messageId =
+    posted && typeof posted.id === "string" && posted.id.trim()
+      ? posted.id.trim()
+      : null;
+  if (!messageId) {
+    // No id is NOT proof Discord rejected the POST: a timeout or truncated
+    // `wait=true` response can arrive after Discord created the message. Keep
+    // the reservation and surface the manual recovery path immediately. The
+    // CAS stands down if an admin already changed the row during the request.
+    const retained = await markReservationInterrupted(claimed);
+    return {
+      ok: false,
+      error: retained
+        ? "Discord didn't confirm the board message id. Check the channel for an untracked board, then clear the interrupted post before trying again."
+        : "Discord didn't confirm the board message id, and the board state changed while posting. Check Discord and reload before trying again.",
+    };
   }
-  await swapState(
-    claimed,
-    { webhookId, messageId: posted.id, digest } satisfies BoardState,
-  );
+  const tracked = await swapState(claimed, {
+    webhookId,
+    messageId,
+    digest,
+  } satisfies BoardState);
+  if (!tracked) {
+    // An admin cleared or moved the reservation during Discord's POST. Never
+    // report success for an untracked message: remove it with the exact
+    // credential that created it. If Discord refuses, name the manual cleanup
+    // instead of silently leaving a frozen second board behind.
+    const deleted = await deleteWebhookMessage(url, messageId);
+    return {
+      ok: false,
+      error: deleted
+        ? "The board post was cancelled before it could be saved. Reload before trying again."
+        : "Discord created the board, but it could not be tracked or removed. Delete the newest board message by hand before trying again.",
+    };
+  }
   return { ok: true };
 }
 
@@ -539,8 +668,24 @@ export async function createInhouseBoard(): Promise<{
 export async function removeInhouseBoard(
   opts: { force?: boolean } = {},
 ): Promise<{ ok: boolean; orphaned?: boolean; error?: string }> {
-  const state = parseState(await getSetting(SETTING_KEYS.INHOUSE_BOARD));
-  if (!state) return { ok: true };
+  const raw = await getSetting(SETTING_KEYS.INHOUSE_BOARD);
+  const state = parseState(raw);
+  if (!state) {
+    const reservation = parseReservation(raw);
+    if (!reservation || !raw) return { ok: true };
+    if (!opts.force && !reservationStuck(reservation)) {
+      return {
+        ok: false,
+        error: "Discord is still posting the board — wait a moment and reload.",
+      };
+    }
+    // We cannot know whether Discord accepted the POST before the process
+    // died, because the message id is precisely what never made it back. Clear
+    // only by CAS and report the possible orphan honestly.
+    await clearStateIf(raw);
+    await setSetting(SETTING_KEYS.INHOUSE_BOARD_AT, "");
+    return { ok: true, orphaned: true };
+  }
 
   // A board posted by a DIFFERENT webhook can't be deleted by this one — the
   // endpoint is scoped to the webhook that sent the message, so the request
@@ -549,7 +694,9 @@ export async function removeInhouseBoard(
   const url = await getInhouseWebhookUrl();
   const stranded = !url || webhookIdOf(url) !== state.webhookId;
 
-  const deleted = stranded ? false : await deleteWebhookMessage(url, state.messageId);
+  const deleted = stranded
+    ? false
+    : await deleteWebhookMessage(url, state.messageId);
   if (!deleted && !stranded && !opts.force) {
     return {
       ok: false,
@@ -558,7 +705,10 @@ export async function removeInhouseBoard(
     };
   }
 
-  await clearState();
+  // The Discord delete round trip is long enough for an admin to post a new
+  // board after clearing/moving the old row. Only remove the state we actually
+  // deleted; a blind clear here would strand that newer board.
+  await clearStateIf(raw!);
   // Drop the spam floor too, so a board posted again later paints its first
   // real change immediately instead of waiting out a window it never used.
   await setSetting(SETTING_KEYS.INHOUSE_BOARD_AT, "");
@@ -572,6 +722,10 @@ export async function removeInhouseBoard(
  */
 export type InhouseBoardStatus = {
   posted: boolean;
+  /** Discord POST is inside its short lease; no second post may start. */
+  posting: boolean;
+  /** The lease expired (or predates leases); an admin must review/clear it. */
+  postingStuck: boolean;
   messageHint: string;
   /** True when the stored board belongs to a webhook that's no longer the
    *  configured one — it's stranded and needs re-creating. */
@@ -601,8 +755,8 @@ export type InhouseBoardStatus = {
 };
 
 export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
-  const [state, url, own, pingRoleId, alertOwn, alertUrl] = await Promise.all([
-    getSetting(SETTING_KEYS.INHOUSE_BOARD).then(parseState),
+  const [raw, url, own, pingRoleId, alertOwn, alertUrl] = await Promise.all([
+    getSetting(SETTING_KEYS.INHOUSE_BOARD),
     getInhouseWebhookUrl(),
     getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL),
     getInhousePingRoleId(),
@@ -616,9 +770,13 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
   // The masked form is all the browser is ever allowed to see (the raw URL is
   // a bearer credential — anyone holding it can post to the channel).
   const inhouseMasked = separateChannel ? maskWebhookUrl(url) : "";
+  const state = parseState(raw);
+  const reservation = parseReservation(raw);
   if (!state) {
     return {
       posted: false,
+      posting: !!reservation,
+      postingStuck: reservation ? reservationStuck(reservation) : false,
       messageHint: "",
       stranded: false,
       lastEdit: null,
@@ -638,6 +796,8 @@ export async function getInhouseBoardStatus(): Promise<InhouseBoardStatus> {
   const snap = await resolveSnapshot(await loadBoardSnapshot());
   return {
     posted: true,
+    posting: false,
+    postingStuck: false,
     messageHint:
       state.messageId.length > 6
         ? `${state.messageId.slice(0, 4)}…${state.messageId.slice(-2)}`

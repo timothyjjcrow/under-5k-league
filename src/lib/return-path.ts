@@ -16,7 +16,6 @@ export function safeReturnPath(input: string | null | undefined): string | null 
   if (p.includes("\\")) return null;
   if (p.includes("://")) return null;
   // Control characters (incl. CR/LF header-splitting) never belong in a path.
-  // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1f]/.test(p)) return null;
   return p;
 }
@@ -24,3 +23,8 @@ export function safeReturnPath(input: string | null | undefined): string | null 
 // One-shot httpOnly cookie carrying the validated path across the Steam
 // OpenID round-trip (set by /api/auth/steam, consumed by its callback).
 export const RETURN_COOKIE = "ld2l_return_to";
+
+// One-shot browser binding for Steam OpenID. Steam signs return_to, while this
+// httpOnly value proves the callback completed in the browser that initiated
+// the login (prevents login-CSRF/account-confusion).
+export const STEAM_STATE_COOKIE = "ld2l_steam_state";

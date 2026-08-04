@@ -8,6 +8,7 @@ import {
   getAllGamesForRecords,
 } from "@/lib/cached-queries";
 import { shareMetadata } from "@/lib/share-metadata";
+import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
 import { steamIdToAccountId } from "@/lib/dota";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
@@ -21,16 +22,13 @@ import {
   summarizePlayerGames,
   wonGame,
   type PlayerGameLine,
-  parseGamePlayers,
+  decodeGamePlayers,
+  trustedGamePlayers,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
 import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
 import { topAffinities, type MeetingGame } from "@/lib/compare";
-import {
-  leagueRecords,
-  toRecordGames,
-  type PlayerRecord,
-} from "@/lib/records";
+import { leagueRecords, toRecordGames, type PlayerRecord } from "@/lib/records";
 import { formatNetWorth, cn, hasText } from "@/lib/utils";
 import { rankMedalName } from "@/lib/rank";
 import { pubTitle, pubToken } from "@/lib/player-pool";
@@ -59,15 +57,27 @@ import {
   TeamCrest,
   textLink,
 } from "@/components/ui";
-import { INHOUSE_STATUS, REGISTRATION_STATUS } from "@/lib/constants";
+import {
+  INHOUSE_STATUS,
+  MATCH_STATUS,
+  REGISTRATION_STATUS,
+} from "@/lib/constants";
 import { PROVISIONAL_GAMES } from "@/lib/inhouse-stats";
 import { loadInhouseLadder } from "@/lib/inhouse-ladder";
 import { parseInhouseBox } from "@/lib/inhouse-box";
+import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { resultFor, type FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
-import { careerReportCard, gradeFor, gradeTone, percentLabel } from "@/lib/benchmarks";
+import {
+  careerReportCard,
+  gradeFor,
+  gradeTone,
+  percentLabel,
+} from "@/lib/benchmarks";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { canViewLeagueContact } from "@/lib/visibility";
 
 export async function generateMetadata({
   params,
@@ -87,7 +97,7 @@ export async function generateMetadata({
   const rank = rankMedalName(user.rankTier);
   const summary = summarizePlayerGames(
     gameScores.flatMap(({ players, radiantWin }) =>
-      parseGamePlayers<PlayerStat>(players)
+      trustedGamePlayers(decodeGamePlayers(players))
         .filter((player) => player.userId === id)
         .map((player) => ({
           radiantWin,
@@ -100,11 +110,15 @@ export async function generateMetadata({
     ),
   );
   const favoriteHero = heroById(
-    summary.topHeroes[0]?.heroId ?? parsePubStats(user.pubStats)?.topHeroes[0]?.heroId ?? 0,
+    summary.topHeroes[0]?.heroId ??
+      parsePubStats(user.pubStats)?.topHeroes[0]?.heroId ??
+      0,
   );
   const highlights = [
     rank !== "Unranked" ? `${rank} medal` : null,
-    summary.games > 0 ? `${summary.wins}–${summary.losses} league record` : null,
+    summary.games > 0
+      ? `${summary.wins}–${summary.losses} league record`
+      : null,
     favoriteHero ? `${favoriteHero.name} player` : null,
   ].filter((highlight): highlight is string => highlight !== null);
   return shareMetadata(
@@ -118,12 +132,11 @@ export default async function PlayerProfilePage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ season?: string }>;
+  searchParams: Promise<{ season?: string | string[] }>;
 }) {
-  const [{ id }, { season: historySeasonParam }] = await Promise.all([
-    params,
-    searchParams,
-  ]);
+  const [{ id }, rawSearchParams] = await Promise.all([params, searchParams]);
+  const historySeasonParam = singleSearchParam(rawSearchParams.season);
+  if (historySeasonParam === null) notFound();
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) notFound();
 
@@ -142,6 +155,7 @@ export default async function PlayerProfilePage({
     gamesLite,
     recentInhouse,
     recordRows,
+    viewerRegistration,
   ] = await Promise.all([
     season
       ? prisma.registration.findUnique({
@@ -174,19 +188,39 @@ export default async function PlayerProfilePage({
         players: { some: { userId: id } },
       },
       orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
+      select: {
+        id: true,
+        matchStartTime: true,
+        startedAt: true,
+        createdAt: true,
+      },
     }),
     // All-time record book input — the cached /records scan ("games"-tagged).
     // Awaited in the page body on purpose: an unstable_cache wrapper awaited
     // inside a nested Suspense component silently never resolved once
     // (documented in cached-queries.ts).
     getAllGamesForRecords(),
+    season && viewer
+      ? prisma.registration.findUnique({
+          where: {
+            seasonId_userId: { seasonId: season.id, userId: viewer.id },
+          },
+          select: { status: true },
+        })
+      : null,
   ]);
+  const recentInhousePlayedAt = recentInhouse
+    ? inhousePlayedAt(recentInhouse)
+    : null;
 
   // Pass 2: only THIS player's games carry the heavy match/team/season joins
   // that feed the match history, stat tiles, achievements, and report card.
   const myGameIds = gamesLite
-    .filter((g) => parseGamePlayers<PlayerStat>(g.players).some((p) => p.userId === id))
+    .filter((g) =>
+      trustedGamePlayers(decodeGamePlayers(g.players)).some(
+        (p) => p.userId === id,
+      ),
+    )
     .map((g) => g.id);
   const games = myGameIds.length
     ? await prisma.game.findMany({
@@ -207,6 +241,11 @@ export default async function PlayerProfilePage({
   // moderation decision is not a public scarlet letter.
   const activeReg =
     registration?.status === REGISTRATION_STATUS.ACTIVE ? registration : null;
+  const canSeeLeagueContact = canViewLeagueContact(
+    viewer,
+    id,
+    viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE,
+  );
   const withdrewThisSeason =
     registration?.status === REGISTRATION_STATUS.WITHDRAWN;
 
@@ -233,14 +272,32 @@ export default async function PlayerProfilePage({
   ];
   const careerMatches = careerSeasonIds.length
     ? await prisma.match.findMany({
-        where: { seasonId: { in: careerSeasonIds }, status: "COMPLETED" },
+        where: { seasonId: { in: careerSeasonIds } },
       })
     : [];
+  const careerMatchesBySeason = new Map<string, typeof careerMatches>();
+  for (const match of careerMatches) {
+    const seasonMatches = careerMatchesBySeason.get(match.seasonId) ?? [];
+    seasonMatches.push(match);
+    careerMatchesBySeason.set(match.seasonId, seasonMatches);
+  }
+  const championBySeason = new Map<string, string | null>();
+  for (const membership of careerMemberships) {
+    const careerSeason = membership.team.season;
+    if (championBySeason.has(careerSeason.id)) continue;
+    championBySeason.set(
+      careerSeason.id,
+      resolveChampionPresentation(
+        careerSeason,
+        careerMatchesBySeason.get(careerSeason.id) ?? [],
+      ).championTeamId,
+    );
+  }
   const careerRows = careerMemberships
     .map((m) => {
       const tally = { W: 0, L: 0, D: 0 };
-      for (const match of careerMatches) {
-        if (match.seasonId !== m.team.seasonId) continue;
+      for (const match of careerMatchesBySeason.get(m.team.seasonId) ?? []) {
+        if (match.status !== MATCH_STATUS.COMPLETED) continue;
         if (match.homeTeamId !== m.teamId && match.awayTeamId !== m.teamId) {
           continue;
         }
@@ -249,7 +306,7 @@ export default async function PlayerProfilePage({
       return {
         membership: m,
         tally,
-        champion: m.team.season.championTeamId === m.teamId,
+        champion: championBySeason.get(m.team.seasonId) === m.teamId,
       };
     })
     .sort(
@@ -298,7 +355,7 @@ export default async function PlayerProfilePage({
   // and the match-history rows (the 🏅 chip).
   const gameRows = games
     .map((g) => {
-      const parsed = parseGamePlayers<PlayerStat>(g.players);
+      const parsed = trustedGamePlayers(decodeGamePlayers(g.players));
       const stat = parsed.find((p) => p.userId === id);
       if (!stat) return null;
       return {
@@ -448,7 +505,9 @@ export default async function PlayerProfilePage({
           seasonMatches,
         )
       : [];
-  const teamRow = team ? standings.find((s) => s.teamId === team.id) : undefined;
+  const teamRow = team
+    ? standings.find((s) => s.teamId === team.id)
+    : undefined;
   const teamRank = team
     ? standings.findIndex((s) => s.teamId === team.id) + 1
     : 0;
@@ -483,7 +542,9 @@ export default async function PlayerProfilePage({
       activeReg.wantsCaptain);
   const selfPickedHeroes = activeReg?.favoriteHeroes;
   const heroCardVisible =
-    leagueHeroes.length > 0 || pubHeroes.length > 0 || hasText(selfPickedHeroes);
+    leagueHeroes.length > 0 ||
+    pubHeroes.length > 0 ||
+    hasText(selfPickedHeroes);
   const connectionsVisible = !!affinities.nemesis || !!affinities.duo;
   const activityVisible =
     !!latestLeagueGame || !!recentInhouse || !!pubActivityNow;
@@ -642,7 +703,10 @@ export default async function PlayerProfilePage({
                   <RoleBadges roles={activeReg?.roles} />
                 ) : null}
                 {pubScout ? (
-                  <span className="tabular-nums" title={pubTitle(pubScout, nowMs)}>
+                  <span
+                    className="tabular-nums"
+                    title={pubTitle(pubScout, nowMs)}
+                  >
                     {pubToken(pubScout)}
                   </span>
                 ) : null}
@@ -651,12 +715,12 @@ export default async function PlayerProfilePage({
                     last played {pubActivityNow.label}
                   </span>
                 ) : null}
-                {viewer && user.fhUnavailable === true ? (
+                {canSeeLeagueContact && user.fhUnavailable === true ? (
                   /* Members-only operational flag, like the Discord tokens
                      below. === true on purpose: null is UNKNOWN and unknown
                      must never render as a negative. */
                   <span
-                    className="text-muted/70"
+                    className="text-muted"
                     title="Expose Public Match Data is off in their Dota client — their games can't auto-import, so results need the manual report paths"
                   >
                     private match data
@@ -692,18 +756,18 @@ export default async function PlayerProfilePage({
                     </a>
                   </>
                 ) : null}
-                {viewer ? (
+                {canSeeLeagueContact ? (
                   <DiscordTag
                     name={user.discordName}
                     verified={!!user.discordId}
                   />
                 ) : null}
-                {viewer && !user.discordName ? (
+                {canSeeLeagueContact && !user.discordName ? (
                   /* Members-only like the tag itself: on draft night the
                      absence IS the information — this player can't be reached
                      where the league lives. */
                   <span
-                    className="text-muted/70"
+                    className="text-muted"
                     title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
                   >
                     no Discord
@@ -770,7 +834,9 @@ export default async function PlayerProfilePage({
               label="Team rank"
               value={teamRank > 0 ? `#${teamRank}` : "—"}
               hint={
-                teamRow ? `${teamRow.wins}–${teamRow.losses} · ${teamRow.points} pts` : undefined
+                teamRow
+                  ? `${teamRow.wins}–${teamRow.losses} · ${teamRow.points} pts`
+                  : undefined
               }
             />
           ) : (
@@ -804,10 +870,17 @@ export default async function PlayerProfilePage({
                       fixed 3-track grid holds a hole per missing metric. */}
                   <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(8rem,100%),1fr))]">
                     {avgNet != null ? (
-                      <Stat label="Avg net worth" value={formatNetWorth(avgNet)} />
+                      <Stat
+                        label="Avg net worth"
+                        value={formatNetWorth(avgNet)}
+                      />
                     ) : null}
-                    {avgGpm != null ? <Stat label="Avg GPM" value={avgGpm} /> : null}
-                    {avgLh != null ? <Stat label="Avg last hits" value={avgLh} /> : null}
+                    {avgGpm != null ? (
+                      <Stat label="Avg GPM" value={avgGpm} />
+                    ) : null}
+                    {avgLh != null ? (
+                      <Stat label="Avg last hits" value={avgLh} />
+                    ) : null}
                   </div>
                   {kdaByGame.length >= 2 ? (
                     /* max-w-md: full width, justify-between held ~700px of
@@ -892,81 +965,90 @@ export default async function PlayerProfilePage({
                       </span>
                     </div>
                   ) : null}
-            <ul className="space-y-2">
-              {reportCard.metrics.map((m) => {
-                const grade = gradeFor(m.avgPct);
-                const tone = gradeTone(grade);
-                return (
-                  <li key={m.key} className="flex items-center gap-3 text-sm">
-                    <span className="w-28 shrink-0 truncate text-xs text-muted sm:w-32">
-                      {m.label}
-                    </span>
-                    <span
-                      role="img"
-                      aria-label={`${m.label}: ${percentLabel(m.avgPct)}, grade ${grade}`}
-                      className="min-w-0 flex-1"
-                    >
-                      <span className="block h-2 w-full overflow-hidden rounded-full bg-surface-2">
-                        <span
-                          className={cn(
-                            "block h-full rounded-full",
-                            tone === "success"
-                              ? "bg-success/80"
-                              : tone === "accent"
-                                ? "bg-accent/80"
-                                : tone === "muted"
-                                  ? "bg-line"
-                                  : "bg-fg/40",
-                          )}
-                          style={{ width: `${Math.round(m.avgPct * 100)}%` }}
-                        />
-                      </span>
-                    </span>
-                    <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">
-                      {percentLabel(m.avgPct).replace(" percentile", "")}
-                      <b
-                        className={cn(
-                          "ml-1.5 font-semibold",
-                          tone === "success"
-                            ? "text-success"
-                            : tone === "accent"
-                              ? "text-accent"
-                              : "text-fg/80",
-                        )}
-                      >
-                        {grade}
-                      </b>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {reportCard.best || reportCard.focus ? (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {reportCard.best ? (
-                  <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-xs">
-                    <span aria-hidden>💪</span>{" "}
-                    <b>Strength:</b> {reportCard.best.label} —{" "}
-                    {percentLabel(reportCard.best.avgPct)}
-                  </div>
-                ) : null}
-                {reportCard.focus ? (
-                  <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
-                    <span aria-hidden>🎯</span>{" "}
-                    <b>Work on:</b> {reportCard.focus.label} —{" "}
-                    {percentLabel(reportCard.focus.avgPct)}
-                  </div>
-                ) : null}
-              </div>
+                  <ul className="space-y-2">
+                    {reportCard.metrics.map((m) => {
+                      const grade = gradeFor(m.avgPct);
+                      const tone = gradeTone(grade);
+                      return (
+                        <li
+                          key={m.key}
+                          className="flex items-center gap-3 text-sm"
+                        >
+                          <span className="w-28 shrink-0 truncate text-xs text-muted sm:w-32">
+                            {m.label}
+                          </span>
+                          <span
+                            role="img"
+                            aria-label={`${m.label}: ${percentLabel(m.avgPct)}, grade ${grade}`}
+                            className="min-w-0 flex-1"
+                          >
+                            <span className="block h-2 w-full overflow-hidden rounded-full bg-surface-2">
+                              <span
+                                className={cn(
+                                  "block h-full rounded-full",
+                                  tone === "success"
+                                    ? "bg-success/80"
+                                    : tone === "accent"
+                                      ? "bg-accent/80"
+                                      : tone === "muted"
+                                        ? "bg-line"
+                                        : "bg-fg/40",
+                                )}
+                                style={{
+                                  width: `${Math.round(m.avgPct * 100)}%`,
+                                }}
+                              />
+                            </span>
+                          </span>
+                          <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">
+                            {percentLabel(m.avgPct).replace(" percentile", "")}
+                            <b
+                              className={cn(
+                                "ml-1.5 font-semibold",
+                                tone === "success"
+                                  ? "text-success"
+                                  : tone === "accent"
+                                    ? "text-accent"
+                                    : "text-fg/80",
+                              )}
+                            >
+                              {grade}
+                            </b>
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {reportCard.best || reportCard.focus ? (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {reportCard.best ? (
+                        <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-xs">
+                          <span aria-hidden>💪</span> <b>Strength:</b>{" "}
+                          {reportCard.best.label} —{" "}
+                          {percentLabel(reportCard.best.avgPct)}
+                        </div>
+                      ) : null}
+                      {reportCard.focus ? (
+                        <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
+                          <span aria-hidden>🎯</span> <b>Work on:</b>{" "}
+                          {reportCard.focus.label} —{" "}
+                          {percentLabel(reportCard.focus.avgPct)}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </CardBody>
+              </Card>
             ) : null}
-          </CardBody>
-          </Card>
-      ) : null}
           </div>
         </section>
       ) : null}
 
-      {activityVisible || signupSnapshotVisible || heroCardVisible || heldRecords.length > 0 || connectionsVisible ? (
+      {activityVisible ||
+      signupSnapshotVisible ||
+      heroCardVisible ||
+      heldRecords.length > 0 ||
+      connectionsVisible ? (
         <section className="space-y-3">
           <SectionTitle>Player profile</SectionTitle>
           <div className="grid gap-6 lg:grid-cols-2">
@@ -978,7 +1060,11 @@ export default async function PlayerProfilePage({
                 )}
               >
                 <CardHeader
-                  title={signupSnapshotVisible ? "League snapshot" : "Recent activity"}
+                  title={
+                    signupSnapshotVisible
+                      ? "League snapshot"
+                      : "Recent activity"
+                  }
                   subtitle={
                     signupSnapshotVisible
                       ? "Signup details, availability, and recent activity"
@@ -1004,7 +1090,9 @@ export default async function PlayerProfilePage({
                               ts={latestLeagueGame.game.startTime * 1000}
                               variant="short"
                               initial={formatMatchTime(
-                                new Date(latestLeagueGame.game.startTime * 1000),
+                                new Date(
+                                  latestLeagueGame.game.startTime * 1000,
+                                ),
                                 "short",
                               )}
                             />
@@ -1015,13 +1103,16 @@ export default async function PlayerProfilePage({
                         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                           <span className="text-muted">Inhouse game</span>
                           <Link
-                            href="/inhouse/history"
+                            href={`/inhouse/history#result-${recentInhouse.id}`}
                             className="font-medium hover:text-info hover:underline"
                           >
                             <LocalTime
-                              ts={recentInhouse.createdAt.getTime()}
+                              ts={recentInhousePlayedAt!.getTime()}
                               variant="short"
-                              initial={formatMatchTime(recentInhouse.createdAt, "short")}
+                              initial={formatMatchTime(
+                                recentInhousePlayedAt!,
+                                "short",
+                              )}
                             />
                           </Link>
                         </div>
@@ -1042,7 +1133,9 @@ export default async function PlayerProfilePage({
                       <h4 className="font-medium text-fg">Signup profile</h4>
                       {newSignupVisible ? (
                         <div className="rounded-lg border border-line/60 bg-surface-2/30 px-3 py-2.5">
-                          <h4 className="font-medium text-fg">Ready for the first game</h4>
+                          <h4 className="font-medium text-fg">
+                            Ready for the first game
+                          </h4>
                           <p className="mt-0.5 text-xs text-muted">
                             League stats appear after the first imported match.
                           </p>
@@ -1066,7 +1159,9 @@ export default async function PlayerProfilePage({
                         ) : null}
                         {hasText(activeReg.statement) ? (
                           <Detail label="Goals">
-                            <span className="text-muted">{activeReg.statement}</span>
+                            <span className="text-muted">
+                              {activeReg.statement}
+                            </span>
                           </Detail>
                         ) : null}
                         {hasText(activeReg.captainNote) ? (
@@ -1147,7 +1242,9 @@ export default async function PlayerProfilePage({
                         <span aria-hidden>{record.emoji}</span>
                         {hero ? <HeroIcon hero={hero} size={22} /> : null}
                         <span>
-                          <span className="block font-medium">{record.title}</span>
+                          <span className="block font-medium">
+                            {record.title}
+                          </span>
                           <span className="block font-mono text-xs tabular-nums text-muted">
                             {recordDisplayValue(record)}
                           </span>
@@ -1251,7 +1348,10 @@ export default async function PlayerProfilePage({
               >
                 <Link
                   href={`/seasons/${m.team.seasonId}`}
-                  className={cn("w-24 shrink-0 text-muted hover:text-info", TAP_SAFE)}
+                  className={cn(
+                    "w-24 shrink-0 text-muted hover:text-info",
+                    TAP_SAFE,
+                  )}
                 >
                   {m.team.season.name}
                 </Link>
@@ -1343,8 +1443,8 @@ export default async function PlayerProfilePage({
               ? selectedHistoryGroup
                 ? selectedHistoryGroup.seasonName
                 : multiSeasonHistory
-                ? "All seasons"
-                : historyGroups[0]?.seasonName
+                  ? "All seasons"
+                  : historyGroups[0]?.seasonName
               : (season?.name ?? undefined)
           }
           action={
@@ -1374,7 +1474,10 @@ export default async function PlayerProfilePage({
                         ))}
                       </select>
                     </label>
-                    <button type="submit" className={buttonClasses("secondary", "sm")}>
+                    <button
+                      type="submit"
+                      className={buttonClasses("secondary", "sm")}
+                    >
                       View
                     </button>
                   </form>
@@ -1445,12 +1548,20 @@ export default async function PlayerProfilePage({
                                 is byte-identical to the old single-line row. */}
                             <span className="min-w-0 flex-1 line-clamp-2 sm:line-clamp-none sm:truncate">
                               <span className="text-muted">vs </span>
-                              <span className="font-medium">{opponentName}</span>
+                              <span className="font-medium">
+                                {opponentName}
+                              </span>
                               <span className="ml-2 text-xs uppercase text-muted sm:hidden">
-                                {matchPhaseAbbrev(game.match.phase, game.match.week)}
+                                {matchPhaseAbbrev(
+                                  game.match.phase,
+                                  game.match.week,
+                                )}
                               </span>
                               <span className="ml-2 hidden text-xs uppercase text-muted sm:inline">
-                                {matchPhaseLabel(game.match.phase, game.match.week)}
+                                {matchPhaseLabel(
+                                  game.match.phase,
+                                  game.match.week,
+                                )}
                               </span>
                             </span>
                             <KDA
@@ -1533,7 +1644,10 @@ function Connection({
           {label}
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <PlayerLink userId={playerId} className="font-semibold hover:text-info">
+          <PlayerLink
+            userId={playerId}
+            className="font-semibold hover:text-info"
+          >
             {playerName ?? "Unknown player"}
           </PlayerLink>
           <Link
@@ -1576,6 +1690,8 @@ async function InhouseCareerCard({ userId }: { userId: string }) {
         radiantScore: true,
         direScore: true,
         boxScore: true,
+        matchStartTime: true,
+        startedAt: true,
         createdAt: true,
         players: { select: { userId: true, team: true } },
       },
@@ -1593,7 +1709,7 @@ async function InhouseCareerCard({ userId }: { userId: string }) {
     const mine = l.players.find((p) => p.userId === userId);
     const line = parseInhouseBox(l.boxScore).find((b) => b.userId === userId);
     const won = mine?.team != null && mine.team === l.winnerTeam;
-    return { lobby: l, line, won };
+    return { lobby: l, line, won, playedAt: inhousePlayedAt(l) };
   });
 
   return (
@@ -1632,19 +1748,19 @@ async function InhouseCareerCard({ userId }: { userId: string }) {
         </div>
 
         <div className="divide-y divide-line/60 border-t border-line/60">
-          {games.map(({ lobby, line, won }) => {
+          {games.map(({ lobby, line, won, playedAt }) => {
             const hero = line ? heroById(line.heroId) : null;
             return (
               <Link
                 key={lobby.id}
-                href="/inhouse/history"
+                href={`/inhouse/history#result-${lobby.id}`}
                 className="flex items-center gap-3 py-2 text-sm transition-colors hover:bg-surface-2/40"
               >
                 <span className="w-24 shrink-0 text-xs text-muted">
                   <LocalTime
-                    ts={lobby.createdAt.getTime()}
+                    ts={playedAt.getTime()}
                     variant="short"
-                    initial={formatMatchTime(lobby.createdAt, "short")}
+                    initial={formatMatchTime(playedAt, "short")}
                   />
                 </span>
                 <Badge tone={won ? "success" : "danger"}>

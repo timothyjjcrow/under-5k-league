@@ -7,6 +7,16 @@ import { resolveSiteUrl } from "@/lib/site-url";
 
 export const dynamic = "force-dynamic";
 
+function safeCalendarFilename(value: string): string {
+  const slug = value
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    .slice(0, 80);
+  return `ld2l-${slug || "league"}-schedule.ics`;
+}
+
 /**
  * iCalendar feed of the active season's scheduled matches. Subscribe from any
  * calendar app; `?team=<id>` narrows it to one team's matches.
@@ -14,36 +24,49 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const season = await getActiveSeason();
   if (!season) {
-    return new NextResponse("No active season", { status: 404 });
+    return new NextResponse("No active season", {
+      status: 404,
+      headers: { "cache-control": "no-store" },
+    });
   }
 
-  const teamId = req.nextUrl.searchParams.get("team");
-  const [matches, teams] = await Promise.all([
-    prisma.match.findMany({
-      where: {
-        seasonId: season.id,
-        scheduledAt: { not: null },
-        status: { not: "COMPLETED" },
-        ...(teamId
-          ? { OR: [{ homeTeamId: teamId }, { awayTeamId: teamId }] }
-          : {}),
-      },
-      orderBy: { scheduledAt: "asc" },
-    }),
-    prisma.team.findMany({ where: { seasonId: season.id } }),
-  ]);
+  const requestedTeamId = req.nextUrl.searchParams.get("team");
+  const teamId = requestedTeamId?.trim() || null;
+  const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
+  const selectedTeam = teamId ? teams.find((team) => team.id === teamId) : null;
+
+  // An explicit filter must resolve inside this season. Silently returning an
+  // empty, generically named feed makes a stale team link look valid forever.
+  if (requestedTeamId !== null && !selectedTeam) {
+    return new NextResponse("Team not found in the active season", {
+      status: 404,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+
+  const matches = await prisma.match.findMany({
+    where: {
+      seasonId: season.id,
+      scheduledAt: { not: null },
+      ...(teamId
+        ? { OR: [{ homeTeamId: teamId }, { awayTeamId: teamId }] }
+        : {}),
+    },
+    orderBy: { scheduledAt: "asc" },
+  });
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const site = resolveSiteUrl();
   const host = new URL(site).host;
-  const calName = teamId
-    ? `${teamName.get(teamId) ?? "Team"} — ${season.name}`
+  const calName = selectedTeam
+    ? `${selectedTeam.name} — ${season.name}`
     : `${season.name} schedule`;
 
   const cal = buildCalendar(
     calName,
     matches.map((m) => ({
       uid: `${m.id}@${host}`,
+      stamp: m.createdAt,
       start: m.scheduledAt as Date,
       // One rough hour per possible game, plus warm-up slack.
       durationMinutes: m.bestOf * 60 + 30,
@@ -56,7 +79,14 @@ export async function GET(req: NextRequest) {
   return new NextResponse(cal, {
     headers: {
       "content-type": "text/calendar; charset=utf-8",
-      "content-disposition": 'attachment; filename="league-schedule.ics"',
+      "content-disposition": `attachment; filename="${safeCalendarFilename(
+        selectedTeam?.name ?? season.name,
+      )}"`,
+      // This is a live public view of league state. Intermediaries may store a
+      // copy, but every reuse must revalidate so a moved match is not served as
+      // current without checking the application first.
+      "cache-control": "public, max-age=0, must-revalidate",
+      "x-content-type-options": "nosniff",
     },
   });
 }

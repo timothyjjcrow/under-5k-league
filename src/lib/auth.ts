@@ -4,6 +4,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "./prisma";
 import { SESSION_COOKIE } from "./constants";
 import { getSessionEpoch } from "./session-epoch";
+import { parseAdminSteamIds, resolveSessionRole } from "./users";
 
 // Session-signing key. Resolved lazily (so a missing secret fails a request,
 // not the build) and FAIL-CLOSED: in production a missing/short AUTH_SECRET
@@ -91,7 +92,15 @@ export const getSessionUser = cache(async function getSessionUser(): Promise<Ses
       steamId: user.steamId,
       name: user.name,
       avatar: user.avatar,
-      role: user.role,
+      // ADMIN_STEAM_IDS is an authorization policy, not merely a login-time
+      // database synchronizer. Re-evaluate it for every authenticated render/
+      // mutation so removing a compromised admin revokes an existing cookie.
+      role: resolveSessionRole({
+        steamId: user.steamId,
+        storedRole: user.role,
+        adminSteamIds: parseAdminSteamIds(process.env.ADMIN_STEAM_IDS),
+        production: process.env.NODE_ENV === "production",
+      }),
     };
   } catch {
     return null;

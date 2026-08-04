@@ -102,12 +102,13 @@ export function nextAutoSyncAt(
  * server claims guarantee only one request ever "does" an import, so without
  * the cursor the rest would poll updated:false forever and stay stale.
  *
- * Two subtleties, both deliberate: the FIRST cursor seen only baselines, never
- * refreshes (the page's own server render is at least that fresh, so only a
- * later advance means "something new landed"), and a null/absent cursor keeps
- * the existing baseline rather than resetting it — otherwise the next real
- * cursor would read as a fresh first response and a landed result would slip
- * past every parked tab.
+ * The cursor baseline comes from the page's Server Component render, not the
+ * first heartbeat response. That ordering is essential: if two first pings
+ * race and another request wins the import claim after this page rendered,
+ * this client's losing response is `updated:false` but carries the newer
+ * cursor and must still refresh. A null baseline is meaningful (there was no
+ * result yet), so the first non-null cursor is an advance. A null/absent
+ * response cursor keeps the existing baseline rather than resetting it.
  */
 export function syncPingStep(
   data: { updated?: boolean; watch?: boolean; cursor?: string | null },
@@ -117,8 +118,7 @@ export function syncPingStep(
     (data.watch ? AUTO_SYNC.WATCH_POLL_SECONDS : AUTO_SYNC.IDLE_POLL_SECONDS) *
     1000;
   const cursor = data.cursor ?? null;
-  const cursorAdvanced =
-    cursor !== null && lastCursor !== null && cursor !== lastCursor;
+  const cursorAdvanced = cursor !== null && cursor !== lastCursor;
   return {
     delayMs,
     refresh: Boolean(data.updated) || cursorAdvanced,

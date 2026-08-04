@@ -6,6 +6,7 @@ import { onceAt, setRaceHook } from "@/lib/race-hook";
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
 vi.mock("@/lib/discord", async (importOriginal) => ({
@@ -22,7 +23,7 @@ import {
   setWeekNight,
 } from "@/app/actions/admin";
 import { proposeReschedule, respondReschedule } from "@/lib/reschedule-service";
-import { MATCH_STATUS } from "@/lib/constants";
+import { MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {
   generateRegularSchedule,
@@ -52,8 +53,10 @@ function fd(values: Record<string, string>): FormData {
   return f;
 }
 
+afterEach(() => setRaceHook(null));
+
 async function seasonWithMatches() {
-  const season = await makeSeason();
+  const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
   // FOUR teams, so every week holds two fixtures — a week whose only match is
   // completed has nothing to move and setWeekNight refuses outright, which
   // makes any assertion after it vacuous.
@@ -61,7 +64,7 @@ async function seasonWithMatches() {
   const away = await makeTeam(season.id, "Away", 1);
   await makeTeam(season.id, "Third", 2);
   await makeTeam(season.id, "Fourth", 3);
-  const matches = await generateRegularSchedule(season.id);
+  await generateRegularSchedule(season.id);
   const when = new Date(Date.now() + 864e5);
   await prisma.match.updateMany({
     where: { seasonId: season.id },
@@ -82,7 +85,7 @@ async function seasonWithMatches() {
 
 describe("admin schedule writes only touch the rows they claim to", () => {
   it("setWeekNight leaves a COMPLETED match on the night it was played", async () => {
-    const { matches } = await seasonWithMatches();
+    const { season, matches } = await seasonWithMatches();
     const week = matches[0].week;
     const inWeek = matches.filter((m) => m.week === week);
     expect(inWeek.length).toBeGreaterThan(1); // one to move, one already played
@@ -99,6 +102,7 @@ describe("admin schedule writes only touch the rows they claim to", () => {
     const out = await setWeekNight(
       { message: "" },
       fd({
+        expectedActiveSeasonId: season.id,
         week: String(week),
         night: night.toISOString(),
         nightTs: String(night.getTime()),
@@ -121,10 +125,15 @@ describe("admin schedule writes only touch the rows they claim to", () => {
       where: { id: inWeek[1].id },
     });
     expect(moved.scheduledAt?.getTime()).toBe(night.getTime());
+    expect(
+      (
+        await prisma.season.findUniqueOrThrow({ where: { id: season.id } })
+      ).firstMatchNight?.getTime(),
+    ).toBe(night.getTime());
   });
 
   it("setWeekNight cancels only the OPEN proposal, not a settled one", async () => {
-    const { matches } = await seasonWithMatches();
+    const { season, matches } = await seasonWithMatches();
     const target = matches[0];
     const { proposer, responder } = await captainsOf(target.id);
 
@@ -134,23 +143,37 @@ describe("admin schedule writes only touch the rows they claim to", () => {
       where: { matchId: target.id, status: "PENDING" },
     });
     await respondReschedule(responder, settled.id, false);
-    await proposeReschedule(proposer, target.id, new Date(Date.now() + 2 * 864e5));
+    await proposeReschedule(
+      proposer,
+      target.id,
+      new Date(Date.now() + 2 * 864e5),
+    );
+    await prisma.matchAvailability.create({
+      data: { matchId: target.id, userId: proposer, status: "IN" },
+    });
 
     const night = new Date(Date.now() + 5 * 864e5);
-    await setWeekNight(
+    const out = await setWeekNight(
       { message: "" },
       fd({
+        expectedActiveSeasonId: season.id,
         week: String(target.week),
         night: night.toISOString(),
         nightTs: String(night.getTime()),
       }),
     );
 
+    expect(out?.message).toMatch(/1 check-in/);
+    expect(out?.message).toMatch(/1 open reschedule proposal/i);
+
     // The retime kills the live ask; the answered one stays answered, or the
     // audit trail stops recording that the opponent ever said no.
     expect(
-      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: settled.id } }))
-        .status,
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: settled.id },
+        })
+      ).status,
     ).toBe("DECLINED");
     expect(
       await prisma.rescheduleRequest.count({
@@ -159,8 +182,167 @@ describe("admin schedule writes only touch the rows they claim to", () => {
     ).toBe(0);
   });
 
+  it("setWeekNight leaves LIVE matches on their real kickoff", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const week = matches[0].week;
+    const inWeek = matches.filter((match) => match.week === week);
+    const before = inWeek[0].scheduledAt;
+    await prisma.match.update({
+      where: { id: inWeek[0].id },
+      data: { status: MATCH_STATUS.LIVE, homeScore: 1, awayScore: 0 },
+    });
+    const night = new Date(Date.now() + 7 * 864e5);
+
+    const out = await setWeekNight(
+      {},
+      fd({
+        expectedActiveSeasonId: season.id,
+        week: String(week),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+      }),
+    );
+
+    expect(out).not.toHaveProperty("error");
+    expect(
+      (
+        await prisma.match.findUniqueOrThrow({ where: { id: inWeek[0].id } })
+      ).scheduledAt?.getTime(),
+    ).toBe(before?.getTime());
+    expect(
+      (
+        await prisma.match.findUniqueOrThrow({ where: { id: inWeek[1].id } })
+      ).scheduledAt?.getTime(),
+    ).toBe(night.getTime());
+  });
+
+  it("an unchanged week submit preserves check-ins, proposals, and reminders", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const target = matches[0];
+    const sameNight = target.scheduledAt!;
+    const { proposer } = await captainsOf(target.id);
+    await prisma.matchAvailability.create({
+      data: { matchId: target.id, userId: proposer, status: "IN" },
+    });
+    const proposal = await prisma.rescheduleRequest.create({
+      data: {
+        matchId: target.id,
+        proposedById: proposer,
+        proposedTime: new Date(sameNight.getTime() + 864e5),
+      },
+    });
+    const reminderKey = `weekReminder:${season.id}:${target.week}`;
+    await prisma.setting.create({ data: { key: reminderKey, value: "sent" } });
+
+    const out = await setWeekNight(
+      {},
+      fd({
+        expectedActiveSeasonId: season.id,
+        week: String(target.week),
+        night: sameNight.toISOString(),
+        nightTs: String(sameNight.getTime()),
+        cascade: "on",
+      }),
+    );
+
+    expect(out?.message).toMatch(/unchanged/i);
+    expect(
+      await prisma.matchAvailability.count({ where: { matchId: target.id } }),
+    ).toBe(1);
+    expect(
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: proposal.id },
+        })
+      ).status,
+    ).toBe("PENDING");
+    expect(
+      await prisma.setting.findUnique({ where: { key: reminderKey } }),
+    ).not.toBeNull();
+  });
+
+  it("a later match completed before the decisive read is not cascaded", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const firstWeek = Math.min(...matches.map((match) => match.week));
+    const later = matches.filter((match) => match.week > firstWeek);
+    expect(later.length).toBeGreaterThan(1);
+    const landed = later[0];
+    const stillScheduled = later[1];
+    const original = landed.scheduledAt!;
+    setRaceHook(
+      onceAt("admin.setWeekNight.beforeTx", async () => {
+        await prisma.match.update({
+          where: { id: landed.id },
+          data: {
+            status: MATCH_STATUS.COMPLETED,
+            homeScore: 2,
+            awayScore: 0,
+            winnerTeamId: landed.homeTeamId,
+          },
+        });
+      }),
+    );
+    const night = new Date(original.getTime() + 3 * 864e5);
+
+    const out = await setWeekNight(
+      {},
+      fd({
+        expectedActiveSeasonId: season.id,
+        week: String(firstWeek),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+        cascade: "on",
+      }),
+    );
+
+    expect(out).not.toHaveProperty("error");
+    const landedAfter = await prisma.match.findUniqueOrThrow({
+      where: { id: landed.id },
+    });
+    expect(landedAfter.status).toBe(MATCH_STATUS.COMPLETED);
+    expect(landedAfter.scheduledAt?.getTime()).toBe(original.getTime());
+    expect(
+      (
+        await prisma.match.findUniqueOrThrow({
+          where: { id: stillScheduled.id },
+        })
+      ).scheduledAt?.getTime(),
+    ).toBe(original.getTime() + 3 * 864e5);
+  });
+
+  it.each([SEASON_STATUS.SIGNUPS, SEASON_STATUS.DRAFT, SEASON_STATUS.COMPLETE])(
+    "setWeekNight refuses writes while the season is %s",
+    async (status) => {
+      const { season, matches } = await seasonWithMatches();
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { status },
+      });
+      const target = matches[0];
+      const before = target.scheduledAt!;
+      const night = new Date(before.getTime() + 864e5);
+
+      const out = await setWeekNight(
+        {},
+        fd({
+          expectedActiveSeasonId: season.id,
+          week: String(target.week),
+          night: night.toISOString(),
+          nightTs: String(night.getTime()),
+        }),
+      );
+
+      expect(out?.error).toMatch(/locked in this league phase/i);
+      expect(
+        (
+          await prisma.match.findUniqueOrThrow({ where: { id: target.id } })
+        ).scheduledAt?.getTime(),
+      ).toBe(before.getTime());
+    },
+  );
+
   it("setMatchTime cancels only the OPEN proposal, not a settled one", async () => {
-    const { matches } = await seasonWithMatches();
+    const { season, matches } = await seasonWithMatches();
     const target = matches[0];
     const { proposer, responder } = await captainsOf(target.id);
 
@@ -169,21 +351,29 @@ describe("admin schedule writes only touch the rows they claim to", () => {
       where: { matchId: target.id, status: "PENDING" },
     });
     await respondReschedule(responder, settled.id, false);
-    await proposeReschedule(proposer, target.id, new Date(Date.now() + 2 * 864e5));
+    await proposeReschedule(
+      proposer,
+      target.id,
+      new Date(Date.now() + 2 * 864e5),
+    );
 
     const when = new Date(Date.now() + 6 * 864e5);
     await setMatchTime(
       {},
       fd({
         matchId: target.id,
+        expectedActiveSeasonId: season.id,
         scheduledAt: when.toISOString(),
         scheduledAtTs: String(when.getTime()),
       }),
     );
 
     expect(
-      (await prisma.rescheduleRequest.findUniqueOrThrow({ where: { id: settled.id } }))
-        .status,
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: settled.id },
+        })
+      ).status,
     ).toBe("DECLINED");
   });
 });
@@ -230,7 +420,9 @@ describe("recordResult won't stamp over a result that landed while it was typed"
 
     expect(fired).toBe(true);
     expect(out).toMatchObject({
-      error: expect.stringContaining("a game was imported while you were typing"),
+      error: expect.stringContaining(
+        "a game was imported while you were typing",
+      ),
     });
     expect(out).not.toHaveProperty("message");
 
@@ -327,7 +519,8 @@ describe("reopenMatch — the games check is the WHERE, not a read-time if", () 
 
     expect(res?.error).toMatch(/isn't marked final/i);
     expect(
-      (await prisma.match.findUniqueOrThrow({ where: { id: target.id } })).status,
+      (await prisma.match.findUniqueOrThrow({ where: { id: target.id } }))
+        .status,
     ).toBe(MATCH_STATUS.LIVE);
   });
 
@@ -342,7 +535,8 @@ describe("reopenMatch — the games check is the WHERE, not a read-time if", () 
     const wins = [first, second].filter((r) => !r?.error).length;
     expect(wins).toBe(1);
     expect(
-      (await prisma.match.findUniqueOrThrow({ where: { id: target.id } })).status,
+      (await prisma.match.findUniqueOrThrow({ where: { id: target.id } }))
+        .status,
     ).toBe(MATCH_STATUS.SCHEDULED);
   });
 });
@@ -361,7 +555,10 @@ describe("a manual score and a concurrent import stay self-consistent", () => {
     for (let run = 0; run < 6; run++) {
       const { matches } = await seasonWithMatches();
       const target = matches[0];
-      await prisma.match.update({ where: { id: target.id }, data: { bestOf: 3 } });
+      await prisma.match.update({
+        where: { id: target.id },
+        data: { bestOf: 3 },
+      });
 
       await raceAll<unknown>([
         () =>
@@ -395,13 +592,19 @@ describe("setWeekNight releases the reminder marker for EVERY retimed week", () 
   // re-announced with its new kickoff.
   it("cascade on: both the moved and the shifted week's markers are released", async () => {
     const { season, matches } = await seasonWithMatches();
-    const weeks = [...new Set(matches.map((m) => m.week))].sort((a, b) => a - b);
+    const weeks = [...new Set(matches.map((m) => m.week))].sort(
+      (a, b) => a - b,
+    );
     expect(weeks.length).toBeGreaterThan(1);
     const [w1, w2] = weeks;
     await prisma.setting.createMany({
       data: [
         { key: `weekReminder:${season.id}:${w1}`, value: "sent" },
         { key: `weekReminder:${season.id}:${w2}`, value: "sent" },
+        {
+          key: `weekReminder:${season.id}:${w2}:kickoff-cluster`,
+          value: "sent",
+        },
       ],
     });
 
@@ -409,6 +612,7 @@ describe("setWeekNight releases the reminder marker for EVERY retimed week", () 
     const out = await setWeekNight(
       { message: "" },
       fd({
+        expectedActiveSeasonId: season.id,
         week: String(w1),
         night: night.toISOString(),
         nightTs: String(night.getTime()),
@@ -427,16 +631,29 @@ describe("setWeekNight releases the reminder marker for EVERY retimed week", () 
         where: { key: `weekReminder:${season.id}:${w2}` },
       }),
     ).toBeNull();
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: `weekReminder:${season.id}:${w2}:kickoff-cluster`,
+        },
+      }),
+    ).toBeNull();
   });
 
   it("cascade off: only the moved week's marker is released", async () => {
     const { season, matches } = await seasonWithMatches();
-    const weeks = [...new Set(matches.map((m) => m.week))].sort((a, b) => a - b);
+    const weeks = [...new Set(matches.map((m) => m.week))].sort(
+      (a, b) => a - b,
+    );
     const [w1, w2] = weeks;
     await prisma.setting.createMany({
       data: [
         { key: `weekReminder:${season.id}:${w1}`, value: "sent" },
         { key: `weekReminder:${season.id}:${w2}`, value: "sent" },
+        {
+          key: `weekReminder:${season.id}:${w2}:kickoff-cluster`,
+          value: "sent",
+        },
       ],
     });
 
@@ -444,6 +661,7 @@ describe("setWeekNight releases the reminder marker for EVERY retimed week", () 
     const out = await setWeekNight(
       { message: "" },
       fd({
+        expectedActiveSeasonId: season.id,
         week: String(w1),
         night: night.toISOString(),
         nightTs: String(night.getTime()),
@@ -461,6 +679,13 @@ describe("setWeekNight releases the reminder marker for EVERY retimed week", () 
     expect(
       await prisma.setting.findUnique({
         where: { key: `weekReminder:${season.id}:${w2}` },
+      }),
+    ).not.toBeNull();
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: `weekReminder:${season.id}:${w2}:kickoff-cluster`,
+        },
       }),
     ).not.toBeNull();
   });

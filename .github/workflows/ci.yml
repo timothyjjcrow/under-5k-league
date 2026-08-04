@@ -6,22 +6,42 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    name: types, unit, integration
+    name: audit, lint, types, build, tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # Unit tests are pure; integration tests override this with their own
       # test.db. A value is set so Prisma Client construction is happy.
-      DATABASE_URL: "file:./prisma/ci.db"
+      # Use an absolute URL so the allowlisted clean-bootstrap helper and
+      # Prisma agree on the exact CI-owned file.
+      DATABASE_URL: "file:${{ github.workspace }}/prisma/ci.db"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: "20.18"
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
           cache: npm
       - run: npm ci
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=low
+      - name: Full dependency audit
+        run: npm audit --audit-level=low
+      - name: Validate committed SQLite schema
+        run: npx prisma validate
       - run: npx prisma generate
+      - name: Lint
+        run: npm run lint -- --max-warnings=0
       - name: Type check
         run: npx tsc --noEmit
       # `github-actions` emits ANNOTATIONS naming the failing test, file, line
@@ -34,14 +54,19 @@ jobs:
         run: npm test -- --reporter=github-actions --reporter=default
       - name: Integration tests
         run: npm run test:integration -- --reporter=github-actions --reporter=default
+      - name: Create build database schema
+        run: node scripts/prepare-sqlite-test-db.mjs ciBuild && npx prisma db push --skip-generate
+      - name: Production build
+        run: npm run build
 
   postgres:
     name: integration on postgres
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # Production runs Postgres; local dev, the integration suite and e2e all
     # run SQLite, which SERIALIZES WRITERS. Every read-then-write race this
     # codebase guards against is therefore invisible to the job above — the
-    # same 367 tests only exercise the guards for real here. See CLAUDE.md,
+    # same integration suite only exercises the guards for real here. See CLAUDE.md,
     # "Concurrency: the two rules".
     services:
       postgres:
@@ -56,16 +81,23 @@ jobs:
     env:
       PG_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_test"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: "20.18"
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
           cache: npm
       - run: npm ci
       # The committed schema is on sqlite; production's build does this same
       # swap. Nothing is committed back — it lives only in this runner.
       - name: Point Prisma at postgres
         run: node scripts/switch-db-provider.mjs postgresql
+      - name: Validate PostgreSQL schema
+        run: npx prisma validate
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
       - name: Push the schema + generate the client
         run: npx prisma db push --skip-generate --accept-data-loss && npx prisma generate
         env:
@@ -73,20 +105,37 @@ jobs:
           DIRECT_URL: ${{ env.PG_TEST_URL }}
       - name: Integration tests on postgres
         run: npm run test:pg -- --reporter=github-actions --reporter=default
+      - name: Exercise the exact Vercel build and final schema command
+        run: npm run build:vercel
+        # Deliberately synthetic values that satisfy production validation;
+        # this job targets only the disposable Postgres service. The schema was
+        # already pushed above, so the final production command is non-destructive
+        # while still proving that command actually executes.
+        env:
+          VERCEL_ENV: production
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
+          AUTH_SECRET: "C8kP2vR7xM4qT9wL6nH3dF5sJ0yB1zUa"
+          BACKUP_RECEIPT_SECRET: "G9mW4rK2pX8cN6tV1hD7sQ3yL5bJ0fZa"
+          ADMIN_STEAM_IDS: "76561198000000001"
+          APP_URL: "https://ci.ld2l.invalid"
+          NEXT_PUBLIC_SITE_URL: "https://ci.ld2l.invalid"
+          ALLOW_DEV_LOGIN: "false"
 
   # THE RATCHET, sharded. A guarded claim's WHERE predicate is its entire
   # concurrency guard, and almost nothing in the suite notices if one is
   # deleted — a happy-path test passes just as well against a blind write. So:
   # delete each protected guard in turn and require the suite to fail.
   #
-  # Every mutant costs a full suite run, so this grows LINEARLY with coverage —
-  # at 38 protected claims it was an 11-minute job on its own. The shards are a
-  # disjoint, complete partition of the baseline, so coverage per push is
+  # Every mutant costs a full suite run, so this grows LINEARLY with coverage.
+  # The committed closed inventory is the ratchet; the shards are a disjoint,
+  # complete partition of that inventory, so coverage per push is
   # unchanged; only the wall clock moves. Raise `shard` if it creeps up again.
-  # New unprotected claims are reported, never gating.
+  # Any unclassified live claim or stale classification fails preflight.
   mutation:
     name: mutation guard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false # one bad shard shouldn't hide the others' results
       matrix:
@@ -104,14 +153,21 @@ jobs:
     env:
       PG_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_test"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: "20.18"
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
           cache: npm
       - run: npm ci
       - name: Point Prisma at postgres
         run: node scripts/switch-db-provider.mjs postgresql
+      - name: Validate PostgreSQL schema
+        run: npx prisma validate
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
       - name: Push the schema + generate the client
         run: npx prisma db push --skip-generate --accept-data-loss && npx prisma generate
         env:
@@ -123,28 +179,31 @@ jobs:
   e2e:
     name: playwright e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
-      DATABASE_URL: "file:./prisma/dev.db"
+      DATABASE_URL: "file:./dev.db"
       ALLOW_DEV_LOGIN: "true"
       AUTH_SECRET: "ci-secret-please-change-0123456789abcdef"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: "20.18"
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
           cache: npm
       - run: npm ci
       - run: npx prisma generate
-      - name: Create the dev database schema
-        run: npx prisma db push --skip-generate
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
       - name: Run e2e (seeds the DB + boots next dev)
         run: npm run test:e2e
       - name: Run mid-season e2e (fixture DB, own port)
         # Sequential on purpose — Next's project-dir lock allows one dev
-        # server per repo, so the two suites can never run simultaneously.
+        # server per repo, so the suites can never run simultaneously.
         run: npm run test:e2e:mid
+      - name: Run postseason e2e (fixture DB, own port)
+        run: npm run test:e2e:postseason
 
       # Without this a failure leaves only log text, which needs repo auth to
       # read — so a red e2e job could not be diagnosed by anyone looking from
@@ -152,7 +211,7 @@ jobs:
       # and a trace you can open in the Playwright viewer.
       - name: Upload the Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: |

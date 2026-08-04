@@ -1,5 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "node scripts/switch-db-provider.mjs postgresql && node scripts/build-db.mjs && node scripts/project-stats.mjs && next build"
+  "buildCommand": "npm run build:vercel"
 }

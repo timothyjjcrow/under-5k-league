@@ -14,7 +14,10 @@ import {
 const NOW = Date.UTC(2026, 6, 12, 20, 0, 0); // an arbitrary league night
 const HOUR = 3600_000;
 
-const match = (offsetMs: number | null, status: string = MATCH_STATUS.SCHEDULED) => ({
+const match = (
+  offsetMs: number | null,
+  status: string = MATCH_STATUS.SCHEDULED,
+) => ({
   scheduledAt: offsetMs === null ? null : new Date(NOW + offsetMs),
   status,
 });
@@ -35,9 +38,9 @@ describe("isAutoSyncDue", () => {
   });
 
   it("closes after the window so stale fixtures stop burning API budget", () => {
-    expect(isAutoSyncDue(match(-(AUTO_SYNC.WINDOW_HOURS - 1) * HOUR), NOW)).toBe(
-      true,
-    );
+    expect(
+      isAutoSyncDue(match(-(AUTO_SYNC.WINDOW_HOURS - 1) * HOUR), NOW),
+    ).toBe(true);
     expect(
       isAutoSyncDue(match(-(AUTO_SYNC.WINDOW_HOURS + 1) * HOUR), NOW),
     ).toBe(false);
@@ -54,13 +57,15 @@ describe("isAutoSyncDue", () => {
 
   it("window edges are inclusive and consistent with the accessors", () => {
     const kickoff = NOW - 3 * HOUR;
-    expect(isAutoSyncDue(match(-3 * HOUR), autoSyncOpensAt(kickoff))).toBe(true);
+    expect(isAutoSyncDue(match(-3 * HOUR), autoSyncOpensAt(kickoff))).toBe(
+      true,
+    );
     expect(isAutoSyncDue(match(-3 * HOUR), autoSyncClosesAt(kickoff))).toBe(
       true,
     );
-    expect(
-      isAutoSyncDue(match(-3 * HOUR), autoSyncClosesAt(kickoff) + 1),
-    ).toBe(false);
+    expect(isAutoSyncDue(match(-3 * HOUR), autoSyncClosesAt(kickoff) + 1)).toBe(
+      false,
+    );
   });
 });
 
@@ -177,12 +182,35 @@ describe("syncPingStep", () => {
   const WATCH_MS = AUTO_SYNC.WATCH_POLL_SECONDS * 1000;
   const IDLE_MS = AUTO_SYNC.IDLE_POLL_SECONDS * 1000;
 
-  it("baselines the cursor from the first response without refreshing", () => {
-    // The page's own server render is at least as fresh as the first cursor —
-    // refreshing here would reload every page once per visit for nothing.
-    const step = syncPingStep({ cursor: "2026-07-30T01:00:00Z" }, null);
+  it("does not refresh when the first heartbeat matches the server-render cursor", () => {
+    const renderedCursor = "2026-07-30T01:00:00Z";
+    const step = syncPingStep({ cursor: renderedCursor }, renderedCursor);
     expect(step.refresh).toBe(false);
-    expect(step.cursor).toBe("2026-07-30T01:00:00Z");
+    expect(step.cursor).toBe(renderedCursor);
+  });
+
+  it("refreshes a losing first heartbeat when another request changed data after render", () => {
+    // Interleaving: the page rendered at cursor A, this tab began heartbeat 1,
+    // heartbeat 2 won the import claim and stamped B, then heartbeat 1 returned
+    // updated:false with B. The first response must compare with the render,
+    // not establish a new baseline and strand this tab on its stale RSC payload.
+    const step = syncPingStep(
+      { updated: false, cursor: "after-concurrent-import" },
+      "at-server-render",
+    );
+    expect(step.refresh).toBe(true);
+    expect(step.cursor).toBe("after-concurrent-import");
+  });
+
+  it("treats a null server-render cursor as a real baseline", () => {
+    // First result ever: there was deliberately no Setting row at render. A
+    // concurrent import creating it is still a post-render change.
+    const step = syncPingStep(
+      { updated: false, cursor: "first-result" },
+      null,
+    );
+    expect(step.refresh).toBe(true);
+    expect(step.cursor).toBe("first-result");
   });
 
   it("refreshes when a later response advances the cursor", () => {
@@ -199,13 +227,18 @@ describe("syncPingStep", () => {
     expect(step.cursor).toBe("a");
   });
 
-  it("updated:true refreshes without a cursor advance", () => {
+  it("updated:true refreshes even while establishing the first cursor baseline", () => {
     // The client whose own ping performed the import: its baseline is already
     // the new value, so the advance can never fire for it.
     expect(syncPingStep({ updated: true, cursor: "a" }, "a").refresh).toBe(
       true,
     );
-    expect(syncPingStep({ updated: true }, null).refresh).toBe(true);
+    const repaired = syncPingStep(
+      { updated: true, cursor: "playoff-repair" },
+      null,
+    );
+    expect(repaired.refresh).toBe(true);
+    expect(repaired.cursor).toBe("playoff-repair");
   });
 
   it("a null or absent cursor preserves the baseline and does not refresh", () => {

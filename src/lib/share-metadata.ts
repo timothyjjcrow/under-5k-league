@@ -8,11 +8,23 @@ import type { Metadata } from "next";
  * file conventions) so social previews keep the image while showing the
  * entity-specific title/description.
  */
-export function shareMetadata(title: string, description: string): Metadata {
+export function shareMetadata(
+  title: string,
+  description: string,
+  pathname?: string,
+): Metadata {
   return {
     title,
     description,
-    openGraph: { title, description, images: ["/opengraph-image.png"] },
+    ...(pathname ? { alternates: { canonical: pathname } } : {}),
+    openGraph: {
+      title,
+      description,
+      siteName: "GGD2L",
+      type: "website",
+      images: ["/opengraph-image.png"],
+      ...(pathname ? { url: pathname } : {}),
+    },
     twitter: {
       card: "summary_large_image",
       title,

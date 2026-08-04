@@ -2,6 +2,12 @@ import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { DraftRoom } from "@/components/draft-room";
 import { EmptyState, PageTitle, buttonClasses } from "@/components/ui";
+import {
+  pauseDraftAction,
+  resumeDraftAction,
+  undoLastSaleAction,
+  voidCurrentLotAction,
+} from "@/app/actions/admin";
 
 export const metadata = { title: "Draft" };
 
@@ -39,7 +45,13 @@ export default async function DraftPage() {
           complete) via its poll. A server-rendered gate here went stale the
           moment the admin clicked start, stranding the whole league on a
           dead page at the worst possible time — nominations run on a clock. */}
-      <DraftRoom draftAtMs={season.draftAt?.getTime() ?? null} />
+      <DraftRoom
+        seasonId={season.id}
+        pauseAction={pauseDraftAction}
+        resumeAction={resumeDraftAction}
+        undoAction={undoLastSaleAction}
+        voidLotAction={voidCurrentLotAction}
+      />
     </div>
   );
 }

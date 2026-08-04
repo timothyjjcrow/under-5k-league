@@ -47,12 +47,16 @@ export async function GET(req: NextRequest) {
       withGuildJoin: !!getGuildConfig(),
     }),
   );
-  res.cookies.set(DISCORD_OAUTH_COOKIE, packOauthCookie(state, verifier, next), {
-    httpOnly: true,
-    sameSite: "lax", // the callback arrives as a top-level nav from discord.com
-    secure: process.env.NODE_ENV === "production",
-    path: DISCORD_OAUTH_COOKIE_PATH,
-    maxAge: DISCORD_OAUTH_MAX_AGE,
-  });
+  res.cookies.set(
+    DISCORD_OAUTH_COOKIE,
+    packOauthCookie(state, verifier, user.id, next),
+    {
+      httpOnly: true,
+      sameSite: "lax", // the callback arrives as a top-level nav from discord.com
+      secure: process.env.NODE_ENV === "production",
+      path: DISCORD_OAUTH_COOKIE_PATH,
+      maxAge: DISCORD_OAUTH_MAX_AGE,
+    },
+  );
   return res;
 }

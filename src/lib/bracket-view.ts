@@ -23,6 +23,8 @@ export type BracketMatchView = {
   away: BracketSide | null;
   homeScore: number;
   awayScore: number;
+  /** Preserved so the client can distinguish a live series from an upcoming one. */
+  status: string;
   completed: boolean;
   winnerTeamId: string | null;
   /** Pre-formatted on the server. */
@@ -51,6 +53,8 @@ export type MatchForBracket = {
   bestOf: number;
 };
 
+const GRAND_FINAL_NAME = "Grand final";
+
 export function buildBracketRounds(
   matches: MatchForBracket[],
   teamName: Map<string, string>,
@@ -64,7 +68,10 @@ export function buildBracketRounds(
     seed: seedByTeam.get(teamId) ?? null,
   });
   return rounds.map(({ round, slots }) => ({
-    name: roundName(round, totalRounds),
+    name:
+      round === totalRounds - 1
+        ? GRAND_FINAL_NAME
+        : roundName(round, totalRounds),
     slots: slots.map((m) =>
       m
         ? {
@@ -73,6 +80,7 @@ export function buildBracketRounds(
             away: side(m.awayTeamId),
             homeScore: m.homeScore,
             awayScore: m.awayScore,
+            status: m.status,
             completed: m.status === MATCH_STATUS.COMPLETED,
             winnerTeamId: m.winnerTeamId,
             when: m.scheduledAt ? formatWhen(m.scheduledAt) : null,
@@ -117,7 +125,9 @@ export function mirrorLayout(rounds: BracketRound[]): MirrorLayout | null {
     left,
     right,
     final: finalRound.slots[0] ?? null,
-    finalName: finalRound.name,
+    // The bracket owns one public name even if a legacy/manual caller supplied
+    // "Final" or title-cased "Grand Final" in its serialized round list.
+    finalName: GRAND_FINAL_NAME,
   };
 }
 

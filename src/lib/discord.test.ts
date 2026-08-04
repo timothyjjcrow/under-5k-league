@@ -5,6 +5,7 @@ import {
   signupMessage,
   draftStartedMessage,
   draftCompleteMessage,
+  regularSeasonStartedMessage,
   freeAgentSignedMessage,
   inhouseLobbyMessage,
   inhouseQueueMessage,
@@ -14,13 +15,18 @@ import {
   playerReleasedMessage,
   playerSoldMessage,
   playoffsStartedMessage,
+  playoffsReturnedToRegularMessage,
   championMessage,
   maskWebhookUrl,
   rolePrefix,
   joinLink,
   webhookIdOf,
   webhookApiUrl,
+  draftCancelledMessage,
+  draftAbortedMessage,
+  draftRescheduledMessage,
   draftScheduledMessage,
+  captainAssignedMessage,
   playerOutMessage,
   rescheduleDeclinedMessage,
   rescheduleProposedMessage,
@@ -29,7 +35,6 @@ import {
   teamWithdrewMessage,
   weekReminderMessage,
   weeklyHonorsMessage,
-  draftRecapMessage,
   type InhouseBetSlip,
 } from "./discord";
 
@@ -58,6 +63,13 @@ describe("discord message formatters", () => {
 
   it("links the teams page when the draft completes", () => {
     expect(draftCompleteMessage("Season 1")).toContain("/teams");
+  });
+
+  it("announces the start of the Regular season with its schedule", () => {
+    const msg = regularSeasonStartedMessage("Season *One*");
+    expect(msg).toContain("Season \\*One\\*");
+    expect(msg).toMatch(/Regular season is live/i);
+    expect(msg).toContain("/schedule");
   });
 
   it("announces a decided series with the winner", () => {
@@ -97,10 +109,30 @@ describe("discord message formatters", () => {
     expect(msg).toContain("/schedule");
   });
 
+  it("announces when a bracket is withdrawn for a standings correction", () => {
+    const msg = playoffsReturnedToRegularMessage("Season 1");
+    expect(msg).toContain("Season 1");
+    expect(msg).toMatch(/bracket is void/i);
+    expect(msg).toMatch(/Regular season/i);
+    expect(msg).toContain("/schedule");
+  });
+
   it("crowns the champion", () => {
-    const msg = championMessage("Season 1", "Zai's Team");
+    const msg = championMessage("Season 1", "Zai's Team", "season/one");
     expect(msg).toContain("**Zai's Team**");
     expect(msg).toContain("champions");
+    expect(msg).toContain("/recap?season=season%2Fone");
+  });
+
+  it("escapes a season name in the champion announcement", () => {
+    const msg = championMessage(
+      "[Season](https://evil.test)",
+      "Team",
+      "season-1",
+    );
+    expect(msg).not.toContain("[Season](https://evil.test)");
+    expect(msg).toContain("\\[Season\\]\\(");
+    expect(msg).not.toContain("(https://evil.test)");
   });
 
   it("announces a sale with the price", () => {
@@ -131,11 +163,42 @@ describe("discord message formatters", () => {
 });
 
 describe("draft scheduling", () => {
+  it("describes every non-captain roster return after an aborted draft", () => {
+    const msg = draftAbortedMessage("Season 2", 3, 2);
+    expect(msg).toContain("3 non-captain roster member(s) returned");
+    expect(msg).toContain("2 unplayed fixture(s) were cleared");
+    expect(msg).toContain("back in Signups");
+  });
+
   it("announces the scheduled draft night reader-local", () => {
     const msg = draftScheduledMessage("Season 2", 1_800_000_000_000);
     expect(msg).toContain("Season 2");
     expect(msg).toContain("<t:1800000000:F>");
-    expect(msg).toContain("/draft");
+    expect(msg).toContain("/me");
+  });
+
+  it("expires confirmations and links reconfirmation after a reschedule", () => {
+    const msg = draftRescheduledMessage("Season 2", 1_800_000_000_000);
+    expect(msg).toContain("moved");
+    expect(msg).toContain("Previous confirmations expired");
+    expect(msg).toContain("<t:1800000000:F>");
+    expect(msg).toContain("/me");
+  });
+
+  it("announces when the scheduled night is cleared", () => {
+    const msg = draftCancelledMessage("Season 2");
+    expect(msg).toContain("was cleared");
+    expect(msg).toContain("post a new time");
+  });
+
+  it("tells a newly assigned captain where to review responsibilities", () => {
+    expect(captainAssignedMessage("Dendi", "Dendi's Team", "123")).toContain(
+      "<@123>",
+    );
+    const fallback = captainAssignedMessage("Den*di", "Team [A]");
+    expect(fallback).toContain("**Den\\*di**");
+    expect(fallback).toContain("Team \\[A\\]");
+    expect(fallback).toContain("/me");
   });
 
   it("signupMessage appends draft night only when one is set", () => {
@@ -191,9 +254,9 @@ describe("inhouse messages", () => {
     expect(rolePrefix(undefined)).toBe("");
     expect(inhouseQueueMessage(4, 10, "999")).toContain("<@&999>");
     expect(inhouseQueueMessage(4, 10)).not.toContain("<@&");
-    expect(inhouseLobbyMessage([{ name: "A", discordId: null }], "999")).toContain(
-      "<@&999>",
-    );
+    expect(
+      inhouseLobbyMessage([{ name: "A", discordId: null }], "999"),
+    ).toContain("<@&999>");
   });
 
   it("links straight into the queue, not just to the page", () => {
@@ -246,11 +309,27 @@ describe("inhouseResultMessage — the slips block", () => {
     dotaMatchId: "8412345678",
   };
 
-  const won = (name: string, stake: number, matched: number): InhouseBetSlip => ({
-    name, stake, matched, outcome: "WON", delta: matched,
+  const won = (
+    name: string,
+    stake: number,
+    matched: number,
+  ): InhouseBetSlip => ({
+    name,
+    stake,
+    matched,
+    outcome: "WON",
+    delta: matched,
   });
-  const lost = (name: string, stake: number, matched: number): InhouseBetSlip => ({
-    name, stake, matched, outcome: "LOST", delta: -matched,
+  const lost = (
+    name: string,
+    stake: number,
+    matched: number,
+  ): InhouseBetSlip => ({
+    name,
+    stake,
+    matched,
+    outcome: "LOST",
+    delta: -matched,
   });
   const voided = (
     name: string,
@@ -260,7 +339,9 @@ describe("inhouseResultMessage — the slips block", () => {
 
   /** Everything below the headline — the block, on its own. */
   const block = (slips: InhouseBetSlip[] | null, over = {}) =>
-    inhouseResultMessage({ ...RESULT, ...over, slips }).split("\n").slice(1);
+    inhouseResultMessage({ ...RESULT, ...over, slips })
+      .split("\n")
+      .slice(1);
 
   it("sends byte-identical output to a league that doesn't bet", () => {
     // The whole point of the omission: `slips` is passed unconditionally by the
@@ -277,9 +358,13 @@ describe("inhouseResultMessage — the slips block", () => {
     // Worked example 1: 200 a side, every stake matched at ratio 1.0.
     expect(
       block([
-        won("Kessler", 100, 100), won("Roo", 50, 50),
-        won("Vex", 40, 40), won("Bo", 10, 10),
-        lost("Dooley", 100, 100), lost("Mig", 60, 60), lost("Nine", 40, 40),
+        won("Kessler", 100, 100),
+        won("Roo", 50, 50),
+        won("Vex", 40, 40),
+        won("Bo", 10, 10),
+        lost("Dooley", 100, 100),
+        lost("Mig", 60, 60),
+        lost("Nine", 40, 40),
       ]),
     ).toEqual([
       "**Pot 400 Cred** · CONTESTED · fully covered",
@@ -295,9 +380,12 @@ describe("inhouseResultMessage — the slips block", () => {
     expect(
       block(
         [
-          won("Dooley", 100, 43), won("Mig", 100, 43),
-          won("Nine", 60, 26), won("Pia", 20, 8),
-          lost("Ash", 100, 100), lost("Bo", 20, 20),
+          won("Dooley", 100, 43),
+          won("Mig", 100, 43),
+          won("Nine", 60, 26),
+          won("Pia", 20, 8),
+          lost("Ash", 100, 100),
+          lost("Bo", 20, 20),
         ],
         { winnerSide: "Dire" as const },
       ),
@@ -357,16 +445,26 @@ describe("inhouseResultMessage — the slips block", () => {
     );
     expect(
       potOf([
-        won("A", 100, 100), won("B", 100, 100), won("C", 100, 100),
-        lost("D", 100, 100), lost("E", 100, 100), lost("F", 100, 100),
+        won("A", 100, 100),
+        won("B", 100, 100),
+        won("C", 100, 100),
+        lost("D", 100, 100),
+        lost("E", 100, 100),
+        lost("F", 100, 100),
       ]),
     ).toContain("HIGH STAKES");
     expect(
       potOf([
-        won("A", 100, 100), won("B", 100, 100), won("C", 100, 100),
-        won("D", 100, 100), won("E", 100, 100),
-        lost("F", 100, 100), lost("G", 100, 100), lost("H", 100, 100),
-        lost("I", 100, 100), lost("J", 100, 100),
+        won("A", 100, 100),
+        won("B", 100, 100),
+        won("C", 100, 100),
+        won("D", 100, 100),
+        won("E", 100, 100),
+        lost("F", 100, 100),
+        lost("G", 100, 100),
+        lost("H", 100, 100),
+        lost("I", 100, 100),
+        lost("J", 100, 100),
       ]),
     ).toContain("MARQUEE");
   });
@@ -375,7 +473,9 @@ describe("inhouseResultMessage — the slips block", () => {
     // Two equal stakes must not settle into whatever order Prisma returned the
     // rows in — the same lobby has to read the same way every time.
     const rows: InhouseBetSlip[] = [
-      won("Zed", 40, 40), won("Ana", 100, 100), won("Bob", 40, 40),
+      won("Zed", 40, 40),
+      won("Ana", 100, 100),
+      won("Bob", 40, 40),
     ];
     expect(block(rows)[1]).toBe(
       "Radiant: Ana 100 → +100 · Bob 40 → +40 · Zed 40 → +40",
@@ -384,7 +484,11 @@ describe("inhouseResultMessage — the slips block", () => {
   });
 
   it("carries no emoji — the block is data, and every glyph is text", () => {
-    const msg = block([won("A", 100, 100), lost("B", 100, 100), voided("C", 10, "VOID_LATE")]);
+    const msg = block([
+      won("A", 100, 100),
+      lost("B", 100, 100),
+      voided("C", 10, "VOID_LATE"),
+    ]);
     expect(msg.join("\n")).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 });
@@ -791,15 +895,23 @@ describe("no message unfurls a link preview", () => {
     const messages = [
       signupMessage("Zai", 3, 20),
       draftScheduledMessage("S1", 1_800_000_000_000),
+      draftRescheduledMessage("S1", 1_800_000_000_000),
+      draftCancelledMessage("S1"),
+      captainAssignedMessage("A", "T", "123"),
       draftStartedMessage("S1"),
       draftCompleteMessage("S1"),
       playerSoldMessage("A", "T", 5),
       matchResultMessage({
-        homeName: "A", awayName: "B", homeScore: 2, awayScore: 0,
-        week: 1, isPlayoff: false,
+        homeName: "A",
+        awayName: "B",
+        homeScore: 2,
+        awayScore: 0,
+        week: 1,
+        isPlayoff: false,
       }),
       playoffsStartedMessage("S1", [{ home: "A", away: "B" }]),
-      championMessage("S1", "T"),
+      playoffsReturnedToRegularMessage("S1"),
+      championMessage("S1", "T", "s1"),
       freeAgentSignedMessage("A", "T"),
       playerReleasedMessage("A", "T"),
       teamWithdrewMessage("T", 3),
@@ -807,52 +919,100 @@ describe("no message unfurls a link preview", () => {
       inhouseQueueMessage(4, 10, "999"),
       inhouseLobbyMessage([{ name: "A", discordId: null }]),
       inhouseResultMessage({
-        winnerSide: "Radiant", radiantScore: 1, direScore: 0, durationSecs: 60,
-        mvpName: null, mvpHero: null, dotaMatchId: "1",
+        winnerSide: "Radiant",
+        radiantScore: 1,
+        direScore: 0,
+        durationSecs: 60,
+        mvpName: null,
+        mvpHero: null,
+        dotaMatchId: "1",
       }),
       inhouseResultMessage({
-        winnerSide: "Radiant", radiantScore: 1, direScore: 0, durationSecs: 60,
-        mvpName: null, mvpHero: null, dotaMatchId: "1",
+        winnerSide: "Radiant",
+        radiantScore: 1,
+        direScore: 0,
+        durationSecs: 60,
+        mvpName: null,
+        mvpHero: null,
+        dotaMatchId: "1",
         slips: [
           { name: "A", stake: 100, matched: 100, outcome: "WON", delta: 100 },
           { name: "B", stake: 100, matched: 100, outcome: "LOST", delta: -100 },
         ],
       }),
       playerOutMessage({
-        playerName: "A", homeName: "H", awayName: "W", week: 1,
-        isPlayoff: false, whenMs: null,
+        playerName: "A",
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
+        whenMs: null,
       }),
       standinAssignedMessage({
-        standinName: "S", replacedName: "R", teamName: "T", homeName: "H",
-        awayName: "W", week: 1, isPlayoff: false, whenMs: null,
+        standinName: "S",
+        replacedName: "R",
+        teamName: "T",
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
+        whenMs: null,
       }),
       standinRemovedMessage({
-        standinName: "S", teamName: "T", homeName: "H", awayName: "W",
-        week: 1, isPlayoff: false,
+        standinName: "S",
+        teamName: "T",
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
       }),
       rescheduleProposedMessage({
-        homeName: "H", awayName: "W", week: 1, isPlayoff: false,
-        proposerName: "P", whenMs: 1_800_000_000_000,
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
+        proposerName: "P",
+        whenMs: 1_800_000_000_000,
       }),
       rescheduleMessage({
-        homeName: "H", awayName: "W", week: 1, isPlayoff: false,
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
         whenMs: 1_800_000_000_000,
       }),
       rescheduleDeclinedMessage({
-        homeName: "H", awayName: "W", week: 1, isPlayoff: false,
-        declinerName: "D", whenMs: 1_800_000_000_000,
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
+        declinerName: "D",
+        whenMs: 1_800_000_000_000,
       }),
       weeklyHonorsMessage({
-        week: 1, playerName: "A", playerPoints: 10, heroName: "Lina",
-        teamName: "T", teamGameWins: 2,
+        week: 1,
+        playerName: "A",
+        playerPoints: 10,
+        heroName: "Lina",
+        teamName: "T",
+        teamGameWins: 2,
       }),
       weekReminderMessage({
-        week: 1, isPlayoff: false,
-        fixtures: [{
-          matchId: "m1", homeName: "H", awayName: "W",
-          scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
-          awayIn: 5, awaySize: 5, waitingOn: [],
-        }],
+        week: 1,
+        isPlayoff: false,
+        fixtures: [
+          {
+            matchId: "m1",
+            homeName: "H",
+            awayName: "W",
+            scheduledAt: 1_800_000_000_000,
+            homeIn: 1,
+            homeSize: 5,
+            awayIn: 5,
+            awaySize: 5,
+            waitingOn: [],
+          },
+        ],
       }),
       newsMessage("Title", "Body with no media"),
     ];
@@ -879,53 +1039,95 @@ describe("no player-supplied name can inject markdown", () => {
     signupMessage(EVIL, 3, 10),
     playerSoldMessage(EVIL, EVIL, 5),
     matchResultMessage({
-      homeName: EVIL, awayName: EVIL, homeScore: 2, awayScore: 0,
-      week: 1, isPlayoff: false,
+      homeName: EVIL,
+      awayName: EVIL,
+      homeScore: 2,
+      awayScore: 0,
+      week: 1,
+      isPlayoff: false,
     }),
-    championMessage("Season 1", EVIL),
+    championMessage("Season 1", EVIL, "s1"),
     freeAgentSignedMessage(EVIL, EVIL),
     playerReleasedMessage(EVIL, EVIL),
     teamWithdrewMessage(EVIL, 3),
     playerOutMessage({
-      playerName: EVIL, homeName: EVIL, awayName: EVIL,
-      week: 1, isPlayoff: false, whenMs: null,
+      playerName: EVIL,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      whenMs: null,
     }),
     standinAssignedMessage({
-      standinName: EVIL, replacedName: EVIL, teamName: EVIL,
-      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: null,
+      standinName: EVIL,
+      replacedName: EVIL,
+      teamName: EVIL,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      whenMs: null,
     }),
     standinRemovedMessage({
-      standinName: EVIL, teamName: EVIL, homeName: EVIL, awayName: EVIL,
-      week: 1, isPlayoff: false,
+      standinName: EVIL,
+      teamName: EVIL,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
     }),
     rescheduleProposedMessage({
-      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false,
-      proposerName: EVIL, whenMs: 1_800_000_000_000,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      proposerName: EVIL,
+      whenMs: 1_800_000_000_000,
     }),
     rescheduleMessage({
-      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
       whenMs: 1_800_000_000_000,
     }),
     rescheduleDeclinedMessage({
-      homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false,
-      declinerName: EVIL, whenMs: 1_800_000_000_000,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      declinerName: EVIL,
+      whenMs: 1_800_000_000_000,
     }),
     weeklyHonorsMessage({
-      week: 1, playerName: EVIL, playerPoints: 40,
-      heroName: "Pudge", teamName: EVIL, teamGameWins: 2,
+      week: 1,
+      playerName: EVIL,
+      playerPoints: 40,
+      heroName: "Pudge",
+      teamName: EVIL,
+      teamGameWins: 2,
     }),
     inhouseLobbyMessage([{ name: EVIL, discordId: null }]),
     inhouseResultMessage({
-      winnerSide: "Radiant", radiantScore: 30, direScore: 10,
-      durationSecs: 2000, mvpName: EVIL, mvpHero: "Pudge",
+      winnerSide: "Radiant",
+      radiantScore: 30,
+      direScore: 10,
+      durationSecs: 2000,
+      mvpName: EVIL,
+      mvpHero: "Pudge",
       dotaMatchId: "123",
     }),
     // The slips block interpolates a name per bettor — same injection point,
     // three renders (winning side, losing side, refunded), all of which land in
     // a channel post the league appears to have written.
     inhouseResultMessage({
-      winnerSide: "Radiant", radiantScore: 30, direScore: 10,
-      durationSecs: 2000, mvpName: null, mvpHero: null, dotaMatchId: "123",
+      winnerSide: "Radiant",
+      radiantScore: 30,
+      direScore: 10,
+      durationSecs: 2000,
+      mvpName: null,
+      mvpHero: null,
+      dotaMatchId: "123",
       slips: [
         { name: EVIL, stake: 100, matched: 100, outcome: "WON", delta: 100 },
         { name: EVIL, stake: 100, matched: 100, outcome: "LOST", delta: -100 },
@@ -933,13 +1135,21 @@ describe("no player-supplied name can inject markdown", () => {
       ],
     }),
     weekReminderMessage({
-      week: 1, isPlayoff: false,
-      fixtures: [{
-        matchId: "m1", homeName: EVIL, awayName: EVIL,
-        scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
-        awayIn: 5, awaySize: 5,
-        waitingOn: [{ name: EVIL, discordId: null }],
-      }],
+      week: 1,
+      isPlayoff: false,
+      fixtures: [
+        {
+          matchId: "m1",
+          homeName: EVIL,
+          awayName: EVIL,
+          scheduledAt: 1_800_000_000_000,
+          homeIn: 1,
+          homeSize: 5,
+          awayIn: 5,
+          awaySize: 5,
+          waitingOn: [{ name: EVIL, discordId: null }],
+        },
+      ],
     }),
   ];
 
@@ -955,26 +1165,44 @@ describe("no player-supplied name can inject markdown", () => {
     expect(teamWithdrewMessage(nl, 3)).not.toContain("\n");
     expect(
       rescheduleDeclinedMessage({
-        homeName: nl, awayName: nl, week: 1, isPlayoff: false,
-        declinerName: nl, whenMs: 1_800_000_000_000,
+        homeName: nl,
+        awayName: nl,
+        week: 1,
+        isPlayoff: false,
+        declinerName: nl,
+        whenMs: 1_800_000_000_000,
       }),
     ).not.toContain("\n");
     // The reminder is genuinely multi-line — assert the COUNT is unchanged
     // rather than that there are none.
     const reminder = weekReminderMessage({
-      week: 1, isPlayoff: false,
-      fixtures: [{
-        matchId: "m1", homeName: nl, awayName: nl,
-        scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
-        awayIn: 5, awaySize: 5, waitingOn: [{ name: nl, discordId: null }],
-      }],
+      week: 1,
+      isPlayoff: false,
+      fixtures: [
+        {
+          matchId: "m1",
+          homeName: nl,
+          awayName: nl,
+          scheduledAt: 1_800_000_000_000,
+          homeIn: 1,
+          homeSize: 5,
+          awayIn: 5,
+          awaySize: 5,
+          waitingOn: [{ name: nl, discordId: null }],
+        },
+      ],
     });
     expect(reminder.split("\n")).toHaveLength(4); // header, fixture, waiting, footer
     // The slips block is one line per SIDE, so a newline in a persona would
     // forge a row and make the message lie about who was in the game.
     const slips = inhouseResultMessage({
-      winnerSide: "Radiant", radiantScore: 1, direScore: 0, durationSecs: 60,
-      mvpName: null, mvpHero: null, dotaMatchId: "1",
+      winnerSide: "Radiant",
+      radiantScore: 1,
+      direScore: 0,
+      durationSecs: 60,
+      mvpName: null,
+      mvpHero: null,
+      dotaMatchId: "1",
       slips: [
         { name: nl, stake: 100, matched: 100, outcome: "WON", delta: 100 },
         { name: nl, stake: 100, matched: 100, outcome: "LOST", delta: -100 },
@@ -990,13 +1218,21 @@ describe("no player-supplied name can inject markdown", () => {
     );
     expect(
       weekReminderMessage({
-        week: 1, isPlayoff: false,
-        fixtures: [{
-          matchId: "m1", homeName: "H", awayName: "A",
-          scheduledAt: 1_800_000_000_000, homeIn: 1, homeSize: 5,
-          awayIn: 5, awaySize: 5,
-          waitingOn: [{ name: "x", discordId: "456" }],
-        }],
+        week: 1,
+        isPlayoff: false,
+        fixtures: [
+          {
+            matchId: "m1",
+            homeName: "H",
+            awayName: "A",
+            scheduledAt: 1_800_000_000_000,
+            homeIn: 1,
+            homeSize: 5,
+            awayIn: 5,
+            awaySize: 5,
+            waitingOn: [{ name: "x", discordId: "456" }],
+          },
+        ],
       }),
     ).toContain("<@456>");
   });
@@ -1015,32 +1251,54 @@ describe("match-page deep links", () => {
   // a preview card over itself.
   it("playerOutMessage links the match page when a matchId is given", () => {
     const msg = playerOutMessage({
-      playerName: "Dendi", homeName: "H", awayName: "W",
-      week: 4, isPlayoff: false, whenMs: null, matchId: "m1",
+      playerName: "Dendi",
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: null,
+      matchId: "m1",
     });
     expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>/);
   });
 
   it("playerOutMessage stays link-free without one — hand-built calls", () => {
     const msg = playerOutMessage({
-      playerName: "Dendi", homeName: "H", awayName: "W",
-      week: 4, isPlayoff: false, whenMs: null,
+      playerName: "Dendi",
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: null,
     });
     expect(msg).not.toContain("/matches/");
   });
 
   it("standinAssignedMessage links the check-in page when a matchId is given", () => {
     const msg = standinAssignedMessage({
-      standinName: "S", replacedName: "R", teamName: "T", homeName: "H",
-      awayName: "W", week: 4, isPlayoff: false, whenMs: null, matchId: "m1",
+      standinName: "S",
+      replacedName: "R",
+      teamName: "T",
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: null,
+      matchId: "m1",
     });
     expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>/);
   });
 
   it("standinAssignedMessage stays link-free without one", () => {
     const msg = standinAssignedMessage({
-      standinName: "S", replacedName: "R", teamName: "T", homeName: "H",
-      awayName: "W", week: 4, isPlayoff: false, whenMs: null,
+      standinName: "S",
+      replacedName: "R",
+      teamName: "T",
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: null,
     });
     expect(msg).not.toContain("/matches/");
   });
@@ -1055,5 +1313,33 @@ describe("freeAgentSignedMessage addresses the signed player", () => {
     const msg = freeAgentSignedMessage("Late Joiner", "Short Squad");
     expect(msg).toContain("/schedule");
     expect(msg.split("Late Joiner")).toHaveLength(3); // named exactly twice
+  });
+});
+
+describe("weeklyHonorsMessage corrections", () => {
+  it("clearly labels a corrected award", () => {
+    const message = weeklyHonorsMessage({
+      week: 3,
+      playerName: "New winner",
+      playerPoints: 42,
+      heroName: "Lina",
+      teamName: "New team",
+      teamGameWins: 2,
+      corrected: true,
+    });
+    expect(message).toMatch(/^🏅 \*\*Correction: Week 3 honors/);
+  });
+
+  it("explicitly withdraws an award when a corrected week has no eligible games", () => {
+    const message = weeklyHonorsMessage({
+      week: 3,
+      playerName: null,
+      playerPoints: 0,
+      heroName: null,
+      teamName: null,
+      teamGameWins: 0,
+      corrected: true,
+    });
+    expect(message).toMatch(/previous honors are withdrawn/i);
   });
 });

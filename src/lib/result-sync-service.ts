@@ -1,14 +1,12 @@
 import { prisma } from "./prisma";
 import {
   AUTO_SYNC,
+  DRAFT_STATUS,
   INHOUSE_ACTIVE_STATUSES,
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
-import {
-  autoSyncClaimCutoff,
-  minutesSinceAutoSyncOpen,
-} from "./result-sync";
+import { autoSyncClaimCutoff, minutesSinceAutoSyncOpen } from "./result-sync";
 import { queuePresentCutoff } from "./inhouse";
 import {
   ANNOUNCE_FAILED_PREFIX,
@@ -27,21 +25,31 @@ import {
 import { resolveUnsettledBets } from "./inhouse-bet-service";
 import {
   CHAMPION_ANNOUNCED_PREFIX,
+  championAnnouncedKey,
   claimThrottle,
   getSetting,
   RESULT_ANNOUNCED_PREFIX,
   SETTING_KEYS,
 } from "./settings";
-import { announceChampionOnce } from "./playoff-service";
+import { advancePlayoffBracket, announceChampionOnce } from "./playoff-service";
 import { syncInhouseBoard } from "./inhouse-board-service";
+import { deliverInhouseAnnouncements } from "./inhouse-announcement-outbox";
 import { raceHook } from "./race-hook";
+import {
+  resolveExpiredNomination,
+  resolveStalledNomination,
+} from "./draft-service";
+import { retryPendingHonorAnnouncements } from "./honors-service";
+import { singleActiveSeason } from "./season";
 
 // Automatic result sync — the league updates itself instead of waiting on a
-// captain or admin to press a button. Driven lazily (no cron/websocket, same
-// philosophy as the draft clock): the sitewide <ResultSyncPing> POSTs
+// captain or admin to press a button. Driven lazily (no cron/websocket): the
+// sitewide <ResultSyncPing> POSTs
 // /api/sync on every page view and slow-polls on match nights, and this
 // service decides — under atomic claims that bound OpenDota usage — whether
-// anything is worth scanning right now. Captain reporting and the admin
+// anything is worth scanning right now. The same heartbeat also advances a
+// due auction clock, so draft progress does not depend on somebody keeping the
+// draft room open. Captain reporting and the admin
 // controls stay as manual overrides for games automation can't see (players
 // with public match data off, unscheduled fixtures).
 
@@ -50,13 +58,18 @@ export type ResultSyncOutcome = {
   imported: number;
   /** An inhouse result was recorded this run. */
   inhouse: boolean;
-  /** Matches are in their detection window or an inhouse lobby is live —
-   *  the client should poll fast so parked dashboards update themselves. */
+  /** A due auction bid or nomination clock advanced this run. */
+  draft: boolean;
+  /** Playoff reconciliation built a round or crowned the champion this run. */
+  playoff: boolean;
+  /** Matches are in their detection window, an inhouse lobby is live, or an
+   *  auction clock is running — the client should poll fast so unattended
+   *  workflows keep advancing and parked dashboards update themselves. */
   watch: boolean;
   /** Change cursor (`resultChangedAt` Setting): bumped by EVERY result path —
-   *  auto sync, captain import, admin record, inhouse. Clients refresh when it
-   *  advances, so the one poller whose request performed an import isn't the
-   *  only viewer who ever repaints. */
+   *  auto sync, captain import, admin record, inhouse, and playoff
+   *  reconciliation. Clients refresh when it advances, so the one poller whose
+   *  request performed an import isn't the only viewer who ever repaints. */
   cursor: string | null;
 };
 
@@ -79,14 +92,11 @@ const claimSyncThrottle = claimThrottle;
 async function syncDueMatches(
   nowMs: number,
 ): Promise<{ imported: number; watch: boolean }> {
-  // Same newest-wins tiebreak as getActiveSeason. If a transient two-active
-  // state ever occurs, every reader must at least agree WHICH season that is —
-  // an unordered findFirst could have auto-sync importing into a different
-  // season than the one the whole UI is rendering.
-  const season = await prisma.season.findFirst({
+  const season = singleActiveSeason(await prisma.season.findMany({
     where: { isActive: true },
     orderBy: { createdAt: "desc" },
-  });
+    take: 2,
+  }));
   if (
     !season ||
     (season.status !== SEASON_STATUS.REGULAR_SEASON &&
@@ -195,11 +205,7 @@ async function syncDueMatches(
           { autoSyncedAt: null },
           {
             autoSyncedAt: {
-              lt: autoSyncClaimCutoff(
-                nowMs,
-                m.autoSyncAttempts,
-                dueMinutes(m),
-              ),
+              lt: autoSyncClaimCutoff(nowMs, m.autoSyncAttempts, dueMinutes(m)),
             },
           },
         ],
@@ -239,6 +245,17 @@ async function syncDueMatches(
  * Gated behind one cheap read so idle page loads cost almost nothing.
  */
 async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
+  // Durable result/void Discord events must progress even after every player
+  // closes the room and no queue exists. Delivery owns an atomic lease and does
+  // the webhook round trip outside transactions; a failed send stays pending.
+  let announcementsPending = false;
+  try {
+    announcementsPending = (await deliverInhouseAnnouncements()).pending;
+  } catch (error) {
+    // The next heartbeat retries. Announcement plumbing must not stop league
+    // result imports or the independent inhouse state resolvers below.
+    console.error("[inhouse-announcement] heartbeat delivery failed", error);
+  }
   const [active, queued] = await Promise.all([
     prisma.inhouseLobby.findFirst({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
@@ -277,7 +294,7 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
     // and closing the tab in the same breath. A Discord channel confidently
     // advertising a dead queue is worse than no board at all.
     await syncInhouseBoard();
-    return { recorded: false, watch: false };
+    return { recorded: false, watch: announcementsPending };
   }
 
   // Abandoned READY/IN_PROGRESS teardown runs here too — this is the path
@@ -290,6 +307,18 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
   await resolveCaptainVote();
   await resolveStalledPick();
   const recorded = await maybeAutoDetectResult();
+  // A result created by maybeAutoDetectResult did not exist during the opening
+  // drain. applyResult already makes one immediate post-commit attempt; this
+  // cheap second pass observes a failed attempt's pending row so the response
+  // keeps the heartbeat in its faster retry cadence.
+  if (recorded) {
+    try {
+      announcementsPending = (await deliverInhouseAnnouncements()).pending;
+    } catch (error) {
+      console.error("[inhouse-announcement] post-result delivery failed", error);
+      announcementsPending = true;
+    }
+  }
 
   const [stillActive, present] = await Promise.all([
     prisma.inhouseLobby.findFirst({
@@ -313,14 +342,80 @@ async function syncInhouse(): Promise<{ recorded: boolean; watch: boolean }> {
   // INHOUSE_ACTIVE_STATUSES — so `stillActive` already pins every client to the
   // fast cadence for the whole 45 seconds and beyond. A `betsCloseAt > now`
   // test here would be dead code wearing the look of a live guard.
-  return { recorded, watch: !!stillActive || present > 0 };
+  return {
+    recorded,
+    watch: !!stillActive || present > 0 || announcementsPending,
+  };
 }
 
 /**
- * Retry series announcements whose Discord send failed. The failing run is
- * the one that COMPLETED the match, so no import path ever re-triggers it —
- * this throttled sweep re-claims exactly the markers announceSeriesResultOnce
- * stamped `failed:` (never anything else, so history can't re-announce).
+ * Advance a due auction clock from the sitewide heartbeat.
+ *
+ * The draft room calls these same idempotent, atomically-claimed resolvers on
+ * every poll. This cheap preflight keeps /api/sync from opening their
+ * transactions unless the newest active season is actually in the Draft phase
+ * with a deadline due. A future live clock remains watch-worthy so any visible
+ * page polls at the one-minute cadence until the deadline is resolved; paused
+ * and completed drafts have no unattended clock to advance.
+ */
+async function syncDraftClocks(
+  nowMs: number,
+): Promise<{ advanced: boolean; watch: boolean }> {
+  const season = singleActiveSeason(await prisma.season.findMany({
+    where: { isActive: true },
+    orderBy: { createdAt: "desc" },
+    take: 2,
+    select: {
+      id: true,
+      status: true,
+      draft: {
+        select: {
+          status: true,
+          bidEndsAt: true,
+          nominationEndsAt: true,
+        },
+      },
+    },
+  }));
+  const draft = season?.draft;
+  if (
+    !season ||
+    season.status !== SEASON_STATUS.DRAFT ||
+    !draft ||
+    draft.status !== DRAFT_STATUS.IN_PROGRESS
+  ) {
+    return { advanced: false, watch: false };
+  }
+
+  const due =
+    (draft.bidEndsAt?.getTime() ?? Number.POSITIVE_INFINITY) <= nowMs ||
+    (draft.nominationEndsAt?.getTime() ?? Number.POSITIVE_INFINITY) <= nowMs;
+  if (!due) return { advanced: false, watch: true };
+
+  // Keep the draft room's ordering: settle a live lot first, then handle an
+  // expired nomination turn. The service claims make this safe when a room
+  // poll and several site heartbeats arrive together.
+  const expired = await resolveExpiredNomination(season.id);
+  const stalled = await resolveStalledNomination(season.id);
+
+  // Another request may have won either claim, and a winning resolver may have
+  // completed the auction. Re-read instead of returning the preflight status so
+  // clients do not fast-poll a draft that is already over.
+  const current = await prisma.draft.findUnique({
+    where: { seasonId: season.id },
+    select: { status: true },
+  });
+  return {
+    advanced: expired || stalled,
+    watch: current?.status === DRAFT_STATUS.IN_PROGRESS,
+  };
+}
+
+/**
+ * Retry durable Discord work whose send failed (or whose weekly award was
+ * invalidated by a result correction). The failing run is usually the one
+ * that completed the match, so no import path can be trusted to re-trigger it;
+ * this throttled sweep delegates to each marker owner's compare-and-swap.
  */
 async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   if (
@@ -336,6 +431,7 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   // series result but strictly more important, so it must not wait on the
   // series queue draining first.
   await retryFailedChampionAnnouncements();
+  await retryPendingHonorAnnouncements();
   const failed = await prisma.setting.findMany({
     where: {
       key: { startsWith: RESULT_ANNOUNCED_PREFIX },
@@ -346,7 +442,9 @@ async function retryFailedAnnouncements(nowMs: number): Promise<void> {
   if (failed.length === 0) return;
   const matches = await prisma.match.findMany({
     where: {
-      id: { in: failed.map((f) => f.key.slice(RESULT_ANNOUNCED_PREFIX.length)) },
+      id: {
+        in: failed.map((f) => f.key.slice(RESULT_ANNOUNCED_PREFIX.length)),
+      },
     },
     select: {
       id: true,
@@ -391,23 +489,71 @@ async function retryFailedChampionAnnouncements(): Promise<void> {
   for (const f of failed) {
     await announceChampionOnce(f.key.slice(CHAMPION_ANNOUNCED_PREFIX.length));
   }
+
+  // No webhook at crowning time deliberately leaves NO marker. That is
+  // different from a failed send, but it still needs a trigger once Discord is
+  // configured later. Only the active completed season is eligible here — a
+  // newly configured league must not replay years of archived champions.
+  const activeChampion = singleActiveSeason(await prisma.season.findMany({
+    where: { isActive: true },
+    orderBy: { createdAt: "desc" },
+    take: 2,
+    select: { id: true, status: true, championTeamId: true },
+  }));
+  if (
+    activeChampion?.status === SEASON_STATUS.COMPLETE &&
+    activeChampion.championTeamId
+  ) {
+    const marker = await prisma.setting.findUnique({
+      where: { key: championAnnouncedKey(activeChampion.id) },
+      select: { key: true },
+    });
+    if (!marker) await announceChampionOnce(activeChampion.id);
+  }
 }
 
-/** One sync pass: league matches + inhouse. Safe (and cheap) on every ping. */
+/**
+ * Reconcile a committed playoff result whose request ended before its
+ * post-commit bracket effect. Advancement is idempotent and transactionally
+ * revalidates its source round, so every ordinary site heartbeat is a safe way
+ * back from a process restart or transient database failure.
+ */
+async function reconcilePlayoffBracket(): Promise<boolean> {
+  const season = singleActiveSeason(await prisma.season.findMany({
+    where: { isActive: true },
+    orderBy: { createdAt: "desc" },
+    take: 2,
+    select: { id: true, status: true },
+  }));
+  if (!season || season.status !== SEASON_STATUS.PLAYOFFS) return false;
+  try {
+    return await advancePlayoffBracket(season.id);
+  } catch {
+    // The next heartbeat retries. A result sync response should not fail after
+    // its independent league/inhouse/draft work already completed.
+    return false;
+  }
+}
+
+/** One sync pass: league matches + inhouse + due draft clocks. */
 export async function runResultSync(): Promise<ResultSyncOutcome> {
   const nowMs = Date.now();
   await retryFailedAnnouncements(nowMs);
-  const [league, inhouse] = await Promise.all([
+  const [league, inhouse, draft] = await Promise.all([
     syncDueMatches(nowMs),
     syncInhouse(),
+    syncDraftClocks(nowMs),
   ]);
+  const playoff = await reconcilePlayoffBracket();
   // Read the cursor AFTER the syncs so a result this very run just landed is
   // already reflected in the value handed back.
   const cursor = await getSetting(SETTING_KEYS.RESULT_CHANGED_AT);
   return {
     imported: league.imported,
     inhouse: inhouse.recorded,
-    watch: league.watch || inhouse.watch,
+    draft: draft.advanced,
+    playoff,
+    watch: league.watch || inhouse.watch || draft.watch,
     cursor,
   };
 }

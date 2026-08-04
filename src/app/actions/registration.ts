@@ -12,9 +12,11 @@ import {
   REGISTRATION_TYPE,
   type RegistrationType,
 } from "@/lib/constants";
+import { draftSetupOpen } from "@/lib/draft-setup";
 import {
   medalProvesIneligible,
   registrationGate,
+  registrationSeasonClosedError,
   withdrawGateError,
 } from "@/lib/registration";
 import { pendingCoverWhere } from "@/lib/standin";
@@ -23,7 +25,6 @@ import { unlinkDiscordAccount } from "@/lib/discord-link-service";
 import { getRoleConfig, setPingRole } from "@/lib/discord-roles";
 import { bool, clampInt, str } from "@/lib/form";
 import {
-  accountIdToSteamId64,
   parseAccountId,
   steamIdToAccountId,
   fetchPlayerRankTier,
@@ -47,6 +48,13 @@ const clearedDraftConfirmation = {
   draftConfirmedFor: null,
 } as const;
 
+class DraftConfirmationClosedError extends Error {}
+class DraftConfirmationChangedError extends Error {}
+class RegistrationLifecycleChangedError extends Error {}
+class RegistrationRosterChangedError extends Error {}
+class RegistrationIdentityChangedError extends Error {}
+class RegistrationStateChangedError extends Error {}
+
 /**
  * A signed-up full player acknowledges the exact draft schedule rendered on
  * /me. Both hidden values are untrusted: identity, registration state and the
@@ -66,6 +74,7 @@ export async function confirmDraftReadiness(
 
   const revisionRaw = str(formData, "draftRevision").trim();
   const draftAtRaw = str(formData, "draftAtTs").trim();
+  const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
   const expectedRevision = Number(revisionRaw);
   const expectedDraftAt = Number(draftAtRaw);
   if (
@@ -81,8 +90,11 @@ export async function confirmDraftReadiness(
 
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
-  if (season.status !== "SIGNUPS") {
-    return { error: "Draft confirmations are closed for this season." };
+  if (!expectedActiveSeasonId || expectedActiveSeasonId !== season.id) {
+    return {
+      error:
+        "The active season changed — reload and review the current draft time.",
+    };
   }
   if (!season.draftAt) {
     return { error: "The draft night has not been scheduled yet." };
@@ -98,32 +110,67 @@ export async function confirmDraftReadiness(
 
   await raceHook("registration.confirmDraftReadiness.beforeWrite");
   const confirmedAt = new Date();
-  const confirmed = await prisma.registration.updateMany({
-    where: {
-      seasonId: season.id,
-      userId: user.id,
-      status: REGISTRATION_STATUS.ACTIVE,
-      type: REGISTRATION_TYPE.PLAYER,
-      // A single SQL statement re-asserts the schedule after the reads above.
-      // If the admin moved it from another request, zero rows are updated.
-      season: {
-        draftRevision: expectedRevision,
-        draftAt: new Date(expectedDraftAt),
-        status: "SIGNUPS",
-        isActive: true,
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const [currentSeason, draft] = await Promise.all([
+          tx.season.findUnique({ where: { id: expectedActiveSeasonId } }),
+          tx.draft.findUnique({
+            where: { seasonId: expectedActiveSeasonId },
+            select: { status: true },
+          }),
+        ]);
+        if (!currentSeason?.isActive) {
+          throw new DraftConfirmationChangedError();
+        }
+        if (!draftSetupOpen(currentSeason.status, draft?.status)) {
+          throw new DraftConfirmationClosedError();
+        }
+        if (
+          currentSeason.draftRevision !== expectedRevision ||
+          currentSeason.draftAt?.getTime() !== expectedDraftAt
+        ) {
+          throw new DraftConfirmationChangedError();
+        }
+        const confirmed = await tx.registration.updateMany({
+          where: {
+            seasonId: currentSeason.id,
+            userId: user.id,
+            status: REGISTRATION_STATUS.ACTIVE,
+            type: REGISTRATION_TYPE.PLAYER,
+            season: {
+              draftRevision: expectedRevision,
+              draftAt: new Date(expectedDraftAt),
+              status: { in: ["SIGNUPS", "DRAFT"] },
+              isActive: true,
+            },
+          },
+          data: {
+            draftConfirmedRevision: expectedRevision,
+            draftConfirmedAt: confirmedAt,
+            draftConfirmedFor: new Date(expectedDraftAt),
+          },
+        });
+        if (confirmed.count === 0) {
+          throw new DraftConfirmationChangedError();
+        }
       },
-    },
-    data: {
-      draftConfirmedRevision: expectedRevision,
-      draftConfirmedAt: confirmedAt,
-      draftConfirmedFor: new Date(expectedDraftAt),
-    },
-  });
-  if (confirmed.count === 0) {
-    return {
-      error:
-        "Your signup or the draft time just changed — reload and review it again.",
-    };
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if (error instanceof DraftConfirmationClosedError) {
+      return { error: "Draft confirmations are closed for this season." };
+    }
+    if (
+      error instanceof DraftConfirmationChangedError ||
+      (error as { code?: string }).code === "P2034"
+    ) {
+      return {
+        error:
+          "Your signup, season, or draft time just changed — reload and review it again.",
+      };
+    }
+    throw error;
   }
 
   // A schedule update that lands immediately after the guarded write makes
@@ -131,10 +178,16 @@ export async function confirmDraftReadiness(
   // stored old revision is retained so /me and admin can explain what changed.
   const current = await prisma.season.findUnique({
     where: { id: season.id },
-    select: { draftRevision: true, draftAt: true, status: true },
+    select: {
+      draftRevision: true,
+      draftAt: true,
+      status: true,
+      isActive: true,
+    },
   });
   if (
-    current?.status !== "SIGNUPS" ||
+    !current?.isActive ||
+    (current.status !== "SIGNUPS" && current.status !== "DRAFT") ||
     current.draftRevision !== expectedRevision ||
     current.draftAt?.getTime() !== expectedDraftAt
   ) {
@@ -163,13 +216,23 @@ export async function saveRegistration(
   }
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
+  const seasonClosed = registrationSeasonClosedError(season.status);
+  if (seasonClosed) return { error: seasonClosed };
+  // This snapshot is intentionally taken before the optional OpenDota fetch.
+  // That network round trip is the widest gap in the action: startDraft can
+  // move the season and auction while the player is waiting. The final
+  // Serializable write re-asserts both versions before changing the pool.
+  const draftSnapshot = await prisma.draft.findUnique({
+    where: { seasonId: season.id },
+    select: { status: true, updatedAt: true },
+  });
 
   const type =
     str(formData, "type") === REGISTRATION_TYPE.STANDIN
       ? REGISTRATION_TYPE.STANDIN
       : REGISTRATION_TYPE.PLAYER;
   let mmr = clampInt(formData, "mmr", 0, 0, 12000);
-  const wantsCaptain = bool(formData, "wantsCaptain");
+  const requestedWantsCaptain = bool(formData, "wantsCaptain");
   const roles = serializeRoles(formData.getAll("roles").map(String));
   // Clamp on whole hero names, not raw characters — a mid-name cut rendered
   // as garbage in the player pool and draft room.
@@ -182,6 +245,19 @@ export async function saveRegistration(
   const existing = await prisma.registration.findUnique({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
   });
+  // Lets the duplicate-submit integration test hold two requests after both
+  // observed "no signup" and prove the unique-key loser is truly idempotent.
+  await raceHook("registration.saveRegistration.afterExistingRead");
+  // Captain volunteering is a signup-phase decision for full players. A
+  // disabled checkbox does not submit, so after signups preserve the stored
+  // answer rather than silently clearing it; standins never enter the captain
+  // candidate pool.
+  const wantsCaptain =
+    type === REGISTRATION_TYPE.PLAYER
+      ? season.status === "SIGNUPS"
+        ? requestedWantsCaptain
+        : (existing?.wantsCaptain ?? false)
+      : false;
 
   // The player's ranked medal, needed BEFORE the gate: claimed MMR is
   // validated against it. On a brand-new signup with no stored medal, pull it
@@ -202,18 +278,36 @@ export async function saveRegistration(
     const accountId = dbUser.dotaAccountId ?? steamIdToAccountId(user.steamId);
     const fetched = accountId ? await fetchPlayerRankTier(accountId) : null;
     if (fetched != null) {
-      await prisma.user.update({
-        where: { id: user.id },
+      // The OpenDota request can take seconds. Another tab may link a
+      // different Dota account while it is in flight, so claim both facts we
+      // fetched against instead of stamping the old account's medal onto the
+      // new link. If the claim loses, use whatever rank is current now.
+      await raceHook("registration.saveRegistration.beforeRankWrite");
+      const stored = await prisma.user.updateMany({
+        where: {
+          id: user.id,
+          rankTier: null,
+          dotaAccountId: dbUser.dotaAccountId,
+        },
         data: { rankTier: fetched },
       });
-      rankTier = fetched;
-      medalLabel = ` · ${rankMedalName(fetched)}`;
+      if (stored.count === 1) {
+        rankTier = fetched;
+        medalLabel = ` · ${rankMedalName(fetched)}`;
+      } else {
+        const current = await prisma.user.findUnique({
+          where: { id: user.id },
+          select: { rankTier: true },
+        });
+        rankTier = current?.rankTier ?? null;
+        medalLabel = rankTier == null ? "" : ` · ${rankMedalName(rankTier)}`;
+      }
     }
   }
 
   // Hard MMR ceiling (the soft limit doesn't block) + "new full players only
-  // during SIGNUPS" (standins any time; existing signups can always be
-  // updated). Rules live in registrationGate — judged on the RAW claim plus
+  // during SIGNUPS" (standins stay open through PLAYOFFS; COMPLETE freezes
+  // every signup). Rules live in registrationGate — judged on the RAW claim plus
   // the medal (never the clamped value: the clamp snaps down to a floor
   // under the ceiling, so gating post-clamp would admit any overstated lie).
   const gateError = registrationGate({
@@ -270,13 +364,9 @@ export async function saveRegistration(
     const wantsMmrChange =
       existing.type === REGISTRATION_TYPE.PLAYER && mmr !== existing.mmr;
     if (wantsTypeFlip || wantsRevival || wantsMmrChange) {
-      const draftRow = await prisma.draft.findUnique({
-        where: { seasonId: season.id },
-        select: { status: true },
-      });
       if (
-        draftRow?.status === DRAFT_STATUS.IN_PROGRESS ||
-        draftRow?.status === DRAFT_STATUS.PAUSED
+        draftSnapshot?.status === DRAFT_STATUS.IN_PROGRESS ||
+        draftSnapshot?.status === DRAFT_STATUS.PAUSED
       ) {
         if (wantsTypeFlip) {
           return {
@@ -354,78 +444,171 @@ export async function saveRegistration(
   const resetDraftConfirmation =
     !!existing &&
     (existing.type !== type || existing.status !== REGISTRATION_STATUS.ACTIVE);
-  // Seam: the rival is this player's own withdrawal from another tab, landing
-  // between the gate's reads and this write.
+  const registrationData = {
+    type,
+    mmr: check.mmr,
+    wantsCaptain,
+    roles,
+    favoriteHeroes,
+    statement,
+    captainNote,
+    status: REGISTRATION_STATUS.ACTIVE,
+    ...(resetDraftConfirmation ? clearedDraftConfirmation : {}),
+  };
+
+  // Seam: a rival may change the signup or start the auction after every
+  // read above. The authoritative lifecycle read and the write below share a
+  // SERIALIZABLE transaction. In Postgres that makes startDraft's pool read
+  // and this pool write conflict instead of both committing; the copied
+  // season/draft versions also make the deterministic pre-snapshot ordering
+  // fail cleanly on SQLite.
   await raceHook("registration.saveRegistration.beforeWrite");
-  const revived = await prisma.registration.updateMany({
-    where: {
-      seasonId: season.id,
-      userId: user.id,
-      status: statusClaim,
-    },
-    data: {
-      type,
-      mmr: check.mmr,
-      wantsCaptain,
-      roles,
-      favoriteHeroes,
-      statement,
-      captainNote,
-      status: "ACTIVE",
-      ...(resetDraftConfirmation ? clearedDraftConfirmation : {}),
-    },
-  });
-  // Zero rows with a row on file means the claim refused it — the signup is
-  // REMOVED. (A row that appeared in the gap is ACTIVE or WITHDRAWN, so it
-  // matches and updates normally.)
-  if (revived.count === 0 && existing) {
-    return {
-      error: medalIneligible
-        ? // The tighter ACTIVE claim above: their signup stopped being active
-          // between the gate and the write, and with an over-ceiling medal
-          // they can't reopen it themselves — say which door to knock on.
-          "Your signup isn't active any more, and your medal is above the league's MMR ceiling — an admin has to put you back in the pool."
-        : "An admin removed your signup for this season — message them if you think that's a mistake.",
-    };
+  let createdNew = false;
+  let saved = false;
+  for (let attempt = 0; attempt < 2 && !saved; attempt += 1) {
+    try {
+      createdNew = await prisma.$transaction(
+        async (tx) => {
+          const [
+            currentSeason,
+            currentDraft,
+            currentRegistration,
+            currentUser,
+            seat,
+          ] = await Promise.all([
+            tx.season.findUnique({
+              where: { id: season.id },
+              select: { isActive: true, status: true, updatedAt: true },
+            }),
+            tx.draft.findUnique({
+              where: { seasonId: season.id },
+              select: { status: true, updatedAt: true },
+            }),
+            tx.registration.findUnique({
+              where: {
+                seasonId_userId: { seasonId: season.id, userId: user.id },
+              },
+              select: { id: true, status: true },
+            }),
+            tx.user.findUnique({
+              where: { id: user.id },
+              select: { rankTier: true },
+            }),
+            type === REGISTRATION_TYPE.STANDIN
+              ? tx.teamMember.findUnique({
+                  where: {
+                    seasonId_userId: {
+                      seasonId: season.id,
+                      userId: user.id,
+                    },
+                  },
+                  select: { id: true },
+                })
+              : Promise.resolve(null),
+          ]);
+
+          const draftPresenceChanged = !!currentDraft !== !!draftSnapshot;
+          const draftVersionChanged =
+            !draftPresenceChanged &&
+            currentDraft != null &&
+            draftSnapshot != null &&
+            (currentDraft.status !== draftSnapshot.status ||
+              currentDraft.updatedAt.getTime() !==
+                draftSnapshot.updatedAt.getTime());
+          if (
+            !currentSeason?.isActive ||
+            currentSeason.status !== season.status ||
+            currentSeason.updatedAt.getTime() !== season.updatedAt.getTime() ||
+            draftPresenceChanged ||
+            draftVersionChanged
+          ) {
+            throw new RegistrationLifecycleChangedError();
+          }
+          if (!currentUser || currentUser.rankTier !== rankTier) {
+            throw new RegistrationIdentityChangedError();
+          }
+          if (seat) throw new RegistrationRosterChangedError();
+
+          // Postgres-only seam: startDraft commits after the snapshot above
+          // but before this write. SERIALIZABLE must choose one winner.
+          await raceHook("registration.saveRegistration.afterLifecycleGate");
+
+          const revived = await tx.registration.updateMany({
+            where: {
+              seasonId: season.id,
+              userId: user.id,
+              status: statusClaim,
+            },
+            data: registrationData,
+          });
+          if (revived.count === 1) return false;
+
+          // A row that failed the guarded update is REMOVED, or (for an
+          // ineligible medal) no longer ACTIVE. Refuse it in this transaction
+          // instead of attempting a create and learning through P2002.
+          if (currentRegistration) throw new RegistrationStateChangedError();
+
+          await tx.registration.create({
+            data: {
+              seasonId: season.id,
+              userId: user.id,
+              ...registrationData,
+            },
+          });
+          return true;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+      saved = true;
+    } catch (error) {
+      if (error instanceof RegistrationLifecycleChangedError) {
+        return {
+          error:
+            "The season or draft changed while you submitted — reload and review your signup before trying again.",
+        };
+      }
+      if (error instanceof RegistrationIdentityChangedError) {
+        return {
+          error:
+            "Your verified Dota details changed while you submitted — reload before trying again.",
+        };
+      }
+      if (error instanceof RegistrationRosterChangedError) {
+        return {
+          error:
+            "You've just joined a roster — ask an admin to release you before switching to standin.",
+        };
+      }
+      if (error instanceof RegistrationStateChangedError) {
+        return {
+          error: medalIneligible
+            ? "Your signup isn't active any more, and your medal is above the league's MMR ceiling — an admin has to put you back in the pool."
+            : existing
+              ? "An admin removed your signup for this season — message them if you think that's a mistake."
+              : "That signup changed while you submitted — reload before trying again.",
+        };
+      }
+      const code = (error as { code?: string }).code;
+      if ((code === "P2002" || code === "P2034") && attempt === 0) continue;
+      if (code === "P2002" || code === "P2034") {
+        return {
+          error:
+            "That signup, season, or draft changed while you submitted — reload before trying again.",
+        };
+      }
+      throw error;
+    }
   }
-  if (revived.count === 0) {
-    // Genuinely no row yet: create it. Still an upsert, because a concurrent
-    // first signup from the same player (double-submit) would otherwise hit
-    // the seasonId_userId unique index.
-    await prisma.registration.upsert({
-      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
-      create: {
-        seasonId: season.id,
-        userId: user.id,
-        type,
-        mmr: check.mmr,
-        wantsCaptain,
-        roles,
-        favoriteHeroes,
-        statement,
-        captainNote,
-        status: "ACTIVE",
-      },
-      update: {
-        type,
-        mmr: check.mmr,
-        wantsCaptain,
-        roles,
-        favoriteHeroes,
-        statement,
-        captainNote,
-        status: "ACTIVE",
-        // This branch means another first-signup request created the row in
-        // the gap. It cannot legitimately carry a confirmation from the page
-        // this request rendered before that row existed.
-        ...clearedDraftConfirmation,
-      },
-    });
+  if (!saved) {
+    return {
+      error:
+        "That signup, season, or draft changed while you submitted — reload before trying again.",
+    };
   }
 
   // Announce brand-new full-player signups (not updates or standins) with a
   // countdown to the draft threshold.
-  if (!existing && type === REGISTRATION_TYPE.PLAYER) {
+  if (createdNew && type === REGISTRATION_TYPE.PLAYER) {
     const playerCount = await prisma.registration.count({
       where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
     });
@@ -462,7 +645,9 @@ export async function saveRegistration(
             ? "Registered as a standin"
             : "You're signed up!") +
           // The adjustment note already names the medal — don't say it twice.
-          (mmrNote ? "" : medalLabel)) + mmrNote + lockedMmrNote,
+          (mmrNote ? "" : medalLabel)) +
+      mmrNote +
+      lockedMmrNote,
   };
 }
 
@@ -484,6 +669,8 @@ export async function leaveLeague(
   }
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
+  const seasonClosed = registrationSeasonClosedError(season.status);
+  if (seasonClosed) return { error: seasonClosed };
 
   const reg = await prisma.registration.findUnique({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
@@ -541,10 +728,32 @@ export async function leaveLeague(
   try {
     await prisma.$transaction(
       async (tx) => {
-        const live = await tx.standinAssignment.count({
-          where: pendingCoverWhere(user.id, season.id),
-        });
+        const [live, currentDraft, currentSeason] = await Promise.all([
+          tx.standinAssignment.count({
+            where: pendingCoverWhere(user.id, season.id),
+          }),
+          tx.draft.findUnique({
+            where: { seasonId: season.id },
+            select: { status: true, nominatedUserId: true },
+          }),
+          tx.season.findUnique({
+            where: { id: season.id },
+            select: { isActive: true, status: true },
+          }),
+        ]);
+        if (!currentSeason?.isActive) throw new Error("SEASON_CHANGED");
+        if (registrationSeasonClosedError(currentSeason.status)) {
+          throw new Error("SEASON_CLOSED");
+        }
         if (live > 0) throw new Error("COVER_APPEARED");
+        if (
+          currentDraft &&
+          (currentDraft.status === DRAFT_STATUS.IN_PROGRESS ||
+            currentDraft.status === DRAFT_STATUS.PAUSED) &&
+          currentDraft.nominatedUserId === user.id
+        ) {
+          throw new Error("ON_BLOCK");
+        }
         // The "you're on a roster — get released first" half of the gate was
         // judged on reads taken outside this transaction, so a draft sale or a
         // free-agent signing landing in the gap let a ROSTERED player withdraw:
@@ -555,7 +764,8 @@ export async function leaveLeague(
           where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
           select: { isCaptain: true },
         });
-        if (seat) throw new Error(seat.isCaptain ? "IS_CAPTAIN" : "IS_ROSTERED");
+        if (seat)
+          throw new Error(seat.isCaptain ? "IS_CAPTAIN" : "IS_ROSTERED");
         // `status: "ACTIVE"` is the whole reason this is an updateMany. The
         // gate above judged a row read before several more round trips, and an
         // admin REMOVAL landing in that gap must survive: without the
@@ -581,6 +791,11 @@ export async function leaveLeague(
         error:
           "You've just been assigned to stand in for an unplayed match — that has to be removed first.",
       };
+    if ((e as Error).message === "ON_BLOCK")
+      return {
+        error:
+          "You're on the auction block right now — wait for the lot to settle before withdrawing.",
+      };
     if ((e as Error).message === "IS_CAPTAIN")
       return {
         error:
@@ -596,6 +811,14 @@ export async function leaveLeague(
         error:
           "Your signup isn't active any more — reload to see where it stands.",
       };
+    if ((e as Error).message === "SEASON_CHANGED")
+      return {
+        error: "The active season changed — reload before withdrawing.",
+      };
+    if ((e as Error).message === "SEASON_CLOSED")
+      return {
+        error: "This season is complete — its signup history is now read-only.",
+      };
     if ((e as { code?: string }).code === "P2034")
       return { error: "Your signup just changed — reload and try again." };
     throw e;
@@ -604,7 +827,7 @@ export async function leaveLeague(
   return { message: "Withdrawn from this season" };
 }
 
-/** Link the current user's Dota/Dotabuff account and fetch their ranked medal. */
+/** Use the current user's Steam-verified Dota account and fetch their medal. */
 export async function updateDotaAccount(
   _prev: ActionResult,
   formData: FormData,
@@ -616,14 +839,18 @@ export async function updateDotaAccount(
     return { error: "Sign in required" };
   }
   const raw = str(formData, "dotaAccountId").trim();
+  const linkedBefore = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { dotaAccountId: true },
+  });
+  if (!linkedBefore) return { error: "Sign in required" };
+  const verifiedAccountId = steamIdToAccountId(user.steamId);
 
   let accountId: number | null;
+  let expectedOverride: number | null;
   if (!raw) {
-    accountId = steamIdToAccountId(user.steamId);
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { dotaAccountId: null },
-    });
+    accountId = verifiedAccountId;
+    expectedOverride = null;
   } else {
     const parsed = parseAccountId(raw);
     if (!parsed) {
@@ -631,50 +858,71 @@ export async function updateDotaAccount(
         error: "Enter an account id, SteamID64, or Dotabuff/OpenDota URL",
       };
     }
-    // Nothing proves this account belongs to the person typing it, but a
-    // COLLISION is the part that actually breaks things: two league players
-    // claiming one account id puts the same account in both teams' sets, so
-    // classifyGame sees a player on both sides and every import for that match
-    // fails (or attributes the box-score line to the wrong person).
-    //
-    // Most users never set an override — their EFFECTIVE account id is DERIVED
-    // from their SteamID64 (`dotaAccountId ?? steamIdToAccountId(steamId)`,
-    // the pattern every consumer uses). So the check must catch B pasting A's
-    // Dotabuff URL even though A's stored override is null: match the stored
-    // override OR the steamId the pasted id derives from.
-    const taken = await prisma.user.findFirst({
-      where: {
-        id: { not: user.id },
-        OR: [
-          { dotaAccountId: parsed },
-          { dotaAccountId: null, steamId: accountIdToSteamId64(parsed) },
-        ],
-      },
-      select: { name: true },
-    });
-    if (taken) {
+    // A pasted public profile proves only that the account exists; it proves
+    // nothing about who controls it. Steam OpenID is the ownership proof, and
+    // the 32-bit Dota id is deterministic from that authenticated SteamID64.
+    // Accept that verified id (stored as NULL so every consumer derives it),
+    // or an unchanged legacy override solely for backward-compatible refresh.
+    // A legacy value can be cleared, but cannot be changed to another
+    // unverified account through this self-service action.
+    const unchangedLegacyOverride =
+      linkedBefore.dotaAccountId != null &&
+      parsed === linkedBefore.dotaAccountId &&
+      parsed !== verifiedAccountId;
+    if (parsed !== verifiedAccountId && !unchangedLegacyOverride) {
       return {
-        error: `That Dota account is already linked to ${taken.name} — check you pasted your own profile`,
+        error:
+          "That Dota account does not match the Steam account you signed in with. Sign out and use the Steam account that owns it.",
       };
     }
     accountId = parsed;
-    try {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { dotaAccountId: parsed },
-      });
-    } catch (e) {
-      // The @unique on dotaAccountId is the write-time re-assert of the
-      // read-time check above (two overrides racing to the same id) — map the
-      // constraint to the same honest error instead of a 500.
-      if ((e as { code?: string }).code === "P2002") {
-        return {
-          error:
-            "That Dota account was just linked by someone else — check you pasted your own profile",
-        };
-      }
-      throw e;
+    expectedOverride = unchangedLegacyOverride ? parsed : null;
+  }
+
+  const previousEffectiveId =
+    linkedBefore.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  const accountChanged = previousEffectiveId !== accountId;
+  try {
+    // Claim the account transition against the override we actually read. If
+    // another tab committed first, this action stands down rather than
+    // silently replacing it. Metadata is cleared only when the EFFECTIVE
+    // account changes: a failed OpenDota fetch must preserve valid data for an
+    // unchanged link, but must never leave the old account's medal/scouting
+    // attached to a new one.
+    // Seam: this user's other tab replaces the override after our read but
+    // before the CAS; the stale submit must preserve that newer link's data.
+    await raceHook("registration.updateDotaAccount.beforeLinkClaim");
+    const linked = await prisma.user.updateMany({
+      where: { id: user.id, dotaAccountId: linkedBefore.dotaAccountId },
+      data: {
+        dotaAccountId: expectedOverride,
+        ...(accountChanged
+          ? {
+              rankTier: null,
+              fhUnavailable: null,
+              pubStats: null,
+              pubStatsAt: null,
+            }
+          : {}),
+      },
+    });
+    if (linked.count === 0) {
+      return {
+        error:
+          "Your Dota account changed in another tab — reload to see the current link.",
+      };
     }
+  } catch (e) {
+    // A legacy explicit override remains unique. Map an unexpected collision
+    // to actionable feedback instead of a 500; newly submitted values never
+    // reach this point unless Steam proves ownership.
+    if ((e as { code?: string }).code === "P2002") {
+      return {
+        error:
+          "That legacy Dota account is already linked elsewhere. Use the Steam account that owns it.",
+      };
+    }
+    throw e;
   }
 
   let medal = "";
@@ -690,7 +938,7 @@ export async function updateDotaAccount(
       // WHERE re-asserts the override this snapshot was fetched under — a
       // second submit racing this one must not land the old account's data.
       await prisma.user.updateMany({
-        where: { id: user.id, dotaAccountId: raw ? accountId : null },
+        where: { id: user.id, dotaAccountId: expectedOverride },
         data: {
           pubStats: JSON.stringify(pubResult.stats),
           pubStatsAt: new Date(),
@@ -703,8 +951,8 @@ export async function updateDotaAccount(
       // account, so on an account change "OpenDota didn't say" must reset to
       // unknown, or a once-private player keeps the danger banner forever on
       // a fresh public account.
-      await prisma.user.update({
-        where: { id: user.id },
+      await prisma.user.updateMany({
+        where: { id: user.id, dotaAccountId: expectedOverride },
         data: {
           rankTier: result.rankTier,
           fhUnavailable: result.fhUnavailable,
@@ -716,11 +964,26 @@ export async function updateDotaAccount(
       // wiping it; they can retry with "Refresh medal".
       medal = " · couldn't fetch medal (try Refresh)";
     }
+    const current = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { dotaAccountId: true },
+    });
+    if (current?.dotaAccountId !== expectedOverride) {
+      refresh();
+      return {
+        error:
+          "Your Dota account changed in another tab — reload to see the current link.",
+      };
+    }
   } else {
     // No derivable account — clear any stale medal (and the private-data
     // flag + scouting snapshot, which belonged to the unlinked account).
-    await prisma.user.update({
-      where: { id: user.id },
+    // A second account-link submit can land after the transition above but
+    // before this cleanup. Keep the seam immediately beside the guarded write
+    // so the old account's cleanup can never wipe the newer account's data.
+    await raceHook("registration.updateDotaAccount.beforeClearMetadata");
+    const cleared = await prisma.user.updateMany({
+      where: { id: user.id, dotaAccountId: expectedOverride },
       data: {
         rankTier: null,
         fhUnavailable: null,
@@ -728,10 +991,24 @@ export async function updateDotaAccount(
         pubStatsAt: null,
       },
     });
+    if (cleared.count === 0) {
+      refresh();
+      return {
+        error:
+          "Your Dota account changed in another tab — reload to see the current link.",
+      };
+    }
   }
 
   refresh();
-  return { message: (raw ? "Account linked" : "Cleared — using Steam") + medal };
+  return {
+    message:
+      (expectedOverride == null
+        ? raw
+          ? "Steam account verified"
+          : "Cleared — using Steam"
+        : "Legacy account refreshed") + medal,
+  };
 }
 
 /** Re-fetch the current user's ranked medal from OpenDota. */
@@ -746,6 +1023,7 @@ export async function refreshRank(
     return { error: "Sign in required" };
   }
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+  if (!dbUser) return { error: "Sign in required" };
   const accountId = dbUser?.dotaAccountId ?? steamIdToAccountId(user.steamId);
   if (!accountId) return { error: "Link your account first" };
 
@@ -759,12 +1037,34 @@ export async function refreshRank(
     // WHERE re-asserts the account the snapshot describes (the repo rule) —
     // an account relink committing mid-fetch must not inherit these figures.
     await prisma.user.updateMany({
-      where: { id: user.id, dotaAccountId: dbUser?.dotaAccountId ?? null },
+      where: { id: user.id, dotaAccountId: dbUser.dotaAccountId },
       data: {
         pubStats: JSON.stringify(pubResult.stats),
         pubStatsAt: new Date(),
       },
     });
+  }
+  if (result.ok) {
+    await prisma.user.updateMany({
+      where: { id: user.id, dotaAccountId: dbUser.dotaAccountId },
+      data: {
+        rankTier: result.rankTier,
+        ...(result.fhUnavailable !== null
+          ? { fhUnavailable: result.fhUnavailable }
+          : {}),
+      },
+    });
+  }
+  const current = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { dotaAccountId: true },
+  });
+  if (current?.dotaAccountId !== dbUser.dotaAccountId) {
+    refresh();
+    return {
+      error:
+        "Your Dota account changed in another tab — reload before refreshing it.",
+    };
   }
   if (!result.ok) {
     // Don't wipe a stored medal because OpenDota was momentarily unreachable —
@@ -781,15 +1081,6 @@ export async function refreshRank(
       error: "Couldn't reach OpenDota (rate limited?) — try again in a moment",
     };
   }
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      rankTier: result.rankTier,
-      ...(result.fhUnavailable !== null
-        ? { fhUnavailable: result.fhUnavailable }
-        : {}),
-    },
-  });
   refresh();
   return {
     message: result.rankTier
@@ -813,7 +1104,8 @@ export async function refreshSteamProfile(
   const p = profiles.get(user.steamId);
   if (!p) {
     return {
-      error: "Couldn't reach Steam (is STEAM_API_KEY set and your profile public?)",
+      error:
+        "Couldn't refresh from Steam right now. Check that your Steam profile is public and try again; ask an admin if it keeps failing.",
     };
   }
   await prisma.user.update({
@@ -923,7 +1215,12 @@ export async function setInhousePingOptIn(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  const user = await requireUser();
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
   const on = str(formData, "on") === "1";
 
   const me = await prisma.user.findUnique({
