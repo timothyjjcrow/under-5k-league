@@ -59,6 +59,18 @@ Hosting plan and Node 22 evidence:
 Manual promotion / deployment-check evidence:
 Production-vs-preview database isolation evidence:
 Authoritative scheduler (exactly one) and one-minute cadence evidence:
+Production function region / database region / pool-limit evidence:
+Deployment Protection for previews and generated deployment URLs:
+
+Canonical DNS resolves directly to Vercel OR approved Trusted Proxy evidence:
+Vercel WAF ruleset version + rule IDs + production-domain scope:
+WAF log-mode baseline / shared-NAT test / block-mode result:
+Multi-instance abuse test and database/provider QPS plateau result:
+`x-vercel-forwarded-for` trust-path evidence (no user-supplied fallback):
+`/api/sync` and `/api/calendar` MISS→HIT edge-cache evidence:
+Authenticated/personalized response never-HIT evidence:
+Production `__Host-` session/OAuth creation and expiration Set-Cookie evidence:
+First-release forced reauthentication communication/result:
 
 Credential-free production database identity:
 Database provider protection / spend-limit evidence:
@@ -79,6 +91,8 @@ Discord OAuth exact callback result:
 Discord bot guild/role hierarchy result:
 League/inhouse webhook channel result:
 OpenDota profile and real match-import result:
+Temporary credential failure/timeout log-trace inspection + rotation result:
+Largest representative season archive byte size / 413 rehearsal result:
 Published privacy mailbox and page verification:
 Verified hosting/database/backup/log storage countries:
 Primary/deputy mailbox MFA and continuity result:
@@ -106,7 +120,10 @@ Residual risks explicitly accepted:
 2. Confirm production promotion requires a human approval or protected
    deployment check. Pause the production scheduler during the release window.
 3. Confirm Node 22, Vercel Pro/Enterprise (or the reviewed external scheduler),
-   database spend/protection limits, and production/preview database isolation.
+   database spend/protection limits, production/preview database isolation,
+   Deployment Protection on previews/generated deployment URLs, a function
+   region close to the database, and reviewed runtime/direct connection-pool
+   ceilings. Complete the edge/proxy/abuse gate below before opening traffic.
 4. Validate production configuration with no test overrides. The pooled and
    direct PostgreSQL URLs must identify the same project, database, schema, and
    username for this release; only their host form, port, and password may
@@ -116,7 +133,13 @@ Residual risks explicitly accepted:
    and record its artifact name and SHA-256. Record a provider PITR point and
    configured restore window. Complete a disposable restore rehearsal. For an
    old `db push` database, use the guarded legacy-baseline rehearsal documented
-   in the README before recording the baseline on the live database.
+   in the README before recording the baseline on the live database. On the
+   production-like candidate, download the largest representative season audit
+   archive and record its UTF-8 response size. If it reaches the application's
+   4,000,000-byte ceiling and returns 413, approve and rehearse an out-of-band
+   audit-export path before allowing that season to be deleted; the full backup
+   is required recovery evidence but does not replace this multi-user audit
+   artifact.
 6. On a production-like candidate backed by a non-production database, verify
    `/api/health/live`, `/api/health/ready`, unauthorized cron = 401, POST
    `/api/sync` = 405, and read-only GET `/api/sync`. Exercise one bounded manual
@@ -125,7 +148,12 @@ Residual risks explicitly accepted:
 7. Complete real credential smoke tests: allowlisted Steam login/profile,
    Discord OAuth, guild membership/role behavior, each configured webhook,
    OpenDota profile lookup, and one known Dota match import. Confirm failure UI
-   does not disclose credentials.
+   does not disclose credentials. With temporary/sacrificial provider
+   credentials, exercise a rejected request and timeout, inspect host logs and
+   outbound traces for Steam/OpenDota query credentials and Discord webhook
+   path tokens, then rotate the temporary values. Platform tracing is outside
+   application catch blocks; any captured credential is a release stop until
+   tracing is redacted/disabled and the credential is rotated.
 8. Verify the privacy/data-use page matches the selected host, database,
    backups, scheduler, logging, retention behavior, external-provider limits,
    and contact process. Confirm the privacy primary and deputy can independently
@@ -137,6 +165,62 @@ Residual risks explicitly accepted:
    cron non-2xx, and database/provider faults. Deliver and acknowledge a test
    alert through a channel that remains available if Discord or this site is
    down.
+
+## Edge, proxy, cache, and abuse-control gate
+
+The application limiter is intentionally per warm process. It is defense in
+depth, not a fleet-wide boundary. Before public DNS opens, configure
+[Vercel WAF rate limits](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting)
+on the production project and capture the versioned ruleset plus rule IDs. Use
+these conservative starting points, scoped by method and path, then tune from a
+closed candidate's measured shared-NAT traffic:
+
+- `POST /api/inhouse` and `POST /api/draft/tick`: 1,200 requests/minute/IP.
+  One venue can contain all players, spectators, and multiple tabs; a lower
+  untested limit can break a live draft or inhouse night.
+- `POST /api/draft/bid`, `/api/draft/nominate`, and
+  `/api/draft/admin-nominate`: 120 requests/minute/IP.
+- `GET /api/sync`: 300 requests/minute/IP; `GET /api/calendar`: 60/minute/IP.
+- Steam/Discord OAuth kickoff: 60/minute/IP; each callback: 20/minute/IP;
+  logout: 60/minute/IP. Do not attach a browser challenge to callbacks.
+- `GET /api/admin/season-export`: five requests per ten minutes/IP. App auth
+  remains authoritative; a WAF rule is not an administrator permission.
+- Keep health probes and the bearer-authenticated cron path free of browser
+  challenges. Allow the reviewed scheduler path, while retaining the
+  application's constant-time bearer check and independent non-2xx monitor.
+
+Run the rules in Log mode during a closed shared-NAT rehearsal, inspect allowed
+and would-block events, then switch the reviewed version to Block before public
+traffic. Test normal room cadence, duplicate tabs, invalid bodies, callbacks,
+and a controlled flood across multiple function instances. Evidence must show
+that origin database/provider QPS plateaus and legitimate venue traffic remains
+usable. Any exception or bypass must have an owner, expiry, and monitor.
+
+The canonical domain must resolve directly to Vercel. If another CDN or proxy
+sits in front, stop unless the reviewed plan supports and enables Vercel Trusted
+Proxy and the end-to-end client-address behavior is tested. At direct Vercel
+ingress, the platform overwrites forwarding headers; the application prefers
+`x-vercel-forwarded-for` and deliberately refuses to fall through when that
+provider-owned value is malformed. Record DNS, proxy, and WAF event evidence;
+do not infer client identity from a header sent straight to local development.
+
+Verify the two viewer-independent microcaches on the deployed candidate:
+repeat `/api/sync` and one representative `/api/calendar` URL until
+`x-vercel-cache` demonstrates MISS→HIT within their five-/thirty-second edge
+windows. Confirm the browser-facing `Cache-Control` still requires
+revalidation. In a separate signed-in test, prove session-tailored pages and
+room responses never return `x-vercel-cache: HIT`. A personalized HIT is a
+release stop.
+
+Finally, inspect production `Set-Cookie` headers after Steam login and Discord
+link kickoff, then inspect logout plus successful, cancelled, and failed
+callback expiration responses. Session, Steam state/return, and Discord state
+cookies must use `__Host-` names with `Secure`, `Path=/`, no `Domain`,
+`HttpOnly`, and `SameSite=Lax`; expiration headers must retain those attributes
+while setting an empty value, `Max-Age=0`, and an epoch `Expires`. The hardened
+name intentionally invalidates sessions from the previous release; announce and
+verify the one-time sign-in requirement rather than adding a legacy-cookie
+fallback that restores sibling-domain cookie tossing.
 
 ## Privacy requests and retention
 

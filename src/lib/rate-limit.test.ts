@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   rateLimit,
   clientIp,
+  retryAfterSeconds,
   __rateLimitBucketCount,
   __resetRateLimits,
 } from "./rate-limit";
@@ -33,6 +34,13 @@ describe("rateLimit", () => {
     expect(rateLimit("a", opts, 0).allowed).toBe(false);
   });
 
+  it("rounds Retry-After up to a positive whole second", () => {
+    expect(retryAfterSeconds({ allowed: false, retryAfterMs: 2_001 })).toBe(
+      "3",
+    );
+    expect(retryAfterSeconds({ allowed: false, retryAfterMs: 0 })).toBe("1");
+  });
+
   it("bounds high-cardinality live buckets with oldest-window eviction", () => {
     const opts = { limit: 1, windowMs: 60_000 };
     for (let i = 0; i < 6_000; i += 1) {
@@ -49,13 +57,41 @@ describe("clientIp", () => {
   const req = (h: Record<string, string>) => ({
     headers: { get: (n: string) => h[n.toLowerCase()] ?? null },
   });
-  it("uses the first x-forwarded-for entry", () => {
+  it("prefers Vercel's platform-owned forwarding header", () => {
+    expect(
+      clientIp(
+        req({
+          "x-vercel-forwarded-for": "2001:DB8::1",
+          "x-forwarded-for": "198.51.100.9",
+        }),
+      ),
+    ).toBe("2001:db8::1");
+  });
+  it("uses the first valid x-forwarded-for entry outside Vercel", () => {
     expect(clientIp(req({ "x-forwarded-for": "1.2.3.4, 5.6.7.8" }))).toBe(
       "1.2.3.4",
     );
   });
-  it("falls back to x-real-ip, then 'unknown'", () => {
+  it("falls back to a valid x-real-ip, then one shared unknown bucket", () => {
     expect(clientIp(req({ "x-real-ip": "9.9.9.9" }))).toBe("9.9.9.9");
     expect(clientIp(req({}))).toBe("unknown");
+  });
+  it.each([
+    "attacker-controlled",
+    "1.2.3.4:443",
+    "999.999.999.999",
+    "x".repeat(600),
+  ])("rejects an invalid high-cardinality identity %j", (value) => {
+    expect(clientIp(req({ "x-forwarded-for": value }))).toBe("unknown");
+  });
+  it("does not fall through when the attested Vercel header is invalid", () => {
+    expect(
+      clientIp(
+        req({
+          "x-vercel-forwarded-for": "forged",
+          "x-forwarded-for": "198.51.100.9",
+        }),
+      ),
+    ).toBe("unknown");
   });
 });

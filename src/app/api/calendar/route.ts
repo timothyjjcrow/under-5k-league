@@ -22,6 +22,14 @@ function safeCalendarFilename(value: string): string {
  * calendar app; `?team=<id>` narrows it to one team's matches.
  */
 export async function GET(req: NextRequest) {
+  const requestedTeamId = req.nextUrl.searchParams.get("team");
+  if (requestedTeamId !== null && requestedTeamId.length > 128) {
+    return new NextResponse("Team filter is too long", {
+      status: 400,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+
   const season = await getActiveSeason();
   if (!season) {
     return new NextResponse("No active season", {
@@ -30,7 +38,6 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const requestedTeamId = req.nextUrl.searchParams.get("team");
   const teamId = requestedTeamId?.trim() || null;
   const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
   const selectedTeam = teamId ? teams.find((team) => team.id === teamId) : null;
@@ -86,6 +93,8 @@ export async function GET(req: NextRequest) {
       // copy, but every reuse must revalidate so a moved match is not served as
       // current without checking the application first.
       "cache-control": "public, max-age=0, must-revalidate",
+      "vercel-cdn-cache-control":
+        "public, max-age=30, stale-while-revalidate=30",
       "x-content-type-options": "nosniff",
     },
   });

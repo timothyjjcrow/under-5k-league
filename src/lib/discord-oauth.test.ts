@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  DISCORD_OAUTH_COOKIE_PATH,
   buildDiscordAuthUrl,
   codeChallengeS256,
   discordProfileFromMe,
@@ -9,6 +10,9 @@ import {
   safeEqual,
   unpackOauthCookie,
 } from "./discord-oauth";
+
+const OAUTH_STATE = "s".repeat(43);
+const OAUTH_VERIFIER = "v".repeat(43);
 
 describe("buildDiscordAuthUrl", () => {
   const url = buildDiscordAuthUrl({
@@ -94,11 +98,19 @@ describe("randomOauthValue", () => {
 });
 
 describe("oauth cookie pack/unpack", () => {
+  it("uses the root path required by production __Host- cookies", () => {
+    expect(DISCORD_OAUTH_COOKIE_PATH).toBe("/");
+  });
+
   it("round-trips state + verifier + initiating site user", () => {
-    const packed = packOauthCookie("abc", "def", "site-user-1");
+    const packed = packOauthCookie(
+      OAUTH_STATE,
+      OAUTH_VERIFIER,
+      "site-user-1",
+    );
     expect(unpackOauthCookie(packed)).toEqual({
-      state: "abc",
-      verifier: "def",
+      state: OAUTH_STATE,
+      verifier: OAUTH_VERIFIER,
       userId: "site-user-1",
       next: null,
     });
@@ -132,14 +144,14 @@ describe("oauth cookie pack/unpack", () => {
 
   it("round-trips a validated return path as an opaque final part", () => {
     const packed = packOauthCookie(
-      "abc",
-      "def",
+      OAUTH_STATE,
+      OAUTH_VERIFIER,
       "site-user-3",
       "/players?pos=1",
     );
     expect(unpackOauthCookie(packed)).toEqual({
-      state: "abc",
-      verifier: "def",
+      state: OAUTH_STATE,
+      verifier: OAUTH_VERIFIER,
       userId: "site-user-3",
       next: "/players?pos=1",
     });
@@ -154,8 +166,15 @@ describe("oauth cookie pack/unpack", () => {
       "/ok\nSet-Cookie: x",
       "\\evil",
     ]) {
-      expect(packOauthCookie("abc", "def", "site-user-4", evil)).toBe(
-        `v2.abc.def.${Buffer.from("site-user-4").toString("base64url")}`,
+      expect(
+        packOauthCookie(
+          OAUTH_STATE,
+          OAUTH_VERIFIER,
+          "site-user-4",
+          evil,
+        ),
+      ).toBe(
+        `v2.${OAUTH_STATE}.${OAUTH_VERIFIER}.${Buffer.from("site-user-4").toString("base64url")}`,
       );
     }
   });
@@ -166,22 +185,35 @@ describe("oauth cookie pack/unpack", () => {
     // it becoming an open redirect.
     const evil = Buffer.from("https://evil.test").toString("base64url");
     const user = Buffer.from("site-user-5").toString("base64url");
-    expect(unpackOauthCookie(`v2.abc.def.${user}.${evil}`)).toEqual({
-      state: "abc",
-      verifier: "def",
+    expect(
+      unpackOauthCookie(`v2.${OAUTH_STATE}.${OAUTH_VERIFIER}.${user}.${evil}`),
+    ).toEqual({
+      state: OAUTH_STATE,
+      verifier: OAUTH_VERIFIER,
       userId: "site-user-5",
       next: null,
     });
-    expect(unpackOauthCookie(`v2.abc.def.${user}.!!!`)).toMatchObject({
-      state: "abc",
-      verifier: "def",
+    expect(
+      unpackOauthCookie(`v2.${OAUTH_STATE}.${OAUTH_VERIFIER}.${user}.!!!`),
+    ).toMatchObject({
+      state: OAUTH_STATE,
+      verifier: OAUTH_VERIFIER,
       userId: "site-user-5",
       next: null,
     });
   });
 
   it("rejects a malformed initiating user instead of weakening the binding", () => {
-    expect(unpackOauthCookie("v2.abc.def.!!!")).toBeNull();
+    expect(
+      unpackOauthCookie(`v2.${OAUTH_STATE}.${OAUTH_VERIFIER}.!!!`),
+    ).toBeNull();
+  });
+
+  it("rejects oversized cookies and non-canonical state/verifier values", () => {
+    expect(unpackOauthCookie("x".repeat(1_025))).toBeNull();
+    const user = Buffer.from("site-user").toString("base64url");
+    expect(unpackOauthCookie(`v2.short.${OAUTH_VERIFIER}.${user}`)).toBeNull();
+    expect(unpackOauthCookie(`v2.${OAUTH_STATE}.short.${user}`)).toBeNull();
   });
 });
 

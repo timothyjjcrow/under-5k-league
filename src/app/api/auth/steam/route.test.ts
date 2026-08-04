@@ -49,4 +49,24 @@ describe("Steam login kickoff return path", () => {
     expect(res.cookies.get(RETURN_COOKIE)?.secure).toBe(true);
     expect(res.cookies.get(STEAM_STATE_COOKIE)?.secure).toBe(true);
   });
+
+  it("marks an expired return cookie secure in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const res = await GET(
+      new NextRequest(
+        "https://league.example/api/auth/steam?next=https%3A%2F%2Fevil.example",
+      ),
+    );
+
+    const cookie = res.cookies.get(RETURN_COOKIE);
+    expect(cookie).toMatchObject({
+      value: "",
+      httpOnly: true,
+      maxAge: 0,
+      path: "/",
+      sameSite: "lax",
+      secure: true,
+    });
+    expect(new Date(cookie?.expires ?? 1).getTime()).toBe(0);
+  });
 });

@@ -3,7 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
 import { steamIdToAccountId } from "@/lib/dota";
 import { reportAutoDetect, reportImportGame } from "@/lib/match-report-service";
-import { makeSeason, makeTeam, makeUser } from "./factories";
+import { providerCooldownKey } from "@/lib/settings";
+import { makeSeason, makeTeam, makeUser, raceAll } from "./factories";
 
 // Keep the real module (steamIdToAccountId, parseMatchId) but stub the network.
 vi.mock("@/lib/dota", async (importOriginal) => {
@@ -158,6 +159,43 @@ describe("match-report service (integration)", () => {
     ).rejects.toThrow(/already recorded/);
   });
 
+  it("elects one exact-ID lookup when a captain races different IDs", async () => {
+    const { home, match } = await setupMatch();
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue(null);
+
+    const results = await raceAll([
+      () => reportImportGame(home.captainId, match.id, "5550010"),
+      () => reportImportGame(home.captainId, match.id, "5550011"),
+    ]);
+
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/could(?:n't| not) fetch/i),
+        }),
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/wait about a minute/i),
+        }),
+      ]),
+    );
+    // The submitted ID is deliberately not part of the claim key: changing it
+    // cannot fan out provider work across tabs or serverless instances.
+    expect(vi.mocked(fetchOpenDotaMatch)).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: providerCooldownKey(
+            "open-dota-match-import",
+            home.captainId,
+            `fixture:${match.id}`,
+          ),
+        },
+      }),
+    ).not.toBeNull();
+  });
+
   it("refuses the old captain when captaincy changes during the OpenDota fetch", async () => {
     const { home, match, homeAccts, awayAccts } = await setupMatch();
     let markFetchStarted!: () => void;
@@ -252,6 +290,50 @@ describe("match-report service (integration)", () => {
     );
     expect(vi.mocked(fetchRecentMatchIds)).not.toHaveBeenCalled();
     expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+
+    // The invalid phase must not consume the legitimate captain's allowance.
+    const key = providerCooldownKey(
+      "open-dota-match-scan",
+      home.captainId,
+      match.id,
+    );
+    expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.REGULAR_SEASON },
+    });
+    vi.mocked(fetchRecentMatchIds).mockResolvedValue([]);
+    await expect(reportAutoDetect(home.captainId, match.id)).resolves.toEqual({
+      ok: true,
+      message: expect.stringMatching(/no matching games/i),
+    });
+    expect(vi.mocked(fetchRecentMatchIds)).toHaveBeenCalled();
+  });
+
+  it("elects one roster scan across concurrent tabs and server instances", async () => {
+    const { home, match } = await setupMatch();
+    vi.mocked(fetchRecentMatchIds).mockResolvedValue([]);
+
+    const results = await raceAll([
+      () => reportAutoDetect(home.captainId, match.id),
+      () => reportAutoDetect(home.captainId, match.id),
+    ]);
+
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ok: true,
+          message: expect.stringMatching(/no matching games/i),
+        }),
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/three minutes/i),
+        }),
+      ]),
+    );
+    // Six roster accounts, once. The losing caller performs no provider work.
+    expect(vi.mocked(fetchRecentMatchIds)).toHaveBeenCalledTimes(6);
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
   });
 
   it("reports an unreachable OpenDota roster scan as an error", async () => {
@@ -273,6 +355,17 @@ describe("match-report service (integration)", () => {
       ok: false,
       error: expect.stringMatching(/valid match id/),
     });
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: providerCooldownKey(
+            "open-dota-match-import",
+            home.captainId,
+            `fixture:${match.id}`,
+          ),
+        },
+      }),
+    ).toBeNull();
 
     // A real fetch that isn't these two teams gets refused by classifyGame.
     const strangers = [991111, 992222, 993333];

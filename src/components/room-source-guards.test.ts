@@ -140,6 +140,30 @@ describe("result-sync ping fetch deadline", () => {
 // another.
 
 describe("live rooms delegate their poll policy", () => {
+  for (const file of ROOMS) {
+    it(`${file}: offline events immediately gate actions until a successful poll`, () => {
+      const src = code(file);
+      expect(src).toContain('window.addEventListener("offline", onOffline)');
+      expect(src).toContain('window.addEventListener("online", onOnline)');
+      expect(src).toContain('setConnectivity("resyncing")');
+      expect(src).toMatch(
+        /setConnectivity\(\s*navigator\.onLine === false \? "offline" : "online",?\s*\)/,
+      );
+      expect(src).toMatch(
+        /const pending\s*=\s*[\s\S]{0,120}connectionUnavailable/,
+      );
+    });
+
+    it(`${file}: unknown action outcomes stay locked through a newer successful poll`, () => {
+      const src = code(file);
+      expect(src).toContain("actionReconcileSeqRef");
+      expect(src).toContain("setActionReconciling(true)");
+      expect(src).toContain("setActionReconciling(false)");
+      expect(src).toMatch(/const pending\s*=\s*[\s\S]{0,180}actionReconciling/);
+      expect(src).toMatch(/actionSeq\s*!==\s*null\s*&&\s*seq\s*>\s*actionSeq/);
+    });
+  }
+
   it("result-sync-ping decides refresh/delay only through syncPingStep", () => {
     const src = code("result-sync-ping.tsx");
     expect(src).toContain("syncPingStep(");
@@ -165,6 +189,17 @@ describe("live rooms delegate their poll policy", () => {
           `from inhousePollCadence so the rules stay in one tested place.`,
       ).toBe(false);
     }
+  });
+
+  it("inhouse-room cannot lose an action reconciliation behind an in-flight poll", () => {
+    const src = code("inhouse-room.tsx");
+    expect(src).toContain("let rerunRequested = false");
+    expect(src).toMatch(
+      /bumpPollRef\.current\s*=\s*\(\)\s*=>\s*\{\s*rerunRequested\s*=\s*true;\s*schedule\(250\)/,
+    );
+    expect(src).toMatch(
+      /if \(rerunRequested\)\s*\{\s*rerunRequested\s*=\s*false;\s*schedule\(0\);\s*return;/,
+    );
   });
 
   it("draft-room computes its cadence only through draftPollCadence", () => {

@@ -165,6 +165,28 @@ describe("postseason admin commands", () => {
     expect(updateTag).toHaveBeenCalledWith("games");
   });
 
+  it("does not disclose an unexpected playoff-start database error", async () => {
+    const secret = "postgresql://league:secret@internal.example/league";
+    const { season } = await seededSeason(2);
+    const claim = await commandFields(season.id);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(prisma, "$transaction").mockRejectedValueOnce(new Error(secret));
+
+    const result = await startPlayoffs(
+      {},
+      form({ ...claim, intent: "start" }),
+    );
+
+    expect(result).toEqual({
+      error: "Couldn't update the playoff bracket — reload and try again",
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(log).toHaveBeenCalledWith(
+      "[server-action:admin.playoffs.start] unexpected failure",
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+  });
+
   it("rejects missing intent and a stale active-season claim", async () => {
     const { season } = await seededSeason(2);
     const claim = await commandFields(season.id);
@@ -248,6 +270,27 @@ describe("postseason admin commands", () => {
     expect(sendDiscordMessage).toHaveBeenCalledWith(
       expect.stringMatching(/bracket is void.*Regular season/i),
     );
+  });
+
+  it("does not disclose an unexpected playoff-return database error", async () => {
+    const secret = "postgresql://league:secret@internal.example/league";
+    const { season } = await seededSeason(2);
+    await createPlayoffBracket(season.id);
+    const claim = await commandFields(season.id);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(prisma, "$transaction").mockRejectedValueOnce(new Error(secret));
+
+    const result = await returnToRegularSeasonAction({}, form(claim));
+
+    expect(result).toEqual({
+      error:
+        "Couldn't return to the regular season — reload and try again",
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(log).toHaveBeenCalledWith(
+      "[server-action:admin.playoffs.return] unexpected failure",
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
   });
 
   it("warns the administrator when the bracket-withdrawal broadcast fails", async () => {

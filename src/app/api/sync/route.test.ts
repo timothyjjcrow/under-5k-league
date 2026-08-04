@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 describe("public result status route", () => {
-  it("returns the read-only watch snapshot and cursor without caching", async () => {
+  it("returns the read-only watch snapshot with browser-safe edge microcaching", async () => {
     snapshot.mockResolvedValue({
       watch: true,
       cursor: "2026-08-03T12:00:00.000Z",
@@ -24,7 +24,12 @@ describe("public result status route", () => {
     const response = await GET();
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe(
+      "public, max-age=0, must-revalidate",
+    );
+    expect(response.headers.get("vercel-cdn-cache-control")).toBe(
+      "public, max-age=5, stale-while-revalidate=10",
+    );
     expect(await response.json()).toEqual({
       updated: false,
       watch: true,

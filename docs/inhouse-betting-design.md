@@ -135,7 +135,7 @@ What the user actually wants — *big bets should mean something visible* — is
 | **Double-click / two tabs / two devices.** | `@@unique([lobbyId, userId])` (bets are single-shot and immutable) plus `balance: { gte: stake }` in the WHERE of the debit. |
 | **Betting after an admin cancel lands mid-request.** | The window claim's relation filter (`lobby: { status: { in: [READY, IN_PROGRESS] }, betsCloseAt: { gt: now } }`) — the `acceptMatch` pattern. `count === 0` throws, the debit rolls back, the player is charged nothing. |
 | **Stranded settlement** — the request that won the COMPLETED claim dies before the payout, and nothing re-triggers (every result path requires `IN_PROGRESS`). | `resolveUnsettledBets()` in **both** resolver chains, and in `syncInhouse` **above** the `!active && queued === 0` early return — which is exactly the state (game over, everyone left) where the sweeper is needed and the current chain does not run. |
-| **A bet bug 500s the room.** The resolver chains have no try/catch and `/api/sync` runs them on every page view of the entire site. | The bet resolver — and only it — is wrapped in try/catch that logs and continues. It must never stop ten people from playing Dota. |
+| **A bet bug 500s the room.** A settlement resolver failure could otherwise fail a claimed room-maintenance pass. | The bet resolver — and only it — is wrapped in try/catch that records a stable diagnostic and continues. `/api/sync` is read-only, anonymous room polls do no maintenance, and a database throttle admits only one authenticated room winner every two seconds. A settlement defect must never stop ten people from playing Dota. |
 
 **Left open, stated honestly:**
 

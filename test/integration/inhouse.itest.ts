@@ -36,7 +36,12 @@ import {
   raceN,
   sessionFor,
 } from "./factories";
-import { getSetting, SETTING_KEYS, setSetting } from "@/lib/settings";
+import {
+  getSetting,
+  providerCooldownKey,
+  SETTING_KEYS,
+  setSetting,
+} from "@/lib/settings";
 import {
   deliverInhouseAnnouncements,
   INHOUSE_ANNOUNCEMENT_KIND,
@@ -621,6 +626,42 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     expect(done.winnerTeam).toBe(2);
   });
 
+  it("elects one exact-ID lookup when a player races different IDs", async () => {
+    const admin = sessionFor(await makeUser("AdminExactIdRace", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    mockMatch.mockResolvedValue(null);
+
+    const results = await raceAll([
+      () => recordMatch(players[0].session, "7000000901"),
+      () => recordMatch(players[0].session, "7000000902"),
+    ]);
+
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/couldn't fetch/i),
+        }),
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/wait about a minute/i),
+        }),
+      ]),
+    );
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: providerCooldownKey(
+            "open-dota-match-import",
+            players[0].session.id,
+            `inhouse:${lobby.id}`,
+          ),
+        },
+      }),
+    ).not.toBeNull();
+  });
+
   it("auto-detects on poll once the game has run long enough (maybeAutoDetectResult)", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
@@ -810,6 +851,18 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     );
     const outsider = sessionFor(await makeUser("Rando"));
     expect((await recordMatch(outsider, "7000000005")).ok).toBe(false);
+    expect(mockMatch).not.toHaveBeenCalled();
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: providerCooldownKey(
+            "open-dota-match-import",
+            outsider.id,
+            `inhouse:${lobby.id}`,
+          ),
+        },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -2421,6 +2474,27 @@ describe("inhouse — abandoned lobby teardown", () => {
       where: { id: lobbyId },
       data: { [field]: new Date(Date.now() - hours * 3_600_000) },
     });
+
+  it("keeps an anonymous spectator snapshot side-effect-free", async () => {
+    const admin = sessionFor(await makeUser("AdminSpectator", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    await age(lobby.id, "startedAt", INHOUSE.ABANDON_IN_PROGRESS_HOURS + 1);
+
+    await getInhouseState(null, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.IN_PROGRESS);
+
+    await getInhouseState(null, { syncBoard: false });
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+  });
 
   it("scraps a READY lobby nobody ever started, and frees its players + the slot", async () => {
     const admin = sessionFor(await makeUser("AdminAB", "ADMIN"));

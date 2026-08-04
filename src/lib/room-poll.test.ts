@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { draftPollCadence, inhousePollCadence } from "./room-poll";
-import { DRAFT_ROOM, INHOUSE } from "./constants";
+import { DRAFT_ROOM, INHOUSE, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
 
 // Two ~1800-line client components' poll loops, with no unit-testable surface
 // of their own (the vitest env is `node` — no jsdom), so these rules were
@@ -116,6 +116,38 @@ describe("inhousePollCadence", () => {
     ).toEqual({ skip: false, delayMs: FAST });
   });
 
+  it("backs a disconnected room off with bounded jitter", () => {
+    const low = inhousePollCadence({
+      ...base,
+      hidden: false,
+      hasStake: true,
+      reached: false,
+      failureCount: ROOM_POLL_FAIL_THRESHOLD + 1,
+      jitter: 0,
+    });
+    const high = inhousePollCadence({
+      ...base,
+      hidden: false,
+      hasStake: true,
+      reached: false,
+      failureCount: 20,
+      jitter: 1,
+    });
+    expect(low.delayMs).toBe(8_000);
+    expect(high.delayMs).toBe(30_000);
+  });
+
+  it("does not issue requests while the browser is offline", () => {
+    expect(
+      inhousePollCadence({
+        ...base,
+        hidden: false,
+        hasStake: true,
+        offline: true,
+      }),
+    ).toEqual({ skip: true, delayMs: 30_000 });
+  });
+
   it("defaults the idle rate to the INHOUSE constant", () => {
     expect(
       inhousePollCadence({ hidden: false, hasStake: false, activeMs: FAST })
@@ -197,6 +229,31 @@ describe("draftPollCadence", () => {
         reached: false,
       }),
     ).toEqual({ skip: false, delayMs: FAST });
+  });
+
+  it("backs off only after the disconnect threshold and caps the delay", () => {
+    expect(
+      draftPollCadence({
+        ...base,
+        hidden: false,
+        hasStake: true,
+        live: false,
+        reached: false,
+        failureCount: ROOM_POLL_FAIL_THRESHOLD,
+        jitter: 1,
+      }).delayMs,
+    ).toBe(FAST);
+    expect(
+      draftPollCadence({
+        ...base,
+        hidden: false,
+        hasStake: true,
+        live: false,
+        reached: false,
+        failureCount: 20,
+        jitter: 1,
+      }).delayMs,
+    ).toBe(30_000);
   });
 });
 

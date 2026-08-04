@@ -7,6 +7,7 @@ import {
   normalizePrivacyContactEmail,
   normalizePrivacyDataLocations,
 } from "../src/lib/privacy-contact.mjs";
+import { normalizeDiscordWebhookUrl } from "../src/lib/discord-webhook.mjs";
 
 // Individual Steam accounts are universe/type/instance base 76561197960265728
 // plus an unsigned 32-bit account id. A 17-digit shape check alone accepts
@@ -301,6 +302,19 @@ export function validateProductionEnv(env) {
     errors.push(
       "DISCORD_BOT_TOKEN and DISCORD_GUILD_ID must either both be set or both be unset",
     );
+  }
+
+  for (const key of [
+    "DISCORD_WEBHOOK_URL",
+    "DISCORD_INHOUSE_WEBHOOK_URL",
+    "DISCORD_INHOUSE_ALERT_WEBHOOK_URL",
+  ]) {
+    const value = env[key];
+    if (value && !normalizeDiscordWebhookUrl(value)) {
+      errors.push(
+        `${key} must be a canonical HTTPS Discord incoming-webhook URL with no credentials, port, query, fragment, or extra path`,
+      );
+    }
   }
 
   return errors;

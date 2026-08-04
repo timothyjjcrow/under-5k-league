@@ -24,8 +24,9 @@ season-independent pick-up mode with its own queue, lobby state machine, Elo
 ladder, and play-money betting, coupled to the league only through the shared
 identity and opportunistic reuse of the latest trusted `Registration.mmr`; it
 has no `seasonId` or league-phase gate. There is no websocket. Interactive
-rooms still use HTTP polling and guarded read-time resolvers, while sitewide
-background work runs once per minute through the bearer-authenticated
+rooms still use HTTP polling; anonymous polls are side-effect-free, while
+authenticated polls elect at most one database-backed maintenance winner per
+room every two seconds. Sitewide background work runs once per minute through the bearer-authenticated
 `GET /api/cron/automation` boundary. Public page traffic observes automation
 state but does not serve as its clock.
 
@@ -53,7 +54,11 @@ unique administrator before deployment, while the atomic
 `bootstrapAdminSteamId` Setting claim is local-development fallback only),
 best-effort backfills the OpenDota rank medal (`ensureRankTier`), and mints a stateless
 jose HS256 JWT session cookie (`src/lib/auth.ts`, claims `{uid, ep}`, 30
-days). Production `getSessionUser` re-evaluates the allowlist on every
+days). Production session and one-shot OAuth cookies use browser-enforced
+`__Host-` names (Secure, host-only, `Path=/`), preventing a sibling subdomain
+from tossing a competing identity/state cookie. The first hardened deployment
+therefore intentionally signs out sessions minted under the legacy name.
+Production `getSessionUser` re-evaluates the allowlist on every
 authenticated request, so removing an administrator revokes the existing
 cookie's authority on the next request instead of waiting for another login.
 There is no middleware: every page, action, and route calls
@@ -61,7 +66,7 @@ There is no middleware: every page, action, and route calls
 session epoch in the `Setting` table (`src/lib/session-epoch.ts`), bumped by
 the admin "revoke all sessions" action. A dev/mock login exists at
 `/api/auth/dev`, double-gated on `ALLOW_DEV_LOGIN` and non-production. A
-validated, ten-minute httpOnly `ld2l_return_to` cookie carries same-origin
+validated, ten-minute httpOnly return cookie carries same-origin
 destinations through Steam. A separate 32-byte one-shot browser-state cookie
 is pinned into the signed OpenID `return_to`; duplicate/canonical OpenID
 assertions and the exact Steam verification response are checked before login.
@@ -529,8 +534,10 @@ Rules that follow from the layering:
   behavioral rule extracted into pure modules precisely because there is no
   jsdom (`vitest.config.mts` is `environment: "node"`).
 - **One authenticated worker, public observation only.** `getDraftState` and
-  `getInhouseState` retain guarded resolvers so interactive rooms can respond
-  immediately. Sitewide work is different: a one-minute scheduler calls
+  `getInhouseState` retain guarded resolvers so a fleet-throttled authenticated
+  room poll can respond immediately without multiplying writes or provider
+  calls across every tab. Anonymous room snapshots never run them. Sitewide
+  work is different: a one-minute scheduler calls
   `GET /api/cron/automation` with `Authorization: Bearer <CRON_SECRET>`.
   `runAutomation` elects one runner across all instances with a tokened,
   database-global 90-second lease, fences finalization with the same token,
@@ -657,15 +664,30 @@ liveness; `/api/health/ready` — database readiness (`SELECT 1`, 503 on
 failure); `/api/health/automation` — public, read-only dead-man probe with only
 a bounded status enum (200 for fresh clean success, 503 otherwise);
 `/api/calendar` — the .ics feed;
-`/api/admin/season-export` — the non-restorable season JSON audit archive; `/api/test/cache` —
-fixture-only cache expiry, gated behind non-production + dev login + an
+`/api/admin/season-export` — the non-restorable season JSON audit archive. It
+serializes one complete snapshot, measures the result in UTF-8 bytes, and
+returns an admin-only 413 with backup/out-of-band-export guidance above the
+4,000,000-byte hosted-response ceiling instead of letting the platform fail an
+oversized response; `/api/test/cache` — fixture-only cache expiry, gated behind non-production + dev login + an
 e2e/fixture database URL and otherwise 404. Rate limiting
 (`src/lib/rate-limit.ts`) is an in-memory per-instance speed bump, not a
-distributed limit; attacker-controlled key growth is bounded to 5,000 live
+distributed limit; production therefore requires reviewed pre-function edge
+rules and direct Vercel ingress (or an explicitly trusted upstream proxy).
+`x-vercel-forwarded-for` wins over spoofable fallback headers and an invalid
+provider-owned value collapses into the shared `unknown` bucket.
+Attacker-controlled key growth is bounded to 5,000 live
 buckets with expiry pruning and oldest-window eviction. App-level files:
 `layout.tsx` (session + season + nav
 gating fetched per request), `error/global-error/loading/not-found.tsx`, `sitemap.ts`,
 `robots.ts`, `manifest.ts`.
+
+All five JSON mutation routes stream at most 8,192 UTF-8 bytes, reject a lying
+or absent `Content-Length` by the measured body, require one JSON object, and
+fail before authentication/database work on malformed input. Scalar-only
+Server Actions have a 64 KB raw multipart ceiling; the app has no file upload.
+`/api/sync` and
+calendar are viewer-independent and use short Vercel-only microcaches while
+browsers must revalidate; room state remains personalized and `no-store`.
 
 ## 6. Database models
 
@@ -906,6 +928,9 @@ untouched. Login destinations are limited to validated same-origin relative
 paths; the short-lived return cookie is secure in production, reset at each
 kickoff, and consumed on success or failure. `/terms` carries the independent,
 not-endorsed and as-is/as-available boundary required for external data.
+The authenticated manual profile refresh has a durable 60-second
+per-user/Steam-id claim, so duplicate tabs and function instances elect one
+provider call and an outage cannot become a retry storm.
 
 **OpenDota** (`src/lib/dota.ts`): match fetches (`/matches/{id}`, 12s cap),
 per-player recent-match lists (8s; returns `null` for unreachable vs `[]` for
@@ -924,11 +949,18 @@ follow never-overwrite-on-failure for an unchanged account. Changing the
 effective account first clears the old medal/private-data/scouting snapshot;
 every asynchronous write re-asserts the account it fetched, so another tab's
 newer link or snapshot wins.
+Manual medal/account refreshes share one durable 60-second per-user/account
+claim. Captain auto-detection claims a 180-second per-captain/match allowance
+only after rechecking the active phase, fixture, result state, and captain
+permission; duplicate instances cannot multiply the roster fan-out.
 
 **Discord** — three mechanisms (no gateway, no slash commands):
 
 1. _Webhooks_ (`src/lib/discord.ts`): ~24 pure, tested message formatters +
    the transport (`sendTo`, 5s timeout, resolves false and never throws).
+   Every runtime/admin/environment value passes one exact URL parser: HTTPS,
+   `discord.com` or `discordapp.com`, canonical webhook path, and no port,
+   query, fragment, or embedded credentials. Invalid values are never fetched.
    `sendDiscordMessage` validates and persists league-channel work before a
    bounded immediate transport attempt; returning true means durable queue
    acceptance, not proof that Discord already rendered it. Three webhooks form

@@ -14,6 +14,16 @@ export async function GET() {
       watch: snapshot.watch,
       cursor: snapshot.cursor,
     },
-    { headers: { "cache-control": "no-store" } },
+    {
+      headers: {
+        // The payload is viewer-independent. Browsers always revalidate, while
+        // Vercel collapses a burst of tabs into one origin snapshot for five
+        // seconds. The worker cadence is one minute, so this cannot hide a
+        // state transition longer than the clients already tolerate.
+        "cache-control": "public, max-age=0, must-revalidate",
+        "vercel-cdn-cache-control":
+          "public, max-age=5, stale-while-revalidate=10",
+      },
+    },
   );
 }

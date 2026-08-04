@@ -602,6 +602,27 @@ describe("result sync — league matches (integration)", () => {
 });
 
 describe("result sync — league feed outage (integration)", () => {
+  it("logs only a stable code when a provider throws secret-shaped metadata", async () => {
+    const secretCode = "SECRETLOOKINGTOKEN";
+    const { season } = await setupNight({ offsetMs: -60 * 60_000 });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18181" },
+    });
+    mockLeague.mockRejectedValue(
+      Object.assign(new Error("provider failed"), { code: secretCode }),
+    );
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await runResultSync();
+
+    expect(result.issues).toContain("LEAGUE_SYNC_FAILED");
+    expect(log).toHaveBeenCalledWith(
+      "[result-sync] league failed (STEP_FAILED)",
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secretCode);
+  });
+
   // fetchLeagueMatchIds now signals unreachable as null (the
   // fetchRecentMatchIds contract). The auto path claims its throttle BEFORE
   // fetching, so without the rollback every outage tick cost one full

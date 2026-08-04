@@ -31,6 +31,14 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  experimental: {
+    serverActions: {
+      // Every action in this app accepts scalar form fields; there are no file
+      // uploads. Keep enough room for multipart boundaries and long admin copy
+      // while refusing Next's otherwise unnecessary 1 MB parse budget.
+      bodySizeLimit: "64kb",
+    },
+  },
   async headers() {
     return [
       { source: "/:path*", headers: SECURITY_HEADERS },

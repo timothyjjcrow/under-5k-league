@@ -11,6 +11,7 @@ import {
   reportImportGame as importInService,
 } from "@/lib/match-report-service";
 import type { ActionResult } from "@/lib/action-result";
+import { actionErrorMessage } from "@/lib/user-facing-error";
 
 // Game imports must also clear the unstable_cache "games" tag (CLAUDE.md:
 // bust the tag from a request scope) — mirrors admin.ts's refreshGames.
@@ -39,7 +40,11 @@ export async function captainImportGame(
     );
   } catch (e) {
     return {
-      error: e instanceof Error ? e.message : "Couldn't report the result",
+      error: actionErrorMessage(
+        e,
+        "Couldn't report the result — try again",
+        "match-report.import",
+      ),
     };
   }
   if (!res.ok) return { error: res.error };
@@ -63,7 +68,11 @@ export async function captainAutoDetect(
     res = await detectInService(user.id, str(formData, "matchId"));
   } catch (e) {
     return {
-      error: e instanceof Error ? e.message : "Couldn't report the result",
+      error: actionErrorMessage(
+        e,
+        "Couldn't report the result — try again",
+        "match-report.auto-detect",
+      ),
     };
   }
   if (!res.ok) return { error: res.error };

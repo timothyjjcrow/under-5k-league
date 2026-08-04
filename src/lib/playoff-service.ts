@@ -25,6 +25,7 @@ import {
   markAnnouncementSent,
   releaseAnnouncementClaim,
 } from "./announcement-marker";
+import { UserFacingError } from "./user-facing-error";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -224,9 +225,11 @@ export async function createPlayoffBracket(
     return await prisma.$transaction(
       async (tx) => {
         const season = await tx.season.findUnique({ where: { id: seasonId } });
-        if (!season) throw new Error("No season");
+        if (!season) throw new UserFacingError("No season");
         if (!season.isActive) {
-          throw new Error("Only the active season can start or reset playoffs");
+          throw new UserFacingError(
+            "Only the active season can start or reset playoffs",
+          );
         }
 
         const teams = await tx.team.findMany({ where: { seasonId } });
@@ -235,7 +238,7 @@ export async function createPlayoffBracket(
           season.status !== SEASON_STATUS.PLAYOFFS &&
           season.status !== SEASON_STATUS.COMPLETE
         ) {
-          throw new Error(
+          throw new UserFacingError(
             "Playoffs can only start after the regular season or be reset from Playoffs/Complete",
           );
         }
@@ -271,7 +274,7 @@ export async function createPlayoffBracket(
         );
         if (claim) {
           if (season.status !== claim.expectedSeasonStatus) {
-            throw new Error(
+            throw new UserFacingError(
               "The season phase changed while this playoff control was open — reload and try again",
             );
           }
@@ -281,24 +284,24 @@ export async function createPlayoffBracket(
             matches,
           });
           if (currentRevision !== claim.expectedRevision) {
-            throw new Error(
+            throw new UserFacingError(
               "The standings, playoff bracket, imported games, or playoff activity changed while this control was open — reload before trying again",
             );
           }
           if (claim.intent === "start") {
             if (hasPostseason) {
-              throw new Error(
+              throw new UserFacingError(
                 "The playoff bracket already exists — reload before using the separate Reset playoffs control",
               );
             }
             if (season.status !== SEASON_STATUS.REGULAR_SEASON) {
-              throw new Error(
+              throw new UserFacingError(
                 "A new playoff bracket can only start from the Regular season phase",
               );
             }
           } else {
             if (!hasPostseason) {
-              throw new Error(
+              throw new UserFacingError(
                 "There is no playoff bracket to reset — reload before starting it",
               );
             }
@@ -306,7 +309,7 @@ export async function createPlayoffBracket(
               season.status !== SEASON_STATUS.PLAYOFFS &&
               season.status !== SEASON_STATUS.COMPLETE
             ) {
-              throw new Error(
+              throw new UserFacingError(
                 "A playoff bracket can only reset from Playoffs or Complete",
               );
             }
@@ -314,17 +317,19 @@ export async function createPlayoffBracket(
         }
         const playoffField = projectPlayoffField(teams, matches);
         if (playoffField.eligibleTeamIds.length < 2) {
-          throw new Error("Need at least 2 eligible teams for playoffs");
+          throw new UserFacingError(
+            "Need at least 2 eligible teams for playoffs",
+          );
         }
 
         const regular = regularSeasonStatus(matches);
         if (!regular.allComplete) {
           if (regular.total === 0) {
-            throw new Error(
+            throw new UserFacingError(
               "Generate and complete the regular-season schedule before starting playoffs",
             );
           }
-          throw new Error(
+          throw new UserFacingError(
             `${regular.pending} regular-season result${regular.pending === 1 ? " is" : "s are"} still outstanding`,
           );
         }
@@ -388,7 +393,7 @@ export async function createPlayoffBracket(
       error instanceof BracketBuildRaceError ||
       (error as { code?: string }).code === "P2034"
     ) {
-      throw new Error(BRACKET_BUILD_RACE_MESSAGE);
+      throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
     }
     throw error;
   }
@@ -410,7 +415,7 @@ export async function returnToRegularSeason(
       async (tx) => {
         const season = await tx.season.findUnique({ where: { id: seasonId } });
         if (!season?.isActive) {
-          throw new Error(
+          throw new UserFacingError(
             "Only the active season can return to the regular season",
           );
         }
@@ -418,7 +423,7 @@ export async function returnToRegularSeason(
           season.status !== SEASON_STATUS.PLAYOFFS &&
           season.status !== SEASON_STATUS.COMPLETE
         ) {
-          throw new Error(
+          throw new UserFacingError(
             "Only a Playoffs or Complete season can return to the regular season",
           );
         }
@@ -454,7 +459,7 @@ export async function returnToRegularSeason(
           }),
         ]);
         if (season.status !== claim.expectedSeasonStatus) {
-          throw new Error(
+          throw new UserFacingError(
             "The season phase changed while this recovery control was open — reload and try again",
           );
         }
@@ -462,12 +467,12 @@ export async function returnToRegularSeason(
           playoffSetupRevision({ season, teams, matches }) !==
           claim.expectedRevision
         ) {
-          throw new Error(
+          throw new UserFacingError(
             "The standings, playoff bracket, imported games, or playoff activity changed while this recovery control was open — reload before trying again",
           );
         }
         if (!matches.some((match) => match.phase !== MATCH_PHASE.REGULAR)) {
-          throw new Error("There is no playoff bracket to remove");
+          throw new UserFacingError("There is no playoff bracket to remove");
         }
 
         const removed = await removePostseason(tx, seasonId, matches);
@@ -498,7 +503,7 @@ export async function returnToRegularSeason(
       error instanceof BracketBuildRaceError ||
       (error as { code?: string }).code === "P2034"
     ) {
-      throw new Error(BRACKET_BUILD_RACE_MESSAGE);
+      throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
     }
     throw error;
   }

@@ -20,6 +20,7 @@ import {
 } from "@/lib/discord";
 import { mentionUsers } from "@/lib/discord-mentions";
 import type { ActionResult } from "@/lib/action-result";
+import { actionErrorMessage } from "@/lib/user-facing-error";
 
 function refresh() {
   revalidatePath("/", "layout");
@@ -54,7 +55,13 @@ export async function proposeReschedule(
       proposedTime,
     );
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Couldn't propose" };
+    return {
+      error: actionErrorMessage(
+        e,
+        "Couldn't propose — try again",
+        "reschedule.propose",
+      ),
+    };
   }
   // A proposal demands the OTHER captain's response — tell the channel
   // instead of hoping they wander onto the match page. Best-effort.
@@ -98,7 +105,13 @@ export async function respondReschedule(
       accept,
     );
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Couldn't respond" };
+    return {
+      error: actionErrorMessage(
+        e,
+        "Couldn't respond — try again",
+        "reschedule.respond",
+      ),
+    };
   }
 
   if (outcome.accepted) {
@@ -170,7 +183,13 @@ export async function cancelReschedule(
       user.role === "ADMIN",
     );
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Couldn't withdraw" };
+    return {
+      error: actionErrorMessage(
+        e,
+        "Couldn't withdraw — try again",
+        "reschedule.cancel",
+      ),
+    };
   }
   refresh();
   return { ok: true, message: "Proposal withdrawn." };

@@ -7,6 +7,10 @@ import { destroySession } from "@/lib/auth";
 import { POST } from "./route";
 
 const destroy = vi.mocked(destroySession);
+const missingOriginHeaders: Record<string, string>[] = [
+  {},
+  { host: "league.example" },
+];
 
 beforeEach(() => destroy.mockReset());
 
@@ -43,6 +47,37 @@ describe("logout", () => {
       new NextRequest("https://league.example/api/auth/logout", {
         method: "POST",
         headers: { origin: "null", host: "league.example" },
+      }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it.each(missingOriginHeaders)(
+    "fails closed when Origin is missing (%j)",
+    async (headers) => {
+      const res = await POST(
+        new NextRequest("https://league.example/api/auth/logout", {
+          method: "POST",
+          headers,
+        }),
+      );
+
+      expect(res.status).toBe(403);
+      expect(destroy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a same-site sibling origin", async () => {
+    const res = await POST(
+      new NextRequest("https://league.example/api/auth/logout", {
+        method: "POST",
+        headers: {
+          origin: "https://admin.league.example",
+          host: "league.example",
+          "sec-fetch-site": "same-site",
+        },
       }),
     );
 

@@ -11,6 +11,7 @@ describe("application shell fallback states", () => {
     expect(src).toContain("unstable_retry");
     expect(src).not.toContain("onClick={reset}");
     expect(src).not.toContain("{error.message");
+    expect(src).toContain('[ui-error] route render failed');
   });
 
   it("owns a standalone root-layout failure document", () => {
@@ -20,6 +21,7 @@ describe("application shell fallback states", () => {
     expect(src).toContain("<body");
     expect(src).toContain("unstable_retry");
     expect(src).not.toContain("{error.message");
+    expect(src).toContain('[ui-error] root layout failed');
   });
 
   it("announces loading and not-found states semantically", () => {

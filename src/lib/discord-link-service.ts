@@ -73,8 +73,7 @@ export async function linkDiscordAccount(
     const prior = self?.discordId ?? null;
     return {
       ok: true,
-      previousDiscordId:
-        prior && prior !== profile.discordId ? prior : null,
+      previousDiscordId: prior && prior !== profile.discordId ? prior : null,
     };
   } catch (e) {
     // P2002 = the unique race: someone else linked this Discord account
@@ -182,9 +181,6 @@ export async function handleDiscordCallback(
     return { redirect: "/login?next=%2Fme%3Fdiscord%3Dsession" };
   }
 
-  // User clicked Cancel on Discord's consent screen — a normal outcome.
-  if (input.errorParam) return { redirect: "/me?discord=denied" };
-
   // CSRF gate: the state must round-trip AND match this browser's cookie.
   const packed = unpackOauthCookie(input.cookie);
   if (
@@ -195,6 +191,11 @@ export async function handleDiscordCallback(
   ) {
     return { redirect: "/me?discord=state" };
   }
+
+  // User clicked Cancel on Discord's consent screen — a normal outcome, but
+  // only after proving this callback belongs to the browser's active flow. A
+  // forged `?error=access_denied` must not cancel someone else's link attempt.
+  if (input.errorParam) return { redirect: "/me?discord=denied" };
 
   if (!input.code) return { redirect: "/me?discord=error" };
 

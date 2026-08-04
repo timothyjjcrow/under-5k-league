@@ -53,7 +53,12 @@ import {
   INHOUSE_ANNOUNCEMENT_KIND,
   INHOUSE_ANNOUNCEMENT_STATUS,
 } from "./inhouse-announcement-outbox";
-import { claimThrottle, stampResultChange, SETTING_KEYS } from "./settings";
+import {
+  claimProviderCooldown,
+  claimThrottle,
+  stampResultChange,
+  SETTING_KEYS,
+} from "./settings";
 import { lobbyView, syncInhouseBoard } from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
@@ -139,8 +144,8 @@ async function loadRecords(
 }
 
 /**
- * Form a lobby when enough players are waiting. Idempotent + safe to call on
- * every poll: no-ops unless the single active-lobby slot is free AND the queue
+ * Form a lobby when enough players are waiting. Idempotent and safe under
+ * concurrent leased maintenance calls: no-ops unless the single active-lobby slot is free AND the queue
  * has reached LOBBY_SIZE. The lobby opens in the READY_CHECK phase — the
  * Dota-style accept gate: all ten must press ACCEPT before the captain vote
  * starts (acceptMatch / resolveReadyCheck), so an AFK player is dropped
@@ -157,8 +162,8 @@ export async function maybeFormLobby(): Promise<boolean> {
         const now = Date.now();
         // Ghosts never get drafted: drop entries whose heartbeat went silent (the
         // player closed /inhouse long ago), so the queue count everyone watches
-        // stays honest. Runs on every poll — the table only ever holds a handful
-        // of rows.
+        // stays honest. Runs on each claimed maintenance pass — the table only
+        // ever holds a handful of rows.
         await tx.inhouseQueueEntry.deleteMany({
           where: { lastSeenAt: { lt: queueDropCutoff(now) } },
         });
@@ -433,8 +438,8 @@ export async function declineMatch(
 /**
  * Resolve an expired ready check: everyone accepted → captain vote (the last
  * accept may race the clock — completeness wins); otherwise cancel and drop
- * the no-shows, re-queuing only the players who accepted. Idempotent; safe on
- * every poll.
+ * the no-shows, re-queuing only the players who accepted. Idempotent and safe
+ * under concurrent maintenance calls.
  */
 export async function resolveReadyCheck(): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -467,7 +472,7 @@ export async function resolveReadyCheck(): Promise<boolean> {
  * Both floors (ABANDON_*_HOURS) are deliberately far past any legitimate use:
  * Start can be pressed late — even after the game — and the manual result
  * paths have no time gate, so a group that simply forgot still recovers their
- * game normally. Idempotent; safe on every poll.
+ * game normally. Idempotent and safe under concurrent maintenance calls.
  *
  * Unlike cancelLobby this does NOT re-queue anyone: an admin cancels a LIVE
  * lobby whose players are present and want the next game, whereas by
@@ -512,7 +517,8 @@ export async function resolveAbandonedLobby(): Promise<boolean> {
 /**
  * Resolve the captain-selection vote once everyone has voted or the timer runs
  * out: tally the winning method, rank candidates, install the top two as
- * captains, and drop into the draft. Idempotent; safe on every poll.
+ * captains, and drop into the draft. Idempotent and safe under concurrent
+ * maintenance calls.
  */
 export async function resolveCaptainVote(): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -838,7 +844,8 @@ async function restoreLostPickTurn(): Promise<boolean> {
 
 /**
  * If a captain lets their pick clock run out, auto-draft the top remaining
- * player for them so the lobby never stalls. Idempotent; safe on every poll.
+ * player for them so the lobby never stalls. Idempotent and safe under
+ * concurrent maintenance calls.
  */
 export async function resolveStalledPick(): Promise<boolean> {
   await restoreLostPickTurn();
@@ -1646,6 +1653,26 @@ export async function recordMatch(
     return { ok: false, error: "Only players in the game can do that" };
   }
 
+  const providerClaim = await claimProviderCooldown(
+    "open-dota-match-import",
+    viewer.id,
+    `inhouse:${lobby.id}`,
+  );
+  if (providerClaim === "cooldown") {
+    return {
+      ok: false,
+      error:
+        "A Dota match ID was checked for this lobby recently — wait about a minute before trying another ID",
+    };
+  }
+  if (providerClaim === "unavailable") {
+    return {
+      ok: false,
+      error:
+        "Couldn't safely start the OpenDota lookup — wait a minute and try again",
+    };
+  }
+
   const od = await fetchOpenDotaMatch(matchId);
   if (!od) {
     return {
@@ -1685,10 +1712,10 @@ export async function recordMatch(
 }
 
 /**
- * Automatic, throttled result detection run on poll: once a game has been going
- * long enough, quietly try OpenDota at most once per interval and close the
- * lobby out if we find it. Safe to call on every poll (claims the attempt
- * atomically so concurrent pollers don't all scan). Idempotent.
+ * Automatic, throttled result detection run during maintenance: once a game
+ * has been going long enough, quietly try OpenDota at most once per interval
+ * and close the lobby out if we find it. It claims the attempt atomically so
+ * concurrent worker/room recovery calls do not all scan. Idempotent.
  */
 export function maybeAutoDetectResult(): Promise<boolean>;
 export function maybeAutoDetectResult(
@@ -2173,36 +2200,42 @@ type PotBlock = {
 /** Everything the inhouse room client needs, tailored to the viewing user. */
 export async function getInhouseState(
   viewer: SessionUser | null,
-  /** Set `syncBoard: false` on the MUTATION path so a button press never waits
-   *  on Discord — see the board sync at the bottom of this function. */
-  { syncBoard = true }: { syncBoard?: boolean } = {},
+  /**
+   * `runMaintenance: false` turns this into a side-effect-free spectator
+   * snapshot. Anonymous traffic must never be able to settle bets, advance a
+   * lobby, call OpenDota, or edit Discord; the leased one-minute worker and
+   * authenticated room participants retain those recovery paths.
+   *
+   * Set `syncBoard: false` on the mutation path so a button press never waits
+   * on Discord — see the board sync at the bottom of this function.
+   */
+  {
+    runMaintenance = true,
+    syncBoard = true,
+  }: { runMaintenance?: boolean; syncBoard?: boolean } = {},
 ) {
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
-  // Abandoned first: it frees the single active-lobby slot, so maybeFormLobby
-  // can form the next game on this very poll instead of the one after.
-  await resolveAbandonedLobby();
-  // …then the pot, immediately, and for the same reason the abandon sweep runs
-  // first: that sweep is what flips a dead lobby to CANCELLED, so a stake
-  // stranded on it becomes refundable on THIS poll rather than the next one.
-  // It also covers the case nothing else does — the request that won
-  // applyResult's COMPLETED claim died before it could pay out, and every
-  // result path requires IN_PROGRESS, so nothing would ever re-trigger.
-  //
-  // Wrapped, and only this one is: the chain below runs from /api/sync on every
-  // page view of the entire site. A bug in the betting code must never be able
-  // to stop ten people playing Dota, so it logs and the poll carries on; the
-  // next poll from anywhere retries the same pot.
-  try {
-    await resolveUnsettledBets();
-  } catch {
-    console.error("[inhouse-bets] resolver failed (BET_SWEEP_FAILED)");
+  if (runMaintenance) {
+    // Abandoned first: it frees the single active-lobby slot, so maybeFormLobby
+    // can form the next game on this very poll instead of the one after.
+    await resolveAbandonedLobby();
+    // …then the pot, immediately, and for the same reason the abandon sweep
+    // runs first: that sweep is what flips a dead lobby to CANCELLED, so a
+    // stake stranded on it becomes refundable on THIS poll rather than the
+    // next one. The authenticated one-minute worker retries this independently
+    // when no participant has the room open.
+    try {
+      await resolveUnsettledBets();
+    } catch {
+      console.error("[inhouse-bets] resolver failed (BET_SWEEP_FAILED)");
+    }
+    await maybeFormLobby();
+    await resolveReadyCheck();
+    await resolveCaptainVote();
+    await resolveStalledPick();
+    await maybeAutoDetectResult();
   }
-  await maybeFormLobby();
-  await resolveReadyCheck();
-  await resolveCaptainVote();
-  await resolveStalledPick();
-  await maybeAutoDetectResult();
 
   const [queue, lobbyRow] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({

@@ -35,6 +35,8 @@ const PROFILE = {
   discordId: "80351110224678912",
   discordName: "dendi_official",
 };
+const OAUTH_STATE = "s".repeat(43);
+const OAUTH_VERIFIER = "v".repeat(43);
 
 /**
  * Deps whose exchange/identity calls succeed unless overridden. joinGuild
@@ -59,9 +61,9 @@ function callbackInput(
   return {
     userId,
     code: "auth-code",
-    state: "the-state",
+    state: OAUTH_STATE,
     errorParam: null,
-    cookie: packOauthCookie("the-state", "the-verifier", initiatingUserId),
+    cookie: packOauthCookie(OAUTH_STATE, OAUTH_VERIFIER, initiatingUserId),
     clientId: "cid",
     clientSecret: "csecret",
     redirectUri: "http://localhost:3000/api/auth/discord/callback",
@@ -188,7 +190,7 @@ describe("the return path — where a link lands", () => {
   // that only /me can render and scrub.
   const withNext = (userId: string, next: string) =>
     callbackInput(userId, {
-      cookie: packOauthCookie("the-state", "the-verifier", userId, next),
+      cookie: packOauthCookie(OAUTH_STATE, OAUTH_VERIFIER, userId, next),
     });
 
   it("a full success lands back where the player clicked", async () => {
@@ -338,6 +340,21 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
     expect(deps.exchange).not.toHaveBeenCalled();
   });
 
+  it("forged cancellation state cannot cancel the browser's active flow", async () => {
+    const user = await makeUser("ForgedCanceller");
+    const deps = happyDeps();
+    const res = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id, {
+        errorParam: "access_denied",
+        state: "a".repeat(43),
+      }),
+      deps,
+    );
+    expect(res.redirect).toBe("/me?discord=state");
+    expect(deps.exchange).not.toHaveBeenCalled();
+  });
+
   it("missing cookie (expired / cross-browser) → state error before any exchange", async () => {
     const user = await makeUser("NoCookie");
     const deps = happyDeps();
@@ -356,8 +373,8 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
     const res = await handleDiscordCallback(
       prisma,
       callbackInput(user.id, {
-        cookie: packOauthCookie("browser-state", "v", user.id),
-        state: "attacker-state",
+        cookie: packOauthCookie("b".repeat(43), "p".repeat(43), user.id),
+        state: "a".repeat(43),
       }),
       deps,
     );
@@ -376,7 +393,7 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
     const res = await handleDiscordCallback(
       prisma,
       callbackInput(replacement.id, {
-        cookie: packOauthCookie("the-state", "the-verifier", initiator.id),
+        cookie: packOauthCookie(OAUTH_STATE, OAUTH_VERIFIER, initiator.id),
       }),
       deps,
     );
@@ -445,7 +462,7 @@ describe("handleDiscordCallback — every branch lands on a fixed same-origin pa
     expect(await discordOf(user.id)).toEqual(PROFILE);
     expect(deps.exchange).toHaveBeenCalledWith(
       expect.objectContaining({
-        codeVerifier: "the-verifier",
+        codeVerifier: OAUTH_VERIFIER,
         code: "auth-code",
       }),
     );

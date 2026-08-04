@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { RETURN_COOKIE, STEAM_STATE_COOKIE } from "@/lib/return-path";
 
@@ -24,6 +24,8 @@ import { GET } from "./route";
 
 const verify = vi.mocked(verifySteamCallback);
 const limit = vi.mocked(rateLimit);
+
+afterEach(() => vi.unstubAllEnvs());
 
 beforeEach(() => {
   verify.mockReset();
@@ -60,6 +62,24 @@ describe("Steam callback failures", () => {
     expect(res.cookies.get(STEAM_STATE_COOKIE)?.value).toBe("");
   });
 
+  it("expires both production flow cookies with __Host-compatible attributes", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const res = await GET(request(null));
+
+    for (const name of [RETURN_COOKIE, STEAM_STATE_COOKIE]) {
+      const cookie = res.cookies.get(name);
+      expect(cookie).toMatchObject({
+        value: "",
+        httpOnly: true,
+        maxAge: 0,
+        path: "/",
+        sameSite: "lax",
+        secure: true,
+      });
+      expect(new Date(cookie?.expires ?? 1).getTime()).toBe(0);
+    }
+  });
+
   it("never copies an unsafe cookie into the retry URL", async () => {
     const res = await GET(request(encodeURIComponent("//evil.example")));
     const location = new URL(res.headers.get("location")!);
@@ -80,20 +100,24 @@ describe("Steam callback failures", () => {
 
   it("rejects an unsolicited callback with no browser state before contacting Steam", async () => {
     const res = await GET(request(null, null, null));
-    expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe(
-      "steam",
-    );
+    expect(
+      new URL(res.headers.get("location")!).searchParams.get("error"),
+    ).toBe("steam");
     expect(verify).not.toHaveBeenCalled();
     expect(limit).not.toHaveBeenCalled();
+    expect(res.cookies.get(RETURN_COOKIE)).toBeUndefined();
+    expect(res.cookies.get(STEAM_STATE_COOKIE)).toBeUndefined();
   });
 
   it("rejects a callback whose state belongs to another browser", async () => {
     const res = await GET(request(null, "browser-state", "attacker-state"));
-    expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe(
-      "steam",
-    );
+    expect(
+      new URL(res.headers.get("location")!).searchParams.get("error"),
+    ).toBe("steam");
     expect(verify).not.toHaveBeenCalled();
     expect(limit).not.toHaveBeenCalled();
+    expect(res.cookies.get(RETURN_COOKIE)).toBeUndefined();
+    expect(res.cookies.get(STEAM_STATE_COOKIE)).toBeUndefined();
   });
 
   it("rejects an ambiguous duplicate state before spending the callback budget", async () => {
@@ -101,11 +125,28 @@ describe("Steam callback failures", () => {
     req.nextUrl.searchParams.append("state", "browser-state");
     const res = await GET(req);
 
-    expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe(
-      "steam",
-    );
+    expect(
+      new URL(res.headers.get("location")!).searchParams.get("error"),
+    ).toBe("steam");
     expect(verify).not.toHaveBeenCalled();
     expect(limit).not.toHaveBeenCalled();
+    expect(res.cookies.get(RETURN_COOKIE)).toBeUndefined();
+    expect(res.cookies.get(STEAM_STATE_COOKIE)).toBeUndefined();
+  });
+
+  it("rejects an oversized callback before rate-limit or provider work", async () => {
+    const req = request(null);
+    req.nextUrl.searchParams.set("padding", "x".repeat(17_000));
+
+    const res = await GET(req);
+
+    expect(
+      new URL(res.headers.get("location")!).searchParams.get("error"),
+    ).toBe("steam");
+    expect(verify).not.toHaveBeenCalled();
+    expect(limit).not.toHaveBeenCalled();
+    expect(res.cookies.get(RETURN_COOKIE)).toBeUndefined();
+    expect(res.cookies.get(STEAM_STATE_COOKIE)).toBeUndefined();
   });
 
   it("pins Steam's signed return_to to the state accepted from the cookie", async () => {

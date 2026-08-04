@@ -101,6 +101,25 @@ describe("verifySteamCallback canonical assertion", () => {
   });
 
   it.each([
+    ["an oversized assertion value", (assertion: URLSearchParams) => {
+      assertion.set("openid.sig", "x".repeat(4_097));
+    }],
+    ["too many OpenID fields", (assertion: URLSearchParams) => {
+      for (let i = 0; i < 33; i += 1) {
+        assertion.set(`openid.extra_${i}`, "x");
+      }
+    }],
+  ])("rejects %s before contacting Steam", async (_label, mutate) => {
+    const assertion = validAssertion();
+    mutate(assertion);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(verifySteamCallback(assertion, CALLBACK)).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["openid.identity", "https://steamcommunity.com/openid/id/76561198000000002"],
     ["openid.claimed_id", `http://steamcommunity.com/openid/id/${STEAM_ID}`],
     ["openid.op_endpoint", "https://evil.example/openid"],

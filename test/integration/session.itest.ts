@@ -23,7 +23,8 @@ vi.mock("next/headers", () => ({
     get: (name: string) =>
       jar.has(name) ? { name, value: jar.get(name)! } : undefined,
     set: (name: string, value: string, options: Record<string, unknown>) => {
-      jar.set(name, value);
+      if (options.maxAge === 0) jar.delete(name);
+      else jar.set(name, value);
       jarOptions.set(name, options);
     },
     delete: (name: string) => {
@@ -236,6 +237,14 @@ describe("session JWT path (real createSession/getSessionUser)", () => {
 
     await destroySession();
     expect(jar.has(SESSION_COOKIE)).toBe(false);
+    expect(jarOptions.get(SESSION_COOKIE)).toMatchObject({
+      expires: new Date(0),
+      httpOnly: true,
+      maxAge: 0,
+      path: "/",
+      sameSite: "lax",
+      secure: false,
+    });
     expect(await getSessionUser()).toBeNull();
   });
 });

@@ -18,6 +18,7 @@ import {
   type LeagueAnnouncementDelivery,
   type LeagueAnnouncementMarker,
 } from "./league-announcement-outbox";
+import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -598,7 +599,10 @@ export type WeekReminderAnnouncement = {
   mentionUserIds: string[];
 };
 
-function reminderFixtureBlock(f: WeekReminderFixture, site: string): {
+function reminderFixtureBlock(
+  f: WeekReminderFixture,
+  site: string,
+): {
   lines: string[];
   mentionUserIds: string[];
 } {
@@ -817,9 +821,39 @@ export function newsMessage(title: string, body: string, id?: string): string {
 // Sending
 // ---------------------------------------------------------------------------
 
+function runtimeWebhookUrl(value: string | null | undefined): string | null {
+  const normalized = normalizeDiscordWebhookUrl(value);
+  if (normalized) return normalized;
+  // The transport integration suite uses a loopback HTTP server to inspect
+  // the exact webhook wire format. Never widen the production validator for a
+  // test stand-in; keep the exception both environment- and host-pinned here.
+  if (process.env.NODE_ENV === "test" && value) {
+    try {
+      const url = new URL(value);
+      if (
+        url.protocol === "http:" &&
+        url.hostname === "127.0.0.1" &&
+        /^\/api\/webhooks\/\d+\/[A-Za-z0-9._-]+$/.test(url.pathname) &&
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash
+      ) {
+        return value;
+      }
+    } catch {
+      // Invalid test input remains disabled.
+    }
+  }
+  return null;
+}
+
 export async function getWebhookUrl(): Promise<string | null> {
   const fromDb = await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL);
-  return fromDb || process.env.DISCORD_WEBHOOK_URL || null;
+  return (
+    runtimeWebhookUrl(fromDb) ??
+    runtimeWebhookUrl(process.env.DISCORD_WEBHOOK_URL)
+  );
 }
 
 /**
@@ -833,11 +867,10 @@ export async function getWebhookUrl(): Promise<string | null> {
  */
 export async function getInhouseAlertWebhookUrl(): Promise<string | null> {
   const fromDb = await getSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL);
-  return (
-    fromDb ||
-    process.env.DISCORD_INHOUSE_ALERT_WEBHOOK_URL ||
-    (await getInhouseWebhookUrl())
-  );
+  const configured =
+    runtimeWebhookUrl(fromDb) ??
+    runtimeWebhookUrl(process.env.DISCORD_INHOUSE_ALERT_WEBHOOK_URL);
+  return configured || (await getInhouseWebhookUrl());
 }
 
 /**
@@ -863,9 +896,10 @@ export async function getInhousePingRoleId(): Promise<string | null> {
  */
 export async function getInhouseWebhookUrl(): Promise<string | null> {
   const fromDb = await getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL);
-  return (
-    fromDb || process.env.DISCORD_INHOUSE_WEBHOOK_URL || (await getWebhookUrl())
-  );
+  const configured =
+    runtimeWebhookUrl(fromDb) ??
+    runtimeWebhookUrl(process.env.DISCORD_INHOUSE_WEBHOOK_URL);
+  return configured || (await getWebhookUrl());
 }
 
 /**
@@ -926,8 +960,10 @@ export async function postWebhookMessage(
   url: string,
   payload: WebhookPayload,
 ): Promise<{ id: string } | null> {
+  const target = runtimeWebhookUrl(url);
+  if (!target) return null;
   try {
-    const res = await fetch(`${webhookApiUrl(url)}?wait=true`, {
+    const res = await fetch(`${webhookApiUrl(target)}?wait=true`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...payload, allowed_mentions: NO_MENTIONS }),
@@ -936,9 +972,9 @@ export async function postWebhookMessage(
     if (!res.ok) return null;
     const json = (await res.json()) as { id?: unknown };
     return typeof json.id === "string" ? { id: json.id } : null;
-  } catch (err) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] webhook post failed:", err);
+      console.warn("[discord] webhook post failed");
     }
     return null;
   }
@@ -966,9 +1002,11 @@ export async function patchWebhookMessage(
   messageId: string,
   payload: WebhookPayload,
 ): Promise<WebhookEditResult> {
+  const target = runtimeWebhookUrl(url);
+  if (!target) return "failed";
   try {
     const res = await fetch(
-      `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
+      `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -987,9 +1025,9 @@ export async function patchWebhookMessage(
       return "gone";
     }
     return "failed";
-  } catch (err) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] webhook edit failed:", err);
+      console.warn("[discord] webhook edit failed");
     }
     return "failed";
   }
@@ -1000,9 +1038,11 @@ export async function deleteWebhookMessage(
   url: string,
   messageId: string,
 ): Promise<boolean> {
+  const target = runtimeWebhookUrl(url);
+  if (!target) return false;
   try {
     const res = await fetch(
-      `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
+      `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
       { method: "DELETE", signal: AbortSignal.timeout(2500) },
     );
     return res.ok || res.status === 404; // already gone is a success
@@ -1134,7 +1174,8 @@ async function sendTo(
   content: string,
   mentions?: MentionAllowlist,
 ): Promise<boolean> {
-  if (!url) return false;
+  const target = runtimeWebhookUrl(url);
+  if (!target) return false;
   try {
     const allowed = normalizeMentionAllowlist(mentions);
     const renderedContent = materializeAllowedMentions(content, allowed);
@@ -1143,7 +1184,7 @@ async function sendTo(
     // Discord's DEFAULT version, still v6 and deprecated. The board's transport
     // has always pinned v10 and these ~28 announcements silently didn't — the
     // same webhook string reaching Discord two different ways.
-    const res = await fetch(webhookApiUrl(url), {
+    const res = await fetch(webhookApiUrl(target), {
       method: "POST",
       headers: { "content-type": "application/json" },
       // parse:[] disables every automatic mention. Only the normalized ids we
@@ -1161,9 +1202,9 @@ async function sendTo(
       signal: AbortSignal.timeout(5000),
     });
     return res.ok;
-  } catch (err) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] webhook send failed:", err);
+      console.warn("[discord] webhook send failed");
     }
     return false;
   }

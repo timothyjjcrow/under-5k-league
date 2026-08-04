@@ -6,6 +6,7 @@ import {
   STEAM_STATE_COOKIE,
   safeReturnPath,
 } from "@/lib/return-path";
+import { expireHttpOnlyCookie } from "@/lib/cookie-policy";
 
 // Kicks off Steam sign-in by redirecting to Steam's OpenID endpoint. A
 // validated ?next= (same-origin relative path) rides a short-lived httpOnly
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
     // A player can abandon one Steam round-trip and start another before the
     // ten-minute cookie expires. Starting without a destination must clear the
     // old intent, or an unrelated later sign-in can unexpectedly land there.
-    res.cookies.delete(RETURN_COOKIE);
+    expireHttpOnlyCookie(res.cookies, RETURN_COOKIE);
   }
   return res;
 }

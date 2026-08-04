@@ -27,6 +27,7 @@ import {
   setSetting,
   SETTING_KEYS,
   weekReminderKey,
+  claimProviderCooldown,
 } from "./settings";
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { matchResultsOpen } from "./league-lifecycle";
@@ -712,6 +713,8 @@ export type ImportGameOptions = {
   expectedCaptainId?: string;
   /** Captain-entered IDs must belong to this fixture, not an old scrim/rematch. */
   enforceFixtureWindow?: boolean;
+  /** Authenticated manual caller. Omit for bounded automation-owned imports. */
+  providerActorId?: string;
   /** Automation-only absolute budget. Manual callers omit both fields. */
   deadlineMs?: number;
   signal?: AbortSignal;
@@ -796,6 +799,27 @@ export async function importGameForMatch(
       error: "Automatic result sync reached its work deadline",
       deadlineReached: true,
     };
+  }
+  if (options.providerActorId) {
+    const providerClaim = await claimProviderCooldown(
+      "open-dota-match-import",
+      options.providerActorId,
+      `fixture:${match.id}`,
+    );
+    if (providerClaim === "cooldown") {
+      return {
+        ok: false,
+        error:
+          "A Dota match ID was checked for this fixture recently — wait about a minute before trying another ID",
+      };
+    }
+    if (providerClaim === "unavailable") {
+      return {
+        ok: false,
+        error:
+          "Couldn't safely start the OpenDota lookup — wait a minute and try again",
+      };
+    }
   }
   const od = await fetchOpenDotaMatch(dotaMatchId, fetchOptions);
   if (!od) {

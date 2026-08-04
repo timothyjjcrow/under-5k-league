@@ -16,6 +16,7 @@
 // never rendered to the client and never logged.
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { deploymentCookieName } from "./cookie-policy";
 import { safeReturnPath } from "./return-path";
 
 const AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
@@ -27,10 +28,22 @@ const ME_URL = "https://discord.com/api/v10/users/@me";
 // important: a person can sign out and into a different site account in
 // another tab while Discord's consent screen is open. The callback must never
 // attach the proven Discord identity to that replacement session.
-// Scoped to /api/auth/discord so it never rides other requests.
-export const DISCORD_OAUTH_COOKIE = "ld2l_discord_oauth";
-export const DISCORD_OAUTH_COOKIE_PATH = "/api/auth/discord";
+// __Host- cookies must use `/`; the short lifetime and httpOnly flag keep the
+// wider request scope bounded while preventing sibling-domain cookie tossing.
+export const DISCORD_OAUTH_COOKIE = deploymentCookieName(
+  "ld2l_discord_oauth",
+);
+export const DISCORD_OAUTH_COOKIE_PATH = "/";
 export const DISCORD_OAUTH_MAX_AGE = 600; // the round-trip takes seconds
+export const DISCORD_OAUTH_VALUE_LENGTH = 43;
+export const DISCORD_OAUTH_COOKIE_MAX_LENGTH = 1024;
+
+export function isDiscordOauthValue(value: string): boolean {
+  return (
+    value.length === DISCORD_OAUTH_VALUE_LENGTH &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
 
 /** URL-safe random value for `state` / the PKCE verifier. */
 export function randomOauthValue(): string {
@@ -75,13 +88,13 @@ export function unpackOauthCookie(value: string | null | undefined): {
   userId: string;
   next: string | null;
 } | null {
-  if (!value) return null;
+  if (!value || value.length > DISCORD_OAUTH_COOKIE_MAX_LENGTH) return null;
   const parts = value.split(".");
   if (
     (parts.length !== 4 && parts.length !== 5) ||
     parts[0] !== "v2" ||
-    !parts[1] ||
-    !parts[2] ||
+    !isDiscordOauthValue(parts[1]) ||
+    !isDiscordOauthValue(parts[2]) ||
     !parts[3]
   ) {
     return null;

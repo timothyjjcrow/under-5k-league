@@ -9,28 +9,38 @@ import {
   STEAM_STATE_COOKIE,
   safeReturnPath,
 } from "@/lib/return-path";
+import { expireHttpOnlyCookie } from "@/lib/cookie-policy";
 
-function failedLogin(req: NextRequest, error: "rate" | "steam") {
+function failedLogin(
+  req: NextRequest,
+  error: "rate" | "steam",
+  { consumeFlow = true }: { consumeFlow?: boolean } = {},
+) {
   const target = new URL("/login", req.url);
   target.searchParams.set("error", error);
   const next = safeReturnPath(req.cookies.get(RETURN_COOKIE)?.value);
   if (next && next !== "/") target.searchParams.set("next", next);
   const res = NextResponse.redirect(target);
-  // The login page now owns the retry destination in its validated `next`
-  // parameter. Clear the one-shot cookie on every callback exit so an
-  // abandoned or failed attempt never leaks into a later sign-in.
-  res.cookies.delete(RETURN_COOKIE);
-  res.cookies.delete(STEAM_STATE_COOKIE);
+  // Once this callback has been bound to the initiating browser, the login
+  // page owns the retry destination in its validated `next` parameter. Clear
+  // the one-shot cookies on every bound callback exit so a failed attempt
+  // never leaks into a later sign-in. Unbound callbacks leave them untouched.
+  if (consumeFlow) {
+    expireHttpOnlyCookie(res.cookies, RETURN_COOKIE);
+    expireHttpOnlyCookie(res.cookies, STEAM_STATE_COOKIE);
+  }
   return res;
 }
 
 export async function GET(req: NextRequest) {
+  if (req.nextUrl.search.length > 16_384) {
+    return failedLogin(req, "steam", { consumeFlow: false });
+  }
   // Bind the callback to the browser that initiated this OpenID round-trip.
   // A valid Steam assertion alone is not enough: without this one-shot state,
   // an attacker can make another browser log into the attacker's account.
   const callbackStates = req.nextUrl.searchParams.getAll("state");
-  const callbackState =
-    callbackStates.length === 1 ? callbackStates[0] : null;
+  const callbackState = callbackStates.length === 1 ? callbackStates[0] : null;
   const cookieState = req.cookies.get(STEAM_STATE_COOKIE)?.value;
   if (
     !callbackState ||
@@ -38,7 +48,9 @@ export async function GET(req: NextRequest) {
     callbackState.length > 128 ||
     callbackState !== cookieState
   ) {
-    return failedLogin(req, "steam");
+    // Do not let an unsolicited or mismatched callback erase a legitimate
+    // browser-bound flow already in progress in another tab.
+    return failedLogin(req, "steam", { consumeFlow: false });
   }
 
   // Only a browser-bound callback can spend this IP budget. Invalid requests
@@ -82,10 +94,9 @@ export async function GET(req: NextRequest) {
   await createSession(user.id);
   // Land back where they clicked Sign in (validated again — the cookie is
   // ours, but defense in depth is free), clearing the one-shot cookie.
-  const next =
-    safeReturnPath(req.cookies.get(RETURN_COOKIE)?.value) ?? "/";
+  const next = safeReturnPath(req.cookies.get(RETURN_COOKIE)?.value) ?? "/";
   const res = NextResponse.redirect(new URL(next, req.url));
-  res.cookies.delete(RETURN_COOKIE);
-  res.cookies.delete(STEAM_STATE_COOKIE);
+  expireHttpOnlyCookie(res.cookies, RETURN_COOKIE);
+  expireHttpOnlyCookie(res.cookies, STEAM_STATE_COOKIE);
   return res;
 }

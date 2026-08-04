@@ -82,9 +82,9 @@ async function call(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(4000),
     });
-  } catch (err) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] bot call failed:", err);
+      console.warn("[discord] bot call failed");
     }
     return null;
   }
@@ -853,4 +853,3 @@ export async function reachabilityNote(userId: string): Promise<string> {
     return "";
   }
 }
-

@@ -45,6 +45,7 @@ import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
+import { claimProviderCooldown } from "@/lib/settings";
 
 function refresh() {
   revalidatePath("/", "layout");
@@ -1002,8 +1003,32 @@ export async function updateDotaAccount(
     }
   }
 
+  const linkMessage =
+    expectedOverride == null
+      ? raw
+        ? "Steam account verified"
+        : "Cleared — using Steam"
+      : "Legacy account refreshed";
   let medal = "";
   if (accountId) {
+    // Ownership/input validation and the guarded link mutation must finish
+    // before this claim. A malformed, colliding, or stale-tab submission must
+    // not consume the user's real OpenDota allowance. updateDotaAccount and
+    // refreshRank intentionally share this per-user/account resource key.
+    const claim = await claimProviderCooldown(
+      "open-dota-profile",
+      user.id,
+      accountId,
+    );
+    if (claim !== "claimed") {
+      refresh();
+      return {
+        message:
+          claim === "cooldown"
+            ? `${linkMessage} · OpenDota was refreshed recently; wait a minute before refreshing the medal again`
+            : `${linkMessage} · couldn't safely start the OpenDota refresh; wait a minute and use Refresh medal`,
+      };
+    }
     // The scouting snapshot rides the same moment (in parallel — independent
     // OpenDota calls). Same non-destructive rule as the medal below: a failed
     // fetch leaves the stored snapshot alone; the player can hit Refresh.
@@ -1039,7 +1064,7 @@ export async function updateDotaAccount(
     } else {
       // Couldn't reach OpenDota — leave the stored medal alone rather than
       // wiping it; they can retry with "Refresh medal".
-      medal = " · couldn't fetch medal (try Refresh)";
+      medal = " · couldn't fetch medal (wait a minute, then try Refresh)";
     }
     const current = await prisma.user.findUnique({
       where: { id: user.id },
@@ -1079,12 +1104,7 @@ export async function updateDotaAccount(
 
   refresh();
   return {
-    message:
-      (expectedOverride == null
-        ? raw
-          ? "Steam account verified"
-          : "Cleared — using Steam"
-        : "Legacy account refreshed") + medal,
+    message: linkMessage + medal,
   };
 }
 
@@ -1103,6 +1123,24 @@ export async function refreshRank(
   if (!dbUser) return { error: "Sign in required" };
   const accountId = effectiveDotaAccountId(dbUser);
   if (!accountId) return { error: "Link your account first" };
+
+  const claim = await claimProviderCooldown(
+    "open-dota-profile",
+    user.id,
+    accountId,
+  );
+  if (claim === "cooldown") {
+    return {
+      error:
+        "Your OpenDota profile was refreshed recently — wait about a minute before trying again.",
+    };
+  }
+  if (claim === "unavailable") {
+    return {
+      error:
+        "Couldn't safely start the OpenDota refresh — wait a minute and try again.",
+    };
+  }
 
   // The scouting snapshot refreshes on the same click (independent calls, in
   // parallel; a failed pub fetch never blocks the medal or vice versa).
@@ -1151,11 +1189,11 @@ export async function refreshRank(
       refresh();
       return {
         message:
-          "Scouting stats refreshed · couldn't fetch your medal (rate limited?) — try again in a moment",
+          "Scouting stats refreshed · couldn't fetch your medal (rate limited?) — wait a minute and try again",
       };
     }
     return {
-      error: "Couldn't reach OpenDota (rate limited?) — try again in a moment",
+      error: "Couldn't reach OpenDota (rate limited?) — wait a minute and try again",
     };
   }
   refresh();
@@ -1177,12 +1215,29 @@ export async function refreshSteamProfile(
   } catch {
     return { error: "Sign in required" };
   }
+  const claim = await claimProviderCooldown(
+    "steam-profile",
+    user.id,
+    user.steamId,
+  );
+  if (claim === "cooldown") {
+    return {
+      error:
+        "Your Steam profile was refreshed recently — wait about a minute before trying again.",
+    };
+  }
+  if (claim === "unavailable") {
+    return {
+      error:
+        "Couldn't safely start the Steam refresh — wait a minute and try again.",
+    };
+  }
   const profiles = await fetchSteamProfiles([user.steamId]);
   const p = profiles.get(user.steamId);
   if (!p) {
     return {
       error:
-        "Couldn't refresh from Steam right now. Check that your Steam profile is public and try again; ask an admin if it keeps failing.",
+        "Couldn't refresh from Steam right now. Check that your Steam profile is public, wait a minute, and try again; ask an admin if it keeps failing.",
     };
   }
   await prisma.user.update({

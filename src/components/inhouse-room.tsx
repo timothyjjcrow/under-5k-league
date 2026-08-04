@@ -116,10 +116,16 @@ export function InhouseRoom({
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
+  const [connectivity, setConnectivity] = useState<
+    "online" | "offline" | "resyncing"
+  >("online");
+  const connectionUnavailable = connectivity !== "online";
   const [reqPending, setPending] = useState(false);
+  const [actionReconciling, setActionReconciling] = useState(false);
   // Disconnected = all actions disabled: a pick/vote against stale state
   // would fail (or look accepted) while the real lobby moved on.
-  const pending = reqPending || disconnected;
+  const pending =
+    reqPending || actionReconciling || disconnected || connectionUnavailable;
   const [selected, setSelected] = useState<string | null>(null);
   const [mmr, setMmr] = useState<number>(defaultMmr);
   const [soundOn, setSoundOn] = usePersistedFlag("inhouseSound");
@@ -200,6 +206,13 @@ export function InhouseRoom({
   // while their real 60s clock burned. Never key this off `s.now`: it's
   // per-instance wall-clock and can skew between serverless instances.
   const seqRef = useRef(ROOM_SEQUENCE_START);
+  // A timeout, 5xx, or unreadable 2xx can happen after the mutation committed.
+  // Keep controls locked until a state poll that STARTED after that action is
+  // successfully applied; an older in-flight payload is not reconciliation.
+  const actionReconcileSeqRef = useRef<number | null>(null);
+  // Only a poll that starts after the latest offline/online transition may
+  // make controls live again. Transport-held pre-outage responses are stale.
+  const connectivityEpochRef = useRef(0);
   // Unlike React state, this can be read safely inside the long-lived poll
   // effect without resubscribing it. A 429 after a good snapshot is ordinary
   // back-pressure; a cold page receiving only 429s still needs to leave its
@@ -209,10 +222,11 @@ export function InhouseRoom({
   const apply = useCallback((s: InhouseState, seq: number) => {
     const { accept, next } = acceptSequence(seqRef.current, seq);
     seqRef.current = next;
-    if (!accept) return; // lost the response race — stale
+    if (!accept) return false; // lost the response race — stale
     hasLoadedRef.current = true;
     setOffsetMs((prev) => nextClockOffset(prev, s.now, Date.now()));
     setState(s);
+    return true;
   }, []);
 
   // Keep the poll loop's "has stake" flag current for its hidden-tab decision.
@@ -227,14 +241,25 @@ export function InhouseRoom({
   // IDLE-slow when just spectating. While the tab is HIDDEN: a viewer with a
   // stake (queued or in a lobby) keeps a slow KEEPALIVE so their presence
   // heartbeat holds the spot and a forming ready check's chime/title still
-  // reaches them; a hidden spectator doesn't fetch at all (the sitewide
-  // /api/sync ping advances lobbies meanwhile). Either way it re-syncs the
-  // instant it's refocused. Mirrors <ResultSyncPing>; kills the ~40 req/min an
-  // idle open tab used to fire.
+  // reaches them; a hidden spectator doesn't fetch at all (authenticated room
+  // traffic and the leased worker advance lobbies meanwhile). Either way it
+  // re-syncs the instant it's refocused. Mirrors <ResultSyncPing>; kills the
+  // ~40 req/min an idle open tab used to fire.
   useEffect(() => {
     let alive = true;
     let inFlight = false;
+    // An action can finish while a slower state poll is already in flight.
+    // Remember the requested reconciliation until that poll settles; merely
+    // replacing its timer is insufficient because the timer can fire, see
+    // `inFlight`, and disappear without ever starting a post-action request.
+    let rerunRequested = false;
+    let consecutiveFailures = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const markFailure = () => {
+      consecutiveFailures += 1;
+      pollFail();
+    };
 
     const schedule = (ms: number) => {
       if (!alive) return;
@@ -246,10 +271,16 @@ export function InhouseRoom({
       // inFlight also guards a visibilitychange firing mid-request — the active
       // call reschedules when it settles.
       if (!alive || inFlight) return;
+      // This tick satisfies any queued action reconciliation. A new action
+      // that lands during the await will set the latch again.
+      rerunRequested = false;
       // Hidden with nothing at stake: don't fetch (browsers throttle background
       // timers anyway); the visibility listener wakes us on focus. Rules +
       // reasoning in inhousePollCadence, where they're unit-tested.
+      const browserOffline = navigator.onLine === false;
+      if (browserOffline) setConnectivity("offline");
       const pre = inhousePollCadence({
+        offline: browserOffline,
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
@@ -268,8 +299,10 @@ export function InhouseRoom({
       // nothing (see room-sequence.ts; the source guard is what catches that).
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
+      const pollConnectivityEpoch = connectivityEpochRef.current;
       let next: InhouseState | null = null;
       let rateLimited = false;
+      let supersededByConnectivityChange = false;
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
@@ -279,10 +312,24 @@ export function InhouseRoom({
           // both freeze the same way without it.
           signal: AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS),
         });
-        if (res.ok) {
-          next = (await res.json()) as InhouseState;
-          apply(next, seq);
-          pollOk();
+        if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+          supersededByConnectivityChange = true;
+        } else if (res.ok) {
+          const payload = (await res.json()) as InhouseState;
+          if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+            supersededByConnectivityChange = true;
+          } else {
+            next = payload;
+            const applied = apply(next, seq);
+            const actionSeq = actionReconcileSeqRef.current;
+            if (applied && actionSeq !== null && seq > actionSeq) {
+              actionReconcileSeqRef.current = null;
+              setActionReconciling(false);
+            }
+            consecutiveFailures = 0;
+            pollOk();
+            setConnectivity(navigator.onLine === false ? "offline" : "online");
+          }
         } else if (res.status === 429) {
           // Once a snapshot exists this is deliberately NOT a poll failure: it
           // must slow us down rather than disable a usable room. Cold-start
@@ -290,14 +337,31 @@ export function InhouseRoom({
           // page saying Loading forever, so they participate in the same
           // retryable initial-error threshold as other non-success responses.
           rateLimited = true;
-          if (!hasLoadedRef.current) pollFail();
+          if (!hasLoadedRef.current) markFailure();
         } else {
-          pollFail();
+          markFailure();
         }
       } catch {
-        pollFail(); // transient blip (or the abort above); next poll retries
+        if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+          supersededByConnectivityChange = true;
+        } else {
+          markFailure(); // transient blip (or the abort above); next poll retries
+        }
       } finally {
         inFlight = false;
+      }
+      if (supersededByConnectivityChange) {
+        setConnectivity(navigator.onLine === false ? "offline" : "resyncing");
+        schedule(0);
+        return;
+      }
+      if (rerunRequested) {
+        // The action response may be unreadable or time out after the server
+        // committed. Always start one poll *after* that action, even when the
+        // earlier 250ms timer fired harmlessly during this request.
+        rerunRequested = false;
+        schedule(0);
+        return;
       }
       // Recompute visibility HERE (not from the pre-fetch snapshot): if the tab
       // was refocused mid-fetch this reschedules at the active rate instead of
@@ -306,10 +370,12 @@ export function InhouseRoom({
       // firing 40 req/min because one existed.
       schedule(
         inhousePollCadence({
+          offline: navigator.onLine === false,
           hidden: document.visibilityState === "hidden",
           hasStake: !!next && (next.me.inLobby || next.me.inQueue),
           rateLimited,
           reached: !!next,
+          failureCount: consecutiveFailures,
           activeMs: pollMs,
         }).delayMs,
       );
@@ -318,17 +384,35 @@ export function InhouseRoom({
     const onVisibility = () => {
       if (document.visibilityState === "visible") tick();
     };
+    const onOffline = () => {
+      connectivityEpochRef.current += 1;
+      setConnectivity("offline");
+    };
+    const onOnline = () => {
+      // Do not re-enable a stale queue/lobby merely because the interface came
+      // back. A successful state payload below is the recovery boundary.
+      connectivityEpochRef.current += 1;
+      setConnectivity("resyncing");
+      tick();
+    };
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
     // An action that changes the viewer's state (join/accept/vote/pick) calls
     // this to poll again almost immediately, so the cadence re-locks to fast
     // right after joining instead of finishing a pending idle wait.
-    bumpPollRef.current = () => schedule(250);
+    bumpPollRef.current = () => {
+      rerunRequested = true;
+      schedule(250);
+    };
     tick();
 
     return () => {
       alive = false;
       bumpPollRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
       if (timer) clearTimeout(timer);
     };
   }, [apply, pollOk, pollFail, pollMs]);
@@ -408,10 +492,25 @@ export function InhouseRoom({
 
   const act = useCallback(
     async (body: Record<string, unknown>): Promise<boolean> => {
+      if (connectionUnavailable) {
+        pushToast(
+          "info",
+          connectivity === "offline"
+            ? "You're offline. Reconnect before using queue or lobby actions."
+            : "We're confirming the current room state before enabling actions.",
+        );
+        return false;
+      }
       unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
+      const reconcileUnknown = (message: string) => {
+        pushToast("info", message);
+        actionReconcileSeqRef.current = seq;
+        setActionReconciling(true);
+        bumpPollRef.current?.();
+      };
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
@@ -437,6 +536,12 @@ export function InhouseRoom({
         // pick-race rejections land while the captain is scrolled into the
         // pool, where a top-of-room banner is invisible and went stale.
         if (!res.ok) {
+          if (res.status >= 500) {
+            reconcileUnknown(
+              "The server couldn't confirm the action — checking the current room state",
+            );
+            return false;
+          }
           pushToast(
             "error",
             data && typeof data.error === "string"
@@ -450,11 +555,9 @@ export function InhouseRoom({
         // like a timeout: never invite a duplicate pick/bet, and let the next
         // authoritative state poll tell the player what happened.
         if (!data || typeof data.now !== "number") {
-          pushToast(
-            "info",
+          reconcileUnknown(
             "The response was incomplete — checking the current room state",
           );
-          bumpPollRef.current?.();
           return false;
         }
         apply(data, seq);
@@ -468,26 +571,24 @@ export function InhouseRoom({
         // have committed. Saying "that didn't go through" would send a captain
         // to re-click a pick that already landed. Nudge the poll instead — the
         // next state payload is the honest answer either way.
-        pushToast(
-          "info",
+        reconcileUnknown(
           (e as Error)?.name === "TimeoutError"
             ? "That's taking a while — checking where things got to"
             : "We lost the response — checking the current room state",
         );
-        bumpPollRef.current?.();
         return false;
       } finally {
         setPending(false);
       }
     },
-    [apply],
+    [apply, connectionUnavailable, connectivity],
   );
 
   // ?join=1 — the one-tap join a Discord ping links to. Waits for the first
   // state so it can refuse the cases where an auto-join would be wrong, then
   // scrubs the param so a refresh can never re-enqueue you.
   useEffect(() => {
-    if (!state || autoJoinedRef.current) return;
+    if (!state || autoJoinedRef.current || connectionUnavailable) return;
     const url = new URL(window.location.href);
     if (url.searchParams.get("join") !== "1") return;
     autoJoinedRef.current = true;
@@ -511,28 +612,41 @@ export function InhouseRoom({
       });
     }, 0);
     return () => clearTimeout(t);
-  }, [state, act, mmr]);
+  }, [state, act, connectionUnavailable, mmr]);
 
   if (!state) {
-    return disconnected ? (
+    return disconnected || connectionUnavailable ? (
       <section
         role="alert"
         aria-labelledby="inhouse-load-error-title"
         className="rounded-[var(--radius)] border border-danger/40 bg-danger/10 px-5 py-6 text-center"
       >
         <h2 id="inhouse-load-error-title" className="font-semibold text-danger">
-          We can&apos;t load the inhouse room
+          {connectivity === "offline"
+            ? "You're offline"
+            : connectivity === "resyncing"
+              ? "Back online — checking the room"
+              : "We can't load the inhouse room"}
         </h2>
         <p className="mx-auto mt-2 max-w-lg text-sm text-muted">
-          We&apos;re reconnecting automatically. Queue and lobby actions stay
-          unavailable until a current server state arrives.
+          {connectivity === "offline"
+            ? "Reconnect to load the current queue or lobby. Actions stay unavailable while this page has no current server state."
+            : "We're reconnecting automatically. Queue and lobby actions stay unavailable until a current server state arrives."}
         </p>
         <button
           type="button"
           onClick={() => bumpPollRef.current?.()}
+          disabled={connectivity === "offline"}
+          title={
+            connectivity === "offline"
+              ? "Reconnect to the internet before retrying."
+              : undefined
+          }
           className={buttonClasses("secondary", "md", "mt-4")}
         >
-          Try again now
+          {connectivity === "offline"
+            ? "Waiting for connection"
+            : "Try again now"}
         </button>
       </section>
     ) : (
@@ -609,6 +723,23 @@ export function InhouseRoom({
         </button>
       </div>
 
+      {connectionUnavailable ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            "rounded-lg border px-4 py-2 text-sm",
+            connectivity === "offline"
+              ? "border-danger/40 bg-danger/10 text-danger"
+              : "border-info/40 bg-info/10 text-info",
+          )}
+        >
+          {connectivity === "offline"
+            ? "⚠️ You're offline — the queue and lobby keep running on the server. Actions are paused until you reconnect and the current room is confirmed."
+            : "Connection restored — checking the current queue and lobby. Actions remain paused until the latest room state arrives."}
+        </div>
+      ) : null}
+
       {disconnected ? (
         <div
           role="status"
@@ -617,6 +748,17 @@ export function InhouseRoom({
         >
           ⚠️ Connection lost — reconnecting… The lobby keeps running on the
           server; actions are paused until we&apos;re back.
+        </div>
+      ) : null}
+
+      {actionReconciling ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
+        >
+          Checking the current queue and lobby after an interrupted action.
+          Controls will unlock when the server confirms the latest state.
         </div>
       ) : null}
 

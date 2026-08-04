@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   nominatePlayer: vi.fn(),
   rateLimit: vi.fn(),
   clientIp: vi.fn(),
+  claimThrottle: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({ getSessionUser: mocks.getSessionUser }));
@@ -21,6 +22,14 @@ vi.mock("@/lib/draft-service", () => ({
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: mocks.rateLimit,
   clientIp: mocks.clientIp,
+  retryAfterSeconds: (result: { retryAfterMs?: number }) =>
+    String(Math.max(1, Math.ceil((result.retryAfterMs ?? 0) / 1000))),
+}));
+vi.mock("@/lib/settings", () => ({
+  claimThrottle: mocks.claimThrottle,
+  SETTING_KEYS: {
+    DRAFT_ROOM_MAINTENANCE_AT: "draftRoomMaintenanceAt",
+  },
 }));
 
 import { POST as tick } from "./tick/route";
@@ -77,6 +86,7 @@ beforeEach(() => {
   mocks.placeBid.mockResolvedValue({ ok: true });
   mocks.nominatePlayer.mockResolvedValue({ ok: true });
   mocks.rateLimit.mockReturnValue({ allowed: true });
+  mocks.claimThrottle.mockResolvedValue(true);
   mocks.clientIp.mockReturnValue("203.0.113.10");
 });
 
@@ -87,7 +97,14 @@ describe("POST /api/draft/tick", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
     expect(await response.json()).toEqual(state);
-    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, user);
+    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, user, {
+      resolveDeadlines: true,
+    });
+    expect(mocks.claimThrottle).toHaveBeenCalledWith(
+      "draftRoomMaintenanceAt",
+      2,
+      expect.any(Number),
+    );
     expect(mocks.rateLimit).toHaveBeenCalledWith(
       `draft:user:${user.id}`,
       expect.objectContaining({ limit: 300 }),
@@ -124,7 +141,36 @@ describe("POST /api/draft/tick", () => {
       expect.objectContaining({ limit: 1200 }),
       expect.any(Number),
     );
-    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, null);
+    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, null, {
+      resolveDeadlines: false,
+    });
+    expect(mocks.claimThrottle).not.toHaveBeenCalled();
+  });
+
+  it("keeps a signed-in viewer personalized when another poll owns deadline recovery", async () => {
+    mocks.claimThrottle.mockResolvedValue(false);
+
+    const response = await tick(request("tick", { seasonId: season.id }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, user, {
+      resolveDeadlines: false,
+    });
+  });
+
+  it("rejects an oversized body after the IP preflight but before auth or database work", async () => {
+    const response = await tick(
+      request("tick", {
+        seasonId: season.id,
+        padding: "x".repeat(9_000),
+      }),
+    );
+
+    expect(response.status).toBe(413);
+    expect(mocks.rateLimit).toHaveBeenCalledOnce();
+    expect(mocks.getSessionUser).not.toHaveBeenCalled();
+    expect(mocks.getActiveSeason).not.toHaveBeenCalled();
+    expect(mocks.getDraftState).not.toHaveBeenCalled();
   });
 });
 
@@ -212,7 +258,19 @@ describe("POST /api/draft/bid", () => {
   it("fails closed on malformed JSON", async () => {
     const response = await bid(rawRequest("bid", "{not-json"));
 
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(400);
+    expect(mocks.getSessionUser).not.toHaveBeenCalled();
+    expect(mocks.placeBid).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized mutation body before auth or database work", async () => {
+    const response = await bid(
+      request("bid", { ...lot, amount: 8, padding: "x".repeat(9_000) }),
+    );
+
+    expect(response.status).toBe(413);
+    expect(mocks.getSessionUser).not.toHaveBeenCalled();
+    expect(mocks.getActiveSeason).not.toHaveBeenCalled();
     expect(mocks.placeBid).not.toHaveBeenCalled();
   });
 });

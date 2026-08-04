@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   newsMessage,
   rescheduleMessage,
@@ -37,8 +39,13 @@ import {
   weekReminderMessage,
   weeklyHonorsMessage,
   materializeAllowedMentions,
+  deleteWebhookMessage,
+  patchWebhookMessage,
+  postWebhookMessage,
   type InhouseBetSlip,
 } from "./discord";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("Discord mention materialization", () => {
   it("adds every allowlisted user and role that is absent from the message", () => {
@@ -72,9 +79,7 @@ describe("Discord mention materialization", () => {
           roles: ["323456789012345678"],
         },
       ),
-    ).toBe(
-      "<@123456789012345678> <@&323456789012345678> Match found",
-    );
+    ).toBe("<@123456789012345678> <@&323456789012345678> Match found");
   });
 
   it("deduplicates ids and refuses to interpolate malformed values", () => {
@@ -746,8 +751,7 @@ describe("weekReminderMessage", () => {
       waitingOn: Array.from({ length: 10 }, (_, playerIndex) => ({
         name: `Player ${fixtureIndex + 1}-${playerIndex + 1}`,
         discordId: (
-          BigInt("800000000000000000") +
-          BigInt(fixtureIndex * 10 + playerIndex)
+          BigInt("800000000000000000") + BigInt(fixtureIndex * 10 + playerIndex)
         ).toString(),
       })),
     }));
@@ -765,9 +769,9 @@ describe("weekReminderMessage", () => {
     // transport materialization cannot prepend hidden/omitted users.
     expect(delivered).toBe(announcement.content);
     expect(delivered.length).toBeLessThanOrEqual(2_000);
-    const visibleMentions = [
-      ...delivered.matchAll(/<@(\d{17,20})>/g),
-    ].map((match) => match[1]);
+    const visibleMentions = [...delivered.matchAll(/<@(\d{17,20})>/g)].map(
+      (match) => match[1],
+    );
     expect(new Set(announcement.mentionUserIds)).toEqual(
       new Set(visibleMentions),
     );
@@ -775,7 +779,9 @@ describe("weekReminderMessage", () => {
     const shownFixtures = delivered
       .split("\n")
       .filter((line) => line.startsWith("🆚")).length;
-    const summary = delivered.match(/…and (\d+) more fixtures? at this kickoff/);
+    const summary = delivered.match(
+      /…and (\d+) more fixtures? at this kickoff/,
+    );
     expect(shownFixtures).toBeGreaterThan(0);
     expect(shownFixtures).toBeLessThan(fixtures.length);
     expect(summary).not.toBeNull();
@@ -942,6 +948,55 @@ describe("webhookApiUrl", () => {
     expect(webhookApiUrl("https://example.com/hook")).toBe(
       "https://example.com/hook",
     );
+  });
+});
+
+describe("Discord transport diagnostics", () => {
+  it("revalidates the general announcement sink immediately before fetch", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "src/lib/discord.ts"),
+      "utf8",
+    );
+    const start = source.indexOf("async function sendTo(");
+    const end = source.indexOf("\n}\n", start);
+    expect(start).toBeGreaterThan(-1);
+    const sink = source.slice(start, end);
+    expect(sink).toContain("const target = runtimeWebhookUrl(url)");
+    expect(sink).toContain("fetch(webhookApiUrl(target)");
+    expect(sink).not.toContain("fetch(webhookApiUrl(url)");
+  });
+
+  it("rejects untrusted transport targets before any network request", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const target = "https://league.example/internal/admin";
+
+    await expect(
+      postWebhookMessage(target, { content: "test" }),
+    ).resolves.toBeNull();
+    await expect(
+      patchWebhookMessage(target, "message-1", { content: "test" }),
+    ).resolves.toBe("failed");
+    await expect(deleteWebhookMessage(target, "message-1")).resolves.toBe(
+      false,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not copy provider errors or webhook credentials into logs", async () => {
+    const token = "credential-that-must-not-be-logged";
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      new Error(`failed request with ${token}`),
+    );
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(
+      await postWebhookMessage(
+        `https://discord.com/api/webhooks/1379001234567890123/${token}`,
+        { content: "test" },
+      ),
+    ).toBeNull();
+    expect(warning).toHaveBeenCalledWith("[discord] webhook post failed");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(token);
   });
 });
 

@@ -5,8 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { seasonSettingScopeWhere } from "@/lib/settings";
 import { storedDotaAccountId } from "@/lib/dota-account";
+import { serializeSeasonExport } from "@/lib/season-export-response";
 
 export const dynamic = "force-dynamic";
+const NO_STORE = { "cache-control": "no-store" };
 
 async function readSeasonArchive(
   tx: Prisma.TransactionClient,
@@ -153,8 +155,9 @@ async function readSeasonArchive(
  * useful for investigation and a future deliberate import tool, but it does
  * not satisfy the production hard-delete backup gate.
  *
- * Read-only, admin-only, and streams whatever the season has — no pagination,
- * because a season is a few thousand rows and the point is completeness.
+ * Read-only and admin-only. The archive is returned whole because its purpose
+ * is completeness, but it is rejected before delivery if the serialized UTF-8
+ * body would exceed the conservative hosted-response ceiling.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -162,12 +165,21 @@ export async function GET(req: NextRequest) {
   } catch {
     // Same shape as the rest of the app: never confirm what exists to a
     // non-admin.
-    return new NextResponse("Not found", { status: 404 });
+    return new NextResponse("Not found", { status: 404, headers: NO_STORE });
   }
 
   const seasonId = req.nextUrl.searchParams.get("seasonId");
   if (!seasonId) {
-    return NextResponse.json({ error: "seasonId required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "seasonId required" },
+      { status: 400, headers: NO_STORE },
+    );
+  }
+  if (seasonId.length > 128) {
+    return NextResponse.json(
+      { error: "seasonId is too long" },
+      { status: 400, headers: NO_STORE },
+    );
   }
 
   let archive: Awaited<ReturnType<typeof readSeasonArchive>>;
@@ -183,13 +195,19 @@ export async function GET(req: NextRequest) {
           error:
             "The season changed while its archive was being captured. Retry the download for one consistent snapshot.",
         },
-        { status: 409, headers: { "retry-after": "1" } },
+        {
+          status: 409,
+          headers: { ...NO_STORE, "retry-after": "1" },
+        },
       );
     }
     throw error;
   }
   if (!archive) {
-    return NextResponse.json({ error: "Unknown season" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Unknown season" },
+      { status: 404, headers: NO_STORE },
+    );
   }
 
   const core = {
@@ -224,7 +242,18 @@ export async function GET(req: NextRequest) {
   const safeName =
     archive.season.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() ||
     "season";
-  return new NextResponse(JSON.stringify(payload, null, 2), {
+  const serialized = serializeSeasonExport(payload);
+  if (!serialized.ok) {
+    return NextResponse.json(
+      {
+        error:
+          "This season's audit archive is too large for the hosted download limit. Use the verified full-database backup workflow and arrange an approved out-of-band audit export before deleting this season.",
+      },
+      { status: 413, headers: NO_STORE },
+    );
+  }
+
+  return new NextResponse(serialized.body, {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "content-disposition": `attachment; filename="ld2l-audit-archive-${safeName}-${seasonId}.json"`,

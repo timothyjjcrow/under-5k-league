@@ -12,10 +12,11 @@ export default function Error({
   unstable_retry: () => void;
 }) {
   useEffect(() => {
-    // Server-render failures are already logged server-side; this also keeps
-    // client-only render failures diagnosable without exposing their message
-    // in the UI.
-    console.error(error);
+    // Server-render failures are already logged server-side. Keep raw client
+    // exceptions in local development only; a future browser-telemetry agent
+    // must not turn arbitrary error contents into a production data channel.
+    if (process.env.NODE_ENV === "development") console.error(error);
+    else console.error("[ui-error] route render failed");
   }, [error]);
 
   return (

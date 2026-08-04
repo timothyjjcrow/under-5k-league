@@ -104,6 +104,31 @@ describe("draft robustness — withdrawn players", () => {
 });
 
 describe("draft robustness — stall auto-advance", () => {
+  it("keeps an anonymous spectator snapshot side-effect-free", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    await makeCaptain(season.id, "Spectator A", 100, 0);
+    await makeCaptain(season.id, "Spectator B", 100, 1);
+    const star = await makePlayer(season.id, "Spectator Star", 5000);
+    await startDraftState(season.id);
+
+    await expireNominationClock(season.id);
+    const snapshot = await getDraftState(season.id, null, {
+      resolveDeadlines: false,
+    });
+
+    expect(snapshot?.nominatedPlayer).toBeNull();
+    expect(
+      (
+        await prisma.draft.findUniqueOrThrow({
+          where: { seasonId: season.id },
+        })
+      ).nominatedUserId,
+    ).toBeNull();
+
+    const recovered = await getDraftState(season.id, null);
+    expect(recovered?.nominatedPlayer?.userId).toBe(star.id);
+  });
+
   it("auto-nominates the top available player when the nomination clock runs out", async () => {
     const season = await makeSeason({ teamSize: 3 });
     const capA = await makeCaptain(season.id, "A", 100, 0); // on the clock

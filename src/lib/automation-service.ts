@@ -5,6 +5,7 @@ import {
   type ResultSyncOutcome,
 } from "./result-sync-service";
 import { raceHook } from "./race-hook";
+import { prismaErrorCode } from "./operational-code";
 
 export const AUTOMATION_RUN_KEY = "league-maintenance";
 export const AUTOMATION_LEASE_MS = 90_000;
@@ -86,19 +87,37 @@ type FinalizeOptions = {
   db?: AutomationDb;
 };
 
-const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const MAX_CODES = 12;
+const SAFE_WORKER_CODES = new Set([
+  "LEAGUE_SYNC_FAILED",
+  "INHOUSE_SYNC_FAILED",
+  "INHOUSE_NOTIFICATION_DELIVERY_FAILED",
+  "DRAFT_SYNC_FAILED",
+  "PLAYOFF_SYNC_FAILED",
+  "REMINDER_FAILED",
+  "NOTIFICATION_RETRY_FAILED",
+  "LEAGUE_NOTIFICATION_DELIVERY_FAILED",
+  "CURSOR_READ_FAILED",
+  "LEAGUE_BUDGET_EXHAUSTED",
+  "INHOUSE_BUDGET_EXHAUSTED",
+  "DRAFT_BUDGET_EXHAUSTED",
+  "PLAYOFF_BUDGET_EXHAUSTED",
+  "REMINDER_BUDGET_EXHAUSTED",
+  "NOTIFICATIONS_BUDGET_EXHAUSTED",
+  "CURSOR_BUDGET_EXHAUSTED",
+]);
 
-function safeCode(value: unknown): string | null {
-  return typeof value === "string" && SAFE_CODE.test(value) ? value : null;
+function safeWorkerCode(value: unknown): string | null {
+  return typeof value === "string" && SAFE_WORKER_CODES.has(value)
+    ? value
+    : null;
 }
 
 function safeCodes(values: readonly string[] | undefined): string[] {
   if (!values) return [];
-  return [...new Set(values.map(safeCode).filter((v): v is string => !!v))].slice(
-    0,
-    MAX_CODES,
-  );
+  return [
+    ...new Set(values.map(safeWorkerCode).filter((v): v is string => !!v)),
+  ].slice(0, MAX_CODES);
 }
 
 function boundedJson(value: Record<string, unknown>): string {
@@ -157,11 +176,7 @@ function failureSummary(
 }
 
 function errorCode(error: unknown): string {
-  if (error && typeof error === "object" && "code" in error) {
-    const code = safeCode((error as { code?: unknown }).code);
-    if (code) return code;
-  }
-  return "AUTOMATION_FAILED";
+  return prismaErrorCode(error) ?? "AUTOMATION_FAILED";
 }
 
 function isUniqueViolation(error: unknown): boolean {

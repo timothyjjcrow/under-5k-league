@@ -24,9 +24,11 @@ import { makeUser, raceN } from "./factories";
 //   * a deleted message turns the feature off instead of re-posting itself
 //   * a webhook pointed at a new channel never edits the old channel's message
 
-const HOOK = "https://discord.com/api/webhooks/1111/token-a";
+const HOOK =
+  "https://discord.com/api/webhooks/11111/token-a-inert-value";
 const OTHER_HOOK = "https://discord.com/api/webhooks/2222/token-b";
-const LEAGUE_HOOK = "https://discord.com/api/webhooks/3333/token-league";
+const LEAGUE_HOOK =
+  "https://discord.com/api/webhooks/33333/token-league-inert-value";
 // A real Discord message id is a 19-digit snowflake — the admin card only ever
 // shows a truncated hint of it, which a 5-character fake would not exercise.
 const MSG_ID = "1379001234567890123";
@@ -155,7 +157,7 @@ describe("inhouse board — creation", () => {
 
     const stored = JSON.parse((await boardRow())!);
     expect(stored.messageId).toBe(MSG_ID);
-    expect(stored.webhookId).toBe("1111");
+    expect(stored.webhookId).toBe("11111");
     expect(stored.digest).toBeTruthy();
 
     const status = await getInhouseBoardStatus();
@@ -191,7 +193,7 @@ describe("inhouse board — creation", () => {
 
     const stored = JSON.parse((await boardRow())!);
     expect(stored).toMatchObject({
-      webhookId: "1111",
+      webhookId: "11111",
       messageId: "",
       reservedAt: null,
     });
@@ -219,7 +221,7 @@ describe("inhouse board — creation", () => {
 
   it("does not overwrite newer board state when an ambiguous response arrives late", async () => {
     const replacement = JSON.stringify({
-      webhookId: "1111",
+      webhookId: "11111",
       messageId: "1379009999999999999",
       digest: "replacement-after-post-started",
     });
@@ -287,9 +289,9 @@ describe("inhouse board — interrupted post recovery", () => {
     await setSetting(
       SETTING_KEYS.INHOUSE_BOARD,
       JSON.stringify({
-        webhookId: "1111",
+        webhookId: "11111",
         messageId: "",
-        digest: "posting:1111",
+        digest: "posting:11111",
         ...(reservedAt ? { reservedAt } : {}),
       }),
     );
@@ -532,7 +534,7 @@ describe("inhouse board — webhook moved to another channel", () => {
     await expireThrottle();
 
     mockHook.mockResolvedValue(
-      "https://discord.com/api/webhooks/1111/NEW-token",
+      "https://discord.com/api/webhooks/11111/NEW-token-inert-value",
     );
     await enqueue(1, "z");
     await syncInhouseBoard();
@@ -585,7 +587,8 @@ describe("alerts vs the board — separate channels", () => {
   // The board is read at a glance from the BOTTOM of its channel. One alert
   // posted under it pushes it out of view, which defeats the whole design —
   // so alerts get their own webhook, and the board's channel stays board-only.
-  const ALERT_HOOK = "https://discord.com/api/webhooks/4444/token-alert";
+  const ALERT_HOOK =
+    "https://discord.com/api/webhooks/44444/token-alert-inert-value";
 
   it("sends alerts to the board's channel when no alert webhook is set", async () => {
     await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, HOOK);
@@ -754,7 +757,7 @@ describe("inhouse board — removal is honest", () => {
   it("does not erase a newer board recorded while the old message is deleting", async () => {
     await createInhouseBoard();
     const replacement = JSON.stringify({
-      webhookId: "1111",
+      webhookId: "11111",
       messageId: "1379009999999999999",
       digest: "replacement",
     });

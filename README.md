@@ -427,6 +427,13 @@ declares the same runtime line used by every CI job.
    > allowlist if access is wrong; do not remove it and expect a production
    > bootstrap.
 
+   > **Discord webhooks are bearer credentials, not arbitrary URLs.** Every
+   > configured league/inhouse webhook must be an exact HTTPS
+   > `discord.com`/`discordapp.com` webhook path with no port, query, fragment,
+   > embedded credentials, whitespace, or redirector host. The production gate
+   > rejects anything else, and the Admin save controls apply the same parser.
+   > Rotate a URL immediately if it ever appears in logs, screenshots, or chat.
+
    > Scope `DATABASE_URL`/`DIRECT_URL` to the **Production** environment. Point
    > Preview at a separate branch database if previews need live data. The
    > migration command is a no-op outside production, but an application

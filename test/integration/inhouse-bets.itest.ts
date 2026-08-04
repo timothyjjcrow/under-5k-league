@@ -75,6 +75,7 @@ import {
   INHOUSE_ANNOUNCEMENT_STATUS,
 } from "@/lib/inhouse-announcement-outbox";
 import { runResultSync } from "@/lib/result-sync-service";
+import { providerCooldownKey } from "@/lib/settings";
 import { ON_POSTGRES, makeUser, raceAll, raceN, sessionFor } from "./factories";
 
 // The inhouse result path only ever touches OpenDota. Stub the two network
@@ -231,9 +232,7 @@ async function accountOf(players: Player[]): Promise<Map<string, number>> {
       legacyDotaAccountId: true,
     },
   });
-  return new Map(
-    rows.map((u) => [u.id, effectiveDotaAccountId(u)!]),
-  );
+  return new Map(rows.map((u) => [u.id, effectiveDotaAccountId(u)!]));
 }
 
 /**
@@ -1203,8 +1202,25 @@ describe("inhouse betting — the result claim and the played roster", () => {
     ).toBe(1);
     expect(await balanceOf(swapper.user.id)).toBe(400); // staked, not settled
 
-    // And the retry is byte-identical to the happy path — the whole point of
-    // rolling back rather than half-committing. Same match id, same button.
+    // The provider request already happened, so an immediate retry remains
+    // intentionally bounded even though the domain transaction rolled back.
+    // Once that one-minute allowance expires, the retry is byte-identical to
+    // the happy path — the whole point of rolling back rather than
+    // half-committing. Same match id, same button.
+    await expect(recordMatch(ctx.admin, String(matchId))).resolves.toEqual({
+      ok: false,
+      error: expect.stringMatching(/wait about a minute/i),
+    });
+    await prisma.setting.update({
+      where: {
+        key: providerCooldownKey(
+          "open-dota-match-import",
+          ctx.admin.id,
+          `inhouse:${ctx.lobbyId}`,
+        ),
+      },
+      data: { value: new Date(0).toISOString() },
+    });
     expect((await recordMatch(ctx.admin, String(matchId))).ok).toBe(true);
     expect(await betRow(ctx.lobbyId, swapper.user.id)).toMatchObject({
       outcome: INHOUSE_BET_OUTCOME.VOID_LINEUP,
@@ -1274,9 +1290,9 @@ describe("inhouse betting — the result claim and the played roster", () => {
         markSendStarted = resolve;
       });
       let capturedContent: string | null = null;
-      let delivery: Promise<Awaited<
-        ReturnType<typeof deliverInhouseAnnouncements>
-      >> | null = null;
+      let delivery: Promise<
+        Awaited<ReturnType<typeof deliverInhouseAnnouncements>>
+      > | null = null;
       let fired = false;
 
       setRaceHook(
@@ -2480,12 +2496,8 @@ describe.skipIf(!ON_POSTGRES)(
         data: { status: INHOUSE_STATUS.CANCELLED },
       });
 
-      setRaceHook(
-        barrierAt("inhouseBet.resolveUnsettled.beforeApply", 4),
-      );
-      const results = await raceN(4, () =>
-        resolveUnsettledBets(ctx.lobbyId),
-      );
+      setRaceHook(barrierAt("inhouseBet.resolveUnsettled.beforeApply", 4));
+      const results = await raceN(4, () => resolveUnsettledBets(ctx.lobbyId));
 
       expect(results.filter(Boolean)).toHaveLength(1);
       expect(
@@ -2522,12 +2534,8 @@ describe.skipIf(!ON_POSTGRES)(
         data: { status: INHOUSE_STATUS.CANCELLED },
       });
 
-      setRaceHook(
-        barrierAt("inhouseBet.resolveUnsettled.beforeApply", 4),
-      );
-      const results = await raceN(4, () =>
-        resolveUnsettledBets(ctx.lobbyId),
-      );
+      setRaceHook(barrierAt("inhouseBet.resolveUnsettled.beforeApply", 4));
+      const results = await raceN(4, () => resolveUnsettledBets(ctx.lobbyId));
 
       expect(results.filter(Boolean)).toHaveLength(1);
       expect(

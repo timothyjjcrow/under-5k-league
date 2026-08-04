@@ -38,8 +38,9 @@ export type DraftActionResult = { ok: true } | { ok: false; error: string };
 /**
  * Finalize a nomination whose clock has expired: the current high bidder wins
  * the player at the current price, budget is deducted, and the nomination
- * advances to the next captain who still needs players. Idempotent + safe to
- * call on every poll (it no-ops unless a nomination has actually expired).
+ * advances to the next captain who still needs players. Idempotent and safe
+ * under concurrent leased maintenance calls (it no-ops unless a nomination
+ * has actually expired).
  */
 export async function resolveExpiredNomination(seasonId: string): Promise<boolean> {
   // Set inside the transaction when this call is the one that finishes the
@@ -1009,9 +1010,17 @@ export async function abortDraft(
 }
 
 /** Everything the draft room client needs, tailored to the viewing user. */
-export async function getDraftState(seasonId: string, viewer: SessionUser | null) {
-  await resolveExpiredNomination(seasonId);
-  await resolveStalledNomination(seasonId);
+export async function getDraftState(
+  seasonId: string,
+  viewer: SessionUser | null,
+  /** Anonymous spectators get a read-only snapshot. The leased worker and
+   * authenticated room participants remain responsible for clock recovery. */
+  { resolveDeadlines = true }: { resolveDeadlines?: boolean } = {},
+) {
+  if (resolveDeadlines) {
+    await resolveExpiredNomination(seasonId);
+    await resolveStalledNomination(seasonId);
+  }
   // One repeatable snapshot. The old Promise.all ran independent queries, so
   // a sale between them could return a new roster with an old budget, or a new
   // lot with the previous lot's Bid trail. SERIALIZABLE is the only isolation

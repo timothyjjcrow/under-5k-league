@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import nextConfig from "../../next.config";
 
 describe("global response security headers", () => {
+  it("bounds scalar-only Server Action request bodies", () => {
+    expect(nextConfig.experimental?.serverActions).toMatchObject({
+      bodySizeLimit: "64kb",
+    });
+  });
+
   it("applies the hydration-safe CSP and baseline protections to every route", async () => {
     expect(typeof nextConfig.headers).toBe("function");
     const entries = await nextConfig.headers!();

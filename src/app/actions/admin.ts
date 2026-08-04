@@ -59,6 +59,7 @@ import {
   advancePlayoffBracket,
   returnToRegularSeason,
 } from "@/lib/playoff-service";
+import { actionErrorMessage } from "@/lib/user-facing-error";
 import {
   regularSeasonStatus,
   pendingResultsMessage,
@@ -147,6 +148,7 @@ import {
   seasonPhasePolicy,
 } from "@/lib/season-phase-policy";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
+import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
 
 /**
  * Thrown from inside a `$transaction` callback when a precondition that was
@@ -2970,7 +2972,13 @@ export async function startPlayoffs(
       expectedRevision,
     });
   } catch (e) {
-    return { error: (e as Error).message };
+    return {
+      error: actionErrorMessage(
+        e,
+        "Couldn't update the playoff bracket — reload and try again",
+        "admin.playoffs.start",
+      ),
+    };
   }
 
   // Announce the fresh first-round pairings.
@@ -3059,7 +3067,13 @@ export async function returnToRegularSeasonAction(
       expectedRevision,
     });
   } catch (error) {
-    return { error: (error as Error).message };
+    return {
+      error: actionErrorMessage(
+        error,
+        "Couldn't return to the regular season — reload and try again",
+        "admin.playoffs.return",
+      ),
+    };
   }
 
   const names = new Map(
@@ -3410,7 +3424,9 @@ export async function recordResult(
       forfeit,
     });
   } catch {
-    console.error("[admin] result announcement deferred (RESULT_ANNOUNCEMENT_FAILED)");
+    console.error(
+      "[admin] result announcement deferred (RESULT_ANNOUNCEMENT_FAILED)",
+    );
   }
 
   // A forfeit RULING on a series with no imported games is a fixture that
@@ -4559,15 +4575,18 @@ export async function importGameAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let admin: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    admin = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
   const matchId = str(formData, "matchId");
   const dotaMatchId = parseMatchId(str(formData, "dotaMatchRef"));
   if (!dotaMatchId) return { error: "Enter a valid match id or URL" };
-  const res = await importGameForMatch(matchId, dotaMatchId);
+  const res = await importGameForMatch(matchId, dotaMatchId, {
+    providerActorId: admin.id,
+  });
   if (!res.ok) return { error: res.error };
   await logAdminAction({
     action: "importGameAction",
@@ -5894,10 +5913,6 @@ async function syncRanksFor(
   return { ranked, unreachable, skipped, outage, stats, deferred };
 }
 
-// One validation regex for all three webhook fields — they must never drift.
-const DISCORD_WEBHOOK_URL_RE =
-  /^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//;
-
 const OPENDOTA_OUTAGE_MSG =
   "OpenDota isn't responding right now — no medals were changed. Try again in a few minutes.";
 
@@ -6333,7 +6348,8 @@ export async function setDiscordWebhook(
         "No change — paste a new URL to replace it, or press \u201cRemove webhook\u201d to turn announcements off.",
     };
   }
-  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
+  const webhookUrl = normalizeDiscordWebhookUrl(value);
+  if (!webhookUrl) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -6348,7 +6364,7 @@ export async function setDiscordWebhook(
   const nextId = webhookIdOf(
     (await getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL)) ||
       process.env.DISCORD_INHOUSE_WEBHOOK_URL ||
-      value,
+      webhookUrl,
   );
   // Only tears the board down when the league webhook IS the effective inhouse
   // one (i.e. no separate inhouse webhook is set) — otherwise the board lives
@@ -6361,7 +6377,7 @@ export async function setDiscordWebhook(
     ? await removeInhouseBoard({ force: true })
     : null;
 
-  await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, value);
+  await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, webhookUrl);
   await logAdminAction({
     action: "setDiscordWebhook",
     summary: `Replaced the league announcement webhook${movedChannel ? (torndown?.orphaned ? "; the old queue board may be orphaned" : "; the old queue board was removed") : ""}`,
@@ -6433,7 +6449,8 @@ export async function setInhouseWebhook(
         "No change — paste a new URL to replace it, or press \u201cUse the league channel instead\u201d to stop posting inhouse to its own channel.",
     };
   }
-  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
+  const webhookUrl = normalizeDiscordWebhookUrl(value);
+  if (!webhookUrl) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
@@ -6444,10 +6461,10 @@ export async function setInhouseWebhook(
   // change of channel strands it. Tear it down while the OLD credential is
   // still the configured one.
   const prevId = webhookIdOf(await getInhouseWebhookUrl());
-  const moved = !!prevId && prevId !== webhookIdOf(value);
+  const moved = !!prevId && prevId !== webhookIdOf(webhookUrl);
   const torndown = moved ? await removeInhouseBoard({ force: true }) : null;
 
-  await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, value);
+  await setSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL, webhookUrl);
   await logAdminAction({
     action: "setInhouseWebhook",
     summary: `Replaced the inhouse board webhook${moved ? (torndown?.orphaned ? "; the old board may be orphaned" : "; the old board was removed") : ""}`,
@@ -6511,13 +6528,14 @@ export async function setInhouseAlertWebhook(
         "No change — paste a new URL to replace it, or press \u201cSend alerts to the board channel instead\u201d to stop using a separate alerts channel.",
     };
   }
-  if (!DISCORD_WEBHOOK_URL_RE.test(value)) {
+  const webhookUrl = normalizeDiscordWebhookUrl(value);
+  if (!webhookUrl) {
     return {
       error:
         "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
     };
   }
-  await setSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL, value);
+  await setSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL, webhookUrl);
   await logAdminAction({
     action: "setInhouseAlertWebhook",
     summary: "Replaced the separate inhouse alert webhook",

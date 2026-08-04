@@ -18,12 +18,15 @@ const mocks = vi.hoisted(() => ({
   cancelLobby: vi.fn(),
   voidLastResult: vi.fn(),
   placeInhouseBet: vi.fn(),
+  claimThrottle: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({ getSessionUser: mocks.getSessionUser }));
 vi.mock("@/lib/rate-limit", () => ({
   clientIp: mocks.clientIp,
   rateLimit: mocks.rateLimit,
+  retryAfterSeconds: (result: { retryAfterMs: number }) =>
+    String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))),
 }));
 vi.mock("@/lib/inhouse-service", () => ({
   getInhouseState: mocks.getInhouseState,
@@ -41,6 +44,12 @@ vi.mock("@/lib/inhouse-service", () => ({
 }));
 vi.mock("@/lib/inhouse-bet-service", () => ({
   placeInhouseBet: mocks.placeInhouseBet,
+}));
+vi.mock("@/lib/settings", () => ({
+  claimThrottle: mocks.claimThrottle,
+  SETTING_KEYS: {
+    INHOUSE_ROOM_MAINTENANCE_AT: "inhouseRoomMaintenanceAt",
+  },
 }));
 
 import { POST } from "./route";
@@ -89,6 +98,7 @@ beforeEach(() => {
   mocks.getSessionUser.mockResolvedValue(user);
   mocks.clientIp.mockReturnValue("203.0.113.10");
   mocks.rateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
+  mocks.claimThrottle.mockResolvedValue(true);
   mocks.getInhouseState.mockResolvedValue(state);
   for (const action of actionMocks) action.mockResolvedValue({ ok: true });
 });
@@ -127,7 +137,11 @@ describe("POST /api/inhouse request boundary", () => {
       { limit: 1200, windowMs: 60_000 },
       expect.any(Number),
     );
-    expect(mocks.getInhouseState).toHaveBeenCalledWith(null);
+    expect(mocks.claimThrottle).not.toHaveBeenCalled();
+    expect(mocks.getInhouseState).toHaveBeenCalledWith(null, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
   });
 
   it("rejects malformed JSON instead of silently running a state poll", async () => {
@@ -135,6 +149,18 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect((await response.json()).error).toMatch(/valid JSON/i);
+    expect(mocks.getSessionUser).not.toHaveBeenCalled();
+    expect(mocks.getInhouseState).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized JSON body before auth, rate-limit, or service work", async () => {
+    const response = await POST(
+      request({ action: "state", padding: "x".repeat(9_000) }),
+    );
+
+    expect(response.status).toBe(413);
+    expect(mocks.clientIp).not.toHaveBeenCalled();
+    expect(mocks.rateLimit).not.toHaveBeenCalled();
     expect(mocks.getSessionUser).not.toHaveBeenCalled();
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
   });
@@ -167,6 +193,7 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
     expect(mocks.getSessionUser).not.toHaveBeenCalled();
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
   });
@@ -198,6 +225,34 @@ describe("POST /api/inhouse request boundary", () => {
     );
     expect(mocks.leaveQueue).toHaveBeenCalledWith(user);
     expect(mocks.getInhouseState).toHaveBeenCalledWith(user, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
+  });
+
+  it("lets the fleet-throttled authenticated poll winner run recovery", async () => {
+    const response = await POST(request({ action: "state" }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.claimThrottle).toHaveBeenCalledWith(
+      "inhouseRoomMaintenanceAt",
+      2,
+      expect.any(Number),
+    );
+    expect(mocks.getInhouseState).toHaveBeenCalledWith(user, {
+      runMaintenance: true,
+      syncBoard: true,
+    });
+  });
+
+  it("returns personalized state without maintenance when another instance owns the throttle", async () => {
+    mocks.claimThrottle.mockResolvedValue(false);
+
+    const response = await POST(request({ action: "state" }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.getInhouseState).toHaveBeenCalledWith(user, {
+      runMaintenance: false,
       syncBoard: false,
     });
   });
@@ -208,6 +263,7 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action: "leave" }));
 
     expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
     expect(mocks.rateLimit).toHaveBeenCalledWith(
       `inhouse:mutation:user:${user.id}`,
       expect.objectContaining({ limit: 300 }),

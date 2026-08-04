@@ -209,6 +209,28 @@ describe("production environment validation", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("accepts canonical Discord webhook fallbacks and rejects arbitrary fetch targets", () => {
+    const webhook =
+      "https://discord.com/api/webhooks/1379001234567890123/Ab3dEf7_9-token.value";
+    const accepted = run({
+      DISCORD_WEBHOOK_URL: webhook,
+      DISCORD_INHOUSE_WEBHOOK_URL: webhook,
+      DISCORD_INHOUSE_ALERT_WEBHOOK_URL: webhook,
+    });
+    expect(accepted.status, accepted.stderr).toBe(0);
+
+    for (const key of [
+      "DISCORD_WEBHOOK_URL",
+      "DISCORD_INHOUSE_WEBHOOK_URL",
+      "DISCORD_INHOUSE_ALERT_WEBHOOK_URL",
+    ]) {
+      const rejected = run({ [key]: "https://internal.example/collect" });
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain(key);
+      expect(rejected.stderr).not.toContain("internal.example");
+    }
+  });
+
   it("rejects separate runtime and migration database usernames for this release", () => {
     const result = run({
       DIRECT_URL:

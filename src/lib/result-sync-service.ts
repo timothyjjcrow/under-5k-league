@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { prismaErrorCode } from "./operational-code";
 import {
   AUTO_SYNC,
   DRAFT_STATUS,
@@ -133,14 +134,7 @@ function canStartWork(
 }
 
 function logStepFailure(step: string, error: unknown) {
-  const code =
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    /^[A-Z][A-Z0-9_]{0,63}$/.test((error as { code: string }).code)
-      ? (error as { code: string }).code
-      : "STEP_FAILED";
+  const code = prismaErrorCode(error) ?? "STEP_FAILED";
   // Never serialize the caught object here: fetch errors may carry a URL and
   // the OpenDota URL can contain its API key. Persisted/operator summaries use
   // the same stable codes and keep credentials out of logs and admin UI.
@@ -581,8 +575,9 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
 /**
  * Advance a due auction clock from the scheduled worker.
  *
- * The draft room calls these same idempotent, atomically-claimed resolvers on
- * every poll. This cheap preflight keeps the automation worker from opening
+ * A database-throttled authenticated draft-room poll may call these same
+ * idempotent, atomically-claimed resolvers for immediate UI recovery. This
+ * cheap preflight keeps the automation worker from opening
  * their transactions unless the newest active season is actually in the Draft
  * phase with a deadline due. A future live clock remains watch-worthy so any
  * visible page polls at the one-minute cadence until the deadline is resolved;

@@ -25,6 +25,13 @@ export const SETTING_KEYS = {
   INHOUSE_ALERT_WEBHOOK_URL: "inhouseAlertWebhookUrl",
   // Epoch ms of the last "queue is almost full" Discord ping (spam throttle).
   INHOUSE_QUEUE_PING_AT: "inhouseQueuePingAt",
+  // Fleet-wide short throttle for the authenticated inhouse room's resolver
+  // chain. Ten active players poll far faster than state transitions need;
+  // one winner every two seconds advances clocks while the rest only read.
+  INHOUSE_ROOM_MAINTENANCE_AT: "inhouseRoomMaintenanceAt",
+  // Same boundary for draft deadline recovery. The key is global because the
+  // data model permits exactly one active season/draft at a time.
+  DRAFT_ROOM_MAINTENANCE_AT: "draftRoomMaintenanceAt",
   // ISO timestamp of the last league-id OpenDota sync (result-sync-service's
   // atomic global throttle for the /leagues/{id}/matches path).
   LEAGUE_AUTO_SYNC_AT: "leagueAutoSyncAt",
@@ -61,7 +68,8 @@ export const SETTING_KEYS = {
 // weekReminder:<season>:<week>:<kickoffMs>, honorsAnnounced:<season>:<week>,
 // playoffRoundBuilt:<season>:<round>), JSON state blobs
 // (playoffGamesArchive:<season>, importSkip:<season>, leagueSyncSkip:<season>)
-// and per-pair throttles (outPing:<matchId>:<userId>). Multi-file key formats
+// and per-pair throttles (outPing:<matchId>:<userId>, providerCooldown:*).
+// Multi-file key formats
 // are built ONLY through the helpers below — a prefix that drifts between the
 // writer and the sweep that startsWith-matches it fails silently, with no
 // compile error. Single-file keys (importSkip, playoffRoundBuilt, outPing)
@@ -146,6 +154,77 @@ export function leagueSyncSkipKey(seasonId: string): string {
   return `leagueSyncSkip:${seasonId}`;
 }
 
+/** Dynamic Setting rows that bound authenticated, user-triggered API work. */
+export const PROVIDER_COOLDOWN_PREFIX = "providerCooldown:";
+
+export const PROVIDER_COOLDOWN_SECONDS = {
+  // A profile refresh fans out to medal + scouting endpoints in parallel.
+  "open-dota-profile": 60,
+  // A match scan can read recent games for every player on both rosters and
+  // then fetch several candidate games. Its worst-case work is much longer.
+  "open-dota-match-scan": 180,
+  // A pasted exact ID is one provider call. Key it to the actor plus the
+  // league fixture/lobby, never the submitted ID an attacker can vary.
+  "open-dota-match-import": 60,
+  "steam-profile": 60,
+} as const;
+
+export type ProviderCooldownAction = keyof typeof PROVIDER_COOLDOWN_SECONDS;
+
+export type ProviderCooldownClaim = "claimed" | "cooldown" | "unavailable";
+
+/**
+ * One unambiguous, bounded row per authenticated user and provider resource.
+ * The inputs have already been read from trusted database/session state; the
+ * explicit length check prevents a corrupt legacy identifier from turning a
+ * cheap safety claim into an unbounded Setting key.
+ */
+export function providerCooldownKey(
+  action: ProviderCooldownAction,
+  userId: string,
+  resourceId: string | number,
+): string {
+  const user = String(userId);
+  const resource = String(resourceId);
+  if (
+    user.length === 0 ||
+    user.length > 128 ||
+    resource.length === 0 ||
+    resource.length > 128
+  ) {
+    throw new Error("Invalid provider cooldown identity");
+  }
+  // Resource precedes user so deleting/exporting a season can select every
+  // captain claim for one match without knowing which users made the calls.
+  return `${PROVIDER_COOLDOWN_PREFIX}${action}:${encodeURIComponent(resource)}:${encodeURIComponent(user)}`;
+}
+
+/**
+ * Fail closed when the durable claim cannot be recorded: provider calls must
+ * never become the fallback for a database outage. The log is intentionally
+ * a fixed event code, not the caught database error, so credentials embedded
+ * in a driver exception cannot reach production logs or an action response.
+ */
+export async function claimProviderCooldown(
+  action: ProviderCooldownAction,
+  userId: string,
+  resourceId: string | number,
+  nowMs = Date.now(),
+): Promise<ProviderCooldownClaim> {
+  try {
+    return (await claimThrottle(
+      providerCooldownKey(action, userId, resourceId),
+      PROVIDER_COOLDOWN_SECONDS[action],
+      nowMs,
+    ))
+      ? "claimed"
+      : "cooldown";
+  } catch {
+    console.error(`[provider-cooldown] claim unavailable (${action})`);
+    return "unavailable";
+  }
+}
+
 /**
  * Every relationless Setting row owned by one season.
  *
@@ -171,6 +250,16 @@ export function seasonSettingScopeWhere(
   const matchScope = matchIds.flatMap<Prisma.SettingWhereInput>((matchId) => [
     { key: resultAnnouncedKey(matchId) },
     { key: { startsWith: `outPing:${matchId}:` } },
+    {
+      key: {
+        startsWith: `${PROVIDER_COOLDOWN_PREFIX}open-dota-match-scan:${encodeURIComponent(matchId)}:`,
+      },
+    },
+    {
+      key: {
+        startsWith: `${PROVIDER_COOLDOWN_PREFIX}open-dota-match-import:${encodeURIComponent(`fixture:${matchId}`)}:`,
+      },
+    },
   ]);
   return { OR: [...seasonScope, ...matchScope] };
 }
@@ -181,10 +270,10 @@ export function seasonSettingScopeWhere(
  * stale" claim: exactly one caller wins per interval, across every serverless
  * instance, with no lock and no cron. Returns true to the winner only.
  *
- * Lives here rather than beside its first caller because three unrelated
- * subsystems now need it (result sync, the announcement retry sweep, the
- * inhouse board) and settings.ts is the one module they can all import
- * without a cycle.
+ * Lives here rather than beside its first caller because unrelated subsystems
+ * now need it (result sync, announcement retries, room maintenance, provider
+ * cooldowns, and the inhouse board), and settings.ts is the one module they
+ * can all import without a cycle.
  */
 export async function claimThrottle(
   key: string,
@@ -196,10 +285,9 @@ export async function claimThrottle(
 
   // Try the STALE-CLAIM update first. The row exists on every call but the
   // first, so leading with `create` meant a caught-and-ignored P2002 on
-  // essentially every /api/sync hit — and the Prisma client logs at "error"
-  // level in production (src/lib/prisma.ts), so each one wrote a stack trace
-  // to the server log before our catch ever ran. /api/sync fires on every page
-  // view, so that buried real errors under constant expected-path noise.
+  // essentially every hot caller. Before the production log policy was
+  // hardened, Prisma emitted that caught conflict directly, burying useful
+  // diagnostics under expected-path noise.
   const updated = await prisma.setting.updateMany({
     where: { key, value: { lt: staleBefore } },
     data: { value },

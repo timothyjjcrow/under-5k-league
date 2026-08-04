@@ -1,3 +1,5 @@
+import { deploymentCookieName } from "./cookie-policy";
+
 // Central place for the string-union "enums" (SQLite has no native enums) and
 // tunable league defaults. Keeping these here makes the state machine explicit.
 // One deliberate exception: the MatchAvailability IN|OUT union lives beside its
@@ -471,7 +473,8 @@ export const AUTO_SYNC = {
   IDLE_POLL_SECONDS: 300,
 } as const;
 
-export const SESSION_COOKIE = "ld2l_session";
+export const LEGACY_SESSION_COOKIE = "ld2l_session";
+export const SESSION_COOKIE = deploymentCookieName(LEGACY_SESSION_COOKIE);
 
 // Community — the league's Discord invite.
 export const DISCORD_INVITE_URL = "https://discord.gg/H7PJ4VxUGh";

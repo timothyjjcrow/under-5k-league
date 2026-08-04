@@ -13,6 +13,10 @@ import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import type { ActionResult } from "@/lib/action-result";
 import { singleActiveSeason } from "@/lib/season";
+import {
+  actionErrorMessage,
+  UserFacingError,
+} from "@/lib/user-facing-error";
 
 /**
  * Record the signed-in player's match-night RSVP (IN | OUT) for a scheduled
@@ -71,11 +75,13 @@ export async function setAvailability(
             },
           }),
         ]);
-        if (!match) throw new Error("Unknown match");
+        if (!match) throw new UserFacingError("Unknown match");
         // An archived season's unplayed match still lists its rosters, and an
         // OUT here would ping a captain about a fixture nobody is playing.
         if (!activeSeason || match.seasonId !== activeSeason.id) {
-          throw new Error("That match belongs to an archived season");
+          throw new UserFacingError(
+            "That match belongs to an archived season",
+          );
         }
 
         const draftStatus = activeSeason.draft?.status;
@@ -89,16 +95,22 @@ export async function setAvailability(
           )
         ) {
           if (match.status === MATCH_STATUS.COMPLETED)
-            throw new Error("That match is already finished");
+            throw new UserFacingError("That match is already finished");
           if (match.status === MATCH_STATUS.LIVE)
-            throw new Error("Check-in is closed because that match is live");
+            throw new UserFacingError(
+              "Check-in is closed because that match is live",
+            );
           if (!postAuctionWorkOpen(activeSeason.status, draftStatus))
-            throw new Error("Check-in is not open in this league phase");
+            throw new UserFacingError(
+              "Check-in is not open in this league phase",
+            );
           if (match.scheduledAt)
-            throw new Error(
+            throw new UserFacingError(
               "Check-in is closed because that kickoff has passed — the result is still outstanding",
             );
-          throw new Error("That match does not have a kickoff yet");
+          throw new UserFacingError(
+            "That match does not have a kickoff yet",
+          );
         }
 
         const teamIds = [match.homeTeamId, match.awayTeamId];
@@ -129,12 +141,12 @@ export async function setAvailability(
           }),
         ]);
         if (onRoster && replacedSeat) {
-          throw new Error(
+          throw new UserFacingError(
             "A standin is covering your seat for this match, so you are not in its playing roster",
           );
         }
         if (!onRoster && !standinSeat) {
-          throw new Error("You're not playing in this match");
+          throw new UserFacingError("You're not playing in this match");
         }
 
         await tx.matchAvailability.upsert({
@@ -165,8 +177,13 @@ export async function setAvailability(
         error: "That match just changed — reload and try your RSVP again",
       };
     }
-    if (error instanceof Error) return { error: error.message };
-    return { error: "Could not save that RSVP — reload and try again" };
+    return {
+      error: actionErrorMessage(
+        error,
+        "Could not save that RSVP — reload and try again",
+        "availability.set",
+      ),
+    };
   }
 
   const { match, priorStatus, affectedCaptainId } = committed;

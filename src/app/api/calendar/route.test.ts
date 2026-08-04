@@ -198,6 +198,16 @@ describe("GET /api/calendar", () => {
     },
   );
 
+  it("rejects an oversized team filter before database work", async () => {
+    const response = await GET(request(`?team=${"x".repeat(129)}`));
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.getActiveSeason).not.toHaveBeenCalled();
+    expect(mocks.findTeams).not.toHaveBeenCalled();
+    expect(mocks.findMatches).not.toHaveBeenCalled();
+  });
+
   it("serves a safe, revalidated iCalendar download", async () => {
     const response = await GET(request());
     const body = await response.text();
@@ -210,6 +220,9 @@ describe("GET /api/calendar", () => {
     );
     expect(response.headers.get("cache-control")).toBe(
       "public, max-age=0, must-revalidate",
+    );
+    expect(response.headers.get("vercel-cdn-cache-control")).toBe(
+      "public, max-age=30, stale-while-revalidate=30",
     );
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(body.startsWith("BEGIN:VCALENDAR\r\n")).toBe(true);

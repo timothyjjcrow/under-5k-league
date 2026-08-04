@@ -7,12 +7,9 @@ later gate remains open.
 
 ## Current verdict
 
-**HOLD — repository gates for a reproducible artifact, versioned PostgreSQL
-deployment, recovery, and unattended league automation are closed, but
-production is not ready yet.** Accurate privacy/data-use disclosures and
-public-abuse hardening remain repository blockers. The target-provider restore,
-PITR, deployment, scheduler, domain/OAuth, monitoring, credential, and
-two-operator proofs remain external launch gates.
+**CONDITIONAL RELEASE CANDIDATE — all repository gates closed; DO NOT OPEN
+TRAFFIC until the external launch evidence in PRODUCTION-OPERATIONS is
+complete.**
 
 ## Iteration 1 — immutable release candidate and truthful CI
 
@@ -482,7 +479,7 @@ disclosing league or infrastructure details.
 ### Changes made
 
 - Replaced traffic-driven writes with an authenticated `GET
-  /api/cron/automation` route. `/api/sync` is now read-only, and the removed
+/api/cron/automation` route. `/api/sync` is now read-only, and the removed
   page/week reminder pings are replaced by the scheduled worker.
 - Added one database-owned, token-fenced 90-second lease and a 45-second work
   budget shared by cron and the administrator's **Run maintenance now**
@@ -796,3 +793,244 @@ provider links and policy effective dates current as integrations change.
 **Public API and polling abuse resistance, trusted-proxy identity, bounded
 queries and payloads, request failure behavior, and externally reachable
 security surfaces.**
+
+## Iteration 5 — public runtime hardening and repository release gate
+
+### Section audited
+
+Public JSON routes, room polling and maintenance, OAuth/OpenID callbacks,
+trusted-proxy client identity, request and query bounds, rate limits, client
+outage recovery, CDN cache policy, Discord webhooks, administrator exports,
+provider refresh actions, production cookies, server-action limits, exception
+and log disclosure, security documentation, and the complete repository release
+gate.
+
+### Current purpose
+
+This boundary keeps anonymous traffic read-only and bounded, prevents one
+client or forged forwarding header from amplifying provider/database work,
+keeps personalized responses out of shared caches, constrains outbound Discord
+destinations and large responses, and ensures expected failures are useful
+without exposing credentials or internal exceptions. It also establishes the
+last repository-owned evidence required before an external candidate
+deployment.
+
+### Actors affected
+
+- Visitors and spectators need fast, reliable public boards that cannot mutate
+  league state.
+- Players, captains, and teams need resilient live polling, safe identity
+  refreshes, and understandable failures.
+- Administrators need bounded exports, safe configuration, and predictable
+  maintenance behavior.
+- Operators need trustworthy client identity, cache separation, sanitized
+  telemetry, and an explicit handoff from repository proof to host/provider
+  launch evidence.
+
+### Problems found
+
+- Anonymous room reads could perform maintenance, draft deadline resolution,
+  and provider synchronization; fleet-wide polling could multiply that work.
+- JSON routes trusted declared lengths and accepted effectively unbounded,
+  malformed, primitive, or invalid-UTF-8 request bodies.
+- Client identity could fall back from an invalid attested header to a
+  spoofable header, and rate-limit responses lacked retry guidance.
+- OAuth/OpenID callbacks, query fields, calendar filters, season exports, and
+  server actions lacked sufficiently narrow request or response limits.
+- Polling retried outages at a steady cadence, creating avoidable load during a
+  prolonged failure; browser offline/online events did not themselves gate
+  stale draft and inhouse controls, and a pre-outage response could arrive
+  after reconnect and re-enable them.
+- Public read responses had no reviewed edge-cache contract, while
+  personalized/private responses needed explicit no-store protection.
+- Discord webhook configuration could permit an unsafe or malformed outbound
+  target, and raw provider/runtime errors could reach logs or user-facing
+  action results.
+- Provider refresh actions had only process-local or incomplete abuse
+  resistance; concurrent instances could bypass it, and changing a pasted Dota
+  match ID could fan out exact-match lookups.
+- Production cookies retained ordinary names vulnerable to cookie tossing;
+  the first hardened deletion path did not explicitly preserve the `Secure`
+  attribute required to expire a `__Host-` cookie.
+- Unbound OAuth/OpenID callbacks could consume a legitimate browser's one-shot
+  flow cookies, Discord transport functions trusted future callers to pass an
+  already-validated URL, and an inhouse action's reconciliation poll could be
+  swallowed by an older in-flight state poll.
+- A timed-out, unreadable, or 5xx live-room mutation released its request-level
+  pending flag before authoritative reconciliation. The server may already
+  have committed, so briefly re-enabling stale controls invited duplicate
+  joins, picks, bids, or votes while the outcome was still unknown.
+- The administrator season export could exceed the hosting response limit.
+
+### Changes made
+
+- Made anonymous inhouse and draft reads side-effect free. Authenticated room
+  maintenance uses a durable two-second database throttle so at most one
+  fleet-wide winner performs the bounded work.
+- Added an 8,192-byte streaming JSON-object parser to all five JSON mutation
+  routes. It rejects oversized, malformed, primitive, and invalid-UTF-8 bodies
+  before authentication or database access, including requests without a
+  trustworthy `Content-Length`.
+- Prefer validated `x-vercel-forwarded-for`; an invalid attested value maps to
+  unknown rather than falling back to a spoofable identity. Added
+  `Retry-After` to throttled responses and made logout same-origin validation
+  fail closed.
+- Bounded Discord OAuth and Steam OpenID callback totals, duplicate fields,
+  individual values, verifier/state values, calendar team IDs, and export
+  season IDs.
+- Added fast initial poll recovery followed by jittered capped backoff. Offline
+  events immediately pause every live-room action; reconnect remains in a
+  visible resynchronizing state until a post-transition authoritative payload
+  arrives. Connectivity generations reject held pre-outage responses, and a
+  queued-rerun latch preserves post-action reconciliation behind an in-flight
+  poll. Unknown mutation outcomes now keep every affected control locked until
+  a state poll that started after the action successfully applies; the room
+  explains that it is reconciling instead of inviting a duplicate click.
+- Added explicit browser revalidation plus short Vercel-only microcaches for
+  public sync and calendar reads; private and error responses remain no-store.
+- Restricted Discord webhooks to canonical HTTPS Discord webhook URLs with
+  exact host, path, credential, port, query, fragment, whitespace, and length
+  rules. Environment, database, administrator-save, and final network-sink
+  paths share the same validator; an invalid sink target performs no fetch.
+- Capped season exports at 4,000,000 UTF-8 bytes and return an administrator-only
+  413 with out-of-band audit guidance before emitting an oversized body.
+- Added typed user-facing errors and stable fallback/event codes so expected
+  errors remain actionable while unexpected exceptions and secret-looking
+  values are not disclosed.
+- Added database-backed, fail-closed provider cooldowns for rank, Steam/Dota
+  account, Steam profile, captain auto-detection, and exact-ID league/inhouse
+  imports after authorization, phase, fixture/lobby, duplicate, and local input
+  checks. Exact-ID keys bind the authenticated actor to the trusted
+  fixture/lobby—not attacker-controlled submitted IDs.
+- Adopted production `__Host-` session and OAuth state/return cookies, secure
+  host-only path policy, explicit secure expiration, and legacy-cookie cleanup.
+  OAuth/OpenID callbacks consume flow cookies only after binding the callback
+  to the initiating browser/user. The first hardened release intentionally
+  requires users to authenticate again.
+- Disabled direct Prisma stdout logging outside development, constrained
+  operational exception codes to approved semantic codes or `Pdddd`, and made
+  production UI error boundaries log stable events only.
+- Set the Next.js server-action body limit to `64kb` and documented the host,
+  proxy, cache, WAF, cookie, export, credential, database, and operator evidence
+  required before opening traffic.
+
+### Architecture improvements made
+
+- Public projection, authenticated maintenance, and provider synchronization
+  are separate boundaries instead of hidden side effects of a read.
+- Shared parsers, webhook policy, error types, operational-code policy, cookie
+  policy, export response construction, and durable cooldown keys replace
+  route-specific conventions.
+- Live-room network state now has explicit online/offline/resynchronizing and
+  request-generation boundaries rather than inferring safety from a fetch
+  merely returning. Provider work is claimed through one database-backed
+  actor/resource policy shared by manual league and inhouse imports.
+- Cacheability is explicit per route and limited to low-TTL public projections;
+  authentication and failure paths remain private.
+- The operations guide is now the authoritative handoff between repository
+  completion and provider-specific launch approval.
+
+### Tests added or updated
+
+- Anonymous/read-only room behavior, durable throttle ownership, request-body
+  streaming and UTF-8 limits, attested-IP handling, callback/query bounds,
+  retry headers, same-origin logout, polling backoff, and cache headers.
+- Webhook URL and sink validation, production-cookie creation/expiration and
+  legacy cleanup, bound OAuth/OpenID flow consumption, provider cooldown
+  concurrency/failure/different-ID behavior, typed action errors, log/code
+  sanitization, export byte boundaries, server-action configuration, and
+  production-environment rejection.
+- SQLite and PostgreSQL integration coverage for connected room, provider,
+  playoff, export, and authorization workflows; Chromium coverage for phone,
+  signup/draft, regular-season, inhouse, offline/resynchronizing states, held
+  pre-outage responses, action/poll overlap, unknown-action lock/reconciliation,
+  and outage behavior. The draft resilience file can now run independently by
+  arranging its live fixture through the real admin workflow rather than test
+  ordering or direct database writes.
+
+### Commands run
+
+- `npm audit --omit=dev --audit-level=low` and
+  `npm audit --audit-level=low`
+- `npm run lint -- --max-warnings=0`, `npx tsc --noEmit --pretty false`, and
+  `npm test -- --reporter=default`
+- `npm run test:integration -- --reporter=default`
+- `npm run pg:up`, `PG_TEST_URL=… npm run test:pg`, and `npm run pg:down`
+- full mutation inventory discovery and verification for all protected claims
+- production-shaped `npm run build:vercel` against disposable PostgreSQL
+- `npm run test:e2e`, `npm run test:e2e:mid`, and
+  `npm run test:e2e:postseason`
+- in-app desktop and 360×800 browser inspection of home, inhouse, login, and
+  signed-in administrator pages
+
+### Test results
+
+- Dependency audits: zero known vulnerabilities in production and full trees.
+- Zero-warning ESLint and TypeScript passed.
+- Unit: 152 files, 2,004/2,004 passed.
+- SQLite integration: 46 files passed and one intentional provider-only file
+  skipped; 1,123 passed and 38 intentional skips (1,161 total).
+- PostgreSQL integration: 47 files; 1,158 passed and three intentional
+  provider-only skips (1,161 total).
+- Mutation inventory: 133 total claims — 85 protected, 48 reviewed
+  equivalents, zero unprotected. Every one of the 85 protected claims was
+  killed, with no infrastructure errors.
+- Chromium chapter 1: 35/35 passed. Midseason: 40/40 passed. Postseason: 10/10
+  passed (85/85 total). Manual desktop/phone inspection found clear hierarchy,
+  restricted-access messaging, and no horizontal overflow at 360px.
+- The exact production build passed environment validation, migration safety,
+  preflight, deployment, and postflight for all three migrations and 14 native
+  objects, then compiled, type-checked, generated 38 static entries, and
+  enumerated all routes.
+- The first PostgreSQL command omitted the exported `PG_TEST_URL` and failed at
+  startup; the guarded local URL was then supplied explicitly and the complete
+  suite passed. This was an invocation/configuration omission, not an
+  application failure.
+- Four SQLite fixture failures used fake Discord webhook IDs/tokens that no
+  longer satisfied the production URL policy. The inert fixtures were changed
+  to valid-shaped values and the focused and complete SQLite suites passed.
+- The first final PostgreSQL run exposed one stale recovery-test assumption:
+  it expected an immediate retry after OpenDota had already been called but a
+  later transaction rolled back. The test now verifies the intentional
+  one-minute provider throttle and successful retry after expiry; the focused
+  and complete PostgreSQL suites then passed.
+
+### Remaining concerns
+
+The repository is complete, but the following are external hard launch gates
+and must be recorded in `PRODUCTION-OPERATIONS.md` before traffic is opened:
+
+- Vercel WAF rule IDs, log-mode/shared-NAT review, and block-mode evidence.
+- Direct DNS or Trusted Proxy configuration and deployed client-IP trust proof.
+- Deployed `x-vercel-cache` MISS-to-HIT evidence for public projections and
+  never-HIT evidence for personalized/private responses.
+- Deployed `__Host-` `Set-Cookie` attributes and the planned forced-reauthentication
+  observation.
+- Production database/provider region, pool, protection, preview isolation,
+  deployment protection, backup/PITR, restore, and actual migration evidence.
+- Credentialed Steam, Discord, and OpenDota smoke tests plus a sacrificial
+  failure trace/log inspection and immediate credential rotation.
+- A largest-representative-season export rehearsal below the enforced limit.
+- A monitored privacy mailbox, accurate storage-country/provider disclosures,
+  reviewed legal/process evidence, and deputy-operation proof.
+- Monitoring and alert routing, exactly one scheduler, traffic freeze and
+  rollback rehearsal, and two named operator approvals.
+
+### Recommended future improvements
+
+After launch evidence is complete, observe throttle/cache effectiveness and
+provider latency under real league traffic before changing limits. Add
+automated retention for old cooldown and operational records in a separately
+reviewed migration, make internal room snapshot helpers side-effect-free by
+default (production anonymous routes already pass explicit safe options), and
+consider stronger Discord delivery deduplication if the provider exposes an
+idempotency primitive. A response that began before a newer action may still
+paint briefly while that action is pending; controls remain disabled and
+server-side version/CAS guards protect integrity, but a future client data layer
+could make that transient presentation impossible too.
+
+### Next section to audit
+
+**External candidate deployment and evidence collection only: provider restore
+and migration, edge/WAF/cache/cookie proofs, credentialed integration smoke,
+monitoring, rollback, privacy operations, and two-operator launch approval.**

@@ -226,6 +226,10 @@ export function DraftRoom({
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
+  const [connectivity, setConnectivity] = useState<
+    "online" | "offline" | "resyncing"
+  >("online");
+  const connectionUnavailable = connectivity !== "online";
   // While there's no active season the tick 404s forever — terminal state.
   const [noSeason, setNoSeason] = useState(false);
   const [seasonChanged, setSeasonChanged] = useState(false);
@@ -241,9 +245,15 @@ export function DraftRoom({
   const clockSettling = settlingClockKey === currentClockKey;
   const [pollKick, setPollKick] = useState(0);
   const [reqPending, setPending] = useState(false);
+  const [actionReconciling, setActionReconciling] = useState(false);
   // Disconnected = every action disabled: a bid against stale state would
   // either fail or, worse, look accepted while the real auction moved on.
-  const pending = reqPending || disconnected || clockSettling;
+  const pending =
+    reqPending ||
+    actionReconciling ||
+    disconnected ||
+    connectionUnavailable ||
+    clockSettling;
   const [soundOn, setSoundOn] = usePersistedFlag("draftSound");
   // Latched while the viewer's team has lost the high bid on the live
   // nomination — cleared by the poll once it's stale (re-took the bid, the
@@ -296,12 +306,20 @@ export function DraftRoom({
   // before my bid must not overwrite the bid's fresher state when it finally
   // lands (the flash of stale auction mid-bid confused captains).
   const seqRef = useRef(ROOM_SEQUENCE_START);
+  // Unknown action outcomes stay locked until a poll that STARTED after the
+  // action successfully applies. A pre-action request cannot prove whether the
+  // mutation committed, even if its response arrives later.
+  const actionReconcileSeqRef = useRef<number | null>(null);
+  // Network transitions invalidate every poll that started before them. An
+  // old request can survive an offline/online round-trip at the transport
+  // layer; it must never be the payload that re-enables live actions.
+  const connectivityEpochRef = useRef(0);
   const hadIdentityRef = useRef(false);
 
   const apply = useCallback((s: DraftState, seq: number) => {
     const { accept, next } = acceptSequence(seqRef.current, seq);
     seqRef.current = next;
-    if (!accept) return; // lost the response race — stale
+    if (!accept) return false; // lost the response race — stale
     if (s.me.userId) {
       hadIdentityRef.current = true;
       setSessionExpired(false);
@@ -310,6 +328,7 @@ export function DraftRoom({
     }
     setOffsetMs((prev) => nextClockOffset(prev, s.now, Date.now()));
     setState(s);
+    return true;
   }, []);
 
   // Seed the feed from the first state DURING RENDER rather than in the diff
@@ -320,7 +339,10 @@ export function DraftRoom({
     setSeeded(true);
     // NEGATIVE ids, descending: the live counter above counts up from 0, so
     // the two ranges can never collide and break a React key mid-draft.
-    const seed = seedDraftFeed(state).map((line, i) => ({ ...line, id: -1 - i }));
+    const seed = seedDraftFeed(state).map((line, i) => ({
+      ...line,
+      id: -1 - i,
+    }));
     if (seed.length) setEvents(seed);
   }
 
@@ -340,7 +362,13 @@ export function DraftRoom({
   useEffect(() => {
     let alive = true;
     let inFlight = false;
+    let consecutiveFailures = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const markFailure = () => {
+      consecutiveFailures += 1;
+      pollFail();
+    };
 
     const schedule = (ms: number) => {
       if (!alive) return;
@@ -355,7 +383,10 @@ export function DraftRoom({
       // Hidden with nothing at stake: don't fetch at all. The visibility
       // listener wakes us the instant it's refocused. Rules + reasoning in
       // draftPollCadence, where they're unit-tested.
+      const browserOffline = navigator.onLine === false;
+      if (browserOffline) setConnectivity("offline");
       const pre = draftPollCadence({
+        offline: browserOffline,
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
         live: false, // irrelevant to the skip decision
@@ -371,9 +402,11 @@ export function DraftRoom({
       // room-sequence.ts).
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
+      const pollConnectivityEpoch = connectivityEpochRef.current;
       let live = false;
       let reached = false;
       let rateLimited = false;
+      let supersededByConnectivityChange = false;
       try {
         const res = await fetch("/api/draft/tick", {
           method: "POST",
@@ -384,18 +417,30 @@ export function DraftRoom({
           // every bid control still live on stale state.
           signal: AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS),
         });
-        if (res.ok) {
+        if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+          supersededByConnectivityChange = true;
+        } else if (res.ok) {
           const next = (await res.json()) as DraftState;
-          if (next.seasonId !== seasonId) {
+          if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+            supersededByConnectivityChange = true;
+          } else if (next.seasonId !== seasonId) {
             setSeasonChanged(true);
             return;
+          } else {
+            const applied = apply(next, seq);
+            const actionSeq = actionReconcileSeqRef.current;
+            if (applied && actionSeq !== null && seq > actionSeq) {
+              actionReconcileSeqRef.current = null;
+              setActionReconciling(false);
+            }
+            consecutiveFailures = 0;
+            pollOk();
+            setConnectivity(navigator.onLine === false ? "offline" : "online");
+            setInitialError(false);
+            setSyncDelayed(false);
+            reached = true;
+            live = next.status === "IN_PROGRESS" || next.status === "PAUSED";
           }
-          apply(next, seq);
-          pollOk();
-          setInitialError(false);
-          setSyncDelayed(false);
-          reached = true;
-          live = next.status === "IN_PROGRESS" || next.status === "PAUSED";
         } else if (res.status === 404) {
           setNoSeason(true); // season deactivated under us — stop pretending
           return;
@@ -411,23 +456,34 @@ export function DraftRoom({
           return;
         } else {
           setInitialError(true);
-          pollFail();
+          markFailure();
         }
       } catch {
-        setInitialError(true);
-        pollFail(); // network blip; next poll retries
+        if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+          supersededByConnectivityChange = true;
+        } else {
+          setInitialError(true);
+          markFailure(); // network blip; next poll retries
+        }
       } finally {
         inFlight = false;
+      }
+      if (supersededByConnectivityChange) {
+        setConnectivity(navigator.onLine === false ? "offline" : "resyncing");
+        schedule(0);
+        return;
       }
       // Recompute visibility HERE, not from a pre-fetch snapshot: a tab
       // refocused mid-request reschedules at the active rate straight away.
       schedule(
         draftPollCadence({
+          offline: navigator.onLine === false,
           hidden: document.visibilityState === "hidden",
           hasStake: hasStakeRef.current,
           live,
           reached,
           rateLimited,
+          failureCount: consecutiveFailures,
           activeMs: pollMs,
         }).delayMs,
       );
@@ -436,12 +492,27 @@ export function DraftRoom({
     const onVisibility = () => {
       if (document.visibilityState === "visible") tick();
     };
+    const onOffline = () => {
+      connectivityEpochRef.current += 1;
+      setConnectivity("offline");
+    };
+    const onOnline = () => {
+      // Keep actions disabled until a fresh authoritative payload arrives.
+      // Merely regaining a network interface does not make the old lot safe.
+      connectivityEpochRef.current += 1;
+      setConnectivity("resyncing");
+      tick();
+    };
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
     tick();
 
     return () => {
       alive = false;
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
       if (timer) clearTimeout(timer);
     };
   }, [apply, pollKick, pollOk, pollFail, pollMs, seasonId]);
@@ -502,7 +573,8 @@ export function DraftRoom({
     if (latch === "set") {
       setOutbid({
         player: state.nominatedPlayer!.name,
-        team: state.teams.find((t) => t.id === state.currentBidTeamId)?.name ?? "—",
+        team:
+          state.teams.find((t) => t.id === state.currentBidTeamId)?.name ?? "—",
         amount: state.currentBid,
       });
     }
@@ -572,23 +644,39 @@ export function DraftRoom({
 
   async function act(url: string, body: Record<string, unknown>) {
     if (!state) return;
+    if (connectionUnavailable) {
+      pushToast(
+        "info",
+        connectivity === "offline"
+          ? "You're offline. Reconnect before using draft actions."
+          : "We're confirming the current lot before enabling draft actions.",
+      );
+      return;
+    }
     unlockAudio(); // this click is a user gesture — prime audio for later
     const { seq, next: seqNext } = issueSequence(seqRef.current);
     seqRef.current = seqNext;
+    const reconcileUnknown = (message: string) => {
+      pushToast("info", message);
+      actionReconcileSeqRef.current = seq;
+      setActionReconciling(true);
+      setPollKick((value) => value + 1);
+    };
     setPending(true);
-    const expectation = url === "/api/draft/bid"
-      ? {
-          draftVersion: state.draftVersion,
-          nominatedUserId: state.nominatedUserId,
-          currentBid: state.currentBid,
-          currentBidTeamId: state.currentBidTeamId,
-          bidEndsAt: state.bidEndsAt,
-        }
-      : {
-          draftVersion: state.draftVersion,
-          nominatorTeamId: state.nominatorTeamId,
-          nominationEndsAt: state.nominationEndsAt,
-        };
+    const expectation =
+      url === "/api/draft/bid"
+        ? {
+            draftVersion: state.draftVersion,
+            nominatedUserId: state.nominatedUserId,
+            currentBid: state.currentBid,
+            currentBidTeamId: state.currentBidTeamId,
+            bidEndsAt: state.bidEndsAt,
+          }
+        : {
+            draftVersion: state.draftVersion,
+            nominatorTeamId: state.nominatorTeamId,
+            nominationEndsAt: state.nominationEndsAt,
+          };
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -599,10 +687,15 @@ export function DraftRoom({
         // under a 30s lot clock. See ROOM_ACTION_TIMEOUT_MS.
         signal: AbortSignal.timeout(ROOM_ACTION_TIMEOUT_MS),
       });
-      const data = (await res.json().catch(() => ({}))) as
-        | DraftState
-        | { error?: string };
+      const data = (await res.json().catch(() => null)) as
+        DraftState | { error?: string } | null;
       if (!res.ok) {
+        if (res.status >= 500) {
+          reconcileUnknown(
+            "The server couldn't confirm the action — checking the current live lot",
+          );
+          return;
+        }
         // Toast, not an inline banner: race rejections ("Another bid just
         // landed") arrive exactly while the captain is scrolled deep in the
         // pool, where a top-of-room banner is invisible — a silently lost
@@ -610,23 +703,32 @@ export function DraftRoom({
         if (res.status === 401) setSessionExpired(true);
         pushToast(
           "error",
-          "error" in data && data.error
+          data && "error" in data && data.error
             ? data.error
             : "The server couldn't confirm that action — check the live lot before trying again.",
         );
         setPollKick((value) => value + 1);
       } else {
-        apply(data as DraftState, seq);
+        if (!data || !("now" in data) || typeof data.now !== "number") {
+          reconcileUnknown(
+            "The response was incomplete — checking the current live lot",
+          );
+          return;
+        }
+        const next = data as DraftState;
+        if (next.seasonId !== seasonId) {
+          setSeasonChanged(true);
+          return;
+        }
+        apply(next, seq);
         setSelected(null);
       }
     } catch {
       // A lost response is never proof that a mutation failed: the server can
       // commit before the connection drops. Reconcile before inviting a retry.
-      pushToast(
-        "error",
+      reconcileUnknown(
         "Connection interrupted — check the live lot to see whether the action landed before trying again.",
       );
-      setPollKick((value) => value + 1);
     } finally {
       setPending(false);
     }
@@ -638,7 +740,9 @@ export function DraftRoom({
         role="alert"
         className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
       >
-        <div className="text-lg font-semibold">This draft room is out of date</div>
+        <div className="text-lg font-semibold">
+          This draft room is out of date
+        </div>
         <p className="mt-1 text-sm text-muted">
           The active season changed. This tab will not send actions to the new
           auction until you reload it.
@@ -657,7 +761,9 @@ export function DraftRoom({
   if (noSeason) {
     return (
       <div className="rounded-[var(--radius)] border border-line bg-surface/60 p-8 text-center">
-        <div className="text-lg font-semibold">The draft isn&apos;t available</div>
+        <div className="text-lg font-semibold">
+          The draft isn&apos;t available
+        </div>
         <p className="mt-1 text-sm text-muted">
           There&apos;s no active season right now.
         </p>
@@ -669,25 +775,39 @@ export function DraftRoom({
   }
 
   if (!state) {
-    if (initialError || disconnected || syncDelayed) {
+    if (initialError || disconnected || syncDelayed || connectionUnavailable) {
       return (
         <div
           role="status"
           aria-live="polite"
           className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
         >
-          <div className="text-lg font-semibold">The draft room hasn&apos;t loaded</div>
+          <div className="text-lg font-semibold">
+            The draft room hasn&apos;t loaded
+          </div>
           <p className="mt-1 text-sm text-muted">
-            {syncDelayed
-              ? "Live updates are temporarily delayed. Your place is safe; try syncing again."
-              : "The server could not provide the live auction yet. Check your connection and retry."}
+            {connectivity === "offline"
+              ? "You're offline. Reconnect to load the current auction; no actions are available from stale state."
+              : connectivity === "resyncing"
+                ? "You're back online. We're checking the current auction before enabling any actions."
+                : syncDelayed
+                  ? "Live updates are temporarily delayed. Your place is safe; try syncing again."
+                  : "The server could not provide the live auction yet. Check your connection and retry."}
           </p>
           <button
             type="button"
             onClick={() => setPollKick((value) => value + 1)}
+            disabled={connectivity === "offline"}
+            title={
+              connectivity === "offline"
+                ? "Reconnect to the internet before retrying."
+                : undefined
+            }
             className={buttonClasses("secondary", "sm", "mt-4")}
           >
-            Retry now
+            {connectivity === "offline"
+              ? "Waiting for connection"
+              : "Retry now"}
           </button>
         </div>
       );
@@ -707,6 +827,23 @@ export function DraftRoom({
     </div>
   ) : null;
 
+  const connectivityStrip = connectionUnavailable ? (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "rounded-lg border px-4 py-2 text-sm",
+        connectivity === "offline"
+          ? "border-danger/40 bg-danger/10 text-danger"
+          : "border-info/40 bg-info/10 text-info",
+      )}
+    >
+      {connectivity === "offline"
+        ? "⚠️ You're offline — the auction keeps running on the server. Actions are paused until you reconnect and the current lot is confirmed."
+        : "Connection restored — checking the current lot. Actions remain paused until the latest auction state arrives."}
+    </div>
+  ) : null;
+
   const syncDelayedStrip = syncDelayed ? (
     <div
       role="status"
@@ -715,6 +852,17 @@ export function DraftRoom({
     >
       Live updates are delayed by traffic — the room is retrying at a slower
       pace. Check the lot before acting.
+    </div>
+  ) : null;
+
+  const actionReconcilingStrip = actionReconciling ? (
+    <div
+      role="status"
+      aria-live="polite"
+      className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
+    >
+      Checking the current live lot after an interrupted action. Controls will
+      unlock when the server confirms the latest auction state.
     </div>
   ) : null;
 
@@ -727,7 +875,10 @@ export function DraftRoom({
         Your sign-in expired. You are watching as a visitor and cannot nominate,
         bid, or use admin controls.
       </span>
-      <Link href="/login?next=/draft" className={buttonClasses("secondary", "sm")}>
+      <Link
+        href="/login?next=/draft"
+        className={buttonClasses("secondary", "sm")}
+      >
         Sign in again
       </Link>
     </div>
@@ -745,8 +896,10 @@ export function DraftRoom({
 
   const roomAlerts = (
     <>
+      {connectivityStrip}
       {disconnectedStrip}
       {syncDelayedStrip}
+      {actionReconcilingStrip}
       {sessionExpiredStrip}
       {settlingStrip}
     </>
@@ -763,7 +916,9 @@ export function DraftRoom({
   )?.name;
   // Who nominates after this lot — captains plan a turn ahead. Pure rotation
   // math over the same draftOrder-sorted teams the server uses.
-  const curNomIdx = state.teams.findIndex((t) => t.id === state.nominatorTeamId);
+  const curNomIdx = state.teams.findIndex(
+    (t) => t.id === state.nominatorTeamId,
+  );
   const nextNomIdx = nextNominatorIndex(
     state.teams.map((t) => ({
       id: t.id,
@@ -822,9 +977,14 @@ export function DraftRoom({
           {roomAlerts}
           {viewerTeamBanner}
           <div className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-6 text-center">
-            <div className="text-lg font-semibold">The auction is not available</div>
+            <div className="text-lg font-semibold">
+              The auction is not available
+            </div>
             <p className="mt-1 text-sm text-muted">
-              {state.seasonName} is currently in {state.seasonStatus.toLowerCase().replaceAll("_", " ")}. An admin must review the missing or reset draft record before this room can be used.
+              {state.seasonName} is currently in{" "}
+              {state.seasonStatus.toLowerCase().replaceAll("_", " ")}. An admin
+              must review the missing or reset draft record before this room can
+              be used.
             </p>
             <div className="mt-4 flex flex-wrap justify-center gap-2">
               <Link href="/teams" className={buttonClasses("secondary", "sm")}>
@@ -920,15 +1080,22 @@ export function DraftRoom({
           <DraftAdminToolbar
             state={state}
             seasonId={seasonId}
+            disabled={pending}
             pauseAction={pauseAction}
             resumeAction={resumeAction}
             undoAction={undoAction}
             voidLotAction={voidLotAction}
           />
         ) : null}
-        <div role="status" aria-live="polite" className="rounded-[var(--radius)] border border-success/40 bg-success/10 p-6 text-center">
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-[var(--radius)] border border-success/40 bg-success/10 p-6 text-center"
+        >
           <div className="text-2xl">✅</div>
-          <div className="mt-1 text-lg font-semibold">The draft is complete!</div>
+          <div className="mt-1 text-lg font-semibold">
+            The draft is complete!
+          </div>
           <div className="text-sm text-muted">
             {shortTeams.length === 0
               ? "All roster seats were filled. Schedule setup is next."
@@ -972,6 +1139,7 @@ export function DraftRoom({
         <DraftAdminToolbar
           state={state}
           seasonId={seasonId}
+          disabled={pending}
           pauseAction={pauseAction}
           resumeAction={resumeAction}
           undoAction={undoAction}
@@ -1015,7 +1183,8 @@ export function DraftRoom({
           </div>
           <div className="text-sm">
             <span className="font-semibold">{outbid.team}</span> bid $
-            {outbid.amount} on <span className="font-semibold">{outbid.player}</span>
+            {outbid.amount} on{" "}
+            <span className="font-semibold">{outbid.player}</span>
           </div>
           {state.me.canBid ? (
             <button
@@ -1052,16 +1221,21 @@ export function DraftRoom({
           <div className="text-sm">
             {soldFlash.isMe ? (
               <>
-                Welcome to <span className="font-semibold">{soldFlash.team}</span>{" "}
-                — they paid{" "}
-                <span className="font-bold text-accent">${soldFlash.price}</span>{" "}
+                Welcome to{" "}
+                <span className="font-semibold">{soldFlash.team}</span> — they
+                paid{" "}
+                <span className="font-bold text-accent">
+                  ${soldFlash.price}
+                </span>{" "}
                 for you.
               </>
             ) : (
               <>
                 <span className="font-semibold">{soldFlash.name}</span> →{" "}
                 {soldFlash.team} for{" "}
-                <span className="font-bold text-accent">${soldFlash.price}</span>
+                <span className="font-bold text-accent">
+                  ${soldFlash.price}
+                </span>
               </>
             )}
           </div>
@@ -1086,8 +1260,9 @@ export function DraftRoom({
               onClick={() =>
                 window.scrollTo({
                   top: 0,
-                  behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
-                    .matches
+                  behavior: window.matchMedia(
+                    "(prefers-reduced-motion: reduce)",
+                  ).matches
                     ? "auto"
                     : "smooth",
                 })
@@ -1095,9 +1270,9 @@ export function DraftRoom({
               title="Back to the auction clock"
               className="flex h-full min-w-0 flex-1 items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
             >
-              {disconnected ? (
+              {connectionUnavailable || disconnected ? (
                 <span className="shrink-0 text-xs font-medium text-danger">
-                  ⚠ reconnecting…
+                  {connectivity === "offline" ? "⚠ offline" : "⚠ reconnecting…"}
                 </span>
               ) : null}
               {state.nominatedPlayer ? (
@@ -1163,7 +1338,11 @@ export function DraftRoom({
                 disabled={
                   pending || nomAmount < state.minBid || nomAmount > me.myMaxBid
                 }
-                className={buttonClasses("accent", "sm", "max-w-[14rem] shrink-0")}
+                className={buttonClasses(
+                  "accent",
+                  "sm",
+                  "max-w-[14rem] shrink-0",
+                )}
               >
                 <span className="truncate">
                   Nominate{" "}
@@ -1188,14 +1367,17 @@ export function DraftRoom({
             "border-accent/70 ring-2 ring-accent/30",
           // Dim the (stale) clocks while polling is dead — they're ticking on
           // the last state we saw, not the live auction.
-          disconnected && "opacity-50",
+          (connectionUnavailable || disconnected) && "opacity-50",
         )}
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
           <h2 className="min-w-0 text-sm font-normal text-muted">
             On the clock: <span className="text-fg">{nominatorName}</span>
             {nextNominatorName ? (
-              <span className="hidden sm:inline"> · next: {nextNominatorName}</span>
+              <span className="hidden sm:inline">
+                {" "}
+                · next: {nextNominatorName}
+              </span>
             ) : null}
           </h2>
           {paused ? (
@@ -1306,7 +1488,10 @@ export function DraftRoom({
                     {state.lotBidsTruncated ? "Latest 8 bids:" : "Bid trail:"}
                   </span>
                   {state.lotBids.map((b, i) => (
-                    <span key={b.at + "-" + i} className="flex items-center gap-2">
+                    <span
+                      key={b.at + "-" + i}
+                      className="flex items-center gap-2"
+                    >
                       {i > 0 ? <span aria-hidden>‹</span> : null}
                       <span
                         className={cn(
@@ -1314,7 +1499,8 @@ export function DraftRoom({
                           i === 0 && "font-semibold text-accent",
                         )}
                       >
-                        {state.teams.find((t) => t.id === b.teamId)?.name ?? "—"}{" "}
+                        {state.teams.find((t) => t.id === b.teamId)?.name ??
+                          "—"}{" "}
                         ${b.amount}
                       </span>
                     </span>
@@ -1379,7 +1565,10 @@ export function DraftRoom({
                   </div>
                 </div>
               ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
-                <div role="status" className="w-full border-t border-line pt-3 text-sm text-success">
+                <div
+                  role="status"
+                  className="w-full border-t border-line pt-3 text-sm text-success"
+                >
                   You hold the high bid.
                 </div>
               ) : rosterFull ? (
@@ -1393,8 +1582,8 @@ export function DraftRoom({
                 </div>
               ) : (
                 <div className="w-full border-t border-line pt-3 text-sm text-muted">
-                  You&apos;re watching this lot. Only captains with an open roster
-                  seat and enough reserved budget can bid.
+                  You&apos;re watching this lot. Only captains with an open
+                  roster seat and enough reserved budget can bid.
                 </div>
               )}
             </div>
@@ -1482,6 +1671,7 @@ export function DraftRoom({
 function DraftAdminToolbar({
   state,
   seasonId,
+  disabled,
   pauseAction,
   resumeAction,
   undoAction,
@@ -1489,6 +1679,7 @@ function DraftAdminToolbar({
 }: {
   state: DraftState;
   seasonId: string;
+  disabled: boolean;
   pauseAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   resumeAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   undoAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
@@ -1518,14 +1709,14 @@ function DraftAdminToolbar({
         <div className="flex flex-wrap items-center gap-2">
           {live ? (
             <ActionForm action={pauseAction} hidden={hidden}>
-              <SubmitButton variant="secondary" size="sm">
+              <SubmitButton variant="secondary" size="sm" disabled={disabled}>
                 Pause auction
               </SubmitButton>
             </ActionForm>
           ) : null}
           {paused ? (
             <ActionForm action={resumeAction} hidden={hidden}>
-              <SubmitButton variant="primary" size="sm">
+              <SubmitButton variant="primary" size="sm" disabled={disabled}>
                 Resume auction
               </SubmitButton>
             </ActionForm>
@@ -1535,6 +1726,7 @@ function DraftAdminToolbar({
               <SubmitButton
                 variant="danger"
                 size="sm"
+                disabled={disabled}
                 confirm={`Void the paused lot for ${state.nominatedPlayer.name}? Bids on this lot will be removed and the same team keeps the nomination turn.`}
               >
                 Void live lot
@@ -1546,6 +1738,7 @@ function DraftAdminToolbar({
               <SubmitButton
                 variant="secondary"
                 size="sm"
+                disabled={disabled}
                 confirm={`Undo the most recent sale (${state.recentSales[0]?.name} → ${state.recentSales[0]?.teamName})?`}
               >
                 Undo last sale
@@ -1693,7 +1886,9 @@ function AvailableList({
               key={p.userId}
               className={cn(
                 "flex items-center rounded-md",
-                selected === p.userId ? "bg-accent/15 ring-1 ring-accent/40" : "",
+                selected === p.userId
+                  ? "bg-accent/15 ring-1 ring-accent/40"
+                  : "",
               )}
             >
               {canNominate ? (
@@ -1873,16 +2068,16 @@ function AuctionPrimer({
       </summary>
       <ul className="space-y-2 border-t border-line/60 px-5 py-4 text-sm text-muted">
         <li>
-          <strong className="text-fg">Captains take turns nominating</strong>{" "}
-          a player from the pool — the order rotates while eligible teams and
+          <strong className="text-fg">Captains take turns nominating</strong> a
+          player from the pool — the order rotates while eligible teams and
           players remain. Players and visitors can follow every lot here.
         </li>
         <li>
           <strong className="text-fg">
             Idle for {DEFAULTS.NOMINATION_TIMER_SECONDS}s on your nomination
           </strong>{" "}
-          and the draft auto-nominates the top available player at ${minBid}{" "}
-          for you — take your time, but not all of it.
+          and the draft auto-nominates the top available player at ${minBid} for
+          you — take your time, but not all of it.
         </li>
         <li>
           <strong className="text-fg">
@@ -1891,15 +2086,14 @@ function AuctionPrimer({
           When it hits zero, the high bidder wins the player.
         </li>
         <li>
-          <strong className="text-fg">Your max bid is capped</strong> — the
-          room reserves ${minBid} {" "}
-          for each seat you&apos;d still have to fill
+          <strong className="text-fg">Your max bid is capped</strong> — the room
+          reserves ${minBid} for each seat you&apos;d still have to fill
           afterwards, so you can always finish your roster.
         </li>
         <li>
           <strong className="text-fg">Captains cost $0</strong> (they fill one
-          of the {teamSize} roster seats), and leftover budget is worth
-          nothing once the draft ends — spend it.
+          of the {teamSize} roster seats), and leftover budget is worth nothing
+          once the draft ends — spend it.
         </li>
       </ul>
     </details>
@@ -2014,7 +2208,10 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <Avatar name={m.name} src={m.avatar} size={20} />
-                      <PlayerLink userId={m.userId} className="min-w-6 truncate">
+                      <PlayerLink
+                        userId={m.userId}
+                        className="min-w-6 truncate"
+                      >
                         {m.name}
                       </PlayerLink>
                       {m.isCaptain ? (

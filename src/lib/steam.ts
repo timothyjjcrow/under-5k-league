@@ -74,12 +74,27 @@ export async function verifySteamCallback(
   query: URLSearchParams,
   expectedReturnTo: string,
 ): Promise<string | null> {
+  const openIdEntries = [...query.entries()].filter(([key]) =>
+    key.startsWith("openid."),
+  );
+  if (
+    openIdEntries.length === 0 ||
+    openIdEntries.length > 32 ||
+    openIdEntries.some(
+      ([key, value]) => key.length > 128 || value.length > 4096,
+    ) ||
+    openIdEntries.reduce(
+      (total, [key, value]) => total + key.length + value.length,
+      0,
+    ) > 12_288
+  ) {
+    return null;
+  }
+
   // URLSearchParams#get reads the first duplicate while set() keeps the last.
   // Never let the identity returned to our app differ from the assertion sent
   // to Steam for verification: every OpenID key must have one canonical value.
-  const openIdKeys = [...query.keys()].filter((key) =>
-    key.startsWith("openid."),
-  );
+  const openIdKeys = openIdEntries.map(([key]) => key);
   if (new Set(openIdKeys).size !== openIdKeys.length) return null;
 
   const claimedId = query.get("openid.claimed_id") ?? "";

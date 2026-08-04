@@ -297,6 +297,28 @@ describe("automation ownership and health", () => {
     expect(store.memory.state?.lastSummary).not.toContain("do-not-persist");
   });
 
+  it("does not persist or return an arbitrary secret-shaped exception code", async () => {
+    const store = fakeDb();
+    const secretCode = "SECRETLOOKINGTOKEN";
+    const result = await runAutomation({
+      source: "CRON",
+      db: store.db,
+      token: "secret-code-token",
+      now: () => NOW,
+      worker: async () => {
+        throw Object.assign(new Error("provider failed"), { code: secretCode });
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "completed",
+      status: "FAILED",
+      errorCode: "AUTOMATION_FAILED",
+    });
+    expect(JSON.stringify(result)).not.toContain(secretCode);
+    expect(JSON.stringify(store.memory.state)).not.toContain(secretCode);
+  });
+
   it("persists bounded safe issue codes as degraded health", async () => {
     const store = fakeDb();
     const result = await runAutomation({
@@ -306,7 +328,7 @@ describe("automation ownership and health", () => {
       now: () => NOW,
       worker: async () => ({
         ...OUTCOME,
-        issues: ["OPENDOTA_UNAVAILABLE", "secret-value?"],
+        issues: ["LEAGUE_SYNC_FAILED", "SECRETLOOKINGTOKEN", "secret-value?"],
         skipped: ["DRAFT_OFF_PHASE"],
       }),
     });
@@ -317,7 +339,10 @@ describe("automation ownership and health", () => {
       consecutiveFailures: 1,
       lastErrorCode: "WORKER_DEGRADED",
     });
-    expect(store.memory.state?.lastSummary).toContain("OPENDOTA_UNAVAILABLE");
+    expect(store.memory.state?.lastSummary).toContain("LEAGUE_SYNC_FAILED");
+    expect(store.memory.state?.lastSummary).not.toContain(
+      "SECRETLOOKINGTOKEN",
+    );
     expect(store.memory.state?.lastSummary).not.toContain("secret-value");
     expect(
       Buffer.byteLength(store.memory.state?.lastSummary ?? "", "utf8"),

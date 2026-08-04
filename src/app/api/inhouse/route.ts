@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import {
+  clientIp,
+  rateLimit,
+  retryAfterSeconds,
+} from "@/lib/rate-limit";
 import {
   acceptMatch,
   autoDetectResult,
@@ -16,7 +20,12 @@ import {
   startGame,
 } from "@/lib/inhouse-service";
 import { placeInhouseBet } from "@/lib/inhouse-bet-service";
-import { requireJsonContentType, requireSameOrigin } from "@/lib/json-mutation";
+import { claimThrottle, SETTING_KEYS } from "@/lib/settings";
+import {
+  readBoundedJsonObject,
+  requireJsonContentType,
+  requireSameOrigin,
+} from "@/lib/json-mutation";
 
 export const dynamic = "force-dynamic";
 
@@ -24,32 +33,15 @@ const RATE_WINDOW_MS = 60_000;
 const STATE_RATE_LIMIT = 1200;
 const MUTATION_RATE_LIMIT = 300;
 
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 // One JSON endpoint for the whole inhouse room. `state` is polled; the rest are
 // mutations. Every response is the fresh, viewer-tailored state (or { error }),
 // so the client stays in sync without extra round-trips.
 export async function POST(req: NextRequest) {
   const invalidMediaType = requireJsonContentType(req);
   if (invalidMediaType) return invalidMediaType;
-  let parsed: unknown;
-  try {
-    parsed = await req.json();
-  } catch {
-    return NextResponse.json(
-      { error: "Request body must be valid JSON" },
-      { status: 400 },
-    );
-  }
-  if (!isJsonObject(parsed)) {
-    return NextResponse.json(
-      { error: "Request body must be a JSON object" },
-      { status: 400 },
-    );
-  }
-  const body = parsed;
+  const parsed = await readBoundedJsonObject(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value;
   if (typeof body.action !== "string" || body.action.trim().length === 0) {
     return NextResponse.json(
       { error: "A non-empty string action is required" },
@@ -63,17 +55,36 @@ export async function POST(req: NextRequest) {
   if (action === "state") {
     // Public room traffic stays IP-keyed, but the allowance covers ten visible
     // players polling every 1.5s behind one venue/NAT with ample headroom.
-    if (
-      !rateLimit(
-        `inhouse:state:ip:${ip}`,
-        { limit: STATE_RATE_LIMIT, windowMs: RATE_WINDOW_MS },
-        Date.now(),
-      ).allowed
-    ) {
-      return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+    const allowance = rateLimit(
+      `inhouse:state:ip:${ip}`,
+      { limit: STATE_RATE_LIMIT, windowMs: RATE_WINDOW_MS },
+      Date.now(),
+    );
+    if (!allowance.allowed) {
+      return NextResponse.json(
+        { error: "Too many requests" },
+        {
+          status: 429,
+          headers: { "retry-after": retryAfterSeconds(allowance) },
+        },
+      );
     }
     const user = await getSessionUser();
-    return NextResponse.json(await getInhouseState(user));
+    const runMaintenance = user
+      ? await claimThrottle(
+          SETTING_KEYS.INHOUSE_ROOM_MAINTENANCE_AT,
+          2,
+          Date.now(),
+        )
+      : false;
+    return NextResponse.json(
+      await getInhouseState(user, {
+        runMaintenance,
+        // The same fleet-wide winner repaints Discord. A losing poll remains a
+        // personalized DB read and never multiplies provider traffic.
+        syncBoard: runMaintenance,
+      }),
+    );
   }
 
   const invalidOrigin = requireSameOrigin(req);
@@ -85,14 +96,19 @@ export async function POST(req: NextRequest) {
   const mutationKey = user
     ? `inhouse:mutation:user:${user.id}`
     : `inhouse:mutation:ip:${ip}`;
-  if (
-    !rateLimit(
-      mutationKey,
-      { limit: MUTATION_RATE_LIMIT, windowMs: RATE_WINDOW_MS },
-      Date.now(),
-    ).allowed
-  ) {
-    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  const allowance = rateLimit(
+    mutationKey,
+    { limit: MUTATION_RATE_LIMIT, windowMs: RATE_WINDOW_MS },
+    Date.now(),
+  );
+  if (!allowance.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests" },
+      {
+        status: 429,
+        headers: { "retry-after": retryAfterSeconds(allowance) },
+      },
+    );
   }
   if (!user) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
@@ -168,5 +184,10 @@ export async function POST(req: NextRequest) {
   // edit claim, so ACCEPT / vote / pick — the second-sensitive clocks — would
   // each pay a round trip. This client nudges its own poll ~250ms later
   // (bumpPollRef in inhouse-room.tsx), and that poll repaints the board.
-  return NextResponse.json(await getInhouseState(user, { syncBoard: false }));
+  return NextResponse.json(
+    await getInhouseState(user, {
+      runMaintenance: false,
+      syncBoard: false,
+    }),
+  );
 }

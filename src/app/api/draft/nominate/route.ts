@@ -7,14 +7,20 @@ import {
   parseDraftTurnExpectation,
   requireExpectedDraftSeason,
 } from "@/lib/draft-http";
-import { rateLimit } from "@/lib/rate-limit";
-import { guardJsonMutation } from "@/lib/json-mutation";
+import { rateLimit, retryAfterSeconds } from "@/lib/rate-limit";
+import {
+  guardJsonMutation,
+  readBoundedJsonObject,
+} from "@/lib/json-mutation";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const invalidRequest = guardJsonMutation(req);
   if (invalidRequest) return invalidRequest;
+  const parsed = await readBoundedJsonObject(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value;
   const user = await getSessionUser();
   if (!user)
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
@@ -29,9 +35,7 @@ export async function POST(req: NextRequest) {
       {
         status: 429,
         headers: {
-          "Retry-After": String(
-            Math.max(1, Math.ceil(allowance.retryAfterMs / 1000)),
-          ),
+          "Retry-After": retryAfterSeconds(allowance),
         },
       },
     );
@@ -40,7 +44,6 @@ export async function POST(req: NextRequest) {
   if (!season)
     return NextResponse.json({ error: "No active season" }, { status: 404 });
 
-  const body = await req.json().catch(() => ({}));
   const expectedSeason = requireExpectedDraftSeason(body, season.id);
   if (!expectedSeason.ok) {
     return NextResponse.json({ error: expectedSeason.error }, { status: 409 });

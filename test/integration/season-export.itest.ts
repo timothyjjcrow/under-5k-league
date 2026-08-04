@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { GET } from "@/app/api/admin/season-export/route";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { SEASON_EXPORT_MAX_RESPONSE_BYTES } from "@/lib/season-export-response";
 import { makePlayer, makeSeason, makeTeam, makeUser } from "./factories";
 
 function exportReq(seasonId?: string): NextRequest {
@@ -229,10 +230,44 @@ describe("GET /api/admin/season-export", () => {
     expect(await res.json()).toEqual({ error: "seasonId required" });
   });
 
+  it("rejects an oversized season id before querying the archive", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
+    const res = await GET(exportReq("s".repeat(129)));
+
+    expect(res.status).toBe(400);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "seasonId is too long" });
+  });
+
   it("404s on a bogus seasonId (admin-confirmed, so this one may say why)", async () => {
     vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
     const res = await GET(exportReq("no-such-season"));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Unknown season" });
+  });
+
+  it("fails safely before returning an archive above the hosted response ceiling", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
+    const a = await stageSeason("Oversize");
+    // Fire is four UTF-8 bytes but only two JavaScript UTF-16 code units. This
+    // makes the route test pin byte-based sizing all the way through the real
+    // database/archive path rather than accidentally enforcing string.length.
+    await prisma.game.update({
+      where: { id: a.game.id },
+      data: {
+        players: "🔥".repeat(
+          Math.ceil(SEASON_EXPORT_MAX_RESPONSE_BYTES / 4),
+        ),
+      },
+    });
+
+    const res = await GET(exportReq(a.season.id));
+    expect(res.status).toBe(413);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("content-disposition")).toBeNull();
+    expect(await res.json()).toEqual({
+      error:
+        "This season's audit archive is too large for the hosted download limit. Use the verified full-database backup workflow and arrange an approved out-of-band audit export before deleting this season.",
+    });
   });
 });
