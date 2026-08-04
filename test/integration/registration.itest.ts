@@ -221,7 +221,7 @@ describe("saveRegistration — submission integrity", () => {
       onceAt("registration.saveRegistration.beforeRankWrite", async () => {
         await prisma.user.update({
           where: { id: user.id },
-          data: { dotaAccountId: 123456, rankTier: 33 },
+          data: { dotaAccountIdV2: 123456, rankTier: 33 },
         });
       }),
     );
@@ -237,6 +237,33 @@ describe("saveRegistration — submission integrity", () => {
         .rankTier,
     ).toBe(33);
     expect((await regFor(season.id, user.id))?.mmr).not.toBe(3119);
+  });
+
+  it("does not overwrite a newer rank sync that finishes during signup", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Ranked Mid Fetch");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    vi.mocked(fetchPlayerRankTier).mockResolvedValue(54);
+    setRaceHook(
+      onceAt("registration.saveRegistration.beforeRankWrite", async () => {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { rankTier: 66 },
+        });
+      }),
+    );
+
+    const result = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 1700 }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .rankTier,
+    ).toBe(66);
+    expect(await regFor(season.id, user.id)).not.toBeNull();
   });
 
   it("ignores captain volunteering for standins and preserves it after signups close", async () => {

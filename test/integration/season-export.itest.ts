@@ -21,10 +21,11 @@ function exportReq(seasonId?: string): NextRequest {
 /** A small but complete season: two teams, a registration, a completed match
  *  and one imported Game carrying a players JSON box score — the part the
  *  route's docstring calls out as unrecoverable once OpenDota ages it out. */
-async function stageSeason(name: string) {
+async function stageSeason(name: string, isActive = true) {
   const season = await makeSeason({
     name,
     status: SEASON_STATUS.REGULAR_SEASON,
+    isActive,
   });
   const home = await makeTeam(season.id, `${name} Home`, 0);
   const away = await makeTeam(season.id, `${name} Away`, 1);
@@ -105,8 +106,19 @@ describe("GET /api/admin/season-export", () => {
   it("exports the season's rows — box-score players JSON included — scoped to that season", async () => {
     vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
     const a = await stageSeason("Alpha");
+    await prisma.user.update({
+      where: { id: a.player.id },
+      data: {
+        dotaAccountIdV2: 388_000_001,
+        legacyDotaAccountId: 388_000_002,
+      },
+    });
+    await prisma.user.update({
+      where: { id: a.outsider.id },
+      data: { legacyDotaAccountId: 388_000_003 },
+    });
     // A second season proves the export filters rather than dumping the DB.
-    await stageSeason("Beta");
+    await stageSeason("Beta", false);
 
     const res = await GET(exportReq(a.season.id));
     expect(res.status).toBe(200);
@@ -158,6 +170,16 @@ describe("GET /api/admin/season-export", () => {
     expect(body.users).toHaveLength(4); // two captains + player + outsider
     expect(body.users[0]).not.toHaveProperty("discordId");
     expect(body.users[0]).not.toHaveProperty("role");
+    const archivedPlayer = body.users.find(
+      (u: { id: string }) => u.id === a.player.id,
+    );
+    const archivedOutsider = body.users.find(
+      (u: { id: string }) => u.id === a.outsider.id,
+    );
+    expect(archivedPlayer).toMatchObject({ dotaAccountId: 388_000_001 });
+    expect(archivedOutsider).toMatchObject({ dotaAccountId: 388_000_003 });
+    expect(archivedPlayer).not.toHaveProperty("dotaAccountIdV2");
+    expect(archivedPlayer).not.toHaveProperty("legacyDotaAccountId");
     expect(body.predictions).toHaveLength(1);
     expect(body.fantasyRosters[0].picks).toHaveLength(1);
 

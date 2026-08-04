@@ -7,7 +7,7 @@ import {
   INHOUSE_STATUS,
 } from "@/lib/constants";
 import { summarizeInhouse } from "@/lib/inhouse-stats";
-import { steamIdToAccountId } from "@/lib/dota";
+import { effectiveDotaAccountId } from "@/lib/dota-account";
 import type { SessionUser } from "@/lib/auth";
 import {
   acceptMatch,
@@ -45,7 +45,7 @@ import {
 
 // The inhouse result path only ever touches OpenDota — never a Valve league
 // ticket. We stub the two network calls it makes (recent-match lists + a full
-// match fetch) and keep everything else (steamIdToAccountId, classifyGame) real.
+// match fetch) and keep everything else (identity fallback, classifyGame) real.
 vi.mock("@/lib/dota", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/dota")>();
   return {
@@ -120,8 +120,11 @@ async function teamAccounts(lobbyId: string) {
     where: { lobbyId },
     include: { user: true },
   });
-  const acc = (u: { dotaAccountId: number | null; steamId: string }) =>
-    u.dotaAccountId ?? steamIdToAccountId(u.steamId)!;
+  const acc = (u: {
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
+    steamId: string;
+  }) => effectiveDotaAccountId(u)!;
   return {
     team1: players.filter((p) => p.team === 1).map((p) => acc(p.user)),
     team2: players.filter((p) => p.team === 2).map((p) => acc(p.user)),
@@ -2392,7 +2395,7 @@ describe("inhouse — the played game is the truth", () => {
     expect(done.radiantTeam).toBe(1);
 
     const accOf = (p: (typeof done.players)[number]) =>
-      p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId)!;
+      effectiveDotaAccountId(p.user)!;
     const rowFor = (acc: number) => done.players.find((p) => accOf(p) === acc)!;
 
     // Rosters follow the game, not the draft — otherwise the ladder credits a

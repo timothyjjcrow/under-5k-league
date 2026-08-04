@@ -73,13 +73,15 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ld2l_test
+          # The migration rehearsal has a deliberately narrow destructive
+          # guard and accepts only a local database named exactly ld2l_pgtest.
+          POSTGRES_DB: ld2l_pgtest
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready --health-interval 5s
           --health-timeout 5s --health-retries 10
     env:
-      PG_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_test"
+      PG_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_pgtest"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -93,24 +95,52 @@ jobs:
       # swap. Nothing is committed back — it lives only in this runner.
       - name: Point Prisma at postgres
         run: node scripts/switch-db-provider.mjs postgresql
-      - name: Validate PostgreSQL schema
-        run: npx prisma validate
+      - name: Validate committed migrations and PostgreSQL schema
+        run: npm run db:migrate:validate
         env:
           DATABASE_URL: ${{ env.PG_TEST_URL }}
           DIRECT_URL: ${{ env.PG_TEST_URL }}
-      - name: Push the schema + generate the client
-        run: npx prisma db push --skip-generate --accept-data-loss && npx prisma generate
+      - name: Rehearse fresh and legacy database upgrades
+        run: npm run db:migrate:rehearse
+      - name: Rehearse a verified backup restore
+        shell: bash
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
+          PG_RESTORE_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_restore_test"
+          BACKUP_RECEIPT_SECRET: "R7vN2cQ9mK4xT8pL1hD6sW3yF5bJ0zUa"
+        run: |
+          set -euo pipefail
+          export BACKUP_DIR="${RUNNER_TEMP}/ld2l-backup-rehearsal"
+          npm run db:backup
+          backup_file="$(find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'backup-*.sql' -print -quit)"
+          test -n "${backup_file}"
+          npm run db:backup:verify -- "${backup_file}"
+          npm run db:backup:rehearse -- "${backup_file}"
+          fixture_counts="$(
+            PGHOST=localhost \
+            PGPORT=5432 \
+            PGUSER=postgres \
+            PGPASSWORD=postgres \
+            PGDATABASE=ld2l_restore_test \
+            psql -X --set=ON_ERROR_STOP=on --tuples-only --no-align \
+              --command="SELECT (SELECT COUNT(*) FROM \"User\" WHERE \"id\" = 'legacy-user-a'), (SELECT COUNT(*) FROM \"Season\" WHERE \"id\" = 'legacy-season')"
+          )"
+          test "${fixture_counts}" = "1|1"
+      - name: Generate the migrated PostgreSQL client
+        run: npx prisma generate
         env:
           DATABASE_URL: ${{ env.PG_TEST_URL }}
           DIRECT_URL: ${{ env.PG_TEST_URL }}
       - name: Integration tests on postgres
         run: npm run test:pg -- --reporter=github-actions --reporter=default
-      - name: Exercise the exact Vercel build and final schema command
+      - name: Exercise the exact Vercel migration and build pipeline
         run: npm run build:vercel
         # Deliberately synthetic values that satisfy production validation;
-        # this job targets only the disposable Postgres service. The schema was
-        # already pushed above, so the final production command is non-destructive
-        # while still proving that command actually executes.
+        # this job targets only the disposable Postgres service. Rehearsal left
+        # the schema current, so `migrate deploy` is a no-op while still proving
+        # that the canonical production command executes before generation and
+        # compilation.
         env:
           VERCEL_ENV: production
           DATABASE_URL: ${{ env.PG_TEST_URL }}
@@ -163,13 +193,13 @@ jobs:
       - run: npm ci
       - name: Point Prisma at postgres
         run: node scripts/switch-db-provider.mjs postgresql
-      - name: Validate PostgreSQL schema
-        run: npx prisma validate
+      - name: Validate committed migrations and PostgreSQL schema
+        run: npm run db:migrate:validate
         env:
           DATABASE_URL: ${{ env.PG_TEST_URL }}
           DIRECT_URL: ${{ env.PG_TEST_URL }}
-      - name: Push the schema + generate the client
-        run: npx prisma db push --skip-generate --accept-data-loss && npx prisma generate
+      - name: Preflight + deploy + attest migrations + generate the client
+        run: npm run db:migrate:preflight && npx prisma migrate deploy && npm run db:migrate:postflight && npx prisma generate
         env:
           DATABASE_URL: ${{ env.PG_TEST_URL }}
           DIRECT_URL: ${{ env.PG_TEST_URL }}

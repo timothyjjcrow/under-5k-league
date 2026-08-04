@@ -24,6 +24,10 @@ import {
 import { DiscordJoinCard, DiscordSetupCard } from "@/components/discord-setup";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
+import {
+  effectiveDotaAccountId,
+  storedDotaAccountId,
+} from "@/lib/dota-account";
 import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
@@ -358,9 +362,13 @@ export default async function MePage({
       </Card>
 
       <DotaAccountCard
-        effectiveId={dbUser?.dotaAccountId ?? steamIdToAccountId(user.steamId)}
+        effectiveId={
+          dbUser
+            ? effectiveDotaAccountId(dbUser)
+            : steamIdToAccountId(user.steamId)
+        }
         steamAccountId={steamIdToAccountId(user.steamId)}
-        override={dbUser?.dotaAccountId ?? null}
+        override={dbUser ? storedDotaAccountId(dbUser) : null}
         rankTier={dbUser?.rankTier ?? null}
         fhUnavailable={dbUser?.fhUnavailable ?? null}
       />

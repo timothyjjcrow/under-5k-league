@@ -581,6 +581,13 @@ describe("a manual score and a concurrent import stay self-consistent", () => {
               : null;
         expect(after.winnerTeamId).toBe(expected);
       }
+      // Each loop iteration is an independent league-history scenario.
+      // Archive it before constructing the next one so this test obeys the
+      // production database's one-active-season invariant.
+      await prisma.season.update({
+        where: { id: target.seasonId },
+        data: { isActive: false },
+      });
     }
   });
 });

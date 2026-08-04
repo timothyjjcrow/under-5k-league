@@ -3,40 +3,30 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-// The Vercel build's final DB step is a deploy-safety gate: client generation
-// and `next build` run before it, only production may mutate the schema, and
-// Prisma must not regenerate after the successful compile. Drive the real
-// script through its exact test-only dry-run seam so the decision remains
-// pinned without touching a database.
+// The Vercel build's DB step is a deploy-safety gate: committed migrations are
+// validated and deployed before the new client/build, only production may
+// mutate the schema, and there is no data-loss override. Drive the real script
+// through its exact test-only dry-run seam so the decision remains pinned
+// without touching a database.
 const SCRIPT = path.resolve(process.cwd(), "scripts/build-db.mjs");
 
-const ACK = "I_UNDERSTAND_THIS_MAY_DELETE_PRODUCTION_DATA";
-const SHA = "0123456789abcdef0123456789abcdef01234567";
 const CLEAN_ENV = Object.fromEntries(
   Object.entries(process.env).filter(
     ([key]) =>
       ![
         "BUILD_DB_DRY_RUN",
         "NODE_ENV",
-        "PRISMA_ACCEPT_DATA_LOSS",
         "VERCEL_ENV",
-        "VERCEL_GIT_COMMIT_SHA",
       ].includes(key),
   ),
 );
 
-function decide(
-  vercelEnv?: string,
-  acknowledgement?: string,
-  commitSha = SHA,
-): string {
+function decide(vercelEnv?: string): string {
   return execFileSync("node", [SCRIPT], {
     env: {
       ...CLEAN_ENV,
       NODE_ENV: "test",
       BUILD_DB_DRY_RUN: "1",
-      PRISMA_ACCEPT_DATA_LOSS: acknowledgement ?? "",
-      VERCEL_GIT_COMMIT_SHA: commitSha,
       ...(vercelEnv === undefined ? {} : { VERCEL_ENV: vercelEnv }),
     },
     encoding: "utf8",
@@ -44,7 +34,7 @@ function decide(
 }
 
 describe("build-db deploy gate", () => {
-  it("runs schema mutation only after client generation and a successful build", () => {
+  it("deploys validated migrations before generating or building new code", () => {
     const config = JSON.parse(
       readFileSync(path.resolve(process.cwd(), "vercel.json"), "utf8"),
     ) as { buildCommand: string };
@@ -57,46 +47,31 @@ describe("build-db deploy gate", () => {
     expect(stages).toEqual([
       "node scripts/validate-prod-env.mjs",
       "node scripts/switch-db-provider.mjs postgresql",
-      "npx prisma validate",
+      "npm run db:migrate:validate",
+      "npm run db:migrate:preflight",
+      "node scripts/build-db.mjs",
+      "npm run db:migrate:postflight",
       "npx prisma generate",
       "next build",
-      "node scripts/build-db.mjs",
     ]);
   });
 
-  it("pushes production schema changes without accepting data loss by default", () => {
+  it("deploys committed production migrations without a schema-push escape hatch", () => {
     const out = decide("production");
-    expect(out).toContain("prisma db push --skip-generate");
+    expect(out).toContain("prisma migrate deploy");
+    expect(out).not.toContain("db push");
     expect(out).not.toContain("--accept-data-loss");
   });
 
-  it("accepts data loss only for the exact current deployment commit", () => {
-    expect(decide("production", `${ACK}:${SHA}`)).toContain(
-      "prisma db push --skip-generate --accept-data-loss",
-    );
-    for (const nearMiss of [
-      "true",
-      "1",
-      ACK,
-      `${ACK}:${"f".repeat(40)}`,
-      `${ACK.toLowerCase()}:${SHA}`,
-      `${ACK}:${SHA} `,
-    ]) {
-      expect(decide("production", nearMiss)).not.toContain("--accept-data-loss");
-    }
-    expect(decide("production", `${ACK}:${SHA}`, "missing-sha")).not.toContain(
-      "--accept-data-loss",
-    );
-  });
-
   it("preview and development deploys do not mutate or regenerate", () => {
-    expect(decide("preview")).toContain("skip schema push");
+    expect(decide("preview")).toContain("skip migration deploy");
     expect(decide("preview")).not.toContain("db push");
+    expect(decide("preview")).not.toContain("migrate deploy");
     expect(decide("preview")).not.toContain("prisma generate");
-    expect(decide("development")).toContain("skip schema push");
+    expect(decide("development")).toContain("skip migration deploy");
   });
 
-  it("an unset VERCEL_ENV (local build) never pushes", () => {
+  it("an unset VERCEL_ENV (local build) never deploys migrations", () => {
     const out = execFileSync("node", [SCRIPT], {
       env: {
         ...CLEAN_ENV,
@@ -105,8 +80,9 @@ describe("build-db deploy gate", () => {
       },
       encoding: "utf8",
     });
-    expect(out).toContain("skip schema push");
+    expect(out).toContain("skip migration deploy");
     expect(out).not.toContain("db push");
+    expect(out).not.toContain("migrate deploy");
   });
 
   it.each([
@@ -133,6 +109,7 @@ describe("build-db deploy gate", () => {
         "BUILD_DB_DRY_RUN is allowed only as exact value 1 when NODE_ENV=test",
       );
       expect(result.stdout).not.toContain("prisma db push");
+      expect(result.stdout).not.toContain("prisma migrate deploy");
     },
   );
 });

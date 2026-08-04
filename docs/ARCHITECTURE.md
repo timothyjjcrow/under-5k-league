@@ -655,12 +655,14 @@ enums, so every status column is a string whose allowed values live in
   unverified fallback), and OpenDota scouting snapshot. Steam OpenID is the
   Dota-account ownership proof: normal identity is derived from `steamId`, new
   arbitrary manual overrides are refused, and verified-owner login retires a
-  conflicting legacy override. Dota metadata writes re-assert
-  `dotaAccountId`; switching a legacy link back to Steam clears old-account
-  metadata before the new fetch and stale in-flight responses are dropped.
-  `dotaAccountId Float? @unique` is deliberate: JavaScript/PostgreSQL double
-  precision represents every unsigned 32-bit account id exactly, while
-  Prisma's signed 32-bit `Int` cannot represent the full Dota range.
+  conflicting legacy override. During the rollback window the old physical
+  signed-`Int` column is exposed as `legacyDotaAccountId`, while current writes
+  use `dotaAccountIdV2 Float?`; all readers prefer v2, then legacy, then the
+  Steam-derived identity. Dota metadata writes compare-and-set both stored
+  columns, so a relink or rollback-column cleanup drops stale in-flight
+  responses. The v2 `Float` is deliberate: JavaScript/PostgreSQL double
+  precision represents every positive unsigned 32-bit account id exactly,
+  while Prisma's signed 32-bit `Int` cannot represent the full Dota range.
 - `NewsPost` — admin announcements; author `SetNull` so posts outlive users.
   Creation request UUIDs are durable `Setting` receipts, making browser replay
   idempotent across the post, audit log, and Discord effect. Delivery remains
@@ -669,10 +671,11 @@ enums, so every status column is a string whose allowed values live in
 **Season core**
 
 - `Season` — the root aggregate and state machine; `isActive` marks "the"
-  season, while zero active rows means offseason (no DB constraint — held by
-  Serializable lifecycle commands and compare-and-set claims). Reads fetch at
-  most two active rows and `singleActiveSeason` fails closed if the invariant
-  has drifted rather than silently choosing one;
+  season, while zero active rows means offseason. Serializable lifecycle
+  commands provide coherent handoffs and the PostgreSQL-native partial unique
+  `Season_one_active_idx` is the final storage barrier against two active rows.
+  Reads still fetch at most two rows and `singleActiveSeason` fails closed for
+  pre-migration or manually corrupted data rather than silently choosing one;
   carries `draftBudget`, `budgetMmrWeight`, `maxMmr` (soft), series lengths,
   `firstMatchNight`, `draftAt`, `dotaLeagueId`, `championTeamId`, and the
   one-way `fantasyLockedAt` competitive-information marker.
@@ -898,7 +901,7 @@ Five layers (depth and the doctrine behind each in CLAUDE.md):
    under `src/lib/` because of the include glob.
 2. **Integration on SQLite** — `npm run test:integration`
    (`vitest.integration.config.mts`, dedicated `prisma/test.db`, schema pushed
-   once, every table wiped per test): 43 `.itest.ts` files exercising the
+   once, every table wiped per test): 44 `.itest.ts` files exercising the
    services with `@/lib/dota` and `@/lib/discord` sends mocked (formatters
    real) — except the two real-HTTP suites that run the actual Discord
    transport against in-process `node:http` stand-ins.
@@ -919,8 +922,8 @@ Five layers (depth and the doctrine behind each in CLAUDE.md):
    `test:mutation:discover` (extend), `scripts/mutation-guard.mjs` + committed
    `test/mutation-baseline.json`: recursively rejects omitted claim-bearing
    source files, deletes each guarded `updateMany` WHERE predicate, and requires
-   a real pg test failure rather than a transform/runner failure. Currently 120
-   live claims — 78 protected and 42 documented equivalent mutants, each with a
+   a real pg test failure rather than a transform/runner failure. Currently 115
+   live claims — 73 protected and 42 documented equivalent mutants, each with a
    reviewable justification; zero claims are unclassified. CI runs it as a
    4-shard matrix. Caveat: it models exactly one
    guard shape — early
@@ -945,49 +948,67 @@ matrix; and all three Playwright suites sequentially. Destructive local
 commands are gated by `scripts/assert-local-db.mjs` and per-script URL guards;
 the fixture/e2e databases and guarded Postgres databases are deliberately
 separate. CI's ordinary SQLite job uses `file:./ci.db`, while Playwright's base
-job starts from `file:./dev.db`; both are Prisma-relative local files rather
-than inherited or remote connection URLs.
+job starts from its dedicated `prisma/e2e.db`; neither can inherit or target a
+remote connection, and the browser fixture never touches `dev.db`.
 
 ## 11. Production deployment and recovery
 
 **Environment gate.** `scripts/validate-prod-env.mjs` runs first for a
 production Vercel build. It requires PostgreSQL `DATABASE_URL` and `DIRECT_URL`
-that normalize to the same user, database and logical endpoint; non-placeholder
-`AUTH_SECRET` and `BACKUP_RECEIPT_SECRET` values of at least 32 characters; at least one valid,
-unique individual SteamID64 in `ADMIN_STEAM_IDS`; identical canonical HTTPS
-origins in `APP_URL` and `NEXT_PUBLIC_SITE_URL`; and dev login unset or exactly
-`false`. It also rejects any configured `BUILD_DB_DRY_RUN`; that exact-value
-flag is reserved for unit tests running with `NODE_ENV=test`. Errors identify
-fields without echoing their values. Production has no
-first-user bootstrap path. Secrets belong in Vercel/a secret manager and a
-private process environment, never literal command arguments, source, logs, or
-chat.
+that name the same logical database and schema (and, for recognized managed
+providers, the same project), while permitting the pooled runtime and direct
+migration connections to use separate least-privilege roles. It rejects a
+custom-provider pair unless hostname and effective port also match; only the
+reviewed Neon and Supabase forms normalize distinct pool/direct endpoints. It
+rejects a pooler as `DIRECT_URL`, a known direct endpoint as `DATABASE_URL`,
+and the obsolete `PRISMA_ACCEPT_DATA_LOSS` escape hatch. It also requires distinct,
+non-placeholder `AUTH_SECRET` and `BACKUP_RECEIPT_SECRET` values of at least 32
+characters; at least one valid, unique individual SteamID64 in
+`ADMIN_STEAM_IDS`; identical canonical HTTPS origins in `APP_URL` and
+`NEXT_PUBLIC_SITE_URL`; and dev login unset or exactly `false`.
+`BUILD_DB_DRY_RUN` is reserved for unit tests running with `NODE_ENV=test` and
+is rejected in production. `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` is also
+rejected so concurrent migration commands retain Prisma's database lock.
+Errors identify fields without echoing their values. Production has no
+first-user bootstrap path. Secrets belong in Vercel
+or another secret manager and a private process environment, never literal
+command arguments, source, logs, or chat.
 
-**Build and schema order.** `vercel.json` is deliberately linear: validate the
-environment → switch the Prisma provider to PostgreSQL → validate the schema
-→ `prisma generate` → `next build` → `scripts/build-db.mjs`. This ensures
-schema/client validation and compilation succeed before a schema mutation is
-attempted. The final script is a no-op outside
-`VERCEL_ENV=production`; production defaults to
-`prisma db push --skip-generate`, so Prisma refuses data-loss warnings. Only the
-exact one-deploy acknowledgement
-`PRISMA_ACCEPT_DATA_LOSS=I_UNDERSTAND_THIS_MAY_DELETE_PRODUCTION_DATA:<VERCEL_GIT_COMMIT_SHA>`
-adds `--accept-data-loss`. The 40-character SHA must equal the current Vercel
-deployment commit, so a stale or persistent value cannot approve later schema
-changes. It is set only after review, backup verification, and a successful
-restore drill, then removed immediately after that deployment.
+**Build and schema order.** `build:vercel` is deliberately linear: validate the
+environment → switch the Prisma provider to PostgreSQL → validate the
+committed migration history and schema → run the read-only data/schema
+preflight → apply `prisma migrate deploy` → run the read-only schema postflight
+→ generate the client → run the Next production build. Postflight compares all
+Prisma-supported objects to an isolated PostgreSQL copy of the datamodel,
+requires the exact completed migration inventory and checksums, and verifies
+the definitions of the release-native CHECK constraints, partial indexes,
+functions, and triggers. Migrations therefore use only the direct connection,
+land before new code is promoted, and must remain backward-compatible with the
+currently serving release. Preview, development, and local builds do not run
+the deployment step. Production has no data-loss override and never uses
+`prisma db push`.
 
-Current limitation: production still uses `db push`, so there is no reviewed,
-versioned migration history or automatic schema rollback. The commit-bound
-data-loss acknowledgement reduces accidental reuse but does not replace a
-migration plan. Move production to committed PostgreSQL migrations and
-`prisma migrate deploy` before schema/change volume or operator count grows.
+**Migration history and existing databases.** The first committed migration is
+an immutable baseline of the last production schema managed with `db push`;
+the next migration is the additive release change. A fresh database applies
+both in order. An existing untracked database must first pass
+`db:migrate:baseline-check`: its semantic Prisma schema and every relevant
+public-schema object must exactly match the pinned baseline, and the current
+data must pass the release preflight. Only then may an operator run the guarded
+`db:migrate:baseline-resolve`, which records the baseline as applied before
+`migrate deploy` adds the release migration. A database with an existing,
+partial, failed, or unexpected migration history is rejected instead of being
+silently adopted. The release migration preserves the legacy Dota column and
+old-writer compatibility triggers for one rollback window; rollback means
+promoting the previous application build, not attempting a destructive SQL
+down migration.
 
-**Database backups.** `npm run db:backup` prefers `DIRECT_URL`, passes the URI to
-`pg_dump` through `PGDATABASE` rather than argv, and produces a non-empty dump
-under a random temporary name. The backup directory is forced to `0700`; backup,
-SHA-256, and sanitized database-identity metadata files are `0600`. They are
-renamed from same-directory temporaries only after checksum creation, and every
+**Database backups.** `npm run db:backup` prefers `DIRECT_URL`, translates the
+connection into dedicated libpq environment fields rather than passing a URI
+or password in argv, and produces a non-empty dump under a random temporary
+name. The backup directory is forced to `0700`; backup, SHA-256, and sanitized
+database-identity metadata files are `0600`. They are renamed from
+same-directory temporaries only after checksum creation, and every
 partial/published piece is removed if any step fails. SQLite uses its online
 backup API and verifies the resulting snapshot with `PRAGMA integrity_check`
 instead of byte-copying a potentially live WAL database; it requires the
@@ -997,13 +1018,20 @@ filename/digest and artifact modes. With `BACKUP_RECEIPT_SECRET` configured it
 also signs a portable receipt naming the artifact digest, kind, creation and
 verification times, and credential-free logical database identity. Production
 `deleteSeason` accepts only a same-database PostgreSQL full-dump receipt whose
-backup and verification are both less than 24 hours old. The season JSON is an
+backup and verification are both less than 24 hours old. Unknown-provider
+identity includes hostname and effective port so a receipt cannot cross between
+clusters listening on different ports; reviewed Neon/Supabase pool/direct forms
+normalize to their managed project identity. The season JSON is an
 audit archive with no restore path and cannot satisfy that gate.
 
 **Recovery proof.** A checksum proves byte integrity, not that SQL is parsable,
-complete, or compatible. A restore drill uses a fresh disposable
-non-production database and compatible `psql --set ON_ERROR_STOP=on --file ...`
-with the scratch URI supplied through `PGDATABASE`, then validates
-representative season/user/team/match/game counts and boots the app against the
-restored data. Record the date and outcome and destroy the scratch database.
-Only that end-to-end drill supports a claim that the backup is restorable.
+complete, or compatible. `npm run db:backup:rehearse -- <backup.sql>` accepts
+only the exact guarded local `ld2l_restore_test` target, verifies the digest
+and private file modes (plus signed metadata when a receipt secret is
+configured), recreates the database from `template0`, restores with
+`psql -X`, `ON_ERROR_STOP`, and one transaction, then requires exactly one
+application schema and runs the same full schema/migration/native-object
+postflight against that discovered schema. CI also asserts that known legacy
+User and Season fixture rows survived the round trip. A launch still requires
+the same restore drill against a disposable database on the actual hosting
+provider, with the result recorded before the backup is trusted for recovery.

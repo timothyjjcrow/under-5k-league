@@ -93,9 +93,17 @@ describe("week reminder (integration)", () => {
   it("stays quiet outside the window, off-season, and without a webhook", async () => {
     const far = await setupWeek(48); // kickoff too far out
     expect(await maybeAnnounceUpcomingWeek(far.season)).toBe(false);
+    await prisma.season.update({
+      where: { id: far.season.id },
+      data: { isActive: false },
+    });
 
     const off = await setupWeek(4, SEASON_STATUS.SIGNUPS);
     expect(await maybeAnnounceUpcomingWeek(off.season)).toBe(false);
+    await prisma.season.update({
+      where: { id: off.season.id },
+      data: { isActive: false },
+    });
 
     mockHook.mockResolvedValue(null); // no Discord configured
     const bare = await setupWeek(4);

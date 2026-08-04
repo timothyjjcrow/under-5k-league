@@ -17,50 +17,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { postgresCliEnv } from "../src/lib/postgres-cli-env.mjs";
 import { postgresDatabaseIdentity } from "../src/lib/postgres-identity.mjs";
-
-const LIBPQ_QUERY_ENV = new Map([
-  ["application_name", "PGAPPNAME"],
-  ["channel_binding", "PGCHANNELBINDING"],
-  ["client_encoding", "PGCLIENTENCODING"],
-  ["connect_timeout", "PGCONNECT_TIMEOUT"],
-  ["fallback_application_name", "PGAPPNAME"],
-  ["gssencmode", "PGGSSENCMODE"],
-  ["gsslib", "PGGSSLIB"],
-  ["keepalives", "PGKEEPALIVES"],
-  ["keepalives_count", "PGKEEPALIVESCOUNT"],
-  ["keepalives_idle", "PGKEEPALIVESIDLE"],
-  ["keepalives_interval", "PGKEEPALIVESINTERVAL"],
-  ["krbsrvname", "PGKRBSRVNAME"],
-  ["load_balance_hosts", "PGLOADBALANCEHOSTS"],
-  ["options", "PGOPTIONS"],
-  ["passfile", "PGPASSFILE"],
-  ["requirepeer", "PGREQUIREPEER"],
-  ["sslcert", "PGSSLCERT"],
-  ["sslcrl", "PGSSLCRL"],
-  ["sslcrldir", "PGSSLCRLDIR"],
-  ["sslidentity", "PGSSLKEY"],
-  ["sslkey", "PGSSLKEY"],
-  ["sslmode", "PGSSLMODE"],
-  ["sslrootcert", "PGSSLROOTCERT"],
-  ["sslsni", "PGSSLSNI"],
-  ["ssl_max_protocol_version", "PGSSLMAXPROTOCOLVERSION"],
-  ["ssl_min_protocol_version", "PGSSLMINPROTOCOLVERSION"],
-  ["target_session_attrs", "PGTARGETSESSIONATTRS"],
-  ["tcp_user_timeout", "PGTCPUSERTIMEOUT"],
-]);
-
-// Prisma-only URL parameters do not affect pg_dump. All other parameters must
-// be understood rather than silently producing a backup from the wrong target.
-const PRISMA_ONLY_QUERY_PARAMS = new Set([
-  "connection_limit",
-  "pgbouncer",
-  "pool_timeout",
-  "schema",
-  "socket_timeout",
-  "sslaccept",
-  "sslpassword",
-]);
 
 // Plain `node` does not load .env. Read only the two connection keys needed by
 // this script; explicit process environment variables remain authoritative.
@@ -220,72 +178,6 @@ async function createBackup(raw) {
     }
     throw error;
   }
-}
-
-function postgresCliEnv(raw) {
-  const parsed = new URL(raw);
-  if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
-    throw new Error("PostgreSQL backup URL must use postgres:// or postgresql://");
-  }
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
-  if (!parsed.hostname || !parsed.username || !database) {
-    throw new Error("PostgreSQL backup URL must include host, user, and database");
-  }
-
-  const env = { ...process.env };
-  delete env.DATABASE_URL;
-  delete env.DIRECT_URL;
-  for (const variable of [
-    "PGAPPNAME",
-    "PGCHANNELBINDING",
-    "PGCLIENTENCODING",
-    "PGCONNECT_TIMEOUT",
-    "PGDATABASE",
-    "PGGSSENCMODE",
-    "PGGSSLIB",
-    "PGHOST",
-    "PGKEEPALIVES",
-    "PGKEEPALIVESCOUNT",
-    "PGKEEPALIVESIDLE",
-    "PGKEEPALIVESINTERVAL",
-    "PGKRBSRVNAME",
-    "PGLOADBALANCEHOSTS",
-    "PGOPTIONS",
-    "PGPASSFILE",
-    "PGPASSWORD",
-    "PGPORT",
-    "PGREQUIREPEER",
-    "PGSSLCERT",
-    "PGSSLCRL",
-    "PGSSLCRLDIR",
-    "PGSSLKEY",
-    "PGSSLMAXPROTOCOLVERSION",
-    "PGSSLMINPROTOCOLVERSION",
-    "PGSSLMODE",
-    "PGSSLSNI",
-    "PGSSLROOTCERT",
-    "PGTARGETSESSIONATTRS",
-    "PGTCPUSERTIMEOUT",
-    "PGUSER",
-  ]) {
-    delete env[variable];
-  }
-
-  env.PGHOST = parsed.hostname;
-  env.PGDATABASE = database;
-  env.PGUSER = decodeURIComponent(parsed.username);
-  if (parsed.port) env.PGPORT = parsed.port;
-  if (parsed.password) env.PGPASSWORD = decodeURIComponent(parsed.password);
-
-  for (const [key, value] of parsed.searchParams) {
-    const variable = LIBPQ_QUERY_ENV.get(key);
-    if (variable) {
-      env[variable] = value;
-    } else if (!PRISMA_ONLY_QUERY_PARAMS.has(key)) {
-      throw new Error(`unsupported PostgreSQL backup URL parameter: ${key}`);
-    }
-  }
-  return env;
 }
 
 function normalizeExistingBackupModes(outDir) {

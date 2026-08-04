@@ -219,10 +219,10 @@ export async function reactivateSeason(
       error: "This season history control is stale — reload before switching.",
     };
   }
-  // SERIALIZABLE: "at most one active season" has no DB constraint behind it
-  // (Season.isActive is a plain Boolean). Two offseason activations can both
-  // read an empty active set and write different target rows; SSI must abort
-  // one instead of leaving two active leagues.
+  // SERIALIZABLE keeps the read-then-activate flow coherent. Production also
+  // has a partial unique index as the final "at most one active season"
+  // barrier; depending on the interleaving, a competing activation can lose as
+  // P2034 (serialization) or P2002 (unique conflict).
   try {
     const result = await prisma.$transaction(
       async (tx) => {
@@ -321,6 +321,7 @@ export async function reactivateSeason(
     if (
       e instanceof ActiveSeasonChangedError ||
       (e as { code?: string }).code === "P2034" ||
+      (e as { code?: string }).code === "P2002" ||
       (e as { code?: string }).code === "P2025"
     ) {
       return {

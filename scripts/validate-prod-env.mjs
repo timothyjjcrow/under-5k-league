@@ -20,8 +20,47 @@ function productionBuild(env) {
   return env.NODE_ENV === "production";
 }
 
-function postgresUrl(value) {
-  return postgresDatabaseIdentity(value) !== null;
+function postgresTarget(value) {
+  const serializedIdentity = postgresDatabaseIdentity(value);
+  if (!serializedIdentity) return null;
+
+  let url;
+  let identity;
+  try {
+    url = new URL(value);
+    identity = JSON.parse(serializedIdentity);
+  } catch {
+    return null;
+  }
+
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  const firstLabel = hostname.split(".")[0];
+  const neon = hostname.endsWith(".neon.tech");
+  const supabasePooler = hostname.endsWith(".pooler.supabase.com");
+  const supabaseDirect = /^db\.[a-z0-9-]+\.supabase\.co$/.test(hostname);
+
+  let provider = null;
+  let connectionMode = "unknown";
+  if (neon) {
+    provider = "neon";
+    connectionMode = firstLabel.endsWith("-pooler") ? "pooled" : "direct";
+  } else if (supabasePooler || supabaseDirect) {
+    provider = "supabase";
+    connectionMode = supabasePooler ? "pooled" : "direct";
+  } else if (url.searchParams.get("pgbouncer")?.toLowerCase() === "true") {
+    connectionMode = "pooled";
+  }
+
+  return {
+    database: identity.database,
+    // Prisma defaults to `public` when no schema query parameter is present.
+    schema: url.searchParams.get("schema") ?? "public",
+    hostname,
+    port: url.port || "5432",
+    provider,
+    logicalEndpoint: identity.endpoint,
+    connectionMode,
+  };
 }
 
 function httpsOrigin(value) {
@@ -58,19 +97,60 @@ export function validateProductionEnv(env) {
   if (env.BUILD_DB_DRY_RUN !== undefined) {
     errors.push("BUILD_DB_DRY_RUN is test-only and must be unset in production");
   }
+  if (env.PRISMA_ACCEPT_DATA_LOSS !== undefined) {
+    errors.push(
+      "PRISMA_ACCEPT_DATA_LOSS is obsolete and must be unset; production uses reviewed migrations",
+    );
+  }
+  if (env.PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK !== undefined) {
+    errors.push(
+      "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK must be unset; production migrations require Prisma advisory locking",
+    );
+  }
 
-  if (!postgresUrl(env.DATABASE_URL)) {
+  const pooledTarget = postgresTarget(env.DATABASE_URL);
+  const directTarget = postgresTarget(env.DIRECT_URL);
+  if (!pooledTarget) {
     errors.push("DATABASE_URL must be a PostgreSQL connection URL with a database name");
   }
-  if (!postgresUrl(env.DIRECT_URL)) {
+  if (!directTarget) {
     errors.push("DIRECT_URL must be a direct PostgreSQL connection URL with a database name");
   }
-  const pooledIdentity = postgresDatabaseIdentity(env.DATABASE_URL);
-  const directIdentity = postgresDatabaseIdentity(env.DIRECT_URL);
-  if (pooledIdentity && directIdentity && pooledIdentity !== directIdentity) {
-    errors.push(
-      "DATABASE_URL and DIRECT_URL must identify the same PostgreSQL user, database, and endpoint",
-    );
+  if (pooledTarget && directTarget) {
+    if (
+      pooledTarget.database !== directTarget.database ||
+      pooledTarget.schema !== directTarget.schema
+    ) {
+      errors.push(
+        "DATABASE_URL and DIRECT_URL must name the same PostgreSQL database and schema",
+      );
+    }
+    if (
+      pooledTarget.provider &&
+      directTarget.provider &&
+      (pooledTarget.provider !== directTarget.provider ||
+        pooledTarget.logicalEndpoint !== directTarget.logicalEndpoint)
+    ) {
+      errors.push(
+        "DATABASE_URL and DIRECT_URL must identify the same managed PostgreSQL provider/project",
+      );
+    }
+    if (
+      (!pooledTarget.provider || !directTarget.provider) &&
+      (pooledTarget.provider !== directTarget.provider ||
+        pooledTarget.hostname !== directTarget.hostname ||
+        pooledTarget.port !== directTarget.port)
+    ) {
+      errors.push(
+        "DATABASE_URL and DIRECT_URL must use the same PostgreSQL host and effective port unless a supported managed provider can be matched",
+      );
+    }
+    if (pooledTarget.connectionMode === "direct") {
+      errors.push("DATABASE_URL must use the provider's pooled PostgreSQL endpoint");
+    }
+    if (directTarget.connectionMode === "pooled") {
+      errors.push("DIRECT_URL must use a direct PostgreSQL endpoint, not a pooler");
+    }
   }
 
   const receiptSecret = env.BACKUP_RECEIPT_SECRET ?? "";

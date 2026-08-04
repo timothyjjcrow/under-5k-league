@@ -1,6 +1,11 @@
 import type { PrismaClient, User } from "@prisma/client";
 import { ROLE } from "./constants";
 import { fetchPubStats, fetchRankTier, steamIdToAccountId } from "./dota";
+import {
+  dotaAccountLinkSnapshot,
+  effectiveDotaAccountId,
+} from "./dota-account";
+import { retireStaleDotaAccountClaims } from "./dota-account-service";
 import { placeholderPersona, steamProfileUrl } from "./steam";
 import { SETTING_KEYS } from "./settings";
 
@@ -92,19 +97,11 @@ export async function upsertLeagueUser(
       // field fetched through it before returning the login. Keeping this in
       // the same transaction as the owner upsert prevents a successful login
       // from publishing two effective users for one Dota account.
-      await tx.user.updateMany({
-        where: {
-          steamId: { not: input.steamId },
-          dotaAccountId: verifiedDotaAccountId,
-        },
-        data: {
-          dotaAccountId: null,
-          rankTier: null,
-          fhUnavailable: null,
-          pubStats: null,
-          pubStatsAt: null,
-        },
-      });
+      await retireStaleDotaAccountClaims(
+        tx,
+        input.steamId,
+        verifiedDotaAccountId,
+      );
     }
 
     const isFirstUser = (await tx.user.count()) === 0;
@@ -183,12 +180,13 @@ export async function ensureRankTier(
   user: {
     id: string;
     steamId: string;
-    dotaAccountId: number | null;
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
     rankTier: number | null;
   },
 ): Promise<void> {
   if (user.rankTier != null) return;
-  const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  const accountId = effectiveDotaAccountId(user);
   if (!accountId) return;
   const result = await fetchRankTier(accountId);
   if (!result.ok) return;
@@ -204,7 +202,7 @@ export async function ensureRankTier(
       // silently dropped.
       where: {
         id: user.id,
-        dotaAccountId: user.dotaAccountId,
+        ...dotaAccountLinkSnapshot(user),
         rankTier: null,
       },
       data,
@@ -226,13 +224,14 @@ export async function ensurePubStats(
   user: {
     id: string;
     steamId: string;
-    dotaAccountId: number | null;
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
     pubStatsAt: Date | null;
   },
   nowMs: number = Date.now(),
 ): Promise<void> {
   if (user.pubStatsAt != null) return;
-  const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  const accountId = effectiveDotaAccountId(user);
   if (!accountId) return;
   const result = await fetchPubStats(accountId);
   if (!result.ok) return;
@@ -243,7 +242,7 @@ export async function ensurePubStats(
   await prisma.user.updateMany({
     where: {
       id: user.id,
-      dotaAccountId: user.dotaAccountId,
+      ...dotaAccountLinkSnapshot(user),
       pubStatsAt: null,
     },
     data: { pubStats: JSON.stringify(result.stats), pubStatsAt: new Date(nowMs) },

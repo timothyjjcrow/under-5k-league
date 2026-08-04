@@ -165,6 +165,25 @@ describe("removeGame — the removal must survive automatic re-import", () => {
       "777001-fantasy-lock",
       matches[0].homeTeamId,
     );
+    const afterInsert = await prisma.season.findUniqueOrThrow({
+      where: { id: season.id },
+    });
+    if (ON_POSTGRES) {
+      // Production deploys the additive schema before the new binary. During
+      // that rollback window an old binary can insert Game without knowing
+      // about fantasyLockedAt, so the compatibility trigger must lock it.
+      expect(afterInsert.fantasyLockedAt).toBeInstanceOf(Date);
+    }
+
+    // Reconstruct the stale marker this removeGame repair specifically guards:
+    // a legacy/local Game row may predate the durable lock. PostgreSQL's
+    // rollback trigger correctly prevents a newly inserted row from naturally
+    // reaching this state, so the fixture must create it explicitly rather
+    // than treating a working trigger as a product failure.
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { fantasyLockedAt: null },
+    });
     expect(
       (await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
         .fantasyLockedAt,

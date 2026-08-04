@@ -7,10 +7,11 @@ later gate remains open.
 
 ## Current verdict
 
-**HOLD — the release artifact and CI gate are reproducible, but production is
-not ready yet.** Versioned PostgreSQL migrations, recoverable automation,
-accurate privacy disclosures, an operator runbook, and final clean-room/manual
-validation remain release blockers.
+**HOLD — the release artifact, CI gate, versioned PostgreSQL migrations, and
+local restore proof are reproducible, but production is not ready yet.**
+Authenticated scheduled automation, durable/observable notification delivery,
+accurate privacy and operator disclosures, the incident runbook, and the final
+target-provider launch drill remain release blockers.
 
 ## Iteration 1 — immutable release candidate and truthful CI
 
@@ -189,3 +190,236 @@ automatic dependency-update pull requests after the launch branch is stable.
 
 **PostgreSQL deployment, migration history, upgrade compatibility, and tested
 backup restoration.**
+
+## Iteration 2 — versioned PostgreSQL deployment and recovery proof
+
+### Section audited
+
+PostgreSQL migration history, clean installation, adoption of an existing
+database created by the former `db push` process, data compatibility, Dota
+account-ID evolution, production database identity validation, backup/restore,
+schema attestation, and the exact production build order.
+
+### Current purpose
+
+This gate lets a reviewed application commit change the production schema
+without inferring destructive SQL at deploy time. It must support both an empty
+database and the existing league database, preserve a rollback window for the
+previous application, refuse unknown drift or unsafe data, and prove that a
+backup can be restored into a coherent database before operators trust it.
+
+### Actors affected
+
+Every player, captain, administrator, and visitor depends on preserved league
+history and consistent identity data. Administrators are additionally affected
+by active-season/lobby integrity and destructive-action recovery. Maintainers
+and operators are affected by migration, backup, restore, and deployment
+procedures.
+
+### Problems found
+
+- Production used `prisma db push`, so the repository had no immutable,
+  reviewable history and no safe way to distinguish an empty database from the
+  untracked existing database.
+- Dota account IDs were stored in a PostgreSQL `INTEGER`, which cannot represent
+  the full unsigned 32-bit account-ID range. Altering that physical column in
+  place would have broken rollback compatibility with the serving release.
+- Marking an old database as baselined could have hidden schema drift, extra
+  native objects, partial migration history, or release-incompatible data.
+- The production build had no read-only preflight or post-deploy proof that the
+  exact migration history, Prisma schema, CHECK constraints, partial indexes,
+  functions, and triggers were all present.
+- “One active season” and “one active inhouse lobby” were application
+  assumptions rather than database-enforced invariants.
+- Dota metadata writes could race across the legacy/new storage columns, and
+  separate unique indexes could not by themselves prevent a stored claim from
+  colliding with another user's Steam-derived canonical account.
+- Backup verification proved only a digest. It did not prove SQL restoration,
+  application-schema discovery, migration checksums, native objects, or fixture
+  data. PostgreSQL URLs also needed a credential-safe CLI boundary.
+- Production URL validation needed to distinguish pooled and direct endpoints,
+  normalize reviewed managed-provider identities, and reject a custom provider
+  pair on a different effective port.
+- The first combined PostgreSQL run exposed 16 real fixture/compatibility
+  failures. In particular, the first Dota compatibility trigger could overwrite
+  an explicit new-client v2 write while mirroring the legacy column.
+- Exhaustive mutation discovery found two unprotected rank synchronization
+  claims: signup and login enrichment could overwrite a newer rank result on
+  the same account link without any test noticing.
+- Running Playwright immediately after a production Next build exposed a test
+  infrastructure defect: its CommonJS global-setup loader transformed an
+  imported ESM helper and rejected `import.meta` before browser tests started.
+
+### Changes made
+
+- Added an immutable baseline generated from commit `5520873` and an additive
+  `20260804010000_release_readiness` migration. Both use explicit transactions;
+  post-baseline destructive SQL is rejected by the migration safety gate.
+- Replaced the production schema write with `prisma migrate deploy`. The
+  canonical build is now environment validation → PostgreSQL provider switch →
+  migration/schema validation → read-only preflight → deploy → read-only
+  postflight → Prisma generation → Next production build.
+- Added a fail-closed existing-database baseline check and resolver. They pin
+  the baseline datamodel digest, compare Prisma-supported schema semantics,
+  inventory native public-schema objects, reject any prior/partial migration
+  history, repeat the data preflight, require explicit `--apply`, and keep the
+  direct database URL out of process arguments.
+- Added preflight checks for unknown objects, non-positive legacy Dota IDs,
+  cross-user stored/Steam Dota collisions, and multiple active seasons or
+  lobbies. Only a truly empty schema takes the fresh-install path.
+- Added postflight attestation for the exact two completed migrations and
+  checksums, Prisma semantic equivalence, and 12 exact native objects. The
+  rehearsal deliberately removes both a normal Prisma index and a native
+  trigger and proves that postflight rejects each drift class.
+- Preserved the old physical `"dotaAccountId"` column for rollback and added a
+  double-precision v2 column with an integer/range CHECK covering 1 through
+  4,294,967,295. Compatibility triggers mirror legacy-only writes while
+  preserving an explicit new-client v2 value; new code compares and writes both
+  stored columns.
+- Backfilled and constrained queue, completion, fantasy-lock, and Dota rollout
+  state; added the durable inhouse announcement table; retained the legacy lobby
+  status index; and added partial unique indexes for one active Season and one
+  active InhouseLobby.
+- Mapped uniqueness/serialization conflicts to actionable application results
+  for season and lobby creation/reactivation rather than leaking Prisma errors.
+- Centralized effective/stored Dota account semantics, dual-column snapshots,
+  collision queries, and stale-claim retirement. All pages, exports, syncs, and
+  metadata compare-and-set writes now use that boundary; a stable export still
+  exposes one `dotaAccountId` field.
+- Hardened production environment validation for advisory locks, obsolete
+  overrides, database/schema/project identity, pooling mode, distinct roles,
+  managed-provider normalization, and custom-provider effective ports.
+- Made PostgreSQL backup commands use dedicated libpq environment fields rather
+  than credential-bearing argv. Added private modes, atomic artifact/digest/
+  identity publication, signed receipts, exact local restore targeting,
+  `template0` recreation, `psql -X` with stop-on-error and one transaction,
+  dynamic schema discovery, full postflight, and fixture survival checks.
+- Changed all Playwright global setups to invoke the ESM SQLite-target guard
+  through its CLI boundary, which remains exact-path validated and works before
+  and after a production Next build.
+- Added focused same-account rank races so both newly discovered mutation gaps
+  preserve the newer synchronization result.
+
+### Architecture improvements made
+
+- Migration SQL, safety policy, data preflight, schema postflight, legacy
+  baseline adoption, backup verification, and restore rehearsal now have
+  separate, composable boundaries rather than one host-specific schema command.
+- Database-native constraints enforce singleton active lifecycle records even
+  if a future application path misses an application-level check.
+- Dota identity has one typed compatibility layer instead of provider-specific
+  field selection scattered across pages and actions.
+- Backup receipts bind a credential-free logical database identity; unknown
+  providers include the normalized effective port, while only reviewed Neon and
+  Supabase pool/direct forms are allowed to normalize across hosts.
+- Migration and restore subprocesses receive credentials through private
+  environment fields, and temporary datamodel/schema work never mutates the
+  committed provider or generated client.
+- Browser fixture setup now treats the ESM helper as a CLI, avoiding loader
+  coupling between Playwright, Next build output, and the safety module.
+
+### Tests added or updated
+
+- Migration checksum, SQL safety, empty/legacy/unexpected-schema preflight,
+  exact-baseline fingerprint, guarded resolver, and postflight native-object
+  tests.
+- Fresh database, invalid-data rollback, exact untracked baseline, populated
+  legacy upgrade, old/new Dota writer compatibility, and deliberate drift
+  rehearsal cases.
+- PostgreSQL identity, libpq environment, backup metadata/receipt, signed
+  restore, custom-schema restore, and restored-fixture checks.
+- Unsigned-32-bit Dota boundaries, legacy fallback, canonical ownership,
+  cross-column collision, three stale-claim paths, duplicate submit, and stale
+  metadata compare-and-set coverage.
+- Database uniqueness and application error mapping for active seasons and
+  inhouse lobbies.
+- Two same-link rank synchronization races that kill the previously surviving
+  signup and login mutations.
+- All three Playwright global-setup paths after a production build.
+
+### Commands run
+
+- `npm run db:migrate:validate`
+- `npm run db:migrate:rehearse`
+- `npm run db:migrate:baseline-check`
+- guarded dry-run and `--apply` baseline-resolution rehearsals
+- `npm run db:backup`, `npm run db:backup:verify`, and signed
+  `npm run db:backup:rehearse` drills, including a custom application schema
+- repeated `npm run pg:up`, focused PostgreSQL fixture/race tests,
+  `PG_TEST_URL=… npm run test:pg`, and `npm run pg:down`
+- focused mutation probes for all three Dota cleanup claims and both rank claims
+- `PG_TEST_URL=… node scripts/mutation-guard.mjs --discover`
+- `PG_TEST_URL=… node scripts/mutation-guard.mjs`
+- production-mode `npm run build:vercel` against the migrated scratch database
+- every `.mjs` syntax check, `git diff --check`, zero-warning lint, TypeScript,
+  unit tests, SQLite integration, both dependency audits, and all three
+  Playwright suites
+
+### Test results
+
+- Migration rehearsal passed fresh install, invalid-data rollback, exact
+  baseline adoption, populated legacy upgrade, Dota dual-write compatibility,
+  and deliberate Prisma/native drift rejection.
+- Signed `pg_dump` verification and restoration passed, including full
+  migration/native-object postflight, fixture survival, and a non-`public`
+  application schema.
+- Production environment and database-identity suites passed 58/58 focused
+  cases; postflight/restore units passed 36/36 focused cases.
+- Dependency audit: zero known vulnerabilities in production and full trees.
+- JavaScript module syntax, migration safety, Prisma validation, zero-warning
+  ESLint, and TypeScript all passed.
+- Unit: 130 files, 1,765/1,765 passed.
+- SQLite integration: 44 files, 1,044 passed and 32 intentional PostgreSQL-only
+  skips (1,076 total).
+- PostgreSQL integration on the settled tree: 44 files, 1,073 passed and three
+  intentional provider-only skips (1,076 total). The earlier 16 failures were
+  investigated and fixed rather than waived.
+- Mutation discovery and independent verification: 115 live claims — 73
+  protected, 42 reviewed equivalents, zero unprotected/unclassified. Both new
+  rank protections and all three Dota cleanup claims were confirmed twice.
+- Chromium: signup/draft 29/29, regular season 40/40, postseason 10/10 (79/79
+  total), including mobile layouts, phase locks, draft/inhouse lifecycles,
+  destructive confirmations, result correction, offseason, and archives.
+- Exact production build passed environment validation, two-migration safety
+  and preflight, `migrate deploy`, exact history plus 12-native-object
+  postflight, Prisma generation, TypeScript, compilation, and all 36 static
+  entries.
+- Cleanup passed: schema/client restored to SQLite; `ld2l_pgtest` and
+  `ld2l_restore_test` were dropped; synthetic backup artifacts were removed;
+  no E2E server remained.
+
+### Remaining concerns
+
+- The actual hosted database has not yet been backed up, fingerprinted,
+  baselined, migrated, or restored into a disposable database on its provider.
+  Local proof cannot certify provider permissions, extensions, network policy,
+  retention, or point-in-time recovery.
+- The compatibility columns/triggers are intentionally retained for one
+  rollback window. A later reviewed migration should remove them only after the
+  previous application can no longer be promoted and the new data has been
+  observed in production.
+- There is no destructive SQL down migration. Rollback is an application
+  promotion using the preserved schema; a forward repair migration owns any
+  later database correction.
+- Scheduled result synchronization, reminders, several Discord notifications,
+  and operational health still depend on traffic or an unauthenticated/public
+  sync boundary. Crash recovery, distributed leasing, and operator visibility
+  are the next repository blocker.
+- Privacy/operator disclosures, the incident runbook, scheduler activation,
+  production secrets/domains/OAuth callbacks, and credentialed
+  Steam/Discord/OpenDota staging checks remain open launch gates.
+
+### Recommended future improvements
+
+Run the full signed backup → provider-hosted disposable restore → baseline check
+→ migration → old/new application compatibility smoke against the actual
+target before promotion. Record provider backup retention and PITR evidence.
+After the rollback window, remove the legacy Dota column and compatibility
+triggers in a separate additive-then-cleanup release. Move mutation execution
+to isolated temporary worktrees so an operating-system kill cannot leave a
+transient mutant in a developer checkout.
+
+### Next section to audit
+
+**Authenticated scheduled synchronization, durable notifications, automation
+health, distributed ownership, bounded work, and operator recovery.**

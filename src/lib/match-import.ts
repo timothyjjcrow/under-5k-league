@@ -1,13 +1,13 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
-  steamIdToAccountId,
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
   fetchLeagueMatchIds,
   type OpenDotaMatch,
   type OpenDotaPlayer,
 } from "./dota";
+import { effectiveDotaAccountId } from "./dota-account";
 import { advancePlayoffBracket } from "./playoff-service";
 import { raceHook } from "./race-hook";
 import { maybeAnnounceWeekHonors } from "./honors-service";
@@ -305,13 +305,13 @@ type MatchRow = {
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
 export async function gatherTeamAccounts(match: MatchRow) {
   // Select-narrowed: this runs on every import AND every auto-sync roster
-  // scan, and only four user fields are ever read (id/name/steamId/
-  // dotaAccountId — the `add` helper's parameter type says so).
+  // scan, and only the identity fields read by `add` are selected.
   const userSelect = {
     id: true,
     name: true,
     steamId: true,
-    dotaAccountId: true,
+    dotaAccountIdV2: true,
+    legacyDotaAccountId: true,
   } as const;
   const [season, members, standins, registrants] = await Promise.all([
     prisma.season.findUnique({
@@ -351,11 +351,12 @@ export async function gatherTeamAccounts(match: MatchRow) {
       id: string;
       name: string;
       steamId: string;
-      dotaAccountId: number | null;
+      dotaAccountIdV2: number | null;
+      legacyDotaAccountId: number | null;
     },
     teamId: string,
   ) => {
-    const acc = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+    const acc = effectiveDotaAccountId(user);
     if (acc == null) return;
     accountMap.set(acc, { userId: user.id, name: user.name, teamId });
     (teamId === match.homeTeamId ? homeSet : awaySet).add(acc);
@@ -367,7 +368,7 @@ export async function gatherTeamAccounts(match: MatchRow) {
   // Registered-but-unrostered users map for attribution only (teamId null) —
   // never added to homeSet/awaySet, so classification is unaffected.
   for (const r of registrants) {
-    const acc = r.user.dotaAccountId ?? steamIdToAccountId(r.user.steamId);
+    const acc = effectiveDotaAccountId(r.user);
     if (acc == null || accountMap.has(acc)) continue;
     accountMap.set(acc, { userId: r.user.id, name: r.user.name, teamId: null });
   }

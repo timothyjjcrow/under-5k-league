@@ -19,14 +19,17 @@ model User {
   name          String
   avatar        String?
   profileUrl    String?
-  // Legacy Dota 2 account override; normal users derive it from their verified
-  // steamId. New arbitrary overrides are refused, and owner login retires any
-  // other user's legacy claim. @unique also prevents two explicit legacy
-  // overrides from colliding. Float is deliberate identifier storage: Prisma
-  // `Int` maps to signed INTEGER on Postgres and cannot hold Dota's full uint32
-  // range, while IEEE-754 represents every uint32 exactly. Values are still
-  // integer-validated at the boundary. Nullable because Steam is canonical.
-  dotaAccountId Float?    @unique
+  // Rollback bridge for values written by the pre-release application. Keep
+  // the old physical column intact until the rollback window closes; current
+  // code reads dotaAccountIdV2 first and only clears a stale legacy claim when
+  // verified Steam ownership proves it belongs elsewhere.
+  legacyDotaAccountId Int?   @unique(map: "User_dotaAccountId_key") @map("dotaAccountId")
+  // Current Dota 2 account override. Float is deliberate identifier storage:
+  // Prisma `Int` maps to signed INTEGER on Postgres and cannot hold Dota's full
+  // uint32 range, while IEEE-754 represents every uint32 exactly. Values are
+  // still integer-validated at the boundary. Nullable because Steam is
+  // canonical.
+  dotaAccountIdV2     Float? @unique(map: "User_dotaAccountIdV2_key") @map("dotaAccountIdV2")
   rankTier      Int? // OpenDota rank_tier (tens=medal, ones=stars); null if unknown
   // OpenDota profile.fh_unavailable: true = "Expose Public Match Data" is OFF,
   // so every automatic import path is blind to this player's games. Null =
@@ -516,6 +519,10 @@ model InhouseLobby {
   // orders by formation time. The composite keeps both the active-lobby probe
   // and the paginated archive on one index prefix as the permanent history
   // grows.
+  // Keep the pre-release single-column index through the rollback window. It
+  // is redundant with the composite prefix, but retaining it makes this
+  // release strictly additive for an old application binary.
+  @@index([status], map: "InhouseLobby_status_idx")
   @@index([status, createdAt])
   // Hot room-poll lookup for the stable post-game banner window.
   @@index([status, completedAt])

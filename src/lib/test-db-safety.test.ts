@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertLocalManagedPostgresUrl,
+  assertLocalRestorePostgresUrl,
   assertPostgresTestUrl,
 } from "../../scripts/test-db-safety.mjs";
 
@@ -38,5 +39,23 @@ describe("destructive Postgres test URL safety", () => {
         "postgresql://tester@localhost:5432/ld2l_pgtest",
       ).hostname,
     ).toBe("localhost");
+  });
+
+  it("reserves one exact localhost database for destructive restore rehearsals", () => {
+    expect(
+      assertLocalRestorePostgresUrl(
+        "postgresql://tester:secret@localhost:5432/ld2l_restore_test",
+      ).pathname,
+    ).toBe("/ld2l_restore_test");
+    for (const unsafe of [
+      "postgresql://tester@localhost/ld2l_test",
+      "postgresql://tester@localhost/ld2l_restore_test_copy",
+      "postgresql://tester@db.example/ld2l_restore_test",
+      "file:./ld2l_restore_test.db",
+    ]) {
+      expect(() => assertLocalRestorePostgresUrl(unsafe)).toThrow(
+        /refus|must|local/i,
+      );
+    }
   });
 });

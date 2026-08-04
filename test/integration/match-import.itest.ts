@@ -926,6 +926,10 @@ describe("enrichStoredGames", () => {
       where: { id: dead.id },
       data: { fetchedAt: new Date(Date.now() - 60_000) },
     });
+    await prisma.season.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
+    });
     const alive9005 = await legacyGame("9005");
     await prisma.game.update({
       where: { id: alive9005.id },

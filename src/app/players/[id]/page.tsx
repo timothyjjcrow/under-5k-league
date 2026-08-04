@@ -10,7 +10,7 @@ import {
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
-import { steamIdToAccountId } from "@/lib/dota";
+import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
@@ -232,7 +232,7 @@ export default async function PlayerProfilePage({
       })
     : [];
 
-  const accountId = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  const accountId = effectiveDotaAccountId(user);
 
   // A signup row exists for WITHDRAWN/REMOVED players too — only an ACTIVE one
   // may render as a live signup (MMR, roles, Standin badge, the whole Signup

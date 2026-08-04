@@ -95,7 +95,7 @@ async function main() {
       data: {
         steamId: accountIdToSteamId64(p.account_id),
         name: p.personaname,
-        dotaAccountId: p.account_id,
+        dotaAccountIdV2: p.account_id,
         role: i === 0 ? "ADMIN" : "USER",
       },
     });

@@ -1,6 +1,6 @@
 // Stand the local Postgres test environment up and back down.
 //
-//   npm run pg:up      # create the throwaway DB, point Prisma at it, push, generate
+//   npm run pg:up      # create the throwaway DB, deploy migrations, generate
 //   npm run pg:down    # put EVERYTHING back to sqlite and drop the DB
 //
 // WHY THIS IS A SCRIPT AND NOT A README PARAGRAPH. Running the Postgres suite
@@ -50,7 +50,10 @@ if (mode === "up") {
   quietDatabaseTool("dropdb", ["--if-exists", "--force", DB]);
   execFileSync("createdb", [DB], { stdio: "inherit", env: databaseToolEnv });
   run("node scripts/switch-db-provider.mjs postgresql");
-  run("npx prisma db push --skip-generate --accept-data-loss", dbEnv);
+  run("npm run db:migrate:validate", dbEnv);
+  run("npm run db:migrate:preflight", dbEnv);
+  run("npx prisma migrate deploy", dbEnv);
+  run("npm run db:migrate:postflight", dbEnv);
   run("npx prisma generate", dbEnv);
   console.log(`\nReady. Keep PG_TEST_URL pointed at ${DB}, then run:\n`);
   if (!process.env.PG_TEST_URL) {

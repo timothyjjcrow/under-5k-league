@@ -76,10 +76,13 @@ import {
 import {
   parseMatchId,
   parseLeagueId,
-  steamIdToAccountId,
   fetchPubStats,
   fetchRankTier,
 } from "@/lib/dota";
+import {
+  dotaAccountLinkSnapshot,
+  effectiveDotaAccountId,
+} from "@/lib/dota-account";
 import { pubStatsFresh } from "@/lib/pub-stats";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { bool, clampInt, localDate, str } from "@/lib/form";
@@ -334,16 +337,11 @@ export async function createSeason(
   const maxMmr = clampInt(formData, "maxMmr", 0, 0, HARD_MMR_CEILING);
 
   // SERIALIZABLE, matching the same zero-or-one-active invariant enforced by
-  // offseason-only `reactivateSeason` (season.ts). Nothing in the schema
-  // enforces "at most one active season", and under READ COMMITTED two
-  // interleaved creates each archive what they can see and then insert their
-  // own active row: T2's
-  // updateMany cannot see T1's uncommitted insert, so BOTH commit isActive
-  // true. `getActiveSeason` then picks one by createdAt desc and the other is
-  // invisible everywhere except /seasons — where it renders with a "Current"
-  // badge it cannot lose, because deleteSeason refuses an active season and
-  // reactivateSeason refuses one that is already active. Two admins, or one
-  // resubmitting an apparently-hung POST, is all it takes.
+  // offseason-only `reactivateSeason` (season.ts). Production's partial unique
+  // index is the final database barrier. The transaction still matters: it
+  // turns the whole archive-and-create handoff into one coherent claim, while
+  // the index prevents a second active row even if an unexpected caller skips
+  // this service.
   let handoff: {
     newSeasonId: string;
     archivedSeason: { id: string; name: string } | null;
@@ -426,7 +424,8 @@ export async function createSeason(
     }
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      (error as { code?: string }).code === "P2034" ||
+      (error as { code?: string }).code === "P2002"
     ) {
       return {
         error:
@@ -5671,7 +5670,11 @@ type RankSyncOutcome = {
 /** Sync one account's medal (+ fh_unavailable) — and, when `withPub`, its
  *  pub-scouting snapshot — retrying whichever call missed once. */
 async function syncOneRank(
-  u: { id: string; dotaAccountId: number | null },
+  u: {
+    id: string;
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
+  },
   acc: number,
   withPub: boolean,
 ): Promise<RankSyncOutcome> {
@@ -5714,7 +5717,7 @@ async function syncOneRank(
     // mid-sweep must not get the old account's data stamped onto the new
     // link. count 0 = they relinked; drop the result — next sweep re-reads.
     await prisma.user.updateMany({
-      where: { id: u.id, dotaAccountId: u.dotaAccountId },
+      where: { id: u.id, ...dotaAccountLinkSnapshot(u) },
       data,
     });
   }
@@ -5757,13 +5760,14 @@ type RankSyncResult = {
 async function syncRanksFor(
   users: {
     id: string;
-    dotaAccountId: number | null;
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
     steamId: string;
     pubStatsAt: Date | null;
   }[],
 ): Promise<RankSyncResult> {
   const targets = users
-    .map((u) => ({ u, acc: u.dotaAccountId ?? steamIdToAccountId(u.steamId) }))
+    .map((u) => ({ u, acc: effectiveDotaAccountId(u) }))
     .filter((t): t is { u: (typeof users)[number]; acc: number } => !!t.acc);
 
   // Which accounts get the two extra pub calls this run — see

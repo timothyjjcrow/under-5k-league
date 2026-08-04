@@ -259,6 +259,10 @@ describe("abortDraft — the way back from a premature Start draft", () => {
         where: { seasonId: season.id },
       });
       expect(draft.status, status).toBe(DRAFT_STATUS.NOT_STARTED);
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { isActive: false },
+      });
     }
   });
 
@@ -922,6 +926,10 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
         expect(member).not.toBeNull();
         expect(budget).toBe(43); // untouched
       }
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { isActive: false },
+      });
     }
   });
 });

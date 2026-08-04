@@ -6,8 +6,8 @@ import { assertPostgresTestUrl } from "./scripts/test-db-safety.mjs";
 // engine. SQLite serializes writers, which masks the read-then-write races the
 // mutation guards exist for; this config is how we verify them for real.
 //   PG_TEST_URL="postgresql://…" npx vitest run --config vitest.pg.config.mts
-// Requires the schema to already be on the postgresql provider + pushed
-// (scripts/switch-db-provider.mjs postgresql && prisma db push).
+// Requires the schema to already be on the postgresql provider with committed
+// migrations deployed (`npm run pg:up` performs the guarded setup).
 const url = process.env.PG_TEST_URL;
 assertPostgresTestUrl(url);
 

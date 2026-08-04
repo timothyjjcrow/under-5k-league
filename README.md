@@ -238,6 +238,13 @@ heroes, last played — which the player pool and profiles render).
 | `npm run db:reset`            | **Destructive** — force-reset the DB and reseed               |
 | `npm run db:backup`           | Create a private, checksummed Postgres/SQLite backup          |
 | `npm run db:backup:verify`    | Verify a backup against its SHA-256 sidecar                   |
+| `npm run db:backup:rehearse`  | **Destructive scratch only** — restore a verified dump locally |
+| `npm run db:migrate:validate` | Validate committed migration safety and the Prisma schema     |
+| `npm run db:migrate:preflight` | Read-only checks for legacy data that would block migration  |
+| `npm run db:migrate:postflight` | Read-only attestation of schema, migration checksums, and native objects |
+| `npm run db:migrate:rehearse` | **Destructive scratch only** — rehearse fresh/legacy upgrades |
+| `npm run db:migrate:baseline-check` | Read-only compatibility check for a pre-migration database |
+| `npm run db:migrate:baseline-resolve` | Record the verified one-time baseline with explicit approval |
 | `npm run set-admins`          | Reconcile existing accounts to `ADMIN_STEAM_IDS`              |
 | `npm test`                    | Run unit tests (Vitest)                                       |
 | `npm run test:integration`    | Run integration tests (isolated `prisma/test.db`)             |
@@ -246,7 +253,7 @@ heroes, last played — which the player pool and profiles render).
 | `npm run test:e2e:mid`        | Run the mid-season browser suite                              |
 | `npm run test:e2e:postseason` | Run the playoffs/completed-season browser suite              |
 
-> **The two destructive scripts refuse to run against a non-local database.**
+> **The local seed/reset scripts refuse to run against a non-local database.**
 > `db:seed` deletes every row and `db:reset` drops the schema first, so both
 > abort unless `DATABASE_URL` is a local `file:` URL. Never place a production
 > connection URL in a command or shell history. To override the seed guard
@@ -351,54 +358,84 @@ declares the same runtime line used by every CI job.
    > allowlist if access is wrong; do not remove it and expect a production
    > bootstrap.
 
-   > Scope `DATABASE_URL`/`DIRECT_URL` to the **Production** environment (or
-   > point Preview at a separate branch database). Builds only run
-   > `prisma db push` on production deploys (`scripts/build-db.mjs`), but a
-   > preview deploy sharing the prod URL still _runs_ against the live data.
+   > Scope `DATABASE_URL`/`DIRECT_URL` to the **Production** environment. Point
+   > Preview at a separate branch database if previews need live data. The
+   > migration command is a no-op outside production, but an application
+   > preview that shares production credentials could still read or write live
+   > league data after it starts.
 
 5. **Deploy.** Vercel and PostgreSQL CI both run the canonical
    `npm run build:vercel` pipeline. Production uses this fail-fast sequence:
 
    1. validate production environment values;
    2. switch Prisma to PostgreSQL;
-   3. validate the PostgreSQL Prisma schema;
-   4. generate the Prisma client;
-   5. complete `next build`; then
-   6. run `prisma db push --skip-generate`.
+   3. reject unsafe committed migration SQL and validate the PostgreSQL schema;
+   4. run a read-only data preflight with actionable legacy-data diagnostics;
+   5. run `prisma migrate deploy` against the direct database connection;
+   6. attest the resulting Prisma schema, exact migration checksums, and
+      PostgreSQL-native constraints, partial indexes, functions, and triggers;
+   7. generate the Prisma client; then
+   8. complete `next build`.
 
-   CI supplies non-secret production-shaped values and points both database
-   URLs at its disposable PostgreSQL service. After creating that schema and
-   running the PostgreSQL integration suite, it runs this entire pipeline,
-   including the real final `prisma db push --skip-generate` command. Because
-   the scratch schema is already current, the exercise is non-destructive while
-   still proving the deploy command actually executes. `BUILD_DB_DRY_RUN=1` is
-   reserved for unit tests paired with `NODE_ENV=test`; production validation
-   rejects the variable whenever it is configured.
+   The preflight is read-only and no-ops on a truly empty database. The same
+   invariants run again inside the migration transaction, so a write between
+   preflight and deploy still fails atomically instead of bypassing the gate.
 
-   Validation rejects missing/non-PostgreSQL database URLs, pooled/direct URLs
-   that identify different users, databases, or logical endpoints, placeholder
-   or short auth/backup-receipt secrets, missing/invalid/duplicate admin
-   SteamIDs, non-HTTPS or divergent site origins, enabled dev login, and any
-   configured test-only schema dry run. Neon
-   `-pooler` and common Supabase pooler forms are normalized before the database
-   identity comparison. The schema push happens only
-   after a successful compile and only for `VERCEL_ENV=production`; preview and
-   development builds do not push. By default Prisma refuses changes that warn
-   of data loss.
+   Migrations intentionally run before compilation. Every production migration
+   must therefore be additive and compatible with the currently deployed app:
+   if generation or compilation fails, Vercel does not promote the new build
+   and the old release keeps serving against the expanded schema. Breaking
+   changes require an expand/deploy/backfill/contract sequence, with the
+   contract migration released only after the old binary can no longer run.
 
-   For one reviewed deployment only, after a verified backup and successful
-   restore drill, set `PRISMA_ACCEPT_DATA_LOSS` to
-   `I_UNDERSTAND_THIS_MAY_DELETE_PRODUCTION_DATA:<VERCEL_GIT_COMMIT_SHA>` in the
-   Production environment. The suffix is the exact 40-character commit SHA for
-   that deployment (normally the output of `git rev-parse HEAD`). The value
-   enables `--accept-data-loss` only for that commit; a persistent or stale
-   value cannot authorize a later deploy. Remove it immediately afterwards.
+   CI validates the committed migration history, rehearses both an empty
+   database and a legacy populated database, proves postflight rejects both
+   Prisma-supported and database-native drift, creates and verifies a real
+   `pg_dump`, restores and fully attests it in a second scratch database, runs
+   PostgreSQL integration tests, and finally exercises the exact production
+   migration and build pipeline. The destructive rehearsal targets are
+   hard-coded to local databases named `ld2l_pgtest` and
+   `ld2l_restore_test`; the scripts refuse remote or similarly named targets.
 
-   > **Current schema limitation:** production still uses `prisma db push`, so
-   > there is no reviewed versioned migration history or automatic rollback.
-   > The commit-bound acknowledgement prevents stale approval; it does not
-   > replace migrations. Move to committed PostgreSQL migrations and
-   > `prisma migrate deploy` as the deployment process matures.
+   Environment validation rejects missing/non-PostgreSQL database URLs,
+   different database or schema names, mismatched managed-provider projects,
+   recognizable direct URLs used as the runtime pool, recognizable pooler URLs
+   used for migrations, placeholder or short auth/backup-receipt secrets,
+   missing/invalid/duplicate admin SteamIDs, non-HTTPS or divergent site
+   origins, enabled dev login, and configured test-only or obsolete release
+   overrides. Runtime and migration URLs may legitimately use different
+   passwords and least-privilege database users. Neon and Supabase projects can
+   also be matched across their standard pool/direct hosts and ports. Unknown
+   providers must use the same normalized hostname and effective port; support
+   for a custom pool/direct gateway pair requires an explicit reviewed
+   normalization rule.
+
+   `BUILD_DB_DRY_RUN=1` remains an exact test-only seam paired with
+   `NODE_ENV=test`. `PRISMA_ACCEPT_DATA_LOSS` is obsolete, and
+   `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` would permit unsafe concurrent
+   migration commands. Remove all three from Vercel: production validation
+   fails if any is configured. There is no production data-loss override and
+   no automatic rollback; Prisma's migration advisory lock remains mandatory.
+
+   **One-time baseline for a database created by the old `db push` process:**
+
+   1. create a full backup, verify it, and complete a restore rehearsal;
+   2. run `npm run db:migrate:baseline-check` with trusted production
+      `DIRECT_URL`/`DATABASE_URL` environment variables;
+   3. with production `DIRECT_URL` set (the resolver intentionally has no
+      pooled-URL fallback), run
+      `npm run db:migrate:baseline-resolve -- --apply` only if that read-only
+      fingerprint passes;
+   4. deploy normally so `20260804010000_release_readiness` is applied.
+
+   Stop and reconcile the database if the baseline check reports any
+   difference. Never mark the baseline applied merely to get past a failed
+   deploy. A brand-new empty database does **not** need this procedure;
+   `prisma migrate deploy` applies the baseline and later migrations itself.
+   The guarded resolver repeats the exact read-only check immediately before
+   writing migration metadata, keeps credentials out of process arguments, and
+   never changes the committed SQLite schema or generated client. Omitting
+   `--apply` fails before any database mutation.
 6. **Sign in with an allowlisted Steam account.** Then go to **/admin**, create
    the season, and set the MMR cap. Steam pulls names and avatars automatically.
 
@@ -417,13 +454,15 @@ npm run db:backup
 npm run db:backup:verify -- backups/<backup-file>.sql
 ```
 
-The backup command uses `DIRECT_URL` in preference to `DATABASE_URL` and passes
-the PostgreSQL connection through `PGDATABASE`, not `pg_dump` argv. It writes to
-a temporary file, rejects empty output, creates a SHA-256 sidecar, and then
-atomically publishes the artifact, checksum, and credential-free database
-identity metadata. `backups/` is mode `0700`; every artifact and sidecar is
-`0600`; failed runs remove partial output. SQLite uses its online backup API
-rather than a byte copy and requires the resulting snapshot to pass
+The backup command uses `DIRECT_URL` in preference to `DATABASE_URL`, parses it,
+and gives `pg_dump` dedicated libpq environment fields (`PGHOST`, `PGPORT`,
+`PGDATABASE`, `PGUSER`, `PGPASSWORD`, and supported TLS options) instead of a
+credential-bearing argv value. It clears conflicting inherited connection
+fields first. The command writes to a temporary file, rejects empty output,
+creates a SHA-256 sidecar, and then atomically publishes the artifact, checksum,
+and credential-free database identity metadata. `backups/` is mode `0700`;
+every artifact and sidecar is `0600`; failed runs remove partial output. SQLite
+uses its online backup API rather than a byte copy and requires the resulting snapshot to pass
 `PRAGMA integrity_check` before publication. That local-development path
 requires the `sqlite3` command-line client and fails safely if it is absent.
 
@@ -434,7 +473,8 @@ requires the `sqlite3` command-line client and fails safely if it is absent.
 >
 > ```bash
 > pg_dump --version                      # must be >= your Neon server major
-> PGDATABASE="$DIRECT_URL" psql -tAc 'show server_version;'
+> # Load PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD from your secret manager.
+> psql -X -tAc 'show server_version;'
 > npm run db:backup
 > ```
 >
@@ -448,19 +488,39 @@ backup also prints a signed `ld2l-backup-v1.…` receipt. A production permanent
 season deletion requires that receipt: it must identify the current logical
 PostgreSQL database, represent a complete database dump, and both the backup
 and verification must be less than 24 hours old. Paste it only into the
-hard-delete dialog. A SQLite receipt never authorizes a production delete.
+hard-delete dialog. Treat the receipt as a short-lived destructive capability:
+run verification only in a private terminal and never copy the receipt into CI
+logs, issues, or chat. CI uses a disposable database and a synthetic signing
+secret. A SQLite receipt never authorizes a production delete.
 
 The downloadable season JSON is explicitly an **audit/reference archive**. It
 has no importer, cannot restore foreign-key graphs, is not a full database
 backup, and does not satisfy the deletion gate.
 
 Receipt verification still does **not** prove restorability. Therefore, run a
-restore drill into a new, disposable, non-production database with a compatible
-`psql`, keeping its URL out of argv:
+guarded local restore rehearsal before a migration release. The command verifies
+the dump again, drops and recreates **only** the exact local database
+`ld2l_restore_test`, restores in one transaction, and checks completed migrations
+plus core league tables:
+
+```bash
+export PG_RESTORE_TEST_URL="postgresql://${USER}@localhost:5432/ld2l_restore_test"
+npm run db:backup:rehearse -- backups/<backup-file>.sql
+unset PG_RESTORE_TEST_URL
+```
+
+It requires compatible `psql`, `dropdb`, and `createdb` clients and a local role
+that may recreate that scratch database. Remote hosts and similarly named
+databases are rejected before a client runs.
+
+Also run a provider-level recovery drill periodically into a new, disposable,
+non-production hosted database. Load its connection as separate libpq
+environment fields from a secret manager so the credential is not exposed in
+argv:
 
 ```bash
 npm run db:backup:verify -- backups/<backup-file>.sql
-PGDATABASE="$SCRATCH_DIRECT_URL" psql --set ON_ERROR_STOP=on \
+psql -X --set ON_ERROR_STOP=on --single-transaction \
   --file backups/<backup-file>.sql
 ```
 

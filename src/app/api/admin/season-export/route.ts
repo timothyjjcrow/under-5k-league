@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { seasonSettingScopeWhere } from "@/lib/settings";
+import { storedDotaAccountId } from "@/lib/dota-account";
 
 export const dynamic = "force-dynamic";
 
@@ -95,17 +96,33 @@ async function readSeasonArchive(
       name: true,
       avatar: true,
       profileUrl: true,
-      dotaAccountId: true,
+      dotaAccountIdV2: true,
+      legacyDotaAccountId: true,
       rankTier: true,
       discordName: true,
       createdAt: true,
       updatedAt: true,
     },
   });
+  // Keep the established archive contract stable. The rollback bridge is an
+  // internal storage detail; an archive carries one authoritative stored
+  // override under the pre-release field name.
+  const archivedUsers = users.map((user) => ({
+    id: user.id,
+    steamId: user.steamId,
+    name: user.name,
+    avatar: user.avatar,
+    profileUrl: user.profileUrl,
+    dotaAccountId: storedDotaAccountId(user),
+    rankTier: user.rankTier,
+    discordName: user.discordName,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  }));
 
   return {
     season,
-    users,
+    users: archivedUsers,
     registrations,
     teams,
     teamMembers,

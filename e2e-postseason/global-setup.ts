@@ -1,16 +1,21 @@
 import { execFileSync } from "node:child_process";
 import { POSTSEASON_DB_URL } from "../playwright.postseason.config";
-import { prepareSqliteTestDatabase } from "../scripts/prepare-sqlite-test-db.mjs";
 
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
 export default async function globalSetup() {
-  prepareSqliteTestDatabase("postseasonE2e", POSTSEASON_DB_URL);
   const env = {
     ...process.env,
     DATABASE_URL: POSTSEASON_DB_URL,
     FIXTURE_MODE: "playoffs",
   };
+  // Run the ESM-only safety helper as a CLI so Playwright's CommonJS global-
+  // setup loader never rewrites the module after a production Next build.
+  execFileSync(
+    process.execPath,
+    ["scripts/prepare-sqlite-test-db.mjs", "postseasonE2e"],
+    { stdio: "inherit", env },
+  );
   execFileSync(
     npx,
     ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],

@@ -31,6 +31,14 @@ import {
   fetchPubStats,
   fetchRankTier,
 } from "@/lib/dota";
+import {
+  dotaAccountClaimWhere,
+  dotaAccountLinkSnapshot,
+  effectiveDotaAccountId,
+  sameDotaAccountLink,
+  storedDotaAccountId,
+} from "@/lib/dota-account";
+import { retireStaleDotaAccountClaims } from "@/lib/dota-account-service";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
 import { clampHeroList } from "@/lib/heroes";
 import { serializeRoles } from "@/lib/roles";
@@ -54,6 +62,7 @@ class RegistrationLifecycleChangedError extends Error {}
 class RegistrationRosterChangedError extends Error {}
 class RegistrationIdentityChangedError extends Error {}
 class RegistrationStateChangedError extends Error {}
+class DotaAccountCollisionError extends Error {}
 
 /**
  * A signed-up full player acknowledges the exact draft schedule rendered on
@@ -270,12 +279,19 @@ export async function saveRegistration(
   // never re-hit the API on signup edits.
   const dbUser = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { dotaAccountId: true, rankTier: true },
+    select: {
+      dotaAccountIdV2: true,
+      legacyDotaAccountId: true,
+      rankTier: true,
+    },
   });
   let rankTier = dbUser?.rankTier ?? null;
   let medalLabel = "";
   if (!existing && dbUser && dbUser.rankTier == null) {
-    const accountId = dbUser.dotaAccountId ?? steamIdToAccountId(user.steamId);
+    const accountId = effectiveDotaAccountId({
+      ...dbUser,
+      steamId: user.steamId,
+    });
     const fetched = accountId ? await fetchPlayerRankTier(accountId) : null;
     if (fetched != null) {
       // The OpenDota request can take seconds. Another tab may link a
@@ -287,7 +303,7 @@ export async function saveRegistration(
         where: {
           id: user.id,
           rankTier: null,
-          dotaAccountId: dbUser.dotaAccountId,
+          ...dotaAccountLinkSnapshot(dbUser),
         },
         data: { rankTier: fetched },
       });
@@ -841,10 +857,11 @@ export async function updateDotaAccount(
   const raw = str(formData, "dotaAccountId").trim();
   const linkedBefore = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { dotaAccountId: true },
+    select: { dotaAccountIdV2: true, legacyDotaAccountId: true },
   });
   if (!linkedBefore) return { error: "Sign in required" };
   const verifiedAccountId = steamIdToAccountId(user.steamId);
+  const storedBefore = storedDotaAccountId(linkedBefore);
 
   let accountId: number | null;
   let expectedOverride: number | null;
@@ -865,23 +882,40 @@ export async function updateDotaAccount(
     // or an unchanged legacy override solely for backward-compatible refresh.
     // A legacy value can be cleared, but cannot be changed to another
     // unverified account through this self-service action.
-    const unchangedLegacyOverride =
-      linkedBefore.dotaAccountId != null &&
-      parsed === linkedBefore.dotaAccountId &&
+    const unchangedGrandfatheredOverride =
+      storedBefore != null &&
+      parsed === storedBefore &&
       parsed !== verifiedAccountId;
-    if (parsed !== verifiedAccountId && !unchangedLegacyOverride) {
+    if (parsed !== verifiedAccountId && !unchangedGrandfatheredOverride) {
       return {
         error:
           "That Dota account does not match the Steam account you signed in with. Sign out and use the Steam account that owns it.",
       };
     }
     accountId = parsed;
-    expectedOverride = unchangedLegacyOverride ? parsed : null;
+    expectedOverride = unchangedGrandfatheredOverride ? parsed : null;
   }
 
-  const previousEffectiveId =
-    linkedBefore.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  const previousEffectiveId = effectiveDotaAccountId({
+    ...linkedBefore,
+    steamId: user.steamId,
+  });
   const accountChanged = previousEffectiveId !== accountId;
+  // An unchanged legacy override is copied into v2 but retained in the old
+  // physical column for rollback. Choosing the Steam identity (or clearing an
+  // underivable link) proves this user's own legacy fallback is stale.
+  const linkedAfter = {
+    dotaAccountIdV2: expectedOverride,
+    legacyDotaAccountId:
+      expectedOverride == null ? null : linkedBefore.legacyDotaAccountId,
+  };
+  const desiredLinkIsCurrent = async () => {
+    const current = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { dotaAccountIdV2: true, legacyDotaAccountId: true },
+    });
+    return current != null && sameDotaAccountLink(current, linkedAfter);
+  };
   try {
     // Claim the account transition against the override we actually read. If
     // another tab committed first, this action stands down rather than
@@ -892,37 +926,80 @@ export async function updateDotaAccount(
     // Seam: this user's other tab replaces the override after our read but
     // before the CAS; the stale submit must preserve that newer link's data.
     await raceHook("registration.updateDotaAccount.beforeLinkClaim");
-    const linked = await prisma.user.updateMany({
-      where: { id: user.id, dotaAccountId: linkedBefore.dotaAccountId },
-      data: {
-        dotaAccountId: expectedOverride,
-        ...(accountChanged
-          ? {
-              rankTier: null,
-              fhUnavailable: null,
-              pubStats: null,
-              pubStatsAt: null,
-            }
-          : {}),
+    const linked = await prisma.$transaction(
+      async (tx) => {
+        if (expectedOverride != null) {
+          // Separate unique indexes cannot prevent A.v2 = B.legacy. Check all
+          // stored claims plus canonical Steam ownership before copying a
+          // grandfathered override into v2.
+          const collision = await tx.user.findFirst({
+            where: {
+              id: { not: user.id },
+              ...dotaAccountClaimWhere(expectedOverride),
+            },
+            select: { id: true },
+          });
+          if (collision) throw new DotaAccountCollisionError();
+        } else if (verifiedAccountId != null) {
+          // The current session's Steam OpenID proves ownership. Retire stale
+          // claims on either stored column before publishing the canonical
+          // derived identity.
+          await retireStaleDotaAccountClaims(
+            tx,
+            user.steamId,
+            verifiedAccountId,
+          );
+        }
+
+        return tx.user.updateMany({
+          where: { id: user.id, ...dotaAccountLinkSnapshot(linkedBefore) },
+          data: {
+            ...linkedAfter,
+            ...(accountChanged
+              ? {
+                  rankTier: null,
+                  fhUnavailable: null,
+                  pubStats: null,
+                  pubStatsAt: null,
+                }
+              : {}),
+          },
+        });
       },
-    });
-    if (linked.count === 0) {
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    if (linked.count === 0 && !(await desiredLinkIsCurrent())) {
       return {
         error:
           "Your Dota account changed in another tab — reload to see the current link.",
       };
     }
   } catch (e) {
-    // A legacy explicit override remains unique. Map an unexpected collision
-    // to actionable feedback instead of a 500; newly submitted values never
-    // reach this point unless Steam proves ownership.
-    if ((e as { code?: string }).code === "P2002") {
+    // Map a stored/derived identity collision to actionable feedback instead
+    // of a 500; newly submitted values never reach this point unless Steam
+    // proves ownership or the value is a grandfathered override.
+    if (
+      e instanceof DotaAccountCollisionError ||
+      (e as { code?: string }).code === "P2002"
+    ) {
       return {
         error:
-          "That legacy Dota account is already linked elsewhere. Use the Steam account that owns it.",
+          "That Dota account is already linked elsewhere. Use the Steam account that owns it.",
       };
     }
-    throw e;
+    if ((e as { code?: string }).code === "P2034") {
+      // Two identical submits can race during the one-time legacy→v2 copy.
+      // Treat the unique winner's exact state as success; a genuinely
+      // different link still gets the stale-tab refusal.
+      if (!(await desiredLinkIsCurrent())) {
+        return {
+          error:
+            "Your Dota account changed in another tab — reload to see the current link.",
+        };
+      }
+    } else {
+      throw e;
+    }
   }
 
   let medal = "";
@@ -938,7 +1015,7 @@ export async function updateDotaAccount(
       // WHERE re-asserts the override this snapshot was fetched under — a
       // second submit racing this one must not land the old account's data.
       await prisma.user.updateMany({
-        where: { id: user.id, dotaAccountId: expectedOverride },
+        where: { id: user.id, ...dotaAccountLinkSnapshot(linkedAfter) },
         data: {
           pubStats: JSON.stringify(pubResult.stats),
           pubStatsAt: new Date(),
@@ -952,7 +1029,7 @@ export async function updateDotaAccount(
       // unknown, or a once-private player keeps the danger banner forever on
       // a fresh public account.
       await prisma.user.updateMany({
-        where: { id: user.id, dotaAccountId: expectedOverride },
+        where: { id: user.id, ...dotaAccountLinkSnapshot(linkedAfter) },
         data: {
           rankTier: result.rankTier,
           fhUnavailable: result.fhUnavailable,
@@ -966,9 +1043,9 @@ export async function updateDotaAccount(
     }
     const current = await prisma.user.findUnique({
       where: { id: user.id },
-      select: { dotaAccountId: true },
+      select: { dotaAccountIdV2: true, legacyDotaAccountId: true },
     });
-    if (current?.dotaAccountId !== expectedOverride) {
+    if (!current || !sameDotaAccountLink(current, linkedAfter)) {
       refresh();
       return {
         error:
@@ -983,7 +1060,7 @@ export async function updateDotaAccount(
     // so the old account's cleanup can never wipe the newer account's data.
     await raceHook("registration.updateDotaAccount.beforeClearMetadata");
     const cleared = await prisma.user.updateMany({
-      where: { id: user.id, dotaAccountId: expectedOverride },
+      where: { id: user.id, ...dotaAccountLinkSnapshot(linkedAfter) },
       data: {
         rankTier: null,
         fhUnavailable: null,
@@ -1024,7 +1101,7 @@ export async function refreshRank(
   }
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
   if (!dbUser) return { error: "Sign in required" };
-  const accountId = dbUser?.dotaAccountId ?? steamIdToAccountId(user.steamId);
+  const accountId = effectiveDotaAccountId(dbUser);
   if (!accountId) return { error: "Link your account first" };
 
   // The scouting snapshot refreshes on the same click (independent calls, in
@@ -1037,7 +1114,7 @@ export async function refreshRank(
     // WHERE re-asserts the account the snapshot describes (the repo rule) —
     // an account relink committing mid-fetch must not inherit these figures.
     await prisma.user.updateMany({
-      where: { id: user.id, dotaAccountId: dbUser.dotaAccountId },
+      where: { id: user.id, ...dotaAccountLinkSnapshot(dbUser) },
       data: {
         pubStats: JSON.stringify(pubResult.stats),
         pubStatsAt: new Date(),
@@ -1046,7 +1123,7 @@ export async function refreshRank(
   }
   if (result.ok) {
     await prisma.user.updateMany({
-      where: { id: user.id, dotaAccountId: dbUser.dotaAccountId },
+      where: { id: user.id, ...dotaAccountLinkSnapshot(dbUser) },
       data: {
         rankTier: result.rankTier,
         ...(result.fhUnavailable !== null
@@ -1057,9 +1134,9 @@ export async function refreshRank(
   }
   const current = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { dotaAccountId: true },
+    select: { dotaAccountIdV2: true, legacyDotaAccountId: true },
   });
-  if (current?.dotaAccountId !== dbUser.dotaAccountId) {
+  if (!current || !sameDotaAccountLink(current, dbUser)) {
     refresh();
     return {
       error:

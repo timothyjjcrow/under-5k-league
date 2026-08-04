@@ -35,9 +35,9 @@ import {
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
   parseMatchId,
-  steamIdToAccountId,
   type OpenDotaMatch,
 } from "./dota";
+import { effectiveDotaAccountId } from "./dota-account";
 import { classifyGame } from "./match-import";
 import {
   inhouseLobbyMessage,
@@ -227,14 +227,18 @@ export async function maybeFormLobby(): Promise<boolean> {
         }));
         return true;
       },
-      // SQLite serializes writers anyway; on Postgres this is what makes the
-      // findFirst-then-create "one active lobby" invariant hold — the loser of
-      // two concurrent formations aborts (P2034) instead of double-forming.
+      // SQLite serializes writers anyway; on Postgres this makes competing
+      // formations conflict before the partial unique index provides the final
+      // "one active lobby" barrier. Depending on the interleaving, the loser is
+      // reported as a serialization conflict (P2034) or unique conflict (P2002).
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
-    // Serialization conflict: someone else's poll formed the lobby first.
-    if ((e as { code?: string }).code === "P2034") return false;
+    // Someone else's poll formed the lobby first. The serializable transaction
+    // and the database's partial unique index can report the same safe loser in
+    // two different ways.
+    const code = (e as { code?: string }).code;
+    if (code === "P2034" || code === "P2002") return false;
     throw e;
   }
   if (formed && lobbyPlayers.length > 0) {
@@ -1103,7 +1107,12 @@ export async function startGame(
 type LobbyPlayerFull = {
   userId: string;
   team: number | null;
-  user: { name: string; dotaAccountId: number | null; steamId: string };
+  user: {
+    name: string;
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
+    steamId: string;
+  };
 };
 
 // One per-player line of the stored box score (mirrors the league Game blob).
@@ -1146,7 +1155,7 @@ function buildResult(
   const team1 = new Set<number>();
   const team2 = new Set<number>();
   for (const p of players) {
-    const acc = p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
+    const acc = effectiveDotaAccountId(p.user);
     if (acc == null || p.team == null) continue;
     accountMap.set(acc, { userId: p.userId, name: p.user.name, team: p.team });
     (p.team === 1 ? team1 : team2).add(acc);
@@ -1481,7 +1490,7 @@ async function findInhouseGame(
   floorSeconds: number,
 ): Promise<{ result: BuiltResult | null; unreachable: boolean }> {
   const accounts = players
-    .map((p) => p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId))
+    .map((p) => effectiveDotaAccountId(p.user))
     .filter((a): a is number => a != null);
   if (accounts.length === 0) return { result: null, unreachable: false };
 

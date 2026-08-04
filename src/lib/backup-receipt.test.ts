@@ -40,6 +40,23 @@ describe("production full-backup receipts", () => {
     ).toMatchObject({ ok: true });
   });
 
+  it("does not authorize an unknown-provider database on a different port", () => {
+    const sourceUrl =
+      "postgresql://league:backup@database.internal:5432/ld2l";
+    const receipt = createBackupReceipt(
+      payload({ databaseIdentity: postgresDatabaseIdentity(sourceUrl)! }),
+      SECRET,
+    );
+    expect(
+      verifyBackupReceipt(receipt, {
+        databaseUrl:
+          "postgresql://league:runtime@database.internal:6432/ld2l",
+        nowMs: NOW,
+        secret: SECRET,
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/different/i) });
+  });
+
   it("rejects tampering, another database, SQLite snapshots and stale artifacts", () => {
     const valid = createBackupReceipt(payload(), SECRET);
     expect(

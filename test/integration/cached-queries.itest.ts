@@ -22,10 +22,15 @@ import {
 // are Next's own code and require the server runtime — see cached-queries.ts).
 // This proves the QUERY is correct; the live fixture demo proves the caching.
 
-async function seedSeasonWithGames(name: string, gameCount: number) {
+async function seedSeasonWithGames(
+  name: string,
+  gameCount: number,
+  isActive = true,
+) {
   const season = await makeSeason({
     name,
     status: SEASON_STATUS.REGULAR_SEASON,
+    isActive,
   });
   const home = await makeTeam(season.id, `${name} Home`, 0);
   const away = await makeTeam(season.id, `${name} Away`, 1);
@@ -64,7 +69,7 @@ function sortById<T extends Record<string, unknown>>(rows: T[], key: keyof T) {
 describe("cached-queries data-equivalence", () => {
   it("each raw scan matches its inline query and filters correctly by season", async () => {
     const a = await seedSeasonWithGames("Alpha", 3);
-    const b = await seedSeasonWithGames("Beta", 2);
+    const b = await seedSeasonWithGames("Beta", 2, false);
 
     // getAllGameLines === prisma.game.findMany({ select: { id, players } })
     const linesCached = await fetchAllGameLines();

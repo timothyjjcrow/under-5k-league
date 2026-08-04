@@ -46,7 +46,7 @@ import {
   INHOUSE_CRED_REASON,
   INHOUSE_STATUS,
 } from "@/lib/constants";
-import { steamIdToAccountId } from "@/lib/dota";
+import { effectiveDotaAccountId } from "@/lib/dota-account";
 import type { SessionUser } from "@/lib/auth";
 import {
   acceptMatch,
@@ -73,7 +73,7 @@ import { runResultSync } from "@/lib/result-sync-service";
 import { ON_POSTGRES, makeUser, raceAll, raceN, sessionFor } from "./factories";
 
 // The inhouse result path only ever touches OpenDota. Stub the two network
-// calls and keep steamIdToAccountId / classifyGame / buildResult real — the
+// calls and keep identity fallback / classifyGame / buildResult real — the
 // team reconciliation those do is exactly what the VOID_LINEUP rule reads.
 vi.mock("@/lib/dota", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/dota")>();
@@ -219,10 +219,15 @@ async function nextLobby(prev: ReadyLobby): Promise<ReadyLobby> {
 async function accountOf(players: Player[]): Promise<Map<string, number>> {
   const rows = await prisma.user.findMany({
     where: { id: { in: players.map((p) => p.user.id) } },
-    select: { id: true, steamId: true, dotaAccountId: true },
+    select: {
+      id: true,
+      steamId: true,
+      dotaAccountIdV2: true,
+      legacyDotaAccountId: true,
+    },
   });
   return new Map(
-    rows.map((u) => [u.id, u.dotaAccountId ?? steamIdToAccountId(u.steamId)!]),
+    rows.map((u) => [u.id, effectiveDotaAccountId(u)!]),
   );
 }
 

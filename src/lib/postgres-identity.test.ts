@@ -41,6 +41,27 @@ describe("PostgreSQL logical database identity", () => {
     ).not.toBe(base);
   });
 
+  it("normalizes the default port but keeps unknown-provider ports and hosts distinct", () => {
+    const base = postgresDatabaseIdentity(
+      "postgresql://league:x@database.internal/ld2l",
+    );
+    expect(
+      postgresDatabaseIdentity(
+        "postgresql://league:other@database.internal:5432/ld2l",
+      ),
+    ).toBe(base);
+    expect(
+      postgresDatabaseIdentity(
+        "postgresql://league:x@database.internal:6432/ld2l",
+      ),
+    ).not.toBe(base);
+    expect(
+      postgresDatabaseIdentity(
+        "postgresql://league:x@database-pooler.internal:5432/ld2l",
+      ),
+    ).not.toBe(base);
+  });
+
   it("rejects malformed, non-Postgres and userless URLs", () => {
     expect(postgresDatabaseIdentity("file:./dev.db")).toBeNull();
     expect(postgresDatabaseIdentity("postgresql://host/database")).toBeNull();

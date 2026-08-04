@@ -721,7 +721,7 @@ fh_unavailable` — true means "Expose Public Match Data" is off, the #1
   link/refresh, admin bulk sync) under the same never-overwrite-on-failure
   rule as `rankTier` (rank-sync.itest). Surfaced as a danger note on /me and
   a "private data" badge in the admin player list. `/me` account-link and
-  refresh writes re-assert the selected `dotaAccountId`; changing the
+  refresh writes re-assert both stored Dota-link columns; changing the
   effective account clears metadata belonging to the previous account before
   fetching, while an unchanged-account outage preserves the valid snapshot.
 - **LIVE chips**: /schedule rows and the dashboard This-week strip show a
@@ -774,9 +774,10 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `applyPick` claims the target row `{team: null}` (double-click = one turn)
   and AUTO-ASSIGNS the final pool player (no dead-air last clock);
   `resolveCaptainVote` claims the `CAPTAIN_VOTE → DRAFTING` flip before
-  installing captains; `maybeFormLobby` runs Serializable + catches P2034
-  (the one-active-lobby invariant has no DB constraint — this is what holds
-  it on Postgres); `joinQueue` wraps guard+upsert in one tx. The queue ping
+  installing captains; `maybeFormLobby` runs Serializable and treats P2034 or
+  P2002 as the benign losing poll, while PostgreSQL's partial unique
+  `InhouseLobby_one_active_idx` is the final one-active-lobby barrier;
+  `joinQueue` wraps guard+upsert in one tx. The queue ping
   throttle is the Setting create/P2002/conditional-update claim.
 - **`applyPick` must THROW, never return, once it has nulled `pickTeam`**
   (2026-07 audit). Nulling `pickTeam` IS the turn claim, and a `return` from a
@@ -2445,7 +2446,7 @@ renders byte-identical to the pre-feature page:
   a recurring 8s worst case on the login path and was reverted), /me
   link/refresh, and the admin "Sync ranks & stats" button. Never overwritten
   on a failed fetch, and **every async profile-metadata write re-asserts
-  `dotaAccountId` in its WHERE** — a relink committing mid-fetch must not
+  both stored Dota-link columns in its WHERE** — a relink committing mid-fetch must not
   inherit the old account's rank or scouting data; the login-only missing
   snapshot fill also re-asserts `pubStatsAt: null`, so a newer same-account
   refresh wins (raced in rank-sync.itest.ts). These
@@ -3136,8 +3137,9 @@ had no reachable control at all.
 
 **Import correctness, three fixes.** `updateDotaAccount`'s collision check now
 matches steam-DERIVED ids (most users have no override, so B pasting A's
-Dotabuff URL found nothing), backed by a nullable `@unique` on
-`User.dotaAccountId` with a P2002 catch. A PLAYER→STANDIN flip is refused while
+Dotabuff URL found nothing), backed by unique indexes on the rollback and v2
+stored columns, an explicit cross-column/Steam collision query, and a P2002
+catch. A PLAYER→STANDIN flip is refused while
 the auction runs, and `resolveExpiredNomination` voids a non-PLAYER lot — the
 on-the-block player could flip on /me, rendering a headless lot that still
 CHARGED the team and minted a rostered STANDIN. And **`syncLeagueGames` buffers

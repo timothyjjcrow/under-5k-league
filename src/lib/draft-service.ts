@@ -7,7 +7,7 @@ import {
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
-import { steamIdToAccountId } from "./dota";
+import { effectiveDotaAccountId } from "./dota-account";
 import {
   canBid,
   canNominate,
@@ -1064,7 +1064,8 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
                   name: true,
                   avatar: true,
                   rankTier: true,
-                  dotaAccountId: true,
+                  dotaAccountIdV2: true,
+                  legacyDotaAccountId: true,
                   steamId: true,
                   discordName: true,
                   discordId: true,
@@ -1225,9 +1226,7 @@ export async function getDraftState(seasonId: string, viewer: SessionUser | null
               favoriteHeroes: nominatedPlayer.favoriteHeroes,
               statement: nominatedPlayer.statement,
               captainNote: nominatedPlayer.captainNote,
-              accountId:
-                nominatedPlayer.user.dotaAccountId ??
-                steamIdToAccountId(nominatedPlayer.user.steamId),
+              accountId: effectiveDotaAccountId(nominatedPlayer.user),
               discordName: canSeeNominatedContact
                 ? nominatedPlayer.user.discordName
                 : "",

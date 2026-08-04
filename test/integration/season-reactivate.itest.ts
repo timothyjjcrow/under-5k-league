@@ -6,6 +6,7 @@ import { getActiveSeason, reactivateSeason } from "@/lib/season";
 import {
   makeSeason,
   makeUser,
+  ON_POSTGRES,
   raceAll,
   sessionFor,
 } from "./factories";
@@ -97,19 +98,36 @@ describe("reactivateSeason (integration)", () => {
     expect(await prisma.season.count({ where: { isActive: true } })).toBe(0);
   });
 
-  it("refuses an invalid rendered revision and multiple-active corruption", async () => {
+  it("refuses an invalid rendered revision", async () => {
     const target = await makeSeason({ isActive: false });
     expect(await reactivateSeason(target.id, new Date("invalid"))).toMatchObject({
       ok: false,
     });
-
-    await makeSeason({ name: "Current A", isActive: true });
-    await makeSeason({ name: "Current B", isActive: true });
-    const result = await reactivateSeason(target.id, target.updatedAt);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/more than one season/i);
-    expect(await prisma.season.count({ where: { isActive: true } })).toBe(2);
   });
+
+  it.skipIf(ON_POSTGRES)(
+    "refuses legacy multiple-active corruption",
+    async () => {
+      const target = await makeSeason({ isActive: false });
+      await makeSeason({ name: "Current A", isActive: true });
+      await makeSeason({ name: "Current B", isActive: true });
+      const result = await reactivateSeason(target.id, target.updatedAt);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatch(/more than one season/i);
+      expect(await prisma.season.count({ where: { isActive: true } })).toBe(2);
+    },
+  );
+
+  it.runIf(ON_POSTGRES)(
+    "has a database barrier against a second active season",
+    async () => {
+      await makeSeason({ name: "Current A", isActive: true });
+      await expect(
+        makeSeason({ name: "Current B", isActive: true }),
+      ).rejects.toMatchObject({ code: "P2002" });
+      expect(await prisma.season.count({ where: { isActive: true } })).toBe(1);
+    },
+  );
 
   it("parks a legacy live auction before activation, then resumes with one fresh clock", async () => {
     const target = await makeSeason({

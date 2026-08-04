@@ -231,6 +231,7 @@ const EQUIVALENT = new Set([
 // source sweep below rejects omissions, so adding a claim in a new module
 // cannot silently leave it outside the ratchet again.
 const FILES = [
+  "src/lib/dota-account-service.ts",
   "src/lib/draft-service.ts",
   "src/lib/inhouse-service.ts",
   "src/lib/match-import.ts",

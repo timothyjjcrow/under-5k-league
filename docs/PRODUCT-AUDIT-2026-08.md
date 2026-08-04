@@ -3400,13 +3400,13 @@ duplicate actions, direct calls, and the real-PostgreSQL interleavings.
   backup identity rules now live in small shared modules instead of JSX or
   one-off action prechecks.
 - Active-season reads fail closed; lifecycle writes claim the expected season
-  in Serializable transactions. Storage-level uniqueness remains a documented
-  production limitation instead of being simulated with an arbitrary newest
-  row.
-- Steam OpenID is the Dota ownership proof. `User.dotaAccountId` remains a
-  unique nullable `Float` deliberately: every unsigned 32-bit Dota account id
-  is exact in double precision, while Prisma/PostgreSQL signed `Int` cannot
-  represent the full range.
+  in Serializable transactions. The release-readiness migration subsequently
+  added a PostgreSQL partial unique index as the final storage-level barrier.
+- Steam OpenID is the Dota ownership proof. The release migration retains the
+  old signed-`Int` physical column for rollback and adds a unique nullable
+  `Float` v2 column: every positive unsigned 32-bit Dota account id is exact in
+  double precision, while Prisma/PostgreSQL signed `Int` cannot represent the
+  full range. Shared readers prefer v2, then legacy, then Steam.
 - OAuth callbacks separate cheap local identity/state checks from shared-IP
   limiting and external network work. JSON route mutations share one
   canonical-origin implementation rather than relying on CORS assumptions.
@@ -3530,10 +3530,13 @@ duplicate actions, direct calls, and the real-PostgreSQL interleavings.
 
 ### Remaining concerns
 
-- Production still uses `prisma db push`, not reviewed versioned migrations,
-  and has no automatic schema rollback. The database also lacks partial-unique
-  constraints for one active Season and one active inhouse lobby; application
-  Serializable claims and fail-closed reads remain the enforcement.
+- The release-readiness follow-up now uses reviewed versioned migrations and
+  database partial-unique constraints for one active Season and one active
+  inhouse lobby. It deliberately has no destructive SQL down migration: the
+  preserved compatibility schema supports application rollback, while a
+  forward repair migration owns any later database correction. The actual
+  hosted database still needs its signed backup, exact baseline check,
+  provider-hosted restore drill, and migration rehearsal before launch.
 - Rate limits are bounded but in-memory and per application instance. They are
   a speed bump, not a distributed abuse-control system.
 - The CSP is a hydration-safe baseline without `script-src`/`style-src` nonces.
@@ -3568,9 +3571,6 @@ duplicate actions, direct calls, and the real-PostgreSQL interleavings.
   provenance is not fully snapshotted.
 - Several service/action/page modules remain large. Their behavior is tested,
   but smaller command/query boundaries would reduce review and change risk.
-- CI runs Node 20.18 while this final local validation used Node 22.23.1. The
-  repository documents a minimum but has no single runtime pin shared by local,
-  CI, and Vercel.
 - The successful restore drill used a disposable local PostgreSQL database. It
   does not replace the production prerequisite: create and verify a fresh
   same-database full backup, confirm off-site retention/PITR, and retain the
@@ -3578,9 +3578,9 @@ duplicate actions, direct calls, and the real-PostgreSQL interleavings.
 
 ### Recommended future improvements
 
-Adopt committed PostgreSQL migrations with `prisma migrate deploy` and rehearse
-rollback; add database-enforced partial uniqueness where the production engine
-permits it; move rate limiting and scheduled work to shared durable services;
+Exercise the committed `prisma migrate deploy` history, compatibility rollback,
+and signed restore on the actual provider; move rate limiting and scheduled
+work to shared durable services;
 add nonce/hash CSP coverage; configure encrypted off-site backups, retention,
 PITR, alerting, and regular restore drills; run credentialed provider smoke
 tests in an isolated staging environment; add axe, Lighthouse, Web Vitals, and
@@ -3588,7 +3588,8 @@ fault-injection release gates; materialize growing historical aggregates;
 expand the audit log only where operators need durable human or automated
 provenance; define league timezone/DST behavior; snapshot match-night identity
 and roster provenance deliberately; split the largest command/page modules;
-and pin one supported Node runtime across developer machines, CI, and Vercel.
+and remove the temporary Dota compatibility schema only after its rollback
+window closes.
 
 ### Next section to audit
 

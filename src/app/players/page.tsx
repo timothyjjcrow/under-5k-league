@@ -4,7 +4,7 @@ import { hasText } from "@/lib/utils";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { steamIdToAccountId } from "@/lib/dota";
+import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { PlayerPool, type PoolDraftInfo } from "@/components/player-pool";
 import { averageMmr } from "@/lib/pool-stats";
 import { loadInhouseLadder } from "@/lib/inhouse-ladder";
@@ -161,7 +161,7 @@ export default async function PlayersPage() {
     captainNote: p.captainNote,
     wantsCaptain: p.wantsCaptain,
     drafted: draftedUserIds.has(p.userId),
-    accountId: p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId),
+    accountId: effectiveDotaAccountId(p.user),
     // Contact info is for league members, not the public internet.
     discordName: canViewLeagueContact(
       viewer,
@@ -327,8 +327,7 @@ export default async function PlayersPage() {
           </SectionTitle>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {captainHopefuls.map((p) => {
-              const accountId =
-                p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
+              const accountId = effectiveDotaAccountId(p.user);
               const sc = scout[p.userId];
               return (
                 <Card key={p.id} interactive>
