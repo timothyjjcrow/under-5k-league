@@ -48,6 +48,10 @@ export async function raceN<T>(n: number, fn: () => Promise<T>): Promise<T[]> {
 
 /** Wipe every table (children first) so each test starts from empty. */
 export async function resetDb() {
+  // Operational singletons/outboxes are relationless and survive every domain
+  // cascade; clear them first so lease/backlog state cannot cross test cases.
+  await prisma.leagueAnnouncement.deleteMany();
+  await prisma.automationRunState.deleteMany();
   // Cred first: InhouseCreditEntry has NO foreign key at all (the AdminAction
   // shape — a staking record has to outlive the account), so nothing cascades
   // it and a missing line here leaks balances between tests. For money math
@@ -62,6 +66,10 @@ export async function resetDb() {
   // Same relationless shape, and it was already missing — an AdminAction row
   // written by one test was visible to the next.
   await prisma.adminAction.deleteMany();
+  // News survives author deletion by design (onDelete: SetNull), so it must be
+  // cleared explicitly before User or fixture resets leak announcements into
+  // the next lifecycle state.
+  await prisma.newsPost.deleteMany();
   await prisma.game.deleteMany();
   await prisma.standinAssignment.deleteMany();
   await prisma.bid.deleteMany();
@@ -108,6 +116,7 @@ type SeasonOverrides = Partial<{
   teamSize: number;
   minTeams: number;
   draftBudget: number;
+  budgetMmrWeight: number;
   maxMmr: number;
   status: string;
   isActive: boolean;

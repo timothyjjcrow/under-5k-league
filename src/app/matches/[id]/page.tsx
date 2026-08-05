@@ -1,6 +1,10 @@
 import { Suspense } from "react";
 import { fetchAllGamesForScouting } from "@/lib/cached-queries";
-import { parseGamePlayers } from "@/lib/player-stats";
+import {
+  decodeGamePlayers,
+  parseGamePlayers,
+  trustedGamePlayers,
+} from "@/lib/player-stats";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -15,6 +19,20 @@ import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
+import { matchNightRoster } from "@/lib/availability";
+import { canViewNamedMatchAvailability } from "@/lib/visibility";
+import {
+  matchCheckinOpen,
+  matchLogisticsOpen,
+  matchResultsOpen,
+  standinAssignmentOpen,
+} from "@/lib/league-lifecycle";
+import {
+  groupPlayoffRounds,
+  matchPhaseLabel,
+  roundName,
+  slotRound,
+} from "@/lib/schedule";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
@@ -51,9 +69,10 @@ import {
   type ThreatBoard,
 } from "@/lib/scouting";
 import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
-import { computeStandings } from "@/lib/standings";
 import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
+import { projectPlayoffField } from "@/lib/playoff-field";
 import { matchStakes, stakesHeadline } from "@/lib/scenarios";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   Avatar,
   Badge,
@@ -91,10 +110,7 @@ export async function generateMetadata({
   // notFound() in metadata runs before the shell streams → real 404 status.
   if (!match) notFound();
   const title = `${match.homeTeam.name} vs ${match.awayTeam.name}`;
-  return shareMetadata(
-    title,
-    `${title} — box score and results in GGD2L.`,
-  );
+  return shareMetadata(title, `${title} — box score and results in GGD2L.`);
 }
 
 export default async function MatchDetailPage({
@@ -110,6 +126,14 @@ export default async function MatchDetailPage({
       awayTeam: true,
       games: { orderBy: { startTime: "asc" } },
       standins: { include: { standin: true, replaced: true } },
+      season: {
+        select: {
+          isActive: true,
+          status: true,
+          name: true,
+          championTeamId: true,
+        },
+      },
     },
   });
   if (!match) notFound();
@@ -118,7 +142,7 @@ export default async function MatchDetailPage({
   // preview/empty-state paths wait on an OpenDota round trip they never use.
   const games = match.games.map((g) => ({
     ...g,
-    parsed: parseGamePlayers<PlayerStat>(g.players),
+    parsed: parseGamePlayers(g.players),
   }));
 
   const userIds = [
@@ -135,15 +159,58 @@ export default async function MatchDetailPage({
     [match.homeTeamId, match.homeTeam.name],
     [match.awayTeamId, match.awayTeam.name],
   ]);
+  // Async server component: capture request time once for the overdue-result
+  // explanation; this is not client render state.
+  // eslint-disable-next-line react-hooks/purity
+  const renderedAt = Date.now();
+  const postseason =
+    match.phase === "REGULAR"
+      ? []
+      : await prisma.match.findMany({
+          where: { seasonId: match.seasonId, phase: { not: "REGULAR" } },
+          select: {
+            id: true,
+            phase: true,
+            bracketSlot: true,
+            status: true,
+            winnerTeamId: true,
+            homeTeamId: true,
+            awayTeamId: true,
+          },
+        });
+  const championPresentation = resolveChampionPresentation(
+    match.season,
+    postseason,
+  );
+  const postseasonLabel =
+    match.phase === "PLAYOFF"
+      ? roundName(
+          slotRound(match.bracketSlot),
+          groupPlayoffRounds(postseason).totalRounds,
+        )
+      : matchPhaseLabel(match.phase, match.week);
 
   return (
     <div className="space-y-6">
       <PageTitle
         title={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
-        subtitle={`Week ${match.week}${match.phase !== "REGULAR" ? ` · ${match.phase}` : ""}`}
+        subtitle={postseasonLabel}
         action={
-          <Link href="/schedule" className={buttonClasses("secondary", "sm")}>
-            ← Schedule
+          <Link
+            href={
+              match.season.isActive
+                ? match.phase === "REGULAR"
+                  ? "/schedule#fixtures"
+                  : "/schedule#playoff-bracket"
+                : `/seasons/${match.seasonId}`
+            }
+            className={buttonClasses("secondary", "sm")}
+          >
+            {match.season.isActive
+              ? match.phase === "REGULAR"
+                ? "← Schedule"
+                : "← Playoff bracket"
+              : "← Season archive"}
           </Link>
         }
       />
@@ -202,7 +269,13 @@ export default async function MatchDetailPage({
             <Badge>Bo{match.bestOf}</Badge>
             {match.status === "COMPLETED" ? (
               <>
-                <Badge>Final</Badge>
+                <Badge>Series complete</Badge>
+                {match.phase === "FINAL" &&
+                match.id === championPresentation.authoritativeFinalId &&
+                match.winnerTeamId === championPresentation.championTeamId ? (
+                  <Badge tone="accent">🏆 League champion crowned</Badge>
+                ) : null}
+                {!match.winnerTeamId ? <Badge tone="accent">Draw</Badge> : null}
                 {match.forfeit ? (
                   <Badge
                     tone="accent"
@@ -219,13 +292,32 @@ export default async function MatchDetailPage({
         </CardBody>
       </Card>
 
-      {/* Rescheduling stays available while the series is live — a proposal
-          made before game 1 must remain answerable after it's imported. */}
-      {match.status !== "COMPLETED" ? <RescheduleSection match={match} /> : null}
+      {!match.season.isActive ? (
+        <div className="rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm text-muted">
+          <strong className="text-fg">Archived result.</strong> This match is
+          part of {match.season.name}; its schedule, reporting, and logistics
+          are read-only.
+        </div>
+      ) : match.status !== "COMPLETED" &&
+        match.scheduledAt &&
+        match.scheduledAt.getTime() < renderedAt ? (
+        <div className="rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-muted">
+          <strong className="text-fg">Result pending.</strong> The scheduled
+          kickoff has passed, but this series is not final yet. A captain can
+          report the Dota game while the fixture&apos;s league phase is open.
+        </div>
+      ) : null}
+
+      {/* The section mirrors the write-time logistics gate. A LIVE or locked
+          season can still expose decline/withdraw cleanup for a stranded
+          proposal, but it can never offer a retime. */}
+      {match.status !== "COMPLETED" ? (
+        <RescheduleSection match={match} />
+      ) : null}
 
       {/* Captains report their own results (OpenDota import) — league night
           doesn't wait for an admin. Stays up while a Bo3/Bo5 is mid-series. */}
-      {match.status !== "COMPLETED" ? <ReportResultSection match={match} /> : null}
+      <ReportResultSection match={match} />
 
       {/* Captains line up their own standin cover — the OUT-ping → DM-the-admin
           relay is gone. Admin's panel keeps the any-team override. */}
@@ -239,14 +331,24 @@ export default async function MatchDetailPage({
         </Suspense>
       ) : games.length === 0 ? (
         <EmptyState
-          title="No games recorded yet"
-          description="Games are pulled from Dota (OpenDota) once the match has been played."
+          title={
+            match.forfeit
+              ? "Series awarded by forfeit"
+              : "Final score entered manually"
+          }
+          description={
+            match.forfeit
+              ? "This is an administrative ruling; no Dota game was recorded for this series."
+              : "The final result is official, but detailed OpenDota box-score data is unavailable."
+          }
         />
       ) : (
         games.map((g, i) => {
           const radiant = g.parsed.filter((p) => p.isRadiant);
           const dire = g.parsed.filter((p) => !p.isRadiant);
-          const winnerName = g.winnerTeamId ? teamName.get(g.winnerTeamId) : null;
+          const winnerName = g.winnerTeamId
+            ? teamName.get(g.winnerTeamId)
+            : null;
           const radiantName = g.radiantTeamId
             ? (teamName.get(g.radiantTeamId) ?? "Radiant")
             : "Radiant";
@@ -277,7 +379,9 @@ export default async function MatchDetailPage({
                 }
                 action={
                   <div className="flex items-center gap-2">
-                    {winnerName ? <Badge tone="success">{winnerName} won</Badge> : null}
+                    {winnerName ? (
+                      <Badge tone="success">{winnerName} won</Badge>
+                    ) : null}
                     <a
                       href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
                       target="_blank"
@@ -348,6 +452,11 @@ async function MatchPreview({
   };
 }) {
   const viewer = await getSessionUser();
+  const canSeeNamedAvailability = canViewNamedMatchAvailability(
+    viewer,
+    match.homeTeam.captainId,
+    match.awayTeam.captainId,
+  );
   const [members, seasonMatches, rsvps] = await Promise.all([
     prisma.teamMember.findMany({
       where: {
@@ -361,7 +470,15 @@ async function MatchPreview({
       where: { seasonId: match.seasonId },
       orderBy: [{ week: "asc" }, { createdAt: "asc" }],
     }),
-    prisma.matchAvailability.findMany({ where: { matchId: match.id } }),
+    viewer
+      ? prisma.matchAvailability.findMany({
+          where: {
+            matchId: match.id,
+            ...(canSeeNamedAvailability ? {} : { userId: viewer.id }),
+          },
+          select: { userId: true, status: true },
+        })
+      : Promise.resolve([]),
   ]);
   const regs = await prisma.registration.findMany({
     where: {
@@ -373,17 +490,46 @@ async function MatchPreview({
   const regByUser = new Map(regs.map((r) => [r.userId, r]));
   const rsvpByUser = new Map(rsvps.map((r) => [r.userId, r.status]));
 
-  // setAvailability refuses archived-season matches — an RSVP is an answer
-  // about the ACTIVE season's match nights, so the banner hides with it.
-  const previewSeason = await prisma.season.findUnique({
-    where: { id: match.seasonId },
-    select: { isActive: true },
-  });
+  // Mirror setAvailability's decisive capability gate: an RSVP is about one
+  // published, upcoming match night, not an archived/locked/untimed/LIVE row.
+  const [previewSeason, previewDraft] = await Promise.all([
+    prisma.season.findUnique({
+      where: { id: match.seasonId },
+      select: { isActive: true, status: true },
+    }),
+    prisma.draft.findUnique({
+      where: { seasonId: match.seasonId },
+      select: { status: true },
+    }),
+  ]);
+  const activeNightRoster = new Set(
+    [match.homeTeamId, match.awayTeamId].flatMap((teamId) =>
+      matchNightRoster(
+        members.filter((m) => m.teamId === teamId).map((m) => m.userId),
+        match.standins
+          .filter((s) => s.teamId === teamId)
+          .map((s) => ({
+            standinUserId: s.standin.id,
+            replacingUserId: s.replaced?.id ?? null,
+          })),
+      ),
+    ),
+  );
+  // Async server component: this captures request time once for the stale-
+  // fixture guard; it is not client render state.
+  // eslint-disable-next-line react-hooks/purity
+  const previewNow = Date.now();
   const isParticipant =
     !!viewer &&
     !!previewSeason?.isActive &&
-    (members.some((m) => m.userId === viewer.id) ||
-      match.standins.some((s) => s.standin.id === viewer.id));
+    matchCheckinOpen(
+      previewSeason.status,
+      previewDraft?.status,
+      match.status,
+      match.scheduledAt,
+      previewNow,
+    ) &&
+    activeNightRoster.has(viewer.id);
   const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
 
   const h2hRow = headToHead(match.homeTeamId, seasonMatches).find(
@@ -474,7 +620,11 @@ async function MatchPreview({
                       )}
                     >
                       <span className="flex min-w-0 items-center gap-2">
-                        <Avatar name={m.user.name} src={m.user.avatar} size={22} />
+                        <Avatar
+                          name={m.user.name}
+                          src={m.user.avatar}
+                          size={22}
+                        />
                         <PlayerLink userId={m.userId} className="truncate">
                           {m.user.name}
                         </PlayerLink>
@@ -482,17 +632,19 @@ async function MatchPreview({
                         <RankBadge rankTier={m.user.rankTier} />
                         <RoleBadges roles={reg?.roles ?? ""} />
                       </span>
-                      <span className="shrink-0 text-xs">
-                        {replaced ? (
-                          <span className="text-muted">standin covers</span>
-                        ) : rsvp === "IN" ? (
-                          <span className="text-success">✓ in</span>
-                        ) : rsvp === "OUT" ? (
-                          <span className="text-danger">✗ out</span>
-                        ) : (
-                          <span className="text-muted">—</span>
-                        )}
-                      </span>
+                      {replaced || canSeeNamedAvailability ? (
+                        <span className="shrink-0 text-xs">
+                          {replaced ? (
+                            <span className="text-muted">standin covers</span>
+                          ) : rsvp === "IN" ? (
+                            <span className="text-success">✓ in</span>
+                          ) : rsvp === "OUT" ? (
+                            <span className="text-danger">✗ out</span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </span>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -507,7 +659,10 @@ async function MatchPreview({
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="text-xs">🔁</span>
-                        <PlayerLink userId={sub.standin.id} className="truncate">
+                        <PlayerLink
+                          userId={sub.standin.id}
+                          className="truncate"
+                        >
                           {sub.standin.name}
                         </PlayerLink>
                         <span className="truncate text-xs text-muted">
@@ -516,15 +671,17 @@ async function MatchPreview({
                             : "filling an open seat"}
                         </span>
                       </span>
-                      <span className="shrink-0 text-xs">
-                        {subRsvp === "IN" ? (
-                          <span className="text-success">✓ in</span>
-                        ) : subRsvp === "OUT" ? (
-                          <span className="text-danger">✗ out</span>
-                        ) : (
-                          <span className="text-muted">—</span>
-                        )}
-                      </span>
+                      {canSeeNamedAvailability ? (
+                        <span className="shrink-0 text-xs">
+                          {subRsvp === "IN" ? (
+                            <span className="text-success">✓ in</span>
+                          ) : subRsvp === "OUT" ? (
+                            <span className="text-danger">✗ out</span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </span>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -589,16 +746,22 @@ async function StakesBanner({
 
   const teams = await prisma.team.findMany({
     where: { seasonId: match.seasonId },
-    select: { id: true },
+    select: { id: true, withdrawn: true },
   });
-  const standings = computeStandings(
-    teams.map((t) => t.id),
+  const playoffField = projectPlayoffField(teams, seasonMatches);
+  const report = seasonScenarioReport(
+    playoffField.eligibleStandings,
     seasonMatches,
+    playoffField.eligibleTeamIds.length,
   );
-  const report = seasonScenarioReport(standings, seasonMatches, teams.length);
   if (!report) return null;
 
-  const stakes = matchStakes(match.id, match.homeTeamId, match.awayTeamId, report);
+  const stakes = matchStakes(
+    match.id,
+    match.homeTeamId,
+    match.awayTeamId,
+    report,
+  );
   const headline = stakesHeadline(stakes);
   const decided = stakes.some(
     (s) => report.teams.get(s.teamId)?.status != null,
@@ -672,7 +835,7 @@ async function ScoutingReport({
     radiantWin: g.radiantWin,
     durationSecs: g.durationSecs,
     startTime: g.startTime,
-    lines: parseGamePlayers<PlayerStat>(g.players).map((p) => ({
+    lines: trustedGamePlayers(decodeGamePlayers(g.players)).map((p) => ({
       userId: p.userId,
       heroId: p.heroId,
       isRadiant: p.isRadiant,
@@ -712,9 +875,17 @@ async function ScoutingReport({
       />
       <CardBody className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {dossiers.map((d) => (
-          <div key={d.teamId} className="min-w-0 rounded-lg border border-line p-3">
+          <div
+            key={d.teamId}
+            className="min-w-0 rounded-lg border border-line p-3"
+          >
             <div className="mb-2.5 flex min-w-0 items-center gap-2">
-              <TeamCrest name={d.name} seed={d.teamId} size={22} className="rounded-md" />
+              <TeamCrest
+                name={d.name}
+                seed={d.teamId}
+                size={22}
+                className="rounded-md"
+              />
               <span className="truncate font-display text-base font-semibold">
                 {d.name}
               </span>
@@ -737,11 +908,7 @@ async function ScoutingReport({
   );
 }
 
-function ThreatList({
-  board,
-}: {
-  board: ThreatBoard;
-}) {
+function ThreatList({ board }: { board: ThreatBoard }) {
   // Only heroes they actually WIN on earn "ban board" framing — a 0-2 hero is
   // not a threat. Without any winning hero at the floor, fall back to plain
   // most-picked framing.
@@ -805,7 +972,10 @@ function ComfortPicks({
       <ul className="space-y-1">
         {withPool.map((p) => (
           <li key={p.userId} className="flex items-center gap-2 text-sm">
-            <PlayerLink userId={p.userId} className="w-28 shrink-0 truncate text-xs">
+            <PlayerLink
+              userId={p.userId}
+              className="w-28 shrink-0 truncate text-xs"
+            >
               {p.name}
             </PlayerLink>
             <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
@@ -933,7 +1103,9 @@ function NetWorthAdvantage({
         <span className="flex min-w-0 items-center gap-1.5 font-medium text-emerald-300">
           <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
           <span className="truncate">{radiantName}</span>
-          <span className="font-mono text-muted">{formatNetWorth(radiantNet)}</span>
+          <span className="font-mono text-muted">
+            {formatNetWorth(radiantNet)}
+          </span>
         </span>
         <span className="shrink-0 text-muted">
           {lead === 0
@@ -941,7 +1113,9 @@ function NetWorthAdvantage({
             : `${leaderName} +${formatNetWorth(Math.abs(lead))}`}
         </span>
         <span className="flex min-w-0 items-center justify-end gap-1.5 font-medium text-rose-300">
-          <span className="font-mono text-muted">{formatNetWorth(direNet)}</span>
+          <span className="font-mono text-muted">
+            {formatNetWorth(direNet)}
+          </span>
           <span className="truncate">{direName}</span>
           <span className="h-2 w-2 shrink-0 rounded-full bg-rose-400" />
         </span>
@@ -1041,7 +1215,10 @@ function SidePlayers({
                       />
                     ) : null}
                     {p.userId ? (
-                      <PlayerLink userId={p.userId} className="truncate text-sm">
+                      <PlayerLink
+                        userId={p.userId}
+                        className="truncate text-sm"
+                      >
                         {displayName}
                       </PlayerLink>
                     ) : (
@@ -1166,6 +1343,9 @@ async function ReportResultSection({
   match: {
     id: string;
     seasonId: string;
+    phase: string;
+    status: string;
+    season: { isActive: boolean; status: string };
     homeTeam: { name: string; captainId: string };
     awayTeam: { name: string; captainId: string };
   };
@@ -1176,18 +1356,36 @@ async function ReportResultSection({
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
   if (!isCaptain) return null;
-  // The service refuses archived-season matches (the StandinSection rule) —
-  // don't render a card whose every submit can only error.
-  const season = await prisma.season.findUnique({
-    where: { id: match.seasonId },
-    select: { isActive: true },
-  });
-  if (!season?.isActive) return null;
+  if (!match.season.isActive) return null;
+  if (match.status === "COMPLETED") {
+    return (
+      <Card>
+        <CardHeader
+          title="Need a result correction?"
+          subtitle="Captains cannot rewrite a final series. Send an admin this match page and the incorrect Dota match ID; they can remove or re-import the game without hiding the audit trail."
+        />
+      </Card>
+    );
+  }
+  if (!matchResultsOpen(match.season.status, match.phase)) {
+    return (
+      <Card>
+        <CardHeader
+          title="Result reporting locked"
+          subtitle={
+            match.phase === "REGULAR"
+              ? "Regular-season games can be reported only while the league is in the Regular season phase. Ask an admin to correct the phase or fixture."
+              : "Playoff games can be reported only while the league is in the Playoffs phase. Ask an admin to reopen the postseason before reporting."
+          }
+        />
+      </Card>
+    );
+  }
   return (
     <Card>
       <CardHeader
         title="Report your result"
-        subtitle="Played it? Pull the finished game from OpenDota — no admin needed. Auto-fetch scans both rosters' recent games, or paste the match ID / Dotabuff-style URL."
+        subtitle="Played it? Pull the finished game from OpenDota — no admin needed. Auto-fetch scans both rosters; a pasted ID must fall near this fixture's kickoff so an old scrim or rematch cannot claim the result."
       />
       <CardBody>
         <MatchImportControls
@@ -1209,6 +1407,7 @@ async function StandinSection({
   match: {
     id: string;
     seasonId: string;
+    status: string;
     homeTeamId: string;
     awayTeamId: string;
     homeTeam: { name: string; captainId: string };
@@ -1248,10 +1447,11 @@ async function StandinSection({
           select: { status: true },
         })
       : null;
-  const assignOpen =
-    season.status === "REGULAR_SEASON" ||
-    season.status === "PLAYOFFS" ||
-    (season.status === "DRAFT" && draftRow?.status === "COMPLETE");
+  const assignOpen = standinAssignmentOpen(
+    season.status,
+    draftRow?.status,
+    match.status,
+  );
 
   const [assignments, roster, registrations, rostered, outRows] =
     await Promise.all([
@@ -1473,30 +1673,72 @@ async function RescheduleSection({
     awayTeam: { name: string; captainId: string };
   };
 }) {
-  const viewer = await getSessionUser();
-  let isCaptain =
+  const [viewer, season, draft, pending] = await Promise.all([
+    getSessionUser(),
+    prisma.season.findUnique({
+      where: { id: match.seasonId },
+      select: { isActive: true, status: true },
+    }),
+    prisma.draft.findUnique({
+      where: { seasonId: match.seasonId },
+      select: { status: true },
+    }),
+    prisma.rescheduleRequest.findFirst({
+      where: { matchId: match.id, status: "PENDING" },
+      include: { proposedBy: { select: { name: true } } },
+    }),
+  ]);
+  const isCaptain =
     !!viewer &&
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
-  if (isCaptain) {
-    // The service refuses proposing/accepting on archived-season matches —
-    // a captain on one gets the read-only strip below, not a form that can
-    // only error.
-    const season = await prisma.season.findUnique({
-      where: { id: match.seasonId },
-      select: { isActive: true },
-    });
-    if (!season?.isActive) isCaptain = false;
+  const canRetime =
+    !!season?.isActive &&
+    matchLogisticsOpen(season.status, draft?.status, match.status);
+
+  if (isCaptain && canRetime) {
+    return (
+      <RescheduleCard match={match} viewerId={viewer!.id} pending={pending} />
+    );
   }
-  if (isCaptain) {
-    return <RescheduleCard match={match} viewerId={viewer!.id} />;
+  if (isCaptain && pending) {
+    const mine = pending.proposedById === viewer!.id;
+    return (
+      <Card>
+        <CardHeader
+          title="Reschedule locked"
+          subtitle="This match can no longer be moved. You can close the stranded proposal so it does not look actionable."
+        />
+        <CardBody className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="min-w-[14rem] flex-1 text-muted">
+            {mine ? "You" : <strong>{pending.proposedBy.name}</strong>} proposed{" "}
+            <strong className="text-fg">
+              <LocalTime
+                ts={pending.proposedTime.getTime()}
+                variant="full"
+                initial={formatMatchTime(pending.proposedTime, "full")}
+              />
+            </strong>
+            .
+          </span>
+          <ActionForm
+            action={mine ? cancelReschedule : respondReschedule}
+            hidden={
+              mine
+                ? { requestId: pending.id }
+                : { requestId: pending.id, response: "decline" }
+            }
+          >
+            <SubmitButton variant="secondary" size="sm">
+              {mine ? "Withdraw proposal" : "Decline proposal"}
+            </SubmitButton>
+          </ActionForm>
+        </CardBody>
+      </Card>
+    );
   }
   // Everyone else gets a read-only heads-up that a time change is pending, so
   // spectators/scouts aren't blindsided by a moved match.
-  const pending = await prisma.rescheduleRequest.findFirst({
-    where: { matchId: match.id, status: "PENDING" },
-    select: { proposedTime: true },
-  });
   if (!pending) return null;
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted">
@@ -1519,6 +1761,7 @@ async function RescheduleSection({
 async function RescheduleCard({
   match,
   viewerId,
+  pending,
 }: {
   match: {
     id: string;
@@ -1528,12 +1771,17 @@ async function RescheduleCard({
     awayTeam: { name: string; captainId: string };
   };
   viewerId: string;
+  pending: {
+    id: string;
+    proposedById: string;
+    proposedTime: Date;
+    proposedBy: { name: string };
+  } | null;
 }) {
   if (match.status === "COMPLETED") return null;
-  const pending = await prisma.rescheduleRequest.findFirst({
-    where: { matchId: match.id, status: "PENDING" },
-    include: { proposedBy: { select: { name: true } } },
-  });
+  const checkinCount = pending
+    ? await prisma.matchAvailability.count({ where: { matchId: match.id } })
+    : 0;
   const fmt = (d: Date) =>
     d.toLocaleString(undefined, {
       weekday: "short",
@@ -1550,7 +1798,7 @@ async function RescheduleCard({
         title="Reschedule"
         subtitle={
           match.scheduledAt
-            ? "Agree a new time with the other captain — accepting retimes the match for everyone."
+            ? "Agree a new time with the other captain. A real time change resets every player's check-in."
             : "No time set yet — propose one to the other captain."
         }
       />
@@ -1568,6 +1816,13 @@ async function RescheduleCard({
                 />
               </strong>
               {mine ? " — waiting on the other captain." : "."}
+              {!mine && checkinCount > 0 ? (
+                <span className="mt-1 block text-xs text-accent">
+                  Accepting will clear {checkinCount} check-in
+                  {checkinCount === 1 ? "" : "s"}; every player must answer
+                  again for the new night.
+                </span>
+              ) : null}
             </span>
             {mine ? (
               <ActionForm
@@ -1584,7 +1839,11 @@ async function RescheduleCard({
                   action={respondReschedule}
                   hidden={{ requestId: pending.id, response: "accept" }}
                 >
-                  <SubmitButton variant="primary" size="sm">
+                  <SubmitButton
+                    variant="primary"
+                    size="sm"
+                    confirm={`Accept this new kickoff? ${checkinCount} check-in${checkinCount === 1 ? "" : "s"} will be cleared and every player must answer again.`}
+                  >
                     ✓ Accept time
                   </SubmitButton>
                 </ActionForm>
@@ -1605,8 +1864,12 @@ async function RescheduleCard({
             hidden={{ matchId: match.id }}
             className="flex flex-wrap items-center gap-2"
           >
-            <span aria-label="Proposed new time" role="group">
+            <label htmlFor={`proposed-time-${match.id}`} className="sr-only">
+              Proposed new kickoff
+            </label>
+            <span>
               <LocalDatetimeField
+                id={`proposed-time-${match.id}`}
                 name="proposedTime"
                 tsName="proposedTs"
                 required

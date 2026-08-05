@@ -7,7 +7,39 @@ import {
   parseLeagueId,
   fetchRankTier,
   fetchPubStats,
+  fetchOpenDotaMatch,
+  fetchRecentMatchIds,
+  fetchLeagueMatchIds,
 } from "./dota";
+
+describe("bounded OpenDota fetches", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("starts no request when an absolute deadline has insufficient time", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const options = { deadlineMs: Date.now() + 100 };
+
+    expect(await fetchOpenDotaMatch("8880928888", options)).toBeNull();
+    expect(await fetchRecentMatchIds(123, 20, options)).toBeNull();
+    expect(await fetchLeagueMatchIds("17119", options)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("starts no request after its caller signal is aborted", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+
+    expect(
+      await fetchOpenDotaMatch("8880928888", {
+        signal: controller.signal,
+      }),
+    ).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("steamIdToAccountId", () => {
   it("converts a SteamID64 to a 32-bit Dota account id and back", () => {
@@ -17,6 +49,7 @@ describe("steamIdToAccountId", () => {
   it("returns null for values below the Steam64 base or non-numeric", () => {
     expect(steamIdToAccountId("123")).toBeNull();
     expect(steamIdToAccountId("not-a-number")).toBeNull();
+    expect(steamIdToAccountId(accountIdToSteamId64(0x100000000))).toBeNull();
   });
 });
 
@@ -81,6 +114,9 @@ describe("parseAccountId", () => {
   });
   it("accepts the 32-bit boundary and rejects garbage", () => {
     expect(parseAccountId("4294967295")).toBe(4294967295);
+    expect(steamIdToAccountId(accountIdToSteamId64(0xffffffff))).toBe(
+      0xffffffff,
+    );
     expect(parseAccountId("no digits here")).toBeNull();
   });
 });
@@ -92,7 +128,10 @@ describe("fetchRankTier", () => {
     vi.stubGlobal("fetch", vi.fn(impl));
 
   it("returns ok:true with the medal on a 200", async () => {
-    stubFetch(async () => ({ ok: true, json: async () => ({ rank_tier: 55 }) }));
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({ rank_tier: 55 }),
+    }));
     expect(await fetchRankTier(123)).toEqual({
       ok: true,
       rankTier: 55,
@@ -101,7 +140,10 @@ describe("fetchRankTier", () => {
   });
 
   it("returns ok:true rankTier:null when the profile has no rank", async () => {
-    stubFetch(async () => ({ ok: true, json: async () => ({ rank_tier: null }) }));
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({ rank_tier: null }),
+    }));
     expect(await fetchRankTier(123)).toEqual({
       ok: true,
       rankTier: null,

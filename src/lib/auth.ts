@@ -2,8 +2,10 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "./prisma";
-import { SESSION_COOKIE } from "./constants";
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from "./constants";
 import { getSessionEpoch } from "./session-epoch";
+import { parseAdminSteamIds, resolveSessionRole } from "./users";
+import { expireHttpOnlyCookie } from "./cookie-policy";
 
 // Session-signing key. Resolved lazily (so a missing secret fails a request,
 // not the build) and FAIL-CLOSED: in production a missing/short AUTH_SECRET
@@ -48,6 +50,12 @@ export async function createSession(userId: string) {
     .sign(secret());
 
   const cookieStore = await cookies();
+  // The hardened production name intentionally invalidates sessions from the
+  // pre-__Host release. Delete the legacy host cookie where possible so the
+  // browser does not keep sending unused credentials.
+  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) {
+    expireHttpOnlyCookie(cookieStore, LEGACY_SESSION_COOKIE);
+  }
   cookieStore.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -59,7 +67,10 @@ export async function createSession(userId: string) {
 
 export async function destroySession() {
   const cookieStore = await cookies();
-  cookieStore.delete(SESSION_COOKIE);
+  expireHttpOnlyCookie(cookieStore, SESSION_COOKIE);
+  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) {
+    expireHttpOnlyCookie(cookieStore, LEGACY_SESSION_COOKIE);
+  }
 }
 
 /**
@@ -91,7 +102,15 @@ export const getSessionUser = cache(async function getSessionUser(): Promise<Ses
       steamId: user.steamId,
       name: user.name,
       avatar: user.avatar,
-      role: user.role,
+      // ADMIN_STEAM_IDS is an authorization policy, not merely a login-time
+      // database synchronizer. Re-evaluate it for every authenticated render/
+      // mutation so removing a compromised admin revokes an existing cookie.
+      role: resolveSessionRole({
+        steamId: user.steamId,
+        storedRole: user.role,
+        adminSteamIds: parseAdminSteamIds(process.env.ADMIN_STEAM_IDS),
+        production: process.env.NODE_ENV === "production",
+      }),
     };
   } catch {
     return null;

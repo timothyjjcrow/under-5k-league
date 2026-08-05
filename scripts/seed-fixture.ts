@@ -1,10 +1,10 @@
-// Seed a FIXTURE database into a mid-season or mid-playoffs state for UI
-// verification. Refuses to touch a non-fixture DB: run with an explicit
-//   DATABASE_URL="file:/abs/path/fixture.db" npx tsx scripts/seed-fixture.ts
+// Seed one of the browser suites' dedicated SQLite databases into a mid-season
+// or mid-playoffs state for UI verification. Every other target is refused.
 // Modes: FIXTURE_MODE=regular (last week open, clinch/bye demo, 6 teams or
 // FIXTURE_TEAMS=n) | complete (whole bracket played) | default (mid-playoffs).
 import { prisma } from "@/lib/prisma";
 import { SEASON_STATUS } from "@/lib/constants";
+import { assertExpectedFixtureDatabase } from "@/lib/fixture-database";
 import { matchNightForWeek } from "@/lib/schedule";
 import {
   createPlayoffBracket,
@@ -33,17 +33,17 @@ const NAMES = [
 
 async function main() {
   const url = process.env.DATABASE_URL ?? "";
-  if (!/fixture/i.test(url)) {
-    throw new Error(
-      `Refusing to seed: DATABASE_URL (${url || "unset"}) doesn't look like a fixture DB. ` +
-        "Point it at a throwaway file containing 'fixture'.",
-    );
-  }
+  assertExpectedFixtureDatabase(
+    url,
+    ["midseason", "postseason"],
+    "seed fixture data",
+  );
 
   await resetDb();
   const season = await makeSeason({
     name: "Season 9 (fixture)",
     status: SEASON_STATUS.REGULAR_SEASON,
+    teamSize: 5,
   });
   const firstNight = new Date("2026-06-06T18:00:00-07:00");
   await prisma.season.update({
@@ -52,7 +52,9 @@ async function main() {
   });
 
   const teams = [];
-  const teamCount = Number(process.env.FIXTURE_TEAMS) || (process.env.FIXTURE_MODE === "regular" ? 6 : NAMES.length);
+  const teamCount =
+    Number(process.env.FIXTURE_TEAMS) ||
+    (process.env.FIXTURE_MODE === "regular" ? 6 : NAMES.length);
   for (let i = 0; i < teamCount; i++)
     teams.push(await makeTeam(season.id, NAMES[i], i));
   const strength = new Map(teams.map((t, i) => [t.id, i]));
@@ -84,12 +86,12 @@ async function main() {
     );
   }
 
-  // Rosters (3 players/team) + imported game box scores so /leaders,
+  // Full 5-player rosters + imported game box scores so /leaders,
   // honors, and fantasy have data. Deterministic stats — no RNG.
   const roster = new Map<string, { id: string; name: string }[]>();
   for (const [ti, t] of teams.entries()) {
     const members = [];
-    for (let j = 0; j < 3; j++) {
+    for (let j = 0; j < 5; j++) {
       const u = await makeUser(t.name.split(" ")[0] + " Player" + (j + 1));
       await prisma.teamMember.create({
         data: {
@@ -122,11 +124,15 @@ async function main() {
         const legacy = gameIndex < 2;
         const gi = gameIndex++;
         const lines = [];
-        for (const [side, teamId] of [[true, m.homeTeamId], [false, m.awayTeamId]] as const) {
-          const won = (winner === teamId);
+        for (const [side, teamId] of [
+          [true, m.homeTeamId],
+          [false, m.awayTeamId],
+        ] as const) {
+          const won = winner === teamId;
           for (const [pi, u] of roster.get(teamId)!.entries()) {
             const seed = mi * 7 + g * 3 + pi * 11 + (side ? 0 : 5);
-            const pct = (offset: number) => ((gi * 13 + pi * 7 + offset) % 20) / 20 + 0.025;
+            const pct = (offset: number) =>
+              ((gi * 13 + pi * 7 + offset) % 20) / 20 + 0.025;
             lines.push({
               accountId: 100000 + seed,
               heroId: 1 + (seed % 30),
@@ -153,11 +159,26 @@ async function main() {
                     heroHealing: pi % 3 === 2 ? 4000 + (seed % 20) * 400 : 0,
                     benchmarks: {
                       gold_per_min: { raw: 320 + (seed % 50) * 6, pct: pct(0) },
-                      xp_per_min: { raw: 380 + ((seed * 3) % 300), pct: pct(5) },
-                      kills_per_min: { raw: 0.2 + (seed % 10) / 20, pct: pct(9) },
-                      last_hits_per_min: { raw: 2 + (seed % 30) / 5, pct: pct(13) },
-                      hero_damage_per_min: { raw: 300 + (seed % 40) * 20, pct: pct(3) },
-                      tower_damage: { raw: 800 + (seed % 30) * 350, pct: pct(11) },
+                      xp_per_min: {
+                        raw: 380 + ((seed * 3) % 300),
+                        pct: pct(5),
+                      },
+                      kills_per_min: {
+                        raw: 0.2 + (seed % 10) / 20,
+                        pct: pct(9),
+                      },
+                      last_hits_per_min: {
+                        raw: 2 + (seed % 30) / 5,
+                        pct: pct(13),
+                      },
+                      hero_damage_per_min: {
+                        raw: 300 + (seed % 40) * 20,
+                        pct: pct(3),
+                      },
+                      tower_damage: {
+                        raw: 800 + (seed % 30) * 350,
+                        pct: pct(11),
+                      },
                     },
                   }),
             });
@@ -168,9 +189,15 @@ async function main() {
             matchId: m.id,
             dotaMatchId: String(dotaId++),
             radiantWin: homeWon,
+            radiantTeamId: m.homeTeamId,
+            direTeamId: m.awayTeamId,
             winnerTeamId: winner,
             durationSecs: 1500 + ((gi * 97) % 1800),
-            startTime: Math.floor(matchNightForWeek(firstNight, m.week).getTime() / 1000) + g * 3600,
+            startTime:
+              Math.floor(
+                matchNightForWeek(firstNight, m.week).getTime() / 1000,
+              ) +
+              g * 3600,
             radiantScore: homeWon ? 30 + (gi % 15) : 18 + (gi % 10),
             direScore: homeWon ? 18 + (gi % 10) : 30 + (gi % 15),
             players: JSON.stringify(lines),
@@ -232,7 +259,9 @@ async function main() {
     orderBy: { bracketSlot: "asc" },
   });
   console.log(
-    all.map((m) => `${m.bracketSlot} ${m.status} ${m.homeScore}-${m.awayScore}`),
+    all.map(
+      (m) => `${m.bracketSlot} ${m.status} ${m.homeScore}-${m.awayScore}`,
+    ),
   );
   console.log("Fixture ready.");
 }

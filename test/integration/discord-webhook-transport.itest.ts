@@ -1,14 +1,29 @@
 import { createServer, type Server } from "node:http";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   deleteWebhookMessage,
+  deliverPendingLeagueAnnouncements,
   patchWebhookMessage,
   postWebhookMessage,
+  sendDiscordMessage,
 } from "@/lib/discord";
 import { SETTING_KEYS, setSetting } from "@/lib/settings";
 import { createInhouseBoard } from "@/lib/inhouse-board-service";
 import { getInhouseState, joinQueue } from "@/lib/inhouse-service";
 import { makeUser, sessionFor } from "./factories";
+import { prisma } from "@/lib/prisma";
+import {
+  enqueueLeagueAnnouncement,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+} from "@/lib/league-announcement-outbox";
 
 // The queue board's transport, exercised over REAL HTTP against a stand-in for
 // Discord. Module mocks can prove the service's decisions but not the wire
@@ -69,6 +84,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  delete process.env.VERCEL_ENV;
   recorded = [];
   respond = () => ({ status: 200, body: { id: "1379001234567890123" } });
   // resetDb() in setup.ts has already wiped Settings; point the real
@@ -83,6 +99,160 @@ beforeEach(async () => {
 function hookUrl() {
   return `${base}/api/webhooks/1111/tok-secret`;
 }
+
+describe("sendDiscordMessage", () => {
+  const USER_ID = "123456789012345678";
+  const ROLE_ID = "223456789012345678";
+
+  it("persists first, then materializes its allowlist into real mentions", async () => {
+    expect(
+      await sendDiscordMessage("Captain, please respond.", {
+        users: [USER_ID, USER_ID],
+        roles: [ROLE_ID],
+      }),
+    ).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].body).toMatchObject({
+      content: `<@${USER_ID}> <@&${ROLE_ID}> Captain, please respond.`,
+      allowed_mentions: {
+        parse: [],
+        users: [USER_ID],
+        roles: [ROLE_ID],
+      },
+    });
+    expect(await prisma.leagueAnnouncement.findFirst()).toMatchObject({
+      content: "Captain, please respond.",
+      status: LEAGUE_ANNOUNCEMENT_STATUS.SENT,
+      attempts: 1,
+    });
+  });
+
+  it("returns durable acceptance when Discord is down, then the wrapper retries", async () => {
+    respond = () => ({ status: 503 });
+    expect(await sendDiscordMessage("Durable result")).toBe(true);
+    const pending = await prisma.leagueAnnouncement.findFirstOrThrow();
+    expect(pending).toMatchObject({
+      content: "Durable result",
+      status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+      attempts: 1,
+      lastErrorCode: "TRANSPORT_REJECTED",
+    });
+    // The bearer credential and arbitrary transport response are never stored.
+    expect(JSON.stringify(pending)).not.toContain("tok-secret");
+
+    respond = () => ({ status: 204 });
+    await expect(
+      deliverPendingLeagueAnnouncements({
+        now: new Date(pending.availableAt.getTime() + 1),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ attempted: 1, delivered: 1, pending: false });
+  });
+
+  it("supports a true direct transport check without creating outbox work", async () => {
+    respond = () => ({ status: 503 });
+    expect(
+      await sendDiscordMessage("Webhook health check", undefined, {
+        durable: false,
+      }),
+    ).toBe(false);
+    expect(await prisma.leagueAnnouncement.count()).toBe(0);
+
+    respond = () => ({ status: 204 });
+    expect(
+      await sendDiscordMessage("Webhook health check", undefined, {
+        durable: false,
+      }),
+    ).toBe(true);
+    expect(await prisma.leagueAnnouncement.count()).toBe(0);
+  });
+
+  it("passes a stable dedupe key through the durable boundary", async () => {
+    const options = { dedupeKey: "match-result:match-42:2-0" };
+    expect(await sendDiscordMessage("Final 2–0", undefined, options)).toBe(true);
+    expect(await sendDiscordMessage("Final 2–0", undefined, options)).toBe(true);
+    expect(await prisma.leagueAnnouncement.count()).toBe(1);
+    expect(recorded).toHaveLength(1);
+    expect(await prisma.leagueAnnouncement.findFirst()).toMatchObject(options);
+  });
+
+  it("returns false and persists nothing when no league webhook exists", async () => {
+    const previous = process.env.DISCORD_WEBHOOK_URL;
+    delete process.env.DISCORD_WEBHOOK_URL;
+    await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
+    try {
+      expect(await sendDiscordMessage("Nowhere to send")).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.DISCORD_WEBHOOK_URL;
+      else process.env.DISCORD_WEBHOOK_URL = previous;
+    }
+    expect(await prisma.leagueAnnouncement.count()).toBe(0);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("does not enqueue, claim, or send Discord work from a Vercel preview", async () => {
+    process.env.VERCEL_ENV = "preview";
+
+    expect(await sendDiscordMessage("Preview-only event")).toBe(false);
+    expect(await prisma.leagueAnnouncement.count()).toBe(0);
+
+    const queued = await enqueueLeagueAnnouncement({
+      content: "Copied pending production event",
+    });
+    await expect(
+      deliverPendingLeagueAnnouncements({ limit: 1 }),
+    ).resolves.toEqual({
+      attempted: 0,
+      delivered: 0,
+      pending: true,
+      blocked: "DISCORD_MUTATIONS_DISABLED",
+    });
+    expect(await prisma.leagueAnnouncement.findUnique({ where: { id: queued.id } }))
+      .toMatchObject({
+        status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+        attempts: 0,
+      });
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("reports durable work as blocked when its webhook is removed", async () => {
+    await enqueueLeagueAnnouncement({ content: "Already accepted" });
+    const previous = process.env.DISCORD_WEBHOOK_URL;
+    delete process.env.DISCORD_WEBHOOK_URL;
+    await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
+    try {
+      await expect(deliverPendingLeagueAnnouncements({ limit: 1 })).resolves.toEqual({
+        attempted: 0,
+        delivered: 0,
+        pending: true,
+        blocked: "WEBHOOK_UNAVAILABLE",
+      });
+    } finally {
+      if (previous === undefined) delete process.env.DISCORD_WEBHOOK_URL;
+      else process.env.DISCORD_WEBHOOK_URL = previous;
+    }
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("rejects invalid payloads and persistence failures before webhook I/O", async () => {
+    expect(await sendDiscordMessage("   ")).toBe(false);
+    expect(await sendDiscordMessage("x".repeat(2_001))).toBe(false);
+    expect(
+      await sendDiscordMessage("x".repeat(1_980), { users: [USER_ID] }),
+    ).toBe(false);
+
+    const create = vi
+      .spyOn(prisma.leagueAnnouncement, "create")
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    try {
+      expect(await sendDiscordMessage("Cannot persist")).toBe(false);
+    } finally {
+      create.mockRestore();
+    }
+    expect(recorded).toHaveLength(0);
+    expect(await prisma.leagueAnnouncement.count()).toBe(0);
+  });
+});
 
 /** Let the board's spam floor lapse without waiting out real seconds. */
 async function expireThrottle() {

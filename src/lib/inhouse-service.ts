@@ -3,6 +3,7 @@ import { prisma } from "./prisma";
 import {
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_BET_STATUS,
   INHOUSE_BETS,
   INHOUSE_STATUS,
 } from "./constants";
@@ -21,30 +22,43 @@ import {
 } from "./inhouse";
 import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
 import type { InhouseBoxPlayer } from "./inhouse-box";
-import { potTier, potView, type PotTier, type Settlement } from "./inhouse-bets";
 import {
-  resolveUnsettledBets,
-  settleInhouseBets,
-} from "./inhouse-bet-service";
-import { gameMvp } from "./achievements";
-import { heroById } from "./heroes";
+  potTier,
+  potView,
+  type PotTier,
+  type Settlement,
+} from "./inhouse-bets";
+import { resolveUnsettledBets, settleInhouseBets } from "./inhouse-bet-service";
 import {
+  canStartOpenDotaFetch,
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
+  openDotaBudgetExpired,
   parseMatchId,
-  steamIdToAccountId,
+  type OpenDotaFetchOptions,
   type OpenDotaMatch,
 } from "./dota";
+import { effectiveDotaAccountId } from "./dota-account";
 import { classifyGame } from "./match-import";
 import {
   inhouseLobbyMessage,
   inhouseQueueMessage,
-  inhouseResultMessage,
   inhouseResultVoidedMessage,
   sendInhouseDiscordMessage,
   getInhousePingRoleId,
 } from "./discord";
-import { claimThrottle, stampResultChange, SETTING_KEYS } from "./settings";
+import {
+  deliverInhouseAnnouncements,
+  inhouseResultAnnouncementContent,
+  INHOUSE_ANNOUNCEMENT_KIND,
+  INHOUSE_ANNOUNCEMENT_STATUS,
+} from "./inhouse-announcement-outbox";
+import {
+  claimProviderCooldown,
+  claimThrottle,
+  stampResultChange,
+  SETTING_KEYS,
+} from "./settings";
 import { lobbyView, syncInhouseBoard } from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
@@ -103,9 +117,22 @@ async function loadRecords(
       status: INHOUSE_STATUS.COMPLETED,
       players: { some: { userId: { in: userIds } } },
     },
-    include: { players: { include: { user: true } } },
-    orderBy: { createdAt: "desc" },
-    take: 500,
+    // Formation is the one moment these snapshots are computed, so silently
+    // truncating the history gives long-running players a different record
+    // from the ladder. Fetch the full career, but only the fields the shared
+    // stats mapper consumes (the former include loaded every User column).
+    select: {
+      id: true,
+      winnerTeam: true,
+      createdAt: true,
+      players: {
+        select: {
+          userId: true,
+          team: true,
+          user: { select: { name: true, avatar: true } },
+        },
+      },
+    },
   });
   const recs = summarizeInhouse(lobbies.map(toFinishedLobby));
   return new Map(
@@ -117,8 +144,8 @@ async function loadRecords(
 }
 
 /**
- * Form a lobby when enough players are waiting. Idempotent + safe to call on
- * every poll: no-ops unless the single active-lobby slot is free AND the queue
+ * Form a lobby when enough players are waiting. Idempotent and safe under
+ * concurrent leased maintenance calls: no-ops unless the single active-lobby slot is free AND the queue
  * has reached LOBBY_SIZE. The lobby opens in the READY_CHECK phase — the
  * Dota-style accept gate: all ten must press ACCEPT before the captain vote
  * starts (acceptMatch / resolveReadyCheck), so an AFK player is dropped
@@ -130,103 +157,106 @@ export async function maybeFormLobby(): Promise<boolean> {
   let lobbyPlayers: { name: string; discordId: string | null }[] = [];
   let formed = false;
   try {
-    formed = await prisma.$transaction(async (tx) => {
-    const now = Date.now();
-    // Ghosts never get drafted: drop entries whose heartbeat went silent (the
-    // player closed /inhouse long ago), so the queue count everyone watches
-    // stays honest. Runs on every poll — the table only ever holds a handful
-    // of rows.
-    await tx.inhouseQueueEntry.deleteMany({
-      where: { lastSeenAt: { lt: queueDropCutoff(now) } },
-    });
+    formed = await prisma.$transaction(
+      async (tx) => {
+        const now = Date.now();
+        // Ghosts never get drafted: drop entries whose heartbeat went silent (the
+        // player closed /inhouse long ago), so the queue count everyone watches
+        // stays honest. Runs on each claimed maintenance pass — the table only
+        // ever holds a handful of rows.
+        await tx.inhouseQueueEntry.deleteMany({
+          where: { lastSeenAt: { lt: queueDropCutoff(now) } },
+        });
 
-    const active = await tx.inhouseLobby.findFirst({
-      where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-      select: { id: true },
-    });
-    if (active) return false;
+        const active = await tx.inhouseLobby.findFirst({
+          where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+          select: { id: true },
+        });
+        if (active) return false;
 
-    // Only players seen recently count toward the ten — an "away" entry keeps
-    // its queue position but can't be pulled into a lobby it won't show up to.
-    const queue = await tx.inhouseQueueEntry.findMany({
-      where: { lastSeenAt: { gte: queuePresentCutoff(now) } },
-      orderBy: { joinedAt: "asc" },
-      take: INHOUSE.LOBBY_SIZE,
-    });
-    if (queue.length < INHOUSE.LOBBY_SIZE) return false;
+        // Only players seen recently count toward the ten — an "away" entry keeps
+        // its queue position but can't be pulled into a lobby it won't show up to.
+        const queue = await tx.inhouseQueueEntry.findMany({
+          where: { lastSeenAt: { gte: queuePresentCutoff(now) } },
+          orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
+          take: INHOUSE.LOBBY_SIZE,
+        });
+        if (queue.length < INHOUSE.LOBBY_SIZE) return false;
 
-    const lobby = await tx.inhouseLobby.create({
-      data: {
-        status: INHOUSE_STATUS.READY_CHECK,
-        acceptEndsAt: acceptDeadline(),
-        radiantTeam: 1,
+        const lobby = await tx.inhouseLobby.create({
+          data: {
+            status: INHOUSE_STATUS.READY_CHECK,
+            acceptEndsAt: acceptDeadline(),
+            radiantTeam: 1,
+          },
+        });
+
+        // Snapshot each player's inhouse record onto their lobby row — one history
+        // scan per FORMATION instead of one per poll. Frozen is correct: no result
+        // can land while this lobby occupies the single active slot.
+        const records = await loadRecords(
+          tx,
+          queue.map((q) => q.userId),
+        );
+
+        // Everyone starts in the pool with no captain; the vote decides the two.
+        await tx.inhouseLobbyPlayer.createMany({
+          data: queue.map((q) => {
+            const r = records.get(q.userId);
+            return {
+              lobbyId: lobby.id,
+              userId: q.userId,
+              mmr: q.mmr,
+              queuedAt: q.joinedAt,
+              wins: r?.wins ?? 0,
+              losses: r?.losses ?? 0,
+              games: r?.games ?? 0,
+            };
+          }),
+        });
+
+        await tx.inhouseQueueEntry.deleteMany({
+          where: { userId: { in: queue.map((q) => q.userId) } },
+        });
+
+        // Player names for the Discord announcement, in queue order. discordId
+        // comes along so the ten can be mentioned by id — the only escalation the
+        // league has that reaches a phone. The site's chime and tab title can't.
+        const users = await tx.user.findMany({
+          where: { id: { in: queue.map((q) => q.userId) } },
+          select: { id: true, name: true, discordId: true },
+        });
+        const byId = new Map(users.map((u) => [u.id, u]));
+        lobbyPlayers = queue.map((q) => ({
+          name: byId.get(q.userId)?.name ?? "?",
+          discordId: byId.get(q.userId)?.discordId ?? null,
+        }));
+        return true;
       },
-    });
-
-    // Snapshot each player's inhouse record onto their lobby row — one history
-    // scan per FORMATION instead of one per poll. Frozen is correct: no result
-    // can land while this lobby occupies the single active slot.
-    const records = await loadRecords(
-      tx,
-      queue.map((q) => q.userId),
-    );
-
-    // Everyone starts in the pool with no captain; the vote decides the two.
-    await tx.inhouseLobbyPlayer.createMany({
-      data: queue.map((q) => {
-        const r = records.get(q.userId);
-        return {
-          lobbyId: lobby.id,
-          userId: q.userId,
-          mmr: q.mmr,
-          wins: r?.wins ?? 0,
-          losses: r?.losses ?? 0,
-          games: r?.games ?? 0,
-        };
-      }),
-    });
-
-    await tx.inhouseQueueEntry.deleteMany({
-      where: { userId: { in: queue.map((q) => q.userId) } },
-    });
-
-    // Player names for the Discord announcement, in queue order. discordId
-    // comes along so the ten can be mentioned by id — the only escalation the
-    // league has that reaches a phone. The site's chime and tab title can't.
-    const users = await tx.user.findMany({
-      where: { id: { in: queue.map((q) => q.userId) } },
-      select: { id: true, name: true, discordId: true },
-    });
-    const byId = new Map(users.map((u) => [u.id, u]));
-    lobbyPlayers = queue.map((q) => ({
-      name: byId.get(q.userId)?.name ?? "?",
-      discordId: byId.get(q.userId)?.discordId ?? null,
-    }));
-    return true;
-    },
-    // SQLite serializes writers anyway; on Postgres this is what makes the
-    // findFirst-then-create "one active lobby" invariant hold — the loser of
-    // two concurrent formations aborts (P2034) instead of double-forming.
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      // SQLite serializes writers anyway; on Postgres this makes competing
+      // formations conflict before the partial unique index provides the final
+      // "one active lobby" barrier. Depending on the interleaving, the loser is
+      // reported as a serialization conflict (P2034) or unique conflict (P2002).
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
-    // Serialization conflict: someone else's poll formed the lobby first.
-    if ((e as { code?: string }).code === "P2034") return false;
+    // Someone else's poll formed the lobby first. The serializable transaction
+    // and the database's partial unique index can report the same safe loser in
+    // two different ways.
+    const code = (e as { code?: string }).code;
+    if (code === "P2034" || code === "P2002") return false;
     throw e;
   }
   if (formed && lobbyPlayers.length > 0) {
     const roleId = await getInhousePingRoleId();
-    await sendInhouseDiscordMessage(
-      inhouseLobbyMessage(lobbyPlayers, roleId),
-      {
-        // Only these exact ids may ring anyone — a Steam persona in the same
-        // message still can't ping (see MentionAllowlist).
-        roles: roleId ? [roleId] : [],
-        users: lobbyPlayers
-          .map((p) => p.discordId)
-          .filter((id): id is string => !!id),
-      },
-    );
+    await sendInhouseDiscordMessage(inhouseLobbyMessage(lobbyPlayers, roleId), {
+      // Only these exact ids may ring anyone — a Steam persona in the same
+      // message still can't ping (see MentionAllowlist).
+      roles: roleId ? [roleId] : [],
+      users: lobbyPlayers
+        .map((p) => p.discordId)
+        .filter((id): id is string => !!id),
+    });
   }
   return formed;
 }
@@ -258,8 +288,8 @@ async function startCaptainVote(tx: Tx, lobbyId: string): Promise<boolean> {
 /**
  * Fail the ready check: cancel the lobby and re-queue ONLY the players who
  * deserve their spot back. Accepters proved they're present — they re-queue
- * with a live heartbeat AND keep priority (their queue slot is anchored to the
- * lobby's formation time, so it outranks anyone who joined during the check).
+ * with a live heartbeat AND keep priority (their exact original queue slot was
+ * snapshotted at formation, so it outranks anyone who joined during the check).
  * `pendingBackdated` players (a decline aborted the check before their clock
  * ran out) re-queue with a BACKDATED heartbeat — their own next poll
  * re-confirms them within seconds if they're really there (the cancelLobby
@@ -286,22 +316,35 @@ async function failReadyCheck(
   const lobby = await tx.inhouseLobby.findUniqueOrThrow({
     where: { id: lobbyId },
     select: {
-      createdAt: true,
-      players: { select: { userId: true, mmr: true, acceptedAt: true } },
+      players: {
+        select: {
+          userId: true,
+          mmr: true,
+          acceptedAt: true,
+          queuedAt: true,
+        },
+      },
     },
   });
-  const requeue = lobby.players.filter((p) => {
-    if (p.userId === opts.dropUserId) return false;
-    return p.acceptedAt != null || opts.pendingBackdated;
-  });
+  const requeue = lobby.players
+    .filter((p) => {
+      if (p.userId === opts.dropUserId) return false;
+      return p.acceptedAt != null || opts.pendingBackdated;
+    })
+    .sort(
+      (a, b) =>
+        a.queuedAt.getTime() - b.queuedAt.getTime() ||
+        a.userId.localeCompare(b.userId),
+    );
   const now = Date.now();
-  for (const [i, p] of requeue.entries()) {
+  for (const p of requeue) {
     const lastSeenAt =
       p.acceptedAt != null ? new Date() : requeueLastSeenAt(now);
-    // Anchor queue order to the lobby's formation instant (+ index) so
-    // re-queued players outrank anyone who joined the queue DURING the check —
-    // they were here first. Staggered by index for deterministic order.
-    const joinedAt = new Date(lobby.createdAt.getTime() + i);
+    // Restore the exact immutable queue position captured at formation. Using
+    // `lobby.createdAt + index` only approximates it: an overflow player who was
+    // already waiting (or joined in those first few milliseconds) could slip in
+    // front of accepters who were promised their spots back.
+    const joinedAt = p.queuedAt;
     await tx.inhouseQueueEntry.upsert({
       where: { userId: p.userId },
       create: { userId: p.userId, mmr: p.mmr, joinedAt, lastSeenAt },
@@ -312,7 +355,9 @@ async function failReadyCheck(
 }
 
 /** Press ACCEPT on the ready check. Idempotent — a double-click is one accept. */
-export async function acceptMatch(viewer: SessionUser): Promise<InhouseActionResult> {
+export async function acceptMatch(
+  viewer: SessionUser,
+): Promise<InhouseActionResult> {
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY_CHECK },
@@ -364,7 +409,9 @@ export async function acceptMatch(viewer: SessionUser): Promise<InhouseActionRes
  * priority, and still-pending players re-queue with a backdated heartbeat —
  * they did nothing wrong, but must re-confirm presence via their own poll.
  */
-export async function declineMatch(viewer: SessionUser): Promise<InhouseActionResult> {
+export async function declineMatch(
+  viewer: SessionUser,
+): Promise<InhouseActionResult> {
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY_CHECK },
@@ -391,8 +438,8 @@ export async function declineMatch(viewer: SessionUser): Promise<InhouseActionRe
 /**
  * Resolve an expired ready check: everyone accepted → captain vote (the last
  * accept may race the clock — completeness wins); otherwise cancel and drop
- * the no-shows, re-queuing only the players who accepted. Idempotent; safe on
- * every poll.
+ * the no-shows, re-queuing only the players who accepted. Idempotent and safe
+ * under concurrent maintenance calls.
  */
 export async function resolveReadyCheck(): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -425,7 +472,7 @@ export async function resolveReadyCheck(): Promise<boolean> {
  * Both floors (ABANDON_*_HOURS) are deliberately far past any legitimate use:
  * Start can be pressed late — even after the game — and the manual result
  * paths have no time gate, so a group that simply forgot still recovers their
- * game normally. Idempotent; safe on every poll.
+ * game normally. Idempotent and safe under concurrent maintenance calls.
  *
  * Unlike cancelLobby this does NOT re-queue anyone: an admin cancels a LIVE
  * lobby whose players are present and want the next game, whereas by
@@ -470,7 +517,8 @@ export async function resolveAbandonedLobby(): Promise<boolean> {
 /**
  * Resolve the captain-selection vote once everyone has voted or the timer runs
  * out: tally the winning method, rank candidates, install the top two as
- * captains, and drop into the draft. Idempotent; safe on every poll.
+ * captains, and drop into the draft. Idempotent and safe under concurrent
+ * maintenance calls.
  */
 export async function resolveCaptainVote(): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -482,7 +530,8 @@ export async function resolveCaptainVote(): Promise<boolean> {
 
     const allVoted =
       lobby.players.length > 0 && lobby.players.every((p) => p.votedMethod);
-    const expired = !!lobby.voteEndsAt && lobby.voteEndsAt.getTime() <= Date.now();
+    const expired =
+      !!lobby.voteEndsAt && lobby.voteEndsAt.getTime() <= Date.now();
     if (!allVoted && !expired) return false;
 
     const method = tallyMethod(
@@ -505,7 +554,7 @@ export async function resolveCaptainVote(): Promise<boolean> {
     const candidates: CaptainCandidate[] = lobby.players.map((p) => ({
       userId: p.userId,
       mmr: p.mmr,
-      joinedAt: p.createdAt,
+      joinedAt: p.queuedAt,
       nominations: nominations.get(p.userId) ?? 0,
       wins: p.wins,
       winRate: p.games > 0 ? p.wins / p.games : 0,
@@ -558,22 +607,43 @@ export async function castVote(
       include: { players: true },
     });
     if (!lobby) return { ok: false as const, error: "Voting isn't open" };
+    if (!lobby.voteEndsAt || lobby.voteEndsAt.getTime() <= Date.now()) {
+      return { ok: false as const, error: "Voting has closed" };
+    }
     const mine = lobby.players.find((p) => p.userId === viewer.id);
     if (!mine) {
-      return { ok: false as const, error: "Only players in the lobby can vote" };
+      return {
+        ok: false as const,
+        error: "Only players in the lobby can vote",
+      };
     }
     let nominee: string | null = null;
     if (m === "VOTE") {
-      if (!nomineeId) return { ok: false as const, error: "Pick a player to captain" };
+      if (!nomineeId)
+        return { ok: false as const, error: "Pick a player to captain" };
       if (!lobby.players.some((p) => p.userId === nomineeId)) {
         return { ok: false as const, error: "That player isn't in this lobby" };
       }
       nominee = nomineeId;
     }
-    await tx.inhouseLobbyPlayer.update({
-      where: { id: mine.id },
+
+    // Seam: the vote clock expires (or a resolver advances the lobby) after
+    // this caller validated its ballot but before the player-row write. The
+    // write below must re-assert both facts on the related lobby, atomically.
+    await raceHook("inhouse.castVote.beforeClaim");
+    const claimed = await tx.inhouseLobbyPlayer.updateMany({
+      where: {
+        id: mine.id,
+        lobby: {
+          status: INHOUSE_STATUS.CAPTAIN_VOTE,
+          voteEndsAt: { gt: new Date() },
+        },
+      },
       data: { votedMethod: m, votedNomineeId: nominee },
     });
+    if (claimed.count === 0) {
+      return { ok: false as const, error: "Voting just closed" };
+    }
     return { ok: true as const };
   });
   if (res.ok) await resolveCaptainVote(); // resolve early if that was the last vote
@@ -609,7 +679,8 @@ async function applyPick(
   }
   const target = lobby.players.find((p) => p.userId === targetUserId);
   if (!target) return { ok: false, error: "That player isn't in this lobby" };
-  if (target.team !== null) return { ok: false, error: "Player already drafted" };
+  if (target.team !== null)
+    return { ok: false, error: "Player already drafted" };
 
   const team = lobby.pickTeam;
   // makePick authorized the caller against the pickTeam ITS OWN read saw.
@@ -773,7 +844,8 @@ async function restoreLostPickTurn(): Promise<boolean> {
 
 /**
  * If a captain lets their pick clock run out, auto-draft the top remaining
- * player for them so the lobby never stalls. Idempotent; safe on every poll.
+ * player for them so the lobby never stalls. Idempotent and safe under
+ * concurrent maintenance calls.
  */
 export async function resolveStalledPick(): Promise<boolean> {
   await restoreLostPickTurn();
@@ -794,7 +866,9 @@ export async function resolveStalledPick(): Promise<boolean> {
         .filter((p) => p.team === null)
         .sort(
           (a, b) =>
-            b.mmr - a.mmr || a.createdAt.getTime() - b.createdAt.getTime(),
+            b.mmr - a.mmr ||
+            a.queuedAt.getTime() - b.queuedAt.getTime() ||
+            a.userId.localeCompare(b.userId),
         );
       if (pool.length === 0) return false;
       const r = await applyPick(tx, lobby.id, pool[0].userId);
@@ -992,22 +1066,30 @@ async function touchQueueHeartbeat(viewerId: string): Promise<void> {
 }
 
 /** Remove the current user from the queue. No-op if they're not queued. */
-export async function leaveQueue(viewer: SessionUser): Promise<InhouseActionResult> {
+export async function leaveQueue(
+  viewer: SessionUser,
+): Promise<InhouseActionResult> {
   await prisma.inhouseQueueEntry.deleteMany({ where: { userId: viewer.id } });
   return { ok: true };
 }
 
 /** Launch the game once teams are set — whoever hosts the in-client lobby. */
-export async function startGame(viewer: SessionUser): Promise<InhouseActionResult> {
+export async function startGame(
+  viewer: SessionUser,
+): Promise<InhouseActionResult> {
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY },
       include: { players: true },
     });
-    if (!lobby) return { ok: false as const, error: "No lobby is ready to start" };
+    if (!lobby)
+      return { ok: false as const, error: "No lobby is ready to start" };
     const isMember = lobby.players.some((p) => p.userId === viewer.id);
     if (!isMember && viewer.role !== "ADMIN") {
-      return { ok: false as const, error: "Only players in the lobby can start it" };
+      return {
+        ok: false as const,
+        error: "Only players in the lobby can start it",
+      };
     }
     // Guarded claim, not a write-by-id: an admin cancel committing between the
     // read above and this write would be silently reverted, putting ten
@@ -1033,7 +1115,12 @@ export async function startGame(viewer: SessionUser): Promise<InhouseActionResul
 type LobbyPlayerFull = {
   userId: string;
   team: number | null;
-  user: { name: string; dotaAccountId: number | null; steamId: string };
+  user: {
+    name: string;
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
+    steamId: string;
+  };
 };
 
 // One per-player line of the stored box score (mirrors the league Game blob).
@@ -1076,7 +1163,7 @@ function buildResult(
   const team1 = new Set<number>();
   const team2 = new Set<number>();
   for (const p of players) {
-    const acc = p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId);
+    const acc = effectiveDotaAccountId(p.user);
     if (acc == null || p.team == null) continue;
     accountMap.set(acc, { userId: p.userId, name: p.user.name, team: p.team });
     (p.team === 1 ? team1 : team2).add(acc);
@@ -1156,7 +1243,8 @@ function buildResult(
  * admin cancel (or a rival record with a different match id) racing the slow
  * OpenDota fetch must never be overwritten, and a CANCELLED lobby must never
  * resurrect as COMPLETED. The claim winner stamps per-player Elo deltas and
- * sends the Discord announcement, so both happen exactly once.
+ * transactionally queues the Discord announcement. A claimed outbox worker
+ * sends it after commit and retries through the site heartbeat.
  */
 async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   // The claim AND the teamFixes loop commit together, as one transaction.
@@ -1207,12 +1295,22 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
     Number.isFinite(r.startTime) && r.startTime > 0
       ? new Date(r.startTime * 1000)
       : null;
+  // Stable result recency. `updatedAt` also moves when a stranded pot retries,
+  // which can otherwise resurrect an older game's banner above the real latest
+  // result. Hoisted to keep the guarded claim's data block flat for the mutation
+  // ratchet (same rule as matchStart immediately above).
+  const completedAt = new Date();
+  // Truthful without the optional wager receipt block, so the durable event
+  // can commit with COMPLETED. Finalization enriches a still-pending row after
+  // settlement, but a process death can no longer erase the result itself.
+  const baseResultContent = inhouseResultAnnouncementContent(r);
 
   const claimed = await prisma.$transaction(async (tx) => {
     const claim = await tx.inhouseLobby.updateMany({
       where: { id: lobbyId, status: INHOUSE_STATUS.IN_PROGRESS },
       data: {
         status: INHOUSE_STATUS.COMPLETED,
+        completedAt,
         winnerTeam: r.winnerTeam,
         radiantTeam: r.radiantTeam,
         dotaMatchId: r.dotaMatchId,
@@ -1245,9 +1343,24 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
         data: { team: fix.team },
       });
     }
+    await tx.inhouseAnnouncement.create({
+      data: {
+        lobbyId,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        sequence: 1,
+        content: baseResultContent,
+        resultMatchId: r.dotaMatchId,
+      },
+    });
+    await stampResultChange(tx);
     return true;
   });
   if (!claimed) return false;
+
+  // Exact process-death seam: everything above is committed, while betting,
+  // Elo and optional announcement enrichment have not started. The heartbeat
+  // reconciler must be able to finish from columns alone after this point.
+  await raceHook("inhouse.applyResult.afterPrimaryCommit");
 
   // Pay the pot. Both boundaries around this call are load-bearing:
   //
@@ -1271,8 +1384,8 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   let settlement: Settlement | null = null;
   try {
     settlement = await settleInhouseBets(lobbyId);
-  } catch (e) {
-    console.error("[inhouse-bets] settlement failed", e);
+  } catch {
+    console.error("[inhouse-bets] settlement failed (BET_SETTLEMENT_FAILED)");
   }
 
   // Stamp each participant's Elo swing from THIS game: the lobby is now the
@@ -1301,16 +1414,9 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   for (const rec of recs) {
     if (participants.has(rec.userId)) deltas[rec.userId] = rec.lastChange;
   }
-  await prisma.inhouseLobby.update({
-    where: { id: lobbyId },
-    data: { eloDeltas: JSON.stringify(deltas) },
-  });
 
-  // Every parked client learns via the /api/sync cursor, not just this one.
-  await stampResultChange();
-
-  // Post-claim, so exactly one path — button, paste, or background scan —
-  // ever announces. Best-effort like every other inhouse send.
+  // Built before the finalization claim so the row lock below is held only for
+  // the Elo write and its durable outbox insert.
   //
   // The third boundary: the announcement is downstream of the settlement, which
   // is the only order that lets it carry the slips block (who was in for what).
@@ -1325,27 +1431,60 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
     ? settlement.bets.map((b) => ({ ...b, name: nameOf.get(b.userId) ?? "?" }))
     : null;
 
-  const radiantWin = r.winnerTeam === r.radiantTeam;
-  const mvpId = gameMvp(r.boxScore, radiantWin);
-  const mvp = mvpId ? r.boxScore.find((b) => b.userId === mvpId) : null;
-  // Assembled as a variable, not passed as a fresh literal: `slips` rides along
-  // on the argument the formatter already takes, and TypeScript only applies its
-  // excess-property check to literals at the call site. So this compiles while
-  // inhouseResultMessage still ignores the field (rendering the block is
-  // discord.ts's half of the feature) and starts feeding it the day it declares
-  // one — and if it declares a DIFFERENT shape, this stops compiling rather than
-  // quietly sending the old message.
-  const resultMessage = {
-    winnerSide: (radiantWin ? "Radiant" : "Dire") as "Radiant" | "Dire",
-    radiantScore: r.radiantScore,
-    direScore: r.direScore,
-    durationSecs: r.durationSecs,
-    mvpName: mvp?.name ?? null,
-    mvpHero: mvp ? (heroById(mvp.heroId)?.name ?? null) : null,
-    dotaMatchId: r.dotaMatchId,
-    slips,
-  };
-  await sendInhouseDiscordMessage(inhouseResultMessage(resultMessage));
+  const resultContent = inhouseResultAnnouncementContent(r, slips);
+
+  // A completed result is still voidable while settlement/history are being
+  // computed. The old update-by-id below could therefore restore eloDeltas on
+  // a CANCELLED lobby, then publish a stale result after the void correction.
+  // Yield while everything is still read-only so the exact interleaving can be
+  // tested without deadlocking a rival on this row.
+  await raceHook("inhouse.applyResult.beforeFinalizationClaim");
+
+  // Finalize only if this exact result is still current. COMPLETED already
+  // committed with a truthful base outbox row; this transaction stamps Elo and
+  // enriches that row with wager receipts only while it is still pending. No
+  // network call runs while this transaction is open. voidLastResult
+  // serializes publication through the same outbox:
+  //
+  //   * void wins first -> this claim loses, so no result event exists;
+  //   * finalization wins first -> void cancels an unsent result, or queues its
+  //     correction behind an already-leased/sent result.
+  const finalized = await prisma.$transaction(async (tx) => {
+    const claim = await tx.inhouseLobby.updateMany({
+      where: {
+        id: lobbyId,
+        status: INHOUSE_STATUS.COMPLETED,
+        dotaMatchId: r.dotaMatchId,
+      },
+      data: { eloDeltas: JSON.stringify(deltas) },
+    });
+    if (claim.count === 0) return false;
+    if (settlement) {
+      await tx.inhouseAnnouncement.updateMany({
+        where: {
+          lobbyId,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+          status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+          resultMatchId: r.dotaMatchId,
+        },
+        data: { content: resultContent },
+      });
+    }
+    await stampResultChange(tx);
+    return true;
+  });
+  if (!finalized) return false;
+
+  // Preserve the immediate announcement when Discord is healthy, but only
+  // AFTER the result + outbox transaction commits. A false/throw leaves the
+  // row PENDING for the sitewide sync heartbeat instead of burning the event.
+  try {
+    await deliverInhouseAnnouncements({ lobbyId });
+  } catch {
+    console.error(
+      "[inhouse-announcement] immediate delivery failed (DELIVERY_FAILED)",
+    );
+  }
   return true;
 }
 
@@ -1360,15 +1499,26 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
 async function findInhouseGame(
   players: LobbyPlayerFull[],
   floorSeconds: number,
-): Promise<{ result: BuiltResult | null; unreachable: boolean }> {
+  options: OpenDotaFetchOptions = {},
+): Promise<{
+  result: BuiltResult | null;
+  unreachable: boolean;
+  deadlineReached?: boolean;
+}> {
   const accounts = players
-    .map((p) => p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId))
+    .map((p) => effectiveDotaAccountId(p.user))
     .filter((a): a is number => a != null);
   if (accounts.length === 0) return { result: null, unreachable: false };
+  if (!canStartOpenDotaFetch(options)) {
+    return { result: null, unreachable: false, deadlineReached: true };
+  }
 
   const lists = await Promise.all(
-    accounts.map((acc) => fetchRecentMatchIds(acc, 10)),
+    accounts.map((acc) => fetchRecentMatchIds(acc, 10, options)),
   );
+  if (!canStartOpenDotaFetch(options) || openDotaBudgetExpired(options)) {
+    return { result: null, unreachable: false, deadlineReached: true };
+  }
   // A game shared by fewer than this many of our players isn't a candidate.
   const MIN_SHARED = 4;
   const reachable = lists.filter((l) => l !== null).length;
@@ -1381,8 +1531,7 @@ async function findInhouseGame(
   // the second requires a fetch to have actually failed, so a lobby that
   // simply has too few resolvable accounts isn't blamed on OpenDota either.
   const unreachable =
-    reachable === 0 ||
-    (reachable < accounts.length && reachable < MIN_SHARED);
+    reachable === 0 || (reachable < accounts.length && reachable < MIN_SHARED);
   const counts = new Map<number, number>();
   for (const ids of lists) {
     for (const id of ids ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -1396,9 +1545,16 @@ async function findInhouseGame(
     .map(([id]) => id);
   if (candidateIds.length === 0) return { result: null, unreachable };
 
+  if (!canStartOpenDotaFetch(options)) {
+    return { result: null, unreachable, deadlineReached: true };
+  }
+
   const matches = await Promise.all(
-    candidateIds.map((id) => fetchOpenDotaMatch(String(id))),
+    candidateIds.map((id) => fetchOpenDotaMatch(String(id), options)),
   );
+  if (!canStartOpenDotaFetch(options) || openDotaBudgetExpired(options)) {
+    return { result: null, unreachable, deadlineReached: true };
+  }
   let best: BuiltResult | null = null;
   for (const od of matches) {
     if (!od || od.start_time < floorSeconds) continue;
@@ -1469,7 +1625,8 @@ export async function autoDetectResult(
   if (!(await applyResult(lobby.id, found))) {
     return {
       ok: false,
-      error: "The lobby closed while we fetched — the result is already in (or an admin cancelled it).",
+      error:
+        "The lobby closed while we fetched — the result is already in (or an admin cancelled it).",
     };
   }
   return { ok: true };
@@ -1481,7 +1638,8 @@ export async function recordMatch(
   input: string,
 ): Promise<InhouseActionResult> {
   const matchId = parseMatchId(input);
-  if (!matchId) return { ok: false, error: "Enter a valid Dota match ID or link" };
+  if (!matchId)
+    return { ok: false, error: "Enter a valid Dota match ID or link" };
 
   const lobby = await prisma.inhouseLobby.findFirst({
     where: { status: INHOUSE_STATUS.IN_PROGRESS },
@@ -1495,11 +1653,32 @@ export async function recordMatch(
     return { ok: false, error: "Only players in the game can do that" };
   }
 
+  const providerClaim = await claimProviderCooldown(
+    "open-dota-match-import",
+    viewer.id,
+    `inhouse:${lobby.id}`,
+  );
+  if (providerClaim === "cooldown") {
+    return {
+      ok: false,
+      error:
+        "A Dota match ID was checked for this lobby recently — wait about a minute before trying another ID",
+    };
+  }
+  if (providerClaim === "unavailable") {
+    return {
+      ok: false,
+      error:
+        "Couldn't safely start the OpenDota lookup — wait a minute and try again",
+    };
+  }
+
   const od = await fetchOpenDotaMatch(matchId);
   if (!od) {
     return {
       ok: false,
-      error: "Couldn't fetch that match from OpenDota (is the ID right and public?)",
+      error:
+        "Couldn't fetch that match from OpenDota (is the ID right and public?)",
     };
   }
   // Same floor findInhouseGame enforces: a PRIOR game between the same ten
@@ -1525,27 +1704,40 @@ export async function recordMatch(
   if (!(await applyResult(lobby.id, built))) {
     return {
       ok: false,
-      error: "The lobby closed while we fetched — the result is already in (or an admin cancelled it).",
+      error:
+        "The lobby closed while we fetched — the result is already in (or an admin cancelled it).",
     };
   }
   return { ok: true };
 }
 
 /**
- * Automatic, throttled result detection run on poll: once a game has been going
- * long enough, quietly try OpenDota at most once per interval and close the
- * lobby out if we find it. Safe to call on every poll (claims the attempt
- * atomically so concurrent pollers don't all scan). Idempotent.
+ * Automatic, throttled result detection run during maintenance: once a game
+ * has been going long enough, quietly try OpenDota at most once per interval
+ * and close the lobby out if we find it. It claims the attempt atomically so
+ * concurrent worker/room recovery calls do not all scan. Idempotent.
  */
-export async function maybeAutoDetectResult(): Promise<boolean> {
+export function maybeAutoDetectResult(): Promise<boolean>;
+export function maybeAutoDetectResult(
+  options: OpenDotaFetchOptions,
+): Promise<{ recorded: boolean; deadlineReached: boolean }>;
+export async function maybeAutoDetectResult(
+  options?: OpenDotaFetchOptions,
+): Promise<boolean | { recorded: boolean; deadlineReached: boolean }> {
+  const detailed = options !== undefined;
+  const finish = (recorded: boolean, deadlineReached = false) =>
+    detailed ? { recorded, deadlineReached } : recorded;
+  const fetchOptions = options ?? {};
+  if (!canStartOpenDotaFetch(fetchOptions)) return finish(false, true);
+
   const now = Date.now();
   const lobby = await prisma.inhouseLobby.findFirst({
     where: { status: INHOUSE_STATUS.IN_PROGRESS },
     include: { players: { include: { user: true } } },
   });
-  if (!lobby || !lobby.startedAt) return false;
+  if (!lobby || !lobby.startedAt) return finish(false);
   if (now - lobby.startedAt.getTime() < INHOUSE.DETECT_MIN_MINUTES * 60_000) {
-    return false; // too early — the game can't be over yet
+    return finish(false); // too early — the game can't be over yet
   }
 
   // Claim this attempt so only one concurrent poll actually hits OpenDota.
@@ -1562,14 +1754,30 @@ export async function maybeAutoDetectResult(): Promise<boolean> {
     },
     data: { detectedAt: new Date(now) },
   });
-  if (claim.count === 0) return false;
+  if (claim.count === 0) return finish(false);
 
-  const { result: found } = await findInhouseGame(
+  const { result: found, deadlineReached } = await findInhouseGame(
     lobby.players,
     Math.floor(lobby.createdAt.getTime() / 1000),
+    fetchOptions,
   );
-  if (!found) return false;
-  return applyResult(lobby.id, found);
+  if (deadlineReached) {
+    // The attempt did not finish, so it must not buy a full backoff interval.
+    // Restore only the exact claim this invocation stamped; a newer poll or an
+    // admin result can never be overwritten by a timed-out worker.
+    await raceHook("inhouse.autoDetect.beforeDeadlineRollback");
+    await prisma.inhouseLobby.updateMany({
+      where: {
+        id: lobby.id,
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        detectedAt: new Date(now),
+      },
+      data: { detectedAt: lobby.detectedAt },
+    });
+    return finish(false, true);
+  }
+  if (!found) return finish(false);
+  return finish(await applyResult(lobby.id, found));
 }
 
 /** Admin: scrap the current lobby (stuck draft, no-shows). Players can requeue. */
@@ -1600,10 +1808,23 @@ export async function voidLastResult(
     ? await prisma.inhouseLobby.findFirst({
         where: { id: lobbyId, status: INHOUSE_STATUS.COMPLETED },
       })
-    : await prisma.inhouseLobby.findFirst({
-        where: { status: INHOUSE_STATUS.COMPLETED },
-        orderBy: { updatedAt: "desc" },
-      });
+    : ((await prisma.inhouseLobby.findFirst({
+        // PostgreSQL sorts NULLS FIRST for DESC while SQLite sorts them last.
+        // Excluding null here makes the stamped-result order provider-stable;
+        // the second query keeps pre-completedAt history voidable after deploy.
+        where: {
+          status: INHOUSE_STATUS.COMPLETED,
+          completedAt: { not: null },
+        },
+        orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+      })) ??
+      (await prisma.inhouseLobby.findFirst({
+        where: {
+          status: INHOUSE_STATUS.COMPLETED,
+          completedAt: null,
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      })));
   if (!last) {
     return {
       ok: false,
@@ -1660,25 +1881,68 @@ export async function voidLastResult(
   });
   const betCount = pot._count._all;
   const staked = pot._sum.stake ?? 0;
-
-  // Guarded claim: a concurrent void must not double-apply.
-  const voided = await prisma.inhouseLobby.updateMany({
-    where: { id: last.id, status: INHOUSE_STATUS.COMPLETED },
-    data: {
-      status: INHOUSE_STATUS.CANCELLED,
-      winnerTeam: null,
-      dotaMatchId: null,
-      durationSecs: null,
-      radiantScore: null,
-      direScore: null,
-      boxScore: "[]",
-      eloDeltas: "{}",
-    },
+  const voidContent = inhouseResultVoidedMessage({
+    betCount,
+    staked,
+    dotaMatchId: last.dotaMatchId,
   });
-  if (voided.count === 0) {
+
+  // Guarded claim + durable correction. If the result has not started sending,
+  // cancel it in the same transaction so Discord never receives a result that
+  // was already void by commit time. A SENDING result is left alone because the
+  // webhook may already have accepted it; sequence 2 then waits behind it and
+  // publishes the correction afterwards.
+  const voided = await prisma.$transaction(async (tx) => {
+    const claim = await tx.inhouseLobby.updateMany({
+      where: { id: last.id, status: INHOUSE_STATUS.COMPLETED },
+      data: {
+        status: INHOUSE_STATUS.CANCELLED,
+        winnerTeam: null,
+        dotaMatchId: null,
+        durationSecs: null,
+        radiantScore: null,
+        direScore: null,
+        boxScore: "[]",
+        eloDeltas: "{}",
+      },
+    });
+    if (claim.count === 0) return false;
+    await tx.inhouseAnnouncement.updateMany({
+      where: {
+        lobbyId: last.id,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      },
+      data: { status: INHOUSE_ANNOUNCEMENT_STATUS.CANCELLED },
+    });
+    await tx.inhouseAnnouncement.create({
+      data: {
+        lobbyId: last.id,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT_VOIDED,
+        sequence: 2,
+        content: voidContent,
+        resultMatchId: last.dotaMatchId,
+      },
+    });
+    return true;
+  });
+  if (!voided) {
     return { ok: false, error: "That result was already voided" };
   }
   await stampResultChange();
+
+  // Await the canonical settlement resolver before returning. The state flip
+  // remains the single source of truth for *why* money moves; invoking the
+  // existing sweeper here merely closes the window where a successful admin
+  // action still showed the old payout/refund until somebody next polled.
+  // Best-effort for the same reason as the site-wide resolver chain: a betting
+  // failure cannot roll back the already-committed void, and the next poll can
+  // retry the unchanged settlement state.
+  try {
+    await resolveUnsettledBets(last.id);
+  } catch {
+    console.error("[inhouse-bets] post-void sweep failed (BET_SWEEP_FAILED)");
+  }
 
   // Post-claim, so only the winner of a concurrent void writes the record —
   // the cancelLobby ordering. This action erases a result and every payout that
@@ -1698,22 +1962,15 @@ export async function voidLastResult(
     }`,
   });
 
-  // Only when there was a pot, and best-effort like every other announcement
-  // here: a dead webhook must never fail the void (`sendInhouseDiscordMessage`
-  // resolves false rather than throwing, and it rides the ALERT webhook, never
-  // the board's — the board is a message read from the BOTTOM of its channel,
-  // so posting under it defeats the whole design).
-  //
-  // A betless void stays silent on purpose: the result post it would be
-  // correcting carried no figures anyone acted on, and the channel already
-  // shows the ladder self-correcting.
-  if (betCount > 0) {
-    await sendInhouseDiscordMessage(
-      inhouseResultVoidedMessage({
-        betCount,
-        staked,
-        dotaMatchId: last.dotaMatchId,
-      }),
+  // Every successful void corrects Discord, including a betless game. The
+  // outbox event was committed with the state flip above, and this post-commit
+  // attempt preserves the old immediate UX without making a transport failure
+  // permanent. It rides the ALERT webhook, never the board's.
+  try {
+    await deliverInhouseAnnouncements({ lobbyId: last.id });
+  } catch {
+    console.error(
+      "[inhouse-announcement] void delivery failed (DELIVERY_FAILED)",
     );
   }
   return { ok: true };
@@ -1731,8 +1988,13 @@ export async function cancelLobby(
   if (!lobby) return { ok: false, error: "No active lobby" };
   const players = await prisma.inhouseLobbyPlayer.findMany({
     where: { lobbyId: lobby.id },
-    select: { userId: true, mmr: true },
+    select: { userId: true, mmr: true, queuedAt: true },
   });
+  const requeuePlayers = [...players].sort(
+    (a, b) =>
+      a.queuedAt.getTime() - b.queuedAt.getTime() ||
+      a.userId.localeCompare(b.userId),
+  );
   const cancelled = await prisma.$transaction(async (tx) => {
     // Guarded transition: if the result landed between the admin's read and
     // this write (auto-detect closing the lobby mid-confirm-dialog), the
@@ -1780,7 +2042,7 @@ export async function cancelLobby(
     // players. The heartbeat is backdated: players still on the page
     // re-confirm on their next poll, while the ghosts that likely caused the
     // cancel never do — so the same lobby can't instantly re-form around them.
-    for (const [i, p] of players.entries()) {
+    for (const [i, p] of requeuePlayers.entries()) {
       await tx.inhouseQueueEntry.upsert({
         where: { userId: p.userId },
         create: {
@@ -1823,24 +2085,30 @@ export async function cancelLobby(
       error: "The lobby just finished — its result is in, nothing to cancel.",
     };
   }
-  if (force) {
-    // The pot is the number that made this destructive, so it goes IN the
-    // summary: the AdminAction row is the whole record, and once the sweeper
-    // has refunded the bets and the lobby reads CANCELLED there is nothing left
-    // to join against. Read after the claim on purpose — a losing cancel must
-    // not log an event that never happened, and the figures don't move (a
-    // refund rewrites outcomes, never stakes).
-    const pot = await prisma.inhouseBet.aggregate({
-      where: { lobbyId: lobby.id, confirmedAt: { not: null } },
-      _sum: { stake: true },
-      _count: { _all: true },
-    });
-    await logAdminAction({
-      action: "cancelLobby",
-      summary: `Force-cancelled the live inhouse (${lobby.status}) over ${
-        pot._count._all
-      } confirmed bet(s), ${pot._sum.stake ?? 0} Cred staked — refunded in full`,
-    });
+  // Every successful admin cancellation is destructive and therefore gets an
+  // audit row, not only the forced/money-bearing variant. Read after the claim
+  // so a losing cancel logs nothing; stake figures remain stable through a
+  // refund, which changes outcomes and balances but never the original stake.
+  const pot = await prisma.inhouseBet.aggregate({
+    where: { lobbyId: lobby.id, confirmedAt: { not: null } },
+    _sum: { stake: true },
+    _count: { _all: true },
+  });
+  await logAdminAction({
+    action: "cancelLobby",
+    summary: `${force ? "Force-cancelled" : "Cancelled"} the inhouse (${lobby.status}) with ${
+      players.length
+    } player(s) — ${pot._count._all} confirmed bet(s), ${
+      pot._sum.stake ?? 0
+    } Cred staked`,
+  });
+
+  // Synchronous best-effort sweep: the action returns after the canonical
+  // refund path has had a chance to synchronize balances with CANCELLED.
+  try {
+    await resolveUnsettledBets(lobby.id);
+  } catch {
+    console.error("[inhouse-bets] post-cancel sweep failed (BET_SWEEP_FAILED)");
   }
   return { ok: true };
 }
@@ -1861,6 +2129,7 @@ type LobbyPlayerRow = {
   userId: string;
   mmr: number;
   pickIndex: number | null;
+  queuedAt: Date;
   // Record snapshot frozen at lobby formation.
   wins: number;
   losses: number;
@@ -1931,40 +2200,46 @@ type PotBlock = {
 /** Everything the inhouse room client needs, tailored to the viewing user. */
 export async function getInhouseState(
   viewer: SessionUser | null,
-  /** Set `syncBoard: false` on the MUTATION path so a button press never waits
-   *  on Discord — see the board sync at the bottom of this function. */
-  { syncBoard = true }: { syncBoard?: boolean } = {},
+  /**
+   * `runMaintenance: false` turns this into a side-effect-free spectator
+   * snapshot. Anonymous traffic must never be able to settle bets, advance a
+   * lobby, call OpenDota, or edit Discord; the leased one-minute worker and
+   * authenticated room participants retain those recovery paths.
+   *
+   * Set `syncBoard: false` on the mutation path so a button press never waits
+   * on Discord — see the board sync at the bottom of this function.
+   */
+  {
+    runMaintenance = true,
+    syncBoard = true,
+  }: { runMaintenance?: boolean; syncBoard?: boolean } = {},
 ) {
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
-  // Abandoned first: it frees the single active-lobby slot, so maybeFormLobby
-  // can form the next game on this very poll instead of the one after.
-  await resolveAbandonedLobby();
-  // …then the pot, immediately, and for the same reason the abandon sweep runs
-  // first: that sweep is what flips a dead lobby to CANCELLED, so a stake
-  // stranded on it becomes refundable on THIS poll rather than the next one.
-  // It also covers the case nothing else does — the request that won
-  // applyResult's COMPLETED claim died before it could pay out, and every
-  // result path requires IN_PROGRESS, so nothing would ever re-trigger.
-  //
-  // Wrapped, and only this one is: the chain below runs from /api/sync on every
-  // page view of the entire site. A bug in the betting code must never be able
-  // to stop ten people playing Dota, so it logs and the poll carries on; the
-  // next poll from anywhere retries the same pot.
-  try {
-    await resolveUnsettledBets();
-  } catch (e) {
-    console.error("[inhouse-bets]", e);
+  if (runMaintenance) {
+    // Abandoned first: it frees the single active-lobby slot, so maybeFormLobby
+    // can form the next game on this very poll instead of the one after.
+    await resolveAbandonedLobby();
+    // …then the pot, immediately, and for the same reason the abandon sweep
+    // runs first: that sweep is what flips a dead lobby to CANCELLED, so a
+    // stake stranded on it becomes refundable on THIS poll rather than the
+    // next one. The authenticated one-minute worker retries this independently
+    // when no participant has the room open.
+    try {
+      await resolveUnsettledBets();
+    } catch {
+      console.error("[inhouse-bets] resolver failed (BET_SWEEP_FAILED)");
+    }
+    await maybeFormLobby();
+    await resolveReadyCheck();
+    await resolveCaptainVote();
+    await resolveStalledPick();
+    await maybeAutoDetectResult();
   }
-  await maybeFormLobby();
-  await resolveReadyCheck();
-  await resolveCaptainVote();
-  await resolveStalledPick();
-  await maybeAutoDetectResult();
 
   const [queue, lobbyRow] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
-      orderBy: { joinedAt: "asc" },
+      orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
       include: { user: true },
     }),
     prisma.inhouseLobby.findFirst({
@@ -1987,9 +2262,7 @@ export async function getInhouseState(
     mmr: p.mmr,
     pickIndex: p.pickIndex,
     record:
-      p.games > 0
-        ? { wins: p.wins, losses: p.losses, games: p.games }
-        : null,
+      p.games > 0 ? { wins: p.wins, losses: p.losses, games: p.games } : null,
   });
 
   let lobby: null | {
@@ -2063,7 +2336,7 @@ export async function getInhouseState(
           winRate: p.games > 0 ? p.wins / p.games : 0,
           games: p.games,
           nominations: nominations.get(p.userId) ?? 0,
-          joinedAt: p.createdAt.getTime(),
+          joinedAt: p.queuedAt.getTime(),
         }))
         .sort((a, b) => b.mmr - a.mmr || a.name.localeCompare(b.name));
       vote = {
@@ -2163,7 +2436,12 @@ export async function getInhouseState(
       teams: [buildTeam(1), buildTeam(2)],
       pool: lobbyRow.players
         .filter((p) => p.team === null)
-        .sort((a, b) => b.mmr - a.mmr || a.createdAt.getTime() - b.createdAt.getTime())
+        .sort(
+          (a, b) =>
+            b.mmr - a.mmr ||
+            a.queuedAt.getTime() - b.queuedAt.getTime() ||
+            a.userId.localeCompare(b.userId),
+        )
         .map(toView),
       vote,
       readyCheck,
@@ -2189,8 +2467,9 @@ export async function getInhouseState(
   // Personal end-of-game payoff: the active-statuses query above drops a
   // COMPLETED lobby instantly, so the room would silently snap to the queue.
   // Probe cheaply (the 1.5s poll must not scan history every tick) for a
-  // completed lobby the viewer just played; their Elo swing was stamped into
-  // eloDeltas when the result landed, so this is a single-row read.
+  // completed lobby the viewer just played. `completedAt` is immutable result
+  // time; `updatedAt` is deliberately not used because a delayed Cred retry
+  // changes it and would resurface an old game as the newest banner.
   let lastResult: null | {
     lobbyId: string;
     winnerSide: "Radiant" | "Dire";
@@ -2204,16 +2483,24 @@ export async function getInhouseState(
      * the eight people who sat the pot out.
      */
     credDelta: number | null;
+    /** True when this bettor's payout/refund is still on the retryable sweep. */
+    credPending: boolean;
   } = null;
   if (viewer) {
     const recent = await prisma.inhouseLobby.findFirst({
       where: {
         status: INHOUSE_STATUS.COMPLETED,
-        updatedAt: { gte: new Date(now - 10 * 60_000) },
+        completedAt: { gte: new Date(now - 10 * 60_000) },
         players: { some: { userId: viewer.id } },
       },
-      orderBy: { updatedAt: "desc" },
-      include: { players: true },
+      orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+      include: {
+        players: true,
+        bets: {
+          where: { userId: viewer.id, confirmedAt: { not: null } },
+          select: { id: true },
+        },
+      },
     });
     if (recent && recent.winnerTeam != null) {
       let eloDelta = 0;
@@ -2246,6 +2533,9 @@ export async function getInhouseState(
         myTeamWon: myPlayer?.team === recent.winnerTeam,
         eloDelta,
         credDelta,
+        credPending:
+          recent.bets.length > 0 &&
+          recent.betSettlement === INHOUSE_BET_STATUS.PENDING,
       };
     }
   }

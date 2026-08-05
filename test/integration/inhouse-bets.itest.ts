@@ -46,7 +46,7 @@ import {
   INHOUSE_CRED_REASON,
   INHOUSE_STATUS,
 } from "@/lib/constants";
-import { steamIdToAccountId } from "@/lib/dota";
+import { effectiveDotaAccountId } from "@/lib/dota-account";
 import type { SessionUser } from "@/lib/auth";
 import {
   acceptMatch,
@@ -69,17 +69,17 @@ import {
   resolveUnsettledBets,
   settleInhouseBets,
 } from "@/lib/inhouse-bet-service";
-import { runResultSync } from "@/lib/result-sync-service";
 import {
-  ON_POSTGRES,
-  makeUser,
-  raceAll,
-  raceN,
-  sessionFor,
-} from "./factories";
+  deliverInhouseAnnouncements,
+  INHOUSE_ANNOUNCEMENT_KIND,
+  INHOUSE_ANNOUNCEMENT_STATUS,
+} from "@/lib/inhouse-announcement-outbox";
+import { runResultSync } from "@/lib/result-sync-service";
+import { providerCooldownKey } from "@/lib/settings";
+import { ON_POSTGRES, makeUser, raceAll, raceN, sessionFor } from "./factories";
 
 // The inhouse result path only ever touches OpenDota. Stub the two network
-// calls and keep steamIdToAccountId / classifyGame / buildResult real — the
+// calls and keep identity fallback / classifyGame / buildResult real — the
 // team reconciliation those do is exactly what the VOID_LINEUP rule reads.
 vi.mock("@/lib/dota", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/dota")>();
@@ -124,7 +124,10 @@ afterEach(() => setRaceHook(null));
 
 // ---- harness ---------------------------------------------------------------
 
-type Player = { user: Awaited<ReturnType<typeof makeUser>>; session: SessionUser };
+type Player = {
+  user: Awaited<ReturnType<typeof makeUser>>;
+  session: SessionUser;
+};
 
 /** A lobby that has finished drafting: teams locked, betting window open. */
 type ReadyLobby = {
@@ -222,11 +225,14 @@ async function nextLobby(prev: ReadyLobby): Promise<ReadyLobby> {
 async function accountOf(players: Player[]): Promise<Map<string, number>> {
   const rows = await prisma.user.findMany({
     where: { id: { in: players.map((p) => p.user.id) } },
-    select: { id: true, steamId: true, dotaAccountId: true },
+    select: {
+      id: true,
+      steamId: true,
+      dotaAccountIdV2: true,
+      legacyDotaAccountId: true,
+    },
   });
-  return new Map(
-    rows.map((u) => [u.id, u.dotaAccountId ?? steamIdToAccountId(u.steamId)!]),
-  );
+  return new Map(rows.map((u) => [u.id, effectiveDotaAccountId(u)!]));
 }
 
 /**
@@ -240,6 +246,68 @@ async function accountOf(players: Player[]): Promise<Map<string, number>> {
  */
 function startTimeAfterNow(): number {
   return Math.floor(Date.now() / 1000) + 1;
+}
+
+/**
+ * Hold N resolver calls immediately after their common candidate read. This is
+ * the deterministic contention that proves the private refund/reversal claims
+ * elect one writer; hoping Promise.all happens to line the reads up did not.
+ */
+function barrierAt(label: string, parties: number) {
+  let arrived = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return async (seen: string) => {
+    if (seen !== label) return;
+    arrived += 1;
+    if (arrived === parties) release();
+    await gate;
+  };
+}
+
+/** A minimal real pot in the terminal state consumed by the refund branch. */
+async function stageCancelledPot(label: string, stake = 100, cursorAt?: Date) {
+  const user = await makeUser(`${label}${userSeq++}`);
+  await ensureCredAccount(user.id);
+  const lobby = await prisma.inhouseLobby.create({
+    data: {
+      status: INHOUSE_STATUS.CANCELLED,
+      betSettlement: INHOUSE_BET_STATUS.PENDING,
+    },
+  });
+  const bet = await prisma.inhouseBet.create({
+    data: {
+      lobbyId: lobby.id,
+      userId: user.id,
+      team: 1,
+      stake,
+      confirmedAt: new Date(),
+    },
+  });
+  await prisma.$transaction([
+    prisma.inhouseCredit.update({
+      where: { userId: user.id },
+      data: { balance: { decrement: stake } },
+    }),
+    prisma.inhouseCreditEntry.create({
+      data: {
+        userId: user.id,
+        delta: -stake,
+        reason: INHOUSE_CRED_REASON.STAKE,
+        refId: bet.id,
+        lobbyId: lobby.id,
+      },
+    }),
+  ]);
+  if (cursorAt) {
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { updatedAt: cursorAt },
+    });
+  }
+  return { user, lobby, bet };
 }
 
 /** An OpenDota match payload with explicit per-side account lists. */
@@ -566,9 +634,9 @@ describe("inhouse betting — placement gates", () => {
 
     // The two edges are legal.
     expect((await placeInhouseBet(me, INHOUSE_BETS.MIN_STAKE)).ok).toBe(true);
-    expect((await placeInhouseBet(ctx.t1[1].session, INHOUSE_BETS.MAX_STAKE)).ok).toBe(
-      true,
-    );
+    expect(
+      (await placeInhouseBet(ctx.t1[1].session, INHOUSE_BETS.MAX_STAKE)).ok,
+    ).toBe(true);
     expect(await prisma.inhouseBet.count()).toBe(2);
     await expectLedgerClosed();
   });
@@ -754,9 +822,81 @@ describe("inhouse betting — settlement, the three worked examples", () => {
     // The room's post-game banner reads betDeltas, never re-derives the pot.
     const state = await getInhouseState(dooley.session);
     expect(state.lastResult?.credDelta).toBe(-100);
+    expect(state.lastResult?.credPending).toBe(false);
 
     await expectLedgerClosed();
     await expectZeroSum();
+  });
+
+  it("tells a bettor when a completed game's settlement is still retrying", async () => {
+    const ctx = await readyLobby();
+    const bettor = ctx.t1[0];
+    expect((await placeInhouseBet(bettor.session, 100)).ok).toBe(true);
+    await prisma.inhouseLobby.update({
+      where: { id: ctx.lobbyId },
+      data: {
+        status: INHOUSE_STATUS.COMPLETED,
+        completedAt: new Date(),
+        winnerTeam: 1,
+        radiantScore: 30,
+        direScore: 20,
+      },
+    });
+    // Simulate a recoverable database-side settlement failure. The resolver's
+    // transaction rolls back to PENDING; the room must not hide the missing
+    // Cred line and imply the debit is final.
+    await prisma.inhouseCredit.delete({ where: { userId: bettor.user.id } });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const state = await getInhouseState(bettor.session, {
+        syncBoard: false,
+      });
+      expect(state.lastResult).toMatchObject({
+        lobbyId: ctx.lobbyId,
+        credDelta: null,
+        credPending: true,
+      });
+      expect(
+        (
+          await prisma.inhouseLobby.findUniqueOrThrow({
+            where: { id: ctx.lobbyId },
+          })
+        ).betSettlement,
+      ).toBe(INHOUSE_BET_STATUS.PENDING);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("keeps the newest game banner newest when an older settlement retry updates its row", async () => {
+    const first = await readyLobby();
+    await playAndRecord(first, { winner: 1 });
+    const second = await nextLobby(first);
+    await playAndRecord(second, { winner: 2 });
+
+    const now = Date.now();
+    await prisma.inhouseLobby.update({
+      where: { id: first.lobbyId },
+      data: { completedAt: new Date(now - 60_000) },
+    });
+    await prisma.inhouseLobby.update({
+      where: { id: second.lobbyId },
+      data: { completedAt: new Date(now) },
+    });
+    // Settlement/refund retries touch generic lobby fields and therefore
+    // updatedAt. Make the older game provably newest by that mutable clock.
+    await prisma.inhouseLobby.update({
+      where: { id: first.lobbyId },
+      data: {
+        detectedAt: new Date(now + 1_000),
+        updatedAt: new Date(now + 60_000),
+      },
+    });
+
+    const state = await getInhouseState(first.players[0].session, {
+      syncBoard: false,
+    });
+    expect(state.lastResult?.lobbyId).toBe(second.lobbyId);
   });
 
   it("2: the underdog side out-stakes the favourite (120 v 280) and wins", async () => {
@@ -799,9 +939,9 @@ describe("inhouse betting — settlement, the three worked examples", () => {
   it("3: lopsided (500 v 20) — staking 500 against 20 wins 20", async () => {
     const ctx = await readyLobby();
     for (const p of ctx.t1) {
-      expect((await placeInhouseBet(p.session, INHOUSE_BETS.MAX_STAKE)).ok).toBe(
-        true,
-      );
+      expect(
+        (await placeInhouseBet(p.session, INHOUSE_BETS.MAX_STAKE)).ok,
+      ).toBe(true);
     }
     const q = ctx.t2[0];
     expect((await placeInhouseBet(q.session, 20)).ok).toBe(true);
@@ -820,7 +960,9 @@ describe("inhouse betting — settlement, the three worked examples", () => {
     // what makes the profit board net profit rather than turnover.
     const legs = await ledgerOf(ctx.t1[0].user.id);
     expect(
-      legs.map((l) => [l.reason, l.delta]).filter(([r]) => r !== INHOUSE_CRED_REASON.GRANT),
+      legs
+        .map((l) => [l.reason, l.delta])
+        .filter(([r]) => r !== INHOUSE_CRED_REASON.GRANT),
     ).toEqual([
       [INHOUSE_CRED_REASON.STAKE, -100],
       [INHOUSE_CRED_REASON.RETURN, 100],
@@ -956,7 +1098,9 @@ describe("inhouse betting — voids", () => {
 
     expect(
       (
-        await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ctx.lobbyId } })
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: ctx.lobbyId },
+        })
       ).matchStartTime?.getTime(),
     ).toBe(startMs);
     expect(await betRow(ctx.lobbyId, late.user.id)).toMatchObject({
@@ -1058,8 +1202,25 @@ describe("inhouse betting — the result claim and the played roster", () => {
     ).toBe(1);
     expect(await balanceOf(swapper.user.id)).toBe(400); // staked, not settled
 
-    // And the retry is byte-identical to the happy path — the whole point of
-    // rolling back rather than half-committing. Same match id, same button.
+    // The provider request already happened, so an immediate retry remains
+    // intentionally bounded even though the domain transaction rolled back.
+    // Once that one-minute allowance expires, the retry is byte-identical to
+    // the happy path — the whole point of rolling back rather than
+    // half-committing. Same match id, same button.
+    await expect(recordMatch(ctx.admin, String(matchId))).resolves.toEqual({
+      ok: false,
+      error: expect.stringMatching(/wait about a minute/i),
+    });
+    await prisma.setting.update({
+      where: {
+        key: providerCooldownKey(
+          "open-dota-match-import",
+          ctx.admin.id,
+          `inhouse:${ctx.lobbyId}`,
+        ),
+      },
+      data: { value: new Date(0).toISOString() },
+    });
     expect((await recordMatch(ctx.admin, String(matchId))).ok).toBe(true);
     expect(await betRow(ctx.lobbyId, swapper.user.id)).toMatchObject({
       outcome: INHOUSE_BET_OUTCOME.VOID_LINEUP,
@@ -1113,37 +1274,118 @@ describe("inhouse betting — the result claim and the played roster", () => {
       await expectLedgerClosed();
       await expectZeroSum();
     });
+
+    it("never rewrites the wager payload after a sender has leased it", async () => {
+      const ctx = await readyLobby();
+      expect((await placeInhouseBet(ctx.t1[0].session, 100)).ok).toBe(true);
+      expect((await placeInhouseBet(ctx.t2[0].session, 40)).ok).toBe(true);
+      const matchId = await stageGame(ctx, { winner: 1 });
+
+      let releaseSend!: (accepted: boolean) => void;
+      let markSendStarted!: () => void;
+      const heldSend = new Promise<boolean>((resolve) => {
+        releaseSend = resolve;
+      });
+      const sendStarted = new Promise<void>((resolve) => {
+        markSendStarted = resolve;
+      });
+      let capturedContent: string | null = null;
+      let delivery: Promise<
+        Awaited<ReturnType<typeof deliverInhouseAnnouncements>>
+      > | null = null;
+      let fired = false;
+
+      setRaceHook(
+        onceAt("inhouse.applyResult.afterPrimaryCommit", async () => {
+          fired = true;
+          // The primary commit created the truthful base result. Lease it and
+          // hold only the external send; the claim transaction has committed,
+          // so result settlement/finalization can continue without a DB lock.
+          delivery = deliverInhouseAnnouncements({
+            lobbyId: ctx.lobbyId,
+            send: async (content) => {
+              capturedContent = content;
+              markSendStarted();
+              return heldSend;
+            },
+          });
+          await sendStarted;
+        }),
+      );
+
+      let result: Awaited<ReturnType<typeof recordMatch>>;
+      let inFlightContent = "";
+      let inFlightStatus = "";
+      try {
+        result = await recordMatch(ctx.admin, String(matchId));
+        const event = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+          where: {
+            lobbyId_kind: {
+              lobbyId: ctx.lobbyId,
+              kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+            },
+          },
+        });
+        inFlightContent = event.content;
+        inFlightStatus = event.status;
+      } finally {
+        // Never strand the held delivery if recording or an assertion fails.
+        releaseSend(true);
+        if (delivery) await delivery;
+      }
+
+      expect(fired).toBe(true);
+      expect(result.ok).toBe(true);
+      expect(capturedContent).not.toBeNull();
+      expect(inFlightStatus).toBe(INHOUSE_ANNOUNCEMENT_STATUS.SENDING);
+      // A SENDING payload is immutable: changing the durable row here would
+      // make Discord receive one message while recovery records another.
+      expect(inFlightContent).toBe(capturedContent);
+      expect(
+        await prisma.inhouseAnnouncement.findUniqueOrThrow({
+          where: {
+            lobbyId_kind: {
+              lobbyId: ctx.lobbyId,
+              kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+            },
+          },
+        }),
+      ).toMatchObject({
+        status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+        content: capturedContent,
+      });
+    });
   });
 });
 
 // ---------------------------------------------------------------------------
-// The ONE refund rule. Not one of the four paths below has a line of betting
-// code in it — each flips the lobby into a state the sweeper recognises. These
-// tests exist to prove that claim, since "no edits were needed" is exactly what
-// an untested gap looks like from here.
+// The ONE refund rule. Each terminal path flips the lobby into a state the
+// canonical sweeper recognises; cancel/void now invoke that same resolver before
+// returning, while lazy lifecycle sweeps retain crash recovery. These tests pin
+// both immediate consistency and idempotent follow-up polls.
 // ---------------------------------------------------------------------------
 
 describe("inhouse betting — refunds ride the sweeper", () => {
-  it("cancelLobby: the pot comes back in full on the next poll", async () => {
+  it("cancelLobby: the pot comes back before the admin action returns", async () => {
     const ctx = await readyLobby();
     await placeInhouseBet(ctx.t1[0].session, 100);
     await placeInhouseBet(ctx.t2[0].session, 30);
 
     expect((await cancelLobby(ctx.admin)).ok).toBe(true);
-    // The cancel itself writes no money — the lobby is merely CANCELLED with a
-    // pot still marked PENDING.
+    // The state flip still drives the canonical sweeper, but cancelLobby now
+    // awaits that resolver so the success response and balances agree.
     expect(
-      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ctx.lobbyId } }))
-        .betSettlement,
-    ).toBe(INHOUSE_BET_STATUS.PENDING);
-    expect(await balanceOf(ctx.t1[0].user.id)).toBe(400);
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: ctx.lobbyId },
+        })
+      ).betSettlement,
+    ).toBe(INHOUSE_BET_STATUS.REFUNDED);
+    expect(await balanceOf(ctx.t1[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
 
-    // RACED: four pollers reach the refund together and only one may hand the
-    // money back. On SQLite `raceN` runs them in sequence (one connection, so
-    // real contention is impossible and staging it would prove nothing); under
-    // `npm run test:pg` this is the claim actually under fire.
+    // Later pollers find no leftover work and cannot hand the money back twice.
     const swept = await raceN(4, () => resolveUnsettledBets());
-    expect(swept.filter(Boolean)).toHaveLength(1);
+    expect(swept.filter(Boolean)).toHaveLength(0);
     expect(await balanceOf(ctx.t1[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
     expect(await balanceOf(ctx.t2[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
     expect(await betRow(ctx.lobbyId, ctx.t1[0].user.id)).toMatchObject({
@@ -1160,6 +1402,141 @@ describe("inhouse betting — refunds ride the sweeper", () => {
     expect(await resolveUnsettledBets()).toBe(false);
     await expectLedgerClosed();
     await expectZeroSum();
+  });
+
+  it("cancelLobby targets its own pot past a full older backlog", async () => {
+    const cursorBase = Date.now() - 120_000;
+    const stranded = await stageCancelledPot(
+      "Stranded",
+      70,
+      new Date(cursorBase),
+    );
+    // This makes the oldest refund fail after winning then rolling back its
+    // claim. Together with the next 24 markers it fills the bounded global
+    // batch, so omitting cancelLobby's target would leave its own pot debited.
+    await prisma.inhouseCredit.delete({
+      where: { userId: stranded.user.id },
+    });
+    for (let i = 1; i < 25; i += 1) {
+      await prisma.inhouseLobby.create({
+        data: {
+          status: INHOUSE_STATUS.CANCELLED,
+          betSettlement: INHOUSE_BET_STATUS.PENDING,
+          createdAt: new Date(cursorBase + i),
+          updatedAt: new Date(cursorBase + i),
+        },
+      });
+    }
+
+    const ctx = await readyLobby();
+    expect((await placeInhouseBet(ctx.t1[0].session, 90)).ok).toBe(true);
+    expect((await cancelLobby(ctx.admin)).ok).toBe(true);
+
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: ctx.lobbyId },
+        })
+      ).betSettlement,
+    ).toBe(INHOUSE_BET_STATUS.REFUNDED);
+    expect(await balanceOf(ctx.t1[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: stranded.lobby.id },
+        })
+      ).betSettlement,
+    ).toBe(INHOUSE_BET_STATUS.PENDING);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: {
+          id: { not: ctx.lobbyId },
+          betSettlement: INHOUSE_BET_STATUS.PENDING,
+        },
+      }),
+    ).toBe(25);
+  });
+
+  it("a poisoned oldest pot cannot starve a healthy later refund", async () => {
+    const poisonedCursor = new Date(Date.now() - 120_000);
+    const poisoned = await stageCancelledPot("Poisoned", 80, poisonedCursor);
+    const healthy = await stageCancelledPot(
+      "Healthy",
+      60,
+      new Date(Date.now() - 60_000),
+    );
+    await prisma.inhouseCredit.delete({
+      where: { userId: poisoned.user.id },
+    });
+
+    // The caller still learns that one row failed, but only after every other
+    // candidate in the bounded batch has had its independent attempt.
+    await expect(resolveUnsettledBets()).rejects.toThrow(
+      "1 inhouse bet settlement failed",
+    );
+
+    const [failedLobby, refundedLobby] = await Promise.all([
+      prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: poisoned.lobby.id },
+      }),
+      prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: healthy.lobby.id },
+      }),
+    ]);
+    expect(failedLobby.betSettlement).toBe(INHOUSE_BET_STATUS.PENDING);
+    expect(failedLobby.updatedAt.getTime()).toBeGreaterThan(
+      poisonedCursor.getTime(),
+    );
+    expect(refundedLobby.betSettlement).toBe(INHOUSE_BET_STATUS.REFUNDED);
+    expect(await balanceOf(healthy.user.id)).toBe(INHOUSE_BETS.START_BALANCE);
+    expect(
+      await prisma.inhouseCreditEntry.count({
+        where: {
+          reason: INHOUSE_CRED_REASON.REFUND,
+          refId: healthy.bet.id,
+        },
+      }),
+    ).toBe(1);
+  });
+
+  it("globally resolves an oldest-first batch of 25 and leaves the rest for the next poll", async () => {
+    const base = Date.now() - 120_000;
+    const lobbyIds: string[] = [];
+    for (let i = 0; i < 26; i += 1) {
+      const at = new Date(base + i);
+      const lobby = await prisma.inhouseLobby.create({
+        data: {
+          status: INHOUSE_STATUS.CANCELLED,
+          // An empty PENDING marker is a recoverable orphan state. It keeps this
+          // scheduling test focused without manufacturing 26 unrelated ledgers.
+          betSettlement: INHOUSE_BET_STATUS.PENDING,
+          createdAt: at,
+          updatedAt: at,
+        },
+      });
+      lobbyIds.push(lobby.id);
+    }
+
+    expect(await resolveUnsettledBets()).toBe(true);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { betSettlement: INHOUSE_BET_STATUS.REFUNDED },
+      }),
+    ).toBe(25);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobbyIds[25] },
+        })
+      ).betSettlement,
+    ).toBe(INHOUSE_BET_STATUS.PENDING);
+
+    expect(await resolveUnsettledBets()).toBe(true);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { betSettlement: INHOUSE_BET_STATUS.PENDING },
+      }),
+    ).toBe(0);
   });
 
   it("resolveAbandonedLobby: a stake locked on a game nobody ever hosted comes back", async () => {
@@ -1232,10 +1609,10 @@ describe("inhouse betting — refunds ride the sweeper", () => {
     );
 
     expect((await voidLastResult(ctx.admin)).ok).toBe(true);
-    // Raced for the same reason the refund is: the reversal claim elects one
-    // winner, and a second one would claw the payout back twice.
+    // The admin action synchronously invokes the same guarded reversal; later
+    // pollers must find nothing and cannot claw the payout back twice.
     const swept = await raceN(4, () => resolveUnsettledBets());
-    expect(swept.filter(Boolean)).toHaveLength(1);
+    expect(swept.filter(Boolean)).toHaveLength(0);
 
     for (const p of bettors) {
       expect({ id: p.user.id, bal: await balanceOf(p.user.id) }).toEqual({
@@ -1260,6 +1637,43 @@ describe("inhouse betting — refunds ride the sweeper", () => {
     expect(await resolveUnsettledBets()).toBe(false);
     await expectLedgerClosed();
     await expectZeroSum();
+  });
+
+  it("voidLastResult targets its reversal past a full older backlog", async () => {
+    const cursorBase = Date.now() - 120_000;
+    for (let i = 0; i < 25; i += 1) {
+      await prisma.inhouseLobby.create({
+        data: {
+          status: INHOUSE_STATUS.CANCELLED,
+          betSettlement: INHOUSE_BET_STATUS.PENDING,
+          createdAt: new Date(cursorBase + i),
+          updatedAt: new Date(cursorBase + i),
+        },
+      });
+    }
+    const ctx = await readyLobby();
+    expect((await placeInhouseBet(ctx.t1[0].session, 100)).ok).toBe(true);
+    expect((await placeInhouseBet(ctx.t2[0].session, 100)).ok).toBe(true);
+    await playAndRecord(ctx, { winner: 1 });
+
+    expect((await voidLastResult(ctx.admin)).ok).toBe(true);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: ctx.lobbyId },
+        })
+      ).betSettlement,
+    ).toBe(INHOUSE_BET_STATUS.REVERSED);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: {
+          id: { not: ctx.lobbyId },
+          betSettlement: INHOUSE_BET_STATUS.PENDING,
+        },
+      }),
+    ).toBe(25);
+    expect(await balanceOf(ctx.t1[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
+    expect(await balanceOf(ctx.t2[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
   });
 
   it("voidLastResult: leaves a record and corrects the channel it lied to", async () => {
@@ -1299,10 +1713,9 @@ describe("inhouse betting — refunds ride the sweeper", () => {
     expect(sent.mock.calls[0][1]).toBeUndefined();
   });
 
-  it("voidLastResult: a betless void is logged but says nothing in Discord", async () => {
-    // The correction exists to amend published payout figures. With no pot
-    // there are none, and a channel gets muted by notifications nobody can act
-    // on — but the destructive act is still worth an audit row.
+  it("voidLastResult: a betless void is logged and still corrects Discord", async () => {
+    // Even without payout figures, the published winner is now false and must
+    // be corrected in the same channel.
     const ctx = await readyLobby();
     await playAndRecord(ctx, { winner: 1 });
 
@@ -1310,7 +1723,9 @@ describe("inhouse betting — refunds ride the sweeper", () => {
     sent.mockClear();
     expect((await voidLastResult(ctx.admin)).ok).toBe(true);
 
-    expect(sent).not.toHaveBeenCalled();
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(sent.mock.calls[0][0]).toContain("result has been voided");
+    expect(sent.mock.calls[0][0]).toContain("0 slips");
     const log = await prisma.adminAction.findMany({
       where: { action: "voidLastResult" },
     });
@@ -1336,7 +1751,7 @@ describe("inhouse betting — refunds ride the sweeper", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The void and the claw-back it queues.
+// The void and the claw-back it now invokes before returning.
 //
 // `reverseLobbyBets` unwinds a payout with an UNFLOORED `{ increment: -payout }`
 // — deliberately, because it is undoing a specific movement rather than
@@ -1390,74 +1805,58 @@ describe("inhouse betting — voiding against live money", () => {
     // A WAIT, not a lockout: once the live game is out of the way the same
     // press goes through. The admin loses one game, not the ability to void.
     expect((await cancelLobby(second.admin)).ok).toBe(true);
-    for (let n = 0; n < 4 && (await resolveUnsettledBets()); n++);
+    expect(await resolveUnsettledBets()).toBe(false);
     // cancelLobby re-queues its ten with a backdated heartbeat; left there
     // they would form a lobby around the void this test is about to press.
     await prisma.inhouseQueueEntry.deleteMany();
 
     expect((await voidLastResult(first.admin)).ok).toBe(true);
-    expect(await resolveUnsettledBets()).toBe(true);
+    expect(await resolveUnsettledBets()).toBe(false);
     expect(await balanceOf(winner.user.id)).toBe(INHOUSE_BETS.START_BALANCE);
     await expectLedgerClosed();
     await expectZeroSum();
   });
 
-  it("adjustCred can credit an account the claw-back drove below zero", async () => {
-    // THE RESIDUAL CASE the refusal above deliberately leaves open, built
-    // through the reversal path rather than by writing a negative number into
-    // the column: `voidLastResult` checks for live stakes at READ time only
-    // (re-asserting it at the write would put the hot betting path on
-    // Serializable to close a gap of milliseconds), and the reversal it queues
-    // does not run until the next sweep. A stake placed in between lands on
-    // exactly the money that is about to be taken back.
-    const first = await readyLobby();
-    const p = first.t1[0];
-    const q = first.t2[0];
-    // Small, so the winnings are ALL of this player's balance. A player at 500
-    // can absorb a claw-back; the one this is about could not.
-    await drainTo(first.admin, p.user.id, 20);
-    expect((await placeInhouseBet(p.session, 20)).ok).toBe(true);
-    expect((await placeInhouseBet(q.session, 20)).ok).toBe(true);
-    // Short of REAL_GAME_SECONDS on purpose: the bankruptcy floor would
-    // otherwise top this player up and paper over the negative balance.
-    await playAndRecord(first, {
-      winner: 1,
-      durationSecs: INHOUSE_BETS.REAL_GAME_SECONDS - 1,
+  it("adjustCred can still repair a residual negative account", async () => {
+    // cancel/void now sweep before returning, so the former sequential setup
+    // (void, re-stake, next poll reverses) is no longer a reachable window.
+    // A true concurrent stake can still beat voidLastResult's documented
+    // read-time live-pot check, so preserve the repair contract with a ledger-
+    // backed residual state rather than weakening the assertion.
+    const admin = sessionFor(await makeUser("Negative Repair Admin", "ADMIN"));
+    const player = await makeUser("Negative Repair Player");
+    await ensureCredAccount(player.id);
+    await prisma.$transaction(async (tx) => {
+      await tx.inhouseCredit.update({
+        where: { userId: player.id },
+        data: { balance: { increment: -(INHOUSE_BETS.START_BALANCE + 20) } },
+      });
+      await tx.inhouseCreditEntry.create({
+        data: {
+          userId: player.id,
+          delta: -(INHOUSE_BETS.START_BALANCE + 20),
+          reason: INHOUSE_CRED_REASON.ADJUST,
+          refId: `negative-residual-${player.id}`,
+          note: "test residual reversal",
+        },
+      });
     });
-    expect(await balanceOf(p.user.id)).toBe(40);
-
-    // Legal: no lobby is live yet, so the refusal above has nothing to refuse.
-    expect((await voidLastResult(first.admin)).ok).toBe(true);
-
-    const second = await nextLobby(first);
-    expect((await placeInhouseBet(p.session, 40)).ok).toBe(true);
-    expect(await balanceOf(p.user.id)).toBe(0);
-
-    expect(await resolveUnsettledBets()).toBe(true);
-    // Below zero, exactly as the unfloored decrement promises. Pinned rather
-    // than fixed: a floored claw-back would leave the books open (money the
-    // ledger says was taken back and the column says wasn't).
-    expect(await balanceOf(p.user.id)).toBe(-20);
+    expect(await balanceOf(player.id)).toBe(-20);
 
     // …and this is the whole point. The one operation that repairs a negative
     // balance must not itself be refused for being applied to one. The old
     // predicate was `gte: Math.max(0, -delta)`, which on a CREDIT reads
     // `gte: 0` — so the admin found the fix locked behind the bug.
-    expect(await adjustCred(first.admin, p.user.id, 20, "repair after a void")).toEqual(
-      { ok: true },
-    );
-    expect(await balanceOf(p.user.id)).toBe(0);
+    expect(
+      await adjustCred(admin, player.id, 20, "repair after a void"),
+    ).toEqual({ ok: true });
+    expect(await balanceOf(player.id)).toBe(0);
 
     // The asymmetry is the fix, not a blanket removal: a DEBIT still
     // re-asserts affordability in its own WHERE.
-    const debit = await adjustCred(first.admin, p.user.id, -10, "not this one");
+    const debit = await adjustCred(admin, player.id, -10, "not this one");
     expect(debit.ok).toBe(false);
-    expect(await balanceOf(p.user.id)).toBe(0);
-
-    // Close the books: the live stake comes home and the league nets to zero.
-    expect((await cancelLobby(second.admin)).ok).toBe(true);
-    for (let n = 0; n < 4 && (await resolveUnsettledBets()); n++);
-    expect(await balanceOf(p.user.id)).toBe(40);
+    expect(await balanceOf(player.id)).toBe(0);
     await expectLedgerClosed();
     await expectZeroSum();
   });
@@ -1480,8 +1879,11 @@ describe("inhouse betting — the forced cancel", () => {
     expect(res.error).toContain("Cred staked");
     expect(res.error).toContain("forced cancel");
     expect(
-      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ctx.lobbyId } }))
-        .status,
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: ctx.lobbyId },
+        })
+      ).status,
     ).toBe(INHOUSE_STATUS.IN_PROGRESS);
   });
 
@@ -1495,8 +1897,11 @@ describe("inhouse betting — the forced cancel", () => {
 
     expect((await cancelLobby(ctx.admin, { force: true })).ok).toBe(true);
     expect(
-      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ctx.lobbyId } }))
-        .status,
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: ctx.lobbyId },
+        })
+      ).status,
     ).toBe(INHOUSE_STATUS.CANCELLED);
 
     const log = await prisma.adminAction.findMany({
@@ -1508,7 +1913,7 @@ describe("inhouse betting — the forced cancel", () => {
     expect(log[0].summary).toContain("2 confirmed bet(s)");
     expect(log[0].summary).toContain("150 Cred staked");
 
-    expect(await resolveUnsettledBets()).toBe(true);
+    expect(await resolveUnsettledBets()).toBe(false);
     expect(await balanceOf(ctx.t1[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
     await expectLedgerClosed();
   });
@@ -1517,7 +1922,13 @@ describe("inhouse betting — the forced cancel", () => {
     const ctx = await readyLobby();
     expect((await startGame(ctx.t1[0].session)).ok).toBe(true);
     expect((await cancelLobby(ctx.admin)).ok).toBe(true);
-    expect(await prisma.adminAction.count()).toBe(0);
+    const log = await prisma.adminAction.findMany({
+      where: { action: "cancelLobby" },
+    });
+    expect(log).toHaveLength(1);
+    expect(log[0].summary).toContain(INHOUSE_STATUS.IN_PROGRESS);
+    expect(log[0].summary).toContain(`${INHOUSE.LOBBY_SIZE} player(s)`);
+    expect(log[0].summary).toContain("0 confirmed bet(s), 0 Cred staked");
   });
 });
 
@@ -1694,7 +2105,7 @@ describe("inhouse betting — the bankruptcy floor", () => {
     ).toBe(1);
 
     expect((await voidLastResult(first.admin)).ok).toBe(true);
-    expect(await resolveUnsettledBets()).toBe(true);
+    expect(await resolveUnsettledBets()).toBe(false);
 
     // EXACTLY pre-game, which is what this function's own docstring promises:
     // 30, not the 130 that reversing the wager legs alone leaves behind.
@@ -1780,8 +2191,11 @@ describe("inhouse betting — the stranded pot", () => {
     expect(await balanceOf(ctx.t1[0].user.id)).toBe(600);
     expect(await balanceOf(ctx.t2[0].user.id)).toBe(400);
     expect(
-      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ctx.lobbyId } }))
-        .betSettlement,
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: ctx.lobbyId },
+        })
+      ).betSettlement,
     ).toBe(INHOUSE_BET_STATUS.SETTLED);
     await expectLedgerClosed();
     await expectZeroSum();
@@ -1800,9 +2214,9 @@ describe("inhouse betting — the profit board and the admin escape hatch", () =
     await playAndRecord(ctx, { winner: 1 });
 
     // An admin hands someone 250 Cred; a broke player is caught by the floor.
-    expect((await adjustCred(ctx.admin, ctx.t1[1].user.id, 250, "goodwill")).ok).toBe(
-      true,
-    );
+    expect(
+      (await adjustCred(ctx.admin, ctx.t1[1].user.id, 250, "goodwill")).ok,
+    ).toBe(true);
 
     const board = await credProfitBoard();
     expect(board.get(winner.user.id)).toBe(100);
@@ -1817,17 +2231,17 @@ describe("inhouse betting — the profit board and the admin escape hatch", () =
     const ctx = await readyLobby();
     const target = ctx.t1[0];
 
-    expect(await adjustCred(target.session, target.user.id, 50, "self-serve")).toEqual(
-      { ok: false, error: "Admins only" },
-    );
+    expect(
+      await adjustCred(target.session, target.user.id, 50, "self-serve"),
+    ).toEqual({ ok: false, error: "Admins only" });
     expect(
       (await adjustCred(ctx.admin, target.user.id, -600, "clawback")).ok,
     ).toBe(false);
     expect(await balanceOf(target.user.id)).toBe(INHOUSE_BETS.START_BALANCE);
 
-    expect((await adjustCred(ctx.admin, target.user.id, -100, "clawback")).ok).toBe(
-      true,
-    );
+    expect(
+      (await adjustCred(ctx.admin, target.user.id, -100, "clawback")).ok,
+    ).toBe(true);
     expect(await balanceOf(target.user.id)).toBe(400);
     const log = await prisma.adminAction.findMany({
       where: { action: "adjustCred" },
@@ -1950,8 +2364,8 @@ describe("inhouse betting — randomised sequences", () => {
         expect((await voidLastResult(ctx.admin)).ok).toBe(true);
       }
 
-      // Drain the sweeper — several rounds leave work, and it does one lobby
-      // per call by design (one indexed probe per resolver run).
+      // Drain the sweeper — terminal paths can leave retryable work, and each
+      // indexed resolver pass handles one bounded oldest-first batch.
       for (let n = 0; n < 4 && (await resolveUnsettledBets()); n++);
       // cancelLobby re-queues its ten with a backdated heartbeat; leaving them
       // there would let the next round's lobby form around a stale cohort.
@@ -1982,92 +2396,168 @@ describe("inhouse betting — randomised sequences", () => {
 // the rival runs on a second connection and SQLite pins one.
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!ON_POSTGRES)("inhouse betting — claims that need a staged interleaving", () => {
-  it("an admin cancel landing between the gate and the debit charges nobody", async () => {
-    const ctx = await readyLobby();
-    const me = ctx.t1[0];
+describe.skipIf(!ON_POSTGRES)(
+  "inhouse betting — claims that need a staged interleaving",
+  () => {
+    it("an admin cancel landing between the gate and the debit charges nobody", async () => {
+      const ctx = await readyLobby();
+      const me = ctx.t1[0];
 
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouseBet.placeBet.beforeDebit", async () => {
-        fired = true;
-        // A different connection, and a row the open transaction has not
-        // written — otherwise this blocks on a lock the transaction is waiting
-        // on us to release, which is a hang, not a failure.
-        await prisma.inhouseLobby.update({
-          where: { id: ctx.lobbyId },
-          data: { status: INHOUSE_STATUS.CANCELLED },
-        });
-      }),
-    );
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouseBet.placeBet.beforeDebit", async () => {
+          fired = true;
+          // A different connection, and a row the open transaction has not
+          // written — otherwise this blocks on a lock the transaction is waiting
+          // on us to release, which is a hang, not a failure.
+          await prisma.inhouseLobby.update({
+            where: { id: ctx.lobbyId },
+            data: { status: INHOUSE_STATUS.CANCELLED },
+          });
+        }),
+      );
 
-    const res = await placeInhouseBet(me.session, 100);
-    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
-    expect(res.ok).toBe(false);
-    // The confirmation claim lost, so the whole transaction rolled back: no
-    // debit, no bet row, no receipt. A `return` there instead of a throw would
-    // have COMMITTED the debit for a bet on a lobby that no longer exists.
-    expect(await balanceOf(me.user.id)).toBe(INHOUSE_BETS.START_BALANCE);
-    expect(await prisma.inhouseBet.count()).toBe(0);
-    expect(
-      await prisma.inhouseCreditEntry.count({
-        where: { reason: INHOUSE_CRED_REASON.STAKE },
-      }),
-    ).toBe(0);
-    await expectLedgerClosed();
-  });
+      const res = await placeInhouseBet(me.session, 100);
+      expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+      expect(res.ok).toBe(false);
+      // The confirmation claim lost, so the whole transaction rolled back: no
+      // debit, no bet row, no receipt. A `return` there instead of a throw would
+      // have COMMITTED the debit for a bet on a lobby that no longer exists.
+      expect(await balanceOf(me.user.id)).toBe(INHOUSE_BETS.START_BALANCE);
+      expect(await prisma.inhouseBet.count()).toBe(0);
+      expect(
+        await prisma.inhouseCreditEntry.count({
+          where: { reason: INHOUSE_CRED_REASON.STAKE },
+        }),
+      ).toBe(0);
+      await expectLedgerClosed();
+    });
 
-  it("an admin deduction landing between the gate and the debit cannot overdraw", async () => {
-    // THE deterministic pin for `balance: { gte: stake }` in the debit.
-    //
-    // A RACED version of this exists above (adjustCred vs placeInhouseBet via
-    // raceAll) and it is NOT a reliable killer. The mutation ratchet caught
-    // that, which is the whole reason this test exists. With the predicate
-    // deleted, the raced version only goes red in ONE of the two orderings:
-    //
-    //   adjustCred first → balance 0 → blind debit → −100                → RED
-    //   the bet first    → balance 0 → adjustCred's own guard refuses    → GREEN
-    //
-    // On SQLite `raceAll` runs sequentially, so it always took the first path
-    // and looked like solid coverage. On Postgres — where the ratchet actually
-    // runs — the two are genuinely concurrent, so the mutant survived about
-    // half the time and the claim graded [unprotected]. A guard caught on a
-    // coin flip is not caught.
-    //
-    // The seam removes the coin flip by committing the rival at exactly the
-    // point between the gate's read and the debit. Safe on locks: at
-    // `beforeDebit` the open transaction has written NOTHING, so the
-    // InhouseCredit row is unlocked and the rival commits instead of blocking
-    // (rule 1 in race-hook.ts — a rival that touches an already-written row is
-    // a hang, not a failure).
-    const ctx = await readyLobby();
-    const me = ctx.t1[0];
-    await drainTo(ctx.admin, me.user.id, 100);
+    it("an admin deduction landing between the gate and the debit cannot overdraw", async () => {
+      // THE deterministic pin for `balance: { gte: stake }` in the debit.
+      //
+      // A RACED version of this exists above (adjustCred vs placeInhouseBet via
+      // raceAll) and it is NOT a reliable killer. The mutation ratchet caught
+      // that, which is the whole reason this test exists. With the predicate
+      // deleted, the raced version only goes red in ONE of the two orderings:
+      //
+      //   adjustCred first → balance 0 → blind debit → −100                → RED
+      //   the bet first    → balance 0 → adjustCred's own guard refuses    → GREEN
+      //
+      // On SQLite `raceAll` runs sequentially, so it always took the first path
+      // and looked like solid coverage. On Postgres — where the ratchet actually
+      // runs — the two are genuinely concurrent, so the mutant survived about
+      // half the time and the claim graded [unprotected]. A guard caught on a
+      // coin flip is not caught.
+      //
+      // The seam removes the coin flip by committing the rival at exactly the
+      // point between the gate's read and the debit. Safe on locks: at
+      // `beforeDebit` the open transaction has written NOTHING, so the
+      // InhouseCredit row is unlocked and the rival commits instead of blocking
+      // (rule 1 in race-hook.ts — a rival that touches an already-written row is
+      // a hang, not a failure).
+      const ctx = await readyLobby();
+      const me = ctx.t1[0];
+      await drainTo(ctx.admin, me.user.id, 100);
 
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouseBet.placeBet.beforeDebit", async () => {
-        fired = true;
-        // Takes the exact Cred this bet is about to stake, on another
-        // connection, after the gate has already read an affordable balance.
-        const res = await adjustCred(
-          ctx.admin,
-          me.user.id,
-          -100,
-          "clawback in the gap",
-        );
-        expect(res.ok).toBe(true);
-      }),
-    );
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouseBet.placeBet.beforeDebit", async () => {
+          fired = true;
+          // Takes the exact Cred this bet is about to stake, on another
+          // connection, after the gate has already read an affordable balance.
+          const res = await adjustCred(
+            ctx.admin,
+            me.user.id,
+            -100,
+            "clawback in the gap",
+          );
+          expect(res.ok).toBe(true);
+        }),
+      );
 
-    const res = await placeInhouseBet(me.session, 100);
-    expect(fired).toBe(true); // not a vacuous pass
-    // The debit re-asserts affordability at the WRITE, finds 0, matches no rows
-    // and refuses — rather than charging money that is no longer there.
-    expect(res.ok).toBe(false);
-    // The assertion that kills the mutant: blind, this lands at −100.
-    expect(await balanceOf(me.user.id)).toBe(0);
-    expect(await prisma.inhouseBet.count()).toBe(0);
-    await expectLedgerClosed();
-  });
-});
+      const res = await placeInhouseBet(me.session, 100);
+      expect(fired).toBe(true); // not a vacuous pass
+      // The debit re-asserts affordability at the WRITE, finds 0, matches no rows
+      // and refuses — rather than charging money that is no longer there.
+      expect(res.ok).toBe(false);
+      // The assertion that kills the mutant: blind, this lands at −100.
+      expect(await balanceOf(me.user.id)).toBe(0);
+      expect(await prisma.inhouseBet.count()).toBe(0);
+      await expectLedgerClosed();
+    });
+
+    it("four refund sweepers elect exactly one refunder from the same read", async () => {
+      const ctx = await readyLobby();
+      expect((await placeInhouseBet(ctx.t1[0].session, 100)).ok).toBe(true);
+      expect((await placeInhouseBet(ctx.t2[0].session, 40)).ok).toBe(true);
+      await prisma.inhouseLobby.update({
+        where: { id: ctx.lobbyId },
+        data: { status: INHOUSE_STATUS.CANCELLED },
+      });
+
+      setRaceHook(barrierAt("inhouseBet.resolveUnsettled.beforeApply", 4));
+      const results = await raceN(4, () => resolveUnsettledBets(ctx.lobbyId));
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(
+        (
+          await prisma.inhouseLobby.findUniqueOrThrow({
+            where: { id: ctx.lobbyId },
+          })
+        ).betSettlement,
+      ).toBe(INHOUSE_BET_STATUS.REFUNDED);
+      expect(await balanceOf(ctx.t1[0].user.id)).toBe(
+        INHOUSE_BETS.START_BALANCE,
+      );
+      expect(await balanceOf(ctx.t2[0].user.id)).toBe(
+        INHOUSE_BETS.START_BALANCE,
+      );
+      expect(
+        await prisma.inhouseCreditEntry.count({
+          where: { reason: INHOUSE_CRED_REASON.REFUND },
+        }),
+      ).toBe(2);
+      await expectLedgerClosed();
+      await expectZeroSum();
+    });
+
+    it("four reversal sweepers elect exactly one claw-back from the same read", async () => {
+      const ctx = await readyLobby();
+      expect((await placeInhouseBet(ctx.t1[0].session, 100)).ok).toBe(true);
+      expect((await placeInhouseBet(ctx.t2[0].session, 100)).ok).toBe(true);
+      await playAndRecord(ctx, { winner: 1 });
+      await prisma.inhouseLobby.update({
+        where: { id: ctx.lobbyId },
+        // Preserve dotaMatchId and the settled bet rows: only the terminal state
+        // changes, exactly what a completed void leaves for the reversal branch.
+        data: { status: INHOUSE_STATUS.CANCELLED },
+      });
+
+      setRaceHook(barrierAt("inhouseBet.resolveUnsettled.beforeApply", 4));
+      const results = await raceN(4, () => resolveUnsettledBets(ctx.lobbyId));
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(
+        (
+          await prisma.inhouseLobby.findUniqueOrThrow({
+            where: { id: ctx.lobbyId },
+          })
+        ).betSettlement,
+      ).toBe(INHOUSE_BET_STATUS.REVERSED);
+      expect(await balanceOf(ctx.t1[0].user.id)).toBe(
+        INHOUSE_BETS.START_BALANCE,
+      );
+      expect(await balanceOf(ctx.t2[0].user.id)).toBe(
+        INHOUSE_BETS.START_BALANCE,
+      );
+      expect(
+        await prisma.inhouseCreditEntry.count({
+          where: { reason: INHOUSE_CRED_REASON.REVERSAL },
+        }),
+      ).toBe(2);
+      await expectLedgerClosed();
+      await expectZeroSum();
+    });
+  },
+);

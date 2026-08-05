@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { getGuildConfig, memoGuildMembership } from "@/lib/discord-roles";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { Card, CardBody, DiscordButton, buttonClasses } from "@/components/ui";
+import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 
 // The "you signed up, now finish" prompt.
 //
@@ -34,10 +35,14 @@ export function DiscordSetupCard({
   linkAvailable,
   autoJoins,
   next,
+  isCaptain = false,
 }: {
   linkAvailable: boolean;
   autoJoins: boolean;
   next?: string;
+  /** Captain copy addresses the team they lead instead of inventing a
+   * different captain who supposedly needs to reach them. */
+  isCaptain?: boolean;
 }) {
   // Nothing configured at all: the invite still works, so still worth asking.
   const oneClick = linkAvailable && autoJoins;
@@ -59,8 +64,10 @@ export function DiscordSetupCard({
           </h2>
           <p className="mt-1 text-sm text-muted">
             The league runs on Discord: scheduling, match-night check-ins and
-            standin scrambles all happen there. Right now your captain has no
-            way to reach you.
+            standin scrambles all happen there.{" "}
+            {isCaptain
+              ? "As a captain, you coordinate the whole team there; right now your players and league admins have no reliable way to reach you."
+              : "Right now your captain has no way to reach you."}
           </p>
         </div>
 
@@ -86,9 +93,9 @@ export function DiscordSetupCard({
 
         <p className="text-xs text-muted">
           {oneClick
-            ? "Sign in with Discord once — it proves the handle is yours and adds you to the server. We only ever read your username."
+            ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
             : linkAvailable
-              ? "Linking proves the handle is really yours, so pings actually reach you. We only ever read your username."
+              ? "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."
               : "Your handle is how captains find you."}
         </p>
       </CardBody>
@@ -193,7 +200,7 @@ export async function DiscordSetupPrompt({
   userId: string;
   seasonId: string;
 }) {
-  const [reg, user] = await Promise.all([
+  const [reg, user, member] = await Promise.all([
     prisma.registration.findUnique({
       where: { seasonId_userId: { seasonId, userId } },
       select: { status: true },
@@ -202,6 +209,10 @@ export async function DiscordSetupPrompt({
       where: { id: userId },
       select: { discordId: true, discordName: true },
     }),
+    prisma.teamMember.findUnique({
+      where: { seasonId_userId: { seasonId, userId } },
+      select: { isCaptain: true },
+    }),
   ]);
   if (reg?.status !== REGISTRATION_STATUS.ACTIVE) return null;
 
@@ -209,14 +220,16 @@ export async function DiscordSetupPrompt({
     process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
   );
   const guildCfg = getGuildConfig();
+  const autoJoins = discordMutationsAllowed() && !!guildCfg;
   // next="/": these instances live on the dashboard, and a successful link
   // should put the player back where they clicked, not on /me.
   if (!user?.discordId) {
     return (
       <DiscordSetupCard
         linkAvailable={linkAvailable}
-        autoJoins={!!guildCfg}
+        autoJoins={autoJoins}
         next="/"
+        isCaptain={!!member?.isCaptain}
       />
     );
   }
@@ -227,7 +240,7 @@ export async function DiscordSetupPrompt({
   return (
     <DiscordJoinCard
       membership={membership}
-      linkAvailable={linkAvailable}
+      linkAvailable={linkAvailable && autoJoins}
       next="/"
       handle={user.discordName}
     />

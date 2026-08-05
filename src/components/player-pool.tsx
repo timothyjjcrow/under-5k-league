@@ -68,10 +68,9 @@ export function PlayerPool({
   /** Server clock (epoch ms) for the pub recency labels — passed down so the
    *  SSR pass and hydration compute identical text. */
   now: number;
-  /** True for signed-in viewers (contact info is members-only). The payload
-   *  blanks discordName when signed out, so without this flag the component
-   *  can't tell "signed out" from "player has no Discord" — and would show
-   *  the no-Discord marker to the public internet. */
+  /** True for active league participants/admins. The payload blanks contact
+   *  for outsiders, so without this flag the component cannot distinguish a
+   *  hidden handle from a player who has no Discord. */
   showContact?: boolean;
 }) {
   // Data-presence gates (the anyDrafted precedent — never season phase).
@@ -99,7 +98,9 @@ export function PlayerPool({
     if (s === "inhouse") return anyInhouse ? "inhouse" : "mmr";
     return s && SORTS.includes(s as PoolSort) ? (s as PoolSort) : "mmr";
   });
-  const [captainOnly, setCaptainOnly] = useState(() => params.get("cap") === "1");
+  const [captainOnly, setCaptainOnly] = useState(
+    () => params.get("cap") === "1",
+  );
   const [status, setStatus] = useState<PoolStatus>(() => {
     const s = params.get("status");
     return s === "drafted" || s === "free" ? s : "all";
@@ -222,15 +223,13 @@ export function PlayerPool({
           className={cn(
             CHIP_BASE,
             "h-11 px-3 sm:h-9",
-            captainOnly
-              ? "border-brand/50 bg-brand/10 text-brand"
-              : CHIP_OFF,
+            captainOnly ? "border-brand/50 bg-brand/10 text-brand" : CHIP_OFF,
           )}
         >
           Wants captain
         </button>
 
-        {anyDrafted ? (
+        {showDraftStatus && anyDrafted ? (
           <div
             className="flex items-center gap-1"
             role="group"
@@ -281,11 +280,7 @@ export function PlayerPool({
             looking; this line yields rather than offering a second control with
             the same name two inches above it. */}
         {filtersActive && filtered.length > 0 ? (
-          <button
-            type="button"
-            onClick={resetFilters}
-            className={textLink()}
-          >
+          <button type="button" onClick={resetFilters} className={textLink()}>
             Clear filters
           </button>
         ) : null}
@@ -334,7 +329,9 @@ export function PlayerPool({
               const sc = scout?.[p.userId];
               const ih = sc?.inhouse;
               const pub = sc?.pub;
-              const activity = pub ? pubActivity(pub.lastPlayedAt, nowMs) : null;
+              const activity = pub
+                ? pubActivity(pub.lastPlayedAt, nowMs)
+                : null;
               // One quote line per row: the captain note (written TO captains)
               // beats the player's own goals; the goals fill the slot when no
               // note exists. `statement` is only sent when it would render.
@@ -344,27 +341,27 @@ export function PlayerPool({
                   ? { text: sc.statement, label: "Their goals" }
                   : null;
               return (
-              <li
-                key={p.userId}
-                className={cn(
-                  grid,
-                  "grid items-center px-4 py-3 transition-colors hover:bg-surface-2/40",
-                )}
-              >
-                {/* 1 — avatar */}
-                <PlayerLink userId={p.userId} className="shrink-0">
-                  <Avatar name={p.name} src={p.avatar} size={34} />
-                </PlayerLink>
-
-                {/* 2 — name, contact, note */}
-                <span className="min-w-0">
-                  <PlayerLink
-                    userId={p.userId}
-                    className="block truncate text-sm font-medium"
-                  >
-                    {p.name}
+                <li
+                  key={p.userId}
+                  className={cn(
+                    grid,
+                    "grid items-center px-4 py-3 transition-colors hover:bg-surface-2/40",
+                  )}
+                >
+                  {/* 1 — avatar */}
+                  <PlayerLink userId={p.userId} className="shrink-0">
+                    <Avatar name={p.name} src={p.avatar} size={34} />
                   </PlayerLink>
-                  {/* mt-2, not mt-0.5: the name and the Dotabuff link are two
+
+                  {/* 2 — name, contact, note */}
+                  <span className="min-w-0">
+                    <PlayerLink
+                      userId={p.userId}
+                      className="block truncate text-sm font-medium"
+                    >
+                      {p.name}
+                    </PlayerLink>
+                    {/* mt-2, not mt-0.5: the name and the Dotabuff link are two
                       separate destinations stacked in one cell, and once both
                       carry TAP_SAFE their hit boxes were overlapping by 6px —
                       a band where a tap landed on whichever painted last. A
@@ -374,197 +371,205 @@ export function PlayerPool({
                       routine, and two TAP_SAFE targets on wrapped lines 4px
                       apart overlap by ~4px (each grows 4px toward the other).
                       8px of real spacing is the stacked-TAP_SAFE floor. */}
-                  <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
-                    {/* Facts before actions: the scouting tokens lead, the
+                    <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
+                      {/* Facts before actions: the scouting tokens lead, the
                         outbound links follow. Plain text — no new tap targets
                         on a line already carrying two. */}
-                    {ih ? (
-                      <span
-                        className="tabular-nums lg:hidden"
-                        title={inhouseTitle(ih)}
-                      >
-                        {inhouseToken(ih)}
-                      </span>
-                    ) : null}
-                    {pub ? (
-                      <span className="tabular-nums" title={pubTitle(pub, nowMs)}>
-                        {pubToken(pub)}
-                      </span>
-                    ) : null}
-                    {pub && pub.topHeroes.length > 0 ? (
-                      /* What they ACTUALLY play — the self-typed signature
+                      {ih ? (
+                        <span
+                          className="tabular-nums lg:hidden"
+                          title={inhouseTitle(ih)}
+                        >
+                          {inhouseToken(ih)}
+                        </span>
+                      ) : null}
+                      {pub ? (
+                        <span
+                          className="tabular-nums"
+                          title={pubTitle(pub, nowMs)}
+                        >
+                          {pubToken(pub)}
+                        </span>
+                      ) : null}
+                      {pub && pub.topHeroes.length > 0 ? (
+                        /* What they ACTUALLY play — the self-typed signature
                          heroes live in their own column; these are OpenDota's
                          lifetime most-played. role="img" + a spoken label per
                          the decorative-indicator convention; each icon's title
                          names the hero and its record. */
-                      <span
-                        role="img"
-                        aria-label={`Most played: ${pub.topHeroes
-                          .map((h) => heroById(h.heroId)?.name ?? `Hero #${h.heroId}`)
-                          .join(", ")}`}
-                        className="flex items-center gap-1"
-                      >
-                        {pub.topHeroes.map((h) => {
-                          const hero = heroById(h.heroId);
-                          // title on the ICON, not a wrapper — the browser
-                          // shows the innermost title, and the img fills any
-                          // span around it.
-                          return hero ? (
-                            <span key={h.heroId} aria-hidden>
-                              <HeroIcon
-                                hero={hero}
-                                size={18}
-                                title={pubHeroTitle(h)}
-                              />
-                            </span>
-                          ) : null;
-                        })}
-                      </span>
-                    ) : null}
-                    {activity?.quiet ? (
-                      <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
-                        last played {activity.label}
-                      </span>
-                    ) : null}
-                    {p.accountId ? (
-                      <a
-                        href={`https://www.dotabuff.com/players/${p.accountId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={textLink()}
-                      >
-                        Dotabuff ↗
-                      </a>
-                    ) : null}
-                    <DiscordTag
-                      name={p.discordName}
-                      verified={p.discordVerified}
-                    />
-                    {showContact && !p.discordName ? (
-                      /* The absence IS the information on draft night: this
+                        <span
+                          role="img"
+                          aria-label={`Most played: ${pub.topHeroes
+                            .map(
+                              (h) =>
+                                heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
+                            )
+                            .join(", ")}`}
+                          className="flex items-center gap-1"
+                        >
+                          {pub.topHeroes.map((h) => {
+                            const hero = heroById(h.heroId);
+                            // title on the ICON, not a wrapper — the browser
+                            // shows the innermost title, and the img fills any
+                            // span around it.
+                            return hero ? (
+                              <span key={h.heroId} aria-hidden>
+                                <HeroIcon
+                                  hero={hero}
+                                  size={18}
+                                  title={pubHeroTitle(h)}
+                                />
+                              </span>
+                            ) : null;
+                          })}
+                        </span>
+                      ) : null}
+                      {activity?.quiet ? (
+                        <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
+                          last played {activity.label}
+                        </span>
+                      ) : null}
+                      {p.accountId ? (
+                        <a
+                          href={`https://www.dotabuff.com/players/${p.accountId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={textLink()}
+                        >
+                          Dotabuff ↗
+                        </a>
+                      ) : null}
+                      <DiscordTag
+                        name={p.discordName}
+                        verified={p.discordVerified}
+                      />
+                      {showContact && !p.discordName ? (
+                        /* The absence IS the information on draft night: this
                          player can't be reached where the league lives. Only
-                         for signed-in viewers — the payload blanks handles
-                         when signed out, and this must not read as data. */
+                         for authorized league viewers — hidden handles must
+                         never be presented as missing data. */
+                        <span
+                          className="text-muted"
+                          title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
+                        >
+                          no Discord
+                        </span>
+                      ) : null}
+                    </span>
+                    {quote ? (
                       <span
-                        className="text-muted/70"
-                        title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
+                        className="mt-1 block truncate text-xs italic text-muted"
+                        title={quote.label}
                       >
-                        no Discord
+                        &ldquo;{quote.text}&rdquo;
                       </span>
                     ) : null}
                   </span>
-                  {quote ? (
-                    <span
-                      className="mt-1 block truncate text-xs italic text-muted"
-                      title={quote.label}
-                    >
-                      &ldquo;{quote.text}&rdquo;
-                    </span>
-                  ) : null}
-                </span>
 
-                {/* 3 — MMR + medal. The default sort key, so it gets the
+                  {/* 3 — MMR + medal. The default sort key, so it gets the
                     tabular figure treatment and its own right-aligned column
                     rather than being one wrapping fragment among six. Stays on
                     the name's row at every width — it is the one number a
                     scanning captain wants beside the name. */}
-                <span className="flex items-center justify-end gap-1.5">
-                  <RankBadge rankTier={p.rankTier} />
-                  {p.mmr > 0 ? (
-                    <span className="text-sm font-semibold tabular-nums text-fg">
-                      {p.mmr}
-                    </span>
-                  ) : (
-                    <span
-                      className="text-sm text-muted/70"
-                      title="No MMR on this signup"
-                    >
-                      —
-                    </span>
-                  )}
-                </span>
+                  <span className="flex items-center justify-end gap-1.5">
+                    <RankBadge rankTier={p.rankTier} />
+                    {p.mmr > 0 ? (
+                      <span className="text-sm font-semibold tabular-nums text-fg">
+                        {p.mmr}
+                      </span>
+                    ) : (
+                      <span
+                        className="text-sm text-muted"
+                        title="No MMR on this signup"
+                      >
+                        —
+                      </span>
+                    )}
+                  </span>
 
-                {/* 3b — inhouse record, lg+ only (below lg it rides the meta
+                  {/* 3b — inhouse record, lg+ only (below lg it rides the meta
                     line above). Claimed MMR beside the observed rating is the
                     exact comparison a bidding captain makes. Renders only when
                     the league has ANY inhouse data (the column exists then);
                     a player without games gets an empty cell, never a dash.
                     Not a link — zero tap-target obligations. */}
-                {anyInhouse ? (
-                  <span
-                    className="hidden lg:flex lg:flex-col lg:items-end"
-                    title={ih ? inhouseTitle(ih) : undefined}
-                  >
-                    {ih ? (
-                      <>
-                        <span
-                          className={cn(
-                            "text-sm font-semibold tabular-nums",
-                            // The rankInhouse rule: provisionals are dimmed and
-                            // never ranked.
-                            ih.rank == null && "text-muted",
-                          )}
-                        >
-                          {ih.rating}
-                          {ih.rank != null ? (
-                            <span className="ml-1 text-xs font-normal text-muted">
-                              #{ih.rank}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="text-xs tabular-nums text-muted">
-                          {ih.wins}–{ih.losses}
-                          {ih.rank == null ? ` · ${ih.games}g` : ""}
-                        </span>
-                      </>
-                    ) : null}
-                  </span>
-                ) : null}
+                  {anyInhouse ? (
+                    <span
+                      className="hidden lg:flex lg:flex-col lg:items-end"
+                      title={ih ? inhouseTitle(ih) : undefined}
+                    >
+                      {ih ? (
+                        <>
+                          <span
+                            className={cn(
+                              "text-sm font-semibold tabular-nums",
+                              // The rankInhouse rule: provisionals are dimmed and
+                              // never ranked.
+                              ih.rank == null && "text-muted",
+                            )}
+                          >
+                            {ih.rating}
+                            {ih.rank != null ? (
+                              <span className="ml-1 text-xs font-normal text-muted">
+                                #{ih.rank}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="text-xs tabular-nums text-muted">
+                            {ih.wins}–{ih.losses}
+                            {ih.rank == null ? ` · ${ih.games}g` : ""}
+                          </span>
+                        </>
+                      ) : null}
+                    </span>
+                  ) : null}
 
-                {/* 4 — roles, and (below md) the hero strip riding along with
+                  {/* 4 — roles, and (below md) the hero strip riding along with
                     them: both answer "what does this player play", and packing
                     them onto one phone row is what keeps a row to three lines. */}
-                <span className={cn(CELL, "flex flex-wrap items-center gap-2")}>
-                  <RoleBadges roles={p.roles} />
-                  <span className="md:hidden">
-                    <HeroList value={p.favoriteHeroes} size={22} max={6} />
+                  <span
+                    className={cn(CELL, "flex flex-wrap items-center gap-2")}
+                  >
+                    <RoleBadges roles={p.roles} />
+                    <span className="md:hidden">
+                      <HeroList value={p.favoriteHeroes} size={22} max={6} />
+                    </span>
                   </span>
-                </span>
 
-                {/* 5 — draft status / captain interest. DOM order puts this
+                  {/* 5 — draft status / captain interest. DOM order puts this
                     BEFORE heroes so md gets its five tracks in the right order;
                     `xl:order` swaps the two back for the wide layout, where
                     heroes want the column to the LEFT of status.
                     It spans both phone tracks rather than sitting in track 3 —
                     an `auto` track sized by a "Techies Anonymous $4" chip stole
                     ~170px back off the name column on the row above. */}
-                <span
-                  className={cn(
-                    CELL,
-                    "flex flex-wrap items-center gap-1.5 justify-end md:justify-end xl:order-2",
-                  )}
-                >
-                  {p.wantsCaptain ? (
-                    <Badge tone="brand">Wants captain</Badge>
-                  ) : null}
-                  {p.drafted ? (
-                    draftInfo?.[p.userId] ? (
-                      <TeamChip info={draftInfo[p.userId]} />
-                    ) : (
-                      <Badge tone="success">Drafted</Badge>
-                    )
-                  ) : showDraftStatus ? (
-                    <Badge tone="accent">Free agent</Badge>
-                  ) : null}
-                </span>
+                  <span
+                    className={cn(
+                      CELL,
+                      "flex flex-wrap items-center gap-1.5 justify-end md:justify-end xl:order-2",
+                    )}
+                  >
+                    {p.wantsCaptain ? (
+                      <Badge tone="brand">Wants captain</Badge>
+                    ) : null}
+                    {p.drafted ? (
+                      draftInfo?.[p.userId] ? (
+                        <TeamChip info={draftInfo[p.userId]} />
+                      ) : (
+                        <Badge tone="success">Drafted</Badge>
+                      )
+                    ) : showDraftStatus ? (
+                      <Badge tone="accent">Free agent</Badge>
+                    ) : null}
+                  </span>
 
-                {/* 6 — signature heroes in their own column, xl only: between
+                  {/* 6 — signature heroes in their own column, xl only: between
                     md and xl there is no track to spare, and above they ride
                     with the roles. */}
-                <span className={cn(CELL, "hidden xl:order-1 xl:block")}>
-                  <HeroList value={p.favoriteHeroes} size={22} max={4} />
-                </span>
-              </li>
+                  <span className={cn(CELL, "hidden xl:order-1 xl:block")}>
+                    <HeroList value={p.favoriteHeroes} size={22} max={4} />
+                  </span>
+                </li>
               );
             })}
           </ul>

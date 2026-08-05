@@ -1,32 +1,44 @@
-// Vercel build step for the database layer. `prisma db push` mutates whatever
-// database DATABASE_URL points at, and Vercel env vars are often scoped to all
-// environments — so an unconditional push meant a PREVIEW deploy of a WIP
-// branch could push its half-finished schema into the live production DB
-// (db push has no migration history, so there is no rollback). Only production
-// deploys may push; every other environment just generates the Prisma client
-// (which the Next build still needs).
+// Production migration step for the canonical Vercel build. It runs after
+// environment + committed-migration validation, but BEFORE Prisma generation
+// and `next build`: the old deployment can continue serving while an additive,
+// backward-compatible migration lands, and a later compile failure never
+// promotes incompatible code. `prisma migrate deploy` applies only reviewed,
+// committed SQL and has no accept-data-loss escape hatch.
 //
-//   node scripts/build-db.mjs            # decide from VERCEL_ENV and run
-//   BUILD_DB_DRY_RUN=1 node scripts/...  # print the decision, run nothing
-import { execSync } from "node:child_process";
+// Preview, development, and local builds are an intentional no-op here. Their
+// databases must be provisioned independently; a preview must never mutate the
+// production target merely because credentials were scoped too broadly.
+//
+//   node scripts/build-db.mjs  # decide from VERCEL_ENV and run
+//
+// BUILD_DB_DRY_RUN=1 is a unit-test seam only. It must be paired with
+// NODE_ENV=test; any other value or environment fails closed so a stray deploy
+// setting cannot silently suppress the production schema command.
+import { execFileSync } from "node:child_process";
 
-/** Exported for tests via dry-run output: the command for an environment. */
+/** Exported for tests: the command selected for a deployment environment. */
 export function commandFor(vercelEnv) {
-  // --accept-data-loss: db push IS this project's migration mechanism (no
-  // migrate history), and without the flag the build fails on ANY warning —
-  // even a purely additive one (a new nullable unique column blocked the
-  // 2026-07 Discord-linking deploy). The safety net for genuinely destructive
-  // changes is `npm run db:backup` before shipping schema changes (README),
-  // plus the production-only gate below.
-  return vercelEnv === "production"
-    ? "prisma db push --accept-data-loss"
-    : "prisma generate";
+  return vercelEnv === "production" ? "prisma migrate deploy" : null;
 }
 
 const cmd = commandFor(process.env.VERCEL_ENV);
-console.log(
-  `build-db: VERCEL_ENV=${process.env.VERCEL_ENV ?? "(unset)"} → ${cmd}`,
-);
-if (!process.env.BUILD_DB_DRY_RUN) {
-  execSync(`npx ${cmd}`, { stdio: "inherit" });
+
+const dryRunConfigured = process.env.BUILD_DB_DRY_RUN !== undefined;
+const testDryRun =
+  process.env.NODE_ENV === "test" && process.env.BUILD_DB_DRY_RUN === "1";
+
+if (dryRunConfigured && !testDryRun) {
+  console.error(
+    "build-db: BUILD_DB_DRY_RUN is allowed only as exact value 1 when NODE_ENV=test",
+  );
+  process.exitCode = 1;
+} else {
+  console.log(
+    `build-db: VERCEL_ENV=${process.env.VERCEL_ENV ?? "(unset)"} → ${cmd ?? "skip migration deploy"}${testDryRun ? " (test dry run)" : ""}`,
+  );
+  if (cmd && !testDryRun) {
+    execFileSync("npx", ["prisma", "migrate", "deploy"], {
+      stdio: "inherit",
+    });
+  }
 }

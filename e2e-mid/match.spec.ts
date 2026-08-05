@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // Match pages in both mid-season states: a completed series' box score (MVP
 // chip, report-card grades) and an unplayed match's preview (scouting report).
@@ -30,12 +30,109 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/schedule");
 
-  // The tonight-retimed open matches render kickoff times, not scores; their
-  // details links sit in the current (expanded) week. The first details link
-  // on the page belongs to the current week when past weeks are collapsed.
-  await page.getByRole("link", { name: "details →" }).first().click();
+  // The staged LIVE row already has a recorded game and correctly renders its
+  // box score. Select a SCHEDULED row by its kickoff <time> so this check keeps
+  // exercising the pre-game scouting state regardless of within-week order.
+  const scheduledDetails = page.locator(
+    '#fixtures div:has(> a[href^="/matches/"]):has(time) > a[href^="/matches/"]',
+  );
+  await expect(scheduledDetails.first()).toBeVisible();
+  await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
   await expect(page.getByText("Scouting report")).toBeVisible();
+
+  assertNoErrors();
+});
+
+test("captains can report an open series and get a clear correction handoff once it is final", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.goto(
+    "/api/auth/dev?name=Result%20Captain&steamId=76561190000991001&redirect=/schedule",
+  );
+
+  // stage.ts assigns this identity to one scheduled fixture's home captain.
+  // Resolve that fixture through the captain's own check-in banner rather than
+  // relying on within-week insertion order (or hard-coding a generated id).
+  const checkIn = page.getByRole("button", { name: "✓ I'm in" });
+  await expect(checkIn).toBeVisible();
+  const checkInBanner = checkIn.locator(
+    'xpath=ancestor::div[.//a[normalize-space()="details →"]][1]',
+  );
+  const openHref = await checkInBanner
+    .getByRole("link", { name: "details →" })
+    .getAttribute("href");
+  expect(openHref).toMatch(/^\/matches\//);
+
+  await page.goto(openHref!);
+  await expect(
+    page.getByRole("heading", { name: "Report your result" }),
+  ).toBeVisible();
+  const matchRef = page.getByRole("textbox", {
+    name: "Dota match ID or URL",
+  });
+  await expect(matchRef).toBeVisible();
+  await expect(
+    page.getByText(
+      "Paste a numeric Dota match ID or an OpenDota/Dotabuff match URL.",
+    ),
+  ).toBeVisible();
+  const autoFetch = page.getByRole("button", { name: "Auto-fetch games" });
+  const addGame = page.getByRole("button", { name: "Add game" });
+  await expect(autoFetch).toBeVisible();
+  await expect(addGame).toBeVisible();
+
+  // A malformed reference is rejected before any OpenDota request. This also
+  // proves the shared ActionForm keeps a captain's pasted value on an error
+  // and returns both controls to an actionable state.
+  await matchRef.fill("not-a-match");
+  await addGame.click();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Enter a valid match id or URL" }),
+  ).toBeVisible();
+  await expect(matchRef).toHaveValue("not-a-match");
+  await expect(autoFetch).toBeEnabled();
+  await expect(addGame).toBeEnabled();
+  await expectNoHorizontalOverflow(page, "/matches/[id] captain result form");
+
+  // Capture the dynamically staged captain's team from the match itself, then
+  // use the team filter to reach a completed fixture for the same captain.
+  // Filtering expands every week, so the first detail link is a played series.
+  const captainTeam = page.locator('#main a[href^="/teams/"]').first();
+  const captainTeamName = (await captainTeam.textContent())?.trim();
+  expect(captainTeamName).toBeTruthy();
+  await page.goto("/schedule");
+  await page
+    .getByRole("button", { name: captainTeamName!, exact: true })
+    .click();
+  // Scope out the separate "Your next match" check-in banner, which carries
+  // its own details link above the five filtered regular-season rows.
+  const teamMatches = page
+    .locator("#fixtures")
+    .getByRole("link", { name: "details →" });
+  await expect(teamMatches).toHaveCount(5);
+  await teamMatches.first().click();
+
+  await expect(
+    page.getByText("Series complete", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Need a result correction?" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Report your result" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("textbox", { name: "Dota match ID or URL" }),
+  ).toHaveCount(0);
+  await expectNoHorizontalOverflow(
+    page,
+    "/matches/[id] captain correction state",
+  );
 
   assertNoErrors();
 });

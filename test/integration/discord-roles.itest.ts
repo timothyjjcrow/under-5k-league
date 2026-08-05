@@ -102,6 +102,7 @@ beforeEach(() => {
   process.env.DISCORD_GUILD_ID = GUILD;
   delete process.env.DISCORD_INHOUSE_ROLE_ID;
   delete process.env.DISCORD_API_BASE;
+  delete process.env.VERCEL_ENV;
   // The membership memo is process-global; a "member" cached by one test
   // would answer for a different test's stand-in responses.
   _clearMembershipMemoForTests();
@@ -135,6 +136,18 @@ describe("configuration gate", () => {
       roleId: ROLE,
     });
     expect(await pingOptInAvailable()).toBe(true);
+  });
+
+  it("keeps read diagnostics configured but hides mutations in preview", async () => {
+    process.env.VERCEL_ENV = "preview";
+    await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, ROLE);
+
+    expect(await getRoleConfig()).toEqual({
+      token: "test-token",
+      guildId: GUILD,
+      roleId: ROLE,
+    });
+    expect(await pingOptInAvailable()).toBe(false);
   });
 });
 
@@ -178,6 +191,20 @@ describe("setPingRole", () => {
     expect(
       await setPingRole(MEMBER, true, { ...cfg(), apiBase: "http://127.0.0.1:1" }),
     ).toBe("failed");
+  });
+
+  it("makes no guild mutation request from a Vercel preview", async () => {
+    process.env.VERCEL_ENV = "preview";
+
+    respond = () => ({ status: 200, body: { roles: [ROLE] } });
+    expect(await hasPingRole(MEMBER, cfg())).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].method).toBe("GET");
+    recorded = [];
+
+    expect(await setPingRole(MEMBER, true, cfg())).toBe("failed");
+    expect(await setPingRole(MEMBER, false, cfg())).toBe("failed");
+    expect(recorded).toHaveLength(0);
   });
 });
 
@@ -381,7 +408,7 @@ describe("getPingHealth — the setup diagnostic", () => {
 describe("getDiscordReach — the denominator", () => {
   it("counts only ACTIVE registrations for the season", async () => {
     const season = await makeSeason({});
-    const other = await makeSeason({});
+    const other = await makeSeason({ isActive: false });
     const linked = await makeUser("Linked");
     const plain = await makeUser("Plain");
     const withdrawn = await makeUser("Gone");
@@ -497,6 +524,13 @@ describe("joinGuild (OAuth guilds.join)", () => {
         apiBase: "http://127.0.0.1:1",
       }),
     ).toBe("failed");
+  });
+
+  it("makes no guild join request from a Vercel preview", async () => {
+    process.env.VERCEL_ENV = "preview";
+
+    expect(await joinGuild(MEMBER, "tok", guildCfg())).toBe("failed");
+    expect(recorded).toHaveLength(0);
   });
 });
 

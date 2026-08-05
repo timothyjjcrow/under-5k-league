@@ -1,16 +1,17 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getSeasonGameScores } from "@/lib/cached-queries";
-import { parseGamePlayers } from "@/lib/player-stats";
+import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import {
   fantasyCap,
+  fantasyPrices,
   fantasyStandings,
   ownershipByPlayer,
   pointsByPlayer,
-  type FantasyGame,
 } from "@/lib/fantasy";
 import { FANTASY } from "@/lib/constants";
 import { saveFantasyRoster } from "@/app/actions/fantasy";
@@ -31,16 +32,47 @@ import {
   textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { shareMetadata } from "@/lib/share-metadata";
+import { singleSearchParam } from "@/lib/search-params";
 
-export const metadata = { title: "Fantasy" };
+type FantasySearchParams = { season?: string | string[] };
 
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<FantasySearchParams>;
+}): Promise<Metadata> {
+  const seasonId = singleSearchParam((await searchParams).season);
+  if (seasonId === null) notFound();
+  const generic = () =>
+    shareMetadata(
+      "Fantasy",
+      "Build a salary-capped fantasy five from the drafted league and score from real GGD2L games.",
+      "/fantasy",
+    );
+  if (!seasonId) return generic();
+  const season = await prisma.season.findUnique({
+    where: { id: seasonId },
+    select: { name: true, isActive: true },
+  });
+  if (!season) notFound();
+  if (season.isActive) return generic();
+  const path = `/fantasy?${new URLSearchParams({ season: seasonId })}`;
+  return shareMetadata(
+    `${season.name} fantasy`,
+    `Final fantasy standings and rosters from ${season.name}.`,
+    path,
+  );
+}
 
 export default async function FantasyPage({
   searchParams,
 }: {
-  searchParams: Promise<{ season?: string }>;
+  searchParams: Promise<FantasySearchParams>;
 }) {
-  const { season: seasonParam } = await searchParams;
+  const seasonParam = singleSearchParam((await searchParams).season);
+  if (seasonParam === null) notFound();
   // ?season=<id> shows an archived season's fantasy league (the leaders/meta/
   // recap pattern). FantasyRoster rows outlive archival — they cascade only on
   // season DELETE — so without this every past season's fantasy champion
@@ -91,7 +123,11 @@ export default async function FantasyPage({
   const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
-  const [members, regs, games, rosters] = await Promise.all([
+  const [draft, members, regs, games, gameCount, rosters] = await Promise.all([
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
     prisma.teamMember.findMany({
       where: { seasonId: season.id },
       include: { user: true, team: true },
@@ -102,41 +138,79 @@ export default async function FantasyPage({
       select: { userId: true, mmr: true },
     }),
     getSeasonGameScores(season.id),
+    // Unlike the cached scoring scan above, the competitive lock must be an
+    // authoritative read. Immediate invalidation keeps boards fresh, but a
+    // cache is still not the right source for enabling a competitive write.
+    prisma.game.count({ where: { match: { seasonId: season.id } } }),
     prisma.fantasyRoster.findMany({
       where: { seasonId: season.id },
       include: { user: true, picks: { include: { player: true } } },
     }),
   ]);
 
+  const phaseOpen = postAuctionWorkOpen(season.status, draft?.status);
+  const isFinal = readOnly || season.status === "COMPLETE";
   if (members.length === 0) {
+    return (
+      <div className="space-y-6">
+        <PageTitle
+          title="Fantasy"
+          subtitle={`${season.name}${readOnly ? " · archived" : ""}`}
+        />
+        <EmptyState
+          title={
+            isFinal
+              ? "No fantasy league on record"
+              : "Fantasy opens after the draft"
+          }
+          description={
+            isFinal
+              ? "This season has no drafted roster pool to build final fantasy standings from."
+              : "Once teams are drafted you'll pick a fantasy five from the rosters — points score from their real games."
+          }
+        />
+      </div>
+    );
+  }
+  // COMPLETE is a read-only final-board phase, not a reason to hide the
+  // feature. Only pre-auction active phases stop here; archived and completed
+  // seasons continue through the same standings renderer with writes locked.
+  if (!readOnly && !phaseOpen && season.status !== "COMPLETE") {
     return (
       <div className="space-y-6">
         <PageTitle title="Fantasy" subtitle={season.name} />
         <EmptyState
           title="Fantasy opens after the draft"
-          description="Once teams are drafted you'll pick a fantasy five from the rosters — points score from their real games."
+          description="When the auction is complete, build your five before the first league game is imported."
         />
       </div>
     );
   }
 
   const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
+  const priceByUser = fantasyPrices(
+    new Map(members.map((m) => [m.userId, mmrByUser.get(m.userId) ?? 0])),
+  );
   const candidates = members.map((m) => ({
     userId: m.userId,
     name: m.user.name,
     avatar: m.user.avatar,
     rankTier: m.user.rankTier,
-    mmr: mmrByUser.get(m.userId) ?? 0,
+    mmr: priceByUser.get(m.userId) ?? 0,
+    mmrEstimated:
+      (mmrByUser.get(m.userId) ?? 0) <= 0 &&
+      (priceByUser.get(m.userId) ?? 0) > 0,
     teamName: m.team.name,
     isCaptain: m.isCaptain,
   }));
-  const cap = fantasyCap(candidates.map((c) => c.mmr));
+  const cap = fantasyCap([...priceByUser.values()]);
   // `readOnly` folds into `locked`, which is the ONE branch that decides
   // whether the picker renders. That makes the archived view structurally
   // read-only rather than visually so: there is no path to a FantasyPicker
   // whose submit would edit the CURRENT season (saveFantasyRoster resolves
   // the active season itself and would accept it silently).
-  const locked = readOnly || games.length > 0;
+  const locked =
+    readOnly || !phaseOpen || season.fantasyLockedAt != null || gameCount > 0;
 
   // A saved pick can reference a since-released player. Pre-lock, that pick
   // must stay visible in the picker (and removable) or the manager is stuck:
@@ -154,6 +228,7 @@ export default async function FantasyPage({
         avatar: p.player.avatar,
         rankTier: p.player.rankTier,
         mmr: mmrByUser.get(p.userId) ?? 0,
+        mmrEstimated: false,
         teamName: "released",
         isCaptain: false,
       });
@@ -161,7 +236,10 @@ export default async function FantasyPage({
   }
 
   const playerPoints = pointsByPlayer(
-    games.map((g) => ({ radiantWin: g.radiantWin, players: parseGamePlayers<FantasyGame["players"][number]>(g.players) })),
+    games.map((g) => ({
+      radiantWin: g.radiantWin,
+      players: trustedGamePlayers(decodeGamePlayers(g.players)),
+    })),
   );
   const standings = fantasyStandings(
     rosters.map((r) => ({
@@ -202,7 +280,12 @@ export default async function FantasyPage({
         rankTier: m?.user.rankTier ?? null,
         value: points,
         valueLabel: `${points} pts`,
-        hint: m ? `picked by ${pct}% · ${m.team.name}` : `picked by ${pct}%`,
+        hint:
+          rosters.length > 0
+            ? m
+              ? `picked by ${pct}% · ${m.team.name}`
+              : `picked by ${pct}%`
+            : (m?.team.name ?? "league player"),
         isViewer: viewer?.id === userId,
       };
     });
@@ -213,13 +296,19 @@ export default async function FantasyPage({
         title="Fantasy"
         // cap 0 = no roster MMRs are known — "under 0 MMR" would read as
         // nonsense, so drop the cap phrasing until there's a real number.
-        subtitle={`${season.name} · ${
-          cap > 0
-            ? `pick five under ${cap.toLocaleString()} MMR`
-            : "pick your fantasy five"
-        } — points from real games`}
+        subtitle={`${season.name}${readOnly ? " · archived" : ""} · ${
+          locked
+            ? isFinal
+              ? "final standings and fantasy fives"
+              : "live scoring and locked fantasy fives"
+            : cap > 0
+              ? `pick five under ${cap.toLocaleString()} MMR`
+              : "uncapped — roster ratings are unavailable"
+        }${locked ? "" : " — points from real games"}`}
         action={
-          locked ? (
+          readOnly ? (
+            <Badge tone="neutral">Archived</Badge>
+          ) : locked ? (
             <Badge tone="accent">Rosters locked</Badge>
           ) : (
             <Badge tone="info">Picks open</Badge>
@@ -227,11 +316,12 @@ export default async function FantasyPage({
         }
       />
 
-      {standings.length > 0 ? (
+      {locked && standings.length > 0 ? (
         <Card>
           <CardHeader
             title="Fantasy standings"
             subtitle={`${standings.length} manager${standings.length === 1 ? "" : "s"} · scoring: ${FANTASY.KILL}/kill, ${FANTASY.ASSIST}/assist, ${FANTASY.DEATH}/death, +${FANTASY.WIN}/win, economy bonus`}
+            headingLevel={2}
           />
           <CardBody className="divide-y divide-line/60 p-0">
             {standings.map((s, i) => (
@@ -277,8 +367,42 @@ export default async function FantasyPage({
                 <span className="shrink-0 font-mono text-base font-semibold tabular-nums">
                   {s.points}
                 </span>
+                <details className="w-full pl-9 text-xs text-muted sm:hidden">
+                  <summary className="cursor-pointer py-1 underline-offset-2 hover:text-info hover:underline">
+                    View fantasy five
+                  </summary>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {s.breakdown.slice(0, 5).map((b) => (
+                      <span
+                        key={b.userId}
+                        className="rounded bg-surface-2 px-1.5 py-0.5"
+                      >
+                        <PlayerLink userId={b.userId}>
+                          {playerName.get(b.userId) ?? "?"}
+                        </PlayerLink>{" "}
+                        <span className="font-mono tabular-nums">
+                          {b.points}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </details>
               </div>
             ))}
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {!locked && rosters.length > 0 ? (
+        <Card>
+          <CardBody className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span>
+              <b>{rosters.length}</b> manager
+              {rosters.length === 1 ? " has" : "s have"} entered.
+            </span>
+            <span className="text-muted">
+              Everyone else&apos;s five stays private until rosters lock.
+            </span>
           </CardBody>
         </Card>
       ) : null}
@@ -286,8 +410,13 @@ export default async function FantasyPage({
       {locked && topScorers.length > 0 ? (
         <LeaderBoard
           title="Top scorers"
-          subtitle={`fantasy points from every imported game · ownership across ${rosters.length} roster${rosters.length === 1 ? "" : "s"}`}
+          subtitle={
+            rosters.length > 0
+              ? `fantasy points from every imported game · ownership across ${rosters.length} roster${rosters.length === 1 ? "" : "s"}`
+              : "fantasy points from every imported game · no managers entered this season"
+          }
           rows={topScorers}
+          headingLevel={2}
         />
       ) : null}
 
@@ -296,14 +425,16 @@ export default async function FantasyPage({
           aside={
             readOnly
               ? "· archived — these were the final fives"
-              : locked
-                ? "· locked for the season — scores update as games are imported"
-                : "· picks lock when the first game is imported"
+              : season.status === "COMPLETE"
+                ? "· season complete — these are the final fives"
+                : locked
+                  ? "· locked for the season — scores update as games are imported"
+                  : "· picks lock when the first game is imported"
           }
         >
           {myRoster
             ? "Your fantasy five"
-            : readOnly
+            : locked
               ? "Fantasy fives"
               : "Pick your fantasy five"}
         </SectionTitle>
@@ -312,7 +443,7 @@ export default async function FantasyPage({
             "Sign in to play fantasy" over a closed season promises a game that
             cannot be played — the same class as the SIGNUPS dashboard's ask
             with no control behind it. */}
-        {!viewer && !readOnly ? (
+        {!viewer && !locked ? (
           <EmptyState
             title="Sign in to play fantasy"
             description="Anyone with a Steam login can manage a fantasy five — you don't need to be on a team."
@@ -331,7 +462,11 @@ export default async function FantasyPage({
                     key={p.id}
                     className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 text-sm"
                   >
-                    <Avatar name={p.player.name} src={p.player.avatar} size={24} />
+                    <Avatar
+                      name={p.player.name}
+                      src={p.player.avatar}
+                      size={24}
+                    />
                     <PlayerLink userId={p.userId}>{p.player.name}</PlayerLink>
                     <span className="font-mono text-xs tabular-nums text-muted">
                       {playerPoints.get(p.userId) ?? 0} pts
@@ -340,9 +475,26 @@ export default async function FantasyPage({
                 ))}
               </CardBody>
             </Card>
+          ) : !viewer ? (
+            <EmptyState
+              title={
+                rosters.length > 0
+                  ? isFinal
+                    ? "Final fantasy fives"
+                    : "Fantasy fives are locked"
+                  : "No fantasy entries on record"
+              }
+              description={
+                rosters.length > 0
+                  ? "The standings above show every manager's locked five and current score."
+                  : "Nobody submitted a fantasy five before entries locked."
+              }
+            />
           ) : (
             <EmptyState
-              title={readOnly ? "No fantasy five on record" : "Rosters are locked"}
+              title={
+                readOnly ? "No fantasy five on record" : "Rosters are locked"
+              }
               description={
                 readOnly
                   ? "This season's fantasy league is closed — the final standings are above."
@@ -352,8 +504,18 @@ export default async function FantasyPage({
           )
         ) : (
           <Card>
-            <CardBody>
-              <ActionForm action={saveFantasyRoster} className="space-y-4">
+            <CardBody className="space-y-4">
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm text-muted">
+                <b className="text-fg">How scoring works:</b> {FANTASY.KILL} per
+                kill, {FANTASY.ASSIST} per assist, {FANTASY.DEATH} per death,
+                and +{FANTASY.WIN} for a win. Economy adds {FANTASY.GPM} per GPM
+                and {FANTASY.LAST_HIT} per last hit in each imported game.
+              </div>
+              <ActionForm
+                action={saveFantasyRoster}
+                hidden={{ expectedSeasonId: season.id }}
+                className="space-y-4"
+              >
                 <FantasyPicker
                   candidates={candidates}
                   slots={FANTASY.SLOTS}

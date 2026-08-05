@@ -18,6 +18,7 @@ export const MID_DB_URL = `file:${path.resolve(
 const MID_PORT = 3212;
 
 const seedChain = [
+  "node scripts/prepare-sqlite-test-db.mjs midseasonE2e",
   "npx prisma db push --skip-generate --accept-data-loss",
   "npx tsx scripts/seed-fixture.ts",
   "npx tsx e2e-mid/stage.ts",
@@ -48,17 +49,23 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     // Playwright polls the URL before globalSetup runs, so the command must
-    // make the DB servable itself; globalSetup re-seeds for the
-    // reuse-an-existing-server path (seeding resets first — running twice is
-    // harmless).
+    // make the DB servable itself; globalSetup re-seeds for the local reuse
+    // path (seeding resets first — running twice is harmless).
     command: `${seedChain} && npm run dev -- -p ${MID_PORT}`,
     url: `http://localhost:${MID_PORT}`,
-    reuseExistingServer: true,
+    // CI must prove this checkout can boot its own server. Local reruns may
+    // reuse the suite-owned port and isolated fixture database.
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     env: {
       DATABASE_URL: MID_DB_URL,
       FIXTURE_MODE: "regular",
       ALLOW_DEV_LOGIN: "true",
+      // This suite compiles most post-draft routes in one dev-server process.
+      // Give Next's dev worker the same test-only heap ceiling as the primary
+      // e2e suite so it does not restart between late-suite navigations.
+      NODE_OPTIONS:
+        `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=8192`.trim(),
     },
   },
   globalSetup: "./e2e-mid/global-setup.ts",

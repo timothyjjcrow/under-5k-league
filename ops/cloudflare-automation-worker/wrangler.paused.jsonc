@@ -1,0 +1,15 @@
+{
+  "name": "ggd2l-automation-scheduler",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-04",
+  "workers_dev": false,
+  "vars": {
+    "AUTOMATION_URL": "https://ggd2l.vercel.app/api/cron/automation"
+  },
+  "triggers": {
+    "crons": []
+  },
+  "secrets": {
+    "required": ["AUTOMATION_SECRET"]
+  }
+}

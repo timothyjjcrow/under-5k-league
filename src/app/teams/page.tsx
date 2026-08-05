@@ -3,9 +3,12 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { draftRecap } from "@/lib/draft-recap";
+import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
 import { formByTeam } from "@/lib/team-matches";
+import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   Avatar,
   Badge,
@@ -18,6 +21,7 @@ import {
   PlayerLink,
   RankBadge,
   TeamCrest,
+  buttonClasses,
   textLink,
 } from "@/components/ui";
 
@@ -27,14 +31,30 @@ export default async function TeamsPage() {
   const season = await getActiveSeason();
   if (!season) {
     return (
-      <div>
+      <div className="space-y-6">
         <PageTitle title="Teams" />
-        <EmptyState title="No active season" />
+        <EmptyState
+          title="League offseason"
+          description="There are no active rosters right now. Past teams, standings, and champions remain available in Season history."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Link href="/seasons" className={buttonClasses("secondary", "sm")}>
+                Season history
+              </Link>
+              <Link href="/hall-of-fame" className={buttonClasses("secondary", "sm")}>
+                Hall of Fame
+              </Link>
+              <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
+                Play an inhouse →
+              </Link>
+            </div>
+          }
+        />
       </div>
     );
   }
 
-  const [teams, matches] = await Promise.all([
+  const [teams, matches, draft] = await Promise.all([
     prisma.team.findMany({
       where: { seasonId: season.id },
       orderBy: { draftOrder: "asc" },
@@ -47,6 +67,10 @@ export default async function TeamsPage() {
       where: { seasonId: season.id },
       orderBy: [{ week: "asc" }, { createdAt: "asc" }],
     }),
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
   ]);
 
   if (teams.length === 0) {
@@ -57,8 +81,8 @@ export default async function TeamsPage() {
           title="No teams yet"
           description={
             season.status === "SIGNUPS"
-              ? "Teams are formed once signups close and the draft runs."
-              : "Teams will appear here once the draft begins."
+              ? "Teams appear here as league administrators designate captains during signups."
+              : "Teams will appear here once captains are designated and rosters are formed."
           }
         />
       </div>
@@ -71,7 +95,9 @@ export default async function TeamsPage() {
   );
   const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
   const rowOf = new Map(standings.map((s) => [s.teamId, s]));
-  const played = matches.some((m) => m.status === "COMPLETED" && m.phase === "REGULAR");
+  const played = matches.some(
+    (m) => m.status === "COMPLETED" && m.phase === "REGULAR",
+  );
   const isDraft = season.status === "DRAFT";
   // Recent W/L/D per team (matches are already ordered chronologically above).
   const forms = formByTeam(
@@ -80,14 +106,33 @@ export default async function TeamsPage() {
   );
 
   // Draft-night superlatives (biggest spend, best steal, …) — MMR from signups.
-  const memberIds = teams.flatMap((t) => t.members.map((m) => m.userId));
-  const regs = memberIds.length
+  const registrationUserIds = [
+    ...new Set([
+      ...teams.map((team) => team.captainId),
+      ...teams.flatMap((team) => team.members.map((member) => member.userId)),
+    ]),
+  ];
+  const regs = registrationUserIds.length
     ? await prisma.registration.findMany({
-        where: { seasonId: season.id, userId: { in: memberIds } },
-        select: { userId: true, mmr: true },
+        where: { seasonId: season.id, userId: { in: registrationUserIds } },
+        select: { userId: true, mmr: true, status: true, type: true },
       })
     : [];
   const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
+  const displayBudgets = draftBudgetsForDisplay({
+    seasonIsActive: season.isActive,
+    seasonStatus: season.status,
+    draftStatus: draft?.status,
+    baseBudget: season.draftBudget,
+    budgetMmrWeight: season.budgetMmrWeight,
+    teamSize: season.teamSize,
+    teams,
+    captainMmrs: regs.filter(
+      (registration) =>
+        registration.status === REGISTRATION_STATUS.ACTIVE &&
+        registration.type === REGISTRATION_TYPE.PLAYER,
+    ),
+  });
   const recap = draftRecap(
     teams.flatMap((t) =>
       t.members.map((m) => ({
@@ -113,6 +158,10 @@ export default async function TeamsPage() {
     teams.map((t) => t.id),
   );
   const powerName = new Map(teams.map((t) => [t.id, t.name]));
+  const withdrawnTeamIds = new Set(
+    teams.filter((team) => team.withdrawn).map((team) => team.id),
+  );
+  const championPresentation = resolveChampionPresentation(season, matches);
 
   return (
     <div className="space-y-6">
@@ -121,17 +170,11 @@ export default async function TeamsPage() {
         subtitle={`${season.name} · ${teams.length} teams`}
         action={
           isDraft ? (
-            <Link
-              href="/draft"
-              className={textLink("text-sm")}
-            >
+            <Link href="/draft" className={textLink("text-sm")}>
               Draft room →
             </Link>
           ) : (
-            <Link
-              href="/schedule"
-              className={textLink("text-sm")}
-            >
+            <Link href="/schedule" className={textLink("text-sm")}>
               Standings →
             </Link>
           )
@@ -182,6 +225,15 @@ export default async function TeamsPage() {
                   >
                     {powerName.get(row.teamId) ?? "?"}
                   </Link>
+                  {withdrawnTeamIds.has(row.teamId) ? (
+                    <Badge
+                      tone="danger"
+                      className="shrink-0 px-1.5 py-0 text-[10px]"
+                      title="Withdrawn teams retain played results but cannot qualify for playoffs"
+                    >
+                      Withdrawn
+                    </Badge>
+                  ) : null}
                   <span
                     className={cn(
                       "font-mono text-xs tabular-nums",
@@ -272,7 +324,8 @@ export default async function TeamsPage() {
         {ordered.map((t) => {
           const rank = rankOf.get(t.id) ?? 0;
           const row = rowOf.get(t.id);
-          const isChampion = season.championTeamId === t.id;
+          const isChampion = championPresentation.championTeamId === t.id;
+          const budget = displayBudgets.byTeam.get(t.id) ?? t.budget;
           return (
             <Card
               key={t.id}
@@ -293,17 +346,38 @@ export default async function TeamsPage() {
                       <span className="truncate">{t.name}</span>
                       {isChampion ? <span title="Champion">🏆</span> : null}
                     </Link>
-                    <p className="mt-0.5 truncate text-sm text-muted">
-                      Captain:{" "}
-                      <PlayerLink userId={t.captainId} className="text-muted">
-                        {t.captain.name}
-                      </PlayerLink>
-                    </p>
+                    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5 text-sm text-muted">
+                      <p className="min-w-0 truncate">
+                        Captain:{" "}
+                        <PlayerLink userId={t.captainId} className="text-muted">
+                          {t.captain.name}
+                        </PlayerLink>
+                      </p>
+                      {t.withdrawn ? (
+                        <Badge
+                          tone="danger"
+                          className="shrink-0"
+                          title="Remaining fixtures were forfeited; this team is excluded from playoff seeding"
+                        >
+                          Withdrawn
+                        </Badge>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
                 <div className="shrink-0">
-                  {isDraft ? (
-                    <Badge tone="accent">${t.budget} left</Badge>
+                  {isDraft || displayBudgets.isProjected ? (
+                    <Badge
+                      tone="accent"
+                      title={
+                        displayBudgets.isProjected
+                          ? "Projected starting budget; finalized when the auction starts"
+                          : "Remaining auction budget"
+                      }
+                    >
+                      ${budget}
+                      {displayBudgets.isProjected ? " projected" : " left"}
+                    </Badge>
                   ) : played && row ? (
                     <div className="text-right">
                       <div className="text-lg font-semibold tabular-nums">
@@ -336,7 +410,11 @@ export default async function TeamsPage() {
                       userId={m.userId}
                       className="my-0 flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
                     >
-                      <Avatar name={m.user.name} src={m.user.avatar} size={20} />
+                      <Avatar
+                        name={m.user.name}
+                        src={m.user.avatar}
+                        size={20}
+                      />
                       <span>{m.user.name}</span>
                       {m.isCaptain ? (
                         <Badge tone="accent" className="px-1.5 py-0">
@@ -356,7 +434,7 @@ export default async function TeamsPage() {
                   }).map((_, i) => (
                     <span
                       key={`empty-${i}`}
-                      className="rounded-full border border-dashed border-line/70 px-3 py-1 text-xs text-muted/60"
+                      className="rounded-full border border-dashed border-line/70 px-3 py-1 text-xs text-muted"
                     >
                       empty
                     </span>

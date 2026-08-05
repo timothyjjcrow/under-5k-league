@@ -6,6 +6,11 @@ import { parseInhouseBox } from "@/lib/inhouse-box";
 import { gameMvp } from "@/lib/achievements";
 import { heroById } from "@/lib/heroes";
 import { formatMatchTime } from "@/lib/match-time";
+import {
+  INHOUSE_HISTORY_PAGE_SIZE,
+  inhouseHistoryPage,
+  inhousePlayedAt,
+} from "@/lib/inhouse-history";
 import { voidInhouseResult } from "@/app/actions/inhouse-admin";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { LocalTime } from "@/components/local-time";
@@ -17,30 +22,44 @@ import {
   EmptyState,
   PageTitle,
   PlayerLink,
+  buttonClasses,
   textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 export const metadata = {
   title: "Inhouse history",
-  description: "Every completed inhouse game — scores, MVPs, and box-score links.",
+  description:
+    "Every completed inhouse game — scores, MVPs, and box-score links.",
 };
-
-const HISTORY_LIMIT = 100;
 
 // The permanent archive behind /inhouse's four recent cards: one compact row
 // per completed game, so the ladder's evidence never becomes unreachable.
-export default async function InhouseHistoryPage() {
+export default async function InhouseHistoryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string | string[] }>;
+}) {
   // Admins get a per-row Void — the durable home for "the scan picked up the
   // wrong game". The room's own void button requires the admin to have PLAYED
   // the game and vanishes 10 minutes after it; this page is where a reported
   // wrong result actually gets fixed.
-  const viewer = await getSessionUser();
+  const [viewer, total, query] = await Promise.all([
+    getSessionUser(),
+    prisma.inhouseLobby.count({
+      where: { status: INHOUSE_STATUS.COMPLETED },
+    }),
+    searchParams,
+  ]);
   const isAdmin = viewer?.role === "ADMIN";
+  const { page, pages, skip } = inhouseHistoryPage(query.page, total);
   const lobbies = await prisma.inhouseLobby.findMany({
     where: { status: INHOUSE_STATUS.COMPLETED },
-    orderBy: { createdAt: "desc" },
-    take: HISTORY_LIMIT,
+    // `id` makes page boundaries stable when a fixture/import creates several
+    // rows with the same database timestamp.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip,
+    take: INHOUSE_HISTORY_PAGE_SIZE,
     select: {
       id: true,
       winnerTeam: true,
@@ -50,6 +69,8 @@ export default async function InhouseHistoryPage() {
       radiantScore: true,
       direScore: true,
       boxScore: true,
+      matchStartTime: true,
+      startedAt: true,
       createdAt: true,
     },
   });
@@ -59,16 +80,16 @@ export default async function InhouseHistoryPage() {
     const radiantWin = l.winnerTeam != null && l.winnerTeam === l.radiantTeam;
     const mvpId = players.length ? gameMvp(players, radiantWin) : null;
     const mvp = mvpId ? players.find((p) => p.userId === mvpId) : null;
-    return { lobby: l, radiantWin, mvp };
+    return { lobby: l, radiantWin, mvp, playedAt: inhousePlayedAt(l) };
   });
+  const first = total === 0 ? 0 : skip + 1;
+  const last = skip + lobbies.length;
 
   return (
     <div className="space-y-6">
       <PageTitle
         title="Inhouse history"
-        subtitle={`Every recorded inhouse game${
-          lobbies.length === HISTORY_LIMIT ? ` (latest ${HISTORY_LIMIT})` : ""
-        } — the ladder's paper trail.`}
+        subtitle={`${total} recorded inhouse ${total === 1 ? "game" : "games"} — the ladder's complete paper trail.`}
         action={
           <Link href="/inhouse" className={textLink("text-sm")}>
             ← Back to the inhouse
@@ -81,7 +102,11 @@ export default async function InhouseHistoryPage() {
       <Card className="overflow-hidden">
         <CardHeader
           title="Completed games"
-          subtitle={`${lobbies.length} on record, newest first`}
+          subtitle={
+            total > 0
+              ? `${first}–${last} of ${total}, newest first`
+              : "No completed games yet"
+          }
         />
         <CardBody className="p-0">
           {rows.length === 0 ? (
@@ -92,129 +117,174 @@ export default async function InhouseHistoryPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-line text-left text-xs uppercase text-muted">
-                    <th className="px-5 py-2.5 font-medium">Played</th>
-                    <th className="px-2 py-2.5 text-center font-medium">Score</th>
-                    <th className="px-2 py-2.5 font-medium">Winner</th>
-                    <th className="hidden px-2 py-2.5 font-medium md:table-cell">
-                      MVP
-                    </th>
-                    <th className="hidden px-2 py-2.5 text-right font-medium sm:table-cell">
-                      Length
-                    </th>
-                    <th className="px-5 py-2.5 text-right font-medium">Match</th>
-                    {isAdmin ? (
-                      <th className="px-5 py-2.5 text-right font-medium">
-                        Admin
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <caption className="sr-only">
+                    Completed inhouse games with played time, score, winner,
+                    MVP, duration, OpenDota match and admin actions.
+                  </caption>
+                  <thead>
+                    <tr className="border-b border-line text-left text-xs uppercase text-muted">
+                      <th className="px-5 py-2.5 font-medium">Played</th>
+                      <th className="px-2 py-2.5 text-center font-medium">
+                        Score
                       </th>
-                    ) : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(({ lobby, radiantWin, mvp }) => {
-                    const dur = lobby.durationSecs ?? 0;
-                    const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
-                    const mvpHero = mvp ? heroById(mvp.heroId) : null;
-                    return (
-                      <tr
-                        key={lobby.id}
-                        className="border-b border-line/50 last:border-0"
-                      >
-                        <td className="whitespace-nowrap px-5 py-2.5 text-muted">
-                          <LocalTime
-                            ts={lobby.createdAt.getTime()}
-                            variant="short"
-                            initial={formatMatchTime(lobby.createdAt, "short")}
-                          />
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-2.5 text-center font-mono tabular-nums">
-                          <span
-                            className={cn(
-                              radiantWin ? "text-success" : "text-muted",
-                            )}
-                          >
-                            {lobby.radiantScore ?? 0}
-                          </span>
-                          <span className="px-1 text-muted">–</span>
-                          <span
-                            className={cn(
-                              !radiantWin ? "text-danger" : "text-muted",
-                            )}
-                          >
-                            {lobby.direScore ?? 0}
-                          </span>
-                        </td>
-                        <td className="px-2 py-2.5">
-                          <Badge tone={radiantWin ? "success" : "danger"}>
-                            {radiantWin ? "Radiant" : "Dire"}
-                          </Badge>
-                        </td>
-                        <td className="hidden max-w-[14rem] px-2 py-2.5 md:table-cell">
-                          {mvp?.userId ? (
-                            <span className="flex min-w-0 items-center gap-1.5">
-                              <span aria-hidden>🏅</span>
-                              <PlayerLink
-                                userId={mvp.userId}
-                                className="min-w-0 truncate"
-                              >
-                                {mvp.name ?? "Unknown"}
-                              </PlayerLink>
-                              {mvpHero ? (
-                                <span className="hidden truncate text-xs text-muted lg:inline">
-                                  {mvpHero.name}
-                                </span>
-                              ) : null}
+                      <th className="px-2 py-2.5 font-medium">Winner</th>
+                      <th className="hidden px-2 py-2.5 font-medium md:table-cell">
+                        MVP
+                      </th>
+                      <th className="hidden px-2 py-2.5 text-right font-medium sm:table-cell">
+                        Length
+                      </th>
+                      <th className="px-5 py-2.5 text-right font-medium">
+                        Match
+                      </th>
+                      {isAdmin ? (
+                        <th className="px-5 py-2.5 text-right font-medium">
+                          Admin
+                        </th>
+                      ) : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(({ lobby, radiantWin, mvp, playedAt }) => {
+                      const dur = lobby.durationSecs ?? 0;
+                      const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
+                      const mvpHero = mvp ? heroById(mvp.heroId) : null;
+                      return (
+                        <tr
+                          key={lobby.id}
+                          id={`result-${lobby.id}`}
+                          className="scroll-mt-24 border-b border-line/50 last:border-0"
+                        >
+                          <td className="whitespace-nowrap px-5 py-2.5 text-muted">
+                            <LocalTime
+                              ts={playedAt.getTime()}
+                              variant="short"
+                              initial={formatMatchTime(playedAt, "short")}
+                            />
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-2.5 text-center font-mono tabular-nums">
+                            <span
+                              className={cn(
+                                radiantWin ? "text-success" : "text-muted",
+                              )}
+                            >
+                              {lobby.radiantScore ?? 0}
                             </span>
-                          ) : (
-                            <span className="text-muted">—</span>
-                          )}
-                        </td>
-                        <td className="hidden px-2 py-2.5 text-right tabular-nums text-muted sm:table-cell">
-                          {durStr}
-                        </td>
-                        <td className="px-5 py-2.5 text-right">
-                          {lobby.dotaMatchId ? (
-                            <a
-                              href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={textLink()}
+                            <span className="px-1 text-muted">–</span>
+                            <span
+                              className={cn(
+                                !radiantWin ? "text-danger" : "text-muted",
+                              )}
                             >
-                              OpenDota ↗
-                            </a>
-                          ) : (
-                            <span className="text-muted">—</span>
-                          )}
-                        </td>
-                        {isAdmin ? (
+                              {lobby.direScore ?? 0}
+                            </span>
+                          </td>
+                          <td className="px-2 py-2.5">
+                            <Badge tone={radiantWin ? "success" : "danger"}>
+                              {radiantWin ? "Radiant" : "Dire"}
+                            </Badge>
+                          </td>
+                          <td className="hidden max-w-[14rem] px-2 py-2.5 md:table-cell">
+                            {mvp?.userId ? (
+                              <span className="flex min-w-0 items-center gap-1.5">
+                                <span aria-hidden>🏅</span>
+                                <PlayerLink
+                                  userId={mvp.userId}
+                                  className="min-w-0 truncate"
+                                >
+                                  {mvp.name ?? "Unknown"}
+                                </PlayerLink>
+                                {mvpHero ? (
+                                  <span className="hidden truncate text-xs text-muted lg:inline">
+                                    {mvpHero.name}
+                                  </span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </td>
+                          <td className="hidden px-2 py-2.5 text-right tabular-nums text-muted sm:table-cell">
+                            {durStr}
+                          </td>
                           <td className="px-5 py-2.5 text-right">
-                            <ActionForm
-                              action={voidInhouseResult}
-                              hidden={{ lobbyId: lobby.id }}
-                            >
-                              {/* The confirm NAMES the game — a void must
+                            {lobby.dotaMatchId ? (
+                              <a
+                                href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={textLink()}
+                              >
+                                OpenDota ↗
+                              </a>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </td>
+                          {isAdmin ? (
+                            <td className="px-5 py-2.5 text-right">
+                              <ActionForm
+                                action={voidInhouseResult}
+                                hidden={{ lobbyId: lobby.id }}
+                              >
+                                {/* The confirm NAMES the game — a void must
                                   never hit "whatever completed most recently
                                   at click time". */}
-                              <SubmitButton
-                                variant="ghost"
-                                size="sm"
-                                className="text-danger hover:underline"
-                                confirm={`Void the ${formatMatchTime(lobby.createdAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, everyone's Elo recalculates without it, and any Cred payouts reverse to pre-game balances.`}
-                              >
-                                void
-                              </SubmitButton>
-                            </ActionForm>
-                          </td>
-                        ) : null}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                                <SubmitButton
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-danger hover:underline"
+                                  confirm={`Void the ${formatMatchTime(playedAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, everyone's Elo recalculates without it, and any Cred payouts reverse to pre-game balances.`}
+                                >
+                                  void
+                                </SubmitButton>
+                              </ActionForm>
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {pages > 1 ? (
+                <nav
+                  aria-label="Inhouse history pages"
+                  className="flex items-center justify-between gap-3 border-t border-line px-5 py-3"
+                >
+                  {page > 1 ? (
+                    <Link
+                      href={
+                        page === 2
+                          ? "/inhouse/history"
+                          : `/inhouse/history?page=${page - 1}`
+                      }
+                      className={buttonClasses("secondary", "sm")}
+                    >
+                      ← Newer games
+                    </Link>
+                  ) : (
+                    <span />
+                  )}
+                  <span className="text-xs text-muted" aria-current="page">
+                    Page {page} of {pages}
+                  </span>
+                  {page < pages ? (
+                    <Link
+                      href={`/inhouse/history?page=${page + 1}`}
+                      className={buttonClasses("secondary", "sm")}
+                    >
+                      Older games →
+                    </Link>
+                  ) : (
+                    <span />
+                  )}
+                </nav>
+              ) : null}
+            </>
           )}
         </CardBody>
       </Card>

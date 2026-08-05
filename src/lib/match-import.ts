@@ -1,26 +1,45 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
-  steamIdToAccountId,
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
   fetchLeagueMatchIds,
+  canStartOpenDotaFetch,
+  openDotaBudgetExpired,
   type OpenDotaMatch,
   type OpenDotaPlayer,
+  type OpenDotaFetchOptions,
 } from "./dota";
+import { effectiveDotaAccountId } from "./dota-account";
 import { advancePlayoffBracket } from "./playoff-service";
 import { raceHook } from "./race-hook";
-import { maybeAnnounceWeekHonors } from "./honors-service";
-import { getWebhookUrl, matchResultMessage, sendDiscordMessage } from "./discord";
+import { markWeekHonorsStale, maybeAnnounceWeekHonors } from "./honors-service";
+import {
+  getWebhookUrl,
+  matchResultMessage,
+  sendDiscordMessage,
+} from "./discord";
 import {
   ANNOUNCE_FAILED_PREFIX,
   getSetting,
   leagueSyncSkipKey,
   resultAnnouncedKey,
   setSetting,
-  stampResultChange,
+  SETTING_KEYS,
+  weekReminderKey,
+  claimProviderCooldown,
 } from "./settings";
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { matchResultsOpen } from "./league-lifecycle";
+import {
+  announcementDedupeKey,
+  claimAnnouncementMarker,
+  invalidatePendingAnnouncementMarkers,
+  markAnnouncementFailed,
+  markAnnouncementSent,
+  recoverableAnnouncementMarker,
+  releaseAnnouncementClaim,
+} from "./announcement-marker";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
@@ -34,14 +53,17 @@ export { ANNOUNCE_FAILED_PREFIX };
  * Announce a decided series to Discord exactly once per match, whichever path
  * completed it (captain import, auto sync, league sync, admin import — and
  * admin recordResult, which claims the same marker before its own send).
- * Atomic Setting-row CREATE, the reminder-service pattern: concurrent
- * completions race to a P2002 instead of double-posting.
+ * The marker claim has an expiring lease: concurrent completions still elect
+ * one sender, while a process death before enqueue can be recovered. Its event
+ * id survives a failed/stale retry and is also the durable outbox dedupe key,
+ * closing the enqueue-before-marker-finalize crash gap.
  *
  * A FAILED send doesn't release the marker (unlike honors/reminders, nothing
  * naturally re-triggers this match — the run whose send failed is the run
- * that completed it): it stamps the marker `failed:<iso>` instead, and the
- * result-sync retry sweep atomically re-claims exactly those. Only rows this
- * code marked failed are ever retried, so a deploy can't re-announce history.
+ * that completed it): it stamps a fenced `failed:v2:<event>:<time>` marker,
+ * and the result-sync retry sweep atomically re-claims those plus expired
+ * leases. Markerless recovery is restricted to active-season rows carrying
+ * the post-migration completion stamp, so historical sent/results never replay.
  */
 export async function announceSeriesResultOnce(match: {
   id: string;
@@ -51,62 +73,121 @@ export async function announceSeriesResultOnce(match: {
   awayScore: number;
   week: number;
   phase: string;
+  forfeit?: boolean;
 }): Promise<boolean> {
-  // Without a webhook, don't burn the once-only marker — if the admin wires
-  // Discord up later, results that complete after that still announce.
-  if (!(await getWebhookUrl())) return false;
   const marker = resultAnnouncedKey(match.id);
-  try {
-    await prisma.setting.create({
-      data: { key: marker, value: new Date().toISOString() },
+
+  // An installation with no league webhook is an intentional silent mode, not
+  // an announcement backlog. Persist that decision beside the committed
+  // result so configuring Discord later cannot replay a season's old scores.
+  // The same-value update locks/revalidates the Match row in this transaction:
+  // if Reopen wins first, no marker is inserted; if this wins first, Reopen's
+  // transactional marker delete runs afterwards.
+  if (!(await getWebhookUrl())) {
+    // Test seam: a result can be reopened after the caller decided it needed
+    // an announcement but before silent-mode suppression claims the row.
+    await raceHook(
+      "match-import.announceSeriesResultOnce.beforeSilentModeClaim",
+    );
+    // PostgreSQL's default READ COMMITTED isolation is deliberate here. The
+    // same-value Match UPDATE still takes the row lock that orders this command
+    // against Reopen, while a marker changed on another row between our read
+    // and CAS re-evaluates to zero instead of aborting the whole post-commit
+    // effect with P2034. SERIALIZABLE made that intended CAS indistinguishable
+    // from a deadlock even though no cross-row snapshot invariant is needed.
+    await prisma.$transaction(async (tx) => {
+      const current = await tx.match.updateMany({
+        where: { id: match.id, status: MATCH_STATUS.COMPLETED },
+        data: { status: MATCH_STATUS.COMPLETED },
+      });
+      if (current.count !== 1) return;
+      const value = `suppressed:no-webhook:${new Date().toISOString()}`;
+      const existing = await tx.setting.findUnique({
+        where: { key: marker },
+        select: { value: true },
+      });
+      if (!existing) {
+        await tx.$executeRaw`
+            INSERT INTO "Setting" ("key", "value")
+            VALUES (${marker}, ${value})
+            ON CONFLICT ("key") DO NOTHING
+          `;
+      } else if (recoverableAnnouncementMarker(existing.value)) {
+        // A failed/expired generation must not remain at the head of the
+        // retry sweep forever after an administrator disables Discord.
+        await raceHook(
+          "match-import.announceSeriesResultOnce.beforeSilentMarkerRetire",
+        );
+        await tx.setting.updateMany({
+          where: { key: marker, value: existing.value },
+          data: { value },
+        });
+      }
     });
-  } catch (e) {
-    if ((e as { code?: string }).code !== "P2002") throw e;
-    // Marker exists: only a failed prior send may be retried — the
-    // conditional update is the atomic claim (one retrier wins).
-    const reclaimed = await prisma.setting.updateMany({
-      where: { key: marker, value: { startsWith: ANNOUNCE_FAILED_PREFIX } },
-      data: { value: new Date().toISOString() },
-    });
-    if (reclaimed.count === 0) return false; // already sent (or being sent)
+    return false;
+  }
+
+  const claim = await claimAnnouncementMarker(marker);
+  if (!claim) return false;
+
+  // Post-commit effects can resume after an administrator has already reopened
+  // or corrected the result. Never let that stale caller manufacture a fresh,
+  // source-authorized event from its old in-memory score. The durable outbox
+  // performs the second marker check immediately before transport; this read
+  // closes the earlier claim-from-a-stale-snapshot gap.
+  const current = await prisma.match.findUnique({
+    where: { id: match.id },
+    select: {
+      id: true,
+      status: true,
+      homeTeamId: true,
+      awayTeamId: true,
+      homeScore: true,
+      awayScore: true,
+      week: true,
+      phase: true,
+      forfeit: true,
+    },
+  });
+  if (!current || current.status !== MATCH_STATUS.COMPLETED) {
+    await releaseAnnouncementClaim(claim);
+    return false;
   }
   const [home, away] = await Promise.all([
-    prisma.team.findUnique({ where: { id: match.homeTeamId } }),
-    prisma.team.findUnique({ where: { id: match.awayTeamId } }),
+    prisma.team.findUnique({ where: { id: current.homeTeamId } }),
+    prisma.team.findUnique({ where: { id: current.awayTeamId } }),
   ]);
   if (!home || !away) {
     // Practically unreachable while the match exists (Match→Team is
-    // FK-RESTRICT), but a bare return here burned the marker with a plain
-    // timestamp — the one path violating this file's own "a failed send
-    // never permanently eats an announcement" rule. Stamp failed: the retry
-    // sweep either retries it (match alive) or its orphan cleanup deletes it
-    // (match gone mid-deleteSeason).
-    await prisma.setting.updateMany({
-      where: { key: marker },
-      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
-    });
+    // FK-RESTRICT), but a bare return here used to burn the marker. Fenced
+    // failure finalization keeps it retryable without overwriting a rival
+    // generation; orphan cleanup handles a match deleted mid-flight.
+    await markAnnouncementFailed(claim);
     return false;
   }
   const sent = await sendDiscordMessage(
     matchResultMessage({
       homeName: home.name,
       awayName: away.name,
-      homeScore: match.homeScore,
-      awayScore: match.awayScore,
-      week: match.week,
-      isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+      homeScore: current.homeScore,
+      awayScore: current.awayScore,
+      week: current.week,
+      isPlayoff: current.phase !== MATCH_PHASE.REGULAR,
+      forfeit: current.forfeit,
     }),
+    undefined,
+    {
+      dedupeKey: announcementDedupeKey("series", claim),
+      marker: { key: claim.key, eventId: claim.eventId },
+    },
   );
   if (!sent) {
     // A Discord blip must not permanently eat the announcement — flag the
     // marker for the sync sweep to retry.
-    await prisma.setting.updateMany({
-      where: { key: marker },
-      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
-    });
+    await markAnnouncementFailed(claim);
     return false;
   }
-  return true;
+  return markAnnouncementSent(claim);
 }
 
 export type GameClassification = {
@@ -137,6 +218,19 @@ export function classifyGame(
     winnerTeamId: null,
   });
 
+  // Legacy profile versions allowed unproved Dota-account overrides. Owner
+  // login now retires those claims, but historical data can still put one
+  // effective account on both rosters until that owner next authenticates.
+  // Fail closed before counting or attributing a box score: one player can
+  // never be evidence for both competing teams.
+  for (const accountId of teamA.accountIds) {
+    if (teamB.accountIds.has(accountId)) {
+      return fail(
+        "A Dota account is linked to players on both teams — correct the account links before importing",
+      );
+    }
+  }
+
   let radA = 0,
     direA = 0,
     radB = 0,
@@ -144,8 +238,14 @@ export function classifyGame(
   for (const p of match.players) {
     if (p.account_id == null) continue;
     const isRadiant = p.isRadiant ?? p.player_slot < 128;
-    if (teamA.accountIds.has(p.account_id)) isRadiant ? radA++ : direA++;
-    if (teamB.accountIds.has(p.account_id)) isRadiant ? radB++ : direB++;
+    if (teamA.accountIds.has(p.account_id)) {
+      if (isRadiant) radA++;
+      else direA++;
+    }
+    if (teamB.accountIds.has(p.account_id)) {
+      if (isRadiant) radB++;
+      else direB++;
+    }
   }
 
   const aRadiant = radA >= direA;
@@ -281,13 +381,13 @@ type MatchRow = {
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
 export async function gatherTeamAccounts(match: MatchRow) {
   // Select-narrowed: this runs on every import AND every auto-sync roster
-  // scan, and only four user fields are ever read (id/name/steamId/
-  // dotaAccountId — the `add` helper's parameter type says so).
+  // scan, and only the identity fields read by `add` are selected.
   const userSelect = {
     id: true,
     name: true,
     steamId: true,
-    dotaAccountId: true,
+    dotaAccountIdV2: true,
+    legacyDotaAccountId: true,
   } as const;
   const [season, members, standins, registrants] = await Promise.all([
     prisma.season.findUnique({
@@ -323,10 +423,16 @@ export async function gatherTeamAccounts(match: MatchRow) {
   const awaySet = new Set<number>();
 
   const add = (
-    user: { id: string; name: string; steamId: string; dotaAccountId: number | null },
+    user: {
+      id: string;
+      name: string;
+      steamId: string;
+      dotaAccountIdV2: number | null;
+      legacyDotaAccountId: number | null;
+    },
     teamId: string,
   ) => {
-    const acc = user.dotaAccountId ?? steamIdToAccountId(user.steamId);
+    const acc = effectiveDotaAccountId(user);
     if (acc == null) return;
     accountMap.set(acc, { userId: user.id, name: user.name, teamId });
     (teamId === match.homeTeamId ? homeSet : awaySet).add(acc);
@@ -338,7 +444,7 @@ export async function gatherTeamAccounts(match: MatchRow) {
   // Registered-but-unrostered users map for attribution only (teamId null) —
   // never added to homeSet/awaySet, so classification is unaffected.
   for (const r of registrants) {
-    const acc = r.user.dotaAccountId ?? steamIdToAccountId(r.user.steamId);
+    const acc = effectiveDotaAccountId(r.user);
     if (acc == null || accountMap.has(acc)) continue;
     accountMap.set(acc, { userId: r.user.id, name: r.user.name, teamId: null });
   }
@@ -377,7 +483,8 @@ export function buildPlayers(
 ) {
   return match.players.map((p) => {
     const isRadiant = p.isRadiant ?? p.player_slot < 128;
-    const mapped = p.account_id != null ? accountMap.get(p.account_id) : undefined;
+    const mapped =
+      p.account_id != null ? accountMap.get(p.account_id) : undefined;
     return {
       accountId: p.account_id,
       heroId: p.hero_id,
@@ -410,6 +517,62 @@ export type PlayerStat = ReturnType<typeof buildPlayers>[number];
  * callback's resolution would COMMIT, and the point is to roll back.
  */
 class ImportRaceError extends Error {}
+
+// PostgreSQL can abort this Serializable write when a reminder is claimed or
+// finalized at the same moment the first game moves a fixture out of
+// SCHEDULED. Retrying only the database command is safe: the OpenDota payload
+// has already been fetched and classified, while every lifecycle/capacity
+// guard is re-read inside each attempt. Keep the cap small so a genuinely hot
+// fixture returns control instead of extending an automation invocation.
+const IMPORT_TRANSACTION_MAX_ATTEMPTS = 3;
+
+export type SeriesProjection = {
+  homeScore: number;
+  awayScore: number;
+  winnerTeamId: string | null;
+  status: string;
+  decided: boolean;
+};
+
+/** The Match row is a projection of its imported games, never a second source
+ * of truth. Kept pure so insert, delete, repair, and tests share one rule. */
+export function deriveSeriesProjection(
+  match: {
+    homeTeamId: string;
+    awayTeamId: string;
+    bestOf: number;
+  },
+  games: { winnerTeamId: string | null }[],
+): SeriesProjection {
+  const homeScore = games.filter(
+    (game) => game.winnerTeamId === match.homeTeamId,
+  ).length;
+  const awayScore = games.filter(
+    (game) => game.winnerTeamId === match.awayTeamId,
+  ).length;
+  const clinchAt = Math.floor(match.bestOf / 2) + 1;
+  const decided =
+    homeScore >= clinchAt ||
+    awayScore >= clinchAt ||
+    homeScore + awayScore >= match.bestOf;
+  return {
+    homeScore,
+    awayScore,
+    decided,
+    winnerTeamId: !decided
+      ? null
+      : homeScore > awayScore
+        ? match.homeTeamId
+        : awayScore > homeScore
+          ? match.awayTeamId
+          : null,
+    status: decided
+      ? MATCH_STATUS.COMPLETED
+      : games.length > 0
+        ? MATCH_STATUS.LIVE
+        : MATCH_STATUS.SCHEDULED,
+  };
+}
 
 const readMatch = (matchId: string) =>
   prisma.match.findUnique({ where: { id: matchId }, include: { games: true } });
@@ -445,27 +608,12 @@ export async function recomputeSeries(matchId: string) {
     // to write second. Fires once per attempt; the retry re-reads.
     await raceHook("match-import.recomputeSeries.beforeSwap");
 
-    homeWins = match.games.filter((g) => g.winnerTeamId === match.homeTeamId).length;
-    awayWins = match.games.filter((g) => g.winnerTeamId === match.awayTeamId).length;
-    // A series is decided when a team clinches the majority (Bo3 → 2, Bo5 → 3) or
-    // when every game has been played (a Bo2 can end 1-1 = a draw).
-    const clinchAt = Math.floor(match.bestOf / 2) + 1;
-    const clinched = homeWins >= clinchAt || awayWins >= clinchAt;
-    const allPlayed = homeWins + awayWins >= match.bestOf;
-    decided = clinched || allPlayed;
-    winnerTeamId = !decided
-      ? null
-      : homeWins > awayWins
-        ? match.homeTeamId
-        : awayWins > homeWins
-          ? match.awayTeamId
-          : null; // drawn series (e.g. a 1-1 best-of-2)
-
-    const status = decided
-      ? MATCH_STATUS.COMPLETED
-      : match.games.length > 0
-        ? MATCH_STATUS.LIVE
-        : MATCH_STATUS.SCHEDULED;
+    const projection = deriveSeriesProjection(match, match.games);
+    homeWins = projection.homeScore;
+    awayWins = projection.awayScore;
+    decided = projection.decided;
+    winnerTeamId = projection.winnerTeamId;
+    const status = projection.status;
     // Nothing to write and nothing to announce — the row already says this.
     if (
       match.homeScore === homeWins &&
@@ -475,40 +623,66 @@ export async function recomputeSeries(matchId: string) {
     ) {
       return;
     }
-    const swap = await prisma.match.updateMany({
-      where: {
-        id: matchId,
-        homeScore: match.homeScore,
-        awayScore: match.awayScore,
-        status: match.status,
-      },
-      data: { homeScore: homeWins, awayScore: awayWins, winnerTeamId, status },
+    won = await prisma.$transaction(async (tx) => {
+      const swap = await tx.match.updateMany({
+        where: {
+          id: matchId,
+          homeScore: match.homeScore,
+          awayScore: match.awayScore,
+          status: match.status,
+        },
+        data: {
+          homeScore: homeWins,
+          awayScore: awayWins,
+          winnerTeamId,
+          status,
+          // A meaningful post-deploy COMPLETE→COMPLETE correction must become
+          // recoverable even when the untouched historical row had the
+          // migration's deliberate completedAt=null sentinel.
+          completedAt: decided ? new Date() : null,
+        },
+      });
+      if (swap.count !== 1) return false;
+
+      // Result state and every queued message derived from the old state move
+      // together. A crash can no longer leave an obsolete reminder/result/
+      // honors marker authorized after the winning score projection commits.
+      if (
+        match.scheduledAt &&
+        match.status === MATCH_STATUS.SCHEDULED &&
+        status !== MATCH_STATUS.SCHEDULED
+      ) {
+        await invalidatePendingAnnouncementMarkers(
+          tx,
+          weekReminderKey(
+            match.seasonId,
+            match.week,
+            match.scheduledAt.getTime(),
+          ),
+        );
+      }
+      if (!decided || match.status === MATCH_STATUS.COMPLETED) {
+        await tx.setting.deleteMany({
+          where: { key: resultAnnouncedKey(matchId) },
+        });
+      }
+      if (
+        match.phase === MATCH_PHASE.REGULAR &&
+        match.status === MATCH_STATUS.COMPLETED
+      ) {
+        await markWeekHonorsStale(tx, match.seasonId, match.week);
+      }
+      return true;
     });
-    won = swap.count > 0;
   }
   // Three lost swaps means another caller is actively rewriting this series;
   // its own recompute carries the announce and the bracket advance, so
   // dropping out here loses nothing.
   if (!won) return;
 
-  // UN-DECIDED means un-announced. `announceSeriesResultOnce` is idempotent
-  // through the `resultAnnounced:<matchId>` marker, and the result-sync retry
-  // sweep only re-claims markers whose value starts with `failed:` — so once a
-  // wrong score had been posted to Discord, correcting it could NEVER reach the
-  // channel: the admin removes the bad game, the real ones import, the series
-  // decides the other way, and the marker silently swallows the announcement.
-  // Discord's permanent record stayed wrong with nothing to fix it. Releasing
-  // the marker here covers every un-deciding caller (removeGame today, anything
-  // future), so the corrected result announces exactly once when it lands.
-  if (!decided) {
-    await prisma.setting.deleteMany({
-      where: { key: resultAnnouncedKey(matchId) },
-    });
-  }
-
   // A freshly decided series announces itself (idempotent claim) — imported
   // results used to reach Discord only when an admin typed the score in.
-  if (decided && match.status !== MATCH_STATUS.COMPLETED) {
+  if (decided) {
     await announceSeriesResultOnce({
       id: match.id,
       homeTeamId: match.homeTeamId,
@@ -530,18 +704,59 @@ export async function recomputeSeries(matchId: string) {
   }
 }
 
-export type ImportResult = { ok: true } | { ok: false; error: string };
+export type ImportResult =
+  | ({ ok: true; downstreamPending?: boolean } & SeriesProjection)
+  | { ok: false; error: string; deadlineReached?: boolean };
+
+export type ImportGameOptions = {
+  /** Re-assert captaincy in the decisive write snapshot after OpenDota I/O. */
+  expectedCaptainId?: string;
+  /** Captain-entered IDs must belong to this fixture, not an old scrim/rematch. */
+  enforceFixtureWindow?: boolean;
+  /** Authenticated manual caller. Omit for bounded automation-owned imports. */
+  providerActorId?: string;
+  /** Automation-only absolute budget. Manual callers omit both fields. */
+  deadlineMs?: number;
+  signal?: AbortSignal;
+};
 
 /** Fetch a specific Dota match and record it against a scheduled league match. */
 export async function importGameForMatch(
   matchId: string,
   dotaMatchId: string,
+  options: ImportGameOptions = {},
 ): Promise<ImportResult> {
   const match = await prisma.match.findUnique({
     where: { id: matchId },
-    include: { games: { select: { id: true } } },
+    include: {
+      games: { select: { id: true } },
+      season: { select: { isActive: true, status: true } },
+      homeTeam: { select: { captainId: true } },
+      awayTeam: { select: { captainId: true } },
+    },
   });
   if (!match) return { ok: false, error: "Unknown league match" };
+
+  if (
+    !match.season.isActive ||
+    !matchResultsOpen(match.season.status, match.phase)
+  ) {
+    return {
+      ok: false,
+      error:
+        "Results are locked for this fixture in the league's current phase",
+    };
+  }
+  if (
+    options.expectedCaptainId &&
+    match.homeTeam.captainId !== options.expectedCaptainId &&
+    match.awayTeam.captainId !== options.expectedCaptainId
+  ) {
+    return {
+      ok: false,
+      error: "You no longer captain either team in this match",
+    };
+  }
 
   // A decided series is closed to further imports, because recomputeSeries
   // would silently rewrite the standing result. This used to check
@@ -574,100 +789,364 @@ export async function importGameForMatch(
       : { ok: false, error: "That game is already recorded for another match" };
   }
 
-  const od = await fetchOpenDotaMatch(dotaMatchId);
-  if (!od) {
+  const fetchOptions: OpenDotaFetchOptions = {
+    deadlineMs: options.deadlineMs,
+    signal: options.signal,
+  };
+  if (!canStartOpenDotaFetch(fetchOptions)) {
     return {
       ok: false,
-      error: "Could not fetch that match from OpenDota (is the id correct and the match public?)",
+      error: "Automatic result sync reached its work deadline",
+      deadlineReached: true,
+    };
+  }
+  if (options.providerActorId) {
+    const providerClaim = await claimProviderCooldown(
+      "open-dota-match-import",
+      options.providerActorId,
+      `fixture:${match.id}`,
+    );
+    if (providerClaim === "cooldown") {
+      return {
+        ok: false,
+        error:
+          "A Dota match ID was checked for this fixture recently — wait about a minute before trying another ID",
+      };
+    }
+    if (providerClaim === "unavailable") {
+      return {
+        ok: false,
+        error:
+          "Couldn't safely start the OpenDota lookup — wait a minute and try again",
+      };
+    }
+  }
+  const od = await fetchOpenDotaMatch(dotaMatchId, fetchOptions);
+  if (!od) {
+    if (openDotaBudgetExpired(fetchOptions)) {
+      return {
+        ok: false,
+        error: "Automatic result sync reached its work deadline",
+        deadlineReached: true,
+      };
+    }
+    return {
+      ok: false,
+      error:
+        "Could not fetch that match from OpenDota (is the id correct and the match public?)",
     };
   }
 
-  const { accountMap, homeSet, awaySet, teamSize } = await gatherTeamAccounts(match);
+  if (options.enforceFixtureWindow) {
+    if (!match.scheduledAt) {
+      return {
+        ok: false,
+        error:
+          "This fixture has no kickoff time, so the site cannot verify which meeting this game belongs to — ask an admin to import it",
+      };
+    }
+    const gameStartMs = Number(od.start_time) * 1000;
+    const kickoffMs = match.scheduledAt.getTime();
+    if (
+      !Number.isFinite(gameStartMs) ||
+      gameStartMs <= 0 ||
+      gameStartMs < kickoffMs - DETECT_WINDOW_BEFORE_MS ||
+      gameStartMs > kickoffMs + DETECT_WINDOW_AFTER_MS
+    ) {
+      return {
+        ok: false,
+        error:
+          "That Dota game is outside this fixture's result window — ask an admin if the kickoff was recorded incorrectly",
+      };
+    }
+    const otherMeetings = await prisma.match.findMany({
+      where: {
+        seasonId: match.seasonId,
+        id: { not: match.id },
+        scheduledAt: { not: null },
+        OR: [
+          {
+            homeTeamId: match.homeTeamId,
+            awayTeamId: match.awayTeamId,
+          },
+          {
+            homeTeamId: match.awayTeamId,
+            awayTeamId: match.homeTeamId,
+          },
+        ],
+      },
+      select: { scheduledAt: true },
+    });
+    if (
+      !claimsGame(
+        gameStartMs,
+        kickoffMs,
+        otherMeetings.map((other) => other.scheduledAt!.getTime()),
+      )
+    ) {
+      return {
+        ok: false,
+        error:
+          "That Dota game is closer to another meeting between these teams — import it on that fixture instead",
+      };
+    }
+  }
+
+  const { accountMap, homeSet, awaySet, teamSize } =
+    await gatherTeamAccounts(match);
   const cls = classifyGame(
     od,
     { teamId: match.homeTeamId, accountIds: homeSet },
     { teamId: match.awayTeamId, accountIds: awaySet },
     Math.min(3, teamSize),
   );
-  if (!cls.ok) return { ok: false, error: cls.reason ?? "Game does not match these teams" };
+  if (!cls.ok)
+    return {
+      ok: false,
+      error: cls.reason ?? "Game does not match these teams",
+    };
 
-  try {
-    // The two guards above (not COMPLETED, under bestOf) were evaluated on a
-    // snapshot taken BEFORE an OpenDota round trip of up to 8s — long enough
-    // for an admin forfeit ruling or a rival import to close the series or
-    // fill its last slot. `dotaMatchId` being unique stops the same game
-    // landing twice, but nothing stopped a DIFFERENT game being added to a
-    // series that had since finished, and the recomputeSeries below would then
-    // rewrite the standing result.
-    //
-    // So re-check inside the write, at SERIALIZABLE: both racers read this
-    // match's game rows and both insert into that set, which is the rw-conflict
-    // SSI aborts one of (P2034 below). Throwing rather than returning keeps
-    // the rollback honest, and the errors match the pre-fetch wording.
-    await prisma.$transaction(
-      async (tx) => {
-        const fresh = await tx.match.findUnique({
-          where: { id: matchId },
-          select: { status: true, bestOf: true, _count: { select: { games: true } } },
-        });
-        if (!fresh) throw new ImportRaceError("Unknown league match");
-        if (fresh.status === MATCH_STATUS.COMPLETED) {
-          throw new ImportRaceError(
-            "This series is already final — remove one of its games first if you need to correct it",
-          );
-        }
-        if (fresh._count.games >= fresh.bestOf) {
-          throw new ImportRaceError(
-            `This best-of-${fresh.bestOf} already has all ${fresh.bestOf} of its games`,
-          );
-        }
-        await tx.game.create({
-          data: {
-            matchId,
-            dotaMatchId: String(od.match_id),
-            radiantWin: od.radiant_win,
-            durationSecs: od.duration,
-            startTime: od.start_time,
-            radiantScore: od.radiant_score ?? 0,
-            direScore: od.dire_score ?? 0,
-            radiantTeamId: cls.radiantTeamId,
-            direTeamId: cls.direTeamId,
-            winnerTeamId: cls.winnerTeamId,
-            players: JSON.stringify(buildPlayers(od, accountMap)),
-          },
-        });
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-  } catch (e) {
-    if (e instanceof ImportRaceError) return { ok: false, error: e.message };
-    // The dedupe check above races with concurrent imports (an OpenDota fetch
-    // sits between check and create) — the unique index is the real arbiter.
-    if ((e as { code?: string }).code === "P2002") {
-      return { ok: false, error: "That game was just recorded by someone else" };
+  let committed:
+    | {
+        projection: SeriesProjection;
+        priorStatus: string;
+        seasonId: string;
+        homeTeamId: string;
+        awayTeamId: string;
+        week: number;
+        phase: string;
+      }
+    | undefined;
+  for (
+    let attempt = 0;
+    attempt < IMPORT_TRANSACTION_MAX_ATTEMPTS && !committed;
+    attempt++
+  ) {
+    try {
+      // The two guards above (not COMPLETED, under bestOf) were evaluated on a
+      // snapshot taken BEFORE an OpenDota round trip of up to 8s — long enough
+      // for an admin forfeit ruling or a rival import to close the series or
+      // fill its last slot. `dotaMatchId` being unique stops the same game
+      // landing twice, but nothing stopped a DIFFERENT game being added to a
+      // series that had since finished, and the recomputeSeries below would then
+      // rewrite the standing result.
+      //
+      // So re-check inside the write, at SERIALIZABLE: both racers read this
+      // match's game rows and both insert into that set, which is the rw-conflict
+      // SSI aborts one of (P2034 below). Throwing rather than returning keeps
+      // the rollback honest, and the errors match the pre-fetch wording.
+      committed = await prisma.$transaction(
+        async (tx) => {
+          const fresh = await tx.match.findUnique({
+            where: { id: matchId },
+            select: {
+              id: true,
+              seasonId: true,
+              homeTeamId: true,
+              awayTeamId: true,
+              phase: true,
+              week: true,
+              scheduledAt: true,
+              status: true,
+              bestOf: true,
+              games: { select: { winnerTeamId: true } },
+              homeTeam: { select: { captainId: true } },
+              awayTeam: { select: { captainId: true } },
+              season: {
+                select: {
+                  isActive: true,
+                  status: true,
+                  fantasyLockedAt: true,
+                  // Read Draft as part of the lifecycle snapshot. Abort writes
+                  // it while deleting the schedule, giving PostgreSQL SSI the
+                  // cross-aggregate conflict needed to pick one winner.
+                  draft: { select: { status: true } },
+                },
+              },
+            },
+          });
+          if (!fresh) throw new ImportRaceError("Unknown league match");
+          if (
+            !fresh.season.isActive ||
+            !matchResultsOpen(fresh.season.status, fresh.phase)
+          ) {
+            throw new ImportRaceError(
+              "The league phase or schedule changed — reload before importing",
+            );
+          }
+          if (
+            options.expectedCaptainId &&
+            fresh.homeTeam.captainId !== options.expectedCaptainId &&
+            fresh.awayTeam.captainId !== options.expectedCaptainId
+          ) {
+            throw new ImportRaceError(
+              "You no longer captain either team in this match",
+            );
+          }
+          if (fresh.status === MATCH_STATUS.COMPLETED) {
+            throw new ImportRaceError(
+              "This series is already final — remove one of its games first if you need to correct it",
+            );
+          }
+          if (fresh.games.length >= fresh.bestOf) {
+            throw new ImportRaceError(
+              `This best-of-${fresh.bestOf} already has all ${fresh.bestOf} of its games`,
+            );
+          }
+          await tx.game.create({
+            data: {
+              matchId,
+              dotaMatchId: String(od.match_id),
+              radiantWin: od.radiant_win,
+              durationSecs: od.duration,
+              startTime: od.start_time,
+              radiantScore: od.radiant_score ?? 0,
+              direScore: od.dire_score ?? 0,
+              radiantTeamId: cls.radiantTeamId,
+              direTeamId: cls.direTeamId,
+              winnerTeamId: cls.winnerTeamId,
+              players: JSON.stringify(buildPlayers(od, accountMap)),
+            },
+          });
+          // Fantasy is a one-way competitive lock. Stamping the Season row in
+          // the same Serializable command as the first imported game gives the
+          // roster action an overlapping read/write boundary with import: either
+          // the roster commits before the game, or it sees/loses cleanly to this
+          // marker. The timestamp is never cleared by game correction, because
+          // performance information has already been exposed at that point.
+          if (!fresh.season.fantasyLockedAt) {
+            await tx.season.updateMany({
+              where: { id: fresh.seasonId, fantasyLockedAt: null },
+              data: { fantasyLockedAt: new Date() },
+            });
+          }
+          const projection = deriveSeriesProjection(fresh, [
+            ...fresh.games,
+            { winnerTeamId: cls.winnerTeamId },
+          ]);
+          // Game + derived series row + freshness cursor are one command. A
+          // process exit can delay Discord/bracket effects, but it can no longer
+          // leave a recorded Game attached to a stale 0-0 SCHEDULED match that
+          // every future scanner skips as "already imported".
+          await tx.match.update({
+            where: { id: matchId },
+            data: {
+              homeScore: projection.homeScore,
+              awayScore: projection.awayScore,
+              winnerTeamId: projection.winnerTeamId,
+              status: projection.status,
+              completedAt: projection.decided ? new Date() : null,
+              forfeit: false,
+              autoSyncAttempts: 0,
+            },
+          });
+          if (
+            fresh.scheduledAt &&
+            fresh.status === MATCH_STATUS.SCHEDULED &&
+            projection.status !== MATCH_STATUS.SCHEDULED
+          ) {
+            // Test seam: a reminder finalizing after this Serializable command
+            // took its snapshot is the production conflict that requires the
+            // bounded retry around this transaction.
+            await raceHook(
+              "match-import.importGame.beforeReminderInvalidation",
+            );
+            await invalidatePendingAnnouncementMarkers(
+              tx,
+              weekReminderKey(
+                fresh.seasonId,
+                fresh.week,
+                fresh.scheduledAt.getTime(),
+              ),
+            );
+          }
+          const changedAt = new Date().toISOString();
+          await tx.setting.upsert({
+            where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+            create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
+            update: { value: changedAt },
+          });
+          return {
+            projection,
+            priorStatus: fresh.status,
+            seasonId: fresh.seasonId,
+            homeTeamId: fresh.homeTeamId,
+            awayTeamId: fresh.awayTeamId,
+            week: fresh.week,
+            phase: fresh.phase,
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (e) {
+      if (e instanceof ImportRaceError) return { ok: false, error: e.message };
+      // The dedupe check above races with concurrent imports (an OpenDota
+      // fetch sits between check and create) — the unique index is the real
+      // arbiter.
+      if ((e as { code?: string }).code === "P2002") {
+        return {
+          ok: false,
+          error: "That game was just recorded by someone else",
+        };
+      }
+      if ((e as { code?: string }).code === "P2034") {
+        // A reminder marker can be the conflicting writer even when no rival
+        // imported this game. Start a new Serializable snapshot so reminder
+        // invalidation remains atomic with the game/result mutation. A true
+        // rival import is then observed by the guards or unique constraint.
+        if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) continue;
+        return {
+          ok: false,
+          error:
+            "This fixture changed while the game was being recorded — try again",
+        };
+      }
+      throw e;
     }
-    // Lost the serialization race to a concurrent import of a different game.
-    if ((e as { code?: string }).code === "P2034") {
-      return { ok: false, error: "That game was just recorded by someone else" };
-    }
-    throw e;
   }
 
-  // A productive import clears the empty-scan backoff, wherever it came from.
-  // This lives here rather than only in the auto-sync service because the
-  // captain "Report your result" and admin auto-fetch paths call
-  // autoDetectGamesForMatch directly — so a Bo3 whose game 1 was imported by
-  // hand used to stay fully backed off for games 2 and 3.
-  await prisma.match.updateMany({
-    where: { id: matchId, autoSyncAttempts: { gt: 0 } },
-    data: { autoSyncAttempts: 0 },
-  });
+  if (!committed)
+    throw new Error("Import committed without a series projection");
 
-  await recomputeSeries(matchId);
-  // Bump the change cursor so every parked client (not just whoever triggered
-  // this import) learns the league moved on its next /api/sync poll.
-  await stampResultChange();
-  return { ok: true };
+  // External effects are deliberately post-commit: OpenDota data and the
+  // series projection are durable even if Discord or bracket reconciliation
+  // has a transient failure. The heartbeat re-runs playoff advancement, while
+  // failed announcement markers remain claimable by its retry sweep.
+  const effects: Promise<unknown>[] = [];
+  if (
+    committed.projection.decided &&
+    committed.priorStatus !== MATCH_STATUS.COMPLETED
+  ) {
+    effects.push(
+      announceSeriesResultOnce({
+        id: matchId,
+        homeTeamId: committed.homeTeamId,
+        awayTeamId: committed.awayTeamId,
+        homeScore: committed.projection.homeScore,
+        awayScore: committed.projection.awayScore,
+        week: committed.week,
+        phase: committed.phase,
+      }),
+    );
+  }
+  if (
+    committed.phase !== MATCH_PHASE.REGULAR &&
+    committed.projection.decided &&
+    committed.projection.winnerTeamId
+  ) {
+    effects.push(advancePlayoffBracket(committed.seasonId));
+  }
+  if (committed.phase === MATCH_PHASE.REGULAR && committed.projection.decided) {
+    effects.push(maybeAnnounceWeekHonors(committed.seasonId, committed.week));
+  }
+  const settled = await Promise.allSettled(effects);
+  return {
+    ok: true,
+    ...committed.projection,
+    ...(settled.some((effect) => effect.status === "rejected")
+      ? { downstreamPending: true }
+      : {}),
+  };
 }
 
 export type AutoDetectResult = {
@@ -677,6 +1156,8 @@ export type AutoDetectResult = {
   /** At least one roster lookup couldn't reach OpenDota, so "found nothing"
    *  proves nothing. Callers use this to avoid counting the scan as empty. */
   unreachable?: boolean;
+  /** The unattended worker stopped before starting more network work. */
+  deadlineReached?: boolean;
 };
 
 /**
@@ -721,7 +1202,10 @@ export async function loadImportSkips(seasonId: string): Promise<Set<string>> {
  * present a racing import is refused by the constraint, so writing the skip
  * first leaves no window in which the game is both importable and unremembered.
  */
-export async function rememberImportSkip(seasonId: string, dotaMatchId: string) {
+export async function rememberImportSkip(
+  seasonId: string,
+  dotaMatchId: string,
+) {
   const skips = await loadImportSkips(seasonId);
   if (skips.has(dotaMatchId)) return;
   skips.add(dotaMatchId);
@@ -733,20 +1217,76 @@ export async function rememberImportSkip(seasonId: string, dotaMatchId: string) 
 
 export async function autoDetectGamesForMatch(
   matchId: string,
-  opts: { ignoreSkips?: boolean } = {},
+  opts: {
+    ignoreSkips?: boolean;
+    expectedCaptainId?: string;
+    deadlineMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<AutoDetectResult> {
-  const match = await prisma.match.findUnique({ where: { id: matchId } });
+  const match = await prisma.match.findUnique({
+    where: { id: matchId },
+    include: {
+      season: { select: { isActive: true, status: true } },
+      homeTeam: { select: { captainId: true } },
+      awayTeam: { select: { captainId: true } },
+    },
+  });
   if (!match) return { imported: 0, scanned: 0, error: "Unknown league match" };
+  if (
+    !match.season.isActive ||
+    !matchResultsOpen(match.season.status, match.phase)
+  ) {
+    return {
+      imported: 0,
+      scanned: 0,
+      error:
+        "Results are locked for this fixture in the league's current phase",
+    };
+  }
+  if (
+    opts.expectedCaptainId &&
+    match.homeTeam.captainId !== opts.expectedCaptainId &&
+    match.awayTeam.captainId !== opts.expectedCaptainId
+  ) {
+    return {
+      imported: 0,
+      scanned: 0,
+      error: "You no longer captain either team in this match",
+    };
+  }
 
   const { homeSet, awaySet, teamSize } = await gatherTeamAccounts(match);
   const accounts = [...homeSet, ...awaySet].slice(0, 12);
+  const fetchOptions: OpenDotaFetchOptions = {
+    deadlineMs: opts.deadlineMs,
+    signal: opts.signal,
+  };
+  const bounded = opts.deadlineMs !== undefined || opts.signal !== undefined;
+  const budgetStopped = () => bounded && !canStartOpenDotaFetch(fetchOptions);
 
   // Count how many of our players share each recent match id.
   const counts = new Map<number, number>();
   let unreachable = false;
   for (const acc of accounts) {
-    const ids = await fetchRecentMatchIds(acc, 20); // null = unreachable
+    if (budgetStopped()) {
+      return {
+        imported: 0,
+        scanned: counts.size,
+        unreachable,
+        deadlineReached: true,
+      };
+    }
+    const ids = await fetchRecentMatchIds(acc, 20, fetchOptions); // null = unreachable
     if (ids === null) {
+      if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
+        return {
+          imported: 0,
+          scanned: counts.size,
+          unreachable,
+          deadlineReached: true,
+        };
+      }
       unreachable = true;
       continue;
     }
@@ -784,10 +1324,13 @@ export async function autoDetectGamesForMatch(
   // off (already-imported games are skipped by the `recorded` set above).
   const scanDeadline = Date.now() + SCAN_BUDGET_MS;
   for (const id of candidateIds) {
-    if (Date.now() > scanDeadline) break;
+    if (Date.now() > scanDeadline || budgetStopped()) break;
     if (recorded.has(String(id))) continue;
-    const od = await fetchOpenDotaMatch(String(id));
-    if (!od) continue;
+    const od = await fetchOpenDotaMatch(String(id), fetchOptions);
+    if (!od) {
+      if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) break;
+      continue;
+    }
     const cls = classifyGame(
       od,
       { teamId: match.homeTeamId, accountIds: homeSet },
@@ -801,6 +1344,15 @@ export async function autoDetectGamesForMatch(
         winnerTeamId: cls.winnerTeamId,
       });
     }
+  }
+
+  if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
+    return {
+      imported: 0,
+      scanned: accounts.length,
+      unreachable,
+      deadlineReached: true,
+    };
   }
 
   // These teams may meet more than once a season (double round robin, playoff
@@ -839,10 +1391,23 @@ export async function autoDetectGamesForMatch(
 
   let imported = 0;
   for (const c of chosen) {
-    const r = await importGameForMatch(matchId, String(c.id));
+    if (budgetStopped()) break;
+    const r = await importGameForMatch(matchId, String(c.id), {
+      expectedCaptainId: opts.expectedCaptainId,
+      deadlineMs: opts.deadlineMs,
+      signal: opts.signal,
+    });
     if (r.ok) imported++;
+    else if (r.deadlineReached) break;
   }
-  return { imported, scanned: accounts.length, unreachable };
+  return {
+    imported,
+    scanned: accounts.length,
+    unreachable,
+    ...(budgetStopped() || openDotaBudgetExpired(fetchOptions)
+      ? { deadlineReached: true }
+      : {}),
+  };
 }
 
 export type EnrichResult = {
@@ -948,6 +1513,8 @@ export type LeagueSyncResult = {
   error?: string;
   /** OpenDota didn't answer — the caller may retry sooner than usual. */
   unreachable?: boolean;
+  /** The unattended worker stopped before starting more network work. */
+  deadlineReached?: boolean;
 };
 
 /**
@@ -967,7 +1534,7 @@ export type LeagueSyncResult = {
  */
 export async function syncLeagueGames(
   seasonId: string,
-  opts: { auto?: boolean } = {},
+  opts: { auto?: boolean; deadlineMs?: number; signal?: AbortSignal } = {},
 ): Promise<LeagueSyncResult> {
   const season = await prisma.season.findUnique({ where: { id: seasonId } });
   if (!season) return { imported: 0, scanned: 0, error: "No season" };
@@ -979,8 +1546,26 @@ export async function syncLeagueGames(
     };
   }
 
-  const leagueMatchIds = await fetchLeagueMatchIds(season.dotaLeagueId);
+  // Deadlines are an unattended-worker concern. Admin/manual sync preserves
+  // its existing unbounded behavior even if a future caller passes options by
+  // mistake without opting into `auto`.
+  const fetchOptions: OpenDotaFetchOptions = opts.auto
+    ? { deadlineMs: opts.deadlineMs, signal: opts.signal }
+    : {};
+  const budgetStopped = () =>
+    !!opts.auto && !canStartOpenDotaFetch(fetchOptions);
+  if (budgetStopped()) {
+    return { imported: 0, scanned: 0, deadlineReached: true };
+  }
+
+  const leagueMatchIds = await fetchLeagueMatchIds(
+    season.dotaLeagueId,
+    fetchOptions,
+  );
   if (leagueMatchIds === null) {
+    if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
+      return { imported: 0, scanned: 0, deadlineReached: true };
+    }
     // Per-game fetch failures below stay `continue` (transient per-id); a
     // null LIST means the feed itself was unreachable — say so instead of
     // reporting a success-shaped "imported 0 of 0".
@@ -1037,6 +1622,7 @@ export async function syncLeagueGames(
     : Number.POSITIVE_INFINITY;
   let fetches = 0;
   let imported = 0;
+  let deadlineReached = false;
   // Phase 1 — fetch, classify, and BUFFER per fixture instead of importing per
   // feed id. The feed lists newest-first, so a "one for fun" game after a
   // decided night used to import BEFORE the real games (the series wasn't
@@ -1046,16 +1632,32 @@ export async function syncLeagueGames(
   // buffering lets this path run the same filter per match below.
   const candidatesByMatch = new Map<
     string,
-    { id: number; idStr: string; startTime: number; winnerTeamId: string | null }[]
+    {
+      id: number;
+      idStr: string;
+      startTime: number;
+      winnerTeamId: string | null;
+    }[]
   >();
   for (const dotaId of leagueMatchIds) {
     const idStr = String(dotaId);
     if (skip.has(idStr)) continue;
-    if (await prisma.game.findUnique({ where: { dotaMatchId: idStr } })) continue;
+    if (await prisma.game.findUnique({ where: { dotaMatchId: idStr } }))
+      continue;
     if (fetches >= maxFetches) break;
+    if (budgetStopped()) {
+      deadlineReached = true;
+      break;
+    }
     fetches++;
-    const od = await fetchOpenDotaMatch(idStr);
-    if (!od) continue; // transient fetch failure — retry later, never skip-listed
+    const od = await fetchOpenDotaMatch(idStr, fetchOptions);
+    if (!od) {
+      if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
+        deadlineReached = true;
+        break;
+      }
+      continue; // transient fetch failure — retry later, never skip-listed
+    }
     await ensureAccounts();
 
     // classifyGame is roster-based and time-blind, and a single round robin
@@ -1064,8 +1666,10 @@ export async function syncLeagueGames(
     // COMPLETED matches never take a game: a decided series (or an admin's
     // manual/forfeit ruling) must not be silently rewritten by a late import —
     // amending one is an explicit per-match admin action.
-    const fits: { m: (typeof scheduled)[number]; winnerTeamId: string | null }[] =
-      [];
+    const fits: {
+      m: (typeof scheduled)[number];
+      winnerTeamId: string | null;
+    }[] = [];
     for (const m of scheduled) {
       const acc = accountsByMatch.get(m.id);
       if (!acc) continue;
@@ -1116,15 +1720,23 @@ export async function syncLeagueGames(
     const chosen = pickSeriesGames(candidates, match.bestOf);
     const chosenIds = new Set(chosen.map((c) => c.idStr));
     for (const c of [...chosen].sort((a, b) => a.startTime - b.startTime)) {
-      const r = await importGameForMatch(matchId, c.idStr);
+      if (budgetStopped()) {
+        deadlineReached = true;
+        break;
+      }
+      const r = await importGameForMatch(matchId, c.idStr, fetchOptions);
       if (r.ok) {
         imported++;
+      } else if (r.deadlineReached) {
+        deadlineReached = true;
+        break;
       } else {
         // A refused import (recorded for another match, full series, manual
         // result) won't succeed next run either — stop refetching it.
         newlySkipped.push(c.idStr);
       }
     }
+    if (deadlineReached) break;
     for (const c of candidates) {
       // The bonus/warmup games pickSeriesGames dropped: fetched, classified,
       // and deliberately not imported — remember them so the automatic feed
@@ -1141,5 +1753,9 @@ export async function syncLeagueGames(
       ),
     );
   }
-  return { imported, scanned: leagueMatchIds.length };
+  return {
+    imported,
+    scanned: leagueMatchIds.length,
+    ...(deadlineReached ? { deadlineReached: true } : {}),
+  };
 }

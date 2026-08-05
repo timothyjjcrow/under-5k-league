@@ -1,4 +1,4 @@
-import { DRAFT_ROOM, INHOUSE } from "./constants";
+import { DRAFT_ROOM, INHOUSE, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
 
 /**
  * The poll cadence for both live rooms.
@@ -25,23 +25,23 @@ import { DRAFT_ROOM, INHOUSE } from "./constants";
  *
  * The four rules, in the order they take precedence:
  *
- * 1. **429 is not a failure — it is a signal to ease off.** These routes'
- *    speed bumps are per-IP and a queued tab polls 40/min, so one household or
- *    one NAT'd office crosses the limit just by having a lobby. Treating it as
- *    a disconnect greyed out ACCEPT MATCH mid-ready-check, and retrying at the
- *    fast rate kept the fixed window saturated so it never cleared. Easing off
- *    is what actually drains the bucket — which the mutations share, so this is
- *    how the next ACCEPT or bid gets through.
- * 2. **A hidden tab WITH a stake keepalives; without one it does not fetch.**
+ * 1. **429 is not a failure — it is a signal to ease off.** Public polling
+ *    buckets can be shared by a household/NAT, and deployments can apply
+ *    additional upstream limits. Treating back-pressure as a disconnect
+ *    greys out second-sensitive actions while retrying fast can keep the
+ *    window saturated. Easing off is what lets the next request through.
+ * 2. **Offline means no request.** The browser wakes the loop immediately on
+ *    `online`; scheduled checks are only a fallback for unreliable events.
+ * 3. **A hidden tab WITH a stake keepalives; without one it does not fetch.**
  *    Queued or in a lobby, the poll IS the presence heartbeat (and carries the
  *    ready-check chime and the tab title), so it must outrun QUEUE_AWAY_SECONDS
  *    even after Chrome clamps background timers. A hidden spectator is pure
- *    cost: the sitewide /api/sync ping advances lobbies without them.
+ *    cost: authenticated participants and the leased worker advance lobbies.
  *    Exception: `coldStart`, below.
- * 3. **A poll that did not land retries at the FAST rate.** Sustained failures
- *    are what flip `disconnected` (see pollHealthAfter) and disable every
- *    control; backing off delays the recovery and the diagnosis equally.
- * 4. Otherwise: fast while the room is active, idle when it is not.
+ * 4. **Failures retry fast through the disconnect threshold; then back off.**
+ *    That diagnoses a broken connection promptly without synchronizing every
+ *    parked client into a request storm for the duration of an outage.
+ * 5. Otherwise: fast while the room is active, idle when it is not.
  *
  * Callers must re-read `document.visibilityState` at the moment they ask, not
  * from a snapshot taken before the fetch — a tab refocused mid-request has to
@@ -58,6 +58,8 @@ export type RoomPollRates = {
   rateLimitedMs: number;
   /** After a poll that did not land (failed, aborted, never attempted). */
   retryMs: number;
+  /** Ceiling for disconnected/offline retry backoff. */
+  maxRetryMs: number;
 };
 
 export type RoomPollInput = {
@@ -67,10 +69,16 @@ export type RoomPollInput = {
   hasStake: boolean;
   /** Is the ROOM in a second-sensitive phase? Defaults to `hasStake`. */
   active?: boolean;
-  /** The response was a 429 from the route's per-IP speed bump. */
+  /** The response was a 429 from the route's applicable state/action bucket. */
   rateLimited?: boolean;
   /** A payload came back (false = failed, aborted, or not attempted). */
   reached?: boolean;
+  /** Browser reports no network connectivity. */
+  offline?: boolean;
+  /** Consecutive non-429 failures for disconnected backoff. */
+  failureCount?: number;
+  /** Deterministic 0..1 jitter seam for tests; runtime defaults to Math.random. */
+  jitter?: number;
   /**
    * No request has EVER left this room. Both rooms learn `hasStake` from a
    * payload, so before the first one it is `false` for everybody — and a tab
@@ -95,6 +103,7 @@ export function roomPollCadence(
   rates: RoomPollRates,
 ): RoomPollCadence {
   if (o.rateLimited) return { skip: false, delayMs: rates.rateLimitedMs };
+  if (o.offline) return { skip: true, delayMs: rates.maxRetryMs };
   // An unknown stake counts as a stake, exactly once — see `coldStart`.
   const stake = o.hasStake || !!o.coldStart;
   if (o.hidden) {
@@ -102,7 +111,25 @@ export function roomPollCadence(
       ? { skip: false, delayMs: rates.keepaliveMs }
       : { skip: true, delayMs: rates.idleMs };
   }
-  if (o.reached === false) return { skip: false, delayMs: rates.retryMs };
+  if (o.reached === false) {
+    const failures = o.failureCount ?? 1;
+    if (failures <= ROOM_POLL_FAIL_THRESHOLD) {
+      return { skip: false, delayMs: rates.retryMs };
+    }
+    const exponent = Math.min(10, failures - ROOM_POLL_FAIL_THRESHOLD);
+    const base = Math.min(
+      rates.maxRetryMs,
+      Math.max(rates.idleMs, rates.retryMs * 2 ** exponent),
+    );
+    const jitter = Math.min(1, Math.max(0, o.jitter ?? Math.random()));
+    return {
+      skip: false,
+      delayMs: Math.min(
+        rates.maxRetryMs,
+        Math.round(base * (0.8 + 0.4 * jitter)),
+      ),
+    };
+  }
   const active = o.active ?? o.hasStake;
   return { skip: false, delayMs: active ? rates.activeMs : rates.idleMs };
 }
@@ -125,6 +152,7 @@ export function inhousePollCadence(
     // already 10s, which drains the window.
     rateLimitedMs: idleMs,
     retryMs: o.activeMs,
+    maxRetryMs: 30_000,
   });
 }
 
@@ -156,6 +184,7 @@ export function draftPollCadence(
       // `disconnected`, which is the safety gate that disables bidding on
       // stale state.
       retryMs: o.activeMs,
+      maxRetryMs: 30_000,
     },
   );
 }

@@ -81,9 +81,10 @@ describe("clampInt", () => {
     expect(clampInt(fd(), "missing", 999, 1, 10)).toBe(999);
   });
 
-  it("parseInt semantics apply: truncation and trailing junk", () => {
-    expect(clampInt(fd({ n: "3.9" }), "n", 0, 1, 10)).toBe(3);
-    expect(clampInt(fd({ n: "4px" }), "n", 0, 1, 10)).toBe(4);
+  it("rejects decimals, exponents, and trailing junk instead of truncating", () => {
+    expect(clampInt(fd({ n: "3.9" }), "n", 7, 1, 10)).toBe(7);
+    expect(clampInt(fd({ n: "4px" }), "n", 7, 1, 10)).toBe(7);
+    expect(clampInt(fd({ n: "1e2" }), "n", 7, 1, 10)).toBe(7);
   });
 });
 

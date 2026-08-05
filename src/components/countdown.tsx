@@ -10,11 +10,15 @@ import { countdownLabel, hasPassed } from "@/lib/countdown";
 export function Countdown({
   targetMs,
   eventLabel = "Match",
+  futureVerb = "starts",
   passedLabel,
+  passesAtTarget = false,
 }: {
   targetMs: number;
   /** Spoken event name — "Draft starts in 2d", not every timer is a match. */
   eventLabel?: string;
+  /** Spoken future-tense verb — deadlines "lock" instead of "start". */
+  futureVerb?: string;
   /**
    * What to show once the date has been and gone. Omit and the chip vanishes,
    * which is right beside a fixture list that has moved on — the row itself is
@@ -32,23 +36,26 @@ export function Countdown({
    * would contradict the countdown that just vanished beside it.
    */
   passedLabel?: string;
+  /** Deadlines pass at the target; events otherwise keep the live window. */
+  passesAtTarget?: boolean;
 }) {
   const [label, setLabel] = useState<string | null>(null);
   const [passed, setPassed] = useState(false);
   useEffect(() => {
     const compute = () => {
       const now = Date.now();
-      setLabel(countdownLabel(targetMs, now));
-      setPassed(hasPassed(targetMs, now));
+      const deadlinePassed = passesAtTarget && now >= targetMs;
+      setLabel(deadlinePassed ? null : countdownLabel(targetMs, now));
+      setPassed(deadlinePassed || hasPassed(targetMs, now));
     };
     compute();
     const id = setInterval(compute, 30_000);
     return () => clearInterval(id);
-  }, [targetMs]);
+  }, [passesAtTarget, targetMs]);
 
   if (!label) {
     // Pre-mount is also `!label`, and it is NOT the passed state — rendering
-    // the passed chip there would flash "hasn't started yet" on every load of
+    // the passed chip there would flash "start overdue" on every load of
     // an upcoming fixture. `passed` is false until the first compute, so the
     // chip stays absent until the clock has actually been read.
     if (!passed || !passedLabel) return null;
@@ -72,7 +79,9 @@ export function Countdown({
     <span
       role="timer"
       aria-label={
-        live ? `${eventLabel} is happening now` : `${eventLabel} starts ${label}`
+        live
+          ? `${eventLabel} is happening now`
+          : `${eventLabel} ${futureVerb} ${label}`
       }
       className={
         live

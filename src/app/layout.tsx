@@ -18,6 +18,7 @@ import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { resolveSiteUrl } from "@/lib/site-url";
+import { getSetting, SETTING_KEYS } from "@/lib/settings";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
@@ -51,11 +52,17 @@ export const viewport: Viewport = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [user, season, archivedCount] = await Promise.all([
-    getSessionUser(),
-    getActiveSeason(),
-    prisma.season.count({ where: { isActive: false } }),
-  ]);
+  const [user, season, archivedCount, resultCursorAtRender] =
+    await Promise.all([
+      getSessionUser(),
+      getActiveSeason(),
+      prisma.season.count({ where: { isActive: false } }),
+      // This is the causality boundary for ResultSyncPing's first heartbeat.
+      // If a concurrent request changes a result after this render, even a
+      // heartbeat that loses the import claim can see the cursor advance and
+      // refresh the stale RSC payload.
+      getSetting(SETTING_KEYS.RESULT_CHANGED_AT),
+    ]);
   const myTeam =
     user && season
       ? await prisma.teamMember.findFirst({
@@ -65,7 +72,11 @@ export default async function RootLayout({
       : null;
 
   return (
-    <html lang="en" className={`h-full antialiased ${display.variable}`}>
+    <html
+      lang="en"
+      className={`h-full antialiased ${display.variable}`}
+      data-scroll-behavior="smooth"
+    >
       <body className="flex min-h-full flex-col">
         <a href="#main" className="skip-link">
           Skip to main content
@@ -89,8 +100,8 @@ export default async function RootLayout({
           hasHistory={archivedCount > 0}
         />
         <Toaster />
-        {/* Lazy automatic result sync — league + inhouse update themselves. */}
-        <ResultSyncPing />
+        {/* Observe worker progress so parked pages refresh after results land. */}
+        <ResultSyncPing initialCursor={resultCursorAtRender} />
       </body>
     </html>
   );

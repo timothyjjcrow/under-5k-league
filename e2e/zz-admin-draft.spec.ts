@@ -50,12 +50,16 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     .locator(".max-h-80 div.rounded-lg", { hasText: "Cap One" })
     .getByRole("button", { name: "make captain" })
     .click();
-  await expect(page.getByRole("heading", { name: /Captains \(1\)/ })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Captains \(1\)/ }),
+  ).toBeVisible();
   await page
     .locator(".max-h-80 div.rounded-lg", { hasText: "Cap Two" })
     .getByRole("button", { name: "make captain" })
     .click();
-  await expect(page.getByRole("heading", { name: /Captains \(2\)/ })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Captains \(2\)/ }),
+  ).toBeVisible();
 
   // Move the season into DRAFT without starting the auction: /draft must be
   // a live waiting room for players, not a static dead end.
@@ -68,6 +72,17 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
       .getByRole("link", { name: "Teams", exact: true })
       .first(),
   ).toBeVisible();
+
+  // DRAFT is the league chapter, not proof that the auction is already live.
+  // Before Start draft, the dashboard must say setup/waiting rather than tell
+  // every visitor that captains are actively bidding.
+  await page.goto("/");
+  await expect(page.getByText("Draft setup", { exact: true })).toBeVisible();
+  await expect(page.getByText(/draft is being prepared/i)).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "View the draft room →" }),
+  ).toBeVisible();
+  await page.goto("/admin");
 
   const playerContext = await browser.newContext();
   const playerPage = await playerContext.newPage();
@@ -109,7 +124,17 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(page.getByText(/On the clock/)).toBeVisible();
   await expect(page.getByText(/Available ·/)).toBeVisible();
   // The auction has the same persisted sound toggle as the inhouse room.
-  await expect(page.getByRole("button", { name: /Sound on|Muted/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Sound on|Muted/ }),
+  ).toBeVisible();
+  // Admin recovery travels with the live room; an operator should not have to
+  // leave the clock to pause or correct the auction.
+  await expect(
+    page.getByRole("button", { name: "Pause auction" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Undo last sale" }),
+  ).toBeVisible();
 
   // --- The live auction, driven from the captains' own browsers ------------
 
@@ -139,16 +164,40 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     .locator("#player-pool")
     .getByRole("button", { name: /Topson/ })
     .click();
-  await capOnePage.getByRole("button", { name: "Nominate", exact: true }).click();
+  await capOnePage
+    .getByRole("button", { name: "Nominate", exact: true })
+    .click();
   await expect(capOnePage.getByText("You hold the high bid.")).toBeVisible();
 
-  // Cap Two sees the lot and raises via the quick-bid stepper (which shows
-  // the absolute amount it will submit).
+  // Cap Two sees the lot on a phone-sized room. The bid controls fit without
+  // horizontal overflow, and an exact amount is available alongside quick
+  // raises for captains coordinating a deliberate budget.
+  await capTwoPage.setViewportSize({ width: 375, height: 812 });
   await expect(capTwoPage.getByText(/high bid|opening/).first()).toBeVisible();
-  await capTwoPage
-    .getByRole("button", { name: /Bid \$2/ })
-    .first()
+  const exactBid = capTwoPage.getByLabel("Exact bid amount");
+  await expect(exactBid).toBeVisible();
+  expect(
+    await capTwoPage.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await exactBid.fill("2");
+  const bidResponsePromise = capTwoPage.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/draft/bid" &&
+      response.request().method() === "POST",
+  );
+  await exactBid
+    .locator("..")
+    .getByRole("button", { name: "Bid $2", exact: true })
     .click();
+  const bidResponse = await bidResponsePromise;
+  const bidBody = await bidResponse.text();
+  expect(
+    bidResponse.ok(),
+    `Bid endpoint returned ${bidResponse.status()}: ${bidBody}`,
+  ).toBe(true);
+  expect(JSON.parse(bidBody)).toMatchObject({ currentBid: 2 });
   await expect(capTwoPage.getByText("You hold the high bid.")).toBeVisible();
 
   // Cap One gets the outbid alarm with a one-tap re-bid…
@@ -168,13 +217,19 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // the way into the live room, plus the night-of controls.
   await page.goto("/admin");
   await expect(page.getByRole("link", { name: /draft room/i })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Start draft" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "make captain" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start draft" })).toHaveCount(
+    0,
+  );
+  await expect(page.getByRole("button", { name: "make captain" })).toHaveCount(
+    0,
+  );
   await expect(
     page.getByRole("button", { name: "Randomize order" }),
   ).toHaveCount(0);
   // The draft-night recovery controls are available while the auction runs.
-  await expect(page.getByRole("button", { name: "Pause auction" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Pause auction" }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Undo last sale" }),
   ).toBeVisible();

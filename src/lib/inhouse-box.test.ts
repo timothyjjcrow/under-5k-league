@@ -44,7 +44,7 @@ describe("parseInhouseBox", () => {
   it("malformed JSON parses to []", () => {
     expect(parseInhouseBox("")).toEqual([]);
     expect(parseInhouseBox("{not json")).toEqual([]);
-    expect(parseInhouseBox("[{\"truncated\":")).toEqual([]);
+    expect(parseInhouseBox('[{"truncated":')).toEqual([]);
   });
 
   it("valid JSON that is not an array parses to []", () => {
@@ -54,5 +54,33 @@ describe("parseInhouseBox", () => {
     expect(parseInhouseBox("42")).toEqual([]);
     expect(parseInhouseBox("null")).toEqual([]);
     expect(parseInhouseBox("true")).toEqual([]);
+  });
+
+  it("drops malformed lines without hiding valid players or crashing readers", () => {
+    const valid: InhouseBoxPlayer = {
+      userId: "u1",
+      name: "Axe Enjoyer",
+      team: 2,
+      isRadiant: false,
+      heroId: 2,
+      kills: 4,
+      deaths: 6,
+      assists: 9,
+      netWorth: 14000,
+      gpm: 420,
+      lastHits: 160,
+    };
+    expect(
+      parseInhouseBox(
+        JSON.stringify([
+          null,
+          valid,
+          { ...valid, kills: "four" },
+          { ...valid, team: 3 },
+          { ...valid, heroId: Number.NaN },
+          [],
+        ]),
+      ),
+    ).toEqual([valid]);
   });
 });

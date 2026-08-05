@@ -3,12 +3,20 @@
 A Learn Dota 2 League site. Read the README for the product overview. This file
 is orientation for future work in the codebase.
 
+> **Release-operations notice (August 2026):** this is a long-lived engineering
+> notebook, not a deployment runbook. For production builds, migrations,
+> backups, schedulers, rollback, and launch approval, the source of truth is the
+> current `README.md` deployment section and
+> `docs/PRODUCTION-READINESS-2026-08.md`. Historical notes below must never
+> override those guarded procedures.
+
 ## Mental model
 
 Everything hangs off a **Season** and its `status` (the state machine):
 `SIGNUPS → DRAFT → REGULAR_SEASON → PLAYOFFS → COMPLETE`. The active season is
-`Season` where `isActive = true` (see `getActiveSeason`). The UI (nav + dashboard)
-renders per-phase so unused features stay hidden.
+the at-most-one `Season` where `isActive = true` (see `getActiveSeason`); zero
+active rows is the deliberate offseason. The UI (nav + dashboard) renders
+per-phase or offseason so unused features stay hidden.
 
 ## Where things live
 
@@ -22,9 +30,11 @@ renders per-phase so unused features stay hidden.
   handlers in `src/app/api/draft/*` (the live draft).
 - **Auth**: `src/lib/auth.ts` (jose-signed cookie session), `steam.ts` (OpenID
   2.0), `users.ts` (upsert + `resolveRole`). Dev/mock login: `/api/auth/dev`
-  (gated by `ALLOW_DEV_LOGIN`). Admin: if `ADMIN_STEAM_IDS` is set it's
-  authoritative (exactly those SteamID64s are admin; others demoted on login);
-  otherwise the first-ever user bootstraps as admin. `npm run set-admins`
+  (gated by `ALLOW_DEV_LOGIN`). Admin: `ADMIN_STEAM_IDS` is authoritative
+  (exactly those SteamID64s are admin; others demoted on login), and production
+  validation requires at least one valid, unique entry before deployment. The
+  atomic `bootstrapAdminSteamId` Setting claim is a local-development fallback
+  only; never describe it as a production setup path. `npm run set-admins`
   reconciles existing accounts to the allowlist in one shot. Steam name/avatar
   come from `fetchSteamProfile`/`fetchSteamProfiles` (GetPlayerSummaries, needs
   `STEAM_API_KEY`) — set on login, bulk-refreshed via admin `syncSteamProfiles`,
@@ -44,7 +54,7 @@ this class in every subsystem. Two rules, both non-negotiable:
    write.** Postgres READ COMMITTED re-snapshots per statement, so anything
    checked before a write can be false by the time the write lands. Turn
    `update({ where: { id } })` into `updateMany({ where: { id, ...what you
-   checked } })` and handle `count === 0`. Where the precondition lives in
+checked } })` and handle `count === 0`. Where the precondition lives in
    another table (a write-skew pair), re-read it INSIDE a `Serializable`
    transaction — SSI only spots the cycle when BOTH sides have the other's
    table in their read set, so one-sided fixes do nothing.
@@ -78,6 +88,13 @@ are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme l
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
 all-clear on a sabotage; don't reintroduce positional ids.
 
+The current 2026-08-03 baseline has 105 live claims: 65 protected, 40 reviewed
+equivalents, and 0 unprotected. Targeted probes use
+`npm run test:mutation:discover -- --only <claim-substring>`; `--only` is never
+valid in verification mode and never rewrites the baseline. The runner mutates
+guarded files in place, so it owns them exclusively while active: do not edit
+or interrupt it, and inspect the exact diff after any abnormal termination.
+
 **The ratchet only models ONE guard shape.** `scripts/mutation-guard.mjs` line 3
 says it: a claim is an `updateMany({ where: … })` whose WHERE re-asserts a
 read-time precondition. Guards written as an early `return { error }` or as a
@@ -90,22 +107,16 @@ integration tests instead, and the honest way to check such a test is to
 sabotage the guard and confirm the test goes red — the ratchet will not do it
 for you. Don't read "all gradeable claims protected" as "every guard in the repo is gated".
 
-Currently **every gradeable claim is protected** (the committed
-`test/mutation-baseline.json` is authoritative for the counts — 62 of 70 (65
-gradeable; the 3 unprotected are the pubStats `dotaAccountId` claims) as of
-2026-08-02, and these numbers go stale here at every `--discover`) — every
-gradeable non-pubStats claim fails the suite when its predicate is deleted. The
-remainder are EQUIVALENT MUTANTS: predicates that can be deleted without
-changing the end state, so no test can ever kill them. They are listed in the
-guard and excluded from the score rather than left looking like gaps — two
-archive-then-set pairs, a `{ gt: 0 }` guarding a write of 0, `applyPick`'s
-advance claim (unfalsifiable behind the turn claim's row lock; see below), and
-`placeInhouseBet`'s betSettlement flip (PENDING over PENDING). Each
-carries its REASON in `EQUIVALENT`, because "equivalent" is also exactly what an
-untested gap looks like from here. A NEW claim is still reported and never
-gating — assume a guard is unprotected until the baseline says otherwise. To
-raise the ratchet: write a raced test, then `npm run test:mutation:discover` and
-commit the new baseline.
+Currently **every non-equivalent live claim is protected**; the committed
+`test/mutation-baseline.json` is authoritative for the counts, which go stale
+here after every `--discover`. The remainder are EQUIVALENT MUTANTS: predicates
+that can be deleted without changing the committed end state, so no test can
+ever kill them. They are listed in the guard and excluded from the score rather
+than left looking like gaps. Each carries its current REASON in `EQUIVALENT`,
+because "equivalent" is also exactly what an untested gap looks like from here.
+A NEW claim is still reported and never gating — assume a guard is unprotected
+until the baseline says otherwise. To raise the ratchet: write a raced test,
+then `npm run test:mutation:discover` and commit the new baseline.
 
 **Running any of this locally** (the guard and the pg suite need Postgres, and
 switching the Prisma provider is a footgun if you forget to switch back):
@@ -117,12 +128,17 @@ switching the Prisma provider is a footgun if you forget to switch back):
     npm run test:mutation -- --shard 2/4     # one CI shard (5-7 min on CI)
     npm run test:mutation -- --discover --only acceptMatch   # probe one claim
     npm run pg:down          # BACK TO SQLITE + drop the DB — do not skip this
+    unset PG_TEST_URL
 
 `pg:down` is the step that matters: without it `prisma/schema.prisma` stays on
 the postgresql provider, the SQLite suites break, and a `git add -A` commits the
 switched provider. `--discover --only` deliberately refuses to write the
 baseline (a partial sweep would drop the ratchet for every claim it skipped);
-only a full `--discover` may.
+only a full `--discover` may. The PG suite truncates every league table:
+`assertPostgresTestUrl` accepts only databases named exactly `ld2l_test` or
+`ld2l_pgtest`, and `pg:up`/`pg:down` additionally require localhost. Never use a
+production or shared database URL, and never paste a credential-bearing URL
+into a command line or shell history.
 
 A full sweep is ~8 min of suite time (a caught mutant `--bail=1`s out
 in seconds, so the cost is dominated by the survivors) but ~25 min wall clock,
@@ -136,7 +152,7 @@ reasons were wrong in the same way — **"something upstream serializes this" on
 covers rivals from the SAME path**, and every one of these claims had a rival
 from a different path. Keep that in mind before writing another such excuse.
 
-* `result-sync-service::dueMinutes` — the excuse was the global
+- `result-sync-service::dueMinutes` — the excuse was the global
   `rosterAutoSyncAt` throttle. It does serialize runs, which is why the `OR`
   half is genuinely belt-and-braces (nothing else writes `autoSyncedAt`, so no
   test can reach it — and it need not, since the ratchet deletes both halves at
@@ -148,7 +164,7 @@ from a different path. Keep that in mind before writing another such excuse.
   `syncLeagueGames` grew one) — and imports a late game over an admin's ruling.
   Seam `resultSync.syncDueMatches.beforeMatchClaim`; the decisive assertion is
   that OpenDota was never called at all.
-* `inhouse-board-service::exists` + `::swapState` — the excuse was "belt-and-
+- `inhouse-board-service::exists` + `::swapState` — the excuse was "belt-and-
   braces behind explicit checks in `claimBoardRow`", which had it backwards: the
   checks are READ-time and both CASes span a Discord round trip, so the checks
   are the thing that goes stale and the CAS is the only write-time re-assertion.
@@ -163,7 +179,7 @@ from a different path. Keep that in mind before writing another such excuse.
   CAS the rival is a second admin's post COMPLETING in the gap (seam
   `inhouseBoard.claimBoardRow.beforeTakeover`) — blind, both post. Both tests
   assert the POST COUNT, because an orphan is made of exactly one extra post.
-* `applyPick::status#1` — this one was genuinely unkillable, and is now listed
+- `applyPick::status#1` — this one was genuinely unkillable, and is now listed
   as an EQUIVALENT MUTANT instead of a gap. The turn claim a few statements
   earlier UPDATEs the same lobby row inside the same transaction, so Postgres
   holds that row's lock until commit: the admin cancel the old comment
@@ -183,7 +199,7 @@ from a different path. Keep that in mind before writing another such excuse.
 **How the last five were closed** (2026-07-27) — the two patterns are worth
 copying:
 
-* **Delete the redundant read-time check so the claim IS the enforcement
+- **Delete the redundant read-time check so the claim IS the enforcement
   point.** `saveRegistration` refused a REMOVED signup twice: an `if` on a row
   read at the top of the request, and the `status: { not: REMOVED }` on the
   update claim. The `if` was strictly weaker (the upsert under it still wrote
@@ -201,7 +217,7 @@ copying:
   only in the WHERE (`games: { none: {} }`, a relation filter — the
   `acceptMatch` pattern), and a `count === 0` re-read says WHICH predicate
   failed, because "nothing happened" is the one answer an admin cannot act on.
-* **Seam the rest.** `recomputeSeries` (rival imports the game that clinches
+- **Seam the rest.** `recomputeSeries` (rival imports the game that clinches
   the series between this caller's read and its CAS — the stale caller must not
   revert a COMPLETED 2-0 to a LIVE 1-0), `startCaptainVote` (a decline CANCELS
   the check between the pending count and the flip — a blind flip resurrects a
@@ -232,11 +248,13 @@ stopped firing would quietly hollow out every test built on it).
 Two rules for writing one: (1) the rival runs on a DIFFERENT connection, so it
 must not touch a row the open transaction has already written — it will block on
 that lock while the transaction waits on the hook, which is a hang, not a
-failure; (2) those tests are Postgres-only (`describe.skipIf(!ON_POSTGRES)`),
-because SQLite pins one connection and ANY rival inside an open transaction
-hangs. Assert a `fired` flag too — a seam whose label drifts otherwise degrades
-into a silently vacuous test. Deliberately removing a guard also needs a re-discover, which
-is the point at which someone has to justify it.
+failure; (2) seams inside an open transaction are Postgres-only
+(`describe.skipIf(!ON_POSTGRES)`), because SQLite pins one connection and a
+rival there hangs. Pre-transaction seams (including the account-link claims)
+are safe and should run on both providers. Assert a `fired` flag too — a seam
+whose label drifts otherwise degrades into a silently vacuous test. Deliberately
+removing a guard also needs a re-discover, which is the point at which someone
+has to justify it.
 
 ## Conventions / gotchas
 
@@ -261,7 +279,7 @@ is the point at which someone has to justify it.
   refuses the 31st signup on a 6-team season: `registrationGate` checks the MMR
   ceiling and the SIGNUPS phase and nothing else, and `startDraft` forms one
   team per CAPTAIN (`teams.length >= 2`, pool > 0), so extra players become
-  extra teams. `capacityInfo`'s `minPlayers`/`needed`/`canDraft` are *display*
+  extra teams. `capacityInfo`'s `minPlayers`/`needed`/`canDraft` are _display_
   values — never a gate; don't turn one into one. The player count is squared
   against the roster size at DRAFT START, by choosing how many captains to
   designate, and `startDraft` accepts both sides of that (a short pool takes
@@ -291,8 +309,7 @@ is the point at which someone has to justify it.
 - `npm run test:e2e:mid` is the MID-SEASON browser suite
   (`playwright.midseason.config.ts`, specs in `e2e-mid/`): its own
   `prisma/e2e-fixture.db` (name satisfies seed-fixture's guard) seeded to
-  `FIXTURE_MODE=regular` + a staged LIVE match (`e2e-mid/stage.ts`), port
-  3212. Covers dashboard/standings sorting, schedule (collapse/filter/LIVE
+  `FIXTURE_MODE=regular` + a staged LIVE match (`e2e-mid/stage.ts`), port 3212. Covers dashboard/standings sorting, schedule (collapse/filter/LIVE
   chip/calendar), box scores, leaders/meta/records, team/player pages,
   fantasy+pick'em signed-in, and a mobile no-horizontal-overflow tripwire
   whose failure output names the offending elements and the scroll chain.
@@ -539,7 +556,7 @@ is the point at which someone has to justify it.
   ownership only, deliberately — per-row membership on pool/roster lists is
   unaffordable and a mirrored column drifts.
   An adversarial review pass hardened the edges — keep these:
-  * `memoGuildMembership` also memoises the IN-FLIGHT promise (two funnel
+  - `memoGuildMembership` also memoises the IN-FLIGHT promise (two funnel
     consumers render concurrently on /admin; a result-only memo doubles the
     cold burst), its resolution won't clobber a FRESHER entry, and
     `primeMembershipMemo` ignores null — one failed /me lookup must not erase
@@ -556,7 +573,7 @@ is the point at which someone has to justify it.
     sweep deadline both sit on top of this). The stand-in tests enforce their
     own bucket server-side, so the exact request COUNT is what proves the
     pacing, not just the outcome.
-  * **The join CTAs carry three DISTINCT names on purpose** ("Join the
+  - **The join CTAs carry three DISTINCT names on purpose** ("Join the
     server" = one-click re-OAuth in `DiscordJoinCard`; "Use the invite
     instead" beside it; "Join via the invite" in /me's strip — and the pending
     strip says "Open Discord" vs the card's "Open the server"). Two rules
@@ -564,20 +581,20 @@ is the point at which someone has to justify it.
     leave an invite path visible** — re-OAuth alone bounces a player whose
     join 403s (bot missing CREATE_INSTANT_INVITE, mismatched app) through
     consent back to the same card forever.
-  * **The live membership answer beats the `?discord=` param** (`/me`'s
+  - **The live membership answer beats the `?discord=` param** (`/me`'s
     `discordNoteResolved`): the note was minted by the CALLBACK, and a player
     who was already in the server when the auto-join 403'd otherwise reads
     "we couldn't add you — join it with the button below" under an
     "In the server ✓" badge, with no such button on the page.
-  * **`getPingHealth` runs its bot checks WITHOUT a ping role** (only the
+  - **`getPingHealth` runs its bot checks WITHOUT a ping role** (only the
     role rows stay null): bot-without-role is a supported config that can run
     the membership sweep, so when the sweep reads all-unknown because the bot
     was kicked or the guild id is wrong, the checklist on the same card is
     what names the cause — every unknown-copy pointer to it depends on that.
     Never claim "reload fixes it" for unknowns: reload inside the 30s memo
     TTL is a no-op, and a kicked bot answers that way forever.
-  Second pass (same day), four additions:
-  * **The OAuth link carries a return path** — `/api/auth/discord?next=…`,
+    Second pass (same day), four additions:
+  - **The OAuth link carries a return path** — `/api/auth/discord?next=…`,
     validated by `safeReturnPath` at pack time AND at unpack (the cookie is
     client-held bytes; a tampered third part degrades to no-path, never a
     redirect), ridden as a base64url third cookie part (two-part cookies from
@@ -586,7 +603,7 @@ is the point at which someone has to justify it.
     `?discord=` code that only /me can render and scrub, so it overrides the
     path; a success bound for /me anyway keeps its confirmation code. The
     dashboard's setup/join cards pass `next="/"`.
-  * **The chase message** (`discordChaseMessage` + `<ChaseCopy>`): the funnel
+  - **The chase message** (`discordChaseMessage` + `<ChaseCopy>`): the funnel
     can't notify the very people it names, so the last mile is a human
     pasting into Discord — one click builds the post (invite for the missing,
     rules nudge for the pending, profile link for the unlinked) onto the
@@ -596,19 +613,19 @@ is the point at which someone has to justify it.
     builders live in `discord-reach.ts`, split out because ChaseCopy is
     `"use client"` and discord-roles imports prisma; discord-roles re-exports
     them so server import paths didn't move.
-  * **`reachabilityNote(userId)`** rides the assign-standin toasts (BOTH
+  - **`reachabilityNote(userId)`** rides the assign-standin toasts (BOTH
     paths — captain and admin): being assigned is the most action-demanding
     message the league sends, so if the announcement structurally can't reach
     the standin (unlinked / not in server / rules-pending), the person
     arranging cover hears it NOW, not on match night. Silent on unknown — a
     Discord hiccup must not dress up as "this player is unreachable" — and it
     never throws (a toast garnish can't be allowed to fail an assignment).
-  * **Re-linking a DIFFERENT Discord account strips the ping role from the
+  - **Re-linking a DIFFERENT Discord account strips the ping role from the
     replaced one** (was a KNOWN GAP): `linkDiscordAccount` returns
     `previousDiscordId`, and the callback's injected `stripPingRole` dep
     fires best-effort AFTER the link commits — a failed strip never costs
     the link. Same-account re-links don't strip.
-  * **"Missing" is a fact about the LINKED ACCOUNT, not always the human —
+  - **"Missing" is a fact about the LINKED ACCOUNT, not always the human —
     and every surface says which account** (first live use: the admin
     reported "some of these players are in the discord", and they were —
     on accounts they hadn't linked). The membership check runs by ID
@@ -625,16 +642,16 @@ is the point at which someone has to justify it.
     claimed. When copy follows a JSX expression onto a new source line, use
     the quoted-string form — the plain leading space is line-trimmed
     ("(@gone4)isn't"); this has now bitten three times.
-  COVERAGE LIMIT (stated, not hidden): the three-state /me card, the
-  dashboard join nag and the note-resolution are server-rendered JSX with no
-  automated render test (no jsdom; e2e has no bot env) — the lib layer under
-  them is fully itested, and they were verified in a real browser via the
-  `discord-fixture` launch entry (port 3115): run
-  `node scripts/discord-standin.mjs` (a stand-in Discord API on :4310 whose
-  member answers key off discordId suffix — …02 member, …03 pending,
-  …04 404-10007, …05 500), seed `signups-fixture.db`, then
-  `scripts/link-fixture-discord.ts` links fixture users to those ids; log in
-  with `/api/auth/dev`.
+    COVERAGE LIMIT (stated, not hidden): the three-state /me card, the
+    dashboard join nag and the note-resolution are server-rendered JSX with no
+    automated render test (no jsdom; e2e has no bot env) — the lib layer under
+    them is fully itested, and they were verified in a real browser via the
+    `discord-fixture` launch entry (port 3115): run
+    `node scripts/discord-standin.mjs` (a stand-in Discord API on :4310 whose
+    member answers key off discordId suffix — …02 member, …03 pending,
+    …04 404-10007, …05 500), seed `signups-fixture.db`, then
+    `scripts/link-fixture-discord.ts` links fixture users to those ids; log in
+    with `/api/auth/dev`.
 - **Player questionnaire**: `Registration.roles` (comma-sep position keys,
   helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
   `captainNote` — captured on `/me`, surfaced in the player pool and draft room
@@ -643,24 +660,20 @@ is the point at which someone has to justify it.
 ## Automatic result sync (done)
 
 The league updates itself — results flow in from OpenDota with no captain or
-admin button press. Lazy, no cron/websocket (draft-clock philosophy).
+admin button press. A bearer-authenticated one-minute scheduler runs the
+bounded automation worker; public page traffic is never the application clock.
 
 - **Trigger**: `<ResultSyncPing>` (`src/components/result-sync-ping.tsx`,
-  mounted once in the root layout, renders nothing) POSTs `/api/sync` on page
-  view, then heartbeats — `AUTO_SYNC.WATCH_POLL_SECONDS` while the server says
-  `watch: true` (matches in their detection window or a live inhouse), else
-  `IDLE_POLL_SECONDS`. Hidden tabs don't ping; a visibilitychange → visible
-  syncs immediately. TWO refresh triggers, both required: `updated` (this
-  client's own request performed the import) and the `cursor` advancing — the
-  atomic claims mean exactly ONE request ever "does" an import, so without
-  the cursor every other parked dashboard would poll `updated:false` forever
-  and stay stale. The cursor is the `resultChangedAt` Setting, bumped by
+  mounted once in the root layout, renders nothing) performs read-only GETs to
+  `/api/sync` so open browsers can refresh when the result cursor advances. It
+  does not run maintenance and POST `/api/sync` is deliberately rejected. The
+  cursor is the `resultChangedAt` Setting, bumped by
   `stampResultChange()` (`settings.ts`) from EVERY result path:
   `importGameForMatch`, admin `recordResult`, and inhouse `applyResult`.
-- **Route** (`src/app/api/sync/route.ts`): per-IP `rateLimit` speed bump, runs
-  `runResultSync`, and busts the `"games"` tag on imports — it's a route
-  handler (not a `<WeekReminderPing>`-style server component) precisely
-  because `revalidateTag` is only legal from a request scope.
+- **Worker route** (`src/app/api/cron/automation/route.ts`): validates
+  `Authorization: Bearer <CRON_SECRET>` before acquiring the global lease and
+  running bounded result, reminder, inhouse, playoff, honors, and announcement
+  maintenance. `/api/sync` is a public, read-only status snapshot only.
 - **Service** (`src/lib/result-sync-service.ts` + pure window math in
   `src/lib/result-sync.ts`, both tested;
   `test/integration/result-sync.itest.ts`): a match is due from
@@ -686,7 +699,7 @@ admin button press. Lazy, no cron/websocket (draft-clock philosophy).
   `syncLeagueGames` never touches a COMPLETED match (was: completed-with-0-
   games only) — a decided series or an admin forfeit ruling must not be
   rewritten by a late league-lobby import; amending is per-match admin work.
-- **Inhouse from anywhere**: the same run executes the inhouse lazy resolvers
+- **Inhouse without an open browser**: the same scheduled run executes the inhouse resolvers
   (`maybeFormLobby`/`resolveCaptainVote`/`resolveStalledPick`/
   `maybeAutoDetectResult`) behind a cheap active-lobby/queue gate — while all
   ten players are in the Dota client with /inhouse closed, any page view on
@@ -696,21 +709,25 @@ admin button press. Lazy, no cron/websocket (draft-clock philosophy).
   `announceSeriesResultOnce` posts the result to Discord (see Discord section)
   whichever path — captain, admin, league sync, or auto sync — finished the
   series.
-- **GET /api/sync** exists for external pingers: point a free 5-minute uptime
-  monitor at it (README) — downtime alerting + a sync heartbeat for the
-  nobody-on-site window, without abandoning the lazy no-cron design.
+- **Health probes**: use `/api/health/live` for process liveness,
+  `/api/health/ready` for database readiness, and the dedicated automation
+  freshness probe documented in the README. `GET /api/sync` is not a scheduler
+  or an automation-health signal.
 - **Health surface**: the admin "Automatic result sync" card (`AutoSyncHealth`
   in `admin/page.tsx`) renders each in-window match's last scan / empty-scan
   count / next-scan time (pure `nextAutoSyncAt`, tested), the league-feed
   throttle, the change cursor, and skip-memory size — a match parked in
   backoff is otherwise indistinguishable from "no games yet".
 - **Private match data**: `User.fhUnavailable` (OpenDota `profile.
-  fh_unavailable` — true means "Expose Public Match Data" is off, the #1
+fh_unavailable` — true means "Expose Public Match Data" is off, the #1
   reason auto-import can't see a player). Captured wherever the medal is
   fetched (`fetchRankTier` carries it; login `ensureRankTier`, /me
   link/refresh, admin bulk sync) under the same never-overwrite-on-failure
   rule as `rankTier` (rank-sync.itest). Surfaced as a danger note on /me and
-  a "private data" badge in the admin player list.
+  a "private data" badge in the admin player list. `/me` account-link and
+  refresh writes re-assert both stored Dota-link columns; changing the
+  effective account clears metadata belonging to the previous account before
+  fetching, while an unchanged-account outage preserves the valid snapshot.
 - **LIVE chips**: /schedule rows and the dashboard This-week strip show a
   pulsing partial score (`live` flag on `MatchView`) while a series is LIVE —
   auto-sync makes "Bo3 at 1–0" a common minutes-fresh state.
@@ -742,22 +759,29 @@ the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
 
 ## Inhouse (done)
 
-A casual pick-up mode, **entirely separate from the league** (no `Season`
-coupling — touches only `User`). Mirrors the draft engine's architecture:
+A casual pick-up mode with **no `seasonId` or phase gate**. It shares identity,
+uses the latest trusted `Registration.mmr` when one exists, and integrates with
+global Settings, AdminAction, Discord and OpenDota, but runs through every
+league phase and the true offseason. Mirrors the draft engine's architecture:
 server-authoritative, resolves lazily on poll (no cron/websocket).
 
 - **Every state transition is a guarded claim (2026-07 hardening — keep it
-  that way)**: `applyResult` is `updateMany({id, status: IN_PROGRESS})` (a
-  cancel racing the seconds-long OpenDota fetch must never be overwritten,
-  nor a CANCELLED lobby resurrected — the claim winner alone stamps
-  `eloDeltas`, bumps the cursor, and sends the Discord result); `cancelLobby`
+  that way)**: `applyResult` first claims
+  `updateMany({id, status: IN_PROGRESS})` with team fixes (a cancel racing the
+  seconds-long OpenDota fetch must never be overwritten), then after settlement
+  and Elo calculation claims the same COMPLETED + `dotaMatchId` result before
+  stamping `eloDeltas` and attempting Discord. That short final transaction
+  holds the lobby row across the bounded webhook call so a void is totally
+  ordered with publication: void-first suppresses the stale result; result-
+  first commits before the correction. `cancelLobby`
   re-claims inside its tx (loses to a landed result, skips the requeue);
   `applyPick` claims the target row `{team: null}` (double-click = one turn)
   and AUTO-ASSIGNS the final pool player (no dead-air last clock);
   `resolveCaptainVote` claims the `CAPTAIN_VOTE → DRAFTING` flip before
-  installing captains; `maybeFormLobby` runs Serializable + catches P2034
-  (the one-active-lobby invariant has no DB constraint — this is what holds
-  it on Postgres); `joinQueue` wraps guard+upsert in one tx. The queue ping
+  installing captains; `maybeFormLobby` runs Serializable and treats P2034 or
+  P2002 as the benign losing poll, while PostgreSQL's partial unique
+  `InhouseLobby_one_active_idx` is the final one-active-lobby barrier;
+  `joinQueue` wraps guard+upsert in one tx. The queue ping
   throttle is the Setting create/P2002/conditional-update claim.
 - **`applyPick` must THROW, never return, once it has nulled `pickTeam`**
   (2026-07 audit). Nulling `pickTeam` IS the turn claim, and a `return` from a
@@ -783,22 +807,39 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `maybeFormLobby` early-returns on any active lobby, so no new game could
   form, AND the dead lobby's own ten were refused by `joinQueue`'s
   inActiveLobby guard. The whole feature was down until an admin visited
-  /inhouse. It runs FIRST in both resolver chains (`getInhouseState` and
-  result-sync's `syncInhouse` — the latter is what reaches a lobby nobody is
-  polling, which is how one gets abandoned) and guard-claims on the status it
-  read, so a late Start or a landed result always wins. Floors are
+  /inhouse. It runs first among the PHASE resolvers in both entry points:
+  `getInhouseState` runs it after the viewer heartbeat; result-sync's
+  `syncInhouse` first runs the always-on bet sweep, then reaches abandonment
+  when there is active/queued work. The latter is what reaches a lobby nobody
+  is polling, which is how one gets abandoned. Its write guard-claims the
+  status it read, so a late Start or a landed result always wins. Floors are
   deliberately generous (`ABANDON_READY_HOURS` 3, `ABANDON_IN_PROGRESS_HOURS`
   6 off `startedAt`): Start can be pressed after the game and the manual
   result paths have no time gate, so a group that simply forgot still records
   normally. It does NOT re-queue anyone — unlike `cancelLobby`, whose players
   are present and want the next game, nobody has touched this one for hours.
-- **`InhouseLobby.eloDeltas`** (JSON userId → Elo swing) is stamped once at
-  completion; the room's post-game banner reads it — never re-derive the
-  ladder on the poll path. **`InhouseLobbyPlayer.wins/losses/games`** are
+- **`InhouseLobby.eloDeltas`** (JSON userId → Elo swing) is stamped by the
+  successful exact-result FINALIZATION claim; the room's post-game banner
+  reads it — never re-derive the ladder on the poll path. COMPLETED is claimed
+  earlier, before settlement/history, and there is not yet a durable
+  finalization marker or outbox: a process death in that gap can leave an empty
+  delta map and no Discord retry. `InhouseLobby.completedAt` is stamped in that
+  first guarded completion transaction and is the immutable result-recency
+  clock. `updatedAt` is deliberately NOT chronology: eligible settlement rows
+  use it as their oldest-first retry cursor, and a failed attempt touches it to
+  rotate that row behind the rest of the backlog.
+  **`InhouseLobbyPlayer.wins/losses/games`** are
   record snapshots frozen at formation (safe: results can't land while the
   lobby is active) — the vote/draft views and RECORD ordering read them, so
-  polls never scan history. `@@index([status])` on lobbies,
-  `@@index([userId])` on lobby players.
+  polls never scan history. Queue reads and formation sort exact
+  `[joinedAt, userId]`, then formation copies `joinedAt` to
+  `InhouseLobbyPlayer.queuedAt`. Ready-check recovery sorts
+  `[queuedAt, userId]` and restores that exact value to queue `joinedAt`; the
+  room pool and timed auto-pick both use MMR descending, then
+  `[queuedAt, userId]`. Never substitute lobby-player `createdAt`, an assigned
+  index or Prisma row order: all ten creation timestamps can tie.
+  `@@index([status, createdAt])` and `@@index([status, completedAt])` on
+  lobbies, `@@index([userId])` on lobby players.
 - **Queue MMR trust chain**: latest `Registration.mmr` (league-trusted) >
   clamped typed value > the player's last lobby snapshot (so the one-tap
   "Run it back" join with a blank field doesn't reset anyone to unknown).
@@ -810,18 +851,19 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   refuses 0-duration games. Auto-scan cadence: pure `detectIntervalSeconds`
   grows the `detectedAt` claim interval with game age (base 180s → cap 1800s)
   so an abandoned IN_PROGRESS lobby scans at a trickle, not forever at rate.
-- **Discord result announcement**: `inhouseResultMessage` (score, duration,
-  MVP via the league's `gameMvp`, OpenDota link) fires from `applyResult`
-  post-claim — exactly once whichever path (button, paste, background scan)
-  lands the result.
-- **Surfaces added**: `/inhouse/history` (compact archive of every completed
-  game — date, score, winner, MVP, OpenDota link; linked from "All results →");
+- **Discord result publication**: `inhouseResultMessage` (score, duration, MVP
+  via the league's `gameMvp`, OpenDota link) is attempted by the guarded exact-
+  result finalization above. A successful void always attempts a correction,
+  including a betless game. Ordering is serialized, but delivery remains
+  best-effort/at-most-once: there is no inhouse outbox or failed-send retry.
+- **Surfaces added**: `/inhouse/history` (every completed game, paginated 100
+  per page — played-time fallback, score, winner, MVP, OpenDota link, exact-row
+  admin void; linked from "All results →");
   "Run it back →" on the victory/defeat banner (dismissal persists across
   reloads via localStorage); a vote-phase compact fixed clock bar (same
   `useBannerOffscreen`/`top-20` contract as the draft); queued players beyond
   the ten slots render as an "In line for the next game" chip list (never
-  silently hidden); `/api/inhouse` has the same per-IP `rateLimit` speed bump
-  as `/api/sync`; the page streams results + ladder behind `Suspense` (room
+  silently hidden); the page streams results + ladder behind `Suspense` (room
   paints immediately); an "Inhouse" career card on `/players/[id]`
   (`InhouseCareerCard` — ladder line + last 3 games with hero/KDA, streamed).
 - **Provisional gating**: pure `rankInhouse` (`inhouse-stats.ts`, tested)
@@ -842,48 +884,48 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   the full lifecycle — vote → UI draft pick → ready → in-progress — with
   nine API-driven players and zero-pageerror assertions.
 - **KNOWN COVERAGE LIMIT — now largely closed by EXTRACTION** (`vitest.config
-  .mts` is `environment: "node"` with no jsdom/testing-library, so nothing in
+.mts` is `environment: "node"` with no jsdom/testing-library, so nothing in
   either ~1800-line room can be rendered in a unit test). Every rule below was
   once comments-only inside a `useEffect`; each is now pure, tested, and called
   by BOTH rooms where the rule is shared:
-  * `roomPollCadence` + `inhousePollCadence` / `draftPollCadence`
+  - `roomPollCadence` + `inhousePollCadence` / `draftPollCadence`
     (`src/lib/room-poll.ts`) — the 429 back-off, the hidden-tab keepalive vs
     full pause, the fast retry, the idle rate, and `coldStart`.
-  * `issueSequence` / `acceptSequence` / `isColdStart`
+  - `issueSequence` / `acceptSequence` / `isColdStart`
     (`src/lib/room-sequence.ts`) — payload ordering by request START.
-  * `pollHealthAfter` (`src/lib/poll-health.ts`) — the disconnect gate's
+  - `pollHealthAfter` (`src/lib/poll-health.ts`) — the disconnect gate's
     CONSECUTIVE-failure rule; `usePollHealth` now only owns the ref.
-  * `nextClockOffset` (`countdown.ts`) — the 1s-hysteresis skew fold, the other
+  - `nextClockOffset` (`countdown.ts`) — the 1s-hysteresis skew fold, the other
     half of each room's `apply()`.
-  * `inhouseAlerts` / `wasInReadyCheck` / `inhouseTitleFlag` /
+  - `inhouseAlerts` / `wasInReadyCheck` / `inhouseTitleFlag` /
     `readyCheckEndedToast` / `autoJoinDecision` / `queueSlots` (`inhouse.ts`).
-  * `outbidLatchAfter` / `draftTitleFlag` + `stripDraftTitleFlag` /
+  - `outbidLatchAfter` / `draftTitleFlag` + `stripDraftTitleFlag` /
     `draftViewerStake` (`draft.ts`), beside the older `wasOutbid`.
-  `src/components/room-source-guards.test.ts` backs all of it: a pure test
-  proves nothing if the room stops calling the function, so it parses both
-  room files and fails on a re-inlined rate, flag string, ordering gate, or a
-  sequence minted on the wrong side of its `await`.
-  * `seedDraftFeed` / `draftFeedDiff` (`src/lib/draft-feed.ts`) — the live
+    `src/components/room-source-guards.test.ts` backs all of it: a pure test
+    proves nothing if the room stops calling the function, so it parses both
+    room files and fails on a re-inlined rate, flag string, ordering gate, or a
+    sequence minted on the wrong side of its `await`.
+  - `seedDraftFeed` / `draftFeedDiff` (`src/lib/draft-feed.ts`) — the live
     feed, the SOLD! flash and the draft's chime triggers. The feed is an
     append-only LOG and genuinely cannot be derived from one payload; what IS
     pure is the STEP, so the module answers "what did this poll change" and the
     component keeps the accumulated list and the React keys.
-  Prefer this treatment for anything else that comes up; a Playwright spec
-  (`zz3`'s route-interception + attempt-count pattern) is the fallback for
-  behaviour that genuinely needs a browser, and adding a jsdom environment is
-  still the last resort. What is left in the components is React and the DOM:
-  refs, effects, `document.title`, and the audio plumbing.
-  Separately, the integration suite runs on SQLite, which serializes writers,
-  so the guarded claims are never under real contention there — it stages
-  races by hand-mutating rows. `npm run test:pg` (`PG_TEST_URL=…`) runs the
-  SAME files on Postgres and is the only thing that exercises them for real;
-  run it after touching any claim.
+    Prefer this treatment for anything else that comes up; a Playwright spec
+    (`zz3`'s route-interception + attempt-count pattern) is the fallback for
+    behaviour that genuinely needs a browser, and adding a jsdom environment is
+    still the last resort. What is left in the components is React and the DOM:
+    refs, effects, `document.title`, and the audio plumbing.
+    Separately, the integration suite runs on SQLite, which serializes writers,
+    so the guarded claims are never under real contention there — it stages
+    races by hand-mutating rows. `npm run test:pg` (`PG_TEST_URL=…`) runs the
+    SAME files on Postgres and is the only thing that exercises them for real;
+    run it after touching any claim.
 
 - **Models** (`schema.prisma`): `InhouseQueueEntry` (one global rolling queue,
-  `userId` unique), `InhouseLobby` (the game + its state machine:
-  `READY_CHECK → CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS →
-  COMPLETED`/`CANCELLED`), `InhouseLobbyPlayer` (`team` 1/2, `isCaptain`,
-  `pickIndex`, `mmr` snapshot, `acceptedAt` for the ready check,
+  `userId` unique), `InhouseLobby` (the game + phase state machine; immutable
+  result-recency `completedAt`; mutable settlement retry cursor `updatedAt`),
+  `InhouseLobbyPlayer` (`team` 1/2, `isCaptain`, `pickIndex`, `mmr` + exact
+  `queuedAt` snapshots, `acceptedAt` for the ready check,
   `votedMethod`/`votedNomineeId` for the captain vote). One active lobby at a
   time (`INHOUSE_ACTIVE_STATUSES`).
 - **Ready check (Dota-style accept gate)**: a filled lobby opens in
@@ -921,8 +963,10 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   timed-out no-shows they were "back in the queue" when `failReadyCheck`
   deliberately DROPPED them (contradicting the decline dialog they had just
   confirmed), and it announced a cancellation to a player whose match was very
-  much alive, because ACCEPT_SECONDS + VOTE_SECONDS fit inside one hidden-tab
-  `POLL_KEEPALIVE_MS` gap so their next poll could jump straight to DRAFTING.
+  much alive. That second bug was possible when the hidden keepalive was 45s:
+  ACCEPT_SECONDS + VOTE_SECONDS fit inside one gap, so the next poll could jump
+  straight from READY_CHECK to DRAFTING. The keepalive is now 10s and is pinned
+  shorter than both action windows, but membership remains the correct gate.
 - **Game-setup instructions**: once teams lock, the READY and IN_PROGRESS
   views render a `GameSetupCard` — step 1 hosts the Dota 2 lobby with a shared
   name (`GGD2L #<code>`) + password (`<code>`) all ten derive identically from
@@ -930,11 +974,12 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   shown as click-to-copy chips; step 2 points each player to their team's
   Discord voice channel (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side
   highlighted via `me.myTeam`). Channel names + lobby prefix are constants.
-- **Captain-selection vote**: when a lobby fills it opens in `CAPTAIN_VOTE` — the
-  10 players vote how captains are chosen so it isn't always the same top-2 MMR
-  pair: `VOTE` (elect specific players), `MMR` (highest 2), or `RECORD` (best 2
-  inhouse records). Resolves when everyone votes or the timer expires, then
-  installs the top two and drops into `DRAFTING`.
+- **Captain-selection vote**: a filled lobby opens in `READY_CHECK`; after all
+  ten accept it enters `CAPTAIN_VOTE`. The players choose `VOTE` (elect
+  specific players), `MMR` (highest 2), or `RECORD` (best 2 inhouse records).
+  A ballot atomically reasserts CAPTAIN_VOTE and `voteEndsAt > now`, so a late
+  request cannot land after resolution. It resolves when everyone votes or the
+  timer expires, then installs the top two and enters `DRAFTING`.
 - **Pure, tested logic**: `src/lib/inhouse.ts` — `tallyMethod` (winning method,
   ties lean `VOTE > RECORD > MMR`), `orderCaptains(method, candidates)` (ranks
   captains per method, always MMR/join fallback), `nextPickTeam` (SNAKE draft
@@ -951,13 +996,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   accumulates over full history). Tunables in
   `constants.ts` (`INHOUSE`: LOBBY_SIZE 10, TEAM_SIZE 5, VOTE_SECONDS 25,
   PICK_SECONDS 60; `CAPTAIN_METHOD` labels).
-- **Service (DB, transactional)**: `src/lib/inhouse-service.ts` —
-  `getInhouseState` (calls `maybeFormLobby` + `resolveCaptainVote` +
-  `resolveStalledPick` + `maybeAutoDetectResult` on every read, like the league
-  draft), `joinQueue`/`leaveQueue`, `castVote`, `makePick`, `startGame`,
-  `autoDetectResult`, `recordMatch`, `cancelLobby` (admin). Queue hits 10 →
-  lobby forms on the next poll; the vote, a stalled pick clock, and the result
-  scan all auto-resolve lazily on poll.
+- **Service (DB, transactional)**: `src/lib/inhouse-service.ts` — a state read
+  runs heartbeat → abandoned-lobby sweep → bet sweep → formation → ready
+  check → captain vote → stalled pick → result detection → board repaint.
+  `joinQueue`/`leaveQueue`, `acceptMatch`/`declineMatch`, `castVote`, `makePick`,
+  `startGame`, `autoDetectResult`, `recordMatch`, `cancelLobby`, and
+  `voidLastResult` own mutations. The tenth join attempts formation immediately;
+  the sitewide `/api/sync` chain is the unwatched-lobby fallback.
 - **Results (OpenDota only — no manual winner)**: a result is recorded solely
   from a real Dota match. `buildResult` fetches an OpenDota match, validates it
   with the league's pure `classifyGame` (rosters on opposite sides → winner +
@@ -995,7 +1040,11 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   resolvable accounts isn't blamed on OpenDota either.
 - **API**: one dispatch endpoint `POST /api/inhouse` (`{ action, ... }`; actions:
   `state`/`join`/`leave`/`accept`/`decline`/`vote`/`pick`/`start`/`detect`/
-  `record`/`cancel`), always returns fresh viewer-tailored state. Polled by
+  `record`/`bet`/`cancel`/`void`). The body must be a valid JSON object with an
+  explicit non-empty action; malformed/missing/unknown actions are 400. Public
+  state uses 1,200/min/IP; mutations use 300/min/signed-in user (IP fallback
+  only for signed-out attempts). Successful mutations return fresh viewer-
+  tailored state. Polled by
   `src/components/inhouse-room.tsx` (`"use client"`, one view per phase incl.
   `VoteView`; syncs the vote/pick clocks via server `now` offset like
   `draft-room.tsx`; `router.refresh()` on lobby end to update the
@@ -1020,8 +1069,9 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   stake: a hidden tab with NO stake fully pauses (no fetch — browsers throttle
   background timers anyway; the sitewide `/api/sync` ping still advances
   lobbies), while a hidden tab that's QUEUED or in a lobby keeps a slow
-  keepalive (`POLL_KEEPALIVE_MS`, 45s — under `QUEUE_AWAY_SECONDS` 90 even
-  after Chrome clamps hidden timers) so its presence heartbeat holds the spot
+  keepalive (`POLL_KEEPALIVE_MS`, 10s — shorter than both accept and vote
+  windows, and under `QUEUE_AWAY_SECONDS` 90 even after browser clamping) so
+  its presence heartbeat holds the spot
   and a forming ready check's chime/title still reaches it (`hasStakeRef`, kept
   current by an effect). **`coldStart` is the exception to that pause**: stake
   is learned FROM a payload, so before the first one it is `false` for
@@ -1050,11 +1100,11 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   silence), and `apply()` must stay the only writer of room state. The poll
   fetch carries `AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS)` against the
   never-answering request (see Poll health — the draft room shares the constant
-  and the regression spec); and **429 is NOT a poll failure** — it eases off to
-  `POLL_IDLE_MS` instead. The route's speed bump is per-IP and a queued tab
-  polls 40/min, so one household or NAT crosses 300/min just by having a lobby;
-  counting it as a disconnect greyed out ACCEPT MATCH mid-ready-check, and
-  retrying at 1.5s kept the fixed window saturated so it never cleared.
+  and the regression spec); and a warm-room **429 is NOT a poll failure** — it
+  eases off to `POLL_IDLE_MS`. A cold page counts repeated 429s toward the
+  accessible retry state instead of displaying Loading forever. Poll and
+  mutation buckets are separate, so back-pressure never consumes a player's
+  action allowance.
 - **The bell and the tab title are pure and tested** (`inhouseAlerts`,
   `inhouseTitleFlag`). The room keeps ONE snapshot ref of the previous poll,
   which feeds both the chime and the "Match cancelled" toast, so they can never
@@ -1083,8 +1133,10 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   unregistered player made a side the drafting banner had just called 120 MMR
   stronger render 620 weaker the instant the last pick landed and one view
   replaced the other. `mmrBalance` is a thin wrapper over it.
-- **Radiant = team 1 (green), Dire = team 2 (red)**. Seed enqueues 6 demo
-  players so `/inhouse` isn't empty on a fresh DB (they prune ~3 min after
+- **Formation initially assigns team 1 as Radiant; the imported played game is
+  authoritative and may rewrite `radiantTeam`.** Green/red presentation follows
+  the stored Radiant/Dire mapping. Seed enqueues 6 demo players so `/inhouse`
+  isn't empty on a fresh DB (they prune ~3 min after
   seeding once someone polls /inhouse — expected, see queue presence).
 - **Queue presence (heartbeat)**: `InhouseQueueEntry.lastSeenAt`, refreshed
   (throttled, `QUEUE_HEARTBEAT_SECONDS`) by the viewer's own polls at the top
@@ -1101,7 +1153,7 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   **`QUEUE_RECONFIRM_SECONDS` (the slack that requeue leaves before the prune)
   must comfortably EXCEED `POLL_KEEPALIVE_MS`, and the binding case is a live
   game**: all ten tabs are hidden (everyone is in the Dota client), so they
-  re-confirm on the 45s keepalive — which Chrome clamps toward once a minute.
+  re-confirm on the 10s keepalive — which Chrome can clamp toward once a minute.
   At 45s of slack the admin's own 1.5s poll ran `maybeFormLobby`'s prune
   before a single keepalive landed, so "players re-queued" silently emptied
   the queue and, with nobody left polling, nothing noticed. It's 75s, pinned
@@ -1186,22 +1238,24 @@ One definition; don't hand-write the second. It is deliberately NOT keyed on
 `startedAt`, which an interested party can push forward simply by pressing
 Start later — the pick'em lesson, lock on a timestamp nobody can rewrite.
 
-**Settlement rides `applyResult`'s existing COMPLETED claim, and its POSITION
-is load-bearing in both directions.** It runs AFTER the `teamFixes` loop,
-because that loop rewrites the very column the lineup void reads; and BEFORE
-the full-history Elo scan, because that scan is the slow unwindowed one and the
-`eloDeltas` write beneath it is the ONE write in that function that is not a
-claim — money must not sit downstream of it. It is wrapped in try/catch that
-logs and continues: `/api/sync` runs this chain on every page view sitewide, so
-a play-money bug must never stop the Elo stamp, the cursor, the announcement,
-or ten people playing Dota.
+**Settlement follows `applyResult`'s COMPLETED + `teamFixes` transaction, and
+its POSITION is load-bearing in both directions.** It runs AFTER the
+`teamFixes` loop, because that loop rewrites the very column the lineup void
+reads; and BEFORE the full-history Elo scan plus exact-result finalization
+claim, because money must not sit downstream of the slow unwindowed work. It is
+wrapped in try/catch that logs and continues: `/api/sync` runs this chain on
+every page view sitewide, so a play-money bug must never stop Elo finalization,
+the cursor, the announcement attempt, or ten people playing Dota. A PENDING
+settlement is independently recoverable even though result finalization itself
+does not yet have a durable retry marker.
 
 **Any check performed AFTER a claim must be computable from COLUMNS.** This is
 the generalised rule and it is why `matchStartTime` is persisted into
 `applyResult`'s existing claim `data` rather than passed along: the request
 holding `BuiltResult` in hand is allowed to die, and the lazy sweeper has to
-reach the same late-bet verdict as the fast path. Crash recovery is then
-byte-identical to the happy path instead of a second, weaker implementation.
+reach the same late-bet verdict as the fast path. Settlement crash recovery is
+then byte-identical to the happy path instead of a second, weaker
+implementation.
 
 **Two voids, and they are removed BEFORE the pools are computed.** Ordering is
 the whole thing — compute pools first and the survivors get matched against
@@ -1217,24 +1271,37 @@ must name one outcome.
 
 **ONE refund rule, not four.** `resolveUnsettledBets()` probes the indexed
 `betSettlement` column and has three branches, each its own guarded claim:
-PENDING+COMPLETED ⇒ settle, PENDING+CANCELLED ⇒ refund in full, SETTLED+CANCELLED
-⇒ reverse to exact pre-game balances. **`cancelLobby`, `failReadyCheck`,
-`resolveAbandonedLobby` and `voidLastResult` therefore need NO refund legs** —
-they already flip the lobby into a state a branch recognises, and bolting money
-into four already-hardened claims is how you get a half-refund. It runs in both
-resolver chains AND in `syncInhouse` **above** the `!active && queued === 0`
-early return, which is exactly the stranded-pot state: game over, everyone
-closed their tabs, nobody polling. Below the return it would first fire when the
-next lobby forms.
+PENDING+COMPLETED ⇒ settle, PENDING+CANCELLED ⇒ refund in full,
+SETTLED+CANCELLED ⇒ reverse to exact pre-game balances. Terminal transitions
+still contain no hand-written payout/refund math, but cancel and void do contain
+a shared betting-service call: after their guarded state change, `cancelLobby`
+and `voidLastResult` explicitly call
+`resolveUnsettledBets(theirLobbyId)` so an older backlog row cannot consume the
+immediate consistency attempt promised to that action's players.
+
+The untargeted resolver used by both state-read paths selects up to 25 eligible
+rows ordered by `[updatedAt asc, id asc]`. Every lobby is attempted in its own
+guarded settlement/refund/reversal transaction; one poisoned row is caught so
+every later row still runs, then best-effort touched to move its `updatedAt`
+cursor to the back. All failures are reported together only after the batch.
+This mutable retry order cannot change result recency because immutable
+`completedAt` owns that contract. The global resolver runs from both
+state-read paths, including `syncInhouse` **above** the
+`!active && queued === 0` early return, which is the stranded-pot state: game
+over, everyone closed their tabs, nobody polling. Later lazy paths retry any
+failed targeted cancel/void sweep.
 
 **`cancelLobby` gained the one guard on hardened code**: its IN_PROGRESS branch
-now requires `bets: { none: { confirmedAt: { not: null } } }` unless an explicit
-`force` is passed, because cancelling a live game is otherwise an admin undo for
-a losing bet. `force` writes an `AdminAction` naming the pot. Admins are NOT
-locked out on purpose — an unkillable lobby holding the single active slot for
-six hours is a strictly worse failure than a logged override.
+now requires `bets: { none: { confirmedAt: { not: null } } }` unless literal
+`force: true` is passed, because cancelling a live game is otherwise an admin
+undo for a losing bet. EVERY successful admin cancellation writes an
+`AdminAction` naming the phase, players and exact pot; force changes the audit
+wording, not whether a row exists. It immediately invokes the canonical refund
+sweep above. There is no Discord cancellation message. Admins are NOT locked
+out on purpose — an unkillable lobby holding the single active slot for six
+hours is a strictly worse failure than a logged override.
 
-**THE RECOVERY PATHS ARE WHERE THE BUGS WERE.** An adversarial audit run *after*
+**THE RECOVERY PATHS ARE WHERE THE BUGS WERE.** An adversarial audit run _after_
 the whole suite was green (1035 unit, 528 pg, 52/52 ratchet, 19+27 e2e) found six
 blockers, four of which lost or minted Cred, and every suite passed against all
 of them. The happy path had been tested hard and the failure paths barely. If you
@@ -1294,6 +1361,7 @@ to mis-settle, plus a Postgres-only second-connection test that is skipped
 everywhere else — `npm run test:pg` is the only thing that runs it.
 
 **Deliberate deviations from house style, each with its reason:**
+
 - **`InhouseCredit.balance` is a MUTABLE column, not a SUM over the ledger.**
   Against this repo's derive-don't-store idiom, and forced: the affordability
   test has to be re-asserted in the WHERE of the debit itself
@@ -1477,7 +1545,8 @@ than letting someone discover it.
   tick must not clobber a fresher bid response); the outbid latch is NOT
   cleared just because the captain is priced out (they most need to see it);
   a `selected` pool player who got drafted is auto-cleared. `/api/draft/tick`
-  has the standard per-IP `rateLimit` speed bump.
+  allows 300/min per signed-in user or 1,200/min per anonymous IP;
+  bid/nominate/admin-nominate share one 120/min-per-user mutation bucket.
 - **Draft-night UX added**: per-lot "Bid trail" (from the Bid audit table,
   served as `lotBids` in state), "next: <team>" nominator preview,
   budget-after-win line under the bid controls, quick-bid steppers show the
@@ -1517,10 +1586,10 @@ than letting someone discover it.
   always sends but upserts the same marker so a later game import can't
   double-post), playoff bracket (`startPlayoffs`), the champion
   (`advancePlayoffBracket`), and inhouse moments: lobby formed
-  (`maybeFormLobby`, captured in-tx/sent post-commit) plus a "queue is two
-  short" ping (`joinQueue` — fires only on an upward crossing of
-  `LOBBY_SIZE-2` present players, never on the lobby-forming join, throttled
-  via the `inhouseQueuePingAt` Setting to one per `QUEUE_PING_MIN_MINUTES`).
+  (`maybeFormLobby`, captured in-tx/sent post-commit) plus a queue-filling ping
+  (`joinQueue` — fires only on an upward crossing of `INHOUSE.QUEUE_PING_AT`,
+  currently 4 present players, never on the lobby-forming join, throttled via
+  the `inhouseQueuePingAt` Setting to one per `QUEUE_PING_MIN_MINUTES`).
   The inhouse room also flips `document.title` ("(!) Your pick…") while the
   viewer's attention is needed — works without the sound toggle/audio unlock.
 
@@ -1555,10 +1624,12 @@ reached a player who wasn't already looking at it.
   it starts crying wolf; `QUEUE_PING_MIN_MINUTES` is the other knob.
 - **`/inhouse?join=1`** — every ping deep-links into the queue (`joinLink()`).
   The room auto-joins ONCE per page load behind a ref, scrubs the param via
-  `history.replaceState` so a refresh can't re-enqueue, and refuses when
-  signed out, already queued, or a lobby is live (never drop someone into a
-  45-second ready check from a standing start). The `act()` call is deferred a
-  tick — setting state synchronously in an effect cascades a render.
+  `history.replaceState` so a refresh can't re-enqueue, and does nothing when
+  signed out, already queued, or already IN the active lobby. A live lobby is
+  deliberately not a refusal for an outsider: only one lobby can exist, so the
+  join is safely for the next game and cannot pull them into the current
+  45-second ready check. The `act()` call is deferred a tick — setting state
+  synchronously in an effect cascades a render.
 
 - **Self-serve ping opt-in** (`src/lib/discord-roles.ts`, integration-tested
   over real HTTP): Discord has NO native self-assignable-role toggle, so the
@@ -1700,19 +1771,22 @@ transport keeps `getInhouseWebhookUrl`; `sendInhouseDiscordMessage` uses the
 alert resolver. Changing the ALERT webhook must never disturb the board — its
 webhook id is untouched, so no strand detection fires.
 
-**Inhouse has its OWN optional webhook** (`inhouseWebhookUrl` Setting /
-`DISCORD_INHOUSE_WEBHOOK_URL` env, `getInhouseWebhookUrl`, falling back to the
-league webhook when unset). A Discord webhook is bound to the channel it was
-created in, so one webhook meant the queue board landed wherever league
-signups and results go — it shipped into #welcome. Everything inhouse posts
-(`sendInhouseDiscordMessage`: lobby formed, the two-short ping, results, and
-the board) routes through it; the other 27 announcement types keep using
-`sendDiscordMessage`. Changing EITHER webhook tears the board down first when
-that webhook is the one the board rides, so it can't be stranded in an old
-channel.
+**The transports are intentionally split.** The BOARD resolves
+`inhouseWebhookUrl` / `DISCORD_INHOUSE_WEBHOOK_URL` through
+`getInhouseWebhookUrl` (falling back to the league webhook) and calls the raw
+POST/PATCH/DELETE transport directly. Queue-filling, match-found, result and
+void-correction ALERTS call `sendInhouseDiscordMessage`, which resolves the
+separate alert webhook first and falls back to the board resolver. Changing an
+ALERT webhook never touches the board. Moving the BOARD webhook attempts to
+delete the old message with the old credential first; a failed forced teardown
+clears tracking only with an explicit orphan warning telling the admin to
+delete the old message by hand.
 
-ONE pinned Discord message showing the live queue count, rewritten IN PLACE —
-a live counter that never posts a second message. Pure render in
+ONE tracked pinned Discord message shows the live queue count and is rewritten
+IN PLACE. Concurrent posts are claimed before Discord so normal operation
+cannot create a second tracked message; a process death after Discord accepts
+POST but before its id is saved is irreducibly uncertain and becomes the
+explicit interrupted-post recovery state below. Pure render in
 `src/lib/inhouse-board.ts` (tested), service in `inhouse-board-service.ts`
 (reminder-service pattern, `test/integration/inhouse-board.itest.ts`),
 transport in `discord.ts` (`postWebhookMessage`/`patchWebhookMessage`/
@@ -1721,10 +1795,26 @@ transport in `discord.ts` (`postWebhookMessage`/`patchWebhookMessage`/
 from the Discord card; no bot, no new credential — it rides the webhook URL
 already in the `Setting` table.
 
-- **The `inhouseBoard` Setting row IS the on/off switch** (JSON
-  `{webhookId, messageId, digest}`). No row = feature off, and "off" costs one
-  PK read on the poll path. Don't add a separate toggle — it would drift from
-  the message that actually exists in Discord.
+- **The `inhouseBoard` Setting row IS the on/off switch.** A live board stores
+  `{webhookId, messageId, digest, lastOkAt?, failures?}`; a post in flight stores
+  the reservation `{webhookId, messageId: "", digest, reservedAt}`. No row =
+  feature off, and "off" costs one PK read on the poll path. Don't add a
+  separate toggle — it would drift from the message that actually exists in
+  Discord.
+- **POST reservations have a 30-second lease, but are NEVER auto-taken over.**
+  A fresh reservation reports "posting" and rejects a second post/removal; an
+  expired, malformed or legacy untimed reservation reports `postingStuck`.
+  Discord may have accepted the message before the process died, so even a
+  stale claim must not automatically post again. The admin inspects Discord,
+  then explicitly clears the interrupted post; clearing reports `orphaned`
+  because an untracked message may require manual deletion. The reservation →
+  live-state swap and every clear are compare-and-set on the exact raw row. A
+  null POST response or response without a non-empty message id is ambiguous,
+  not a confirmed failure: the caller immediately compare-and-sets
+  `reservedAt: null`, making the retained reservation `postingStuck` without
+  waiting 30 seconds. Automatic/admin repost stays blocked until the admin
+  checks Discord and explicitly clears it, preventing a duplicate board when
+  Discord accepted the first POST but lost its response.
 - **`?wait=true` is mandatory on the POST.** Without it Discord answers 204
   with no body, and there is NO endpoint to look the id up afterwards — a
   message sent without it can never be edited again.
@@ -1753,10 +1843,15 @@ already in the `Setting` table.
   reads as a dead league. `BoardStats` (last result + MVP, all-time lobby
   count, ladder #1) is the proof-of-life, loaded ONLY for that render and
   memoised in-process on a 60s TTL (`loadBoardStats`) because it scans full
-  history for Elo. Every figure is monotonic or completes-with-a-state-change —
-  NEVER a trailing window like "games this week", which would silently rot
-  through the exact quiet stretch it exists to paper over. Anything missing is
-  OMITTED, never faked: a league with no games shows no stat row at all.
+  history for Elo. The loader chooses the newest formed COMPLETED lobby by
+  `[createdAt desc, id desc]`; its `lastEndedAtMs` is the best played start
+  (`matchStartTime ?? startedAt ?? createdAt`) plus `durationSecs`, falling back
+  to immutable `completedAt` when an end cannot be derived. Generic `updatedAt`
+  is NEVER read for this — settlement retry rotation is not a new game. Every
+  figure is monotonic or completes-with-a-state-change — NEVER a trailing
+  window like "games this week", which would silently rot through the exact
+  quiet stretch it exists to paper over. Anything missing is OMITTED, never
+  faked: a league with no games shows no stat row at all.
   That state also carries NO "updated <t:R>" line on purpose — its digest
   barely moves, so after a quiet weekend it would read "updated 3 days ago",
   the single most off-putting thing a conversion surface can say.
@@ -1772,11 +1867,12 @@ already in the `Setting` table.
   board silently burns one PATCH every `BOARD_MIN_SECONDS` forever, on an empty
   queue. A motionless queue currently costs zero requests — verified live.
 - **`syncInhouse` repaints the board on its EARLY-RETURN path too** (queue
-  empty AND no lobby). Nothing else runs in that state — the resolvers are
-  skipped and no one is polling the room — yet it is the state the board is
-  most likely to be lying about: a game that just ENDED leaves the board
-  reading "game in progress", and the last player can leave and close the tab
-  in one breath. Pinned by `runResultSync` tests in
+  empty AND no lobby). The bet sweep ALWAYS runs before this branch so a
+  stranded PENDING/SETTLED pot still settles, refunds or reverses; only the
+  phase resolvers are skipped. No one may be polling the room, yet this is the
+  state the board is most likely to be lying about: a game that just ENDED
+  leaves the board reading "game in progress", and the last player can leave
+  and close the tab in one breath. Pinned by `runResultSync` tests in
   `test/integration/inhouse-board.itest.ts`; don't drop it.
   Separately, `syncInhouse`'s `watch` includes a non-empty PRESENT queue, not
   just a live lobby — sitewide pingers used to idle at 300s through the whole
@@ -1806,7 +1902,9 @@ already in the `Setting` table.
   timestamp, which is written when the claim is won, i.e. before the request,
   and so keeps looking healthy while every edit fails. The card also renders
   the LIVE queue (`boardStateLabel`) plus an `inSync` digest comparison, which
-  is the only way to answer "is the channel lying right now?".
+  is the only way to answer "is the channel lying right now?". Its separate
+  `posting` / `postingStuck` state exposes an in-flight or interrupted initial
+  POST instead of misreporting either as a live board.
 - **Removal reports honestly** — an orphan (row forgotten, message still
   pinned and now unreachable) is the worst end state this feature has, and the
   next "Post" would add a SECOND board beside it. So: Discord confirmed → ok;
@@ -1816,17 +1914,25 @@ already in the `Setting` table.
   "delete that message by hand". A STRANDED board never routes through
   `deleteWebhookMessage` at all: that endpoint is scoped to the sending
   webhook, so it would 404, which the transport correctly reads as success.
-- Swapping the webhook to a DIFFERENT channel strands the message;
-  `setDiscordWebhook`/`clearDiscordWebhook` tear the board down FIRST, while
-  the old credential is still the configured one. A regenerated token keeps the
-  same webhook id, so that case correctly survives (`webhookIdOf`).
+- Swapping the BOARD webhook to a DIFFERENT channel can strand the message, so
+  the relevant setting actions attempt teardown FIRST while the old credential
+  is still configured. If Discord refuses, the forced move reports an orphan
+  and requires manual deletion rather than claiming the old message vanished.
+  A regenerated token keeps the same webhook id, so that case correctly
+  survives (`webhookIdOf`); changing the ALERT webhook never tears down the
+  board.
 - **The board informs; it does not convert.** Edits produce no notification and
-  no unread. The `LOBBY_SIZE-2` `@`-ping in `joinQueue` is still the only thing
-  that actually gets a ninth player to queue — keep it.
-- KNOWN LIMIT: with nobody on the site at all, nothing runs and the board
-  freezes. The `updated <t:…:R>` line makes that visible rather than hidden;
-  the README's optional uptime monitor on `GET /api/sync` is what actually
-  bounds it.
+  no unread. The separate `INHOUSE.QUEUE_PING_AT` rally (currently 4/10), plus
+  the match-found alert at formation, is what can actually reach opted-in
+  players — keep board edits mention-free.
+- The board is maintained by the authenticated automation worker even when no
+  browser is open. There is deliberately NO generic "updated <t:…:R>" line: the empty
+  board would advertise weekend-old staleness even when truth had not changed.
+  Semantic timestamps (ready expiry, live start, last lobby) continue in the
+  Discord client without PATCHes, while the admin card exposes the last
+  accepted edit, failures and live-vs-posted digest. Monitor scheduler responses
+  and the dedicated automation-freshness probe; never use `/api/sync` as a
+  write heartbeat.
 
 ## Match-night check-in (done)
 
@@ -2036,8 +2142,8 @@ already in the `Setting` table.
 ## Mobile layout rules (done — keep following these)
 
 - Card grids must use `grid-cols-1` explicitly (`grid grid-cols-1 gap-4
-  sm:grid-cols-2`) — without it the implicit track is `auto` and a long team
-  name widens the whole page. Same trap: grid *items* need `min-w-0` (see the
+sm:grid-cols-2`) — without it the implicit track is `auto` and a long team
+  name widens the whole page. Same trap: grid _items_ need `min-w-0` (see the
   dashboard's two column divs).
 - `StandingsTable` is `table-fixed` with column widths on a responsive
   `<colgroup>` so the Team column truncates instead of stretching. Widths must
@@ -2073,12 +2179,12 @@ in the lower-left — the single worst thing on the site, and invisible in code
 review because both halves are individually correct. Two replacements, both in
 `src/app/page.tsx`, and neither is optional decoration:
 
-* **A band whose card count is KNOWN** gets an explicit grid whose spans adapt:
+- **A band whose card count is KNOWN** gets an explicit grid whose spans adapt:
   Standings is `lg:col-span-2` when a "Your team" card sits beside it and
   `lg:col-span-3` when the viewer has none. The `COMPLETE` view's twin split
   instead uses `items-start`, because there the short card genuinely should not
   stretch.
-* **A band whose card count is UNKNOWN at render time** (League pulse renders
+- **A band whose card count is UNKNOWN at render time** (League pulse renders
   `null` until the league has games; Upcoming and Recent each vanish at the ends
   of a season) uses auto-fit:
   `grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]`.
@@ -2155,8 +2261,14 @@ box scores → ladder, which put the Elo ladder (the reason anyone comes back)
 past 4,000px AND paid the page's most expensive query for its least reachable
 content. It is now room → `SceneStats` → ladder → results → guide. `SceneStats`
 calls the SAME memoised `loadBoardStats` the pinned Discord board uses, so the
-channel and the site can never disagree about when the last game was — and the
-empty queue, which is ~95% of views, stops reading as a dead league. Recent
+channel and site agree on proof-of-life counts, result and MVP. The loader
+selects the newest formed COMPLETED lobby by `[createdAt desc, id desc]` and
+reports `lastEndedAtMs` as its played start plus `durationSecs`, falling back to
+immutable `completedAt` when needed. It never reads `updatedAt`, the settlement
+retry cursor. Archive, recent-result and player-profile dates remain played
+starts via `matchStartTime ?? startedAt ?? createdAt`; SceneStats/board show the
+corresponding played end. The empty queue, which is ~95% of views, stops reading
+as a dead league. Recent
 results keep all four box scores but fold the older three into `<details>` whose
 summary IS the scoreline; the anchor id lives on the `<details>` element so a
 `#result-<id>` jump from the room's "Box score ↓" always lands. The OpenDota
@@ -2223,13 +2335,13 @@ Don't chase the rest by shrinking gaps.
 page.** `getBoundingClientRect()` is not a test of whether something is on
 screen, and two things on this site prove it:
 
-* **A closed `<details>` LAYS ITS CONTENTS OUT.** Non-zero box, `display:block`,
+- **A closed `<details>` LAYS ITS CONTENTS OUT.** Non-zero box, `display:block`,
   `visibility:visible` — Chrome simply never paints or hit-tests them. Every
   collapsed disclosure was contributing phantom controls that "overlapped"
   whatever sat near them; on /admin, which now has five collapsed
   `AdminSection`s plus a `✎ Rename team` disclosure per team, that alone was
   439 of 442 findings.
-* **A clipping ancestor does not move the rect.** A row scrolled below the fold
+- **A clipping ancestor does not move the rect.** A row scrolled below the fold
   of `admin/page.tsx`'s `max-h-80 overflow-y-auto` captain list still reports
   coordinates hundreds of pixels down the page, landing on the Schedule card's
   controls. That was the other 3-4.
@@ -2338,9 +2450,11 @@ renders byte-identical to the pre-feature page:
   MISSING-only, the ensureRankTier rule; an earlier 7-day staleness gate put
   a recurring 8s worst case on the login path and was reverted), /me
   link/refresh, and the admin "Sync ranks & stats" button. Never overwritten
-  on a failed fetch, and **every pubStats write re-asserts
-  `dotaAccountId` in its WHERE** — a relink committing mid-fetch must not
-  inherit the old account's data (raced in rank-sync.itest.ts). These
+  on a failed fetch, and **every async profile-metadata write re-asserts
+  both stored Dota-link columns in its WHERE** — a relink committing mid-fetch must not
+  inherit the old account's rank or scouting data; the login-only missing
+  snapshot fill also re-asserts `pubStatsAt: null`, so a newer same-account
+  refresh wins (raced in rank-sync.itest.ts). These
   updateMany claims are NEW to the mutation baseline — assume unprotected
   until a full `--discover` says otherwise.
 - **`PUB_SYNC_MAX_PER_RUN` (12) is the API budget** — the bulk sync fires 3
@@ -2351,7 +2465,7 @@ renders byte-identical to the pre-feature page:
   `pubStatsFresh`); the toast reports "(N more next run)".
 - `PoolPlayer` stays FROZEN: everything rides `PoolScoutInfo`, one parallel
   record (the `PoolDraftInfo` precedent) carrying `{inhouse?, pub?,
-  statement?}` — statement is the row quote's fallback when `captainNote` is
+statement?}` — statement is the row quote's fallback when `captainNote` is
   empty, sent only when it will render. Token/title text lives in
   `player-pool.ts` (`inhouseToken`/`pubToken`/…) so the rows, the lg column
   and the hopefuls cards can never phrase the same fact differently.
@@ -2373,12 +2487,21 @@ renders byte-identical to the pre-feature page:
   MMR salary cap (`fantasyCap` = league-avg rostered MMR × 5 × 1.05); points
   score per imported game via `fantasyPoints` (kills/assists/deaths/economy/
   win bonus — weights in `FANTASY` constants). All pure + tested in
-  `src/lib/fantasy.ts`.
+  `src/lib/fantasy.ts`. `fantasyPrices` imputes a missing rating from the known
+  drafted-pool average; a wholly unrated pool is explicitly uncapped.
 - Models `FantasyRoster`+`FantasyPick`; `saveFantasyRoster` action validates
-  picks server-side and **locks league-wide once the first game is imported**.
-- `/fantasy`: live-budget picker (client `FantasyPicker`, checkboxes named
-  `picks`), standings with per-pick breakdowns, locked-roster chips. Nav from
-  REGULAR_SEASON on.
+  the rendered `expectedSeasonId`, lifecycle, drafted pool, current prices and
+  picks inside its Serializable write. `Season.fantasyLockedAt` is the durable
+  one-way information lock: first import stamps it atomically, game correction
+  preserves/backfills it, and only a true pre-result Draft Abort clears it.
+- `src/lib/side-game-claims.ts` supplies the provider boundary. PostgreSQL uses
+  compatible `FOR SHARE` Season/Draft locks so managers do not serialize on a
+  global no-op update, while import/phase/archive writers remain exclusive;
+  SQLite uses guarded no-op claims. Transient P2034 and raw-query
+  P2010/SQLSTATE-40001 conflicts retry from a fresh snapshot.
+- `/fantasy`: private live-budget picker before lock, entry count without
+  ownership leakage, then live/final standings with per-pick breakdowns and
+  locked-roster chips. Discoverable from DRAFT; COMPLETE/archive are read-only.
 
 ## MVPs & achievements (done, branch: bigger-features)
 
@@ -2414,27 +2537,39 @@ renders byte-identical to the pre-feature page:
 - Pure `weeklyHonors` (`src/lib/honors.ts`, tested): Player of the Week =
   best fantasy points that week (same `fantasyPoints` identity as the
   fantasy league); Team of the Week = most game wins, points tiebreak.
-- `honors-service.ts`: `maybeAnnounceWeekHonors(seasonId, week)` fires once
-  a regular week's matches are all COMPLETED — idempotent via an ATOMIC
-  `honorsAnnounced:<season>:<week>` Setting CREATE (P2002 ⇒ already sent;
-  claimed only after the nothing-imported check so a games-less week never
-  burns the marker — auto-sync means the week's last two series can finish
-  from two concurrent unauthenticated pings, which the old read-then-upsert
-  could double-announce). Hooked in `recomputeSeries` (all import paths) and
-  manual `recordResult`.
-- `/leaders` shows a "Weekly honors" card (newest week first, hero name via
-  `heroById`).
+- Publication authority is `evaluateHonorWeeks` in
+  `src/lib/honors-readiness.ts`, loaded by
+  `src/lib/honors-readiness-service.ts`. It ignores postseason matches and
+  requires every regular fixture final; every played series must have a
+  non-zero score backed by exactly that many complete 5v5 Game rows; forfeits
+  may have zero/fewer rows but never more than their ruled score. Every
+  retained game must have ten unique, attributed users whose team ids agree
+  with Radiant/Dire and whose winner agrees with the saved result.
+- `/leaders`, dashboard `LeaguePulse`, and `honors-service.ts` use that same
+  gate. Final-but-incomplete weeks visibly wait for repair instead of crowning
+  from partial data.
+- `honorsAnnounced:<season>:<week>` is a retryable CAS state, not a simple
+  sent bit. Reopening a regular match or removing a Game marks an existing
+  award stale inside the result transaction; reconciliation sends an explicit
+  corrected award (or withdrawal) exactly once, and failed/abandoned claims
+  are swept by result sync.
 
 ## Pick'em (done, branch: bigger-features)
 
 - `Prediction` model (matchId+userId unique). Pure `src/lib/pickem.ts`
-  (tested): `predictionOpen` (locks at `scheduledAt` or completion),
+  (tested): `predictionOpen` (locks at `scheduledAt`, LIVE, or completion),
+  exhaustive `partitionPickemMatches` (open/locked/graded/void),
   `pickemStandings` (correct desc, accuracy tiebreak; draws void picks),
   `pickSplit` (community percentages).
-- `savePrediction` action re-validates the lock + that the pick is one of the
-  two teams. `/pickem`: oracle-board leaderboard, open matches as two
-  team-buttons with live pick splits, "your graded picks" review. Nav from
-  REGULAR_SEASON on.
+- `savePrediction` re-validates active Season/Draft lifecycle, matchup, side,
+  status and deadline in the same Serializable transaction as the upsert.
+  `side-game-claims.ts` takes PostgreSQL shared Season/Draft/Match locks (or
+  SQLite guarded claims), keeping participant bursts concurrent while
+  excluding result, reschedule, phase and archive writers.
+- `/pickem`: one pending-state form per fixture, hidden community split until
+  lock, locked/graded/void pick review, deadline-first grouping, and a client
+  deadline refresh whose server rerender remains authoritative. Discoverable
+  from DRAFT; COMPLETE/archive are read-only.
 
 ## Interactive bracket (done)
 
@@ -2468,8 +2603,12 @@ renders byte-identical to the pre-feature page:
 - `/meta`: league-wide hero report from imported box scores — pick/win rates,
   most-contested table, best-win-rate board (adaptive `metaMinPicks` floor),
   signature player per hero, untouched-pool card. Pure `heroMeta`/
-  `bestWinRates` in `src/lib/hero-meta.ts` (tested); unknown hero ids render a
-  "Hero #N" fallback. Nav "Meta" + footer link from REGULAR_SEASON on.
+  `bestWinRates` in `src/lib/hero-meta.ts` (tested). Only complete, unique 5v5
+  boxes enter the denominator; a game containing an unknown hero id is omitted
+  as a whole so known-hero coverage cannot exceed 100%, with a catalogue-update
+  diagnostic. Deleted signature owners remain visible as `Former player`.
+  The shared Statistics nav and Explore/mobile discovery keep it reachable in
+  every phase; primary nav + footer promote it from REGULAR_SEASON on.
 
 ## Record book (done)
 
@@ -2478,17 +2617,22 @@ renders byte-identical to the pre-feature page:
   records (longest/fastest by `durationSecs`, bloodiest/biggest stomp by kill
   score; 0–0 or 0-duration games never qualify — unreported ≠ record). Pure
   `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps a
-  tie, so feed games chronologically. Linked from the footer + Hall of Fame.
+  tie, so `fetchAllGamesForRecords` orders by OpenDota start time, puts unknown
+  chronology last, then uses id as a deterministic key. Malformed/partial/
+  duplicated boxes are omitted from both player and game records; unsafe
+  stored duration/score values are neutralized and diagnosed. The UI discloses
+  the first-achiever policy. Linked from Statistics navigation, Explore/mobile
+  discovery, the footer, and Hall of Fame.
 
 ## Hero report cards (done, branch: ambitious-features)
 
 - Import now stores the extended per-player OpenDota fields on each
   `Game.players` line: `xpm/denies/level/heroDamage/towerDamage/heroHealing`
-  + `benchmarks` (per-metric `{raw, pct}` percentiles vs the world on that
-  hero — present on plain `/matches/{id}` payloads, no replay parse needed).
-  `sanitizeBenchmarks` (exported, tested) keeps only finite pcts, clamped
-  0..1, and stores `null` when none — the `"benchmarks"` JSON key doubles as
-  the "already enriched" marker. Legacy lines simply lack the fields.
+  - `benchmarks` (per-metric `{raw, pct}` percentiles vs the world on that
+    hero — present on plain `/matches/{id}` payloads, no replay parse needed).
+    `sanitizeBenchmarks` (exported, tested) keeps only finite pcts, clamped
+    0..1, and stores `null` when none — the `"benchmarks"` JSON key doubles as
+    the "already enriched" marker. Legacy lines simply lack the fields.
 - Pure `src/lib/benchmarks.ts` (tested): 7-metric catalog, `gradeFor`
   (S/A/B/C/D), `gameReportCard`, `careerReportCard` (per-metric averages +
   focus/best callouts with an observation floor), `percentLabel` ordinals.
@@ -2538,10 +2682,17 @@ renders byte-identical to the pre-feature page:
 - `NewsPost` model (title/body/pinned/author). Pure `sortNews` (pinned first,
   newest first) + `newsPostError` validation in `src/lib/news.ts` (tested).
 - Admin "League news" card (create/pin/delete, always rendered — news is
-  season-independent) → `src/app/actions/news.ts`; new posts announce to
-  Discord via `newsMessage` (tested formatter, best-effort send).
+  season-independent) → `src/app/actions/news.ts`. Create carries a UUID
+  request receipt committed with the post, so replays/double-clicks create,
+  log, and announce once. Pin/delete use conditional writes; every success,
+  authoritative no-op, and stale-tab result revalidates `/`, `/news`, and
+  `/admin`. Discord delivery is awaited best-effort and failure is explicit in
+  the success toast; a durable transactional outbox is still future work.
 - Surfaced on the dashboard (`LeagueNews` card, top 3, pinned first) and the
-  full `/news` archive (footer link). Post dates render via `<LocalTime>`.
+  full `/news` archive (footer link). Posts are `<article>` landmarks with
+  title-specific permalinks; media respects reduced motion and degrades to its
+  source link. Post dates render via `<LocalTime>`. Media still lacks an
+  administrator-authored text alternative/transcript field.
 - Header nav collapses to the menu below **xl** (was lg), omits "Home" inline
   (the logo is the home link), and the link strip scrolls (hidden scrollbar)
   instead of overlapping the account cluster — with Admin + name + Logout the
@@ -2554,7 +2705,11 @@ renders byte-identical to the pre-feature page:
   record + games-as-teammates), career table over ALL seasons' games (reuses
   `summarizePlayerGames`; better side highlighted, deaths lower-is-better,
   games count never judged), top-5 hero lists per player. Linked from
-  `/players` (action) and each profile ("Compare vs… →" prefills `?a=`).
+  Statistics/Explore navigation, `/players` (action), and each profile
+  ("Compare vs… →" prefills `?a=`).
+  Selectors and matchup metadata include only users with at least one trusted
+  imported 5v5 line. Repeated query keys are rejected as an unavailable
+  selection instead of reaching Prisma as an array.
 
 ## Dashboard: the SIGNUPS view (2026-07-29 audit — read before editing it)
 
@@ -2620,8 +2775,11 @@ ask it made twice. What that turned into:
   W–L–D wraps at Stat's text-3xl in the narrow column), form strip, stake
   one-liner, next-up tile aligned to the ENGINE's nextMatchId so the "next
   series" guarantee and the tile never point at different matches.
-- **League pulse**: latest week's honors + most-picked hero (unknown hero ids
-  render the "Hero #N" fallback per /meta's convention).
+- **League pulse**: latest publishable weekly honors + most-picked known hero,
+  derived through the shared honors and trusted-5v5 boundaries. A final week
+  awaiting boxes and corrupt/unknown-hero imports explain their repair path;
+  the component renders nothing rather than a header-only shell when it has no
+  content or state to explain.
 - COMPLETE: champion card + "How it was won" bracket + archive links.
 
 ## Standings & schedule UX (done)
@@ -2742,11 +2900,13 @@ ask it made twice. What that turned into:
   table. Those scans go through `src/lib/cached-queries.ts` (`unstable_cache`,
   60s TTL, tagged `"games"`) — viewer-independent, shared across requests. Add
   new all-games roll-ups there, not as inline `prisma.game.findMany`. The
-  game-import admin actions call `refreshGames()` (`revalidateTag("games")` +
-  path revalidate) so stats reflect a new import immediately; the 60s TTL is
-  just the backstop. `revalidatePath` alone does NOT clear unstable_cache tags —
-  bust the tag from a request scope (an action/route), never from the lib (it
-  throws outside a request, breaking the integration tests that call it directly).
+  game-changing Server Actions call `refreshGames()` (`updateTag("games")` +
+  path revalidate) for read-your-own-writes; `/api/sync` and the fixture-only
+  cache route use `revalidateTag("games", { expire: 0 })`, the Route Handler
+  equivalent. Team rename also expires the tag because cached record matchups
+  include team names. The 60s TTL is only an out-of-band-write backstop.
+  `revalidatePath` alone does NOT clear unstable_cache tags — bust the tag from
+  request scope, never from the lib.
 - **Live-room clocks**: the draft/inhouse countdowns tick inside leaf
   components via `useSecondsLeft`/`useElapsedMs` (`src/components/room-clock.tsx`)
   so only the clock text re-renders each 250ms — NOT the room + player pool.
@@ -2761,10 +2921,10 @@ ask it made twice. What that turned into:
   the count outright. While
   disconnected: aria-live danger strip, ALL actions disabled (each room
   derives `pending = reqPending || disconnected`), draft clock banner dimmed
-  + "reconnecting" in the sticky bar. A 404 from `/api/draft/tick` is
-  terminal ("no active season" card), not a retry loop. Never swallow poll
-  failures silently — that's how captains watched a frozen auction sell
-  their player.
+  - "reconnecting" in the sticky bar. A 404 from `/api/draft/tick` is
+    terminal ("no active season" card), not a retry loop. Never swallow poll
+    failures silently — that's how captains watched a frozen auction sell
+    their player.
 - **Every room poll fetch carries `AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS)`**
   (`constants.ts`, shared by draft + inhouse — one value on purpose, since the
   two loops are the same code). Both latch `inFlight` and clear it only in the
@@ -2808,28 +2968,63 @@ ask it made twice. What that turned into:
   Don't re-add full user rows to snapshot/roster queries — the derived
   `SeasonSnapshot` type makes tsc enforce the narrowed shape.
 
-## Deploy safety & ops (done — keep following these)
+## Deploy safety & ops (historical summary)
 
-- **`scripts/build-db.mjs` gates the build's `prisma db push` to
-  `VERCEL_ENV === "production"`** (previews only `prisma generate`) — a
-  preview deploy of a WIP branch must never push its schema into the live DB.
-  The production push runs `--accept-data-loss`: push-without-history fails
-  the build on ANY schema warning otherwise, additive ones included (a new
-  nullable unique column blocked a deploy); back up before destructive
-  schema changes — that's the safety net, not the flag. Pinned by
-  `src/lib/build-db.test.ts` (drives the script in dry-run); don't put a
-  bare `prisma db push` back in vercel.json.
-- **`npm run db:backup`** (`scripts/backup-db.mjs`): pg_dump for Postgres
-  URLs, file-copy for SQLite, timestamped into gitignored `backups/`. README
-  documents the prod recipe. Tested end-to-end for the SQLite path.
+The guarded commands and exact operator sequence in `README.md` supersede this
+summary. In particular, production uses committed Prisma migrations; it never
+uses `prisma db push` and has no data-loss override.
+
+- **Production environment validation is a pre-build gate.**
+  `scripts/validate-prod-env.mjs` runs first and rejects non-PostgreSQL or
+  missing `DATABASE_URL`/`DIRECT_URL`, or URLs that name different logical
+  users/databases/endpoints after common pooler normalization; placeholder or
+  fewer-than-32-character `AUTH_SECRET`/`BACKUP_RECEIPT_SECRET` values; no valid,
+  unique individual SteamID64 in `ADMIN_STEAM_IDS`;
+  non-HTTPS, path-bearing, trailing-slash, or divergent `APP_URL` and
+  `NEXT_PUBLIC_SITE_URL`; and any `ALLOW_DEV_LOGIN` value except unset/`false`.
+  It reports field names, never secret values. Vercel previews deliberately
+  skip the production-only validation, but they must use a separate database
+  if they need live data. There is no production first-user admin bootstrap.
+- **Deployment order is migration-based and fail-closed.** `vercel.json` runs
+  `npm run build:vercel`, which validates production configuration, switches
+  Prisma to PostgreSQL, validates and preflights committed migrations, applies
+  them with `prisma migrate deploy`, performs postflight attestation, generates
+  the client, and then builds Next.js. Migrations must remain additive and
+  compatible with the previously deployed binary because they run before the
+  candidate build is promoted.
+- **There is no production data-loss override.** `PRISMA_ACCEPT_DATA_LOSS`,
+  `BUILD_DB_DRY_RUN`, and disabled migration advisory locks are rejected by the
+  production environment gate. Never substitute `db push` for the reviewed
+  migration pipeline.
+- **`npm run db:backup` publishes private, verifiable artifacts.**
+  `scripts/backup-db.mjs` uses the direct URL when available and supplies it to
+  `pg_dump` through `PGDATABASE`, never argv. It writes beside the final target
+  under a random temporary name, rejects empty output, sets the directory to
+  `0700` and artifacts to `0600`, computes a SHA-256 sidecar, atomically renames
+  each into place, writes credential-free target metadata, and cleans every
+  partial/published piece on failure. SQLite uses its online backup API and
+  requires `PRAGMA integrity_check` rather than byte-copying a live/WAL file.
+  `npm run db:backup:verify -- backups/<file>` checks mode, name, size, and
+  digest. With `BACKUP_RECEIPT_SECRET`, it emits a signed full-backup receipt;
+  production `deleteSeason` requires a same-database Postgres receipt whose
+  artifact and verification are both less than 24 hours old.
+- **Checksum verification is not a restore test.** A real drill restores the
+  verified SQL with `ON_ERROR_STOP` into a new disposable non-production DB,
+  checks representative row counts/invariants, and boots the app against it.
+  Record the date/result and destroy the scratch DB. Never claim a backup is
+  restorable from a passing SHA-256 check alone. Keep all connection URLs and
+  API/session secrets in Vercel or a password manager/private environment;
+  never put literal values in commands, commits, logs, issues, screenshots, or
+  chat.
 - **`reactivateSeason`** (`src/lib/season.ts`, integration-tested): archived
   seasons get a "Make active again" button on /seasons — the undo for a
   mis-clicked Create season (previously nothing ever wrote `isActive` back).
 - **Failed Discord sends never permanently eat an announcement**
   (announce-retry.itest.ts); no-webhook never burns a marker. Two shapes:
-  honors + week reminders DELETE their marker on a failed send (their
-  triggers naturally re-fire — later imports / page loads in the window);
-  series results instead stamp the marker `failed:<iso>` and the throttled
+  week reminders DELETE their marker on a failed send; weekly honors retain a
+  CAS marker with initial/corrected/failed/stale state so result corrections
+  can replace or withdraw an award exactly once; series results stamp the
+  marker `failed:<iso>` and the throttled
   `retryFailedAnnouncements` sweep in result-sync-service re-claims exactly
   those (the run whose send failed is the run that COMPLETED the match, so
   no import path would ever re-trigger it — and only rows stamped failed are
@@ -2881,11 +3076,11 @@ the phase, a schedule with no kickoff times disables auto-sync/reminders/pick'em
 locks for the whole season, nothing prompted "start the playoffs" or "record the
 final", and COMPLETE was a dead end whose only exit sat in a collapsed section.
 
-**Two safety nets that did not exist.** `GET /api/admin/season-export` downloads
-a whole season as JSON including box scores (the part that cannot be re-fetched
-once OpenDota ages them out) — it is the only backup behind `deleteSeason`,
-since `npm run db:backup` cannot run against production from a serverless host.
-Deliberately an EXPORT, not a restore. And `AdminAction` + `logAdminAction`
+**Audit archive, not recovery.** `GET /api/admin/season-export` downloads one
+season as JSON including box scores (the part that cannot be re-fetched once
+OpenDota ages them out), but it is explicitly non-restorable and never satisfies
+the production deletion gate. Whole-database backup + verification receipt is
+the recovery boundary. `AdminAction` + `logAdminAction`
 (`src/lib/admin-log.ts`) records who did what: append-only, best-effort (a
 failed log must NEVER fail the mutation it describes), written from ONE helper
 that resolves the actor from the session rather than threading it through
@@ -2947,8 +3142,9 @@ had no reachable control at all.
 
 **Import correctness, three fixes.** `updateDotaAccount`'s collision check now
 matches steam-DERIVED ids (most users have no override, so B pasting A's
-Dotabuff URL found nothing), backed by a nullable `@unique` on
-`User.dotaAccountId` with a P2002 catch. A PLAYER→STANDIN flip is refused while
+Dotabuff URL found nothing), backed by unique indexes on the rollback and v2
+stored columns, an explicit cross-column/Steam collision query, and a P2002
+catch. A PLAYER→STANDIN flip is refused while
 the auction runs, and `resolveExpiredNomination` voids a non-PLAYER lot — the
 on-the-block player could flip on /me, rendering a headless lot that still
 CHARGED the team and minted a rostered STANDIN. And **`syncLeagueGames` buffers
@@ -3032,9 +3228,9 @@ The product gaps the audit named. Each is small and each has a rule:
   MMR-weighted budget.
 - **Standin signups are moderatable**: the admin signups card lists registered
   STANDINs with the same remove form plus an MMR edit that is deliberately NOT
-  draft-gated (standins register in every phase). `withdrawSignup` never had a
-  type gate — this was a missing render, and it meant a troll standin sat in
-  every dropdown all season.
+  draft-gated (standins remain available through playoffs; completed seasons
+  are read-only). `withdrawSignup` never had a type gate — this was a missing
+  render, and it meant a troll standin sat in every dropdown all season.
 
 ## Pre-draft-night hardening (2026-08-01 — a 28-agent audit of the draft path)
 

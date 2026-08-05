@@ -29,6 +29,10 @@ import { describe, expect, it } from "vitest";
 // 3. The action wrapper must convert a REJECTED promise (network drop,
 //    server restart mid-deploy) into an { error } result. Unhandled, the
 //    rejection propagates to the root error.tsx and replaces the whole page.
+//
+// 4. Toasts must be emitted from that wrapper, not a state effect. A server
+//    action may revalidate away its own form (accepting a reschedule does), so
+//    an effect owned by the form can disappear before it reports success.
 
 const SRC = readFileSync(join(__dirname, "action-form.tsx"), "utf8");
 
@@ -48,9 +52,14 @@ const CODE = SRC.split("\n")
  * already stripped). Returns the body and the index just past the closing
  * brace, so a caller can assert what immediately FOLLOWS a branch.
  */
-function braceBlock(src: string, openAt: number): { body: string; endAt: number } {
+function braceBlock(
+  src: string,
+  openAt: number,
+): { body: string; endAt: number } {
   if (src[openAt] !== "{") {
-    throw new Error(`braceBlock: expected "{" at ${openAt}, got ${src[openAt]}`);
+    throw new Error(
+      `braceBlock: expected "{" at ${openAt}, got ${src[openAt]}`,
+    );
   }
   let depth = 0;
   for (let i = openAt; i < src.length; i++) {
@@ -74,7 +83,7 @@ describe("ActionForm source guards", () => {
       "useActionState(",
       "formRef.current?.reset()",
       "await action(",
-      "if (state.error)",
+      "if (result?.error)",
     ]) {
       expect(
         CODE.indexOf(anchor),
@@ -117,39 +126,58 @@ describe("ActionForm source guards", () => {
     ).toBe(true);
   });
 
+  it("passes submitter identity and native validation overrides through", () => {
+    expect(CODE).toContain("name={name}");
+    expect(CODE).toContain("value={value}");
+    expect(CODE).toContain("formNoValidate={formNoValidate}");
+  });
+
   it("resets the form ONLY on the success path", () => {
     const RESET = "formRef.current?.reset()";
     // Exactly one call site, so the branch check below covers all of them.
-    expect(CODE.split(RESET).length - 1, `expected exactly one ${RESET}`).toBe(1);
+    expect(CODE.split(RESET).length - 1, `expected exactly one ${RESET}`).toBe(
+      1,
+    );
 
     // The effect bails on the initial null state before any branch runs.
-    const bail = CODE.indexOf("if (!state) return;");
-    const errIf = CODE.indexOf("if (state.error)");
-    expect(bail, "the state effect no longer bails on null state").toBeGreaterThanOrEqual(0);
-    expect(bail).toBeLessThan(errIf);
-
-    // The error branch must NOT reset (that is the wiped-questionnaire bug)…
-    const errBlock = braceBlock(CODE, CODE.indexOf("{", errIf));
+    const bail = CODE.indexOf("if (!state || state.error) return;");
     expect(
-      errBlock.body.includes(RESET),
-      `${RESET} is in the error branch — an { error } result wipes the ` +
-        `typed input the manual dispatch exists to preserve.`,
-    ).toBe(false);
-    expect(errBlock.body).toContain('pushToast("error"');
-
-    // …and the success branch — the else immediately following it — must.
-    const after = CODE.slice(errBlock.endAt, errBlock.endAt + 12);
+      bail,
+      `the state effect must return for both initial and { error } states ` +
+        `before it can reset typed input.`,
+    ).toBeGreaterThanOrEqual(0);
+    const resetAt = CODE.indexOf(RESET);
     expect(
-      after.includes("else"),
-      `if (state.error) no longer has an adjacent else — the success branch ` +
-        `this guard pins has moved; re-read the code and re-anchor.`,
-    ).toBe(true);
-    const elseBlock = braceBlock(CODE, CODE.indexOf("{", errBlock.endAt));
-    expect(
-      elseBlock.body.includes(RESET),
-      `${RESET} left the success branch — success no longer clears the form ` +
+      resetAt > bail,
+      `${RESET} must follow the null/error guard — success no longer clears the form ` +
         `(the manual dispatch skipped React's auto-reset, so nothing else does).`,
     ).toBe(true);
+  });
+
+  it("emits action feedback before a revalidation can unmount the form", () => {
+    const wrapperAt = CODE.indexOf("const safeAction");
+    const useActionAt = CODE.indexOf("useActionState(safeAction");
+    const resultReturn = CODE.indexOf("return result;", wrapperAt);
+    const errorToast = CODE.indexOf(
+      'pushToast("error", result.error)',
+      wrapperAt,
+    );
+    const successToast = CODE.indexOf(
+      'pushToast("success", result.message)',
+      wrapperAt,
+    );
+
+    expect(wrapperAt).toBeGreaterThanOrEqual(0);
+    expect(errorToast).toBeGreaterThan(wrapperAt);
+    expect(successToast).toBeGreaterThan(wrapperAt);
+    expect(errorToast).toBeLessThan(resultReturn);
+    expect(successToast).toBeLessThan(resultReturn);
+    expect(resultReturn).toBeLessThan(useActionAt);
+    expect(
+      CODE.slice(useActionAt).includes("pushToast("),
+      `toast emission moved back into post-state/effect code — a form removed ` +
+        `by server revalidation can lose its own confirmation again.`,
+    ).toBe(false);
   });
 
   it("converts a rejected action promise into an { error } result", () => {
@@ -169,9 +197,10 @@ describe("ActionForm source guards", () => {
     ).toBe(true);
     const catchBlock = braceBlock(CODE, CODE.indexOf("{", catchAt)).body;
     expect(
-      catchBlock.includes("return") && catchBlock.includes("error:"),
-      `The catch no longer returns an { error: … } ActionResult — it must ` +
-        `convert the rejection, not rethrow or swallow it.`,
+      catchBlock.includes("result =") && catchBlock.includes("error:"),
+      `The catch no longer converts the rejection into an { error: … } ` +
+        `ActionResult — it must preserve the result for immediate toast ` +
+        `delivery, not rethrow or swallow it.`,
     ).toBe(true);
 
     // The wrapper only matters if it is the thing actually dispatched.
@@ -180,5 +209,14 @@ describe("ActionForm source guards", () => {
       `useActionState no longer consumes the guarded wrapper — the try/catch ` +
         `above it is decoration if the raw action is dispatched.`,
     ).toBe(true);
+  });
+
+  it("treats a rejected transport as uncertain instead of claiming nothing changed", () => {
+    // Losing the response is not proof the server failed to commit. In
+    // particular, retrying Undo/Abort after a false "nothing was saved" toast
+    // can apply a second destructive mutation to already-changed state.
+    expect(SRC).not.toMatch(/nothing was saved|didn['’]t go through/i);
+    expect(SRC).toContain("The action may have completed");
+    expect(SRC).toContain("check the current page state before trying again");
   });
 });

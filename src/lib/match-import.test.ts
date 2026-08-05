@@ -42,7 +42,11 @@ const teamB = { teamId: "B", accountIds: new Set([6, 7, 8, 9, 10]) };
 
 describe("classifyGame", () => {
   it("identifies sides and winner (A radiant, radiant wins)", () => {
-    const c = classifyGame(makeMatch([1, 2, 3, 4, 5], [6, 7, 8, 9, 10], true), teamA, teamB);
+    const c = classifyGame(
+      makeMatch([1, 2, 3, 4, 5], [6, 7, 8, 9, 10], true),
+      teamA,
+      teamB,
+    );
     expect(c.ok).toBe(true);
     expect(c.radiantTeamId).toBe("A");
     expect(c.direTeamId).toBe("B");
@@ -50,7 +54,11 @@ describe("classifyGame", () => {
   });
 
   it("assigns the win to dire when radiant_win is false", () => {
-    const c = classifyGame(makeMatch([1, 2, 3, 4, 5], [6, 7, 8, 9, 10], false), teamA, teamB);
+    const c = classifyGame(
+      makeMatch([1, 2, 3, 4, 5], [6, 7, 8, 9, 10], false),
+      teamA,
+      teamB,
+    );
     expect(c.winnerTeamId).toBe("B");
   });
 
@@ -89,6 +97,19 @@ describe("classifyGame", () => {
       teamB,
     );
     expect(c.ok).toBe(false);
+  });
+
+  it("fails closed when a legacy effective account appears on both rosters", () => {
+    const c = classifyGame(
+      makeMatch([1, 2, 3, 4, 5], [6, 7, 8, 9, 10], true),
+      teamA,
+      { teamId: "B", accountIds: new Set([5, 6, 7, 8, 9]) },
+    );
+
+    expect(c).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/both teams/i),
+    });
   });
 });
 

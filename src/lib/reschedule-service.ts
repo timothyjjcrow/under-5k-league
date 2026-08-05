@@ -1,13 +1,16 @@
 // Captain-to-captain rescheduling rules, separated from the server actions
 // so the guards are integration-testable (same pattern as draft-service).
-// Every function throws Error with a player-facing message on a violation.
+// Every expected rule violation throws UserFacingError; the action boundary
+// never serializes arbitrary database or provider exception text.
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
-import { getActiveSeason } from "./season";
+import { matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
+import { singleActiveSeason } from "./season";
+import { UserFacingError } from "./user-facing-error";
 
 export type AcceptedReschedule = {
   homeName: string;
@@ -78,10 +81,12 @@ const PAST_GRACE_MS = 60 * 60 * 1000; // "tonight, an hour ago" is fine
 const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000; // no league pauses half a year
 
 function assertSaneProposedTime(proposedTime: Date, now = new Date()): void {
+  if (!Number.isFinite(proposedTime.getTime()))
+    throw new UserFacingError("Choose a valid proposed time");
   if (proposedTime.getTime() < now.getTime() - PAST_GRACE_MS)
-    throw new Error("That time is in the past");
+    throw new UserFacingError("That time is in the past");
   if (proposedTime.getTime() > now.getTime() + MAX_AHEAD_MS)
-    throw new Error("That time is too far out — check the year");
+    throw new UserFacingError("That time is too far out — check the year");
 }
 
 /** Create (or supersede) the match's open proposal. Captains only. */
@@ -90,25 +95,6 @@ export async function proposeReschedule(
   matchId: string,
   proposedTime: Date,
 ): Promise<ProposedReschedule> {
-  const match = await prisma.match.findUnique({
-    where: { id: matchId },
-    include: { homeTeam: true, awayTeam: true },
-  });
-  if (!match) throw new Error("Match not found");
-  if (
-    match.homeTeam.captainId !== userId &&
-    match.awayTeam.captainId !== userId
-  )
-    throw new Error("Only the two captains can propose a time");
-  if (match.status === MATCH_STATUS.COMPLETED)
-    throw new Error("This match is already played");
-  // An archived season's unplayed match keeps its captains — proposing onto it
-  // opens a live negotiation (with a Discord mention) over a dead fixture, and
-  // an eventual accept would retime it and wipe its RSVPs. Decline/withdraw
-  // stay legal below: cleaning up a proposal stranded by the archival is fine.
-  const activeSeason = await getActiveSeason();
-  if (!activeSeason || match.seasonId !== activeSeason.id)
-    throw new Error("This match belongs to an archived season");
   assertSaneProposedTime(proposedTime);
 
   // Replace any open proposal — the newest ask is the only live one.
@@ -117,32 +103,95 @@ export async function proposeReschedule(
   // the same instant each cancel what they can see and then both insert,
   // leaving TWO open proposals. The loser was a zombie the other captain could
   // accept days later, retiming the match out from under everyone.
-  await prisma.$transaction(
-    async (tx) => {
-      await tx.rescheduleRequest.updateMany({
-        where: { matchId, status: "PENDING" },
-        data: { status: "CANCELLED" },
-      });
-      await tx.rescheduleRequest.create({
-        data: { matchId, proposedById: userId, proposedTime },
-      });
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-  );
+  try {
+    return await prisma.$transaction(
+      async (tx) => {
+        // These are authority reads, not presentation data: season turnover,
+        // a phase advance, a result sync, or a captain replacement between a
+        // page render and this click must be decisive here at write time.
+        const [activeSeason, match] = await Promise.all([
+          tx.season
+            .findMany({
+              where: { isActive: true },
+              orderBy: { createdAt: "desc" },
+              take: 2,
+              select: {
+                id: true,
+                status: true,
+                draft: { select: { status: true } },
+              },
+            })
+            .then(singleActiveSeason),
+          tx.match.findUnique({
+            where: { id: matchId },
+            include: { homeTeam: true, awayTeam: true },
+          }),
+        ]);
+        if (!match) throw new UserFacingError("Match not found");
+        if (
+          match.homeTeam.captainId !== userId &&
+          match.awayTeam.captainId !== userId
+        )
+          throw new UserFacingError("Only the two captains can propose a time");
+        // An archived season's unplayed match keeps its captains. Opening a
+        // negotiation there would also send a live Discord mention about a
+        // dead fixture. Decline/withdraw remain legal cleanup below.
+        if (!activeSeason || match.seasonId !== activeSeason.id)
+          throw new UserFacingError(
+            "This match belongs to an archived season",
+          );
+        if (
+          !matchLogisticsOpen(
+            activeSeason.status,
+            activeSeason.draft?.status,
+            match.status,
+          )
+        ) {
+          if (match.status === MATCH_STATUS.COMPLETED)
+            throw new UserFacingError("This match is already played");
+          if (match.status === MATCH_STATUS.LIVE)
+            throw new UserFacingError("This match is already live");
+          throw new UserFacingError(
+            "Rescheduling is not open in this league phase",
+          );
+        }
+        // An unscheduled SCHEDULED match may use a proposal to receive its
+        // first kickoff. Once it has one, proposing that exact instant creates
+        // a notification and approval task that cannot change anything.
+        if (match.scheduledAt?.getTime() === proposedTime.getTime())
+          throw new UserFacingError("That is already this match's kickoff");
 
-  return {
-    homeName: match.homeTeam.name,
-    awayName: match.awayTeam.name,
-    week: match.week,
-    isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
-    proposedTime,
-    // The proposer is one of the two captains (asserted above), so the
-    // counterpart is simply the other one.
-    notifyUserId:
-      match.homeTeam.captainId === userId
-        ? match.awayTeam.captainId
-        : match.homeTeam.captainId,
-  };
+        await tx.rescheduleRequest.updateMany({
+          where: { matchId, status: "PENDING" },
+          data: { status: "CANCELLED" },
+        });
+        await tx.rescheduleRequest.create({
+          data: { matchId, proposedById: userId, proposedTime },
+        });
+
+        return {
+          homeName: match.homeTeam.name,
+          awayName: match.awayTeam.name,
+          week: match.week,
+          isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+          proposedTime,
+          // The proposer is one of the two captains (asserted above), so the
+          // counterpart is simply the other one.
+          notifyUserId:
+            match.homeTeam.captainId === userId
+              ? match.awayTeam.captainId
+              : match.homeTeam.captainId,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === "P2034")
+      throw new UserFacingError(
+        "That match just changed — reload and try again",
+      );
+    throw error;
+  }
 }
 
 /**
@@ -154,128 +203,171 @@ export async function respondReschedule(
   requestId: string,
   accept: boolean,
 ): Promise<RescheduleOutcome> {
-  const request = await prisma.rescheduleRequest.findUnique({
-    where: { id: requestId },
-    include: { match: { include: { homeTeam: true, awayTeam: true } } },
-  });
-  if (!request || request.status !== "PENDING")
-    throw new Error("That proposal is no longer open");
-  const { match } = request;
-  const isCaptain =
-    match.homeTeam.captainId === userId ||
-    match.awayTeam.captainId === userId;
-  if (!isCaptain || request.proposedById === userId)
-    throw new Error("Only the opposing captain can respond");
-  if (match.status === MATCH_STATUS.COMPLETED)
-    throw new Error("This match is already played");
+  let outcome;
+  try {
+    outcome = await prisma.$transaction(
+      async (tx) => {
+        const request = await tx.rescheduleRequest.findUnique({
+          where: { id: requestId },
+          include: { match: { include: { homeTeam: true, awayTeam: true } } },
+        });
+        if (!request || request.status !== "PENDING")
+          throw new UserFacingError("That proposal is no longer open");
+        const { match } = request;
+        const isCaptain =
+          match.homeTeam.captainId === userId ||
+          match.awayTeam.captainId === userId;
+        if (!isCaptain || request.proposedById === userId)
+          throw new UserFacingError("Only the opposing captain can respond");
 
-  if (!accept) {
-    // Conditional write — a concurrent withdraw/supersede must not be
-    // flipped to DECLINED after the fact.
-    const declined = await prisma.rescheduleRequest.updateMany({
-      where: { id: requestId, status: "PENDING" },
-      data: { status: "DECLINED" },
-    });
-    if (declined.count === 0)
-      throw new Error("That proposal is no longer open");
-    return {
-      accepted: false,
-      homeName: match.homeTeam.name,
-      awayName: match.awayTeam.name,
-      week: match.week,
-      isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
-      proposedTime: request.proposedTime,
-      // The proposer — asserted above to be the OTHER captain, since a
-      // responder equal to proposedById is refused.
-      notifyUserId: request.proposedById,
-    };
+        if (!accept) {
+          // Decline is cleanup, so it stays legal after a phase change, result,
+          // or season archival. Authority and request state are still read and
+          // claimed in this transaction so an old page cannot override a
+          // concurrent supersede/withdraw.
+          const declined = await tx.rescheduleRequest.updateMany({
+            where: { id: requestId, status: "PENDING" },
+            data: { status: "DECLINED" },
+          });
+          if (declined.count === 0)
+            throw new UserFacingError("That proposal is no longer open");
+          return {
+            accepted: false as const,
+            homeName: match.homeTeam.name,
+            awayName: match.awayTeam.name,
+            week: match.week,
+            isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+            proposedTime: request.proposedTime,
+            notifyUserId: request.proposedById,
+          };
+        }
+
+        // Accepting mutates the fixture, so unlike decline it must still be an
+        // active, post-draft, SCHEDULED match at this exact write decision.
+        const activeSeason = await tx.season
+          .findMany({
+            where: { isActive: true },
+            orderBy: { createdAt: "desc" },
+            take: 2,
+            select: {
+              id: true,
+              status: true,
+              draft: { select: { status: true } },
+            },
+          })
+          .then(singleActiveSeason);
+        if (!activeSeason || match.seasonId !== activeSeason.id)
+          throw new UserFacingError(
+            "This match belongs to an archived season",
+          );
+        if (
+          !matchLogisticsOpen(
+            activeSeason.status,
+            activeSeason.draft?.status,
+            match.status,
+          )
+        ) {
+          if (match.status === MATCH_STATUS.COMPLETED)
+            throw new UserFacingError("This match is already played");
+          if (match.status === MATCH_STATUS.LIVE)
+            throw new UserFacingError("This match is already live");
+          throw new UserFacingError(
+            "Rescheduling is not open in this league phase",
+          );
+        }
+
+        // A proposal may have sat open while the time aged out or an admin
+        // independently moved the match. Recheck both against fresh state.
+        assertSaneProposedTime(request.proposedTime);
+        if (match.scheduledAt?.getTime() === request.proposedTime.getTime())
+          throw new UserFacingError("That is already this match's kickoff");
+
+        const accepted = await tx.rescheduleRequest.updateMany({
+          where: { id: requestId, status: "PENDING" },
+          data: { status: "ACCEPTED" },
+        });
+        if (accepted.count === 0)
+          throw new UserFacingError("That proposal is no longer open");
+        const retimed = await tx.match.updateMany({
+          where: { id: match.id, status: MATCH_STATUS.SCHEDULED },
+          // New kickoff ⇒ new detection window: clear the backoff accrued
+          // against the old one so the moved night is scanned promptly.
+          data: {
+            scheduledAt: request.proposedTime,
+            autoSyncedAt: null,
+            autoSyncAttempts: 0,
+          },
+        });
+        if (retimed.count === 0)
+          throw new UserFacingError(
+            "That match is no longer awaiting play",
+          );
+
+        // Every RSVP answered the OLD night. Clear them and release the old
+        // reminder marker atomically with the retime.
+        const [cleared, standins] = await Promise.all([
+          tx.matchAvailability.deleteMany({ where: { matchId: match.id } }),
+          tx.standinAssignment.findMany({
+            where: { matchId: match.id },
+            select: { standinUserId: true },
+          }),
+          tx.setting.deleteMany({
+            where: {
+              OR: [
+                { key: weekReminderKey(match.seasonId, match.week) },
+                {
+                  key: {
+                    startsWith: `${weekReminderKey(match.seasonId, match.week)}:`,
+                  },
+                },
+              ],
+            },
+          }),
+        ]);
+
+        return {
+          accepted: true as const,
+          homeName: match.homeTeam.name,
+          awayName: match.awayTeam.name,
+          week: match.week,
+          isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+          newTime: request.proposedTime,
+          notifyUserId: request.proposedById,
+          clearedRsvps: cleared.count,
+          standinUserIds: standins.map((s) => s.standinUserId),
+          matchId: match.id,
+          seasonId: match.seasonId,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === "P2034")
+      throw new UserFacingError(
+        "That proposal or match just changed — reload and try again",
+      );
+    throw error;
   }
 
-  // Accepting RETIMES the match, so the archived-season rule bites here, not
-  // on decline: a proposal stranded by an early season turnover must still be
-  // declinable (that only touches the request row), but never acceptable —
-  // that would stamp a new kickoff onto a finished season's fixture and wipe
-  // its RSVPs.
-  const activeSeason = await getActiveSeason();
-  if (!activeSeason || match.seasonId !== activeSeason.id)
-    throw new Error("This match belongs to an archived season");
-
-  // Re-validate on ACCEPT, not just on propose: a proposal sat on for two
-  // weeks would otherwise move the match to a night that has already passed
-  // (which also drops it outside its own auto-sync window).
-  assertSaneProposedTime(request.proposedTime);
-
-  let clearedRsvps = 0;
-  await prisma.$transaction(async (tx) => {
-    // Same conditional-write rule for accept: only a still-PENDING request
-    // may retime the match.
-    const accepted = await tx.rescheduleRequest.updateMany({
-      where: { id: requestId, status: "PENDING" },
-      data: { status: "ACCEPTED" },
-    });
-    if (accepted.count === 0)
-      throw new Error("That proposal is no longer open");
-    // The "not already played" check happened against a row read before this
-    // transaction opened, and auto-sync completes matches from any visitor's
-    // page view — so re-assert it at the write. Otherwise accepting a stale
-    // proposal could stamp a FUTURE kickoff onto a match that just finished
-    // (and wipe its RSVPs), putting a completed series outside its own
-    // detection window. Throwing rolls the ACCEPTED flip back with it.
-    const retimed = await tx.match.updateMany({
-      where: { id: match.id, status: { not: MATCH_STATUS.COMPLETED } },
-      // New kickoff ⇒ new detection window: clear the backoff accrued
-      // against the old one so the moved night is scanned promptly.
-      data: {
-        scheduledAt: request.proposedTime,
-        autoSyncedAt: null,
-        autoSyncAttempts: 0,
-      },
-    });
-    if (retimed.count === 0) throw new Error("This match is already played");
-    // The night changed — every RSVP was an answer about the OLD night.
-    // Clearing them re-prompts the rosters instead of carrying 8 stale ✓s
-    // into a night nobody actually agreed to play.
-    //
-    // The COUNT rides out to the announcement: silently deleting ten players'
-    // check-ins produces a match that looks unstaffed to its own captain and
-    // an eight-to-ten-person roster who each believe they already answered.
-    // Nothing else on the site tells them.
-    const cleared = await tx.matchAvailability.deleteMany({
-      where: { matchId: match.id },
-    });
-    clearedRsvps = cleared.count;
-
-    // The week's reminder has already gone out quoting the OLD kickoff, and a
-    // Discord edit wouldn't notify anyone even if we edited it. Dropping the
-    // idempotency marker lets maybeAnnounceUpcomingWeek re-fire for this week
-    // once the NEW time comes inside its window — with correct times and a
-    // fresh (now empty) check-in count.
-    await tx.setting.deleteMany({
-      where: { key: weekReminderKey(match.seasonId, match.week) },
-    });
-  });
+  if (!outcome.accepted) return outcome;
   // Accepting a reschedule moves the fixture, which can put a standin on two
   // games the same night — standinConflict is only checked when cover is
   // arranged, never when a match later moves onto that night. Reported, not
   // refused: the reschedule is the legitimate act.
-  const standinClashes = await clashesAfterRetime(match.seasonId, [match.id]);
-  // The match's booked standins: their assignment ping quoted the OLD kickoff,
-  // and their RSVPs were just wiped with everyone else's.
-  const standins = await prisma.standinAssignment.findMany({
-    where: { matchId: match.id },
-    select: { standinUserId: true },
-  });
+  const standinClashes = await clashesAfterRetime(outcome.seasonId, [
+    outcome.matchId,
+  ]);
   return {
     accepted: true,
-    homeName: match.homeTeam.name,
-    awayName: match.awayTeam.name,
-    week: match.week,
-    isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
-    newTime: request.proposedTime,
-    notifyUserId: request.proposedById,
-    clearedRsvps,
+    homeName: outcome.homeName,
+    awayName: outcome.awayName,
+    week: outcome.week,
+    isPlayoff: outcome.isPlayoff,
+    newTime: outcome.newTime,
+    notifyUserId: outcome.notifyUserId,
+    clearedRsvps: outcome.clearedRsvps,
+    standinUserIds: outcome.standinUserIds,
     standinClashes,
-    standinUserIds: standins.map((s) => s.standinUserId),
   };
 }
 
@@ -285,17 +377,30 @@ export async function cancelReschedule(
   requestId: string,
   isAdmin: boolean,
 ): Promise<void> {
-  const request = await prisma.rescheduleRequest.findUnique({
-    where: { id: requestId },
-  });
-  if (!request || request.status !== "PENDING")
-    throw new Error("That proposal is no longer open");
-  if (request.proposedById !== userId && !isAdmin)
-    throw new Error("Only the proposer can withdraw it");
-  const cancelled = await prisma.rescheduleRequest.updateMany({
-    where: { id: requestId, status: "PENDING" },
-    data: { status: "CANCELLED" },
-  });
-  if (cancelled.count === 0)
-    throw new Error("That proposal is no longer open");
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const request = await tx.rescheduleRequest.findUnique({
+          where: { id: requestId },
+        });
+        if (!request || request.status !== "PENDING")
+          throw new UserFacingError("That proposal is no longer open");
+        if (request.proposedById !== userId && !isAdmin)
+          throw new UserFacingError("Only the proposer can withdraw it");
+        const cancelled = await tx.rescheduleRequest.updateMany({
+          where: { id: requestId, status: "PENDING" },
+          data: { status: "CANCELLED" },
+        });
+        if (cancelled.count === 0)
+          throw new UserFacingError("That proposal is no longer open");
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === "P2034")
+      throw new UserFacingError(
+        "That proposal just changed — reload and try again",
+      );
+    throw error;
+  }
 }

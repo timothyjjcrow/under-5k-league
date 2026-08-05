@@ -6,7 +6,9 @@ import {
   wonGame,
   type LeaderEntry,
   type PlayerGameLine,
+  decodeGamePlayers,
   parseGamePlayers,
+  trustedGamePlayers,
 } from "./player-stats";
 
 function line(partial: Partial<PlayerGameLine>): PlayerGameLine {
@@ -42,7 +44,10 @@ describe("currentStreak", () => {
   });
 
   it("counts the leading run of wins (newest first)", () => {
-    expect(currentStreak([w(), w(), w(), l()])).toEqual({ type: "W", count: 3 });
+    expect(currentStreak([w(), w(), w(), l()])).toEqual({
+      type: "W",
+      count: 3,
+    });
   });
 
   it("counts the leading run of losses", () => {
@@ -103,6 +108,8 @@ describe("summarizePlayerGames", () => {
     ]);
     expect(s.avgNetWorth).toBe(15000);
     expect(s.avgGpm).toBe(600);
+    expect(s.netWorthGames).toBe(2);
+    expect(s.gpmGames).toBe(2);
   });
 
   it("reports null economy averages when no game has the data", () => {
@@ -150,9 +157,9 @@ describe("topBy", () => {
     ];
     // Without the floor the 1-game player would top winRate; with minGames=3
     // they're excluded.
-    expect(topBy(entries, "winRate", { minGames: 3 }).map((r) => r.id)).toEqual([
-      "grinder",
-    ]);
+    expect(topBy(entries, "winRate", { minGames: 3 }).map((r) => r.id)).toEqual(
+      ["grinder"],
+    );
   });
 
   it("ranks by average GPM and excludes players with no economy data", () => {
@@ -162,6 +169,24 @@ describe("topBy", () => {
       entry("nodata", [line({}), line({})]), // no gpm -> value 0 -> excluded
     ];
     expect(topBy(entries, "gpm").map((r) => r.id)).toEqual(["rich", "poor"]);
+  });
+
+  it("applies economy floors to reported samples, not unrelated game count", () => {
+    const entries = [
+      entry("one-sample", [
+        line({ gpm: 900 }),
+        line({ gpm: null }),
+        line({ gpm: null }),
+      ]),
+      entry("qualified", [
+        line({ gpm: 500 }),
+        line({ gpm: 550 }),
+        line({ gpm: 600 }),
+      ]),
+    ];
+    expect(topBy(entries, "gpm", { minGames: 3 }).map((r) => r.id)).toEqual([
+      "qualified",
+    ]);
   });
 
   it("drops zero-value rows and respects the limit", () => {
@@ -178,8 +203,19 @@ describe("topBy", () => {
 
 describe("parseGamePlayers", () => {
   it("parses a stored box score into lines", () => {
-    const lines = parseGamePlayers<{ kills: number }>('[{"kills":7}]');
-    expect(lines).toEqual([{ kills: 7 }]);
+    const lines = parseGamePlayers(
+      '[{"heroId":7,"isRadiant":true,"kills":7,"deaths":2,"assists":9,"userId":"u1"}]',
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      heroId: 7,
+      isRadiant: true,
+      kills: 7,
+      deaths: 2,
+      assists: 9,
+      userId: "u1",
+      netWorth: null,
+    });
   });
 
   it("returns [] for malformed JSON instead of throwing", () => {
@@ -197,5 +233,180 @@ describe("parseGamePlayers", () => {
 
   it("handles the default empty column value", () => {
     expect(parseGamePlayers("[]")).toEqual([]);
+  });
+
+  it("rejects structurally unsafe array members instead of casting them", () => {
+    const decoded = decodeGamePlayers(
+      JSON.stringify([
+        {},
+        { heroId: 1, isRadiant: true, kills: "7", deaths: 1, assists: 2 },
+        { heroId: 1, isRadiant: true, kills: 7, deaths: null, assists: 2 },
+        {
+          heroId: 1,
+          isRadiant: true,
+          kills: 7,
+          deaths: 1,
+          assists: 2,
+          userId: 42,
+        },
+      ]),
+    );
+    expect(decoded).toEqual({
+      players: [],
+      invalidLines: 4,
+      malformed: false,
+      completeRoster: false,
+    });
+  });
+
+  it("normalizes unsafe optional economy and benchmark values to null", () => {
+    const [line] = parseGamePlayers(
+      JSON.stringify([
+        {
+          heroId: 1,
+          isRadiant: false,
+          kills: 2,
+          deaths: 3,
+          assists: 4,
+          gpm: "fast",
+          netWorth: -1,
+          lastHits: 1e308,
+          benchmarks: {
+            gold_per_min: { raw: "unknown", pct: 2 },
+            broken: { pct: "high" },
+          },
+        },
+      ]),
+    );
+    expect(line.gpm).toBeNull();
+    expect(line.netWorth).toBeNull();
+    expect(line.lastHits).toBeNull();
+    expect(line.benchmarks).toEqual({
+      gold_per_min: { raw: null, pct: 1 },
+    });
+  });
+
+  it("preserves real 32-bit account ids but rejects fractional or oversized ids", () => {
+    const base = {
+      heroId: 1,
+      isRadiant: true,
+      kills: 2,
+      deaths: 3,
+      assists: 4,
+    };
+    const lines = parseGamePlayers(
+      JSON.stringify([
+        { ...base, accountId: 4_000_000_000 },
+        { ...base, heroId: 2, accountId: 12.5 },
+        { ...base, heroId: 3, accountId: Number.MAX_SAFE_INTEGER },
+      ]),
+    );
+    expect(lines.map((line) => line.accountId)).toEqual([
+      4_000_000_000,
+      null,
+      null,
+    ]);
+  });
+
+  it("reports malformed top-level data separately from invalid lines", () => {
+    expect(decodeGamePlayers("not json")).toEqual({
+      players: [],
+      invalidLines: 0,
+      malformed: true,
+      completeRoster: false,
+    });
+    expect(decodeGamePlayers("[{}]")).toMatchObject({
+      invalidLines: 1,
+      malformed: false,
+    });
+  });
+
+  it("rejects unsafe required counters and implausible hero ids", () => {
+    const decoded = decodeGamePlayers(
+      JSON.stringify([
+        {
+          heroId: 1,
+          isRadiant: true,
+          kills: Number.MAX_SAFE_INTEGER,
+          deaths: 1,
+          assists: 1,
+        },
+        {
+          heroId: 99_999,
+          isRadiant: false,
+          kills: 1,
+          deaths: 1,
+          assists: 1,
+        },
+      ]),
+    );
+    expect(decoded.invalidLines).toBe(2);
+    expect(decoded.players).toEqual([]);
+  });
+
+  it("trusts only a unique complete 5v5 roster for public roll-ups", () => {
+    const roster = Array.from({ length: 10 }, (_, index) => ({
+      accountId: 1000 + index,
+      userId: `u${index}`,
+      heroId: index + 1,
+      isRadiant: index < 5,
+      kills: index,
+      deaths: 2,
+      assists: 4,
+    }));
+    const complete = decodeGamePlayers(JSON.stringify(roster));
+    expect(complete.completeRoster).toBe(true);
+    expect(trustedGamePlayers(complete)).toHaveLength(10);
+
+    const duplicate = decodeGamePlayers(
+      JSON.stringify([...roster.slice(0, 9), { ...roster[9], userId: "u0" }]),
+    );
+    expect(duplicate.completeRoster).toBe(false);
+    expect(trustedGamePlayers(duplicate)).toEqual([]);
+
+    const sixRadiant = decodeGamePlayers(
+      JSON.stringify(
+        roster.map((line, index) => ({
+          ...line,
+          isRadiant: index < 6,
+        })),
+      ),
+    );
+    expect(sixRadiant.completeRoster).toBe(false);
+  });
+
+  it("allows a complete hero box without mappings while rejecting supplied duplicates", () => {
+    const roster = Array.from({ length: 10 }, (_, index) => ({
+      accountId: null,
+      userId: null,
+      heroId: index + 1,
+      isRadiant: index < 5,
+      kills: index,
+      deaths: 2,
+      assists: 4,
+    }));
+    const unmapped = decodeGamePlayers(JSON.stringify(roster));
+    expect(unmapped.completeRoster).toBe(true);
+    expect(trustedGamePlayers(unmapped)).toHaveLength(10);
+
+    const duplicateAccount = decodeGamePlayers(
+      JSON.stringify(
+        roster.map((line, index) => ({
+          ...line,
+          accountId: index < 2 ? 42 : 100 + index,
+        })),
+      ),
+    );
+    expect(duplicateAccount.completeRoster).toBe(false);
+
+    const duplicateHero = decodeGamePlayers(
+      JSON.stringify(
+        roster.map((line, index) => ({
+          ...line,
+          heroId: index < 2 ? 42 : 100 + index,
+        })),
+      ),
+    );
+    expect(duplicateHero.completeRoster).toBe(false);
   });
 });

@@ -1,11 +1,17 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
-import { pickemStandings, pickSplit, predictionOpen , groupOpenByWeek } from "@/lib/pickem";
+import {
+  groupOpenByWeek,
+  partitionPickemMatches,
+  pickemStandings,
+  pickSplit,
+} from "@/lib/pickem";
 import { savePrediction } from "@/app/actions/pickem";
-import { ActionForm, SubmitButton } from "@/components/action-form";
+import { ActionForm } from "@/components/action-form";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { formatMatchTime } from "@/lib/match-time";
@@ -24,15 +30,49 @@ import {
   textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { PickemSubmitButton } from "@/components/pickem-submit-button";
+import { PickemDeadlineRefresh } from "@/components/pickem-deadline-refresh";
+import { shareMetadata } from "@/lib/share-metadata";
+import { singleSearchParam } from "@/lib/search-params";
 
-export const metadata = { title: "Pick'em" };
+type PickemSearchParams = { season?: string | string[] };
+
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<PickemSearchParams>;
+}): Promise<Metadata> {
+  const seasonId = singleSearchParam((await searchParams).season);
+  if (seasonId === null) notFound();
+  const generic = () =>
+    shareMetadata(
+      "Pick'em",
+      "Call every GGD2L match before kickoff and climb the season's oracle board.",
+      "/pickem",
+    );
+  if (!seasonId) return generic();
+  const season = await prisma.season.findUnique({
+    where: { id: seasonId },
+    select: { name: true, isActive: true },
+  });
+  if (!season) notFound();
+  if (season.isActive) return generic();
+  const path = `/pickem?${new URLSearchParams({ season: seasonId })}`;
+  return shareMetadata(
+    `${season.name} Pick'em`,
+    `Final predictions and oracle standings from ${season.name}.`,
+    path,
+  );
+}
 
 export default async function PickemPage({
   searchParams,
 }: {
-  searchParams: Promise<{ season?: string }>;
+  searchParams: Promise<PickemSearchParams>;
 }) {
-  const { season: seasonParam } = await searchParams;
+  const seasonParam = singleSearchParam((await searchParams).season);
+  if (seasonParam === null) notFound();
   // ?season=<id> shows an archived season's oracle board (the leaders/meta/
   // recap pattern). Prediction rows hang off Match and outlive archival, so
   // without this the season's oracle champion became unreachable the moment
@@ -83,7 +123,11 @@ export default async function PickemPage({
   const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
-  const [matches, teams, predictions, users] = await Promise.all([
+  const [draft, matches, teams, predictions, users] = await Promise.all([
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
     prisma.match.findMany({
       where: { seasonId: season.id },
       orderBy: [{ week: "asc" }, { createdAt: "asc" }],
@@ -96,13 +140,27 @@ export default async function PickemPage({
     }),
   ]);
 
+  const phaseOpen = postAuctionWorkOpen(season.status, draft?.status);
+  const canPlay = !readOnly && phaseOpen;
+
   if (matches.length === 0) {
     return (
       <div className="space-y-6">
-        <PageTitle title="Pick'em" subtitle={season.name} />
+        <PageTitle
+          title="Pick'em"
+          subtitle={`${season.name}${readOnly ? " · archived" : ""}`}
+        />
         <EmptyState
-          title="No matches to predict yet"
-          description="Pick'em opens once the schedule is generated — call every winner, top the oracle board."
+          title={
+            readOnly || season.status === "COMPLETE"
+              ? "No Pick'em board on record"
+              : "No matches to predict yet"
+          }
+          description={
+            readOnly || season.status === "COMPLETE"
+              ? "This season has no scheduled match history to grade."
+              : "Pick'em opens once the schedule is generated — call every winner, top the oracle board."
+          }
         />
       </div>
     );
@@ -120,21 +178,37 @@ export default async function PickemPage({
     : new Map<string, string>();
 
   const standings = pickemStandings(predictions, matches);
-  // An archived season has no open picks by construction — this is the one
-  // branch the pick buttons hang off, so making it empty is what makes the
-  // read-only view structural rather than cosmetic.
-  const open = readOnly ? [] : matches.filter((m) => predictionOpen(m));
-  const graded = matches.filter(
-    (m) => m.status === "COMPLETED" && m.winnerTeamId,
-  );
+  const buckets = partitionPickemMatches(matches);
+  // Structurally read-only in archives and closed phases: no match can reach
+  // the branch that renders a server-action form.
+  const open = canPlay ? buckets.open : [];
+  // A future fixture from a closed phase is review-only too; direct actions
+  // are rejected by the same phase gate in savePrediction.
+  const lockedForReview = canPlay
+    ? buckets.locked
+    : [...buckets.locked, ...buckets.open];
+  const graded = buckets.graded;
+  const voided = buckets.voided;
+  const nextOpenDeadline = open.reduce<number | null>((next, match) => {
+    const at = match.scheduledAt?.getTime();
+    return at == null || (next != null && next <= at) ? next : at;
+  }, null);
 
   return (
     <div className="space-y-8">
       <PageTitle
         title="Pick'em"
-        subtitle={`${season.name} · call every match, top the oracle board`}
+        subtitle={`${season.name}${readOnly ? " · archived" : ""} · call every match, top the oracle board`}
         action={
-          viewer ? null : (
+          readOnly ? (
+            <Badge tone="neutral">Archived</Badge>
+          ) : !phaseOpen ? (
+            <Badge tone="accent">
+              {season.status === "COMPLETE"
+                ? "Pick'em closed"
+                : "Opens after draft"}
+            </Badge>
+          ) : viewer ? null : (
             <Link href="/login?next=/pickem" className={textLink("text-sm")}>
               Sign in to play →
             </Link>
@@ -147,6 +221,7 @@ export default async function PickemPage({
           <CardHeader
             title="Oracle board"
             subtitle={`${graded.length} decided match${graded.length === 1 ? "" : "es"} graded · draws void picks`}
+            headingLevel={2}
           />
           <CardBody className="divide-y divide-line/60 p-0">
             {standings.map((s, i) => (
@@ -190,157 +265,316 @@ export default async function PickemPage({
         </Card>
       ) : null}
 
-      <section className="space-y-4">
-        <SectionTitle
-          aside={
-            viewer
-              ? "· picks lock at the match's scheduled start"
-              : "· sign in to lock in your calls"
-          }
-        >
-          Upcoming matches
-        </SectionTitle>
-        {open.length === 0 ? (
-          <EmptyState
-            title="Nothing open to predict"
-            description="Every remaining match is locked or finished — check the oracle board."
-          />
-        ) : (
-          <div className="space-y-4">
-            {groupOpenByWeek(open).map(({ week, matches: weekMatches }, wi) => {
-              const isFirstWeek = wi === 0;
-              const picked = viewer
-                ? weekMatches.filter((wm) => myPicks.has(wm.id)).length
-                : 0;
-              const grid = (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {weekMatches.map((m) => {
-              const split = pickSplit(predictions, m.id, m.homeTeamId);
-              const total = split.home + split.away;
-              const myPick = myPicks.get(m.id);
-              const side = (teamId: string, count: number) => {
-                const name = teamName.get(teamId) ?? "?";
-                const mine = myPick === teamId;
-                return (
-                  <ActionForm
-                    action={savePrediction}
-                    hidden={{ matchId: m.id, pickedTeamId: teamId }}
-                    className="min-w-0 flex-1"
-                  >
-                    <SubmitButton
-                      variant={mine ? "accent" : "secondary"}
-                      size="sm"
-                      className="w-full"
-                      disabled={!viewer}
-                      aria-pressed={mine}
+      {canPlay ? (
+        <section className="space-y-4">
+          {nextOpenDeadline != null ? (
+            <PickemDeadlineRefresh targetMs={nextOpenDeadline} />
+          ) : null}
+          <SectionTitle
+            aside={
+              viewer
+                ? "· picks lock at the match's scheduled start"
+                : "· sign in to lock in your calls"
+            }
+          >
+            Upcoming matches
+          </SectionTitle>
+          {open.length === 0 ? (
+            <EmptyState
+              title="Nothing open to predict"
+              description="Every remaining match is locked or finished — check the oracle board."
+            />
+          ) : (
+            <div className="space-y-4">
+              {groupOpenByWeek(open).map(
+                ({ week, matches: weekMatches }, wi) => {
+                  const isFirstGroup = wi === 0;
+                  const picked = viewer
+                    ? weekMatches.filter((wm) => myPicks.has(wm.id)).length
+                    : 0;
+                  const grid = (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      {weekMatches.map((m) => {
+                        const myPick = myPicks.get(m.id);
+                        const side = (teamId: string) => {
+                          const name = teamName.get(teamId) ?? "?";
+                          const mine = myPick === teamId;
+                          return (
+                            <PickemSubmitButton
+                              selected={mine}
+                              canSubmit={viewer != null}
+                              locksAt={m.scheduledAt?.getTime() ?? null}
+                              name="pickedTeamId"
+                              value={teamId}
+                            >
+                              <span className="flex min-w-0 items-center gap-2">
+                                <TeamCrest
+                                  name={name}
+                                  seed={teamId}
+                                  size={20}
+                                  className="rounded"
+                                />
+                                <span className="truncate">{name}</span>
+                                {mine ? (
+                                  <>
+                                    <span aria-hidden>✓</span>
+                                    <span className="sr-only">(your pick)</span>
+                                  </>
+                                ) : null}
+                              </span>
+                            </PickemSubmitButton>
+                          );
+                        };
+                        const homeName = teamName.get(m.homeTeamId) ?? "?";
+                        const awayName = teamName.get(m.awayTeamId) ?? "?";
+                        return (
+                          <Card key={m.id}>
+                            <CardBody className="space-y-2.5">
+                              <div className="flex items-center justify-between text-xs text-muted">
+                                <span>
+                                  Week {m.week}
+                                  {m.phase !== "REGULAR" ? (
+                                    <Badge tone="accent" className="ml-2">
+                                      {m.phase === "FINAL"
+                                        ? "Final"
+                                        : "Playoff"}
+                                    </Badge>
+                                  ) : null}
+                                </span>
+                                <span className="flex items-center gap-2">
+                                  {m.scheduledAt ? (
+                                    <>
+                                      <LocalTime
+                                        ts={m.scheduledAt.getTime()}
+                                        variant="full"
+                                        initial={formatMatchTime(
+                                          m.scheduledAt,
+                                          "full",
+                                        )}
+                                      />
+                                      {/* A deadline, not an event: on an already-open
+                                page this turns into "picks locked" exactly at
+                                kickoff while the adjacent buttons disable. */}
+                                      <Countdown
+                                        targetMs={m.scheduledAt.getTime()}
+                                        eventLabel="Picks"
+                                        futureVerb="lock"
+                                        passedLabel="picks locked"
+                                        passesAtTarget
+                                      />
+                                    </>
+                                  ) : (
+                                    "time TBD"
+                                  )}
+                                  <Link
+                                    href={`/matches/${m.id}`}
+                                    className={textLink()}
+                                  >
+                                    preview →
+                                  </Link>
+                                </span>
+                              </div>
+                              <ActionForm
+                                action={savePrediction}
+                                hidden={{ matchId: m.id }}
+                                className="min-w-0"
+                              >
+                                <fieldset className="min-w-0">
+                                  <legend className="sr-only">
+                                    Pick the winner of Week {m.week}: {homeName}{" "}
+                                    versus {awayName}
+                                  </legend>
+                                  <div className="flex items-center gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      {side(m.homeTeamId)}
+                                    </div>
+                                    <span className="shrink-0 text-xs text-muted">
+                                      vs
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      {side(m.awayTeamId)}
+                                    </div>
+                                  </div>
+                                </fieldset>
+                              </ActionForm>
+                              <div className="text-center text-[11px] text-muted">
+                                Community split stays hidden until picks lock.
+                              </div>
+                            </CardBody>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  );
+                  const headerAside = viewer
+                    ? ` — you've picked ${picked} of ${weekMatches.length}`
+                    : ` — ${weekMatches.length} match${weekMatches.length === 1 ? "" : "es"}`;
+                  const nextKickoff = weekMatches.find(
+                    (match) => match.scheduledAt,
+                  )?.scheduledAt;
+                  return isFirstGroup ? (
+                    <section key={week} className="space-y-3">
+                      <h3 className="text-sm font-semibold">
+                        Week {week}
+                        <span className="font-normal text-muted">
+                          {headerAside}
+                        </span>
+                      </h3>
+                      {grid}
+                    </section>
+                  ) : (
+                    // Later weeks stay pickable but collapsed — the weekly ritual
+                    // is about what locks NEXT, not week 7's coin flips.
+                    <details
+                      key={week}
+                      className="rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3"
                     >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <TeamCrest
-                          name={name}
-                          seed={teamId}
-                          size={20}
-                          className="rounded"
-                        />
-                        <span className="truncate">{name}</span>
-                        {mine ? (
-                          <>
-                            <span aria-hidden>✓</span>
-                            <span className="sr-only">(your pick)</span>
-                          </>
-                        ) : null}
-                        {total > 0 ? (
-                          <span className="ml-auto font-mono text-xs tabular-nums opacity-70">
-                            {Math.round((count / total) * 100)}%
+                      <summary className="cursor-pointer text-sm font-semibold marker:text-muted">
+                        Week {week}
+                        <span className="font-normal text-muted">
+                          {headerAside}
+                        </span>
+                        {nextKickoff ? (
+                          <span className="ml-1 font-normal text-muted">
+                            · next lock{" "}
+                            <LocalTime
+                              ts={nextKickoff.getTime()}
+                              variant="short"
+                              initial={formatMatchTime(nextKickoff, "short")}
+                            />
                           </span>
                         ) : null}
+                      </summary>
+                      <div className="mt-4">{grid}</div>
+                    </details>
+                  );
+                },
+              )}
+            </div>
+          )}
+        </section>
+      ) : standings.length === 0 ? (
+        <EmptyState
+          title={
+            predictions.length > 0
+              ? "No Pick'em results graded"
+              : readOnly
+                ? "No Pick'em entries on record"
+                : season.status === "COMPLETE"
+                  ? "Pick'em is closed"
+                  : "Pick'em opens after the draft"
+          }
+          description={
+            predictions.length > 0
+              ? "Predictions were recorded, but no completed match has a winner. Drawn or voided picks do not affect the oracle board."
+              : readOnly
+                ? "This archived season has no submitted predictions."
+                : season.status === "COMPLETE"
+                  ? "The season is complete. Final oracle standings appear here when picks were recorded."
+                  : "Once the auction is complete and fixtures are published, every signed-in visitor can call the winners."
+          }
+        />
+      ) : null}
+
+      {viewer && lockedForReview.some((m) => myPicks.has(m.id)) ? (
+        <section className="space-y-4">
+          <SectionTitle aside="· submitted and no longer editable">
+            Your locked picks
+          </SectionTitle>
+          <Card>
+            <CardBody className="divide-y divide-line/60 p-0">
+              {lockedForReview
+                .filter((m) => myPicks.has(m.id))
+                .map((m) => {
+                  const pick = myPicks.get(m.id)!;
+                  const split = pickSplit(predictions, m.id, m.homeTeamId);
+                  const total = split.home + split.away;
+                  return (
+                    <div
+                      key={m.id}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
+                    >
+                      <span aria-hidden className="shrink-0">
+                        🔒
                       </span>
-                    </SubmitButton>
-                  </ActionForm>
-                );
-              };
-              return (
-                <Card key={m.id}>
-                  <CardBody className="space-y-2.5">
-                    <div className="flex items-center justify-between text-xs text-muted">
-                      <span>
-                        Week {m.week}
-                        {m.phase !== "REGULAR" ? (
-                          <Badge tone="accent" className="ml-2">
-                            {m.phase === "FINAL" ? "Final" : "Playoff"}
-                          </Badge>
-                        ) : null}
-                      </span>
-                      <span className="flex items-center gap-2">
-                        {m.scheduledAt ? (
-                          <>
-                            <LocalTime
-                              ts={m.scheduledAt.getTime()}
-                              variant="full"
-                              initial={formatMatchTime(m.scheduledAt, "full")}
-                            />
-                            {/* Lock countdown — picks lock at start. Only the
-                                earliest open week; Countdown itself renders
-                                for ANY future target. */}
-                            {isFirstWeek ? (
-                              <Countdown targetMs={m.scheduledAt.getTime()} />
-                            ) : null}
-                          </>
-                        ) : (
-                          "time TBD"
-                        )}
+                      <Link
+                        href={`/matches/${m.id}`}
+                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
+                      >
+                        Week {m.week}: {teamName.get(m.homeTeamId) ?? "?"} vs{" "}
+                        {teamName.get(m.awayTeamId) ?? "?"}
+                      </Link>
+                      <span className="shrink-0 text-xs text-muted">
+                        you picked{" "}
                         <Link
-                          href={`/matches/${m.id}`}
-                          className={textLink()}
+                          href={`/teams/${pick}`}
+                          className="font-medium text-fg hover:text-info hover:underline"
                         >
-                          preview →
+                          {teamName.get(pick) ?? "?"}
+                        </Link>
+                      </span>
+                      {total > 0 ? (
+                        <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
+                          crowd: {Math.round((split.home / total) * 100)}%{" "}
+                          {teamName.get(m.homeTeamId) ?? "?"}
+                          {" · "}
+                          {Math.round((split.away / total) * 100)}%{" "}
+                          {teamName.get(m.awayTeamId) ?? "?"}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+            </CardBody>
+          </Card>
+        </section>
+      ) : null}
+
+      {viewer && voided.some((m) => myPicks.has(m.id)) ? (
+        <section className="space-y-4">
+          <SectionTitle aside="· draw or no-contest — no point awarded">
+            Your void picks
+          </SectionTitle>
+          <Card>
+            <CardBody className="divide-y divide-line/60 p-0">
+              {voided
+                .filter((m) => myPicks.has(m.id))
+                .map((m) => {
+                  const pick = myPicks.get(m.id)!;
+                  return (
+                    <div
+                      key={m.id}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
+                    >
+                      <span role="img" aria-label="Void pick">
+                        <span aria-hidden>➖</span>
+                      </span>
+                      <Link
+                        href={`/matches/${m.id}`}
+                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
+                      >
+                        Week {m.week}: {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                        <span className="font-mono text-xs">
+                          {m.homeScore}–{m.awayScore}
+                        </span>{" "}
+                        {teamName.get(m.awayTeamId) ?? "?"}
+                      </Link>
+                      <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
+                        you picked{" "}
+                        <Link
+                          href={`/teams/${pick}`}
+                          className="hover:text-info hover:underline"
+                        >
+                          {teamName.get(pick) ?? "?"}
                         </Link>
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {side(m.homeTeamId, split.home)}
-                      <span className="shrink-0 text-xs text-muted">vs</span>
-                      {side(m.awayTeamId, split.away)}
-                    </div>
-                    {total > 0 ? (
-                      <div className="text-center text-[11px] text-muted">
-                        {total} pick{total === 1 ? "" : "s"} in
-                      </div>
-                    ) : null}
-                  </CardBody>
-                </Card>
-              );
-                  })}
-                </div>
-              );
-              const headerAside = viewer
-                ? ` — you've picked ${picked} of ${weekMatches.length}`
-                : ` — ${weekMatches.length} match${weekMatches.length === 1 ? "" : "es"}`;
-              return isFirstWeek ? (
-                <section key={week} className="space-y-3">
-                  <h3 className="text-sm font-semibold">
-                    Week {week}
-                    <span className="font-normal text-muted">{headerAside}</span>
-                  </h3>
-                  {grid}
-                </section>
-              ) : (
-                // Later weeks stay pickable but collapsed — the weekly ritual
-                // is about what locks NEXT, not week 7's coin flips.
-                <details
-                  key={week}
-                  className="rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3"
-                >
-                  <summary className="cursor-pointer text-sm font-semibold marker:text-muted">
-                    Week {week}
-                    <span className="font-normal text-muted">{headerAside}</span>
-                  </summary>
-                  <div className="mt-4">{grid}</div>
-                </details>
-              );
-            })}
-          </div>
-        )}
-      </section>
+                  );
+                })}
+            </CardBody>
+          </Card>
+        </section>
+      ) : null}
 
       {/* `graded` counts every decided match; without the myPicks filter here
           a viewer who never predicted got a "Your graded picks" heading over
@@ -358,7 +592,7 @@ export default async function PickemPage({
                   return (
                     <div
                       key={m.id}
-                      className="flex items-center gap-3 px-5 py-2.5 text-sm"
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5 text-sm"
                     >
                       <span
                         role="img"
@@ -368,7 +602,7 @@ export default async function PickemPage({
                       </span>
                       <Link
                         href={`/matches/${m.id}`}
-                        className="min-w-0 flex-1 truncate hover:text-info hover:underline"
+                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
                       >
                         Week {m.week}: {teamName.get(m.homeTeamId)}{" "}
                         <span className="font-mono text-xs">
@@ -376,7 +610,7 @@ export default async function PickemPage({
                         </span>{" "}
                         {teamName.get(m.awayTeamId)}
                       </Link>
-                      <span className="shrink-0 text-xs text-muted">
+                      <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
                         you picked{" "}
                         <Link
                           href={`/teams/${pick}`}

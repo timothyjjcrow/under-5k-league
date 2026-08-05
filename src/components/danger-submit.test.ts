@@ -92,6 +92,17 @@ describe("the DangerSubmit mechanism itself", () => {
     expect(danger).not.toMatch(/toLowerCase\(\)|includes\(token/);
   });
 
+  it("submits the typed token so destructive actions can verify it server-side", () => {
+    expect(danger).toContain('name="confirmationName"');
+  });
+
+  it("can require server-verified operator evidence before arming", () => {
+    expect(danger).toContain("(!evidence || evidenceValue.trim().length > 0)");
+    expect(danger).toContain("name={evidence.name}");
+    expect(seasons).toContain('name: "backupReceipt"');
+    expect(seasons).toMatch(/cannot restore the database/i);
+  });
+
   it("refuses to let Enter complete the action from the token field", () => {
     expect(danger).toContain('if (e.key === "Enter") e.preventDefault()');
   });
@@ -107,7 +118,24 @@ describe("the DangerSubmit mechanism itself", () => {
     // Removing the button in onClick cancels Chrome's default form submission
     // before ActionForm can dispatch the server action. The dialog closes only
     // after requestSubmit synchronously delivers the form's submit event.
-    expect(danger).not.toContain('onClick={() => setOpen(false)}');
+    expect(danger).not.toContain("onClick={() => setOpen(false)}");
     expect(danger).toContain("form.requestSubmit(e.currentTarget)");
+  });
+
+  it("uses a real opaque surface token and describes the consequences", () => {
+    // `surface-1` has never existed in the Tailwind theme, so the old class
+    // emitted no background rule and left this destructive dialog transparent.
+    expect(danger).toContain("bg-surface p-5");
+    expect(danger).not.toContain("bg-surface-1");
+    expect(danger).toContain("aria-describedby={`${inputId}-description`}");
+    expect(danger).toContain("id={`${inputId}-description`}");
+  });
+
+  it("traps focus inside the modal and restores it to the trigger", () => {
+    expect(danger).toContain("dialog.querySelectorAll<HTMLElement>");
+    expect(danger).toContain('if (e.key !== "Tab") return;');
+    expect(danger).toContain("triggerRef.current?.focus()");
+    expect(danger).toContain("ref={triggerRef}");
+    expect(danger).toContain("onKeyDown={onDialogKeyDown}");
   });
 });

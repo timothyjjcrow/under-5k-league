@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { Avatar, RankBadge } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { PendingContext } from "@/components/action-form";
 
 export type FantasyCandidate = {
   userId: string;
@@ -10,6 +11,8 @@ export type FantasyCandidate = {
   avatar: string | null;
   rankTier: number | null;
   mmr: number;
+  /** True when a missing MMR is priced at the known-pool average. */
+  mmrEstimated: boolean;
   teamName: string;
   isCaptain: boolean;
 };
@@ -30,6 +33,7 @@ export function FantasyPicker({
   cap: number;
   initial: string[];
 }) {
+  const pending = useContext(PendingContext);
   const [picked, setPicked] = useState<Set<string>>(new Set(initial));
   const spent = candidates
     .filter((c) => picked.has(c.userId))
@@ -51,24 +55,37 @@ export function FantasyPicker({
   return (
     <div className="space-y-4">
       <div
+        aria-live="polite"
         className={cn(
           "flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm",
-          overCap ? "border-danger/50 bg-danger/10" : "border-line bg-surface-2/40",
+          overCap
+            ? "border-danger/50 bg-danger/10"
+            : "border-line bg-surface-2/40",
         )}
       >
         <span>
           <b>{picked.size}</b>/{slots} picked
         </span>
-        <span className={cn("font-mono tabular-nums", overCap && "text-danger")}>
-          {spent.toLocaleString()} / {cap.toLocaleString()} MMR
+        <span
+          className={cn("font-mono tabular-nums", overCap && "text-danger")}
+        >
+          {cap > 0
+            ? `${spent.toLocaleString()} / ${cap.toLocaleString()} MMR`
+            : `${spent.toLocaleString()} MMR · uncapped`}
           {overCap ? " — over the cap!" : ""}
         </span>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {teams.map((teamName) => (
-          <div key={teamName} className="min-w-0 rounded-lg border border-line p-3">
-            <div className="mb-2 truncate text-sm font-semibold">{teamName}</div>
+          <fieldset
+            key={teamName}
+            disabled={pending}
+            className="min-w-0 rounded-lg border border-line p-3 disabled:opacity-70"
+          >
+            <legend className="max-w-full truncate px-1 text-sm font-semibold">
+              {teamName}
+            </legend>
             <div className="space-y-1">
               {candidates
                 .filter((c) => c.teamName === teamName)
@@ -90,7 +107,7 @@ export function FantasyPicker({
                         name="picks"
                         value={c.userId}
                         checked={isPicked}
-                        disabled={!isPicked && full}
+                        disabled={pending || (!isPicked && full)}
                         onChange={() => toggle(c.userId)}
                         // React auto-resets the form after a server action,
                         // clearing the DOM checkbox behind the controlled
@@ -109,14 +126,23 @@ export function FantasyPicker({
                         ) : null}
                       </span>
                       <RankBadge rankTier={c.rankTier} />
-                      <span className="font-mono text-xs tabular-nums text-muted">
-                        {c.mmr}
+                      <span
+                        className="font-mono text-xs tabular-nums text-muted"
+                        title={
+                          c.mmrEstimated
+                            ? "Estimated from the drafted pool average"
+                            : undefined
+                        }
+                      >
+                        {c.mmr > 0
+                          ? `${c.mmr.toLocaleString()}${c.mmrEstimated ? " est." : ""}`
+                          : "unrated"}
                       </span>
                     </label>
                   );
                 })}
             </div>
-          </div>
+          </fieldset>
         ))}
       </div>
     </div>

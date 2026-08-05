@@ -14,43 +14,48 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  steamId       String   @unique
-  name          String
-  avatar        String?
-  profileUrl    String?
-  // Dota 2 32-bit account id (defaults to one derived from steamId). @unique
-  // is the write-time backstop for updateDotaAccount's collision check: one
-  // account id on two users puts the same account in both teams' import sets,
-  // and classifyGame then fails or mis-attributes every match containing both.
-  // (Nullable unique — most users never set an override.)
-  dotaAccountId Int? @unique
-  rankTier      Int? // OpenDota rank_tier (tens=medal, ones=stars); null if unknown
+  id                  String    @id @default(cuid())
+  steamId             String    @unique
+  name                String
+  avatar              String?
+  profileUrl          String?
+  // Rollback bridge for values written by the pre-release application. Keep
+  // the old physical column intact until the rollback window closes; current
+  // code reads dotaAccountIdV2 first and only clears a stale legacy claim when
+  // verified Steam ownership proves it belongs elsewhere.
+  legacyDotaAccountId Int?      @unique(map: "User_dotaAccountId_key") @map("dotaAccountId")
+  // Current Dota 2 account override. Float is deliberate identifier storage:
+  // Prisma `Int` maps to signed INTEGER on Postgres and cannot hold Dota's full
+  // uint32 range, while IEEE-754 represents every uint32 exactly. Values are
+  // still integer-validated at the boundary. Nullable because Steam is
+  // canonical.
+  dotaAccountIdV2     Float?    @unique(map: "User_dotaAccountIdV2_key") @map("dotaAccountIdV2")
+  rankTier            Int? // OpenDota rank_tier (tens=medal, ones=stars); null if unknown
   // OpenDota profile.fh_unavailable: true = "Expose Public Match Data" is OFF,
   // so every automatic import path is blind to this player's games. Null =
   // unknown (never fetched / OpenDota didn't say). Refreshed wherever the
   // medal is (login, /me refresh, admin bulk sync); never overwritten on a
   // failed fetch — same rule as rankTier.
-  fhUnavailable Boolean?
+  fhUnavailable       Boolean?
   // Pub-scouting snapshot from OpenDota (/wl + /heroes), stored as a JSON
   // string (SQLite has no Json type — the Game.players precedent; parse with
   // parsePubStats, which degrades garbage to null). Refreshed wherever the
   // medal is: login when missing/stale, /me link/refresh, admin bulk sync.
   // Never overwritten on a failed fetch — the rankTier rule. Null = never
   // fetched. pubStatsAt is the freshness stamp login's re-fetch gate reads.
-  pubStats      String?
-  pubStatsAt    DateTime?
+  pubStats            String?
+  pubStatsAt          DateTime?
   // Discord username — the league runs on Discord, and this is how captains
   // reach their roster. Empty string = not provided. Persists across seasons.
-  discordName   String   @default("")
+  discordName         String    @default("")
   // Discord account link (OAuth2 `identify`): the snowflake id, set ONLY by
   // the OAuth callback — proof the player owns that Discord account, unlike
   // the typed discordName fallback. @unique stops two site accounts claiming
   // the same Discord account. Null = not linked. No tokens are ever stored.
-  discordId     String?  @unique
-  role          String   @default("USER") // USER | ADMIN
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  discordId           String?   @unique
+  role                String    @default("USER") // USER | ADMIN
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   registrations       Registration[]
   teamMemberships     TeamMember[]
@@ -81,6 +86,8 @@ model NewsPost {
   createdAt DateTime @default(now())
 
   author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([pinned, createdAt, id])
 }
 
 model Season {
@@ -101,6 +108,11 @@ model Season {
   dotaLeagueId    String? // optional Valve league id, if the league is ticketed
   matchSchedule   String? // weekly match slot shown before signup (null = app default)
   firstMatchNight DateTime? // week 1's match time; later weeks (incl. playoffs) are +7d each
+  // Durable competitive lock for Fantasy. The first imported Game stamps this
+  // in the SAME transaction as the game/series projection. It deliberately
+  // survives game removal: once real performance data was visible, deleting a
+  // mistaken import must not reopen roster editing with that information known.
+  fantasyLockedAt DateTime?
   // When the live auction happens — announced with countdowns during SIGNUPS.
   draftAt         DateTime?
   // Incremented whenever draftAt actually changes. Player acknowledgements
@@ -120,23 +132,23 @@ model Season {
 }
 
 model Registration {
-  id             String   @id @default(cuid())
-  seasonId       String
-  userId         String
-  type           String   @default("PLAYER") // PLAYER | STANDIN
-  mmr            Int      @default(0)
-  wantsCaptain   Boolean  @default(false)
-  roles          String   @default("") // preferred positions, comma-separated 1-5
-  favoriteHeroes String   @default("")
-  statement      String   @default("") // what the player wants from the league
-  captainNote    String   @default("") // message to captains/drafters
-  status         String   @default("ACTIVE") // ACTIVE | WITHDRAWN (self, reversible) | REMOVED (admin, sticky)
+  id                     String    @id @default(cuid())
+  seasonId               String
+  userId                 String
+  type                   String    @default("PLAYER") // PLAYER | STANDIN
+  mmr                    Int       @default(0)
+  wantsCaptain           Boolean   @default(false)
+  roles                  String    @default("") // preferred positions, comma-separated 1-5
+  favoriteHeroes         String    @default("")
+  statement              String    @default("") // what the player wants from the league
+  captainNote            String    @default("") // public scouting note, highlighted for captains/drafters
+  status                 String    @default("ACTIVE") // ACTIVE | WITHDRAWN (self, reversible) | REMOVED (admin, sticky)
   // Acknowledgement of the current Season.draftAt. The revision is the
   // validity check; the two dates make the admin/player copy auditable.
   draftConfirmedRevision Int?
   draftConfirmedAt       DateTime?
   draftConfirmedFor      DateTime?
-  createdAt      DateTime @default(now())
+  createdAt              DateTime  @default(now())
 
   season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -257,6 +269,10 @@ model Match {
   // that never produces games (forfeit, private match data) stops burning the
   // OpenDota budget. Reset to 0 whenever a scan imports a game.
   autoSyncAttempts Int       @default(0)
+  // Stamped by the PostgreSQL completion trigger whenever status enters
+  // COMPLETED and cleared when a result is reopened. Existing pre-migration
+  // results stay null so crash reconciliation cannot replay old announcements.
+  completedAt      DateTime?
   createdAt        DateTime  @default(now())
 
   season       Season              @relation(fields: [seasonId], references: [id], onDelete: Cascade)
@@ -271,6 +287,7 @@ model Match {
   // seasonId is filtered on nearly every mid-season page; team pages/standings
   // filter home/away team ids.
   @@index([seasonId])
+  @@index([seasonId, status, completedAt])
   @@index([homeTeamId])
   @@index([awayTeamId])
 }
@@ -352,6 +369,61 @@ model Game {
 model Setting {
   key   String @id
   value String
+}
+
+// Singleton operational state for the unattended league-maintenance worker.
+// A tokened, expiring lease elects one worker across serverless instances;
+// completion is fenced by the same token so a timed-out process cannot
+// overwrite a newer run. The bounded summary/error fields are intentionally
+// strings for SQLite/PostgreSQL parity and must never contain credentials or
+// player-controlled content.
+model AutomationRunState {
+  key                 String    @id
+  leaseToken          String?
+  leaseOwner          String?
+  leaseExpiresAt      DateTime?
+  lastAttemptAt       DateTime?
+  lastStartedAt       DateTime?
+  lastFinishedAt      DateTime?
+  lastSuccessAt       DateTime?
+  lastFailureAt       DateTime?
+  lastStatus          String    @default("NEVER") // NEVER | RUNNING | SUCCEEDED | DEGRADED | FAILED
+  lastSource          String?
+  lastDurationMs      Int?
+  consecutiveFailures Int       @default(0)
+  lastErrorCode       String?
+  lastSummary         String    @default("{}")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+// Durable league-channel webhook work. Callers may provide a stable dedupe key
+// when they already own an exactly-once domain marker; ordinary one-off admin
+// and player actions may leave it null. Delivery is ordered, bounded, leased,
+// retried with backoff, and intentionally at-least-once across Discord's
+// accept/our SENT-commit gap (Discord webhooks expose no idempotency key).
+model LeagueAnnouncement {
+  id            String    @id @default(cuid())
+  dedupeKey     String?   @unique
+  content       String
+  mentions      String    @default("{}")
+  status        String    @default("PENDING") // PENDING | SENDING | SENT | CANCELLED
+  attempts      Int       @default(0)
+  availableAt   DateTime  @default(now())
+  claimedAt     DateTime?
+  claimToken    String?
+  // Marker-backed work is sent only while the current Setting value still
+  // owns this event generation. A correction/reset can therefore invalidate
+  // an unsent stale payload without deleting the audit row.
+  markerKey     String?
+  markerEventId String?
+  lastErrorCode String?
+  sentAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status, availableAt, createdAt])
+  @@index([markerKey, status])
 }
 
 // What an admin did, so "the schedule is gone and I don't know what I pressed"
@@ -462,6 +534,10 @@ model InhouseLobby {
   winnerTeam   Int? // 1 | 2 once a result is reported
   startedById  String? // who launched the in-game lobby
   startedAt    DateTime? // when the game was launched (IN_PROGRESS)
+  // Stable wall-clock time of the IN_PROGRESS -> COMPLETED claim. Unlike
+  // updatedAt, settlement retries cannot move this and make an old game look
+  // like the result that just finished.
+  completedAt  DateTime?
   dotaMatchId  String? // OpenDota match id, once the result is recorded
   detectedAt   DateTime? // throttles the automatic OpenDota result scan
   durationSecs Int? // game length once recorded
@@ -494,17 +570,60 @@ model InhouseLobby {
   // re-deriving a settlement on every poll.
   betDeltas      String    @default("{}")
 
-  players   InhouseLobbyPlayer[]
-  bets      InhouseBet[]
-  startedBy User?                @relation("InhouseStarter", fields: [startedById], references: [id])
+  players       InhouseLobbyPlayer[]
+  bets          InhouseBet[]
+  announcements InhouseAnnouncement[]
+  startedBy     User?                 @relation("InhouseStarter", fields: [startedById], references: [id])
 
-  // Nearly every service query filters on status (single active lobby,
-  // completed-history scans).
-  @@index([status])
-  // The unsettled-pot sweeper probes betSettlement = "PENDING", true of at
-  // most one lobby at a time — so a league that never bets pays one index
-  // probe per resolver run.
+  // Nearly every service query filters on status; completed history then
+  // orders by formation time. The composite keeps both the active-lobby probe
+  // and the paginated archive on one index prefix as the permanent history
+  // grows.
+  // Keep the pre-release single-column index through the rollback window. It
+  // is redundant with the composite prefix, but retaining it makes this
+  // release strictly additive for an old application binary.
+  @@index([status], map: "InhouseLobby_status_idx")
+  @@index([status, createdAt])
+  // Hot room-poll lookup for the stable post-game banner window.
+  @@index([status, completedAt])
+  // The unsettled-pot sweeper probes betSettlement; terminal failures can
+  // leave a backlog, so it scans every eligible indexed row without touching
+  // the much larger null/no-bets population.
   @@index([betSettlement])
+}
+
+// Durable Discord work created in the same transaction as the inhouse state it
+// announces. The webhook transport has no idempotency key, so this is an
+// at-least-once outbox: an atomic lease prevents ordinary concurrent sends,
+// while a process dying after Discord accepts the POST but before `sentAt` is
+// committed can still produce a duplicate on lease recovery. Result/void
+// events are sequenced per lobby so a correction never intentionally overtakes
+// a result already being delivered.
+model InhouseAnnouncement {
+  id            String    @id @default(cuid())
+  lobbyId       String
+  kind          String // RESULT | RESULT_VOIDED
+  sequence      Int // RESULT=1, RESULT_VOIDED=2
+  content       String
+  // Pins a RESULT event to the exact game it describes. A void can invalidate
+  // an unsent result without parsing player-controlled message text.
+  resultMatchId String?
+  status        String    @default("PENDING") // PENDING | SENDING | SENT | CANCELLED
+  attempts      Int       @default(0)
+  availableAt   DateTime  @default(now())
+  claimedAt     DateTime?
+  claimToken    String?
+  sentAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  lobby InhouseLobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+
+  // A lobby has at most one result and one correction. This is the durable
+  // dedupe guard when result recording or admin actions are retried.
+  @@unique([lobbyId, kind])
+  @@index([status, availableAt, createdAt])
+  @@index([lobbyId, sequence])
 }
 
 model InhouseLobbyPlayer {
@@ -524,6 +643,10 @@ model InhouseLobbyPlayer {
   wins           Int       @default(0)
   losses         Int       @default(0)
   games          Int       @default(0)
+  // Original queue position, snapshotted at formation. `createdAt` is the
+  // lobby-row insertion time and all ten rows can share it, so it cannot honor
+  // the documented earliest-queued captain/pool tiebreak.
+  queuedAt       DateTime  @default(now())
   createdAt      DateTime  @default(now())
 
   lobby InhouseLobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)

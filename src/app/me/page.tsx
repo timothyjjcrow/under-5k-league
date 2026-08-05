@@ -22,12 +22,23 @@ import {
   primeMembershipMemo,
 } from "@/lib/discord-roles";
 import { DiscordJoinCard, DiscordSetupCard } from "@/components/discord-setup";
+import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
+import {
+  effectiveDotaAccountId,
+  storedDotaAccountId,
+} from "@/lib/dota-account";
 import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
-import { HARD_MMR_CEILING, REGISTRATION_TYPE } from "@/lib/constants";
+import {
+  HARD_MMR_CEILING,
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+} from "@/lib/constants";
+import { registrationSeasonClosedError } from "@/lib/registration";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
+import { draftSetupOpen } from "@/lib/draft-setup";
 import {
   formatMmrRange,
   mmrRangeForRankTier,
@@ -99,7 +110,11 @@ const DISCORD_LINK_NOTES: Record<
   },
   unconfigured: {
     tone: "danger",
-    text: "Discord linking isn't set up on this server yet (admin: set DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET).",
+    text: "Discord linking isn't available right now — ask a league admin.",
+  },
+  session: {
+    tone: "danger",
+    text: "Your site session expired while Discord was open. Sign in again, then retry the link.",
   },
 };
 
@@ -110,7 +125,13 @@ export default async function MePage({
 }) {
   const user = await getSessionUser();
   if (!user) redirect("/login?next=/me");
-  const { discord: discordParam } = await searchParams;
+  // Season/profile reads do not depend on one another. Keeping them parallel
+  // avoids making every profile visit pay three sequential database waits.
+  const [{ discord: discordParam }, season, dbUser] = await Promise.all([
+    searchParams,
+    getActiveSeason(),
+    prisma.user.findUnique({ where: { id: user.id } }),
+  ]);
   // hasOwnProperty guard: a crafted ?discord=__proto__/constructor/toString
   // would otherwise resolve an inherited truthy value past the ?? fallback
   // and render an empty note instead of the generic error copy.
@@ -128,28 +149,52 @@ export default async function MePage({
   // `guilds.join`, so linking adds them to the server in the same click. The
   // copy has to match what the consent screen actually asks for.
   const guildCfg = getGuildConfig();
-  const discordAutoJoins = !!guildCfg;
+  const discordWritesEnabled = discordMutationsAllowed();
+  const discordAutoJoins = discordWritesEnabled && !!guildCfg;
 
-  const season = await getActiveSeason();
-  const reg = season
-    ? await prisma.registration.findUnique({
-        where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
-      })
-    : null;
+  const [reg, member, draft, memberInfo, pingCfg] = await Promise.all([
+    season
+      ? prisma.registration.findUnique({
+          where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+        })
+      : null,
+    season
+      ? prisma.teamMember.findUnique({
+          where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+          include: { team: true },
+        })
+      : null,
+    season
+      ? prisma.draft.findUnique({
+          where: { seasonId: season.id },
+          select: { status: true },
+        })
+      : null,
+    dbUser?.discordId && guildCfg
+      ? fetchGuildMember(dbUser.discordId, guildCfg)
+      : null,
+    dbUser?.discordId && discordWritesEnabled ? getRoleConfig() : null,
+  ]);
 
   // Returning player: no signup for this season yet, but one from a past
   // season — carry those answers into the fresh form so they don't retype.
-  const previous =
+  const [previous, standinAssignments] = await Promise.all([
     season && !reg
-      ? await prisma.registration.findFirst({
+      ? prisma.registration.findFirst({
           where: { userId: user.id, NOT: { seasonId: season.id } },
           orderBy: { createdAt: "desc" },
           include: { season: { select: { name: true } } },
         })
-      : null;
+      : null,
+    season && reg?.status === "ACTIVE"
+      ? prisma.standinAssignment.findMany({
+          where: pendingCoverWhere(user.id, season.id),
+          include: { match: { include: { homeTeam: true, awayTeam: true } } },
+          orderBy: { match: { week: "asc" } },
+        })
+      : null,
+  ]);
   const form = reg ?? previous;
-
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
 
   // ONE live member lookup answers both questions this page has about the
   // linked account: is the player actually IN the league's server (linking
@@ -158,10 +203,6 @@ export default async function MePage({
   // configured, or Discord didn't answer — and null renders as the plain
   // "Linked ✓" card, never as "not in the server": telling a player they left
   // a server they're sitting in reads as broken (the hasPingRole rule).
-  const memberInfo =
-    dbUser?.discordId && guildCfg
-      ? await fetchGuildMember(dbUser.discordId, guildCfg)
-      : null;
   const membership = memberInfo === null ? null : memberInfo.membership;
   if (dbUser?.discordId && guildCfg) {
     // Keep the dashboard's memoised join nag in step with what this page is
@@ -188,7 +229,6 @@ export default async function MePage({
   // or the player isn't in the server) — rendered as unknown rather than "off",
   // because showing an unticked box to someone already opted in makes them
   // click it and change nothing, which reads as broken.
-  const pingCfg = dbUser?.discordId ? await getRoleConfig() : null;
   const pingOptIn = {
     available: !!pingCfg,
     on: pingCfg
@@ -207,31 +247,23 @@ export default async function MePage({
 
   // Your-season context: the roster seat (from DRAFT on) or, for standins,
   // the matches they've been assigned to cover.
-  const member =
-    season
-      ? await prisma.teamMember.findUnique({
-          where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
-          include: { team: true },
-        })
-      : null;
   // Gated on "ACTIVE and not rostered" — the SAME predicate the assign pools
   // use — never on type: both assign forms deliberately offer undrafted
   // PLAYER-type free agents as cover ("anyone registered but undrafted"), and
   // the type gate hid this card from exactly those people. The member check
   // rides below (isRostered), so a rostered player never sees a stray card.
-  const standinAssignments =
-    season && reg?.status === "ACTIVE"
-      ? await prisma.standinAssignment.findMany({
-          where: pendingCoverWhere(user.id, season.id),
-          include: { match: { include: { homeTeam: true, awayTeam: true } } },
-          orderBy: { match: { week: "asc" } },
-        })
-      : null;
   const isRostered = !!member;
   const isCaptain = !!member?.isCaptain;
 
   const isRegistered = reg?.status === "ACTIVE";
   const signupsOpen = season?.status === "SIGNUPS";
+  const draftConfirmationOpen = season
+    ? draftSetupOpen(season.status, draft?.status)
+    : false;
+  const registrationRemoved = reg?.status === REGISTRATION_STATUS.REMOVED;
+  const seasonRegistrationClosed = !!registrationSeasonClosedError(
+    season?.status ?? "",
+  );
   // Post-signups, PLAYER stays available only to those already registered as
   // one (matches registrationGate — standins can't upgrade mid-season). The
   // locked tile must also not stay default-checked: disabled radios don't
@@ -254,6 +286,7 @@ export default async function MePage({
         <DiscordSetupCard
           linkAvailable={discordLinkAvailable}
           autoJoins={discordAutoJoins}
+          isCaptain={isCaptain}
         />
       ) : isRegistered &&
         (membership === "not-member" || membership === "pending") ? (
@@ -262,7 +295,7 @@ export default async function MePage({
            rule: it disappears the moment the join/rules step is complete. */
         <DiscordJoinCard
           membership={membership}
-          linkAvailable={discordLinkAvailable}
+          linkAvailable={discordLinkAvailable && discordAutoJoins}
           handle={dbUser?.discordName}
         />
       ) : null}
@@ -331,8 +364,13 @@ export default async function MePage({
       </Card>
 
       <DotaAccountCard
-        effectiveId={dbUser?.dotaAccountId ?? steamIdToAccountId(user.steamId)}
-        override={dbUser?.dotaAccountId ?? null}
+        effectiveId={
+          dbUser
+            ? effectiveDotaAccountId(dbUser)
+            : steamIdToAccountId(user.steamId)
+        }
+        steamAccountId={steamIdToAccountId(user.steamId)}
+        override={dbUser ? storedDotaAccountId(dbUser) : null}
         rankTier={dbUser?.rankTier ?? null}
         fhUnavailable={dbUser?.fhUnavailable ?? null}
       />
@@ -342,15 +380,20 @@ export default async function MePage({
           OAuth proves account ownership; the typed handle is the fallback. */}
       <Card>
         <CardHeader
+          headingLevel={2}
           title="Discord"
           subtitle={
             dbUser?.discordId
               ? membership === "member"
-                ? "Linked and in the league's Discord server — your handle is verified, and captains can reach you."
-                : "Linked via Discord — your handle is verified, and shown to signed-in league members."
+                ? isCaptain
+                  ? "Linked and in the league's Discord server — your handle is verified, and your team and league admins can reach you."
+                  : "Linked and in the league's Discord server — your handle is verified, and captains can reach you."
+                : "Linked via Discord — your handle is verified, and shown to you, league admins, and active league participants."
               : dbUser?.discordName
-                ? "Shown to signed-in league members on rosters and the player pool."
-                : "Add your Discord so your captain can reach you — it's how the league talks."
+                ? "Shown to you, league admins, and active league participants on rosters and the player pool."
+                : isCaptain
+                  ? "Add your Discord so your team and league admins can reach you — it's how the league coordinates."
+                  : "Add your Discord so your captain can reach you — it's how the league talks."
           }
           action={
             /* The badge only claims what this render actually verified:
@@ -374,7 +417,7 @@ export default async function MePage({
           {discordNoteResolved ? <StripQueryParam param="discord" /> : null}
           {discordNoteResolved ? (
             <p
-              role="status"
+              role={discordNoteResolved.tone === "danger" ? "alert" : "status"}
               className={
                 discordNoteResolved.tone === "success"
                   ? "rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
@@ -419,7 +462,9 @@ export default async function MePage({
                 {dbUser?.discordName ? ` (@${dbUser.discordName})` : ""}
                 {/* Quoted string: JSX line-trimming eats a plain leading
                     space after an expression across a source-line break. */}
-                {" isn't in the league's server — that's where scheduling, match-night check-ins and standin scrambles happen, and nothing can reach you until it is. In the server on a different account? Use the Join button at the top of this page — it re-links whichever account your browser is signed into, so one click fixes both."}
+                {
+                  " isn't in the league's server — that's where scheduling, match-night check-ins and standin scrambles happen, and nothing can reach you until it is. In the server on a different account? Use the Join button at the top of this page — it re-links whichever account your browser is signed into, so one click fixes both."
+                }
               </p>
               <div className="mt-2">
                 {/* The INVITE, deliberately not the one-click OAuth join. This
@@ -438,7 +483,7 @@ export default async function MePage({
               <p className="text-muted">
                 You&apos;re in the server but haven&apos;t accepted its rules
                 yet — until you do, nothing can ping you: not match found, not
-                your captain.
+                {isCaptain ? " your team." : " your captain."}
               </p>
               <div className="mt-2">
                 {/* "Open Discord", not "Open the server" — the top-of-page
@@ -475,9 +520,9 @@ export default async function MePage({
                         Ping me for inhouse games
                       </p>
                       <p className="text-xs text-muted">
-                        Get a Discord notification when a queue is filling up and
-                        when your match is found. Off by default, and you can
-                        turn it back off here any time.
+                        Get a Discord notification when a queue is filling up
+                        and when your match is found. Off by default, and you
+                        can turn it back off here any time.
                       </p>
                     </div>
                     <ActionForm action={setInhousePingOptIn}>
@@ -496,8 +541,8 @@ export default async function MePage({
                   </div>
                   {pingOptIn.on === null ? (
                     <p className="mt-2 text-xs text-muted">
-                      Couldn&apos;t check your current setting — either Discord is
-                      slow right now, or you&apos;re not in the league&apos;s
+                      Couldn&apos;t check your current setting — either Discord
+                      is slow right now, or you&apos;re not in the league&apos;s
                       server yet.
                     </p>
                   ) : (
@@ -522,13 +567,11 @@ export default async function MePage({
                   </a>
                   <span className="text-xs text-muted">
                     {/* This has to describe the real consent screen. With
-                        guilds.join in the scope, "we only see your username"
-                        is still true of what we READ — but it stops being the
-                        whole story, and a player who spots the gap has every
-                        reason to distrust the rest. */}
+                        guilds.join in the scope, the copy must name both the
+                        stable identity we store and the server write it permits. */}
                     {discordAutoJoins
-                      ? "Sign in with Discord once — proves the handle is really yours and adds you to the league server. We only ever read your username; the join is the only thing we ask to do."
-                      : "Sign in with Discord once — proves the handle is really yours. We only ever see your username, nothing else."}
+                      ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
+                      : "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."}
                   </span>
                   {!isRegistered && signupsOpen ? (
                     <span className="text-xs text-muted">
@@ -571,16 +614,27 @@ export default async function MePage({
       ) : (
         <Card>
           <CardHeader
+            headingLevel={2}
             title={`Signup — ${season.name}`}
             subtitle={
-              isRegistered
-                ? `You're currently ${reg?.type === "STANDIN" ? "a standin" : "signed up to play"}.`
-                : signupsOpen
-                  ? "Fill this out to join the season."
-                  : "Player signups are closed, but you can still register as a standin."
+              registrationRemoved
+                ? "An admin removed this signup. Only a league admin can reinstate it."
+                : seasonRegistrationClosed
+                  ? isRegistered
+                    ? "The season is complete. Your signup is now read-only."
+                    : "The season is complete, so registrations are closed."
+                  : isRegistered
+                    ? `You're currently ${reg?.type === "STANDIN" ? "a standin" : "signed up to play"}.`
+                    : signupsOpen
+                      ? "Fill this out to join the season."
+                      : "Player signups are closed, but you can still register as a standin."
             }
             action={
-              isRegistered ? (
+              registrationRemoved ? (
+                <Badge tone="danger">Removed</Badge>
+              ) : seasonRegistrationClosed && isRegistered ? (
+                <Badge>Closed</Badge>
+              ) : isRegistered ? (
                 <Badge tone={reg?.type === "STANDIN" ? "info" : "success"}>
                   {reg?.type === "STANDIN" ? "Standin" : "Playing"}
                 </Badge>
@@ -588,7 +642,7 @@ export default async function MePage({
             }
           />
           <CardBody className="space-y-5">
-            {season.draftAt && season.status === "SIGNUPS" ? (
+            {season.draftAt && draftConfirmationOpen ? (
               <p className="text-sm text-muted">
                 🗓️ Draft night:{" "}
                 <strong className="text-fg">
@@ -606,7 +660,7 @@ export default async function MePage({
               </p>
             ) : null}
             {season.draftAt &&
-            signupsOpen &&
+            draftConfirmationOpen &&
             isRegistered &&
             reg?.type === REGISTRATION_TYPE.PLAYER ? (
               <div
@@ -619,7 +673,7 @@ export default async function MePage({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="font-medium text-fg">Draft commitment</h4>
+                      <h3 className="font-medium text-fg">Draft commitment</h3>
                       {myDraftReadiness === DRAFT_READINESS.READY ? (
                         <Badge tone="success">Ready for draft ✓</Badge>
                       ) : myDraftReadiness === DRAFT_READINESS.STALE ? (
@@ -630,11 +684,12 @@ export default async function MePage({
                     </div>
                     {myDraftReadiness === DRAFT_READINESS.READY ? (
                       <p className="mt-1 text-sm text-muted">
-                        You&apos;ve seen the draft time and confirmed you&apos;re
-                        still committed to playing this season.
+                        You&apos;ve seen the draft time and confirmed
+                        you&apos;re still committed to playing this season.
                         {reg.draftConfirmedAt ? (
                           <>
-                            {" "}Confirmed{" "}
+                            {" "}
+                            Confirmed{" "}
                             <LocalTime
                               ts={reg.draftConfirmedAt.getTime()}
                               variant="short"
@@ -676,6 +731,7 @@ export default async function MePage({
                     <ActionForm
                       action={confirmDraftReadiness}
                       hidden={{
+                        expectedActiveSeasonId: season.id,
                         draftRevision: String(season.draftRevision),
                         draftAtTs: String(season.draftAt.getTime()),
                       }}
@@ -715,9 +771,7 @@ export default async function MePage({
                   <div className="text-xs uppercase tracking-wide text-muted">
                     Your team
                   </div>
-                  <div className="truncate font-medium">
-                    {member.team.name}
-                  </div>
+                  <div className="truncate font-medium">{member.team.name}</div>
                 </div>
                 <div className="ml-auto shrink-0">
                   {member.isCaptain ? (
@@ -752,8 +806,8 @@ export default async function MePage({
                 {standinAssignments.length === 0 ? (
                   <p className="mt-1 text-sm text-muted">
                     No assignments yet — captains grab cover from the standin
-                    pool on each match page as their players drop out. Keep
-                    your Discord linked so their ping reaches you.
+                    pool on each match page as their players drop out. Keep your
+                    Discord linked so their ping reaches you.
                   </p>
                 ) : (
                   <ul className="mt-2 space-y-2">
@@ -810,238 +864,310 @@ export default async function MePage({
               </div>
             ) : null}
 
-            <ScheduleCallout label={season.matchSchedule} />
-            {!reg && previous ? (
-              <div className="flex items-start gap-2 rounded-lg border border-info/40 bg-info/10 px-3 py-2 text-xs">
-                <span aria-hidden>↩️</span>
-                <span>
-                  Welcome back! We prefilled this from your{" "}
-                  <b>{previous.season.name}</b> signup — update anything that
-                  changed, then submit to join.
-                </span>
-              </div>
-            ) : null}
-            <ActionForm action={saveRegistration} className="space-y-5">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">
-                  Participation
-                </label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <RadioTile
-                    name="type"
-                    value="PLAYER"
-                    defaultChecked={!playerLocked && form?.type !== "STANDIN"}
-                    title="Full player"
-                    desc="Get drafted onto a team and play every week."
-                    disabled={playerLocked}
-                  />
-                  <RadioTile
-                    name="type"
-                    value="STANDIN"
-                    defaultChecked={playerLocked || form?.type === "STANDIN"}
-                    title="Standin"
-                    desc="Fill in for teams when someone can't play."
-                  />
-                </div>
-                {!signupsOpen ? (
-                  <p className="mt-2 text-xs text-muted">
-                    Full-player signups are closed for this season. Standins are
-                    always welcome.
-                  </p>
-                ) : null}
-              </div>
-
-              <div>
-                <label
-                  htmlFor="mmr"
-                  className="mb-1.5 block text-sm font-medium"
-                >
-                  Dota 2 MMR
-                </label>
-                <input
-                  id="mmr"
-                  name="mmr"
-                  type="number"
-                  // min=1: a typed 0 fails native validation, while BLANK stays
-                  // allowed — 0 is the stored "unknown" sentinel, never typed.
-                  min={1}
-                  max={HARD_MMR_CEILING}
-                  // `|| ""` (not ??): a stored unknown (0) must render blank,
-                  // or resubmitting the form trips the min=1 validation.
-                  defaultValue={form?.mmr || ""}
-                  placeholder="e.g. 3200"
-                  className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-                />
-                <p className="mt-1 text-xs text-muted">
-                  {mmrWindow && mmrWindow.min > 0
-                    ? "Not sure? Leave it blank — we'll estimate it from your ranked medal. "
-                    : "Unranked or not sure? Leave it blank — captains will see your ranked medal instead, and you can update it later. "}
-                  Used to help balance the draft. Be honest!
-                  {season.maxMmr > 0
-                    ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
-                    : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}
+            {registrationRemoved ? (
+              <div
+                role="alert"
+                className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm"
+              >
+                <p className="font-medium text-danger">
+                  You can&apos;t rejoin this season from this form.
                 </p>
-                {medalBlocked ? (
-                  <p className="mt-1 text-xs text-danger">
-                    Your {rankMedalName(dbUser?.rankTier)} medal puts you above{" "}
-                    {HARD_MMR_CEILING} MMR, so this league can&apos;t take your
-                    signup.
-                  </p>
-                ) : mmrWindow ? (
-                  <p className="mt-1 text-xs text-muted">
-                    Your {rankMedalName(dbUser?.rankTier)} medal puts you
-                    around{" "}
-                    <strong>
-                      {/* Display capped at the ceiling — the form's max —
-                          even where the tolerance window runs past it. */}
-                      {formatMmrRange({
-                        min: mmrWindow.min,
-                        max:
-                          mmrWindow.max === null
-                            ? HARD_MMR_CEILING
-                            : Math.min(mmrWindow.max, HARD_MMR_CEILING),
-                      })}
-                    </strong>{" "}
-                    MMR —{" "}
-                    {mmrWindow.min > 0
-                      ? `a value outside that range is automatically set to ${mmrWindow.min}.`
-                      : "a value outside that range is treated as unknown (captains judge by your medal)."}
-                  </p>
-                ) : null}
+                <p className="mt-1 text-muted">
+                  A league admin removed the signup. Contact an admin in Discord
+                  if this was a mistake; they can review and reinstate the same
+                  record without losing your answers.
+                </p>
               </div>
+            ) : seasonRegistrationClosed ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm">
+                <p className="font-medium text-fg">Registration is closed.</p>
+                <p className="mt-1 text-muted">
+                  {isRegistered
+                    ? "Your final signup details stay attached to this season's history. Your Steam, Dota and Discord profile settings above remain editable."
+                    : "This season has finished. Watch the dashboard for the next season; your Steam, Dota and Discord profile settings above are ready to carry forward."}
+                </p>
+              </div>
+            ) : (
+              <>
+                <ScheduleCallout label={season.matchSchedule} />
+                {!reg && previous ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-info/40 bg-info/10 px-3 py-2 text-xs">
+                    <span aria-hidden>↩️</span>
+                    <span>
+                      Welcome back! We prefilled this from your{" "}
+                      <b>{previous.season.name}</b> signup — update anything
+                      that changed, then submit to join.
+                    </span>
+                  </div>
+                ) : null}
+                <ActionForm action={saveRegistration} className="space-y-5">
+                  <div className="rounded-lg border border-accent/35 bg-accent/10 p-3 text-sm">
+                    <h3 className="font-medium text-fg">
+                      Public signup profile
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-muted">
+                      Your participation type, submitted or estimated MMR,
+                      medal, preferred roles, favorite heroes, captain
+                      interest, goals, and captain note can appear in the public
+                      player pool and on your public profile. Do not enter
+                      contact details, specific availability, health details,
+                      or anything private in free-text fields. Joining asks the
+                      league to periodically refresh the public Steam and Dota
+                      data needed to run your competition.
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      Discord contact is limited to you, league admins, and
+                      active league participants.
+                    </p>
+                  </div>
 
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">
-                  Preferred roles
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {DOTA_ROLES.map((r) => (
-                    <label
-                      key={r.key}
-                      className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm has-[:checked]:border-accent has-[:checked]:bg-accent/10"
-                    >
-                      <input
-                        type="checkbox"
-                        name="roles"
-                        value={r.key}
-                        defaultChecked={myRoles.includes(r.key)}
-                        className="h-4 w-4 accent-[var(--color-accent)]"
-                      />
-                      {r.label}{" "}
-                      <span className="text-xs text-muted">({r.short})</span>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium">
+                      Participation
                     </label>
-                  ))}
-                </div>
-              </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <RadioTile
+                        name="type"
+                        value="PLAYER"
+                        defaultChecked={
+                          !playerLocked && form?.type !== "STANDIN"
+                        }
+                        title="Full player"
+                        desc="Get drafted onto a team and play every week."
+                        disabled={playerLocked}
+                      />
+                      <RadioTile
+                        name="type"
+                        value="STANDIN"
+                        defaultChecked={
+                          playerLocked || form?.type === "STANDIN"
+                        }
+                        title="Standin"
+                        desc="Fill in for teams when someone can't play."
+                      />
+                    </div>
+                    {!signupsOpen ? (
+                      <p className="mt-2 text-xs text-muted">
+                        Full-player signups are closed. Standins can still
+                        register through the draft, regular season and playoffs
+                        when teams may need cover.
+                      </p>
+                    ) : null}
+                  </div>
 
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">
-                  Favorite heroes
-                </label>
-                <HeroPicker
-                  name="favoriteHeroes"
-                  defaultValue={form?.favoriteHeroes}
-                />
-                <p className="mt-1 text-xs text-muted">
-                  Pick the heroes you&apos;re known for —{" "}
-                  <Link
-                    href={`/players/${user.id}`}
-                    className={textLink()}
-                  >
-                    captains see these
-                  </Link>{" "}
-                  during the draft.
-                </p>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="statement"
-                  className="mb-1.5 block text-sm font-medium"
-                >
-                  What you want from the league
-                </label>
-                <textarea
-                  id="statement"
-                  name="statement"
-                  rows={3}
-                  maxLength={1000}
-                  defaultValue={form?.statement ?? ""}
-                  placeholder="Why you're here, your goals, availability…"
-                  className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="captainNote"
-                  className="mb-1.5 block text-sm font-medium"
-                >
-                  Note for captains / drafters
-                </label>
-                <textarea
-                  id="captainNote"
-                  name="captainNote"
-                  rows={3}
-                  maxLength={1000}
-                  defaultValue={form?.captainNote ?? ""}
-                  placeholder="What should captains know about you as a player?"
-                  className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
-                />
-                <p className="mt-1 text-xs text-muted">
-                  Shown to captains during the draft.
-                </p>
-              </div>
-
-              <label className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-                <input
-                  type="checkbox"
-                  name="wantsCaptain"
-                  defaultChecked={form?.wantsCaptain ?? false}
-                  className="h-4 w-4 accent-[var(--color-brand)]"
-                />
-                <span className="text-sm">
-                  I&apos;d like to be considered as a team captain
-                </span>
-              </label>
-
-              <div className="flex flex-wrap gap-3">
-                <SubmitButton>
-                  {isRegistered ? "Update signup" : "Join the season"}
-                </SubmitButton>
-              </div>
-            </ActionForm>
-
-            {isRegistered ? (
-              <div className="mt-4 border-t border-line pt-4">
-                {isRostered || isCaptain ? (
-                  <p className="text-xs text-muted">
-                    {isCaptain ? (
-                      <>
-                        You captain{" "}
-                        <b>{member?.team.name}</b> — ask an admin to replace you
-                        before you can withdraw.
-                      </>
-                    ) : (
-                      <>
-                        You&apos;re on <b>{member?.team.name}</b>&apos;s roster —
-                        ask an admin to release you before withdrawing.
-                      </>
-                    )}
-                  </p>
-                ) : (
-                  <ActionForm action={leaveLeague}>
-                    <SubmitButton
-                      variant="ghost"
-                      size="sm"
-                      confirm="Withdraw from this season?"
+                  <div>
+                    <label
+                      htmlFor="mmr"
+                      className="mb-1.5 block text-sm font-medium"
                     >
-                      Withdraw from this season
+                      Dota 2 MMR
+                    </label>
+                    <input
+                      id="mmr"
+                      name="mmr"
+                      type="number"
+                      // min=1: a typed 0 fails native validation, while BLANK stays
+                      // allowed — 0 is the stored "unknown" sentinel, never typed.
+                      min={1}
+                      max={HARD_MMR_CEILING}
+                      // `|| ""` (not ??): a stored unknown (0) must render blank,
+                      // or resubmitting the form trips the min=1 validation.
+                      defaultValue={form?.mmr || ""}
+                      placeholder="e.g. 3200"
+                      className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      {mmrWindow && mmrWindow.min > 0
+                        ? "Not sure? Leave it blank — we'll estimate it from your ranked medal. "
+                        : "Unranked or not sure? Leave it blank — captains will see your ranked medal instead, and you can update it later. "}
+                      Used to help balance the draft. Be honest!
+                      {" "}Your submitted or medal-estimated MMR is public on
+                      the player pool and profile.
+                      {season.maxMmr > 0
+                        ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
+                        : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}
+                    </p>
+                    {medalBlocked ? (
+                      <p className="mt-1 text-xs text-danger">
+                        Your {rankMedalName(dbUser?.rankTier)} medal puts you
+                        above {HARD_MMR_CEILING} MMR, so this league can&apos;t
+                        take your signup.
+                      </p>
+                    ) : mmrWindow ? (
+                      <p className="mt-1 text-xs text-muted">
+                        Your {rankMedalName(dbUser?.rankTier)} medal puts you
+                        around{" "}
+                        <strong>
+                          {/* Display capped at the ceiling — the form's max —
+                          even where the tolerance window runs past it. */}
+                          {formatMmrRange({
+                            min: mmrWindow.min,
+                            max:
+                              mmrWindow.max === null
+                                ? HARD_MMR_CEILING
+                                : Math.min(mmrWindow.max, HARD_MMR_CEILING),
+                          })}
+                        </strong>{" "}
+                        MMR —{" "}
+                        {mmrWindow.min > 0
+                          ? `a value outside that range is automatically set to ${mmrWindow.min}.`
+                          : "a value outside that range is treated as unknown (captains judge by your medal)."}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium">
+                      Preferred roles
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {DOTA_ROLES.map((r) => (
+                        <label
+                          key={r.key}
+                          className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm has-[:checked]:border-accent has-[:checked]:bg-accent/10"
+                        >
+                          <input
+                            type="checkbox"
+                            name="roles"
+                            value={r.key}
+                            defaultChecked={myRoles.includes(r.key)}
+                            className="h-4 w-4 accent-[var(--color-accent)]"
+                          />
+                          {r.label}{" "}
+                          <span className="text-xs text-muted">
+                            ({r.short})
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-xs text-muted">
+                      Shown publicly on your player profile and in the player
+                      pool.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium">
+                      Favorite heroes
+                    </label>
+                    <HeroPicker
+                      name="favoriteHeroes"
+                      defaultValue={form?.favoriteHeroes}
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      Pick the heroes you&apos;re known for — shown publicly on your{" "}
+                      <Link href={`/players/${user.id}`} className={textLink()}>
+                        player profile
+                      </Link>{" "}
+                      and in the player pool, including during the draft.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="statement"
+                      className="mb-1.5 block text-sm font-medium"
+                    >
+                      What you want from the league (public)
+                    </label>
+                    <textarea
+                      id="statement"
+                      name="statement"
+                      rows={3}
+                      maxLength={1000}
+                      defaultValue={form?.statement ?? ""}
+                      placeholder="Why you're here and what you'd like to improve…"
+                      className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      Shown publicly on your player profile and, when no captain
+                      note is present, in the player pool. Don&apos;t include
+                      contact details or specific availability.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="captainNote"
+                      className="mb-1.5 block text-sm font-medium"
+                    >
+                      Note for captains / drafters (public)
+                    </label>
+                    <textarea
+                      id="captainNote"
+                      name="captainNote"
+                      rows={3}
+                      maxLength={1000}
+                      defaultValue={form?.captainNote ?? ""}
+                      placeholder="What should captains know about you as a player?"
+                      className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      Shown publicly on your player profile and in the player
+                      pool, and surfaced again to captains during the draft.
+                      Don&apos;t put private contact details here.
+                    </p>
+                  </div>
+
+                  <label className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
+                    <input
+                      type="checkbox"
+                      name="wantsCaptain"
+                      defaultChecked={form?.wantsCaptain ?? false}
+                      disabled={!signupsOpen}
+                      className="h-4 w-4 accent-[var(--color-brand)]"
+                    />
+                    <span className="text-sm">
+                      <span className="block">
+                        I&apos;d like to be considered as a team captain
+                      </span>
+                      <span className="block text-xs text-muted">
+                        {signupsOpen
+                          ? "Applies to full-player signups only and is public on the player pool and profile."
+                          : "Captain volunteering closed when player signups ended."}
+                      </span>
+                    </span>
+                  </label>
+
+                  <div className="flex flex-wrap gap-3">
+                    <SubmitButton>
+                      {isRegistered ? "Update signup" : "Join the season"}
                     </SubmitButton>
-                  </ActionForm>
-                )}
-              </div>
-            ) : null}
+                  </div>
+                </ActionForm>
+
+                {isRegistered ? (
+                  <div className="mt-4 border-t border-line pt-4">
+                    {isRostered || isCaptain ? (
+                      <p className="text-xs text-muted">
+                        {isCaptain ? (
+                          <>
+                            You captain <b>{member?.team.name}</b> — ask an
+                            admin to replace you before you can withdraw.
+                          </>
+                        ) : (
+                          <>
+                            You&apos;re on <b>{member?.team.name}</b>&apos;s
+                            roster — ask an admin to release you before
+                            withdrawing.
+                          </>
+                        )}
+                      </p>
+                    ) : (
+                      <ActionForm action={leaveLeague}>
+                        <SubmitButton
+                          variant="ghost"
+                          size="sm"
+                          confirm="Withdraw from this season?"
+                        >
+                          Withdraw from this season
+                        </SubmitButton>
+                      </ActionForm>
+                    )}
+                  </div>
+                ) : null}
+              </>
+            )}
           </CardBody>
         </Card>
       )}
@@ -1088,11 +1214,13 @@ function RadioTile({
 
 function DotaAccountCard({
   effectiveId,
+  steamAccountId,
   override,
   rankTier,
   fhUnavailable,
 }: {
   effectiveId: number | null;
+  steamAccountId: number | null;
   override: number | null;
   rankTier: number | null;
   /** OpenDota fh_unavailable: true = match data private (auto-import blind). */
@@ -1101,8 +1229,9 @@ function DotaAccountCard({
   return (
     <Card>
       <CardHeader
+        headingLevel={2}
         title="Dota / Dotabuff account"
-        subtitle="Link it so captains can see your rank when drafting."
+        subtitle="Your Steam sign-in verifies the account used for ranks, scouting, and match imports."
         action={
           effectiveId ? (
             <div className="flex items-center gap-3 text-sm">
@@ -1129,22 +1258,24 @@ function DotaAccountCard({
       <CardBody className="space-y-3">
         {fhUnavailable === true ? (
           <div
-            role="status"
+            role="alert"
             className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
           >
             <b>Your Dota match data is private</b> — league results can&apos;t
-            auto-import your games, and your medal/stats stay invisible. In
-            Dota 2: <b>Settings → Options → Advanced → Social → Expose Public
-            Match Data</b>, play a game, then hit Refresh medal below.
+            auto-import your games, and your medal/stats stay invisible. In Dota
+            2:{" "}
+            <b>
+              Settings → Options → Advanced → Social → Expose Public Match Data
+            </b>
+            , play a game, then hit Refresh medal below.
           </div>
         ) : null}
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
           {effectiveId ? (
             <>
               <span>
-                Account{" "}
-                <span className="font-mono text-fg">{effectiveId}</span>{" "}
-                {override == null ? "(from Steam)" : "(manual)"}
+                Account <span className="font-mono text-fg">{effectiveId}</span>{" "}
+                {override == null ? "(verified by Steam)" : "(legacy manual link)"}
               </span>
               <span>·</span>
               <span>Medal:</span>
@@ -1156,32 +1287,33 @@ function DotaAccountCard({
             </>
           ) : (
             <span>
-              We couldn&apos;t derive your account from Steam — link it below.
+              We couldn&apos;t derive a Dota account from this Steam identity.
+              Contact a league admin before playing.
             </span>
           )}
         </div>
 
-        <ActionForm
-          action={updateDotaAccount}
-          className="flex flex-wrap items-end gap-2"
-        >
-          <div>
-            <label
-              htmlFor="dotaAccountId"
-              className="mb-1 block text-xs text-muted"
-            >
-              Dotabuff/OpenDota URL, account id, or SteamID64
-            </label>
-            <input
-              id="dotaAccountId"
-              name="dotaAccountId"
-              defaultValue={override ?? ""}
-              placeholder="Dotabuff/OpenDota URL or account id"
-              className="h-10 w-80 max-w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-            />
+        {override != null ? (
+          <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
+            <p>
+              This manual link came from an older version of the league site
+              and is not ownership-verified. You can keep refreshing it, or
+              switch permanently to the account verified by your Steam sign-in.
+            </p>
+            {steamAccountId != null ? (
+              <ActionForm action={updateDotaAccount}>
+                <SubmitButton variant="secondary" size="sm">
+                  Use my verified Steam account
+                </SubmitButton>
+              </ActionForm>
+            ) : null}
           </div>
-          <SubmitButton variant="secondary">Link &amp; fetch medal</SubmitButton>
-        </ActionForm>
+        ) : steamAccountId != null ? (
+          <p className="text-xs text-muted">
+            Need to use a different Dota account? Sign out, then sign in with
+            the Steam account that owns it so the league can verify it.
+          </p>
+        ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
           <ActionForm action={refreshRank}>
@@ -1190,7 +1322,10 @@ function DotaAccountCard({
             </SubmitButton>
           </ActionForm>
           <p className="text-xs text-muted">
-            Medal needs <b>Settings → Options → Expose Public Match Data</b>{" "}
+            Medal needs{" "}
+            <b>
+              Settings → Options → Advanced → Social → Expose Public Match Data
+            </b>{" "}
             enabled in Dota 2.
           </p>
         </div>

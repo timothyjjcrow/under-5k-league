@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge } from "@/components/ui";
+import { scheduleDestinationLabel } from "@/lib/season-copy";
 import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -53,9 +54,27 @@ function navItems(
   }
   if (teamsExist) items.push({ href: "/teams", label: "Teams" });
   if (myTeamId) items.push({ href: `/teams/${myTeamId}`, label: "My Team" });
-  if (phase === "DRAFT") items.push({ href: "/draft", label: "Draft" });
-  if (phase === "REGULAR_SEASON" || phase === "PLAYOFFS" || phase === "COMPLETE") {
+  if (phase === "DRAFT") {
+    items.push({ href: "/draft", label: "Draft" });
+    // A completed auction can publish fixtures before the admin advances the
+    // phase. The page itself explains the locked/in-progress state earlier in
+    // DRAFT, so hiding this link only made a valid published schedule a secret.
     items.push({ href: "/schedule", label: "Schedule" });
+    // Side games open the moment the auction completes, before the admin's
+    // explicit phase advance. Keep them discoverable throughout Draft; each
+    // page explains the auction lock until that handoff is actually complete.
+    items.push({ href: "/fantasy", label: "Fantasy" });
+    items.push({ href: "/pickem", label: "Pick'em" });
+  }
+  if (
+    phase === "REGULAR_SEASON" ||
+    phase === "PLAYOFFS" ||
+    phase === "COMPLETE"
+  ) {
+    items.push({
+      href: "/schedule",
+      label: scheduleDestinationLabel(phase),
+    });
     items.push({ href: "/leaders", label: "Leaders" });
     items.push({ href: "/meta", label: "Meta" });
     items.push({ href: "/fantasy", label: "Fantasy" });
@@ -106,7 +125,9 @@ export function SiteHeader({
   const items = navItems(phase, myTeamId, hasHistory);
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
   const [open, setOpen] = useState(false);
+  const [exploreOpen, setExploreOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const exploreButtonRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
 
   // Close the mobile menu whenever the route changes (e.g. a link was tapped).
@@ -117,22 +138,26 @@ export function SiteHeader({
   if (menuPath !== pathname) {
     setMenuPath(pathname);
     setOpen(false);
+    setExploreOpen(false);
   }
 
   // While the mobile menu is open, Escape closes it (returning focus to the
   // toggle so keyboard users don't lose their place) and a tap/click outside
   // the header dismisses it — a route change already closes it otherwise.
   useEffect(() => {
-    if (!open) return;
+    if (!open && !exploreOpen) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
+        const returnTo = open ? buttonRef.current : exploreButtonRef.current;
         setOpen(false);
-        buttonRef.current?.focus();
+        setExploreOpen(false);
+        returnTo?.focus();
       }
     }
     function onPointerDown(e: PointerEvent) {
       if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
         setOpen(false);
+        setExploreOpen(false);
       }
     }
     document.addEventListener("keydown", onKeyDown);
@@ -141,7 +166,7 @@ export function SiteHeader({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open]);
+  }, [open, exploreOpen]);
 
   const adminActive = pathname.startsWith("/admin");
 
@@ -161,6 +186,15 @@ export function SiteHeader({
     { href: "/news", label: "News" },
     { href: "/hall-of-fame", label: "Hall of Fame" },
     { href: "/records", label: "Record book" },
+    { href: "/players/compare", label: "Compare players" },
+  ];
+  const exploreItems: { href: string; label: string }[] = [
+    { href: "/news", label: "League news" },
+    { href: "/features", label: "Feature tour" },
+    { href: "/records", label: "Record book" },
+    { href: "/players/compare", label: "Compare players" },
+    { href: "/hall-of-fame", label: "Hall of Fame" },
+    ...(hasHistory ? [{ href: "/seasons", label: "Past seasons" }] : []),
   ];
 
   return (
@@ -172,7 +206,7 @@ export function SiteHeader({
         <Link
           href="/"
           aria-label="GGD2L — home"
-          className="flex shrink-0 items-center"
+          className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           {/* Tight-cropped emblem (glow/margins trimmed) sized to nearly fill
               the bar so there's minimal top/bottom padding. */}
@@ -186,6 +220,27 @@ export function SiteHeader({
           />
         </Link>
 
+        {/* Internal pages need league context without making users scroll to
+            the footer or open the phone menu. Keep it inside the existing
+            80px header (draft-room sticky offsets depend on that height) and
+            hide it only on the narrowest screens, where the menu still carries
+            the same name + phase. */}
+        {pathname !== "/" && seasonName && phase ? (
+          <Link
+            href="/"
+            aria-label={`League status: ${seasonName} — ${PHASE_LABEL[phase] ?? phase}`}
+            className="hidden shrink-0 items-center gap-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:flex"
+            title={`${seasonName} · ${PHASE_LABEL[phase] ?? phase}`}
+          >
+            <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+              {PHASE_LABEL[phase] ?? phase}
+            </Badge>
+            <span className="hidden max-w-28 truncate text-xs text-muted 2xl:inline">
+              {seasonName}
+            </span>
+          </Link>
+        ) : null}
+
         {/* Inline nav — only when there's room (xl+). Below that it collapses
             into the menu button so links never get cut off. "Home" is omitted
             inline (the logo is the home link) and the list scrolls rather than
@@ -194,28 +249,72 @@ export function SiteHeader({
           aria-label="Primary"
           className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:flex"
         >
-          {items.filter((item) => item.href !== "/").map((item) => {
-            const active = isActive(pathname, item.href, myTeamHref);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
-                  active
-                    ? "bg-accent/15 text-fg"
-                    : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                )}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
+          {items
+            .filter((item) => item.href !== "/")
+            .map((item) => {
+              const active = isActive(pathname, item.href, myTeamHref);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                    active
+                      ? "bg-accent/15 text-fg"
+                      : "text-muted hover:bg-surface-2/60 hover:text-fg",
+                  )}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
         </nav>
 
         {/* Pushes the account cluster to the right when the inline nav is hidden. */}
         <div className="flex-1 xl:hidden" />
+
+        {/* Evergreen club/discovery pages stay reachable on wide screens too.
+            The phone menu already exposes these below the phase navigation. */}
+        <div className="relative hidden xl:block">
+          <button
+            ref={exploreButtonRef}
+            type="button"
+            aria-expanded={exploreOpen}
+            aria-controls="desktop-explore-nav"
+            onClick={() => setExploreOpen((value) => !value)}
+            className="rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+          >
+            Explore <span aria-hidden>{exploreOpen ? "↑" : "↓"}</span>
+          </button>
+          {exploreOpen ? (
+            <nav
+              id="desktop-explore-nav"
+              aria-label="Explore"
+              className="absolute right-0 top-full z-40 mt-2 w-52 rounded-xl border border-line/80 bg-bg/95 p-2 shadow-xl backdrop-blur"
+            >
+              {exploreItems.map((item) => {
+                const active = isActive(pathname, item.href, myTeamHref);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    onClick={() => setExploreOpen(false)}
+                    className={cn(
+                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                      active
+                        ? "bg-accent/15 text-fg"
+                        : "text-muted hover:bg-surface-2/60 hover:text-fg",
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          ) : null}
+        </div>
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {/* Season phase/name lives on the home hero + footer, not here — it
@@ -227,7 +326,7 @@ export function SiteHeader({
                   href="/admin"
                   aria-current={adminActive ? "page" : undefined}
                   className={cn(
-                    "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors xl:block",
+                    "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 xl:block",
                     adminActive
                       ? "bg-surface-2 text-accent"
                       : "text-accent/80 hover:text-accent",
@@ -241,7 +340,7 @@ export function SiteHeader({
                 // Below xl the name is hidden and this is an unlabeled 30px
                 // pill — give assistive tech its destination.
                 aria-label={`My profile — ${user.name}`}
-                className="flex items-center gap-2 rounded-full border border-line py-1 pl-1 pr-1 text-sm hover:border-muted/60 xl:pr-3"
+                className="flex min-h-11 items-center gap-2 rounded-full border border-line py-1 pl-1 pr-1 text-sm hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 xl:pr-3"
               >
                 <Avatar name={user.name} src={user.avatar} size={28} />
                 <span className="hidden max-w-[8rem] truncate xl:block">
@@ -255,14 +354,14 @@ export function SiteHeader({
               >
                 <button
                   type="submit"
-                  className="text-sm text-muted hover:text-fg"
+                  className="rounded text-sm text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                   title="Log out"
                 >
                   Logout
                 </button>
               </form>
             </>
-          ) : (
+          ) : pathname !== "/login" ? (
             <Link
               // Carry the current page through sign-in — landing back on the
               // dashboard after every login was a pointless extra hop.
@@ -271,11 +370,11 @@ export function SiteHeader({
                   ? `/login?next=${encodeURIComponent(pathname)}`
                   : "/login"
               }
-              className="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 sm:px-4"
+              className="inline-flex min-h-11 items-center rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 sm:px-4"
             >
               Sign in
             </Link>
-          )}
+          ) : null}
 
           {/* Menu toggle — only below xl, where the inline nav is hidden. */}
           <button
@@ -285,7 +384,7 @@ export function SiteHeader({
             aria-label={open ? "Close menu" : "Open menu"}
             aria-expanded={open}
             aria-controls="mobile-nav"
-            className="grid h-9 w-9 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg xl:hidden"
+            className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9 sm:w-9 xl:hidden"
           >
             {open ? <CloseIcon /> : <MenuIcon />}
           </button>
@@ -309,7 +408,7 @@ export function SiteHeader({
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                    "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
                     active
                       ? "bg-accent/15 text-fg"
                       : "text-muted hover:bg-surface-2/60 hover:text-fg",
@@ -330,7 +429,7 @@ export function SiteHeader({
                     href={item.href}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                      "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
                       active
                         ? "bg-accent/15 text-fg"
                         : "text-muted hover:bg-surface-2/60 hover:text-fg",
@@ -349,7 +448,7 @@ export function SiteHeader({
                     href="/admin"
                     aria-current={adminActive ? "page" : undefined}
                     className={cn(
-                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                      "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
                       adminActive
                         ? "bg-surface-2 text-accent"
                         : "text-accent/80 hover:bg-surface-2/60 hover:text-accent",
@@ -365,7 +464,7 @@ export function SiteHeader({
                       isActive(pathname, "/me", null) ? "page" : undefined
                     }
                     className={cn(
-                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                      "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
                       isActive(pathname, "/me", null)
                         ? "bg-accent/15 text-fg"
                         : "text-muted hover:bg-surface-2/60 hover:text-fg",
@@ -378,7 +477,7 @@ export function SiteHeader({
                   <form action="/api/auth/logout" method="POST">
                     <button
                       type="submit"
-                      className="block w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium text-muted hover:bg-surface-2/60 hover:text-fg"
+                      className="block w-full rounded-lg px-3 py-3 text-left text-sm font-medium text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5"
                     >
                       Log out
                     </button>

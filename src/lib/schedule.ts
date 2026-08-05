@@ -1,7 +1,7 @@
 // Round-robin schedule generation (circle method) + single-elimination seeding.
 // Pure + testable.
 
-import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 
 export type Pairing = { home: string; away: string };
 
@@ -41,7 +41,10 @@ export function upcomingMatchNight(
  * `doubleRound`). Returns an array of rounds (weeks); each round is a list of
  * pairings. Handles odd team counts by inserting a bye.
  */
-export function roundRobin(teamIds: string[], doubleRound = false): Pairing[][] {
+export function roundRobin(
+  teamIds: string[],
+  doubleRound = false,
+): Pairing[][] {
   const teams = [...teamIds];
   if (teams.length < 2) return [];
 
@@ -152,7 +155,7 @@ export function bracketRounds(bracketSize: number): number {
 /** Human name for a playoff round given the total number of rounds. */
 export function roundName(roundIndex: number, totalRounds: number): string {
   const fromEnd = totalRounds - roundIndex;
-  if (fromEnd <= 1) return "Final";
+  if (fromEnd <= 1) return "Grand final";
   if (fromEnd === 2) return "Semifinals";
   if (fromEnd === 3) return "Quarterfinals";
   return `Round ${roundIndex + 1}`;
@@ -207,12 +210,33 @@ export function slotRound(slot: string | null | undefined): number {
 }
 
 /**
+ * Has this playoff series already produced downstream bracket state?
+ *
+ * Result corrections use this same deliberately conservative rule on the
+ * server: once any later round exists, changing an earlier winner would leave
+ * the teams in that later round stale. Keeping the projection shared lets the
+ * admin UI stop advertising a correction that the mutation must reject.
+ */
+export function hasLaterBracketRound(
+  matches: { bracketSlot: string | null }[],
+  bracketSlot: string | null | undefined,
+): boolean {
+  const round = slotRound(bracketSlot);
+  return matches.some((match) => slotRound(match.bracketSlot) > round);
+}
+
+/**
  * Which teams sit out each regular-season week (odd team counts give the
  * round-robin a rotating bye). Only weeks that have at least one match are
  * reported — a week number is defined by its fixtures.
  */
 export function byeTeamsByWeek<
-  T extends { week: number; homeTeamId: string; awayTeamId: string; phase: string },
+  T extends {
+    week: number;
+    homeTeamId: string;
+    awayTeamId: string;
+    phase: string;
+  },
 >(matches: T[], teamIds: string[]): Map<number, string[]> {
   const byWeek = new Map<number, Set<string>>();
   for (const m of matches) {
@@ -244,12 +268,18 @@ export function remainingSchedule<
     phase: string;
     status: string;
   },
->(teamIds: string[], matches: T[]): Map<string, { week: number; opponentId: string }[]> {
+>(
+  teamIds: string[],
+  matches: T[],
+): Map<string, { week: number; opponentId: string }[]> {
   const out = new Map<string, { week: number; opponentId: string }[]>(
     teamIds.map((id) => [id, []]),
   );
   const open = matches
-    .filter((m) => m.phase === MATCH_PHASE.REGULAR && m.status !== MATCH_STATUS.COMPLETED)
+    .filter(
+      (m) =>
+        m.phase === MATCH_PHASE.REGULAR && m.status !== MATCH_STATUS.COMPLETED,
+    )
     .sort((a, b) => a.week - b.week);
   for (const m of open) {
     out.get(m.homeTeamId)?.push({ week: m.week, opponentId: m.awayTeamId });
@@ -312,7 +342,8 @@ export function groupPlayoffRounds<T extends { bracketSlot: string | null }>(
   const firstRoundCount = matches.filter(
     (m) => slotRound(m.bracketSlot) === 0,
   ).length;
-  const totalRounds = firstRoundCount > 0 ? bracketRounds(firstRoundCount * 2) : 0;
+  const totalRounds =
+    firstRoundCount > 0 ? bracketRounds(firstRoundCount * 2) : 0;
   const roundNums = [
     ...new Set(matches.map((m) => slotRound(m.bracketSlot))),
   ].sort((a, b) => a - b);
@@ -331,7 +362,23 @@ export type SlateMatch = {
   week: number;
   phase: string;
   status: string;
+  scheduledAt?: Date | null;
 };
+
+/**
+ * Is an unfinished fixture still relevant as current/upcoming schedule work?
+ * LIVE and untimed rows remain visible. A timed row older than the result-sync
+ * window is results debt: surfaces should label it overdue rather than call it
+ * the player's next match or the league's current week.
+ */
+export function isRelevantOpenMatch(match: SlateMatch, nowMs: number): boolean {
+  if (match.status === MATCH_STATUS.COMPLETED) return false;
+  if (match.status === MATCH_STATUS.LIVE || match.scheduledAt == null)
+    return true;
+  return (
+    match.scheduledAt.getTime() >= nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000
+  );
+}
 
 /**
  * The slate the dashboard leads with: during PLAYOFFS every open bracket
@@ -349,8 +396,9 @@ export type SlateMatch = {
 export function focusSlate<T extends SlateMatch>(
   seasonStatus: string,
   matches: T[],
+  nowMs = Date.now(),
 ): { slate: T[]; title: string } {
-  const open = matches.filter((m) => m.status !== MATCH_STATUS.COMPLETED);
+  const open = matches.filter((m) => isRelevantOpenMatch(m, nowMs));
   if (seasonStatus === "PLAYOFFS") {
     return {
       slate: open.filter((m) => m.phase !== MATCH_PHASE.REGULAR),

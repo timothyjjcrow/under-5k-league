@@ -18,7 +18,11 @@ export function clampInt(
   max: number,
 ): number {
   const raw = fd.get(key);
-  const n = typeof raw === "string" ? parseInt(raw, 10) : NaN;
+  const normalized = typeof raw === "string" ? raw.trim() : "";
+  // Number inputs should be whole decimal strings. parseInt("12junk") and
+  // parseInt("3.9") silently accepted malformed client input, which made an
+  // invalid form look successfully saved with a different value.
+  const n = /^-?\d+$/.test(normalized) ? Number(normalized) : NaN;
   if (Number.isNaN(n)) return fallback;
   return Math.max(min, Math.min(max, n));
 }

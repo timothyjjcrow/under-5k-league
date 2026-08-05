@@ -29,6 +29,9 @@ import { join } from "node:path";
 const read = (...p: string[]) => readFileSync(join(__dirname, ...p), "utf8");
 const FANTASY = read("fantasy", "page.tsx");
 const PICKEM = read("pickem", "page.tsx");
+const HOME = read("page.tsx");
+const FANTASY_ACTION = read("actions", "fantasy.ts");
+const PICKEM_BUTTON = read("..", "components", "pickem-submit-button.tsx");
 const SEASON_ARCHIVE = read("seasons", "[id]", "page.tsx");
 
 describe("side-game archive: both pages resolve ?season=", () => {
@@ -38,11 +41,15 @@ describe("side-game archive: both pages resolve ?season=", () => {
   ] as const) {
     it(`${name} accepts a season param and 404s an unknown one`, () => {
       expect(src, `${name} takes searchParams`).toMatch(
-        /searchParams:\s*Promise<\{\s*season\?:\s*string\s*\}>/,
+        /type \w+SearchParams = \{ season\?: string \| string\[\] \}/,
       );
-      expect(src, `${name} resolves the param before the active season`).toMatch(
-        /seasonParam\s*\n?\s*\?\s*await prisma\.season\.findUnique/,
+      expect(src, `${name} rejects a repeated season key`).toContain(
+        "if (seasonParam === null) notFound()",
       );
+      expect(
+        src,
+        `${name} resolves the param before the active season`,
+      ).toMatch(/seasonParam\s*\n?\s*\?\s*await prisma\.season\.findUnique/);
       // An unknown id must 404, not silently fall back to the live season —
       // that would render this season's data under someone else's link.
       expect(src, `${name} notFounds an unknown season`).toMatch(
@@ -63,23 +70,26 @@ describe("side-game archive: an archived season is STRUCTURALLY read-only", () =
     // If this regresses to `games.length > 0`, an archived season with no
     // imported games renders a live <FantasyPicker> whose submit edits the
     // CURRENT season's roster.
-    expect(FANTASY).toMatch(/const locked = readOnly \|\| games\.length > 0;/);
+    expect(FANTASY).toMatch(
+      /const locked =\s*readOnly \|\| !phaseOpen \|\| season\.fantasyLockedAt != null \|\| gameCount > 0;/,
+    );
     // …and the picker really does hang off that flag alone.
     expect(FANTASY).toMatch(/locked \?/);
   });
 
-  it("pickem forces the open-match list empty when archived", () => {
+  it("pickem makes the action-rendering branch unreachable when archived", () => {
     // `predictionOpen` returns true for any SCHEDULED match with a null
     // kickoff, so an archived season would otherwise render live pick buttons
     // that can only error.
-    expect(PICKEM).toMatch(
-      /const open = readOnly \? \[\] : matches\.filter\(\(m\) => predictionOpen\(m\)\)/,
-    );
+    expect(PICKEM).toMatch(/const canPlay = !readOnly && phaseOpen;/);
+    expect(PICKEM).toMatch(/const open = canPlay \? buckets\.open : \[\];/);
+    expect(PICKEM).toMatch(/\{canPlay \? \(\s*<section/);
   });
 
   it("neither page offers a sign-in-to-play CTA on a closed season", () => {
     // An ask with no control behind it — the SIGNUPS-dashboard lesson.
-    expect(FANTASY).toMatch(/!viewer && !readOnly \?/);
+    expect(FANTASY).toMatch(/!viewer && !locked \?/);
+    expect(PICKEM).toMatch(/readOnly \? \(\s*<Badge tone="neutral">Archived/);
   });
 });
 
@@ -87,7 +97,39 @@ describe("side-game archive: the season archive links to them", () => {
   it("/seasons/[id] carries fantasy and pick'em links", () => {
     // Without a link from the page that OWNS the season, ?season= is a URL
     // only someone who read the source would know to type.
-    expect(SEASON_ARCHIVE).toMatch(/href=\{`\/fantasy\?season=\$\{season\.id\}`\}/);
-    expect(SEASON_ARCHIVE).toMatch(/href=\{`\/pickem\?season=\$\{season\.id\}`\}/);
+    expect(SEASON_ARCHIVE).toMatch(
+      /href=\{`\/fantasy\?season=\$\{season\.id\}`\}/,
+    );
+    expect(SEASON_ARCHIVE).toMatch(
+      /href=\{`\/pickem\?season=\$\{season\.id\}`\}/,
+    );
+  });
+});
+
+describe("side-game live-state integrity", () => {
+  it("the homepage honors Fantasy's durable information lock", () => {
+    expect(HOME).toMatch(
+      /const fantasyLocked =\s*season\.fantasyLockedAt != null \|\| seasonGames > 0;/,
+    );
+  });
+
+  it("a Fantasy form cannot roll into a later active season", () => {
+    expect(FANTASY).toMatch(/hidden=\{\{ expectedSeasonId: season\.id \}\}/);
+    expect(FANTASY_ACTION).toMatch(/season\.id !== expectedSeasonId/);
+  });
+
+  it("Pick'em transitions at kickoff and preserves void history", () => {
+    expect(PICKEM).toMatch(/const voided = buckets\.voided;/);
+    expect(PICKEM).toMatch(/Your void picks/);
+    expect(PICKEM).toMatch(
+      /<PickemDeadlineRefresh targetMs=\{nextOpenDeadline\}/,
+    );
+    expect(PICKEM_BUTTON).toMatch(/setPassedAt\(locksAt\)/);
+  });
+
+  it("both Pick'em choices share one pending form", () => {
+    expect(PICKEM).toMatch(/hidden=\{\{ matchId: m\.id \}\}/);
+    expect(PICKEM).toMatch(/name="pickedTeamId"/);
+    expect(PICKEM).not.toMatch(/hidden=\{\{ matchId: m\.id, pickedTeamId:/);
   });
 });

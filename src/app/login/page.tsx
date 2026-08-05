@@ -25,9 +25,13 @@ const GENERIC_LOGIN_ERROR = "Sign-in didn't go through — please try again.";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; next?: string }>;
+  searchParams: Promise<{
+    error?: string;
+    next?: string;
+    signedOut?: string;
+  }>;
 }) {
-  const { error, next: rawNext } = await searchParams;
+  const { error, next: rawNext, signedOut } = await searchParams;
   // Validated same-origin path to land on after sign-in (never echoed as
   // text; only ever used inside our own hrefs/redirects).
   const next = safeReturnPath(rawNext);
@@ -50,6 +54,12 @@ export default async function LoginPage({
   const devSuffix = next ? `&redirect=${encodeURIComponent(next)}` : "";
 
   const devLogin = process.env.ALLOW_DEV_LOGIN === "true";
+  const intro =
+    next === "/me"
+      ? "Sign in to open your profile and continue setting up your league account."
+      : next
+        ? "Sign in to continue where you left off."
+        : "Use Steam to create or return to your league profile.";
 
   return (
     <div className="mx-auto max-w-md">
@@ -62,12 +72,24 @@ export default async function LoginPage({
               alt="GGD2L — amateur Dota 2 league"
               width={768}
               height={512}
-              className="mx-auto w-56 max-w-full"
+              className="mx-auto w-44 max-w-full sm:w-52"
             />
+            <h1 className="mt-3 font-display text-2xl font-semibold text-fg">
+              Sign in to GGD2L
+            </h1>
             <p className="mt-4 text-sm text-muted">
-              Sign in with Steam to join the season.
+              {intro}
             </p>
           </div>
+
+          {signedOut === "1" ? (
+            <div
+              role="status"
+              className="rounded-lg border border-success/40 bg-success/10 px-3 py-2.5 text-sm text-success"
+            >
+              You&apos;re signed out. See you next match.
+            </div>
+          ) : null}
 
           {errorCopy ? (
             <div
@@ -81,7 +103,7 @@ export default async function LoginPage({
           <div className="space-y-2">
             <a
               href={steamHref}
-              className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-[#1b2838] px-4 font-medium text-white transition-colors hover:bg-[#223247]"
+              className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-[#1b2838] px-4 font-medium text-white transition-colors hover:bg-[#223247] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
             >
               <SteamIcon />
               Sign in through Steam
@@ -94,12 +116,18 @@ export default async function LoginPage({
 
           <SteamSafetyNote />
 
-          <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-muted">
-            <span className="h-px flex-1 bg-line" />
-            or
-            <span className="h-px flex-1 bg-line" />
+          <div className="space-y-3 border-t border-line pt-5">
+            <div>
+              <h2 className="font-display text-base font-semibold text-fg">
+                Join the league community
+              </h2>
+              <p className="mt-1 text-xs text-muted">
+                Steam signs you into this site. Discord is where the league
+                coordinates matches and announcements.
+              </p>
+            </div>
+            <DiscordButton label="Join the community Discord" className="w-full" />
           </div>
-          <DiscordButton label="Join the community Discord" className="w-full" />
 
           {devLogin ? (
             <div className="space-y-3 border-t border-line pt-5 text-left">
@@ -130,7 +158,8 @@ export default async function LoginPage({
         <Link href="/players" className={textLink()}>
           browse the league
         </Link>{" "}
-        without signing in — you only need Steam to join.
+        without signing in — use Steam when you&apos;re ready to participate or
+        manage your profile.
       </p>
       <p className="mt-2 text-center text-sm text-muted">
         <Link href="/" className="hover:text-fg">
@@ -155,8 +184,8 @@ function DevLoginLink({
       href={href}
       className={
         accent
-          ? "rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-center text-sm font-medium text-accent hover:bg-accent/20"
-          : "rounded-lg border border-line bg-surface-2 px-3 py-2 text-center text-sm font-medium hover:border-muted/60"
+          ? "flex min-h-11 items-center justify-center rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-center text-sm font-medium text-accent hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          : "flex min-h-11 items-center justify-center rounded-lg border border-line bg-surface-2 px-3 py-2 text-center text-sm font-medium hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
       }
     >
       {label}

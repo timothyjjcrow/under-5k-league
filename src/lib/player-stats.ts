@@ -2,25 +2,174 @@
 // (no DB): the profile page parses each Game's stored player JSON into these
 // lines, then this rolls them up.
 
-/**
- * Parse a Game's stored `players` JSON into typed box-score lines.
- *
- * Player attribution lives inside that column, so every stat surface (leaders,
- * meta, records, hall of fame, fantasy, profiles, match pages, team pages,
- * compare, recap, dashboard) has to parse it — and had drifted into eleven
- * byte-identical private copies. Generic in the line type because the fantasy
- * and hall-of-fame boards want a narrower shape than PlayerStat.
- *
- * Always returns an array: a malformed or legacy row yields [] rather than
- * throwing a whole stat page off the air.
- */
-export function parseGamePlayers<T>(json: string): T[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? (v as T[]) : [];
-  } catch {
-    return [];
+import type { PlayerStat } from "./match-import";
+
+export type ParsedGamePlayers = {
+  players: PlayerStat[];
+  /** Array members rejected because required fields or ids were unsafe. */
+  invalidLines: number;
+  /** Syntactically invalid JSON or a non-array top-level value. */
+  malformed: boolean;
+  /** Ten valid rows, five per side, with unique heroes and supplied identities. */
+  completeRoster: boolean;
+};
+
+const MAX_HERO_ID = 10_000;
+const MAX_COUNTING_STAT = 1_000_000;
+const MAX_REPORTED_STAT = 10_000_000;
+const MAX_ACCOUNT_ID = 0xffff_ffff;
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function nullableFinite(value: unknown): number | null {
+  return finiteNumber(value) && value >= 0 && value <= MAX_REPORTED_STAT
+    ? value
+    : null;
+}
+
+function nullableAccountId(value: unknown): number | null {
+  return finiteNumber(value) &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_ACCOUNT_ID
+    ? value
+    : null;
+}
+
+function safeCountingStat(value: unknown): value is number {
+  return (
+    finiteNumber(value) &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_COUNTING_STAT
+  );
+}
+
+function normalizedBenchmarks(value: unknown): PlayerStat["benchmarks"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: NonNullable<PlayerStat["benchmarks"]> = {};
+  for (const [key, candidate] of Object.entries(value)) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+      continue;
+    const row = candidate as Record<string, unknown>;
+    if (!finiteNumber(row.pct)) continue;
+    out[key] = {
+      raw: nullableFinite(row.raw),
+      pct: Math.min(1, Math.max(0, row.pct)),
+    };
   }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function normalizedPlayerStat(value: unknown): PlayerStat | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const line = value as Record<string, unknown>;
+  if (
+    !Number.isSafeInteger(line.heroId) ||
+    !finiteNumber(line.heroId) ||
+    line.heroId <= 0 ||
+    line.heroId > MAX_HERO_ID ||
+    typeof line.isRadiant !== "boolean" ||
+    !safeCountingStat(line.kills) ||
+    !safeCountingStat(line.deaths) ||
+    !safeCountingStat(line.assists)
+  ) {
+    return null;
+  }
+  for (const key of ["userId", "teamId"] as const) {
+    const id = line[key];
+    if (id != null && (typeof id !== "string" || id.trim().length === 0)) {
+      return null;
+    }
+  }
+
+  return {
+    accountId: nullableAccountId(line.accountId),
+    heroId: line.heroId,
+    isRadiant: line.isRadiant,
+    kills: line.kills,
+    deaths: line.deaths,
+    assists: line.assists,
+    personaname: typeof line.personaname === "string" ? line.personaname : null,
+    netWorth: nullableFinite(line.netWorth),
+    gpm: nullableFinite(line.gpm),
+    lastHits: nullableFinite(line.lastHits),
+    xpm: nullableFinite(line.xpm),
+    denies: nullableFinite(line.denies),
+    level: nullableFinite(line.level),
+    heroDamage: nullableFinite(line.heroDamage),
+    towerDamage: nullableFinite(line.towerDamage),
+    heroHealing: nullableFinite(line.heroHealing),
+    benchmarks: normalizedBenchmarks(line.benchmarks),
+    userId: typeof line.userId === "string" ? line.userId : null,
+    teamId: typeof line.teamId === "string" ? line.teamId : null,
+  };
+}
+
+/**
+ * Decode the denormalized Game.players column at one runtime boundary. Valid
+ * JSON is not automatically trusted: unsafe members are skipped so arithmetic
+ * on public stat pages cannot turn strings/nulls into NaN or false records.
+ */
+export function decodeGamePlayers(json: string): ParsedGamePlayers {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return {
+      players: [],
+      invalidLines: 0,
+      malformed: true,
+      completeRoster: false,
+    };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      players: [],
+      invalidLines: 0,
+      malformed: true,
+      completeRoster: false,
+    };
+  }
+  const players: PlayerStat[] = [];
+  let invalidLines = 0;
+  for (const candidate of value) {
+    const player = normalizedPlayerStat(candidate);
+    if (player) players.push(player);
+    else invalidLines += 1;
+  }
+  const radiant = players.filter((player) => player.isRadiant).length;
+  // Missing identities are permitted for hero/game aggregates. When an id is
+  // supplied, however, a duplicate means these cannot be ten distinct lines.
+  // Actor-specific consumers (leaders) skip unmapped rows; honors applies its
+  // stricter all-users/all-teams attribution rule separately.
+  const unique = <T extends string | number>(values: (T | null)[]) => {
+    const present = values.filter((value): value is T => value != null);
+    return new Set(present).size === present.length;
+  };
+  const completeRoster =
+    invalidLines === 0 &&
+    players.length === 10 &&
+    radiant === 5 &&
+    unique(players.map((player) => player.heroId)) &&
+    unique(players.map((player) => player.accountId)) &&
+    unique(players.map((player) => player.userId));
+  return { players, invalidLines, malformed: false, completeRoster };
+}
+
+/**
+ * Public roll-ups must never turn a partial/duplicated box score into a league
+ * record. Detail and repair surfaces can still inspect `decoded.players`.
+ */
+export function trustedGamePlayers(decoded: ParsedGamePlayers): PlayerStat[] {
+  return decoded.completeRoster ? decoded.players : [];
+}
+
+/** Safe convenience form for callers that do not need diagnostics. */
+export function parseGamePlayers(json: string): PlayerStat[] {
+  return decodeGamePlayers(json).players;
 }
 
 export type PlayerGameLine = {
@@ -54,6 +203,8 @@ export type PlayerSummary = {
   kda: number; // (kills + assists) / max(1, deaths), one decimal
   avgNetWorth: number | null; // averaged over games that reported it; null if none
   avgGpm: number | null;
+  netWorthGames: number;
+  gpmGames: number;
   topHeroes: HeroTally[]; // most-played first, then most wins
 };
 
@@ -116,8 +267,14 @@ export function topBy(
   { minGames = 1, limit = 5 }: { minGames?: number; limit?: number } = {},
 ): LeaderRow[] {
   const value = LEADER_VALUE[key];
+  const samples = (summary: PlayerSummary) =>
+    key === "gpm"
+      ? summary.gpmGames
+      : key === "netWorth"
+        ? summary.netWorthGames
+        : summary.games;
   return entries
-    .filter((e) => e.summary.games >= minGames)
+    .filter((e) => samples(e.summary) >= minGames)
     .map((e) => ({ id: e.id, value: value(e.summary), summary: e.summary }))
     .filter((r) => r.value > 0)
     .sort(
@@ -186,8 +343,11 @@ export function summarizePlayerGames(lines: PlayerGameLine[]): PlayerSummary {
     avgDeaths: games > 0 ? round1(deaths / games) : 0,
     avgAssists: games > 0 ? round1(assists / games) : 0,
     kda: round1((kills + assists) / Math.max(1, deaths)),
-    avgNetWorth: netWorthGames > 0 ? Math.round(netWorthSum / netWorthGames) : null,
+    avgNetWorth:
+      netWorthGames > 0 ? Math.round(netWorthSum / netWorthGames) : null,
     avgGpm: gpmGames > 0 ? Math.round(gpmSum / gpmGames) : null,
+    netWorthGames,
+    gpmGames,
     topHeroes,
   };
 }

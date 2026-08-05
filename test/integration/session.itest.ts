@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { SignJWT } from "jose";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -17,12 +17,15 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
 // cookie store is the one seam this needs — everything past it (jose signing,
 // verification, the epoch comparison, the user lookup) runs for real.
 const jar = vi.hoisted(() => new Map<string, string>());
+const jarOptions = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 vi.mock("next/headers", () => ({
   cookies: async () => ({
     get: (name: string) =>
       jar.has(name) ? { name, value: jar.get(name)! } : undefined,
-    set: (name: string, value: string) => {
-      jar.set(name, value);
+    set: (name: string, value: string, options: Record<string, unknown>) => {
+      if (options.maxAge === 0) jar.delete(name);
+      else jar.set(name, value);
+      jarOptions.set(name, options);
     },
     delete: (name: string) => {
       jar.delete(name);
@@ -36,6 +39,8 @@ import { createSession, destroySession, getSessionUser } from "@/lib/auth";
 import { SESSION_COOKIE } from "@/lib/constants";
 import { prisma } from "@/lib/prisma";
 import { makeUser } from "./factories";
+
+afterEach(() => vi.unstubAllEnvs());
 
 // Read the persisted epoch directly (bypasses the in-process cache in
 // session-epoch.ts so assertions see the DB truth).
@@ -101,6 +106,7 @@ async function syncEpochCache() {
 describe("session JWT path (real createSession/getSessionUser)", () => {
   beforeEach(async () => {
     jar.clear();
+    jarOptions.clear();
     await syncEpochCache();
   });
 
@@ -109,11 +115,39 @@ describe("session JWT path (real createSession/getSessionUser)", () => {
     await createSession(user.id);
 
     expect(jar.get(SESSION_COOKIE)).toBeTruthy();
+    expect(jarOptions.get(SESSION_COOKIE)).toMatchObject({
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
     const session = await getSessionUser();
     expect(session).toMatchObject({
       id: user.id,
       steamId: user.steamId,
       name: "Session Holder",
+      role: "USER",
+    });
+  });
+
+  it("revokes an allowlisted admin on the next request without replacing their cookie", async () => {
+    const user = await makeUser("Allowlisted Admin", "ADMIN");
+    vi.stubEnv("ADMIN_STEAM_IDS", user.steamId);
+    await createSession(user.id);
+
+    const token = jar.get(SESSION_COOKIE);
+    expect(await getSessionUser()).toMatchObject({
+      id: user.id,
+      role: "ADMIN",
+    });
+
+    // Simulate an incident-response env change while the 30-day JWT remains
+    // in the browser. Authorization must follow the live allowlist, not the
+    // stale DB role or anything copied into the token.
+    vi.stubEnv("ADMIN_STEAM_IDS", "76561199999999999");
+    expect(jar.get(SESSION_COOKIE)).toBe(token);
+    expect(await getSessionUser()).toMatchObject({
+      id: user.id,
       role: "USER",
     });
   });
@@ -183,6 +217,19 @@ describe("session JWT path (real createSession/getSessionUser)", () => {
     expect(await getSessionUser()).toBeNull(); // valid token, vanished user
   });
 
+  it("reads the current database role instead of trusting a role in the JWT", async () => {
+    const user = await makeUser("Promoted Later");
+    await createSession(user.id);
+    expect((await getSessionUser())?.role).toBe("USER");
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { role: "ADMIN" },
+    });
+
+    expect((await getSessionUser())?.role).toBe("ADMIN");
+  });
+
   it("destroySession deletes the cookie", async () => {
     const user = await makeUser("Leaver");
     await createSession(user.id);
@@ -190,6 +237,14 @@ describe("session JWT path (real createSession/getSessionUser)", () => {
 
     await destroySession();
     expect(jar.has(SESSION_COOKIE)).toBe(false);
+    expect(jarOptions.get(SESSION_COOKIE)).toMatchObject({
+      expires: new Date(0),
+      httpOnly: true,
+      maxAge: 0,
+      path: "/",
+      sameSite: "lax",
+      secure: false,
+    });
     expect(await getSessionUser()).toBeNull();
   });
 });

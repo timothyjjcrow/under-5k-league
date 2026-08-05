@@ -16,6 +16,8 @@ import {
 } from "@/components/ui";
 
 import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { productionDeleteBackupRequired } from "@/lib/backup-receipt.mjs";
 
 export const metadata = { title: "Season history" };
 
@@ -25,12 +27,27 @@ export default async function SeasonsPage() {
       orderBy: { createdAt: "desc" },
       include: {
         teams: { select: { id: true, name: true } },
+        matches: {
+          where: { phase: { not: "REGULAR" } },
+          select: {
+            id: true,
+            phase: true,
+            bracketSlot: true,
+            status: true,
+            winnerTeamId: true,
+            homeTeamId: true,
+            awayTeamId: true,
+          },
+        },
+        draft: { select: { status: true } },
         _count: { select: { registrations: true, matches: true } },
       },
     }),
     getSessionUser(),
   ]);
   const isAdmin = viewer?.role === "ADMIN";
+  const activeSeason = seasons.find((season) => season.isActive) ?? null;
+  const backupReceiptRequired = productionDeleteBackupRequired(process.env);
 
   return (
     <div className="space-y-8">
@@ -47,13 +64,41 @@ export default async function SeasonsPage() {
         }
       />
 
+      {isAdmin && activeSeason ? (
+        <Card>
+          <CardBody className="space-y-2">
+            <p className="font-semibold">
+              Reactivation is available from the offseason
+            </p>
+            <p className="text-sm text-muted">
+              {activeSeason.name} is currently active. To avoid silently
+              cancelling a live league, first use Season handoff to archive a
+              completed season or explicitly cancel an unfinished one. Then
+              return here to resume an archived season.
+            </p>
+            <Link
+              href="/admin#adm-new-season"
+              className={textLink("text-sm")}
+            >
+              Review season handoff →
+            </Link>
+          </CardBody>
+        </Card>
+      ) : null}
+
       {seasons.length === 0 ? (
         <EmptyState title="No seasons yet" />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {seasons.map((s) => {
-            const champion = s.championTeamId
-              ? s.teams.find((t) => t.id === s.championTeamId)
+            const championPresentation = resolveChampionPresentation(
+              s,
+              s.matches,
+            );
+            const champion = championPresentation.championTeamId
+              ? s.teams.find(
+                  (team) => team.id === championPresentation.championTeamId,
+                )
               : null;
             return (
               <div key={s.id} className="flex h-full flex-col gap-1.5">
@@ -89,9 +134,11 @@ export default async function SeasonsPage() {
                       </div>
                     ) : (
                       <div className="text-sm text-muted">
-                        {s.isActive
-                          ? "Season in progress"
-                          : "No champion recorded"}
+                        {s.status === "COMPLETE"
+                          ? "Champion state needs review"
+                          : s.isActive
+                            ? "Season in progress"
+                            : "No champion recorded"}
                       </div>
                     )}
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
@@ -105,18 +152,37 @@ export default async function SeasonsPage() {
                 </Link>
                 {isAdmin && !s.isActive ? (
                   <div className="flex flex-col gap-2">
-                    <ActionForm
-                      action={reactivateSeasonAction}
-                      hidden={{ seasonId: s.id }}
-                    >
-                      <SubmitButton
-                        variant="secondary"
-                        size="sm"
-                        confirm={`Make ${s.name} the active season again? The current active season is archived (nothing is deleted — you can switch back the same way).`}
+                    {activeSeason ? (
+                      <button
+                        type="button"
+                        disabled
+                        className={buttonClasses("secondary", "sm")}
                       >
-                        ↩ Make active again
-                      </SubmitButton>
-                    </ActionForm>
+                        ↩ Enter offseason to reactivate
+                      </button>
+                    ) : (
+                      <ActionForm
+                        action={reactivateSeasonAction}
+                        hidden={{
+                          seasonId: s.id,
+                          expectedTargetUpdatedAt: s.updatedAt.toISOString(),
+                        }}
+                      >
+                        <SubmitButton
+                          variant="secondary"
+                          size="sm"
+                          confirm={
+                            s.status === "COMPLETE"
+                              ? `Reactivate completed ${s.name} for corrections? This ends the offseason and makes it the current public season. It remains Complete until you deliberately use a correction or recovery control; no results or history change now.`
+                              : `Resume ${s.name}? This ends the offseason and restores ${PHASE_LABEL[s.status] ?? s.status} exactly as saved. The signup, draft, and match tools allowed in that phase become active again. Nothing is deleted.${s.draft?.status === "IN_PROGRESS" || s.draft?.status === "PAUSED" ? " Its auction will remain paused until an admin resumes it." : ""}`
+                          }
+                        >
+                          {s.status === "COMPLETE"
+                            ? "↩ Reactivate for corrections"
+                            : "↩ Resume season"}
+                        </SubmitButton>
+                      </ActionForm>
+                    )}
                     {/* TYPE-TO-CONFIRM, not window.confirm. This is the only
                         truly unrecoverable action in the app — a hard cascade
                         delete of every match, game, box score, registration,
@@ -124,24 +190,30 @@ export default async function SeasonsPage() {
                         the season, which also silently rewrites the
                         cross-season boards (/records, /hall-of-fame, /meta,
                         career stats) because they scan all Game rows. And it
-                        sat 8px from "Make active again" as a same-sized
+                        sat 8px from the reactivation control as a same-sized
                         sibling, behind a dialog whose OK button is focused by
                         default. One stray Enter is not an acceptable barrier
                         for that. Its own row, danger styling, and the admin
                         has to type the season's name. */}
-                    {/* The BACKUP, offered right where the risk is. Delete is
-                        the only unrecoverable action in the app and the only
-                        safeguard was a CLI script the panel never mentions, so
-                        the export sits directly above it and the delete dialog
-                        points at it by name. */}
+                    <p className="rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-xs text-muted">
+                      The JSON download is an audit/reference archive only. It
+                      cannot restore the database and does not satisfy the
+                      production backup requirement.
+                    </p>
                     <a
                       href={`/api/admin/season-export?seasonId=${s.id}`}
                       className={buttonClasses("secondary", "sm")}
                       download
                     >
-                      ⤓ Download archive (JSON)
+                      ⤓ Download audit archive (JSON)
                     </a>
-                    <ActionForm action={deleteSeason} hidden={{ seasonId: s.id }}>
+                    <ActionForm
+                      action={deleteSeason}
+                      hidden={{
+                        seasonId: s.id,
+                        expectedSeasonUpdatedAt: s.updatedAt.toISOString(),
+                      }}
+                    >
                       <DangerSubmit
                         token={s.name}
                         title={`Permanently delete ${s.name}?`}
@@ -151,7 +223,18 @@ export default async function SeasonsPage() {
                           "Fantasy rosters and pick'em picks for this season.",
                           "Its results disappear from the all-time record book, hall of fame, hero meta and every player's career stats.",
                         ]}
-                        recovery="There is no undo for this. Download the archive first (the button above this one) — it is the only copy you will have. If you only want the season out of the way, it is already archived; leave it."
+                        recovery="There is no in-app undo. The JSON audit archive above is not a database backup and cannot restore the deleted rows. If you only want the season out of the way, it is already archived; leave it."
+                        evidence={
+                          backupReceiptRequired
+                            ? {
+                                name: "backupReceipt",
+                                label: "Recent full-database backup receipt",
+                                description:
+                                  "Create a fresh full backup, verify it with BACKUP_RECEIPT_SECRET configured, and paste the emitted receipt. It expires after 24 hours and must match this production database.",
+                                placeholder: "ld2l-backup-v1.…",
+                              }
+                            : undefined
+                        }
                       >
                         🗑 Delete permanently
                       </DangerSubmit>

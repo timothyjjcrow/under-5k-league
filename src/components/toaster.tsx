@@ -42,7 +42,7 @@ export function Toaster() {
       {toasts.map((t) => (
         <div
           key={t.id}
-          role="status"
+          role={t.type === "error" ? "alert" : "status"}
           className={cn(
             "toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm shadow-lg backdrop-blur",
             t.type === "error"
@@ -58,7 +58,7 @@ export function Toaster() {
             type="button"
             aria-label="Dismiss"
             onClick={() => dismiss(t.id)}
-            className="-mr-1 shrink-0 rounded p-0.5 opacity-60 transition-opacity hover:opacity-100"
+            className="-mr-1 shrink-0 rounded p-0.5 opacity-60 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
           >
             <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden>
               <path d="M6 6l12 12M18 6 6 18" />

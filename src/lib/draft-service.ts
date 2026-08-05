@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
   DEFAULTS,
@@ -6,7 +7,7 @@ import {
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
-import { steamIdToAccountId } from "./dota";
+import { effectiveDotaAccountId } from "./dota-account";
 import {
   canBid,
   canNominate,
@@ -15,23 +16,31 @@ import {
   nextNominatorIndex,
   type DraftTeam,
 } from "./draft";
+import { draftBudgetsForDisplay } from "./draft-budgets";
 import type { SessionUser } from "./auth";
 import { raceHook } from "./race-hook";
 import { draftRecap } from "./draft-recap";
+import type {
+  DraftLotExpectation,
+  DraftTurnExpectation,
+} from "./draft-http";
+import { weekReminderPrefix } from "./settings";
 import {
   draftCompleteMessage,
   draftRecapMessage,
   playerSoldMessage,
   sendDiscordMessage,
 } from "./discord";
+import { canViewLeagueContact } from "./visibility";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
 /**
  * Finalize a nomination whose clock has expired: the current high bidder wins
  * the player at the current price, budget is deducted, and the nomination
- * advances to the next captain who still needs players. Idempotent + safe to
- * call on every poll (it no-ops unless a nomination has actually expired).
+ * advances to the next captain who still needs players. Idempotent and safe
+ * under concurrent leased maintenance calls (it no-ops unless a nomination
+ * has actually expired).
  */
 export async function resolveExpiredNomination(seasonId: string): Promise<boolean> {
   // Set inside the transaction when this call is the one that finishes the
@@ -52,7 +61,14 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     if (draft.bidEndsAt.getTime() > Date.now()) return false;
 
     const season = await tx.season.findUnique({ where: { id: seasonId } });
-    if (!season) return false;
+    // Draft.status is not sufficient on its own: phase is the outer lifecycle
+    // gate. If a prior race ever stranded a live Draft outside DRAFT, a random
+    // visitor must not auto-sell another player before an admin repairs it.
+    if (
+      !season?.isActive ||
+      season.status !== SEASON_STATUS.DRAFT
+    )
+      return false;
 
     // Claim the resolution atomically (the placeBid optimistic-lock pattern):
     // clear the nomination only if the auction is still exactly as read. Two
@@ -237,7 +253,12 @@ export async function resolveStalledNomination(
         include: { _count: { select: { members: true } } },
       }),
     ]);
-    if (!season || !nominator) return false;
+    if (
+      !season?.isActive ||
+      season.status !== SEASON_STATUS.DRAFT ||
+      !nominator
+    )
+      return false;
     // Full roster OR no money for even the minimum bid — both mean this team
     // cannot legally take the clock, so ADVANCE instead of no-opping forever (an
     // expired clock plus an ineligible nominator would otherwise freeze the
@@ -384,16 +405,28 @@ export async function pauseDraft(
   viewer: SessionUser,
 ): Promise<DraftActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  const claim = await prisma.draft.updateMany({
-    where: { seasonId, status: DRAFT_STATUS.IN_PROGRESS },
-    data: {
-      status: DRAFT_STATUS.PAUSED,
-      bidEndsAt: null,
-      nominationEndsAt: null,
-    },
+  // A pause arriving just after zero must settle the expired clock, not grant
+  // a fresh full clock on Resume. Both resolvers are idempotent and phase-
+  // gated; after they run, the claim parks whichever clock is now current.
+  await resolveExpiredNomination(seasonId);
+  await resolveStalledNomination(seasonId);
+  return prisma.$transaction(async (tx) => {
+    const season = await tx.season.findUnique({ where: { id: seasonId } });
+    if (!season?.isActive || season.status !== SEASON_STATUS.DRAFT) {
+      return { ok: false as const, error: "The auction is not in the Draft phase" };
+    }
+    const claim = await tx.draft.updateMany({
+      where: { seasonId, status: DRAFT_STATUS.IN_PROGRESS },
+      data: {
+        status: DRAFT_STATUS.PAUSED,
+        bidEndsAt: null,
+        nominationEndsAt: null,
+      },
+    });
+    if (claim.count === 0)
+      return { ok: false as const, error: "The draft isn't live" };
+    return { ok: true as const };
   });
-  if (claim.count === 0) return { ok: false, error: "The draft isn't live" };
-  return { ok: true };
 }
 
 /** Admin: resume a paused auction with a fresh full clock for the live lot. */
@@ -402,23 +435,121 @@ export async function resumeDraft(
   viewer: SessionUser,
 ): Promise<DraftActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  const draft = await prisma.draft.findUnique({ where: { seasonId } });
-  if (!draft || draft.status !== DRAFT_STATUS.PAUSED) {
-    return { ok: false, error: "The draft isn't paused" };
-  }
-  const clock = draft.nominatedUserId
-    ? { bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000) }
-    : {
-        nominationEndsAt: new Date(
-          Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
-        ),
-      };
-  const claim = await prisma.draft.updateMany({
-    where: { seasonId, status: DRAFT_STATUS.PAUSED },
-    data: { status: DRAFT_STATUS.IN_PROGRESS, ...clock },
+  return prisma.$transaction(async (tx) => {
+    const [season, draft] = await Promise.all([
+      tx.season.findUnique({ where: { id: seasonId } }),
+      tx.draft.findUnique({ where: { seasonId } }),
+    ]);
+    if (!season?.isActive || season.status !== SEASON_STATUS.DRAFT) {
+      return { ok: false as const, error: "The auction is not in the Draft phase" };
+    }
+    if (!draft || draft.status !== DRAFT_STATUS.PAUSED) {
+      return { ok: false as const, error: "The draft isn't paused" };
+    }
+    const clock = draft.nominatedUserId
+      ? { bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000) }
+      : {
+          nominationEndsAt: new Date(
+            Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
+          ),
+        };
+    // Cancellation deliberately touches even an already-PAUSED draft. A
+    // Resume that authorized itself just before that lifecycle write must lose
+    // this updatedAt claim instead of rearming clocks on an archived season.
+    await raceHook("draft.resume.beforeClaim");
+    const claim = await tx.draft.updateMany({
+      where: {
+        seasonId,
+        status: DRAFT_STATUS.PAUSED,
+        updatedAt: draft.updatedAt,
+      },
+      data: { status: DRAFT_STATUS.IN_PROGRESS, ...clock },
+    });
+    if (claim.count === 0)
+      return { ok: false as const, error: "The draft just changed — reload" };
+    return { ok: true as const };
   });
-  if (claim.count === 0) return { ok: false, error: "The draft isn't paused" };
-  return { ok: true };
+}
+
+export type VoidLotSummary = {
+  ok: true;
+  player: string;
+  nominator: string;
+};
+
+/**
+ * Cancel a mistaken/disputed live lot while the auction is paused.
+ *
+ * Undo repairs a completed sale; it deliberately cannot touch a live lot.
+ * Without this companion operation, pausing a wrong nomination created a
+ * dead end: the lot could neither settle while paused nor be corrected. The
+ * same nominator keeps the turn and Resume gives them a fresh nomination
+ * clock. All bids for the void lot are removed from the visible audit trail.
+ */
+export async function voidCurrentLot(
+  seasonId: string,
+  viewer: SessionUser,
+): Promise<VoidLotSummary | { ok: false; error: string }> {
+  if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
+  return prisma.$transaction(
+    async (tx) => {
+      const [season, draft] = await Promise.all([
+        tx.season.findUnique({ where: { id: seasonId } }),
+        tx.draft.findUnique({ where: { seasonId } }),
+      ]);
+      if (!season?.isActive || season.status !== SEASON_STATUS.DRAFT) {
+        return { ok: false as const, error: "The auction is not in the Draft phase" };
+      }
+      if (!draft || draft.status !== DRAFT_STATUS.PAUSED) {
+        return {
+          ok: false as const,
+          error: "Pause the auction before voiding a live lot",
+        };
+      }
+      if (!draft.nominatedUserId) {
+        return { ok: false as const, error: "There is no live lot to void" };
+      }
+      const [player, nominator] = await Promise.all([
+        tx.user.findUnique({
+          where: { id: draft.nominatedUserId },
+          select: { name: true },
+        }),
+        tx.team.findUnique({
+          where: { id: draft.nominatorTeamId ?? "" },
+          select: { name: true },
+        }),
+      ]);
+      const claim = await tx.draft.updateMany({
+        where: {
+          seasonId,
+          status: DRAFT_STATUS.PAUSED,
+          nominatedUserId: draft.nominatedUserId,
+          currentBid: draft.currentBid,
+          currentBidTeamId: draft.currentBidTeamId,
+          updatedAt: draft.updatedAt,
+        },
+        data: {
+          nominatedUserId: null,
+          currentBid: 0,
+          currentBidTeamId: null,
+          bidEndsAt: null,
+          nominationEndsAt: null,
+        },
+      });
+      if (claim.count === 0) {
+        return { ok: false as const, error: "The lot just changed — reload" };
+      }
+      await tx.bid.deleteMany({
+        where: { draftId: draft.id, userId: draft.nominatedUserId },
+      });
+      return {
+        ok: true as const,
+        player: player?.name ?? "The nominated player",
+        nominator: nominator?.name ?? "The team on the clock",
+      };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }
 
 /** Which purchase an undo actually reverted, so the toast can name it. */
@@ -454,7 +585,21 @@ export async function undoLastSale(
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   try {
     return await prisma.$transaction(async (tx) => {
-    const draft = await tx.draft.findUnique({ where: { seasonId } });
+    const [season, draft] = await Promise.all([
+      tx.season.findUnique({ where: { id: seasonId } }),
+      tx.draft.findUnique({ where: { seasonId } }),
+    ]);
+    // Action-level phase checks are useful copy, but the service owns the
+    // invariant. Reading Season in this SERIALIZABLE transaction pairs with
+    // setSeasonPhase's Draft read, so phase-advance-vs-Undo cannot commit a
+    // REGULAR_SEASON with an IN_PROGRESS auction.
+    if (!season?.isActive || season.status !== SEASON_STATUS.DRAFT) {
+      return {
+        ok: false as const,
+        error:
+          "The season has moved on — use Release / Sign free agent for roster corrections.",
+      };
+    }
     if (!draft) return { ok: false as const, error: "No draft" };
     if (
       draft.status !== DRAFT_STATUS.IN_PROGRESS &&
@@ -579,12 +724,18 @@ export async function undoLastSale(
       price: last.price,
       paused: wasPaused,
     };
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (e) {
     // Outside the callback on purpose — catching inside would resolve the
     // transaction and commit the very writes the throw exists to roll back.
     if (e instanceof UndoRaceError) {
       return { ok: false as const, error: e.message };
+    }
+    if ((e as { code?: string }).code === "P2034") {
+      return {
+        ok: false as const,
+        error: "The phase, roster, or auction just changed — reload and try again.",
+      };
     }
     throw e;
   }
@@ -596,6 +747,11 @@ export type AbortDraftSummary = {
   playersReturned: number;
   budgetRestored: number;
   teams: number;
+  matchesRemoved: number;
+  checkInsCleared: number;
+  predictionsCleared: number;
+  reschedulesCleared: number;
+  fantasyRostersCleared: number;
   /** Standin bookings deleted with the rosters they covered — the ACTION
    *  sends one stand-down per row post-commit (the generateSchedule shape). */
   coverStandDowns: {
@@ -608,6 +764,8 @@ export type AbortDraftSummary = {
     isPlayoff: boolean;
   }[];
 };
+
+class AbortRaceError extends Error {}
 
 /**
  * Admin: ABORT the draft and put the season back to pre-draft.
@@ -632,309 +790,489 @@ export async function abortDraft(
   viewer: SessionUser,
 ): Promise<AbortDraftSummary | { ok: false; error: string }> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  return prisma.$transaction(async (tx) => {
-    const draft = await tx.draft.findUnique({ where: { seasonId } });
-    if (!draft || draft.status === DRAFT_STATUS.NOT_STARTED) {
-      return { ok: false as const, error: "The draft hasn't started" };
-    }
-    // Rosters become load-bearing the moment anything is played. Guard on both
-    // recorded results AND imported games — a forfeit typed by the admin has no
-    // Game rows, and an auto-synced game can land before the series completes.
-    const [played, games] = await Promise.all([
-      tx.match.count({ where: { seasonId, status: MATCH_STATUS.COMPLETED } }),
-      tx.game.count({ where: { match: { seasonId } } }),
-    ]);
-    if (played > 0 || games > 0) {
+  try {
+    return await prisma.$transaction(
+      async (tx) => {
+        const [season, draft] = await Promise.all([
+          tx.season.findUnique({ where: { id: seasonId } }),
+          tx.draft.findUnique({ where: { seasonId } }),
+        ]);
+        if (!season?.isActive) {
+          return { ok: false as const, error: "That is no longer the active season" };
+        }
+        if (!draft || draft.status === DRAFT_STATUS.NOT_STARTED) {
+          return { ok: false as const, error: "The draft hasn't started" };
+        }
+
+        // Rosters become load-bearing the moment anything is played. Guard on
+        // both recorded results AND imported games. The transaction is
+        // SERIALIZABLE and importGameForMatch reads the same Season/Draft rows,
+        // so an import racing this teardown cannot slip through the count.
+        const [
+          played,
+          games,
+          nonScheduled,
+          matchesRemoved,
+          checkInsCleared,
+          predictionsCleared,
+          reschedulesCleared,
+          fantasyRostersCleared,
+        ] = await Promise.all([
+          tx.match.count({ where: { seasonId, status: MATCH_STATUS.COMPLETED } }),
+          tx.game.count({ where: { match: { seasonId } } }),
+          tx.match.count({
+            where: { seasonId, status: { not: MATCH_STATUS.SCHEDULED } },
+          }),
+          tx.match.count({ where: { seasonId } }),
+          tx.matchAvailability.count({ where: { match: { seasonId } } }),
+          tx.prediction.count({ where: { match: { seasonId } } }),
+          tx.rescheduleRequest.count({ where: { match: { seasonId } } }),
+          tx.fantasyRoster.count({ where: { seasonId } }),
+        ]);
+        if (played > 0 || games > 0 || nonScheduled > 0) {
+          return {
+            ok: false as const,
+            error:
+              "A match has started or results are already recorded — the draft can't be aborted. Use Release / Sign free agent to fix a roster.",
+          };
+        }
+
+        const claim = await tx.draft.updateMany({
+          where: {
+            seasonId,
+            status: draft.status,
+            updatedAt: draft.updatedAt,
+          },
+          data: {
+            status: DRAFT_STATUS.NOT_STARTED,
+            nominatedUserId: null,
+            currentBid: 0,
+            currentBidTeamId: null,
+            bidEndsAt: null,
+            nominationEndsAt: null,
+            nominatorTeamId: null,
+            nominationIndex: 0,
+          },
+        });
+        if (claim.count === 0) throw new AbortRaceError();
+
+        // Restore a captain-only setup using Team.captainId as the authority,
+        // not the denormalized member flag. A bought player can legitimately be
+        // promoted after completion; if the auction is then aborted they remain
+        // the captain, but their auction price must become $0 and be refunded.
+        // The former captain and every other non-authoritative roster row return
+        // to the pool, including $0 free-agent signings made after completion.
+        const [teamAuthorities, roster] = await Promise.all([
+          tx.team.findMany({
+            where: { seasonId },
+            select: { id: true, captainId: true },
+          }),
+          tx.teamMember.findMany({
+            where: { seasonId },
+            select: { id: true, teamId: true, userId: true, price: true },
+          }),
+        ]);
+        const captainByTeam = new Map(
+          teamAuthorities.map((team) => [team.id, team.captainId]),
+        );
+        const retainedCaptains = roster.filter(
+          (member) => captainByTeam.get(member.teamId) === member.userId,
+        );
+        if (retainedCaptains.length !== teamAuthorities.length) {
+          throw new AbortRaceError();
+        }
+        const returned = roster.filter(
+          (member) => captainByTeam.get(member.teamId) !== member.userId,
+        );
+        const spentByTeam = new Map<string, number>();
+        for (const member of roster) {
+          spentByTeam.set(
+            member.teamId,
+            (spentByTeam.get(member.teamId) ?? 0) + member.price,
+          );
+        }
+        if (returned.length > 0) {
+          await tx.teamMember.deleteMany({
+            where: { id: { in: returned.map((member) => member.id) } },
+          });
+        }
+        await tx.teamMember.updateMany({
+          where: { id: { in: retainedCaptains.map((member) => member.id) } },
+          data: { isCaptain: true, price: 0 },
+        });
+        for (const [teamId, spent] of spentByTeam) {
+          if (spent !== 0) {
+            await tx.team.update({
+              where: { id: teamId },
+              data: { budget: { increment: spent } },
+            });
+          }
+        }
+        await tx.bid.deleteMany({ where: { draftId: draft.id } });
+
+        // Every fixture-level artifact was composed against the rosters being
+        // dissolved. Preserve none of that semantically stale schedule: Match
+        // cascades clear check-ins, predictions, cover and reschedules; fantasy
+        // lineups are season-level and need an explicit reset.
+        const staleCover = await tx.standinAssignment.findMany({
+          where: { match: { seasonId } },
+          select: {
+            teamId: true,
+            standin: { select: { name: true, discordId: true } },
+            match: {
+              select: {
+                week: true,
+                phase: true,
+                homeTeam: { select: { name: true } },
+                awayTeam: { select: { name: true } },
+              },
+            },
+          },
+        });
+        const teamNames = new Map(
+          (
+            await tx.team.findMany({
+              where: { seasonId },
+              select: { id: true, name: true },
+            })
+          ).map((team) => [team.id, team.name]),
+        );
+        await raceHook("draft.abortDraft.beforeFixtureDelete");
+        const removedMatches = await tx.match.deleteMany({
+          where: {
+            seasonId,
+            status: MATCH_STATUS.SCHEDULED,
+            games: { none: {} },
+          },
+        });
+        if (removedMatches.count !== matchesRemoved) throw new AbortRaceError();
+        await tx.fantasyRoster.deleteMany({ where: { seasonId } });
+        await tx.setting.deleteMany({
+          where: { key: { startsWith: weekReminderPrefix(seasonId) } },
+        });
+
+        // The draft time/readiness acknowledgements are deliberately kept: an
+        // abort normally means "fix captains and rerun tonight", so asking the
+        // same people to reconfirm the unchanged time adds no integrity. Match
+        // night, week and champion state belong to the deleted schedule.
+        const resetSeason = await tx.season.updateMany({
+          where: {
+            id: seasonId,
+            isActive: true,
+            status: season.status,
+          },
+          data: {
+            status: SEASON_STATUS.SIGNUPS,
+            currentWeek: 0,
+            championTeamId: null,
+            fantasyLockedAt: null,
+          },
+        });
+        if (resetSeason.count === 0) throw new AbortRaceError();
+
+        const teams = await tx.team.count({ where: { seasonId } });
+        return {
+          ok: true as const,
+          playersReturned: returned.length,
+          budgetRestored: [...spentByTeam.values()].reduce((n, value) => n + value, 0),
+          teams,
+          matchesRemoved,
+          checkInsCleared,
+          predictionsCleared,
+          reschedulesCleared,
+          fantasyRostersCleared,
+          coverStandDowns: staleCover.map((assignment) => ({
+            standinName: assignment.standin.name,
+            discordId: assignment.standin.discordId,
+            teamName: teamNames.get(assignment.teamId) ?? "their team",
+            homeName: assignment.match.homeTeam.name,
+            awayName: assignment.match.awayTeam.name,
+            week: assignment.match.week,
+            isPlayoff: assignment.match.phase !== MATCH_PHASE.REGULAR,
+          })),
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if (
+      error instanceof AbortRaceError ||
+      (error as { code?: string }).code === "P2034"
+    ) {
       return {
-        ok: false as const,
+        ok: false,
         error:
-          "Results are already recorded — the draft can't be aborted. Use Release / Sign free agent to fix a roster.",
+          "The auction, schedule, or results changed during the reset — nothing was aborted. Reload and review it.",
       };
     }
-
-    // Claim the abort so two admins double-clicking can't both run the teardown
-    // (the guarded-claim rule every other draft transition follows).
-    const claim = await tx.draft.updateMany({
-      where: { seasonId, status: draft.status },
-      data: {
-        status: DRAFT_STATUS.NOT_STARTED,
-        nominatedUserId: null,
-        currentBid: 0,
-        currentBidTeamId: null,
-        bidEndsAt: null,
-        nominationEndsAt: null,
-        nominatorTeamId: null,
-        nominationIndex: 0,
-      },
-    });
-    if (claim.count === 0) {
-      return { ok: false as const, error: "The draft just changed — try again" };
-    }
-
-    // Undo every purchase: drop the bought players and credit each team back
-    // exactly what those rows cost. Captain rows are KEPT and deliberately not
-    // credited — usually they cost 0, but `transferCaptaincy` only flips
-    // isCaptain, so a player bought at $57 who was later promoted keeps that
-    // price on a row that survives the abort. Not crediting it is correct: that
-    // player is still rostered, so the money is still spent and
-    // `budget + spent == starting budget` continues to hold.
-    const bought = await tx.teamMember.findMany({
-      where: { seasonId, isCaptain: false },
-      select: { id: true, teamId: true, price: true },
-    });
-    const spentByTeam = new Map<string, number>();
-    for (const m of bought) {
-      spentByTeam.set(m.teamId, (spentByTeam.get(m.teamId) ?? 0) + m.price);
-    }
-    if (bought.length) {
-      await tx.teamMember.deleteMany({
-        where: { id: { in: bought.map((m) => m.id) } },
-      });
-    }
-    for (const [teamId, spent] of spentByTeam) {
-      if (spent !== 0) {
-        await tx.team.update({
-          where: { id: teamId },
-          data: { budget: { increment: spent } },
-        });
-      }
-    }
-    // Void the audit trail — otherwise the re-run auction's "Bid trail" replays
-    // the aborted draft's prices (the reason undoLastSale clears Bids too).
-    await tx.bid.deleteMany({ where: { draftId: draft.id } });
-
-    // Cover keyed to rosters this abort just dissolved is stale by definition
-    // — and the empty-seat kind (replacingUserId null) is permanently "live"
-    // to matchNightRoster, so a booking that survives into the re-run auction
-    // inflates a freshly drafted side to six on /schedule, the week reminder
-    // and the import account sets. Deleted here, stood down by the ACTION
-    // post-commit (the generateSchedule pattern). No played-games caveat
-    // needed: this abort already refused if any game or result exists.
-    const staleCover = await tx.standinAssignment.findMany({
-      where: { match: { seasonId } },
-      select: {
-        teamId: true,
-        standin: { select: { name: true, discordId: true } },
-        match: {
-          select: {
-            week: true,
-            phase: true,
-            homeTeam: { select: { name: true } },
-            awayTeam: { select: { name: true } },
-          },
-        },
-      },
-    });
-    if (staleCover.length) {
-      await tx.standinAssignment.deleteMany({
-        where: { match: { seasonId } },
-      });
-    }
-    const teamNames = new Map(
-      (
-        await tx.team.findMany({
-          where: { seasonId },
-          select: { id: true, name: true },
-        })
-      ).map((t) => [t.id, t.name]),
-    );
-
-    // Back to SIGNUPS: that is what reopens captain management AND lets the late
-    // players this abort exists for register at all (registrationGate blocks new
-    // PLAYER signups outside SIGNUPS).
-    await tx.season.update({
-      where: { id: seasonId },
-      data: { status: SEASON_STATUS.SIGNUPS },
-    });
-
-    const teams = await tx.team.count({ where: { seasonId } });
-    return {
-      ok: true as const,
-      playersReturned: bought.length,
-      budgetRestored: [...spentByTeam.values()].reduce((n, v) => n + v, 0),
-      teams,
-      coverStandDowns: staleCover.map((a) => ({
-        standinName: a.standin.name,
-        discordId: a.standin.discordId,
-        teamName: teamNames.get(a.teamId) ?? "their team",
-        homeName: a.match.homeTeam.name,
-        awayName: a.match.awayTeam.name,
-        week: a.match.week,
-        isPlayoff: a.match.phase !== MATCH_PHASE.REGULAR,
-      })),
-    };
-  });
-}
-
-async function loadTeamsWithCounts(seasonId: string) {
-  const teams = await prisma.team.findMany({
-    where: { seasonId },
-    orderBy: { draftOrder: "asc" },
-    include: {
-      captain: true,
-      members: { include: { user: true }, orderBy: { price: "desc" } },
-    },
-  });
-  return teams;
+    throw error;
+  }
 }
 
 /** Everything the draft room client needs, tailored to the viewing user. */
-export async function getDraftState(seasonId: string, viewer: SessionUser | null) {
-  await resolveExpiredNomination(seasonId);
-  await resolveStalledNomination(seasonId);
+export async function getDraftState(
+  seasonId: string,
+  viewer: SessionUser | null,
+  /** Anonymous spectators get a read-only snapshot. The leased worker and
+   * authenticated room participants remain responsible for clock recovery. */
+  { resolveDeadlines = true }: { resolveDeadlines?: boolean } = {},
+) {
+  if (resolveDeadlines) {
+    await resolveExpiredNomination(seasonId);
+    await resolveStalledNomination(seasonId);
+  }
+  // One repeatable snapshot. The old Promise.all ran independent queries, so
+  // a sale between them could return a new roster with an old budget, or a new
+  // lot with the previous lot's Bid trail. SERIALIZABLE is the only isolation
+  // level shared by this repository's SQLite dev/test DB and PostgreSQL.
+  return prisma.$transaction(
+    async (tx) => {
+      const [season, draft, teams, playerRegs, viewerRegistration] =
+        await Promise.all([
+          tx.season.findUnique({ where: { id: seasonId } }),
+          tx.draft.findUnique({ where: { seasonId } }),
+          tx.team.findMany({
+            where: { seasonId },
+            orderBy: { draftOrder: "asc" },
+            select: {
+              id: true,
+              name: true,
+              budget: true,
+              draftOrder: true,
+              captainId: true,
+              members: {
+                orderBy: { price: "desc" },
+                select: {
+                  userId: true,
+                  price: true,
+                  isCaptain: true,
+                  createdAt: true,
+                  user: {
+                    select: {
+                      name: true,
+                      avatar: true,
+                      rankTier: true,
+                    },
+                  },
+                },
+              },
+            },
+          }),
+          tx.registration.findMany({
+            where: { seasonId, status: "ACTIVE", type: "PLAYER" },
+            orderBy: { mmr: "desc" },
+            select: {
+              userId: true,
+              mmr: true,
+              roles: true,
+              favoriteHeroes: true,
+              statement: true,
+              captainNote: true,
+              user: {
+                select: {
+                  name: true,
+                  avatar: true,
+                  rankTier: true,
+                  dotaAccountIdV2: true,
+                  legacyDotaAccountId: true,
+                  steamId: true,
+                  discordName: true,
+                  discordId: true,
+                },
+              },
+            },
+          }),
+          viewer
+            ? tx.registration.findUnique({
+                where: {
+                  seasonId_userId: { seasonId, userId: viewer.id },
+                },
+                select: { status: true },
+              })
+            : null,
+        ]);
+      if (!season) return null;
 
-  const [season, draft, teams, playerRegs, members] = await Promise.all([
-    prisma.season.findUnique({ where: { id: seasonId } }),
-    prisma.draft.findUnique({ where: { seasonId } }),
-    loadTeamsWithCounts(seasonId),
-    prisma.registration.findMany({
-      where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-      include: { user: true },
-      orderBy: { mmr: "desc" },
-    }),
-    prisma.teamMember.findMany({ where: { seasonId } }),
-  ]);
-  if (!season) return null;
+      const members = teams.flatMap((team) => team.members);
+      const draftedIds = new Set(members.map((member) => member.userId));
+      const available = playerRegs
+        .filter((registration) => !draftedIds.has(registration.userId))
+        .map((registration) => ({
+          userId: registration.userId,
+          name: registration.user.name,
+          avatar: registration.user.avatar,
+          mmr: registration.mmr,
+          rankTier: registration.user.rankTier,
+          roles: registration.roles,
+        }));
 
-  const draftedIds = new Set(members.map((m) => m.userId));
-  const available = playerRegs
-    .filter((r) => !draftedIds.has(r.userId))
-    .map((r) => ({
-      userId: r.userId,
-      name: r.user.name,
-      avatar: r.user.avatar,
-      mmr: r.mmr,
-      rankTier: r.user.rankTier,
-      roles: r.roles,
-    }));
-
-  const teamViews = teams.map((t) => ({
-    id: t.id,
-    name: t.name,
-    budget: t.budget,
-    draftOrder: t.draftOrder,
-    captainId: t.captainId,
-    need: teamNeed(season.teamSize, t.members.length),
-    members: t.members.map((m) => ({
-      userId: m.userId,
-      name: m.user.name,
-      avatar: m.user.avatar,
-      price: m.price,
-      isCaptain: m.isCaptain,
-      rankTier: m.user.rankTier,
-    })),
-  }));
-
-  const myTeam = viewer
-    ? teams.find((t) => t.captainId === viewer.id)
-    : undefined;
-  const isAdmin = viewer?.role === "ADMIN";
-  const now = Date.now();
-  const bidOpen =
-    !!draft?.nominatedUserId &&
-    !!draft?.bidEndsAt &&
-    draft.bidEndsAt.getTime() > now;
-
-  const myDraftTeam: DraftTeam | undefined = myTeam
-    ? { id: myTeam.id, budget: myTeam.budget, rosterCount: myTeam.members.length }
-    : undefined;
-
-  // Sale history reconstructed from rostered members (newest first) so a
-  // fresh page load can seed its live feed — the feed itself is client-side
-  // state diffing and would otherwise start empty mid-draft.
-  const recentSales = teams
-    .flatMap((t) =>
-      t.members
-        .filter((m) => !m.isCaptain)
-        .map((m) => ({
-          name: m.user.name,
-          teamName: t.name,
-          price: m.price,
-          at: m.createdAt.getTime(),
+      const displayBudgets = draftBudgetsForDisplay({
+        seasonIsActive: season.isActive,
+        seasonStatus: season.status,
+        draftStatus: draft?.status,
+        baseBudget: season.draftBudget,
+        budgetMmrWeight: season.budgetMmrWeight,
+        teamSize: season.teamSize,
+        teams,
+        captainMmrs: playerRegs,
+      });
+      const teamViews = teams.map((team) => ({
+        id: team.id,
+        name: team.name,
+        budget: displayBudgets.byTeam.get(team.id) ?? team.budget,
+        draftOrder: team.draftOrder,
+        captainId: team.captainId,
+        need: teamNeed(season.teamSize, team.members.length),
+        members: team.members.map((member) => ({
+          userId: member.userId,
+          name: member.user.name,
+          avatar: member.user.avatar,
+          price: member.price,
+          isCaptain: member.isCaptain,
+          rankTier: member.user.rankTier,
         })),
-    )
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 8);
+      }));
 
-  const nominatedPlayer = draft?.nominatedUserId
-    ? (playerRegs.find((r) => r.userId === draft.nominatedUserId) ?? null)
-    : null;
+      const myTeam = viewer
+        ? teams.find((team) => team.captainId === viewer.id)
+        : undefined;
+      const rosterTeam = viewer
+        ? teams.find((team) =>
+            team.members.some((member) => member.userId === viewer.id),
+          )
+        : undefined;
+      const rosterSeat = rosterTeam?.members.find(
+        (member) => member.userId === viewer?.id,
+      );
+      const now = Date.now();
+      const bidOpen =
+        season.status === SEASON_STATUS.DRAFT &&
+        !!draft?.nominatedUserId &&
+        !!draft.bidEndsAt &&
+        draft.bidEndsAt.getTime() > now;
+      const myBudget = myTeam
+        ? (displayBudgets.byTeam.get(myTeam.id) ?? myTeam.budget)
+        : 0;
+      const myDraftTeam: DraftTeam | undefined = myTeam
+        ? {
+            id: myTeam.id,
+            budget: myBudget,
+            rosterCount: myTeam.members.length,
+          }
+        : undefined;
 
-  // The current lot's bid trail (the Bid table is the audit log — surfacing
-  // it kills "wait, who bid what?" disputes mid-auction). Newest first.
-  const lotBids =
-    draft && draft.nominatedUserId
-      ? (
-          await prisma.bid.findMany({
-            where: { draftId: draft.id, userId: draft.nominatedUserId },
-            orderBy: { createdAt: "desc" },
-            take: 8,
-            select: { teamId: true, amount: true, createdAt: true },
-          })
-        ).map((b) => ({
-          teamId: b.teamId,
-          amount: b.amount,
-          at: b.createdAt.getTime(),
-        }))
-      : [];
+      const recentSales = teams
+        .flatMap((team) =>
+          team.members
+            .filter((member) => !member.isCaptain && member.price > 0)
+            .map((member) => ({
+              name: member.user.name,
+              teamName: team.name,
+              price: member.price,
+              at: member.createdAt.getTime(),
+            })),
+        )
+        .sort((a, b) => b.at - a.at)
+        .slice(0, 8);
+      const nominatedPlayer = draft?.nominatedUserId
+        ? (playerRegs.find(
+            (registration) => registration.userId === draft.nominatedUserId,
+          ) ?? null)
+        : null;
+      const canSeeNominatedContact = nominatedPlayer
+        ? canViewLeagueContact(
+            viewer,
+            nominatedPlayer.userId,
+            viewerRegistration?.status === "ACTIVE",
+          )
+        : false;
+      const lotBidRows =
+        draft?.nominatedUserId != null
+          ? await tx.bid.findMany({
+              where: {
+                draftId: draft.id,
+                userId: draft.nominatedUserId,
+              },
+              orderBy: { createdAt: "desc" },
+              take: 9,
+              select: { teamId: true, amount: true, createdAt: true },
+            })
+          : [];
 
-  return {
-    status: draft?.status ?? DRAFT_STATUS.NOT_STARTED,
-    teamSize: season.teamSize,
-    minBid: DEFAULTS.MIN_BID,
-    now,
-    bidEndsAt: draft?.bidEndsAt ? draft.bidEndsAt.getTime() : null,
-    nominationEndsAt: draft?.nominationEndsAt
-      ? draft.nominationEndsAt.getTime()
-      : null,
-    nominatorTeamId: draft?.nominatorTeamId ?? null,
-    currentBid: draft?.currentBid ?? 0,
-    currentBidTeamId: draft?.currentBidTeamId ?? null,
-    lotBids,
-    recentSales,
-    nominatedPlayer: nominatedPlayer
-      ? {
-          userId: nominatedPlayer.userId,
-          name: nominatedPlayer.user.name,
-          avatar: nominatedPlayer.user.avatar,
-          mmr: nominatedPlayer.mmr,
-          rankTier: nominatedPlayer.user.rankTier,
-          roles: nominatedPlayer.roles,
-          favoriteHeroes: nominatedPlayer.favoriteHeroes,
-          statement: nominatedPlayer.statement,
-          captainNote: nominatedPlayer.captainNote,
-          // Same derivation as /players: linked Dota account, else from Steam.
-          accountId:
-            nominatedPlayer.user.dotaAccountId ??
-            steamIdToAccountId(nominatedPlayer.user.steamId),
-          // Contact chip is for league members — the room is signed-in-gated
-          // in practice, but keep the same rule as /players anyway.
-          discordName: viewer ? nominatedPlayer.user.discordName : "",
-          discordVerified: viewer ? !!nominatedPlayer.user.discordId : false,
-        }
-      : null,
-    teams: teamViews,
-    available,
-    me: {
-      userId: viewer?.id ?? null,
-      isAdmin,
-      myTeamId: myTeam?.id ?? null,
-      isMyTurn: !!myTeam && draft?.nominatorTeamId === myTeam.id,
-      canNominate:
-        draft?.status === DRAFT_STATUS.IN_PROGRESS &&
-        !draft?.nominatedUserId &&
-        !!myDraftTeam &&
-        draft?.nominatorTeamId === myTeam?.id &&
-        teamNeed(season.teamSize, myDraftTeam.rosterCount) > 0,
-      canBid:
-        bidOpen &&
-        !!myDraftTeam &&
-        draft?.currentBidTeamId !== myTeam?.id &&
-        maxBid(myDraftTeam, season.teamSize) > (draft?.currentBid ?? 0),
-      myMaxBid: myDraftTeam ? maxBid(myDraftTeam, season.teamSize) : 0,
-      myBudget: myTeam?.budget ?? 0,
+      return {
+        seasonId: season.id,
+        seasonName: season.name,
+        seasonStatus: season.status,
+        draftAtMs: season.draftAt?.getTime() ?? null,
+        draftRevision: season.draftRevision,
+        draftVersion: draft?.updatedAt.getTime() ?? null,
+        status: draft?.status ?? DRAFT_STATUS.NOT_STARTED,
+        budgetsProjected: displayBudgets.isProjected,
+        teamSize: season.teamSize,
+        minBid: DEFAULTS.MIN_BID,
+        now,
+        bidEndsAt: draft?.bidEndsAt?.getTime() ?? null,
+        nominationEndsAt: draft?.nominationEndsAt?.getTime() ?? null,
+        nominatorTeamId: draft?.nominatorTeamId ?? null,
+        nominatedUserId: draft?.nominatedUserId ?? null,
+        currentBid: draft?.currentBid ?? 0,
+        currentBidTeamId: draft?.currentBidTeamId ?? null,
+        lotBids: lotBidRows.slice(0, 8).map((bid) => ({
+          teamId: bid.teamId,
+          amount: bid.amount,
+          at: bid.createdAt.getTime(),
+        })),
+        lotBidsTruncated: lotBidRows.length > 8,
+        recentSales,
+        nominatedPlayer: nominatedPlayer
+          ? {
+              userId: nominatedPlayer.userId,
+              name: nominatedPlayer.user.name,
+              avatar: nominatedPlayer.user.avatar,
+              mmr: nominatedPlayer.mmr,
+              rankTier: nominatedPlayer.user.rankTier,
+              roles: nominatedPlayer.roles,
+              favoriteHeroes: nominatedPlayer.favoriteHeroes,
+              statement: nominatedPlayer.statement,
+              captainNote: nominatedPlayer.captainNote,
+              accountId: effectiveDotaAccountId(nominatedPlayer.user),
+              discordName: canSeeNominatedContact
+                ? nominatedPlayer.user.discordName
+                : "",
+              discordVerified:
+                canSeeNominatedContact && !!nominatedPlayer.user.discordId,
+            }
+          : null,
+        teams: teamViews,
+        available,
+        me: {
+          userId: viewer?.id ?? null,
+          isAdmin: viewer?.role === "ADMIN",
+          myTeamId: myTeam?.id ?? null,
+          rosterTeamId: rosterTeam?.id ?? null,
+          rosterTeamName: rosterTeam?.name ?? null,
+          rosterPrice: rosterSeat?.price ?? null,
+          rosterIsCaptain: rosterSeat?.isCaptain ?? false,
+          isMyTurn: !!myTeam && draft?.nominatorTeamId === myTeam.id,
+          canNominate:
+            season.status === SEASON_STATUS.DRAFT &&
+            draft?.status === DRAFT_STATUS.IN_PROGRESS &&
+            !draft.nominatedUserId &&
+            !!myDraftTeam &&
+            draft.nominatorTeamId === myTeam?.id &&
+            teamNeed(season.teamSize, myDraftTeam.rosterCount) > 0,
+          canBid:
+            bidOpen &&
+            !!myDraftTeam &&
+            draft?.currentBidTeamId !== myTeam?.id &&
+            maxBid(myDraftTeam, season.teamSize) > (draft?.currentBid ?? 0),
+          myMaxBid: myDraftTeam ? maxBid(myDraftTeam, season.teamSize) : 0,
+          myBudget,
+        },
+      };
     },
-  };
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }
 
 export type DraftState = NonNullable<Awaited<ReturnType<typeof getDraftState>>>;
@@ -945,15 +1283,31 @@ export async function nominatePlayer(
   viewer: SessionUser,
   playerId: string,
   amount: number,
+  expected?: DraftTurnExpectation,
 ): Promise<DraftActionResult> {
   await resolveExpiredNomination(seasonId);
 
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const [season, draft] = await Promise.all([
       tx.season.findUnique({ where: { id: seasonId } }),
       tx.draft.findUnique({ where: { seasonId } }),
     ]);
     if (!season || !draft) return { ok: false as const, error: "No draft" };
+    if (!season.isActive || season.status !== SEASON_STATUS.DRAFT) {
+      return { ok: false as const, error: "The auction is not in the Draft phase" };
+    }
+    if (
+      expected &&
+      (draft.updatedAt.getTime() !== expected.draftVersion ||
+        draft.nominatorTeamId !== expected.nominatorTeamId ||
+        draft.nominationEndsAt?.getTime() !== expected.nominationEndsAt)
+    ) {
+      return {
+        ok: false as const,
+        error: "The nomination turn changed — review the live room before acting.",
+      };
+    }
     if (draft.status !== DRAFT_STATUS.IN_PROGRESS)
       return { ok: false as const, error: "Draft is not live" };
     if (draft.nominatedUserId)
@@ -1020,6 +1374,7 @@ export async function nominatePlayer(
         nominatedUserId: null,
         nominatorTeamId: draft.nominatorTeamId,
         nominationEndsAt: draft.nominationEndsAt,
+        updatedAt: draft.updatedAt,
       },
       data: {
         nominatedUserId: playerId,
@@ -1045,7 +1400,16 @@ export async function nominatePlayer(
       },
     });
     return { ok: true as const };
-  });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if ((error as { code?: string }).code === "P2034") {
+      return {
+        ok: false,
+        error: "The player pool or nomination turn just changed — review the room.",
+      };
+    }
+    throw error;
+  }
 }
 
 /** A captain raises the current high bid on the nominated player. */
@@ -1053,6 +1417,7 @@ export async function placeBid(
   seasonId: string,
   viewer: SessionUser,
   amount: number,
+  expected?: DraftLotExpectation,
 ): Promise<DraftActionResult> {
   await resolveExpiredNomination(seasonId);
 
@@ -1062,6 +1427,22 @@ export async function placeBid(
       tx.draft.findUnique({ where: { seasonId } }),
     ]);
     if (!season || !draft) return { ok: false as const, error: "No draft" };
+    if (!season.isActive || season.status !== SEASON_STATUS.DRAFT) {
+      return { ok: false as const, error: "The auction is not in the Draft phase" };
+    }
+    if (
+      expected &&
+      (draft.updatedAt.getTime() !== expected.draftVersion ||
+        draft.nominatedUserId !== expected.nominatedUserId ||
+        draft.currentBid !== expected.currentBid ||
+        draft.currentBidTeamId !== expected.currentBidTeamId ||
+        draft.bidEndsAt?.getTime() !== expected.bidEndsAt)
+    ) {
+      return {
+        ok: false as const,
+        error: "The auction lot changed — review the live price before bidding.",
+      };
+    }
     if (draft.status !== DRAFT_STATUS.IN_PROGRESS || !draft.nominatedUserId)
       return { ok: false as const, error: "Nothing is up for auction" };
     if (!draft.bidEndsAt || draft.bidEndsAt.getTime() <= Date.now())
@@ -1098,6 +1479,9 @@ export async function placeBid(
         status: DRAFT_STATUS.IN_PROGRESS,
         nominatedUserId: draft.nominatedUserId,
         currentBid: draft.currentBid,
+        currentBidTeamId: draft.currentBidTeamId,
+        bidEndsAt: draft.bidEndsAt,
+        updatedAt: draft.updatedAt,
       },
       data: {
         currentBid: amount,

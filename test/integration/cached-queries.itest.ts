@@ -22,10 +22,15 @@ import {
 // are Next's own code and require the server runtime — see cached-queries.ts).
 // This proves the QUERY is correct; the live fixture demo proves the caching.
 
-async function seedSeasonWithGames(name: string, gameCount: number) {
+async function seedSeasonWithGames(
+  name: string,
+  gameCount: number,
+  isActive = true,
+) {
   const season = await makeSeason({
     name,
     status: SEASON_STATUS.REGULAR_SEASON,
+    isActive,
   });
   const home = await makeTeam(season.id, `${name} Home`, 0);
   const away = await makeTeam(season.id, `${name} Away`, 1);
@@ -64,7 +69,7 @@ function sortById<T extends Record<string, unknown>>(rows: T[], key: keyof T) {
 describe("cached-queries data-equivalence", () => {
   it("each raw scan matches its inline query and filters correctly by season", async () => {
     const a = await seedSeasonWithGames("Alpha", 3);
-    const b = await seedSeasonWithGames("Beta", 2);
+    const b = await seedSeasonWithGames("Beta", 2, false);
 
     // getAllGameLines === prisma.game.findMany({ select: { id, players } })
     const linesCached = await fetchAllGameLines();
@@ -86,8 +91,9 @@ describe("cached-queries data-equivalence", () => {
     // getAllGamesForRecords === the record-book scan (matchup context, ordered)
     const recordsCached = await fetchAllGamesForRecords();
     const recordsInline = await prisma.game.findMany({
-      orderBy: [{ startTime: "asc" }, { fetchedAt: "asc" }],
       select: {
+        id: true,
+        startTime: true,
         matchId: true,
         radiantWin: true,
         durationSecs: true,
@@ -103,7 +109,14 @@ describe("cached-queries data-equivalence", () => {
         },
       },
     });
-    // orderBy matters here — compare in exact returned order.
+    recordsInline.sort((left, right) => {
+      const leftTime =
+        left.startTime > 0 ? left.startTime : Number.MAX_SAFE_INTEGER;
+      const rightTime =
+        right.startTime > 0 ? right.startTime : Number.MAX_SAFE_INTEGER;
+      return leftTime - rightTime || left.id.localeCompare(right.id);
+    });
+    // The total chronology matters here — compare in exact returned order.
     expect(recordsCached).toEqual(recordsInline);
     expect(recordsCached[0].match.homeTeam.name).toContain("Home");
 
@@ -172,5 +185,34 @@ describe("cached-queries data-equivalence", () => {
         },
       }),
     );
+  });
+
+  it("puts unknown record timestamps last and resolves exact times stably", async () => {
+    const seeded = await seedSeasonWithGames("Chronology", 3);
+    const rows = await prisma.game.findMany({
+      where: { matchId: seeded.match.id },
+      orderBy: { id: "asc" },
+      select: { id: true },
+    });
+    await prisma.$transaction([
+      prisma.game.update({
+        where: { id: rows[0].id },
+        data: { startTime: 0 },
+      }),
+      prisma.game.update({
+        where: { id: rows[1].id },
+        data: { startTime: 2000 },
+      }),
+      prisma.game.update({
+        where: { id: rows[2].id },
+        data: { startTime: 2000 },
+      }),
+    ]);
+
+    const ordered = await fetchAllGamesForRecords();
+    expect(ordered.map((game) => game.id)).toEqual([
+      ...[rows[1].id, rows[2].id].sort(),
+      rows[0].id,
+    ]);
   });
 });

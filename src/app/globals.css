@@ -16,15 +16,17 @@
   --color-line-soft: #1e2840;
   --color-fg: #e8edf5;
   --color-muted: #8b98af;
-  --color-brand: #e23b3b;
+  /* White text clears WCAG AA at normal button sizes (4.58:1). */
+  --color-brand: #dc3434;
   --color-brand-fg: #ffffff;
   --color-accent: #f2b134;
   --color-success: #3fb950;
   --color-danger: #e5534b;
   --color-info: #4c8dff;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
   --radius: 0.75rem;
@@ -56,6 +58,14 @@ body {
 
 a {
   color: inherit;
+}
+
+/* Several dense forms intentionally remove the browser's default outline to
+   avoid a double ring. Give every native field one consistent, unmistakable
+   keyboard focus indicator even when a local utility only changes its border. */
+:where(input, select, textarea):focus-visible {
+  outline: 2px solid var(--color-accent) !important;
+  outline-offset: 2px !important;
 }
 
 @layer base {
@@ -312,6 +322,17 @@ a {
   }
   .sold-flash {
     animation: none;
+  }
+
+  /* Catch component-local Tailwind transitions and any future animation that
+     forgets an explicit motion-reduce utility. State still changes instantly. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

@@ -6,13 +6,58 @@ import type { PubStats } from "./pub-stats";
 
 const BASE = "https://api.opendota.com/api";
 const STEAM64_BASE = BigInt("76561197960265728");
-const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_DOTA_ACCOUNT_ID = BigInt(0xffffffff);
+
+export const OPEN_DOTA_RECENT_TIMEOUT_MS = 8_000;
+export const OPEN_DOTA_MATCH_TIMEOUT_MS = 12_000;
+export const OPEN_DOTA_LEAGUE_TIMEOUT_MS = 12_000;
+const MIN_OPEN_DOTA_START_BUDGET_MS = 250;
+
+export type OpenDotaFetchOptions = {
+  /** Absolute wall-clock deadline. Omitted manual calls retain normal limits. */
+  deadlineMs?: number;
+  signal?: AbortSignal;
+};
+
+/** True only while an automated loop has enough time to start another call. */
+export function canStartOpenDotaFetch(
+  options: OpenDotaFetchOptions = {},
+  minimumRemainingMs = MIN_OPEN_DOTA_START_BUDGET_MS,
+): boolean {
+  if (options.signal?.aborted) return false;
+  return (
+    options.deadlineMs === undefined ||
+    options.deadlineMs - Date.now() >= minimumRemainingMs
+  );
+}
+
+export function openDotaBudgetExpired(
+  options: OpenDotaFetchOptions = {},
+): boolean {
+  return (
+    options.signal?.aborted === true ||
+    (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs)
+  );
+}
+
+function boundedSignal(
+  timeoutMs: number,
+  options: OpenDotaFetchOptions,
+): AbortSignal | null {
+  if (!canStartOpenDotaFetch(options)) return null;
+  const remaining =
+    options.deadlineMs === undefined
+      ? timeoutMs
+      : Math.max(1, options.deadlineMs - Date.now());
+  const timeout = AbortSignal.timeout(Math.min(timeoutMs, remaining));
+  return options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+}
 
 /** Convert a 64-bit SteamID to a 32-bit Dota account id (or null if invalid). */
 export function steamIdToAccountId(steamId64: string): number | null {
   try {
     const v = BigInt(steamId64) - STEAM64_BASE;
-    return v > BigInt(0) && v < MAX_SAFE ? Number(v) : null;
+    return v > BigInt(0) && v <= MAX_DOTA_ACCOUNT_ID ? Number(v) : null;
   } catch {
     return null;
   }
@@ -24,7 +69,9 @@ export function accountIdToSteamId64(accountId: number): string {
 
 /** Pull a numeric Dota match id out of a raw id or an OpenDota/Dotabuff/Stratz URL. */
 export function parseMatchId(input: string): string | null {
-  const m = String(input).trim().match(/(\d{6,})/);
+  const m = String(input)
+    .trim()
+    .match(/(\d{6,})/);
   return m ? m[1] : null;
 }
 
@@ -44,7 +91,9 @@ export function parseMatchId(input: string): string | null {
  * an empty input is the caller's business (that means "clear it").
  */
 export function parseLeagueId(input: string): string | null {
-  const m = String(input).trim().match(/(\d{4,})/);
+  const m = String(input)
+    .trim()
+    .match(/(\d{4,})/);
   return m ? m[1] : null;
 }
 
@@ -53,7 +102,9 @@ export function parseLeagueId(input: string): string | null {
  * OpenDota/Dotabuff player URL, or a Steam profile URL. Returns the 32-bit id.
  */
 export function parseAccountId(input: string): number | null {
-  const match = String(input).trim().match(/(\d{5,})/);
+  const match = String(input)
+    .trim()
+    .match(/(\d{5,})/);
   if (!match) return null;
   const digits = match[1];
   if (digits.length >= 17) return steamIdToAccountId(digits);
@@ -110,13 +161,16 @@ export type OpenDotaMatch = {
 
 export async function fetchOpenDotaMatch(
   dotaMatchId: string,
+  options: OpenDotaFetchOptions = {},
 ): Promise<OpenDotaMatch | null> {
+  const signal = boundedSignal(OPEN_DOTA_MATCH_TIMEOUT_MS, options);
+  if (!signal) return null;
   try {
     const res = await fetch(withKey(`${BASE}/matches/${dotaMatchId}`), {
       cache: "no-store",
       // A hung OpenDota call would otherwise block the server action (or the
       // inhouse poll) indefinitely — the sibling fetchers all time out too.
-      signal: AbortSignal.timeout(12_000),
+      signal,
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -136,11 +190,14 @@ export async function fetchOpenDotaMatch(
 export async function fetchRecentMatchIds(
   accountId: number,
   limit = 20,
+  options: OpenDotaFetchOptions = {},
 ): Promise<number[] | null> {
+  const signal = boundedSignal(OPEN_DOTA_RECENT_TIMEOUT_MS, options);
+  if (!signal) return null;
   try {
     const res = await fetch(
       withKey(`${BASE}/players/${accountId}/recentMatches`),
-      { cache: "no-store", signal: AbortSignal.timeout(8_000) },
+      { cache: "no-store", signal },
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -174,7 +231,9 @@ export type RankTierResult =
  * games, so every medal refresh doubles as a private-data check. Null when
  * OpenDota didn't include the field.
  */
-export async function fetchRankTier(accountId: number): Promise<RankTierResult> {
+export async function fetchRankTier(
+  accountId: number,
+): Promise<RankTierResult> {
   try {
     const res = await fetch(withKey(`${BASE}/players/${accountId}`), {
       cache: "no-store",
@@ -214,8 +273,7 @@ export async function fetchPlayerRankTier(
  * failed call, or a busy moment silently wipes everyone's scouting data.
  */
 export type PubStatsResult =
-  | { ok: true; stats: PubStats }
-  | { ok: false; stats: null };
+  { ok: true; stats: PubStats } | { ok: false; stats: null };
 
 /**
  * A player's pub-game scouting snapshot: W/L over their last ≤100 games
@@ -226,7 +284,9 @@ export type PubStatsResult =
  * returns all-zero figures; that is a real answer, stored as such (the UI
  * treats an empty recent window as "nothing scoutable").
  */
-export async function fetchPubStats(accountId: number): Promise<PubStatsResult> {
+export async function fetchPubStats(
+  accountId: number,
+): Promise<PubStatsResult> {
   try {
     const [wlRes, heroesRes] = await Promise.all([
       fetch(withKey(`${BASE}/players/${accountId}/wl?limit=100`), {
@@ -293,11 +353,14 @@ export async function fetchPubStats(accountId: number): Promise<PubStatsResult> 
  */
 export async function fetchLeagueMatchIds(
   leagueId: string,
+  options: OpenDotaFetchOptions = {},
 ): Promise<number[] | null> {
+  const signal = boundedSignal(OPEN_DOTA_LEAGUE_TIMEOUT_MS, options);
+  if (!signal) return null;
   try {
     const res = await fetch(withKey(`${BASE}/leagues/${leagueId}/matches`), {
       cache: "no-store",
-      signal: AbortSignal.timeout(12000),
+      signal,
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -309,4 +372,3 @@ export async function fetchLeagueMatchIds(
     return null;
   }
 }
-

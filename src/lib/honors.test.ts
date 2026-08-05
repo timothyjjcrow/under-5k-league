@@ -16,10 +16,31 @@ describe("weeklyHonors", () => {
           radiantWin: true,
           players: [
             // T1 radiant, wins: a1 pops off (30+10=40), a2 quiet (3+10=13)
-            { userId: "a1", isRadiant: true, heroId: 8, kills: 10, deaths: 0, assists: 0 },
-            { userId: "a2", isRadiant: true, heroId: 14, kills: 1, deaths: 0, assists: 0 },
+            {
+              userId: "a1",
+              isRadiant: true,
+              heroId: 8,
+              kills: 10,
+              deaths: 0,
+              assists: 0,
+            },
+            {
+              userId: "a2",
+              isRadiant: true,
+              heroId: 14,
+              kills: 1,
+              deaths: 0,
+              assists: 0,
+            },
             // T2 dire, loses: b1 decent but beaten (8*3-2=22)
-            { userId: "b1", isRadiant: false, heroId: 11, kills: 8, deaths: 2, assists: 0 },
+            {
+              userId: "b1",
+              isRadiant: false,
+              heroId: 11,
+              kills: 8,
+              deaths: 2,
+              assists: 0,
+            },
           ],
         },
       ],
@@ -68,6 +89,77 @@ describe("weeklyHonors", () => {
     );
     expect(anon.player).toBeNull();
   });
+
+  it("uses the winner's best single-game hero, not whichever row arrived last", () => {
+    const games = [
+      {
+        radiantWin: true,
+        players: [
+          {
+            userId: "a1",
+            isRadiant: true,
+            heroId: 9,
+            kills: 10,
+            deaths: 0,
+            assists: 0,
+          },
+        ],
+      },
+      {
+        radiantWin: true,
+        players: [
+          {
+            userId: "a1",
+            isRadiant: true,
+            heroId: 2,
+            kills: 1,
+            deaths: 8,
+            assists: 0,
+          },
+        ],
+      },
+    ];
+
+    expect(weeklyHonors(games, teamOf).player?.heroId).toBe(9);
+    expect(weeklyHonors([...games].reverse(), teamOf).player?.heroId).toBe(9);
+  });
+
+  it("resolves exact player and team ties by stable ids", () => {
+    const games = [
+      {
+        radiantWin: true,
+        players: [
+          {
+            userId: "b2",
+            teamId: "T2",
+            isRadiant: true,
+            heroId: 9,
+            kills: 3,
+            deaths: 0,
+            assists: 0,
+          },
+          {
+            userId: "a2",
+            teamId: "T1",
+            isRadiant: true,
+            heroId: 8,
+            kills: 3,
+            deaths: 0,
+            assists: 0,
+          },
+        ],
+      },
+    ];
+
+    const forward = weeklyHonors(games, teamOf);
+    const reversed = weeklyHonors(
+      [{ ...games[0], players: [...games[0].players].reverse() }],
+      teamOf,
+    );
+    expect(forward.player?.userId).toBe("a2");
+    expect(forward.team?.teamId).toBe("T1");
+    expect(reversed).toEqual(forward);
+  });
 });
 
 describe("weeklyHonors — roster churn", () => {
@@ -88,7 +180,15 @@ describe("weeklyHonors — roster churn", () => {
               assists: 0,
               teamId: "T1",
             },
-            { userId: "b1", isRadiant: false, heroId: 11, kills: 2, deaths: 3, assists: 0, teamId: "T2" },
+            {
+              userId: "b1",
+              isRadiant: false,
+              heroId: 11,
+              kills: 2,
+              deaths: 3,
+              assists: 0,
+              teamId: "T2",
+            },
           ],
         },
       ],

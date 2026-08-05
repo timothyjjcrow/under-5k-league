@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
 vi.mock("@/lib/discord", async (importOriginal) => ({
@@ -29,6 +30,7 @@ import {
   MATCH_STATUS,
   SEASON_STATUS,
 } from "@/lib/constants";
+import { weekReminderKey } from "@/lib/settings";
 import {
   makeCaptain,
   makePlayer,
@@ -93,12 +95,18 @@ describe("abortDraft — the way back from a premature Start draft", () => {
     });
 
     // Before the abort, the whole reason this exists: captains are locked.
-    const blocked = await addCaptain({}, formWith({ userId: late.id }));
-    expect(blocked?.error).toMatch(/draft has started/i);
+    const blocked = await addCaptain(
+      {},
+      formWith({ userId: late.id, expectedActiveSeasonId: season.id }),
+    );
+    expect(blocked?.error).toMatch(/auction is live.*locked/i);
 
     await abortDraft(season.id, await admin());
 
-    const allowed = await addCaptain({}, formWith({ userId: late.id }));
+    const allowed = await addCaptain(
+      {},
+      formWith({ userId: late.id, expectedActiveSeasonId: season.id }),
+    );
     expect(allowed?.error).toBeUndefined();
     expect(await prisma.team.count({ where: { seasonId: season.id } })).toBe(3);
   });
@@ -107,7 +115,10 @@ describe("abortDraft — the way back from a premature Start draft", () => {
     const { season } = await prematureStart();
     await abortDraft(season.id, await admin());
 
-    const res = await startDraft({}, new FormData());
+    const res = await startDraft(
+      {},
+      formWith({ expectedActiveSeasonId: season.id }),
+    );
 
     expect(res?.error).toBeUndefined();
     const draft = await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } });
@@ -145,6 +156,49 @@ describe("abortDraft — the way back from a premature Start draft", () => {
       where: { seasonId: season.id, status: "ACTIVE" },
     });
     expect(stillActive).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps a transferred captain but clears and refunds their auction price", async () => {
+    const { season, a, pool } = await prematureStart();
+    const replacement = pool[0];
+    const boughtCaptain = await prisma.teamMember.create({
+      data: {
+        seasonId: season.id,
+        teamId: a.team.id,
+        userId: replacement.id,
+        price: 25,
+        isCaptain: true,
+      },
+    });
+    await prisma.$transaction([
+      prisma.team.update({
+        where: { id: a.team.id },
+        data: { captainId: replacement.id, budget: 75 },
+      }),
+      prisma.teamMember.update({
+        where: {
+          seasonId_userId: { seasonId: season.id, userId: a.user.id },
+        },
+        data: { isCaptain: false },
+      }),
+    ]);
+
+    const res = await abortDraft(season.id, await admin());
+
+    expect(res).toMatchObject({ ok: true, playersReturned: 1, budgetRestored: 25 });
+    expect(
+      await prisma.teamMember.findUnique({
+        where: {
+          seasonId_userId: { seasonId: season.id, userId: a.user.id },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      await prisma.teamMember.findUnique({ where: { id: boughtCaptain.id } }),
+    ).toMatchObject({ isCaptain: true, price: 0 });
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })).budget,
+    ).toBe(100);
   });
 
   it("restores MMR-weighted budgets correctly (credits spend, not a flat reset)", async () => {
@@ -205,6 +259,10 @@ describe("abortDraft — the way back from a premature Start draft", () => {
         where: { seasonId: season.id },
       });
       expect(draft.status, status).toBe(DRAFT_STATUS.NOT_STARTED);
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { isActive: false },
+      });
     }
   });
 
@@ -226,6 +284,176 @@ describe("abortDraft — the way back from a premature Start draft", () => {
     expect(
       await prisma.teamMember.count({ where: { seasonId: season.id, isCaptain: false } }),
     ).toBe(0);
+  });
+
+  it("clears every roster-derived fixture artifact while preserving signup configuration and readiness", async () => {
+    const { season, a, b, pool } = await prematureStart();
+    const draftAt = new Date("2030-02-10T19:00:00.000Z");
+    const firstMatchNight = new Date("2030-02-17T19:00:00.000Z");
+    const confirmedAt = new Date("2030-02-01T12:00:00.000Z");
+    const scheduledAt = new Date("2030-02-17T19:00:00.000Z");
+    await prisma.season.update({
+      where: { id: season.id },
+      data: {
+        draftAt,
+        draftRevision: 4,
+        matchSchedule: "Sundays at 7 PM UTC",
+        firstMatchNight,
+        currentWeek: 5,
+        championTeamId: a.team.id,
+      },
+    });
+    await prisma.registration.update({
+      where: {
+        seasonId_userId: { seasonId: season.id, userId: pool[0].id },
+      },
+      data: {
+        draftConfirmedRevision: 4,
+        draftConfirmedAt: confirmedAt,
+        draftConfirmedFor: draftAt,
+      },
+    });
+
+    // A bought player and every fixture-level feature that can refer to the
+    // now-invalid roster/schedule.
+    await prisma.teamMember.create({
+      data: {
+        seasonId: season.id,
+        teamId: a.team.id,
+        userId: pool[0].id,
+        price: 17,
+      },
+    });
+    await prisma.team.update({ where: { id: a.team.id }, data: { budget: 83 } });
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 5,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: a.team.id,
+        awayTeamId: b.team.id,
+        bestOf: 3,
+        scheduledAt,
+        status: MATCH_STATUS.SCHEDULED,
+      },
+    });
+    const manager = await makeUser("Fantasy Manager");
+    const standin = await makeUser("Scheduled Cover");
+    await prisma.matchAvailability.create({
+      data: { matchId: match.id, userId: pool[0].id, status: "IN" },
+    });
+    await prisma.prediction.create({
+      data: {
+        matchId: match.id,
+        userId: manager.id,
+        pickedTeamId: a.team.id,
+      },
+    });
+    await prisma.rescheduleRequest.createMany({
+      data: [
+        {
+          matchId: match.id,
+          proposedById: a.user.id,
+          proposedTime: new Date(scheduledAt.getTime() + 60 * 60 * 1000),
+          status: "PENDING",
+        },
+        {
+          matchId: match.id,
+          proposedById: b.user.id,
+          proposedTime: new Date(scheduledAt.getTime() + 2 * 60 * 60 * 1000),
+          status: "DECLINED",
+        },
+      ],
+    });
+    await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: b.team.id,
+        standinUserId: standin.id,
+      },
+    });
+    const fantasy = await prisma.fantasyRoster.create({
+      data: { seasonId: season.id, userId: manager.id },
+    });
+    await prisma.fantasyPick.createMany({
+      data: [
+        { rosterId: fantasy.id, userId: pool[0].id },
+        { rosterId: fantasy.id, userId: pool[1].id },
+      ],
+    });
+    const reminder = weekReminderKey(season.id, 5);
+    const unrelatedSetting = "unrelated:test-setting";
+    await prisma.setting.createMany({
+      data: [
+        { key: reminder, value: "sent" },
+        { key: unrelatedSetting, value: "keep" },
+      ],
+    });
+
+    const res = await abortDraft(season.id, await admin());
+
+    expect(res).toMatchObject({
+      ok: true,
+      playersReturned: 1,
+      budgetRestored: 17,
+      teams: 2,
+      matchesRemoved: 1,
+      checkInsCleared: 1,
+      predictionsCleared: 1,
+      reschedulesCleared: 2,
+      fantasyRostersCleared: 1,
+    });
+    if (!res.ok) throw new Error("expected the abort to succeed");
+    expect(res.coverStandDowns).toHaveLength(1);
+
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(0);
+    expect(await prisma.matchAvailability.count()).toBe(0);
+    expect(await prisma.prediction.count()).toBe(0);
+    expect(await prisma.rescheduleRequest.count()).toBe(0);
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    expect(await prisma.fantasyRoster.count({ where: { seasonId: season.id } })).toBe(0);
+    expect(await prisma.fantasyPick.count()).toBe(0);
+    expect(await prisma.setting.findUnique({ where: { key: reminder } })).toBeNull();
+    expect(
+      await prisma.setting.findUnique({ where: { key: unrelatedSetting } }),
+    ).toMatchObject({ value: "keep" });
+
+    const resetSeason = await prisma.season.findUniqueOrThrow({
+      where: { id: season.id },
+    });
+    expect(resetSeason).toMatchObject({
+      status: SEASON_STATUS.SIGNUPS,
+      currentWeek: 0,
+      championTeamId: null,
+      draftRevision: 4,
+      matchSchedule: "Sundays at 7 PM UTC",
+    });
+    expect(resetSeason.draftAt?.getTime()).toBe(draftAt.getTime());
+    expect(resetSeason.firstMatchNight?.getTime()).toBe(firstMatchNight.getTime());
+    const readiness = await prisma.registration.findUniqueOrThrow({
+      where: {
+        seasonId_userId: { seasonId: season.id, userId: pool[0].id },
+      },
+    });
+    expect(readiness.draftConfirmedRevision).toBe(4);
+    expect(readiness.draftConfirmedAt?.getTime()).toBe(confirmedAt.getTime());
+    expect(readiness.draftConfirmedFor?.getTime()).toBe(draftAt.getTime());
+
+    // Captains/teams are the editable signup setup; only auction purchases go.
+    expect(await prisma.team.count({ where: { seasonId: season.id } })).toBe(2);
+    expect(
+      await prisma.teamMember.count({
+        where: { seasonId: season.id, isCaptain: true },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.teamMember.count({
+        where: { seasonId: season.id, isCaptain: false },
+      }),
+    ).toBe(0);
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })).budget,
+    ).toBe(100);
   });
 });
 
@@ -311,6 +539,55 @@ describe("abortDraft — guards", () => {
 
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) expect(res.error).toMatch(/results are already recorded/i);
+  });
+
+  it("REFUSES a LIVE match even before any game is imported, leaving the draft and roster untouched", async () => {
+    const { season, a, b, pool } = await prematureStart();
+    await prisma.teamMember.create({
+      data: {
+        seasonId: season.id,
+        teamId: a.team.id,
+        userId: pool[0].id,
+        price: 19,
+      },
+    });
+    await prisma.team.update({ where: { id: a.team.id }, data: { budget: 81 } });
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: a.team.id,
+        awayTeamId: b.team.id,
+        bestOf: 3,
+        status: MATCH_STATUS.LIVE,
+      },
+    });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+
+    const res = await abortDraft(season.id, await admin());
+
+    expect(res).toMatchObject({ ok: false });
+    if (!res.ok) expect(res.error).toMatch(/match has started/i);
+    expect(
+      (await prisma.season.findUniqueOrThrow({ where: { id: season.id } })).status,
+    ).toBe(SEASON_STATUS.DRAFT);
+    expect(
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status,
+    ).toBe(DRAFT_STATUS.IN_PROGRESS);
+    expect(await prisma.match.findUnique({ where: { id: match.id } })).toMatchObject({
+      status: MATCH_STATUS.LIVE,
+    });
+    expect(
+      await prisma.teamMember.findUnique({
+        where: {
+          seasonId_userId: { seasonId: season.id, userId: pool[0].id },
+        },
+      }),
+    ).toMatchObject({ teamId: a.team.id, price: 19 });
+    expect(
+      (await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })).budget,
+    ).toBe(81);
   });
 
   it("is idempotent under a double-click — the second call is refused, not a second teardown", async () => {
@@ -649,6 +926,10 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
         expect(member).not.toBeNull();
         expect(budget).toBe(43); // untouched
       }
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { isActive: false },
+      });
     }
   });
 });

@@ -71,6 +71,12 @@ const code = (file: string) =>
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join("\n");
 
+const appCode = (file: string) =>
+  readFileSync(path.join(process.cwd(), "src/app", file), "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+
 describe("live-room fetch deadlines", () => {
   for (const file of ROOMS) {
     it(`${file}: every fetch carries an AbortSignal`, () => {
@@ -109,6 +115,21 @@ describe("result-sync ping fetch deadline", () => {
       ).toBe(true);
     }
   });
+
+  it("seeds the first heartbeat with the server-rendered result cursor", () => {
+    const ping = code("result-sync-ping.tsx");
+    const layout = appCode("layout.tsx");
+
+    // The pure interleaving test only protects the comparison rule. This
+    // contract guard proves the root Server Component actually supplies the
+    // render-time causality boundary and the client uses it on its first tick.
+    expect(layout).toContain("getSetting(SETTING_KEYS.RESULT_CHANGED_AT)");
+    expect(layout).toMatch(
+      /<ResultSyncPing\s+initialCursor=\{[A-Za-z_$][\w$]*\}\s*\/>/,
+    );
+    expect(ping).toContain("initialCursor: string | null");
+    expect(ping).toContain("let lastCursor: string | null = initialCursor");
+  });
 });
 
 // Same kind of guard, for the same reason: these rules are unit-tested now,
@@ -119,6 +140,30 @@ describe("result-sync ping fetch deadline", () => {
 // another.
 
 describe("live rooms delegate their poll policy", () => {
+  for (const file of ROOMS) {
+    it(`${file}: offline events immediately gate actions until a successful poll`, () => {
+      const src = code(file);
+      expect(src).toContain('window.addEventListener("offline", onOffline)');
+      expect(src).toContain('window.addEventListener("online", onOnline)');
+      expect(src).toContain('setConnectivity("resyncing")');
+      expect(src).toMatch(
+        /setConnectivity\(\s*navigator\.onLine === false \? "offline" : "online",?\s*\)/,
+      );
+      expect(src).toMatch(
+        /const pending\s*=\s*[\s\S]{0,120}connectionUnavailable/,
+      );
+    });
+
+    it(`${file}: unknown action outcomes stay locked through a newer successful poll`, () => {
+      const src = code(file);
+      expect(src).toContain("actionReconcileSeqRef");
+      expect(src).toContain("setActionReconciling(true)");
+      expect(src).toContain("setActionReconciling(false)");
+      expect(src).toMatch(/const pending\s*=\s*[\s\S]{0,180}actionReconciling/);
+      expect(src).toMatch(/actionSeq\s*!==\s*null\s*&&\s*seq\s*>\s*actionSeq/);
+    });
+  }
+
   it("result-sync-ping decides refresh/delay only through syncPingStep", () => {
     const src = code("result-sync-ping.tsx");
     expect(src).toContain("syncPingStep(");
@@ -144,6 +189,17 @@ describe("live rooms delegate their poll policy", () => {
           `from inhousePollCadence so the rules stay in one tested place.`,
       ).toBe(false);
     }
+  });
+
+  it("inhouse-room cannot lose an action reconciliation behind an in-flight poll", () => {
+    const src = code("inhouse-room.tsx");
+    expect(src).toContain("let rerunRequested = false");
+    expect(src).toMatch(
+      /bumpPollRef\.current\s*=\s*\(\)\s*=>\s*\{\s*rerunRequested\s*=\s*true;\s*schedule\(250\)/,
+    );
+    expect(src).toMatch(
+      /if \(rerunRequested\)\s*\{\s*rerunRequested\s*=\s*false;\s*schedule\(0\);\s*return;/,
+    );
   });
 
   it("draft-room computes its cadence only through draftPollCadence", () => {

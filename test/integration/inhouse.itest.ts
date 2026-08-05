@@ -7,7 +7,7 @@ import {
   INHOUSE_STATUS,
 } from "@/lib/constants";
 import { summarizeInhouse } from "@/lib/inhouse-stats";
-import { steamIdToAccountId } from "@/lib/dota";
+import { effectiveDotaAccountId } from "@/lib/dota-account";
 import type { SessionUser } from "@/lib/auth";
 import {
   acceptMatch,
@@ -36,11 +36,22 @@ import {
   raceN,
   sessionFor,
 } from "./factories";
-import { SETTING_KEYS, setSetting } from "@/lib/settings";
+import {
+  getSetting,
+  providerCooldownKey,
+  SETTING_KEYS,
+  setSetting,
+} from "@/lib/settings";
+import {
+  deliverInhouseAnnouncements,
+  INHOUSE_ANNOUNCEMENT_KIND,
+  INHOUSE_ANNOUNCEMENT_STATUS,
+  reconcileMissingInhouseResultAnnouncements,
+} from "@/lib/inhouse-announcement-outbox";
 
 // The inhouse result path only ever touches OpenDota — never a Valve league
 // ticket. We stub the two network calls it makes (recent-match lists + a full
-// match fetch) and keep everything else (steamIdToAccountId, classifyGame) real.
+// match fetch) and keep everything else (identity fallback, classifyGame) real.
 vi.mock("@/lib/dota", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/dota")>();
   return {
@@ -66,6 +77,7 @@ const mockMatch = vi.mocked(fetchOpenDotaMatch);
 const mockSend = vi.mocked(sendInhouseDiscordMessage);
 
 afterEach(() => {
+  setRaceHook(null);
   mockRecent.mockReset();
   mockMatch.mockReset();
   mockRecent.mockResolvedValue([]);
@@ -74,15 +86,22 @@ afterEach(() => {
 beforeEach(() => {
   mockRecent.mockResolvedValue([]);
   mockMatch.mockResolvedValue(null);
-  mockSend.mockClear();
+  mockSend.mockReset();
+  mockSend.mockResolvedValue(true);
 });
 
 // ---- helpers ---------------------------------------------------------------
 
-type QueuedUser = { user: Awaited<ReturnType<typeof makeUser>>; session: SessionUser };
+type QueuedUser = {
+  user: Awaited<ReturnType<typeof makeUser>>;
+  session: SessionUser;
+};
 
 /** Register N users and push them through joinQueue; the 10th forms a lobby. */
-async function enqueue(count: number, mmrFor: (i: number) => number): Promise<QueuedUser[]> {
+async function enqueue(
+  count: number,
+  mmrFor: (i: number) => number,
+): Promise<QueuedUser[]> {
   const out: QueuedUser[] = [];
   for (let i = 0; i < count; i++) {
     const user = await makeUser(`IH${i}`);
@@ -107,8 +126,11 @@ async function teamAccounts(lobbyId: string) {
     where: { lobbyId },
     include: { user: true },
   });
-  const acc = (u: { dotaAccountId: number | null; steamId: string }) =>
-    u.dotaAccountId ?? steamIdToAccountId(u.steamId)!;
+  const acc = (u: {
+    dotaAccountIdV2: number | null;
+    legacyDotaAccountId: number | null;
+    steamId: string;
+  }) => effectiveDotaAccountId(u)!;
   return {
     team1: players.filter((p) => p.team === 1).map((p) => acc(p.user)),
     team2: players.filter((p) => p.team === 2).map((p) => acc(p.user)),
@@ -124,7 +146,12 @@ function fakeMatch(opts: {
   startTime: number;
   leagueid?: number;
 }) {
-  const line = (accountId: number, slot: number, isRadiant: boolean, i: number) => ({
+  const line = (
+    accountId: number,
+    slot: number,
+    isRadiant: boolean,
+    i: number,
+  ) => ({
     account_id: accountId,
     player_slot: slot,
     hero_id: i + 1,
@@ -162,7 +189,11 @@ async function acceptAll(players: QueuedUser[]) {
  * method (last vote resolves it). acceptMatch quietly no-ops when the lobby
  * is already past the ready check.
  */
-async function voteAll(players: QueuedUser[], method: string, nomineeId?: string) {
+async function voteAll(
+  players: QueuedUser[],
+  method: string,
+  nomineeId?: string,
+) {
   await acceptAll(players);
   for (const p of players) await castVote(p.session, method, nomineeId);
 }
@@ -217,7 +248,9 @@ describe("inhouse — lobby formation", () => {
     expect(await prisma.inhouseQueueEntry.count()).toBe(0);
     expect(lobby.players.every((p) => p.acceptedAt === null)).toBe(true);
     // Nobody has a team yet — the vote decides captains first.
-    expect(lobby.players.every((p) => p.team === null && !p.isCaptain)).toBe(true);
+    expect(lobby.players.every((p) => p.team === null && !p.isCaptain)).toBe(
+      true,
+    );
   });
 
   it("keeps a second batch of 10 in the queue while one lobby is active", async () => {
@@ -246,15 +279,64 @@ describe("inhouse — captain vote", () => {
     expect(lobby.voteEndsAt).toBeNull();
   });
 
+  it("uses original queue position as the tied-MMR captain tiebreak", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+    const base = Date.now() - 60_000;
+    for (const [i, p] of players.entries()) {
+      await prisma.inhouseQueueEntry.update({
+        where: { userId: p.user.id },
+        data: { joinedAt: new Date(base + i) },
+      });
+    }
+    const lastUser = await makeUser("IH-last");
+    const last = { user: lastUser, session: sessionFor(lastUser) };
+    players.push(last);
+    expect((await joinQueue(last.session, 3000)).ok).toBe(true);
+
+    const ready = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    const snapshot = new Map(
+      ready.players.map((p) => [p.userId, p.queuedAt.getTime()] as const),
+    );
+    expect(players.slice(0, -1).map((p) => snapshot.get(p.user.id))).toEqual(
+      players.slice(0, -1).map((_, i) => base + i),
+    );
+
+    await acceptAll(players);
+    const voting = await getInhouseState(players[0].session, {
+      syncBoard: false,
+    });
+    const previewQueueTimes = new Map(
+      voting.lobby?.vote?.candidates.map((p) => [p.userId, p.joinedAt]) ?? [],
+    );
+    expect(previewQueueTimes.get(players[0].user.id)).toBe(base);
+
+    await prisma.inhouseLobby.update({
+      where: { id: ready.id },
+      data: { voteEndsAt: new Date(Date.now() - 1) },
+    });
+    expect(await resolveCaptainVote()).toBe(true);
+    const drafting = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    expect(
+      drafting.players
+        .filter((p) => p.isCaptain)
+        .sort((a, b) => (a.team ?? 0) - (b.team ?? 0))
+        .map((p) => p.userId),
+    ).toEqual([players[0].user.id, players[1].user.id]);
+  });
+
   it("VOTE: the two most-nominated players become captains", async () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 3000 + i); // low, distinct MMR
     await acceptAll(players);
     // Everyone elects players[7] and players[8] (not the top-MMR pair).
-    for (const p of players.slice(0, 5)) await castVote(p.session, "VOTE", players[7].user.id);
-    for (const p of players.slice(5)) await castVote(p.session, "VOTE", players[8].user.id);
+    for (const p of players.slice(0, 5))
+      await castVote(p.session, "VOTE", players[7].user.id);
+    for (const p of players.slice(5))
+      await castVote(p.session, "VOTE", players[8].user.id);
 
     const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
-    const capIds = lobby.players.filter((p) => p.isCaptain).map((p) => p.userId);
+    const capIds = lobby.players
+      .filter((p) => p.isCaptain)
+      .map((p) => p.userId);
     expect(capIds).toContain(players[7].user.id);
     expect(capIds).toContain(players[8].user.id);
   });
@@ -282,6 +364,27 @@ describe("inhouse — captain vote", () => {
     expect((await castVote(outsider, "MMR")).ok).toBe(false);
     expect((await castVote(players[0].session, "BOGUS")).ok).toBe(false);
     expect((await castVote(players[0].session, "VOTE")).ok).toBe(false); // no nominee
+  });
+
+  it("rejects a ballot after the captain-vote deadline", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    await acceptAll(players);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { voteEndsAt: new Date(Date.now() - 1000) },
+    });
+
+    const res = await castVote(players[0].session, "MMR");
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.error).toMatch(/voting.*closed/i);
+    expect(
+      (
+        await prisma.inhouseLobbyPlayer.findFirstOrThrow({
+          where: { lobbyId: lobby.id, userId: players[0].user.id },
+        })
+      ).votedMethod,
+    ).toBeNull();
   });
 });
 
@@ -337,8 +440,12 @@ describe("inhouse — drafting", () => {
     const lobby = await lobbyByStatus(INHOUSE_STATUS.READY);
     expect(lobby.pickTeam).toBeNull();
     expect(lobby.pickEndsAt).toBeNull();
-    expect(lobby.players.filter((p) => p.team === 1)).toHaveLength(INHOUSE.TEAM_SIZE);
-    expect(lobby.players.filter((p) => p.team === 2)).toHaveLength(INHOUSE.TEAM_SIZE);
+    expect(lobby.players.filter((p) => p.team === 1)).toHaveLength(
+      INHOUSE.TEAM_SIZE,
+    );
+    expect(lobby.players.filter((p) => p.team === 2)).toHaveLength(
+      INHOUSE.TEAM_SIZE,
+    );
     expect(lobby.players.filter((p) => p.team === null)).toHaveLength(0);
     // Draft order was recorded for each non-captain pick.
     const picks = lobby.players.filter((p) => !p.isCaptain);
@@ -362,6 +469,67 @@ describe("inhouse — drafting", () => {
       where: { lobbyId: lobby.id, userId: topPool.user.id },
     });
     expect(drafted.team).not.toBeNull(); // was auto-drafted onto the stalled team
+  });
+
+  it("auto-picks the earliest queued player when the top pool MMR is tied", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+    const base = Date.now() - 60_000;
+    for (const [i, p] of players.entries()) {
+      await prisma.inhouseQueueEntry.update({
+        where: { userId: p.user.id },
+        data: { joinedAt: new Date(base + i) },
+      });
+    }
+    const lastUser = await makeUser("IH-autopick-last");
+    players.push({ user: lastUser, session: sessionFor(lastUser) });
+    expect((await joinQueue(sessionFor(lastUser), 3000)).ok).toBe(true);
+    await voteAll(players, "MMR");
+
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    const expected = players[2]; // first two queue positions became captains
+    const decoy = players[3];
+    // Make the row insertion clock say the opposite. createdAt used to drive
+    // this tiebreak even though queuedAt is the user-visible queue contract.
+    await prisma.inhouseLobbyPlayer.updateMany({
+      where: { lobbyId: lobby.id, team: null },
+      data: { createdAt: new Date(base + 10_000) },
+    });
+    await prisma.inhouseLobbyPlayer.update({
+      where: {
+        lobbyId_userId: { lobbyId: lobby.id, userId: decoy.user.id },
+      },
+      data: { createdAt: new Date(base - 10_000) },
+    });
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { pickEndsAt: new Date(Date.now() - 1) },
+    });
+
+    expect(await resolveStalledPick()).toBe(true);
+    expect(
+      (
+        await prisma.inhouseLobbyPlayer.findUniqueOrThrow({
+          where: {
+            lobbyId_userId: {
+              lobbyId: lobby.id,
+              userId: expected.user.id,
+            },
+          },
+        })
+      ).team,
+    ).not.toBeNull();
+    expect(
+      (
+        await prisma.inhouseLobbyPlayer.findUniqueOrThrow({
+          where: {
+            lobbyId_userId: {
+              lobbyId: lobby.id,
+              userId: decoy.user.id,
+            },
+          },
+        })
+      ).team,
+    ).toBeNull();
   });
 });
 
@@ -394,21 +562,33 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     mockRecent.mockResolvedValue([MATCH_ID]);
     // ...and the match itself is an ordinary lobby game — NO leagueid at all.
     mockMatch.mockResolvedValue(
-      fakeMatch({ matchId: MATCH_ID, team1, team2, radiantWin: true, startTime }),
+      fakeMatch({
+        matchId: MATCH_ID,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime,
+      }),
     );
 
     const res = await autoDetectResult(players[0].session);
     expect(res.ok).toBe(true);
 
-    const done = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
     expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.completedAt).not.toBeNull();
     expect(done.winnerTeam).toBe(1); // team 1 was Radiant and Radiant won
     expect(done.radiantTeam).toBe(1);
     expect(done.dotaMatchId).toBe(String(MATCH_ID));
     expect(done.durationSecs).toBe(2400);
 
     // The full per-player box score was captured for scoring.
-    const box = JSON.parse(done.boxScore) as { userId: string | null; team: number | null }[];
+    const box = JSON.parse(done.boxScore) as {
+      userId: string | null;
+      team: number | null;
+    }[];
     expect(box).toHaveLength(10);
     expect(box.filter((b) => b.team === 1)).toHaveLength(5);
     expect(box.filter((b) => b.team === 2)).toHaveLength(5);
@@ -433,12 +613,53 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
       }),
     );
 
-    const res = await recordMatch(players[2].session, `https://www.opendota.com/matches/${MATCH_ID}`);
+    const res = await recordMatch(
+      players[2].session,
+      `https://www.opendota.com/matches/${MATCH_ID}`,
+    );
     expect(res.ok).toBe(true);
 
-    const done = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
     expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
     expect(done.winnerTeam).toBe(2);
+  });
+
+  it("elects one exact-ID lookup when a player races different IDs", async () => {
+    const admin = sessionFor(await makeUser("AdminExactIdRace", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    mockMatch.mockResolvedValue(null);
+
+    const results = await raceAll([
+      () => recordMatch(players[0].session, "7000000901"),
+      () => recordMatch(players[0].session, "7000000902"),
+    ]);
+
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/couldn't fetch/i),
+        }),
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/wait about a minute/i),
+        }),
+      ]),
+    );
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: providerCooldownKey(
+            "open-dota-match-import",
+            players[0].session.id,
+            `inhouse:${lobby.id}`,
+          ),
+        },
+      }),
+    ).not.toBeNull();
   });
 
   it("auto-detects on poll once the game has run long enough (maybeAutoDetectResult)", async () => {
@@ -464,14 +685,110 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     // Backdate the start past the detect floor, then poll again.
     await prisma.inhouseLobby.update({
       where: { id: lobby.id },
-      data: { startedAt: new Date(Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000) },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000,
+        ),
+      },
     });
     // getInhouseState runs maybeAutoDetectResult as part of a normal poll.
     await getInhouseState(players[0].session);
 
-    const done = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
     expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
     expect(done.winnerTeam).toBe(1);
+  });
+
+  it("restores the exact automatic detection claim when its worker is aborted", async () => {
+    const admin = sessionFor(await makeUser("AdminAbortDetect", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const previousDetectedAt = new Date(Date.now() - 60 * 60_000);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000,
+        ),
+        detectedAt: previousDetectedAt,
+      },
+    });
+
+    const controller = new AbortController();
+    mockRecent.mockImplementation(async () => {
+      controller.abort();
+      return [];
+    });
+    mockMatch.mockClear();
+
+    expect(await maybeAutoDetectResult({ signal: controller.signal })).toEqual({
+      recorded: false,
+      deadlineReached: true,
+    });
+    expect(mockMatch).not.toHaveBeenCalled();
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+          select: { detectedAt: true },
+        })
+      ).detectedAt,
+    ).toEqual(previousDetectedAt);
+  });
+
+  it("does not rewind a newer detection cursor when an older worker aborts", async () => {
+    const admin = sessionFor(await makeUser("AdminAbortDetectRace", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const previousDetectedAt = new Date(Date.now() - 60 * 60_000);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        startedAt: new Date(
+          Date.now() - (INHOUSE.DETECT_MIN_MINUTES + 1) * 60_000,
+        ),
+        detectedAt: previousDetectedAt,
+      },
+    });
+
+    const controller = new AbortController();
+    mockRecent.mockImplementation(async () => {
+      controller.abort();
+      return [];
+    });
+    const newerDetectedAt = new Date(Date.now() + 60_000);
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.autoDetect.beforeDeadlineRollback", async () => {
+        fired = true;
+        // A newer poll owns this cursor now. The aborted worker may restore
+        // only the exact timestamp it claimed, never rewind this successor.
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { detectedAt: newerDetectedAt },
+        });
+      }),
+    );
+
+    expect(await maybeAutoDetectResult({ signal: controller.signal })).toEqual({
+      recorded: false,
+      deadlineReached: true,
+    });
+    expect(fired).toBe(true);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+          select: { detectedAt: true },
+        })
+      ).detectedAt,
+    ).toEqual(newerDetectedAt);
+
+    // The preserved successor cursor also prevents an immediate duplicate
+    // OpenDota fan-out after the timed-out request returns.
+    mockRecent.mockClear();
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(mockRecent).not.toHaveBeenCalled();
   });
 
   it("rejects a match that isn't between these two teams", async () => {
@@ -492,7 +809,9 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     const res = await recordMatch(players[0].session, String(MATCH_ID));
     expect(res.ok).toBe(false);
 
-    const still = await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } });
+    const still = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
     expect(still.status).toBe(INHOUSE_STATUS.IN_PROGRESS); // untouched
   });
 
@@ -532,6 +851,18 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     );
     const outsider = sessionFor(await makeUser("Rando"));
     expect((await recordMatch(outsider, "7000000005")).ok).toBe(false);
+    expect(mockMatch).not.toHaveBeenCalled();
+    expect(
+      await prisma.setting.findUnique({
+        where: {
+          key: providerCooldownKey(
+            "open-dota-match-import",
+            outsider.id,
+            `inhouse:${lobby.id}`,
+          ),
+        },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -551,12 +882,16 @@ describe("inhouse — scoring feeds ranking across games", () => {
         startTime: Math.floor(Date.now() / 1000),
       }),
     );
-    expect((await recordMatch(g1.players[0].session, "7100000001")).ok).toBe(true);
+    expect((await recordMatch(g1.players[0].session, "7100000001")).ok).toBe(
+      true,
+    );
 
     const winners = new Set(
-      (await prisma.inhouseLobbyPlayer.findMany({
-        where: { lobbyId: g1.lobby.id, team: 1 },
-      })).map((p) => p.userId),
+      (
+        await prisma.inhouseLobbyPlayer.findMany({
+          where: { lobbyId: g1.lobby.id, team: 1 },
+        })
+      ).map((p) => p.userId),
     );
     expect(winners.size).toBe(INHOUSE.TEAM_SIZE);
 
@@ -579,7 +914,10 @@ describe("inhouse — scoring feeds ranking across games", () => {
       })),
     );
     for (const w of winners) {
-      expect(board.find((r) => r.userId === w)).toMatchObject({ wins: 1, losses: 0 });
+      expect(board.find((r) => r.userId === w)).toMatchObject({
+        wins: 1,
+        losses: 0,
+      });
     }
 
     // ---- GAME 2: same 10 requeue and vote RECORD → captains come from the winners ----
@@ -588,13 +926,68 @@ describe("inhouse — scoring feeds ranking across games", () => {
     const lobby2 = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
     const sessById = new Map(g1Users.map((u) => [u.id, sessionFor(u)]));
     for (const p of lobby2.players) await acceptMatch(sessById.get(p.userId)!);
-    for (const p of lobby2.players) await castVote(sessById.get(p.userId)!, "RECORD");
+    for (const p of lobby2.players)
+      await castVote(sessById.get(p.userId)!, "RECORD");
 
     const drafting2 = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
-    const newCaps = drafting2.players.filter((p) => p.isCaptain).map((p) => p.userId);
+    const newCaps = drafting2.players
+      .filter((p) => p.isCaptain)
+      .map((p) => p.userId);
     expect(newCaps).toHaveLength(2);
     // Best inhouse record (1-0) belongs to game-1's winners → both captains are winners.
     for (const c of newCaps) expect(winners.has(c)).toBe(true);
+  });
+
+  it("snapshots a player's full career after more than 500 completed games", async () => {
+    const veteran = await makeUser("Long Career Winner");
+    const rival = await makeUser("Long Career Rival");
+    const prefix = `career-${veteran.id}`;
+    const count = 501;
+    const createdAt = Date.now() - count * 60_000;
+    const lobbies = Array.from({ length: count }, (_, i) => ({
+      id: `${prefix}-${i}`,
+      status: INHOUSE_STATUS.COMPLETED,
+      radiantTeam: 1,
+      winnerTeam: 1,
+      createdAt: new Date(createdAt + i * 60_000),
+    }));
+    const rows = lobbies.flatMap((lobby) => [
+      { lobbyId: lobby.id, userId: veteran.id, team: 1 },
+      { lobbyId: lobby.id, userId: rival.id, team: 2 },
+    ]);
+    // Keep batches under conservative SQLite parameter limits while retaining
+    // a fast, real-database proof of the former 500-lobby truncation.
+    for (let i = 0; i < lobbies.length; i += 100) {
+      await prisma.inhouseLobby.createMany({ data: lobbies.slice(i, i + 100) });
+    }
+    for (let i = 0; i < rows.length; i += 100) {
+      await prisma.inhouseLobbyPlayer.createMany({
+        data: rows.slice(i, i + 100),
+      });
+    }
+
+    const cohort = [veteran, rival];
+    for (let i = 0; i < INHOUSE.LOBBY_SIZE - 2; i++) {
+      cohort.push(await makeUser(`Career Newcomer ${i}`));
+    }
+    for (const user of cohort) {
+      expect((await joinQueue(sessionFor(user), 3000)).ok).toBe(true);
+    }
+
+    const formed = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    const snapshots = new Map(
+      formed.players.map((p) => [p.userId, p] as const),
+    );
+    expect(snapshots.get(veteran.id)).toMatchObject({
+      games: count,
+      wins: count,
+      losses: 0,
+    });
+    expect(snapshots.get(rival.id)).toMatchObject({
+      games: count,
+      wins: 0,
+      losses: count,
+    });
   });
 });
 
@@ -698,9 +1091,7 @@ describe("inhouse — discord announcements", () => {
 
   it("pings nobody when no role is configured — the old behaviour", async () => {
     await enqueue(INHOUSE.QUEUE_PING_AT, () => 3000);
-    const ping = mockSend.mock.calls.find(([m]) =>
-      m.includes("Inhouse queue"),
-    );
+    const ping = mockSend.mock.calls.find(([m]) => m.includes("Inhouse queue"));
     expect(ping![0]).not.toContain("<@&");
     expect(ping![1]).toEqual({ roles: [] });
   });
@@ -738,9 +1129,9 @@ describe("inhouse — queue presence", () => {
 
     // The away player is flagged for everyone and excluded from the count.
     const state = await getInhouseState(tenth);
-    expect(
-      state.queue.find((q) => q.userId === players[0].user.id)?.away,
-    ).toBe(true);
+    expect(state.queue.find((q) => q.userId === players[0].user.id)?.away).toBe(
+      true,
+    );
     expect(state.needed).toBe(1);
 
     // Their own next poll heartbeats them back — and the lobby forms.
@@ -757,9 +1148,7 @@ describe("inhouse — queue presence", () => {
     await backdate(players[1].user.id, INHOUSE.QUEUE_DROP_SECONDS + 5);
 
     const state = await getInhouseState(players[0].session);
-    expect(state.queue.map((q) => q.userId)).not.toContain(
-      players[1].user.id,
-    );
+    expect(state.queue.map((q) => q.userId)).not.toContain(players[1].user.id);
     expect(await prisma.inhouseQueueEntry.count()).toBe(2);
   });
 
@@ -799,9 +1188,7 @@ describe("inhouse — queue presence", () => {
     await backdate(players[0].user.id, INHOUSE.QUEUE_DROP_SECONDS + 5);
 
     await getInhouseState(admin);
-    expect(await prisma.inhouseQueueEntry.count()).toBe(
-      INHOUSE.LOBBY_SIZE - 1,
-    );
+    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE - 1);
     expect(
       await prisma.inhouseLobby.count({
         where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
@@ -943,12 +1330,27 @@ describe("inhouse — ready check", () => {
   it("re-queued accepters keep priority over players who joined during the check", async () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     for (const p of players.slice(0, 9)) await acceptMatch(p.session);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    const accepterIds = new Set(players.slice(0, 9).map((p) => p.user.id));
+    const expected = lobby.players
+      .filter((p) => accepterIds.has(p.userId))
+      .sort(
+        (a, b) =>
+          a.queuedAt.getTime() - b.queuedAt.getTime() ||
+          a.userId.localeCompare(b.userId),
+      );
     // A spectator joins the queue mid-check (behind the ten in the lobby).
     const latecomer = sessionFor(await makeUser("Latecomer"));
     await joinQueue(latecomer, 3000);
+    // Put them inside the millisecond range the old `lobby.createdAt + i`
+    // approximation assigned to accepters. They still joined after formation,
+    // so exact queuedAt restoration must keep every accepter ahead of them.
+    await prisma.inhouseQueueEntry.update({
+      where: { userId: latecomer.id },
+      data: { joinedAt: new Date(lobby.createdAt.getTime() + 1) },
+    });
 
     // players[9] never accepts → the check times out.
-    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
     await prisma.inhouseLobby.update({
       where: { id: lobby.id },
       data: { acceptEndsAt: new Date(Date.now() - 1000) },
@@ -958,12 +1360,16 @@ describe("inhouse — ready check", () => {
     // Queue order: the nine accepters (anchored to formation) BEFORE the
     // latecomer who joined during the check.
     const queued = await prisma.inhouseQueueEntry.findMany({
-      orderBy: { joinedAt: "asc" },
+      orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
     });
     const order = queued.map((q) => q.userId);
-    const latecomerPos = order.indexOf(latecomer.id);
-    for (const p of players.slice(0, 9)) {
-      expect(order.indexOf(p.user.id)).toBeLessThan(latecomerPos);
+    expect(order.slice(0, expected.length)).toEqual(
+      expected.map((p) => p.userId),
+    );
+    expect(order.indexOf(latecomer.id)).toBe(expected.length);
+    const byId = new Map(queued.map((q) => [q.userId, q] as const));
+    for (const p of expected) {
+      expect(byId.get(p.userId)?.joinedAt.getTime()).toBe(p.queuedAt.getTime());
     }
   });
 
@@ -978,9 +1384,9 @@ describe("inhouse — ready check", () => {
 
     // Any poll resolves it lazily.
     await getInhouseState(players[0].session);
-    expect(
-      (await prisma.inhouseLobby.findFirstOrThrow()).status,
-    ).toBe(INHOUSE_STATUS.CANCELLED);
+    expect((await prisma.inhouseLobby.findFirstOrThrow()).status).toBe(
+      INHOUSE_STATUS.CANCELLED,
+    );
 
     // Only the seven accepters are back in the queue, present.
     const queued = await prisma.inhouseQueueEntry.findMany();
@@ -995,7 +1401,7 @@ describe("inhouse — ready check", () => {
     // uncommitted, so NEITHER flipped — all ten accepted but status is still
     // READY_CHECK. resolveReadyCheck's all-accepted branch must rescue it, even
     // before the clock expires.
-    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
     await prisma.inhouseLobbyPlayer.updateMany({
       where: { lobbyId: lobby.id },
@@ -1043,7 +1449,9 @@ describe("inhouse — ready check", () => {
     });
     expect(reformed.id).not.toBe(lobby.id);
     expect(
-      await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CANCELLED } }),
+      await prisma.inhouseLobby.count({
+        where: { status: INHOUSE_STATUS.CANCELLED },
+      }),
     ).toBe(1);
   });
 
@@ -1059,7 +1467,9 @@ describe("inhouse — ready check", () => {
     expect(rc!.total).toBe(INHOUSE.LOBBY_SIZE);
     // Pending players sort ahead of accepted ones (they're the holdup).
     const firstAcceptedIdx = rc!.players.findIndex((p) => p.accepted);
-    const lastPendingIdx = rc!.players.map((p) => p.accepted).lastIndexOf(false);
+    const lastPendingIdx = rc!.players
+      .map((p) => p.accepted)
+      .lastIndexOf(false);
     expect(lastPendingIdx).toBeLessThan(firstAcceptedIdx);
     // The accept clock is serialized as an epoch, and the viewer's own flags.
     expect(typeof state.lobby?.acceptEndsAt).toBe("number");
@@ -1072,9 +1482,9 @@ describe("inhouse — ready check", () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     await acceptMatch(players[0].session);
     expect((await cancelLobby(admin)).ok).toBe(true);
-    expect(
-      (await prisma.inhouseLobby.findFirstOrThrow()).status,
-    ).toBe(INHOUSE_STATUS.CANCELLED);
+    expect((await prisma.inhouseLobby.findFirstOrThrow()).status).toBe(
+      INHOUSE_STATUS.CANCELLED,
+    );
     expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
   });
 });
@@ -1193,6 +1603,77 @@ describe("inhouse — result vs cancel race guards", () => {
     ).toHaveLength(0);
   });
 
+  it("a void after completion but before finalization cannot restore Elo or publish a stale result", async () => {
+    const admin = sessionFor(await makeUser("AdminMidFinalize", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    await primeResult(lobby.id, 7000000100);
+    mockSend.mockClear();
+
+    let voided = false;
+    setRaceHook(
+      onceAt("inhouse.applyResult.beforeFinalizationClaim", async () => {
+        const res = await voidLastResult(admin, lobby.id);
+        voided = res.ok;
+      }),
+    );
+
+    const res = await recordMatch(players[0].session, "7000000100");
+    expect(voided).toBe(true); // the seam fired; this is not a staged pre-call
+    expect(res.ok).toBe(false);
+
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(after.eloDeltas).toBe("{}");
+    const messages = mockSend.mock.calls.map(([message]) => message);
+    expect(
+      messages.filter((message) => message.includes("Inhouse result:")),
+    ).toEqual([]);
+    expect(
+      messages.filter((message) => message.includes("result has been voided")),
+    ).toHaveLength(1);
+  });
+
+  it("finalization re-asserts COMPLETED even when the rival preserves the match id", async () => {
+    // The real void race above changes BOTH guard columns: status becomes
+    // CANCELLED and dotaMatchId becomes null. That means the match-id predicate
+    // alone can keep it green if the status predicate is deleted. This
+    // status-only rival is the mutation tripwire for the independent invariant.
+    const admin = sessionFor(await makeUser("AdminStatusTripwire", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    await primeResult(lobby.id, 7000000101);
+    mockSend.mockClear();
+
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.applyResult.beforeFinalizationClaim", async () => {
+        fired = true;
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { status: INHOUSE_STATUS.CANCELLED },
+        });
+      }),
+    );
+
+    const res = await recordMatch(players[0].session, "7000000101");
+    expect(fired).toBe(true);
+    expect(res.ok).toBe(false);
+
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(after.dotaMatchId).toBe("7000000101");
+    expect(after.completedAt).not.toBeNull();
+    expect(after.eloDeltas).toBe("{}");
+    expect(
+      mockSend.mock.calls.filter(([message]) =>
+        String(message).includes("Inhouse result:"),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("rejects a pasted match that started before this lobby formed", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
@@ -1245,6 +1726,34 @@ describe("inhouse — result vs cancel race guards", () => {
 });
 
 describe("inhouse — Elo deltas + result announcement", () => {
+  async function leaveResultAfterPrimaryCommit(matchId: number) {
+    const admin = sessionFor(await makeUser(`AdminCrash${matchId}`, "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    setRaceHook(
+      onceAt("inhouse.applyResult.afterPrimaryCommit", async () => {
+        throw new Error("simulated process death after result commit");
+      }),
+    );
+    try {
+      await expect(
+        recordMatch(players[0].session, String(matchId)),
+      ).rejects.toThrow("simulated process death after result commit");
+    } finally {
+      setRaceHook(null);
+    }
+    return { players, lobby };
+  }
+
   it("stamps per-player Elo deltas at completion and serves them via lastResult", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
@@ -1275,7 +1784,9 @@ describe("inhouse — Elo deltas + result announcement", () => {
 
     // The room's post-game banner reads the stamped delta, not a rescan.
     const winner = done.players.find((p) => p.team === 1)!;
-    const winnerSession = players.find((p) => p.user.id === winner.userId)!.session;
+    const winnerSession = players.find(
+      (p) => p.user.id === winner.userId,
+    )!.session;
     const state = await getInhouseState(winnerSession);
     expect(state.lastResult).not.toBeNull();
     expect(state.lastResult!.myTeamWon).toBe(true);
@@ -1297,7 +1808,9 @@ describe("inhouse — Elo deltas + result announcement", () => {
     );
     expect((await recordMatch(players[0].session, "7000000021")).ok).toBe(true);
     // A second record attempt loses the claim — no double announcement.
-    expect((await recordMatch(players[1].session, "7000000021")).ok).toBe(false);
+    expect((await recordMatch(players[1].session, "7000000021")).ok).toBe(
+      false,
+    );
 
     const resultSends = mockSend.mock.calls
       .map((c) => String(c[0]))
@@ -1306,6 +1819,352 @@ describe("inhouse — Elo deltas + result announcement", () => {
     expect(resultSends[0]).toMatch(/Radiant win 30–20/);
     expect(resultSends[0]).toMatch(/MVP:/);
     expect(resultSends[0]).toContain("opendota.com/matches/7000000021");
+    expect(
+      await prisma.inhouseAnnouncement.findUnique({
+        where: {
+          lobbyId_kind: {
+            lobbyId: lobby.id,
+            kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+          },
+        },
+      }),
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+      attempts: 1,
+      resultMatchId: "7000000021",
+    });
+  });
+
+  it("keeps a rejected result send durable and retries it on a later heartbeat", async () => {
+    const admin = sessionFor(await makeUser("AdminRetry", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000022,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    mockSend.mockReset();
+    mockSend.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    // Discord rejects the immediate post-commit attempt, but recording the
+    // game still succeeds and the exact payload remains durable.
+    expect((await recordMatch(players[0].session, "7000000022")).ok).toBe(true);
+    const pending = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+      where: {
+        lobbyId_kind: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      },
+    });
+    expect(pending).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      attempts: 1,
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+
+    const retry = await deliverInhouseAnnouncements({
+      lobbyId: lobby.id,
+      now: new Date(pending.availableAt.getTime() + 1),
+    });
+    expect(retry).toEqual({ attempted: 1, delivered: 1, pending: false });
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(
+      await prisma.inhouseAnnouncement.findUniqueOrThrow({
+        where: { id: pending.id },
+      }),
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+      attempts: 2,
+    });
+  });
+
+  it("recovers Elo and a missing result event after process death past the primary commit", async () => {
+    const oldCursor = "2000-01-01T00:00:00.000Z";
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, oldCursor);
+    const { lobby } = await leaveResultAfterPrimaryCommit(7000000120);
+
+    const committed = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(committed).toMatchObject({
+      status: INHOUSE_STATUS.COMPLETED,
+      dotaMatchId: "7000000120",
+      eloDeltas: "{}",
+    });
+    const baseEvent = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+      where: {
+        lobbyId_kind: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      },
+    });
+    expect(baseEvent).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      resultMatchId: "7000000120",
+    });
+    expect(baseEvent.content).toMatch(/Radiant win 30–20/);
+    expect(await getSetting(SETTING_KEYS.RESULT_CHANGED_AT)).not.toBe(
+      oldCursor,
+    );
+
+    // Model the row-less state an older binary left in this crash window.
+    await prisma.inhouseAnnouncement.delete({ where: { id: baseEvent.id } });
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, oldCursor);
+    await expect(reconcileMissingInhouseResultAnnouncements()).resolves.toEqual(
+      { scanned: 1, created: 1 },
+    );
+
+    const repaired = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: true },
+    });
+    const deltas = JSON.parse(repaired.eloDeltas) as Record<string, number>;
+    expect(Object.keys(deltas)).toHaveLength(INHOUSE.LOBBY_SIZE);
+    expect(await getSetting(SETTING_KEYS.RESULT_CHANGED_AT)).not.toBe(
+      oldCursor,
+    );
+    const recoveredEvent = await prisma.inhouseAnnouncement.findUniqueOrThrow({
+      where: {
+        lobbyId_kind: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      },
+    });
+    expect(recoveredEvent.content).toMatch(/Radiant win 30–20/);
+    expect(recoveredEvent.content).toContain("opendota.com/matches/7000000120");
+    await expect(reconcileMissingInhouseResultAnnouncements()).resolves.toEqual(
+      { scanned: 0, created: 0 },
+    );
+    await expect(
+      deliverInhouseAnnouncements({ lobbyId: lobby.id }),
+    ).resolves.toEqual({ attempted: 1, delivered: 1, pending: false });
+  });
+
+  it("lets only one concurrent SQLite reconciler create a missing result event", async () => {
+    const { lobby } = await leaveResultAfterPrimaryCommit(7000000121);
+    await prisma.inhouseAnnouncement.deleteMany({
+      where: {
+        lobbyId: lobby.id,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+      },
+    });
+
+    const outcomes = await Promise.all([
+      reconcileMissingInhouseResultAnnouncements(),
+      reconcileMissingInhouseResultAnnouncements(),
+    ]);
+    expect(outcomes.reduce((sum, result) => sum + result.created, 0)).toBe(1);
+    expect(
+      await prisma.inhouseAnnouncement.count({
+        where: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      }),
+    ).toBe(1);
+    const repaired = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(Object.keys(JSON.parse(repaired.eloDeltas))).toHaveLength(
+      INHOUSE.LOBBY_SIZE,
+    );
+  });
+
+  it("never rewrites a result payload after its send lease is live", async () => {
+    const { lobby } = await leaveResultAfterPrimaryCommit(7000000122);
+    const frozenContent = "frozen payload already handed to Discord";
+    const event = await prisma.inhouseAnnouncement.update({
+      where: {
+        lobbyId_kind: {
+          lobbyId: lobby.id,
+          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        },
+      },
+      data: { content: frozenContent },
+    });
+
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sendStarted = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const send = vi.fn(async () => {
+      entered();
+      await gate;
+      return true;
+    });
+    const delivery = deliverInhouseAnnouncements({
+      lobbyId: lobby.id,
+      now: new Date(event.availableAt.getTime() + 1),
+      send,
+      limit: 1,
+    });
+    await sendStarted;
+
+    try {
+      await expect(
+        reconcileMissingInhouseResultAnnouncements(),
+      ).resolves.toEqual({ scanned: 1, created: 0 });
+      expect(
+        await prisma.inhouseAnnouncement.findUniqueOrThrow({
+          where: { id: event.id },
+        }),
+      ).toMatchObject({
+        status: INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
+        content: frozenContent,
+      });
+    } finally {
+      // Mutation failures must still release the webhook seam so the worker
+      // cannot leak into teardown or leave this test hanging.
+      release();
+      await delivery;
+    }
+    expect(send).toHaveBeenCalledWith(frozenContent);
+    expect(
+      await prisma.inhouseAnnouncement.findUniqueOrThrow({
+        where: { id: event.id },
+      }),
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+      attempts: 1,
+    });
+  });
+
+  it("leases one pending announcement to only one concurrent worker", async () => {
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.COMPLETED,
+        winnerTeam: 1,
+        dotaMatchId: "7000000023",
+        completedAt: new Date(),
+      },
+    });
+    const event = await prisma.inhouseAnnouncement.create({
+      data: {
+        lobbyId: lobby.id,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        sequence: 1,
+        content: "durable result",
+        resultMatchId: "7000000023",
+      },
+    });
+
+    let release!: (accepted: boolean) => void;
+    let started!: () => void;
+    const inFlight = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const sendStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const send = vi.fn(async () => {
+      started();
+      return inFlight;
+    });
+    const now = new Date();
+
+    const first = deliverInhouseAnnouncements({
+      lobbyId: lobby.id,
+      now,
+      send,
+    });
+    await sendStarted;
+    const rival = await deliverInhouseAnnouncements({
+      lobbyId: lobby.id,
+      now,
+      send,
+    });
+    expect(rival).toEqual({ attempted: 0, delivered: 0, pending: true });
+    expect(send).toHaveBeenCalledTimes(1);
+
+    release(true);
+    expect(await first).toEqual({ attempted: 1, delivered: 1, pending: false });
+    expect(
+      await prisma.inhouseAnnouncement.findUniqueOrThrow({
+        where: { id: event.id },
+      }),
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.SENT,
+      attempts: 1,
+    });
+  });
+
+  it("does not lease a result after its lobby changes behind the candidate snapshot", async () => {
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.COMPLETED,
+        winnerTeam: 1,
+        dotaMatchId: "7000000024",
+        completedAt: new Date(),
+      },
+    });
+    const event = await prisma.inhouseAnnouncement.create({
+      data: {
+        lobbyId: lobby.id,
+        kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
+        sequence: 1,
+        content: "now stale result",
+        resultMatchId: "7000000024",
+      },
+    });
+    const originalFind = prisma.inhouseAnnouncement.findMany.bind(
+      prisma.inhouseAnnouncement,
+    );
+    let moved = false;
+    const candidateSpy = vi
+      .spyOn(prisma.inhouseAnnouncement, "findMany")
+      .mockImplementation((async (args: Parameters<typeof originalFind>[0]) => {
+        const candidates = await originalFind(args);
+        if (!moved && candidates.length > 0) {
+          moved = true;
+          await prisma.inhouseLobby.update({
+            where: { id: lobby.id },
+            data: { status: INHOUSE_STATUS.CANCELLED, dotaMatchId: null },
+          });
+        }
+        return candidates;
+      }) as never);
+
+    let first: Awaited<ReturnType<typeof deliverInhouseAnnouncements>>;
+    try {
+      first = await deliverInhouseAnnouncements({ lobbyId: lobby.id });
+    } finally {
+      candidateSpy.mockRestore();
+    }
+
+    expect(moved).toBe(true);
+    expect(first).toEqual({ attempted: 0, delivered: 0, pending: true });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(
+      await prisma.inhouseAnnouncement.findUniqueOrThrow({
+        where: { id: event.id },
+      }),
+    ).toMatchObject({
+      status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      attempts: 0,
+    });
+
+    // A fresh candidate snapshot sees the cancellation and retires the stale
+    // result without spending a webhook attempt.
+    await expect(
+      deliverInhouseAnnouncements({ lobbyId: lobby.id }),
+    ).resolves.toEqual({ attempted: 0, delivered: 0, pending: false });
+    expect(
+      await prisma.inhouseAnnouncement.findUniqueOrThrow({
+        where: { id: event.id },
+      }),
+    ).toMatchObject({ status: INHOUSE_ANNOUNCEMENT_STATUS.CANCELLED });
   });
 });
 
@@ -1341,7 +2200,12 @@ describe("inhouse — queue MMR trust", () => {
       data: { name: "IH Trust", status: "REGULAR_SEASON", isActive: false },
     });
     await prisma.registration.create({
-      data: { seasonId: season.id, userId: user.id, mmr: 4321, status: "ACTIVE" },
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        mmr: 4321,
+        status: "ACTIVE",
+      },
     });
     // The client claims 12000 — the league-trusted number wins.
     expect((await joinQueue(sessionFor(user), 12000)).ok).toBe(true);
@@ -1470,7 +2334,9 @@ describe("inhouse — an admin can void a wrong result", () => {
         startTime: Math.floor(Date.now() / 1000),
       }),
     );
-    expect((await recordMatch(g.players[0].session, "7200000001")).ok).toBe(true);
+    expect((await recordMatch(g.players[0].session, "7200000001")).ok).toBe(
+      true,
+    );
 
     const ladder = async () => {
       const completed = await prisma.inhouseLobby.findMany({
@@ -1514,6 +2380,55 @@ describe("inhouse — an admin can void a wrong result", () => {
     expect((await voidLastResult(admin)).ok).toBe(false);
   });
 
+  it("bare void prefers the newest stamped result, then falls back to legacy null timestamps", async () => {
+    const admin = sessionFor(await makeUser("Legacy Void Admin", "ADMIN"));
+    const legacy = await prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.COMPLETED,
+        radiantTeam: 1,
+        winnerTeam: 1,
+        createdAt: new Date(Date.now() - 60_000),
+        completedAt: null,
+      },
+    });
+    const stamped = await prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.COMPLETED,
+        radiantTeam: 1,
+        winnerTeam: 2,
+        completedAt: new Date(),
+      },
+    });
+
+    // PostgreSQL puts nulls first for DESC while SQLite puts them last. The
+    // explicit non-null query must therefore choose the stamped row on both.
+    expect((await voidLastResult(admin)).ok).toBe(true);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: stamped.id },
+        })
+      ).status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: legacy.id },
+        })
+      ).status,
+    ).toBe(INHOUSE_STATUS.COMPLETED);
+
+    // Pre-migration history remains recoverable once no stamped result remains.
+    expect((await voidLastResult(admin)).ok).toBe(true);
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: legacy.id },
+        })
+      ).status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+  });
+
   it("voids the NAMED game when a lobbyId is given, not the newest", async () => {
     // The /inhouse/history control targets a specific row — a result landing
     // between the admin's look and their click must never redirect the void.
@@ -1550,11 +2465,36 @@ describe("inhouse — an admin can void a wrong result", () => {
 
 describe("inhouse — abandoned lobby teardown", () => {
   /** Backdate the field the abandonment floor is measured from. */
-  const age = (lobbyId: string, field: "updatedAt" | "startedAt", hours: number) =>
+  const age = (
+    lobbyId: string,
+    field: "updatedAt" | "startedAt",
+    hours: number,
+  ) =>
     prisma.inhouseLobby.update({
       where: { id: lobbyId },
       data: { [field]: new Date(Date.now() - hours * 3_600_000) },
     });
+
+  it("keeps an anonymous spectator snapshot side-effect-free", async () => {
+    const admin = sessionFor(await makeUser("AdminSpectator", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    await age(lobby.id, "startedAt", INHOUSE.ABANDON_IN_PROGRESS_HOURS + 1);
+
+    await getInhouseState(null, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.IN_PROGRESS);
+
+    await getInhouseState(null, { syncBoard: false });
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+  });
 
   it("scraps a READY lobby nobody ever started, and frees its players + the slot", async () => {
     const admin = sessionFor(await makeUser("AdminAB", "ADMIN"));
@@ -1702,8 +2642,11 @@ describe("inhouse — the draft can't be left off the clock", () => {
 
     await getInhouseState(null);
     expect(
-      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: drafting.id } }))
-        .status,
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: drafting.id },
+        })
+      ).status,
     ).toBe(INHOUSE_STATUS.READY);
   });
 
@@ -1759,7 +2702,9 @@ describe("inhouse — the draft can't be left off the clock", () => {
       after.status === INHOUSE_STATUS.DRAFTING && after.pickTeam === null,
     ).toBe(false);
     // And the turn was consumed once, not once per racer.
-    const drafted = after.players.filter((p) => p.team !== null && !p.isCaptain);
+    const drafted = after.players.filter(
+      (p) => p.team !== null && !p.isCaptain,
+    );
     expect(new Set(drafted.map((p) => p.userId)).size).toBe(drafted.length);
     expect(drafted.length).toBeLessThanOrEqual(3); // pick 0 + at most the pair
   });
@@ -1799,9 +2744,8 @@ describe("inhouse — the played game is the truth", () => {
     expect(done.radiantTeam).toBe(1);
 
     const accOf = (p: (typeof done.players)[number]) =>
-      p.user.dotaAccountId ?? steamIdToAccountId(p.user.steamId)!;
-    const rowFor = (acc: number) =>
-      done.players.find((p) => accOf(p) === acc)!;
+      effectiveDotaAccountId(p.user)!;
+    const rowFor = (acc: number) => done.players.find((p) => accOf(p) === acc)!;
 
     // Rosters follow the game, not the draft — otherwise the ladder credits a
     // win to the five who lost.
@@ -1908,12 +2852,17 @@ describe("inhouse — guarded claims fire exactly once under contention", () => 
 
   it("cancelLobby: only one of N simultaneous admin cancels may scrap it", async () => {
     const admin = sessionFor(await makeUser("AdminCL", "ADMIN"));
-    await voteAll(await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4000 - i * 50), "MMR");
+    await voteAll(
+      await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4000 - i * 50),
+      "MMR",
+    );
 
     const res = await raceN(4, () => cancelLobby(admin));
     expect(res.filter((r) => r.ok)).toHaveLength(1);
     expect(
-      await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CANCELLED } }),
+      await prisma.inhouseLobby.count({
+        where: { status: INHOUSE_STATUS.CANCELLED },
+      }),
     ).toBe(1);
   });
 
@@ -1984,7 +2933,9 @@ describe("inhouse — guarded claims fire exactly once under contention", () => 
     ]);
     expect(res.filter((r) => r.ok)).toHaveLength(1);
     expect(
-      await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.CANCELLED } }),
+      await prisma.inhouseLobby.count({
+        where: { status: INHOUSE_STATUS.CANCELLED },
+      }),
     ).toBe(1);
   });
 
@@ -2036,138 +2987,268 @@ describe("inhouse — guarded claims fire exactly once under contention", () => 
 // pins one, so a rival issued inside an open transaction would HANG.
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!ON_POSTGRES)("inhouse — claims that need a staged interleaving", () => {
-  afterEach(() => setRaceHook(null));
+describe.skipIf(!ON_POSTGRES)(
+  "inhouse — claims that need a staged interleaving",
+  () => {
+    afterEach(() => setRaceHook(null));
 
-  /** Ten players, voted through to a live draft. */
-  async function draftingLobby(tag: string) {
-    const admin = sessionFor(await makeUser(`AdminFI${tag}`, "ADMIN"));
-    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4500 - i * 100);
-    await voteAll(players, "MMR");
-    const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
-    return { admin, players, lobby };
-  }
+    /** Ten players, voted through to a live draft. */
+    async function draftingLobby(tag: string) {
+      const admin = sessionFor(await makeUser(`AdminFI${tag}`, "ADMIN"));
+      const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4500 - i * 100);
+      await voteAll(players, "MMR");
+      const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+      return { admin, players, lobby };
+    }
 
-  it("refuses a pick whose TURN moved on, even to the same team", async () => {
-    // The snake repeats a team across consecutive picks, so `pickTeam` alone
-    // does not identify a turn — `pickEndsAt` does. The rival below completes
-    // the previous turn and hands the SAME team the next one with a fresh
-    // deadline; without that clause in the claim, this caller's stale read
-    // wins a turn that was never its own and two players land on one pick.
-    const { admin, lobby } = await draftingLobby("Turn");
-    // One real pick so the next two turns both belong to the same team.
-    const pool0 = lobby.players
-      .filter((p) => p.team === null)
-      .sort((a, b) => b.mmr - a.mmr);
-    expect((await makePick(admin, pool0[0].userId)).ok).toBe(true);
+    it("refuses a ballot whose deadline expires between validation and the player write", async () => {
+      const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+      await acceptAll(players);
+      const lobby = await lobbyByStatus(INHOUSE_STATUS.CAPTAIN_VOTE);
 
-    const live = await prisma.inhouseLobby.findUniqueOrThrow({
-      where: { id: lobby.id },
-      include: { players: true },
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouse.castVote.beforeClaim", async () => {
+          fired = true;
+          await prisma.inhouseLobby.update({
+            where: { id: lobby.id },
+            data: { voteEndsAt: new Date(Date.now() - 1000) },
+          });
+        }),
+      );
+
+      const res = await castVote(players[0].session, "MMR");
+      expect(fired).toBe(true);
+      expect(res.ok).toBe(false);
+      expect(res.ok === false && res.error).toMatch(/voting.*closed/i);
+      expect(
+        (
+          await prisma.inhouseLobbyPlayer.findFirstOrThrow({
+            where: { lobbyId: lobby.id, userId: players[0].user.id },
+          })
+        ).votedMethod,
+      ).toBeNull();
     });
-    const onClock = live.pickTeam!;
-    const pool = live.players.filter((p) => p.team === null);
-    const [target, rivalPick] = pool;
 
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouse.applyPick.beforeTurnClaim", async () => {
-        fired = true;
-        // The rival's pick lands and the turn advances to the SAME team with a
-        // NEW deadline. Two rows, neither written by the open transaction.
-        await prisma.inhouseLobbyPlayer.update({
-          where: { id: rivalPick.id },
-          data: { team: onClock, pickIndex: 1 },
-        });
-        await prisma.inhouseLobby.update({
+    it("orders a void behind an in-flight result publication", async () => {
+      const admin = sessionFor(await makeUser("AdminFIPublish", "ADMIN"));
+      const { players, lobby } = await runToInProgress(admin);
+      const { team1, team2 } = await teamAccounts(lobby.id);
+      mockMatch.mockResolvedValue(
+        fakeMatch({
+          matchId: 994001,
+          team1,
+          team2,
+          radiantWin: true,
+          startTime: Math.floor(Date.now() / 1000),
+        }),
+      );
+      mockSend.mockClear();
+
+      const messages: string[] = [];
+      let releaseResult!: (accepted: boolean) => void;
+      let markResultStarted!: () => void;
+      const heldResult = new Promise<boolean>((resolve) => {
+        releaseResult = resolve;
+      });
+      const resultStarted = new Promise<void>((resolve) => {
+        markResultStarted = resolve;
+      });
+      mockSend.mockImplementation(async (message) => {
+        messages.push(message);
+        if (message.includes("Inhouse result:")) {
+          markResultStarted();
+          return heldResult;
+        }
+        return true;
+      });
+
+      const pendingRecord = recordMatch(players[0].session, "994001");
+      await resultStarted;
+
+      let voided!: Awaited<ReturnType<typeof voidLastResult>>;
+      let messagesBeforeResultRelease: string[] = [];
+      let statusesBeforeResultRelease: string[] = [];
+      try {
+        // The RESULT row owns a SENDING lease here. The void transaction may
+        // cancel only a still-PENDING result; its correction must remain
+        // PENDING behind this in-flight sequence until the send resolves.
+        voided = await voidLastResult(admin, lobby.id);
+        messagesBeforeResultRelease = [...messages];
+        statusesBeforeResultRelease = (
+          await prisma.inhouseAnnouncement.findMany({
+            where: { lobbyId: lobby.id },
+            orderBy: { sequence: "asc" },
+            select: { status: true },
+          })
+        ).map((event) => event.status);
+      } finally {
+        // Always settle the parked worker, including when an assertion or the
+        // void path throws, so this interleaving cannot leak into later tests.
+        releaseResult(true);
+      }
+
+      expect((await pendingRecord).ok).toBe(true);
+      // The original worker normally observes sequence 2 after completing
+      // sequence 1; this explicit drain also proves no durable work is left if
+      // that implementation detail changes.
+      await deliverInhouseAnnouncements({ lobbyId: lobby.id });
+
+      expect(voided.ok).toBe(true);
+      expect(messagesBeforeResultRelease).toHaveLength(1);
+      expect(messagesBeforeResultRelease[0]).toContain("Inhouse result:");
+      expect(statusesBeforeResultRelease).toEqual([
+        INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
+        INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+      ]);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toContain("Inhouse result:");
+      expect(messages[1]).toContain("result has been voided");
+      expect(
+        (
+          await prisma.inhouseLobby.findUniqueOrThrow({
+            where: { id: lobby.id },
+          })
+        ).status,
+      ).toBe(INHOUSE_STATUS.CANCELLED);
+    });
+
+    it("refuses a pick whose TURN moved on, even to the same team", async () => {
+      // The snake repeats a team across consecutive picks, so `pickTeam` alone
+      // does not identify a turn — `pickEndsAt` does. The rival below completes
+      // the previous turn and hands the SAME team the next one with a fresh
+      // deadline; without that clause in the claim, this caller's stale read
+      // wins a turn that was never its own and two players land on one pick.
+      const { admin, lobby } = await draftingLobby("Turn");
+      // One real pick so the next two turns both belong to the same team.
+      const pool0 = lobby.players
+        .filter((p) => p.team === null)
+        .sort((a, b) => b.mmr - a.mmr);
+      expect((await makePick(admin, pool0[0].userId)).ok).toBe(true);
+
+      const live = await prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: lobby.id },
+        include: { players: true },
+      });
+      const onClock = live.pickTeam!;
+      const pool = live.players.filter((p) => p.team === null);
+      const [target, rivalPick] = pool;
+
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouse.applyPick.beforeTurnClaim", async () => {
+          fired = true;
+          // The rival's pick lands and the turn advances to the SAME team with a
+          // NEW deadline. Two rows, neither written by the open transaction.
+          await prisma.inhouseLobbyPlayer.update({
+            where: { id: rivalPick.id },
+            data: { team: onClock, pickIndex: 1 },
+          });
+          await prisma.inhouseLobby.update({
+            where: { id: lobby.id },
+            data: {
+              pickTeam: onClock,
+              pickEndsAt: new Date(Date.now() + 60_000),
+            },
+          });
+        }),
+      );
+
+      const res = await makePick(admin, target.userId);
+      expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+      expect(res.ok).toBe(false);
+      expect(
+        (
+          await prisma.inhouseLobbyPlayer.findUniqueOrThrow({
+            where: { id: target.id },
+          })
+        ).team,
+      ).toBeNull();
+      // One turn consumed one player: the first real pick plus the rival's.
+      expect(
+        await prisma.inhouseLobbyPlayer.count({
+          where: { lobbyId: lobby.id, isCaptain: false, team: { not: null } },
+        }),
+      ).toBe(2);
+    });
+
+    it("refuses a pick whose TARGET was drafted between the read and the claim", async () => {
+      const { admin, lobby } = await draftingLobby("Target");
+      const pool = lobby.players.filter((p) => p.team === null);
+      const target = pool[0];
+
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouse.applyPick.beforePlayerClaim", async () => {
+          fired = true;
+          // A rival takes the very player being drafted. Player row only — the
+          // open transaction has written the lobby row, not this one.
+          await prisma.inhouseLobbyPlayer.update({
+            where: { id: target.id },
+            data: { team: 1, pickIndex: 0 },
+          });
+        }),
+      );
+
+      const res = await makePick(admin, target.userId);
+      expect(fired).toBe(true);
+      expect(res.ok).toBe(false);
+      // AND the turn claim rolled back — the draft is still on the clock, not
+      // frozen with pickTeam null (the PickRaceError contract).
+      const after = await prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: lobby.id },
+      });
+      expect(after.status).toBe(INHOUSE_STATUS.DRAFTING);
+      expect(after.pickTeam).not.toBeNull();
+    });
+
+    it("puts a lost pick turn back exactly once when two pollers restore it", async () => {
+      const { lobby } = await draftingLobby("Restore");
+      await prisma.inhouseLobby.update({
+        where: { id: lobby.id },
+        data: { pickTeam: null, pickEndsAt: new Date(Date.now() - 60_000) },
+      });
+
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouse.restoreLostPickTurn.beforeClaim", async () => {
+          fired = true;
+          // Another poller got there first and put the lobby back on the clock.
+          await prisma.inhouseLobby.update({
+            where: { id: lobby.id },
+            data: { pickTeam: 1, pickEndsAt: new Date(Date.now() + 60_000) },
+          });
+        }),
+      );
+
+      await resolveStalledPick();
+      expect(fired).toBe(true);
+      const after = await prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: lobby.id },
+      });
+      // The rival's restore stands; ours must not have overwritten its deadline.
+      expect(after.pickTeam).toBe(1);
+      expect(after.pickEndsAt!.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it("won't auto-assign the last pool player if a rival took them first", async () => {
+      // The last-pick auto-assign skips a pointless 60s clock when one player
+      // remains. Its claim is what stops it assigning someone a rival already
+      // took — which would put a player on BOTH sides of the roster count.
+      const { admin, lobby } = await draftingLobby("Last");
+      // Drive to exactly two pool players, so the NEXT pick triggers the
+      // auto-assign of the final one.
+      for (let guard = 0; guard < 20; guard++) {
+        const live = await prisma.inhouseLobby.findUniqueOrThrow({
           where: { id: lobby.id },
-          data: { pickTeam: onClock, pickEndsAt: new Date(Date.now() + 60_000) },
+          include: { players: true },
         });
-      }),
-    );
-
-    const res = await makePick(admin, target.userId);
-    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
-    expect(res.ok).toBe(false);
-    expect(
-      (await prisma.inhouseLobbyPlayer.findUniqueOrThrow({ where: { id: target.id } }))
-        .team,
-    ).toBeNull();
-    // One turn consumed one player: the first real pick plus the rival's.
-    expect(
-      await prisma.inhouseLobbyPlayer.count({
-        where: { lobbyId: lobby.id, isCaptain: false, team: { not: null } },
-      }),
-    ).toBe(2);
-  });
-
-  it("refuses a pick whose TARGET was drafted between the read and the claim", async () => {
-    const { admin, lobby } = await draftingLobby("Target");
-    const pool = lobby.players.filter((p) => p.team === null);
-    const target = pool[0];
-
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouse.applyPick.beforePlayerClaim", async () => {
-        fired = true;
-        // A rival takes the very player being drafted. Player row only — the
-        // open transaction has written the lobby row, not this one.
-        await prisma.inhouseLobbyPlayer.update({
-          where: { id: target.id },
-          data: { team: 1, pickIndex: 0 },
-        });
-      }),
-    );
-
-    const res = await makePick(admin, target.userId);
-    expect(fired).toBe(true);
-    expect(res.ok).toBe(false);
-    // AND the turn claim rolled back — the draft is still on the clock, not
-    // frozen with pickTeam null (the PickRaceError contract).
-    const after = await prisma.inhouseLobby.findUniqueOrThrow({
-      where: { id: lobby.id },
-    });
-    expect(after.status).toBe(INHOUSE_STATUS.DRAFTING);
-    expect(after.pickTeam).not.toBeNull();
-  });
-
-  it("puts a lost pick turn back exactly once when two pollers restore it", async () => {
-    const { lobby } = await draftingLobby("Restore");
-    await prisma.inhouseLobby.update({
-      where: { id: lobby.id },
-      data: { pickTeam: null, pickEndsAt: new Date(Date.now() - 60_000) },
-    });
-
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouse.restoreLostPickTurn.beforeClaim", async () => {
-        fired = true;
-        // Another poller got there first and put the lobby back on the clock.
-        await prisma.inhouseLobby.update({
-          where: { id: lobby.id },
-          data: { pickTeam: 1, pickEndsAt: new Date(Date.now() + 60_000) },
-        });
-      }),
-    );
-
-    await resolveStalledPick();
-    expect(fired).toBe(true);
-    const after = await prisma.inhouseLobby.findUniqueOrThrow({
-      where: { id: lobby.id },
-    });
-    // The rival's restore stands; ours must not have overwritten its deadline.
-    expect(after.pickTeam).toBe(1);
-    expect(after.pickEndsAt!.getTime()).toBeGreaterThan(Date.now());
-  });
-
-  it("won't auto-assign the last pool player if a rival took them first", async () => {
-    // The last-pick auto-assign skips a pointless 60s clock when one player
-    // remains. Its claim is what stops it assigning someone a rival already
-    // took — which would put a player on BOTH sides of the roster count.
-    const { admin, lobby } = await draftingLobby("Last");
-    // Drive to exactly two pool players, so the NEXT pick triggers the
-    // auto-assign of the final one.
-    for (let guard = 0; guard < 20; guard++) {
+        const pool = live.players
+          .filter((p) => p.team === null)
+          .sort((a, b) => b.mmr - a.mmr);
+        if (pool.length <= 2) break;
+        expect((await makePick(admin, pool[0].userId)).ok).toBe(true);
+      }
       const live = await prisma.inhouseLobby.findUniqueOrThrow({
         where: { id: lobby.id },
         include: { players: true },
@@ -2175,169 +3256,164 @@ describe.skipIf(!ON_POSTGRES)("inhouse — claims that need a staged interleavin
       const pool = live.players
         .filter((p) => p.team === null)
         .sort((a, b) => b.mmr - a.mmr);
-      if (pool.length <= 2) break;
-      expect((await makePick(admin, pool[0].userId)).ok).toBe(true);
-    }
-    const live = await prisma.inhouseLobby.findUniqueOrThrow({
-      where: { id: lobby.id },
-      include: { players: true },
-    });
-    const pool = live.players
-      .filter((p) => p.team === null)
-      .sort((a, b) => b.mmr - a.mmr);
-    expect(pool).toHaveLength(2);
-    const [target, last] = pool;
+      expect(pool).toHaveLength(2);
+      const [target, last] = pool;
 
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouse.applyPick.beforeLastAssign", async () => {
-        fired = true;
-        // A rival grabs the final player before the auto-assign can.
-        await prisma.inhouseLobbyPlayer.update({
-          where: { id: last.id },
-          data: { team: 1, pickIndex: 99 },
-        });
-      }),
-    );
-
-    const res = await makePick(admin, target.userId);
-    expect(fired).toBe(true);
-    expect(res.ok).toBe(true); // the caller's OWN pick still lands
-
-    // The rival's assignment stands — the auto-assign did not overwrite it,
-    // and nobody was counted onto a side twice.
-    const after = await prisma.inhouseLobbyPlayer.findUniqueOrThrow({
-      where: { id: last.id },
-    });
-    expect(after.team).toBe(1);
-    expect(after.pickIndex).toBe(99);
-  });
-
-  it("an accept lands on nothing when the check is cancelled mid-call", async () => {
-    // The relation filter's whole job: a decline committing between the
-    // accepter's read and their write must not leave acceptedAt stamped on a
-    // dead lobby AND report success to the player.
-    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
-    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
-
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouse.acceptMatch.beforeClaim", async () => {
-        fired = true;
-        await prisma.inhouseLobby.update({
-          where: { id: lobby.id },
-          data: { status: INHOUSE_STATUS.CANCELLED },
-        });
-      }),
-    );
-
-    const res = await acceptMatch(players[0].session);
-    expect(fired).toBe(true);
-    expect(res.ok).toBe(false);
-    expect(res.ok === false && res.error).toMatch(/cancelled/i);
-    expect(
-      (await prisma.inhouseLobbyPlayer.findFirstOrThrow({
-        where: { lobbyId: lobby.id, userId: players[0].user.id },
-      })).acceptedAt,
-    ).toBeNull();
-  });
-
-  it("does not resurrect a cancelled check when the last accept opens the vote", async () => {
-    // The accept path counts pending players and, on zero, flips the lobby to
-    // CAPTAIN_VOTE. Both happen inside one transaction but on a per-statement
-    // snapshot, so a decline can CANCEL the lobby in between — and a blind
-    // flip then reopens a dead match: ten players pulled back into a vote they
-    // were already told was off, while their queue entries (written by the
-    // decline) sit alongside a live lobby, which is the one thing
-    // joinQueue/maybeFormLobby assume can never happen.
-    const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
-    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
-    // Nine accepts, so the tenth is the one that trips the flip.
-    for (const p of players.slice(0, INHOUSE.LOBBY_SIZE - 1)) {
-      expect((await acceptMatch(p.session)).ok).toBe(true);
-    }
-
-    let fired = false;
-    setRaceHook(
-      onceAt("inhouse.startCaptainVote.beforeFlip", async () => {
-        fired = true;
-        // A tenth-second too late, one of the nine changes their mind. The
-        // decline writes the lobby row and the queue rows — neither touched
-        // yet by the open transaction, which has written only its own
-        // acceptedAt (so this cannot deadlock).
-        expect((await declineMatch(players[0].session)).ok).toBe(true);
-      }),
-    );
-
-    await acceptMatch(players[INHOUSE.LOBBY_SIZE - 1].session);
-
-    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
-    const after = await prisma.inhouseLobby.findUniqueOrThrow({
-      where: { id: lobby.id },
-    });
-    expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
-    // No vote was ever started, so no vote clock: a resurrected lobby would
-    // carry one, and resolveCaptainVote would go on to install captains.
-    expect(after.voteEndsAt).toBeNull();
-    // The decline's requeue stands, and it is NOT shadowed by a live lobby:
-    // the decliner dropped, the other nine back in line.
-    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE - 1);
-    expect(
-      await prisma.inhouseLobby.count({
-        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-      }),
-    ).toBe(0);
-  });
-
-  it("the DRAFTING re-assert cannot be falsified — the turn claim holds the row", async () => {
-    // applyPick's LAST write re-asserts `status: DRAFTING`, and the mutation
-    // guard reports that predicate as an equivalent mutant: no test kills it.
-    // That is a claim about the code, so pin it rather than trust it. The turn
-    // claim a few statements earlier UPDATEs this very row, so from that moment
-    // the transaction holds its row lock and nothing — not an admin cancel, not
-    // a landed result — can move the status before the advance.
-    //
-    // NOWAIT is what makes this safe to assert: an ordinary rival UPDATE here
-    // would BLOCK on the lock while the transaction waits on the seam, which is
-    // a hung suite rather than a failing test. NOWAIT turns "would block" into
-    // an immediate error, so the two outcomes are one statement apart.
-    //
-    // If this goes red, the equivalence justification in
-    // scripts/mutation-guard.mjs has expired and the claim needs a real test.
-    const { admin, lobby } = await draftingLobby("Lock");
-    const target = lobby.players.find((p) => p.team === null)!;
-    const takeTheRow = () =>
-      prisma.$queryRawUnsafe(
-        `SELECT id FROM "InhouseLobby" WHERE id = $1 FOR UPDATE NOWAIT`,
-        lobby.id,
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouse.applyPick.beforeLastAssign", async () => {
+          fired = true;
+          // A rival grabs the final player before the auto-assign can.
+          await prisma.inhouseLobbyPlayer.update({
+            where: { id: last.id },
+            data: { team: 1, pickIndex: 99 },
+          });
+        }),
       );
 
-    // Positive control FIRST: with no transaction open the same statement
-    // succeeds. Without it, a typo'd table name would throw inside the seam and
-    // be read as proof of a lock — the test would "pass" having measured
-    // nothing, which is the exact failure mode this whole ratchet exists for.
-    await takeTheRow();
+      const res = await makePick(admin, target.userId);
+      expect(fired).toBe(true);
+      expect(res.ok).toBe(true); // the caller's OWN pick still lands
 
-    let fired = false;
-    let rivalCouldTakeTheRow: boolean | null = null;
-    let rivalError = "";
-    setRaceHook(
-      onceAt("inhouse.applyPick.beforeAdvance", async () => {
-        fired = true;
-        try {
-          await takeTheRow();
-          rivalCouldTakeTheRow = true;
-        } catch (e) {
-          rivalCouldTakeTheRow = false;
-          rivalError = String((e as Error).message);
-        }
-      }),
-    );
+      // The rival's assignment stands — the auto-assign did not overwrite it,
+      // and nobody was counted onto a side twice.
+      const after = await prisma.inhouseLobbyPlayer.findUniqueOrThrow({
+        where: { id: last.id },
+      });
+      expect(after.team).toBe(1);
+      expect(after.pickIndex).toBe(99);
+    });
 
-    expect((await makePick(admin, target.userId)).ok).toBe(true);
-    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
-    expect(rivalCouldTakeTheRow).toBe(false);
-    // …and refused for the RIGHT reason (55P03 lock_not_available).
-    expect(rivalError).toMatch(/could not obtain lock/i);
-  });
-});
+    it("an accept lands on nothing when the check is cancelled mid-call", async () => {
+      // The relation filter's whole job: a decline committing between the
+      // accepter's read and their write must not leave acceptedAt stamped on a
+      // dead lobby AND report success to the player.
+      const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+      const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouse.acceptMatch.beforeClaim", async () => {
+          fired = true;
+          await prisma.inhouseLobby.update({
+            where: { id: lobby.id },
+            data: { status: INHOUSE_STATUS.CANCELLED },
+          });
+        }),
+      );
+
+      const res = await acceptMatch(players[0].session);
+      expect(fired).toBe(true);
+      expect(res.ok).toBe(false);
+      expect(res.ok === false && res.error).toMatch(/cancelled/i);
+      expect(
+        (
+          await prisma.inhouseLobbyPlayer.findFirstOrThrow({
+            where: { lobbyId: lobby.id, userId: players[0].user.id },
+          })
+        ).acceptedAt,
+      ).toBeNull();
+    });
+
+    it("does not resurrect a cancelled check when the last accept opens the vote", async () => {
+      // The accept path counts pending players and, on zero, flips the lobby to
+      // CAPTAIN_VOTE. Both happen inside one transaction but on a per-statement
+      // snapshot, so a decline can CANCEL the lobby in between — and a blind
+      // flip then reopens a dead match: ten players pulled back into a vote they
+      // were already told was off, while their queue entries (written by the
+      // decline) sit alongside a live lobby, which is the one thing
+      // joinQueue/maybeFormLobby assume can never happen.
+      const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+      const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+      // Nine accepts, so the tenth is the one that trips the flip.
+      for (const p of players.slice(0, INHOUSE.LOBBY_SIZE - 1)) {
+        expect((await acceptMatch(p.session)).ok).toBe(true);
+      }
+
+      let fired = false;
+      setRaceHook(
+        onceAt("inhouse.startCaptainVote.beforeFlip", async () => {
+          fired = true;
+          // A tenth-second too late, one of the nine changes their mind. The
+          // decline writes the lobby row and the queue rows — neither touched
+          // yet by the open transaction, which has written only its own
+          // acceptedAt (so this cannot deadlock).
+          expect((await declineMatch(players[0].session)).ok).toBe(true);
+        }),
+      );
+
+      await acceptMatch(players[INHOUSE.LOBBY_SIZE - 1].session);
+
+      expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+      const after = await prisma.inhouseLobby.findUniqueOrThrow({
+        where: { id: lobby.id },
+      });
+      expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
+      // No vote was ever started, so no vote clock: a resurrected lobby would
+      // carry one, and resolveCaptainVote would go on to install captains.
+      expect(after.voteEndsAt).toBeNull();
+      // The decline's requeue stands, and it is NOT shadowed by a live lobby:
+      // the decliner dropped, the other nine back in line.
+      expect(await prisma.inhouseQueueEntry.count()).toBe(
+        INHOUSE.LOBBY_SIZE - 1,
+      );
+      expect(
+        await prisma.inhouseLobby.count({
+          where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+        }),
+      ).toBe(0);
+    });
+
+    it("the DRAFTING re-assert cannot be falsified — the turn claim holds the row", async () => {
+      // applyPick's LAST write re-asserts `status: DRAFTING`, and the mutation
+      // guard reports that predicate as an equivalent mutant: no test kills it.
+      // That is a claim about the code, so pin it rather than trust it. The turn
+      // claim a few statements earlier UPDATEs this very row, so from that moment
+      // the transaction holds its row lock and nothing — not an admin cancel, not
+      // a landed result — can move the status before the advance.
+      //
+      // NOWAIT is what makes this safe to assert: an ordinary rival UPDATE here
+      // would BLOCK on the lock while the transaction waits on the seam, which is
+      // a hung suite rather than a failing test. NOWAIT turns "would block" into
+      // an immediate error, so the two outcomes are one statement apart.
+      //
+      // If this goes red, the equivalence justification in
+      // scripts/mutation-guard.mjs has expired and the claim needs a real test.
+      const { admin, lobby } = await draftingLobby("Lock");
+      const target = lobby.players.find((p) => p.team === null)!;
+      const takeTheRow = () =>
+        prisma.$queryRawUnsafe(
+          `SELECT id FROM "InhouseLobby" WHERE id = $1 FOR UPDATE NOWAIT`,
+          lobby.id,
+        );
+
+      // Positive control FIRST: with no transaction open the same statement
+      // succeeds. Without it, a typo'd table name would throw inside the seam and
+      // be read as proof of a lock — the test would "pass" having measured
+      // nothing, which is the exact failure mode this whole ratchet exists for.
+      await takeTheRow();
+
+      let fired = false;
+      let rivalCouldTakeTheRow: boolean | null = null;
+      let rivalError = "";
+      setRaceHook(
+        onceAt("inhouse.applyPick.beforeAdvance", async () => {
+          fired = true;
+          try {
+            await takeTheRow();
+            rivalCouldTakeTheRow = true;
+          } catch (e) {
+            rivalCouldTakeTheRow = false;
+            rivalError = String((e as Error).message);
+          }
+        }),
+      );
+
+      expect((await makePick(admin, target.userId)).ok).toBe(true);
+      expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+      expect(rivalCouldTakeTheRow).toBe(false);
+      // …and refused for the RIGHT reason (55P03 lock_not_available).
+      expect(rivalError).toMatch(/could not obtain lock/i);
+    });
+  },
+);

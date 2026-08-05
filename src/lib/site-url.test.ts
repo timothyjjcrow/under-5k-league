@@ -35,8 +35,25 @@ describe("resolveSiteUrl", () => {
     process.env.NEXT_PUBLIC_SITE_URL = "https://ggd2l.example";
     process.env.VERCEL_PROJECT_PRODUCTION_URL = "prod.vercel.app";
     process.env.VERCEL_URL = "preview.vercel.app";
-    // Used verbatim — no https:// is prepended to the explicit override.
     expect(resolveSiteUrl()).toBe("https://ggd2l.example");
+  });
+
+  it("normalizes an explicit URL to its origin", () => {
+    process.env.NEXT_PUBLIC_SITE_URL =
+      "https://ggd2l.example/some/path/?preview=1";
+    expect(resolveSiteUrl()).toBe("https://ggd2l.example");
+  });
+
+  it("ignores a malformed explicit URL and uses the deployment fallback", () => {
+    process.env.NEXT_PUBLIC_SITE_URL = "not a URL";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "ggd2l.vercel.app";
+    expect(resolveSiteUrl()).toBe("https://ggd2l.vercel.app");
+  });
+
+  it("ignores a syntactically valid non-web URL", () => {
+    process.env.NEXT_PUBLIC_SITE_URL = "javascript:alert(1)";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "ggd2l.vercel.app";
+    expect(resolveSiteUrl()).toBe("https://ggd2l.vercel.app");
   });
 
   it("Vercel's production domain gets https:// prepended", () => {

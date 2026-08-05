@@ -31,7 +31,15 @@ export function weeklyHonors(
   games: HonorsGame[],
   teamOf: Map<string, string>,
 ): WeeklyHonors {
-  const playerPoints = new Map<string, { points: number; heroId: number | null }>();
+  const playerPoints = new Map<
+    string,
+    {
+      points: number;
+      /** Hero from this player's best single game in the week. */
+      heroId: number | null;
+      heroPoints: number | null;
+    }
+  >();
   const teamPoints = new Map<string, number>();
   const teamWins = new Map<string, number>();
 
@@ -42,9 +50,18 @@ export function weeklyHonors(
       const won = p.isRadiant === g.radiantWin;
       const pts = fantasyPoints(p, won);
       const prev = playerPoints.get(p.userId);
+      const heroId = p.heroId ?? null;
+      const heroWinsTie =
+        heroId != null && (prev?.heroId == null || heroId < prev.heroId);
+      const newHeroBest =
+        heroId != null &&
+        (prev?.heroPoints == null ||
+          pts > prev.heroPoints ||
+          (pts === prev.heroPoints && heroWinsTie));
       playerPoints.set(p.userId, {
         points: Math.round(((prev?.points ?? 0) + pts) * 10) / 10,
-        heroId: p.heroId ?? prev?.heroId ?? null,
+        heroId: newHeroBest ? heroId : (prev?.heroId ?? null),
+        heroPoints: newHeroBest ? pts : (prev?.heroPoints ?? null),
       });
       const teamId = p.teamId ?? teamOf.get(p.userId);
       if (teamId) {
@@ -62,7 +79,11 @@ export function weeklyHonors(
 
   let player: WeeklyHonors["player"] = null;
   for (const [userId, v] of playerPoints) {
-    if (!player || v.points > player.points) {
+    if (
+      !player ||
+      v.points > player.points ||
+      (v.points === player.points && userId.localeCompare(player.userId) < 0)
+    ) {
       player = { userId, points: v.points, heroId: v.heroId };
     }
   }
@@ -73,7 +94,10 @@ export function weeklyHonors(
     if (
       !team ||
       gameWins > team.gameWins ||
-      (gameWins === team.gameWins && points > team.points)
+      (gameWins === team.gameWins && points > team.points) ||
+      (gameWins === team.gameWins &&
+        points === team.points &&
+        teamId.localeCompare(team.teamId) < 0)
     ) {
       team = { teamId, gameWins, points };
     }

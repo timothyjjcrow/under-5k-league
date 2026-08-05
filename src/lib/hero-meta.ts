@@ -40,6 +40,30 @@ export type HeroMeta = {
   rows: HeroMetaRow[]; // most-picked first, then win rate, then heroId
 };
 
+/** A game is publishable in catalogue-based meta only when every pick is known. */
+export function allHeroesKnown(
+  lines: readonly Pick<MetaLine, "heroId">[],
+  knownHeroIds: ReadonlySet<number>,
+): boolean {
+  return (
+    lines.length > 0 && lines.every((line) => knownHeroIds.has(line.heroId))
+  );
+}
+
+/** Known catalogue coverage; unknown ids can never inflate the denominator. */
+export function heroPoolSeenPercent(
+  rows: readonly Pick<HeroMetaRow, "heroId">[],
+  knownHeroIds: ReadonlySet<number>,
+): number {
+  if (knownHeroIds.size === 0) return 0;
+  const seen = new Set(
+    rows
+      .filter((row) => knownHeroIds.has(row.heroId))
+      .map((row) => row.heroId),
+  );
+  return Math.round((seen.size / knownHeroIds.size) * 100);
+}
+
 /** Roll every game's lines up into per-hero meta rows. */
 export function heroMeta(games: MetaGame[]): HeroMeta {
   type Agg = {
@@ -95,7 +119,10 @@ export function heroMeta(games: MetaGame[]): HeroMeta {
       if (
         !topPlayer ||
         p.games > topPlayer.games ||
-        (p.games === topPlayer.games && p.wins > topPlayer.wins)
+        (p.games === topPlayer.games && p.wins > topPlayer.wins) ||
+        (p.games === topPlayer.games &&
+          p.wins === topPlayer.wins &&
+          userId.localeCompare(topPlayer.userId) < 0)
       ) {
         topPlayer = { userId, games: p.games, wins: p.wins };
       }

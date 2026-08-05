@@ -7,7 +7,7 @@ test("home shows the signups phase for the seeded season", async ({ page }) => {
   await expect(
     page.locator("#main").getByText("Signups open", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText(/players to start/)).toBeVisible();
+  await expect(page.getByText(/more to reach the player minimum/)).toBeVisible();
 });
 
 test("a new player can sign in and join the season", async ({ page }) => {
@@ -40,21 +40,24 @@ test("a new player can sign in and join the season", async ({ page }) => {
   await expect(page.getByRole("main").getByText(name)).toBeVisible();
 });
 
-test("a player can link their Dota account on their profile", async ({
+test("a player's profile uses their Steam-verified Dota account", async ({
   page,
 }) => {
   const steamId = "765611980" + String(Date.now()).slice(-8);
+  const accountId = (
+    BigInt(steamId) - BigInt("76561197960265728")
+  ).toString();
   await page.goto(
     `/api/auth/dev?name=Linker&steamId=${steamId}&redirect=/me`,
   );
   await expect(
     page.getByRole("heading", { name: "Dota / Dotabuff account" }),
   ).toBeVisible();
-  await page
-    .getByPlaceholder("Dotabuff/OpenDota URL or account id")
-    .fill("70388657");
-  await page.getByRole("button", { name: /Link/ }).click();
-  await expect(page.getByText("(manual)")).toBeVisible();
+  await expect(page.getByText("(verified by Steam)")).toBeVisible();
+  await expect(page.getByText(accountId, { exact: true })).toBeVisible();
+  await expect(
+    page.getByPlaceholder("Dotabuff/OpenDota URL or account id"),
+  ).toHaveCount(0);
 });
 
 test("admin sees the league control panel", async ({ page }) => {
@@ -67,7 +70,9 @@ test("admin sees the league control panel", async ({ page }) => {
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("phase control")).toBeVisible();
-  await expect(page.getByText("Create a new season")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Season handoff", exact: true }),
+  ).toBeVisible();
 });
 
 test("a player confirms the draft schedule and admin sees the readiness change", async ({
@@ -85,7 +90,7 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   );
   await page.getByLabel(/Draft night/).fill("2026-08-15T18:00");
   await page.getByRole("button", { name: "Set draft night" }).click();
-  await expect(page.getByText(/0\/\d+ ready/)).toBeVisible();
+  await expect(page.getByText(/^0\/\d+ ready$/)).toBeVisible();
 
   const playerContext = await browser.newContext();
   const playerPage = await playerContext.newPage();
@@ -167,11 +172,17 @@ test("typed confirmation actually removes a designated captain", async ({
   await expect(page.getByText("Dendi's Team", { exact: true })).toHaveCount(0);
 });
 
-test("non-admin is redirected away from admin", async ({ page }) => {
+test("non-admin sees a clear restricted-access state", async ({ page }) => {
   const steamId = "7656119" + String(Date.now() + 1).slice(-10);
   await page.goto(
     `/api/auth/dev?name=Regular&steamId=${steamId}&redirect=/admin`,
   );
-  // Redirected to home (no admin heading). Relative → resolved via baseURL.
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/admin");
+  await expect(
+    page.getByRole("heading", { name: "Admin access required" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("You do not have administrator access"),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Return to league home" })).toBeVisible();
 });

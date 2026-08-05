@@ -9,11 +9,15 @@ const CACHED_MEDIA = ["/hero-loop.mp4"];
 
 // Baseline security headers on every response. Deliberately no script/style CSP
 // directives (Next injects inline hydration scripts that a strict script-src
-// would break) — `frame-ancestors 'none'` + X-Frame-Options give clickjacking
-// protection without that risk.
+// would break). The remaining directives are hydration-safe: they prevent
+// clickjacking, external form posts, injected base URLs, and legacy plugins.
 const SECURITY_HEADERS = [
   { key: "X-Frame-Options", value: "DENY" },
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  {
+    key: "Content-Security-Policy",
+    value:
+      "base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+  },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
@@ -27,6 +31,14 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  experimental: {
+    serverActions: {
+      // Every action in this app accepts scalar form fields; there are no file
+      // uploads. Keep enough room for multipart boundaries and long admin copy
+      // while refusing Next's otherwise unnecessary 1 MB parse budget.
+      bodySizeLimit: "64kb",
+    },
+  },
   async headers() {
     return [
       { source: "/:path*", headers: SECURITY_HEADERS },

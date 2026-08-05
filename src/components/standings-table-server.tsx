@@ -1,9 +1,6 @@
 import type { computeStandings, ClinchStatus } from "@/lib/standings";
 import type { FormResult } from "@/lib/team-matches";
-import {
-  StandingsTableClient,
-  type StandingsRowView,
-} from "./standings-table";
+import { StandingsTableClient, type StandingsRowView } from "./standings-table";
 
 /**
  * Server-side adapter for the sortable client table: flattens the maps into
@@ -25,6 +22,8 @@ export function StandingsTable({
   movement,
   totalTeams,
   withdrawnIds,
+  playoffSeedByTeam,
+  eligibleTeams,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -42,12 +41,19 @@ export function StandingsTable({
   /** Teams that withdrew mid-season (withdrawTeam) — badged, never hidden:
    *  their played results are real, they're just out of seeding contention. */
   withdrawnIds?: Set<string>;
+  /** Canonical eligible seed map from projectPlayoffField. */
+  playoffSeedByTeam?: Map<string, number>;
+  /** Number of non-withdrawn teams competing for playoff places. */
+  eligibleTeams?: number;
 }) {
   // "Everyone makes the bracket" must be judged against the whole league,
   // not the (possibly sliced) rows this table happens to show.
   const fieldSize = totalTeams ?? standings.length;
+  const eligibleFieldSize =
+    eligibleTeams ??
+    standings.filter((row) => !withdrawnIds?.has(row.teamId)).length;
   const cutIsReal =
-    playoffCut != null && playoffCut > 0 && playoffCut < fieldSize;
+    playoffCut != null && playoffCut > 0 && playoffCut < eligibleFieldSize;
   const rows: StandingsRowView[] = standings.map((s, i) => ({
     teamId: s.teamId,
     name: teamName.get(s.teamId) ?? "—",
@@ -57,11 +63,12 @@ export function StandingsTable({
     losses: s.losses,
     gameDiff: s.gameDiff,
     points: s.points,
-    form: formByTeam ? formByTeam.get(s.teamId) ?? [] : null,
-    clinch: cutIsReal ? clinch?.get(s.teamId) ?? null : null,
+    form: formByTeam ? (formByTeam.get(s.teamId) ?? []) : null,
+    clinch: cutIsReal ? (clinch?.get(s.teamId) ?? null) : null,
     move: movement?.get(s.teamId) ?? 0,
     idDecided: s.idDecided ?? false,
     withdrawn: withdrawnIds?.has(s.teamId) ?? false,
+    playoffSeed: playoffSeedByTeam?.get(s.teamId) ?? null,
   }));
   return (
     <StandingsTableClient
@@ -69,6 +76,7 @@ export function StandingsTable({
       playoffCut={playoffCut}
       viewerTeamId={viewerTeamId}
       totalTeams={fieldSize}
+      eligibleTeams={eligibleFieldSize}
     />
   );
 }

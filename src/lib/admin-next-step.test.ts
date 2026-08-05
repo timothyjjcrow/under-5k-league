@@ -55,8 +55,12 @@ describe("adminNextStep — signups", () => {
 
   it("says nothing about Discord when everyone linked (or the count wasn't supplied)", () => {
     expect(
-      at({ playerCount: 10, minPlayers: 10, teamCount: 4, unlinkedDiscordCount: 0 })
-        .detail,
+      at({
+        playerCount: 10,
+        minPlayers: 10,
+        teamCount: 4,
+        unlinkedDiscordCount: 0,
+      }).detail,
     ).not.toMatch(/Discord/);
     expect(
       at({ playerCount: 10, minPlayers: 10, teamCount: 4 }).detail,
@@ -106,9 +110,9 @@ describe("adminNextStep — draft", () => {
 
 describe("adminNextStep — regular season", () => {
   it("asks for a schedule before anything else", () => {
-    expect(
-      at({ seasonStatus: SEASON_STATUS.REGULAR_SEASON }).title,
-    ).toMatch(/generate the schedule/i);
+    expect(at({ seasonStatus: SEASON_STATUS.REGULAR_SEASON }).title).toMatch(
+      /generate the schedule/i,
+    );
   });
 
   // A schedule with no kickoff times silently disables auto-sync, the weekly
@@ -151,6 +155,7 @@ describe("adminNextStep — playoffs and completion", () => {
   it("warns when the phase is Playoffs but no bracket was ever seeded", () => {
     const s = at({ seasonStatus: SEASON_STATUS.PLAYOFFS });
     expect(s.tone).toBe("warning");
+    expect(s.detail).toMatch(/Regular season.*Start playoffs/i);
   });
 
   it("tells the admin to leave the season in Playoffs while it runs", () => {
@@ -170,13 +175,12 @@ describe("adminNextStep — playoffs and completion", () => {
       hasChampion: false,
     });
     expect(s.tone).toBe("warning");
-    expect(s.detail).toMatch(/Re-save the final/i);
+    expect(s.detail).toMatch(/result sync|grand final/i);
   });
 
-  // The state setSeasonPhase's close-out escape produces. Every playoff result
-  // saves with a success toast in COMPLETE while advancing nothing, so the
-  // panel has to name the one-click way back.
-  it("names the way back from a season completed mid-bracket", () => {
+  // Legacy rows may predate the safe phase transition. The panel must describe
+  // recovery rather than treating them as ordinary completed seasons.
+  it("names the way back from a legacy season completed mid-bracket", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.COMPLETE,
       playoffMatchCount: 7,
@@ -187,14 +191,39 @@ describe("adminNextStep — playoffs and completion", () => {
     expect(s.detail).toMatch(/back to Playoffs/i);
   });
 
-  it("turns a finished season into the next one, since nothing else prompts it", () => {
+  it("does not call COMPLETE-without-champion finished even when every row is done", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.COMPLETE,
+      playoffMatchCount: 7,
+      unfinishedPlayoffCount: 0,
+      hasChampion: false,
+    });
+    expect(s.tone).toBe("warning");
+    expect(s.title).toMatch(/missing.*champion/i);
+    expect(s.detail).toMatch(/back to Playoffs/i);
+  });
+
+  it("routes COMPLETE-without-a-bracket through Regular season before seeding", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.COMPLETE,
+      playoffMatchCount: 0,
+      unfinishedPlayoffCount: 0,
+      hasChampion: false,
+    });
+    expect(s.tone).toBe("warning");
+    expect(s.detail).toMatch(/Regular season.*Start playoffs/i);
+    expect(s.detail).not.toMatch(/back to Playoffs/i);
+  });
+
+  it("offers a deliberate offseason or next season after a valid finish", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.COMPLETE,
       hasChampion: true,
     });
-    expect(s.title).toMatch(/create the next season/i);
+    expect(s.title).toMatch(/choose the league's next state/i);
     // Name the control EXACTLY as the page labels it.
-    expect(s.detail).toContain("Create a new season");
+    expect(s.detail).toContain("Season handoff");
+    expect(s.detail).toContain("offseason");
     // Archiving sounds destructive; say plainly that nothing is lost.
     expect(s.detail).toMatch(/kept/i);
   });

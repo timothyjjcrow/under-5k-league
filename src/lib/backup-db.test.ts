@@ -1,83 +1,312 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { verifyBackupReceipt } from "./backup-receipt.mjs";
 
-// The backup script is the league's only defense against data loss — pin the
-// SQLite path (copy) end-to-end with a throwaway db file. The Postgres path
-// shells out to pg_dump, which a unit test can't exercise hermetically; its
-// URL-vs-file dispatch is covered here via the failure mode (no URL).
-const SCRIPT = path.resolve(process.cwd(), "scripts/backup-db.mjs");
+// Exercise both database branches without touching a real database. PostgreSQL
+// uses a tiny fake pg_dump executable so the test can inspect argv/environment
+// and force a mid-dump failure while the production script remains unchanged.
+const BACKUP_SCRIPT = path.resolve(process.cwd(), "scripts/backup-db.mjs");
+const VERIFY_SCRIPT = path.resolve(process.cwd(), "scripts/verify-backup.mjs");
 
-describe("db backup script", () => {
-  it("copies a SQLite database into a timestamped backup file", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "ld2l-backup-"));
-    const dbFile = path.join(dir, "source.db");
-    writeFileSync(dbFile, "sqlite-bytes-fixture");
-    const backupDir = path.join(dir, "out");
+function envWithoutDatabaseUrls(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) => key !== "DATABASE_URL" && key !== "DIRECT_URL",
+    ),
+  ) as NodeJS.ProcessEnv;
+}
 
-    const out = execFileSync("node", [SCRIPT], {
-      env: {
-        ...process.env,
-        DATABASE_URL: `file:${dbFile}`,
-        DIRECT_URL: "",
-        BACKUP_DIR: backupDir,
-      },
-      encoding: "utf8",
-    });
+function backupFiles(directory: string, extension: ".db" | ".sql") {
+  return readdirSync(directory)
+    .filter((file) => file.endsWith(extension))
+    .map((file) => path.join(directory, file));
+}
 
-    expect(out).toContain("SQLite backup written");
-    const files = readdirSync(backupDir).filter((f) => f.endsWith(".db"));
-    expect(files).toHaveLength(1);
-    expect(readFileSync(path.join(backupDir, files[0]), "utf8")).toBe(
-      "sqlite-bytes-fixture",
-    );
-    expect(existsSync(dbFile)).toBe(true); // source untouched
+function createSqliteBackup() {
+  const directory = mkdtempSync(path.join(tmpdir(), "ld2l-backup-"));
+  const database = path.join(directory, "source.db");
+  const output = path.join(directory, "out");
+  execFileSync("sqlite3", [
+    database,
+    "PRAGMA journal_mode=WAL; CREATE TABLE fixture(value TEXT NOT NULL); INSERT INTO fixture VALUES ('sqlite-row-fixture');",
+  ]);
+
+  const stdout = execFileSync("node", [BACKUP_SCRIPT], {
+    env: {
+      ...envWithoutDatabaseUrls(),
+      DATABASE_URL: `file:${database}`,
+      BACKUP_DIR: output,
+    },
+    encoding: "utf8",
   });
 
-  it("falls back to .env in the cwd — `npm run db:backup` works bare", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "ld2l-backup-env-"));
-    const dbFile = path.join(dir, "envdb.db");
-    writeFileSync(dbFile, "from-dotenv");
-    writeFileSync(
-      path.join(dir, ".env"),
-      `# comment\nDATABASE_URL="file:${dbFile}"\nOTHER=x\n`,
-    );
-    const backupDir = path.join(dir, "out");
+  const [backup] = backupFiles(output, ".db");
+  return { backup, database, directory, output, stdout };
+}
 
-    const out = execFileSync("node", [SCRIPT], {
-      cwd: dir, // .env lives here; no URL in the process env
+function installFakePgDump(directory: string) {
+  const bin = path.join(directory, "bin");
+  mkdirSync(bin);
+  const executable = path.join(bin, "pg_dump");
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+const argv = process.argv.slice(2);
+const outputArg = argv.find((value) => value.startsWith("--file="));
+writeFileSync(process.env.PG_DUMP_CAPTURE, JSON.stringify({
+  argv,
+  pgdatabase: process.env.PGDATABASE,
+  pghost: process.env.PGHOST,
+  pgport: process.env.PGPORT,
+  pguser: process.env.PGUSER,
+  pgpassword: process.env.PGPASSWORD,
+  pgsslmode: process.env.PGSSLMODE,
+  hasDatabaseUrl: Object.hasOwn(process.env, "DATABASE_URL"),
+  hasDirectUrl: Object.hasOwn(process.env, "DIRECT_URL"),
+}));
+if (!outputArg) process.exit(8);
+writeFileSync(outputArg.slice("--file=".length), "postgres-dump-fixture");
+if (process.env.PG_DUMP_FAIL === "1") process.exit(9);
+`,
+    { mode: 0o700 },
+  );
+  chmodSync(executable, 0o700);
+  return bin;
+}
+
+describe("db backup script", () => {
+  it("publishes a private SQLite backup with a valid checksum", () => {
+    const { backup, database, output, stdout } = createSqliteBackup();
+
+    expect(stdout).toContain("SQLite backup written");
+    expect(
+      execFileSync("sqlite3", [backup, "PRAGMA integrity_check;"], {
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("ok");
+    expect(
+      execFileSync("sqlite3", [backup, "SELECT value FROM fixture;"], {
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("sqlite-row-fixture");
+    expect(existsSync(database)).toBe(true);
+    expect(statSync(output).mode & 0o777).toBe(0o700);
+    expect(statSync(backup).mode & 0o777).toBe(0o600);
+    expect(statSync(`${backup}.sha256`).mode & 0o777).toBe(0o600);
+    expect(statSync(`${backup}.metadata.json`).mode & 0o777).toBe(0o600);
+
+    const expected = createHash("sha256")
+      .update(readFileSync(backup))
+      .digest("hex");
+    expect(readFileSync(`${backup}.sha256`, "utf8")).toBe(
+      `${expected}  ${path.basename(backup)}\n`,
+    );
+    expect(
+      execFileSync("node", [VERIFY_SCRIPT, backup], { encoding: "utf8" }),
+    ).toContain("Verified backup");
+  });
+
+  it("repairs legacy backup permissions before publishing another backup", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ld2l-backup-legacy-"));
+    const database = path.join(directory, "source.db");
+    const output = path.join(directory, "out");
+    mkdirSync(output, { mode: 0o755 });
+    const legacy = path.join(output, "backup-legacy.db");
+    const sidecar = `${legacy}.sha256`;
+    const metadata = `${legacy}.metadata.json`;
+    execFileSync("sqlite3", [database, "CREATE TABLE fixture(value);"]);
+    writeFileSync(legacy, "legacy", { mode: 0o644 });
+    writeFileSync(sidecar, "legacy-checksum", { mode: 0o644 });
+    writeFileSync(metadata, "{}", { mode: 0o644 });
+
+    execFileSync("node", [BACKUP_SCRIPT], {
       env: {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([k]) => k !== "DATABASE_URL" && k !== "DIRECT_URL",
-          ),
-        ),
+        ...envWithoutDatabaseUrls(),
+        DATABASE_URL: `file:${database}`,
+        BACKUP_DIR: output,
+      },
+    });
+
+    expect(statSync(output).mode & 0o777).toBe(0o700);
+    expect(statSync(legacy).mode & 0o777).toBe(0o600);
+    expect(statSync(sidecar).mode & 0o777).toBe(0o600);
+    expect(statSync(metadata).mode & 0o777).toBe(0o600);
+  });
+
+  it("falls back to .env in the cwd when the process has no database URL", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ld2l-backup-env-"));
+    const database = path.join(directory, "envdb.db");
+    const output = path.join(directory, "out");
+    execFileSync("sqlite3", [database, "CREATE TABLE fixture(value);"]);
+    writeFileSync(
+      path.join(directory, ".env"),
+      `# comment\nDATABASE_URL="file:${database}"\nOTHER=x\n`,
+    );
+
+    const stdout = execFileSync("node", [BACKUP_SCRIPT], {
+      cwd: directory,
+      env: {
+        ...envWithoutDatabaseUrls(),
         NODE_ENV: "test",
-        BACKUP_DIR: backupDir,
+        BACKUP_DIR: output,
       },
       encoding: "utf8",
     });
-    expect(out).toContain("SQLite backup written");
-    expect(readdirSync(backupDir)).toHaveLength(1);
+
+    expect(stdout).toContain("SQLite backup written");
+    expect(readdirSync(output)).toHaveLength(3);
+    expect(backupFiles(output, ".db")).toHaveLength(1);
   });
 
   it("fails loudly when no database URL is configured anywhere", () => {
-    const bare = mkdtempSync(path.join(tmpdir(), "ld2l-backup-bare-")); // no .env
-    expect(() =>
-      execFileSync("node", [SCRIPT], {
-        cwd: bare,
-        env: {
-          ...Object.fromEntries(
-            Object.entries(process.env).filter(
-              ([k]) => k !== "DATABASE_URL" && k !== "DIRECT_URL",
-            ),
-          ),
-          NODE_ENV: "test",
-        },
-        stdio: "pipe",
-      }),
-    ).toThrow();
+    const directory = mkdtempSync(path.join(tmpdir(), "ld2l-backup-bare-"));
+    const result = spawnSync("node", [BACKUP_SCRIPT], {
+      cwd: directory,
+      env: { ...envWithoutDatabaseUrls(), NODE_ENV: "test" },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Set DATABASE_URL (or DIRECT_URL)");
+  });
+
+  it("detects a backup changed after publication", () => {
+    const { backup } = createSqliteBackup();
+    writeFileSync(backup, "tampered");
+
+    const result = spawnSync("node", [VERIFY_SCRIPT, backup], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("does not match its SHA-256 checksum");
+  });
+
+  it("passes parsed PostgreSQL fields through libpq env rather than argv", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ld2l-pgdump-"));
+    const bin = installFakePgDump(directory);
+    const capture = path.join(directory, "capture.json");
+    const output = path.join(directory, "out");
+    const databaseUrl =
+      "postgresql://league:very-secret-pass@db.example.com:5432/league?sslmode=require";
+
+    const stdout = execFileSync("node", [BACKUP_SCRIPT], {
+      env: {
+        ...envWithoutDatabaseUrls(),
+        DATABASE_URL: databaseUrl,
+        BACKUP_DIR: output,
+        PG_DUMP_CAPTURE: capture,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+      },
+      encoding: "utf8",
+    });
+    const captured = JSON.parse(readFileSync(capture, "utf8")) as {
+      argv: string[];
+      pgdatabase: string;
+      pghost: string;
+      pgport: string;
+      pguser: string;
+      pgpassword: string;
+      pgsslmode: string;
+      hasDatabaseUrl: boolean;
+      hasDirectUrl: boolean;
+    };
+    const [backup] = backupFiles(output, ".sql");
+
+    expect(stdout).toContain("Postgres backup written");
+    expect(captured.pgdatabase).toBe("league");
+    expect(captured.pghost).toBe("db.example.com");
+    expect(captured.pgport).toBe("5432");
+    expect(captured.pguser).toBe("league");
+    expect(captured.pgpassword).toBe("very-secret-pass");
+    expect(captured.pgsslmode).toBe("require");
+    expect(captured.argv.join(" ")).not.toContain(databaseUrl);
+    expect(captured.argv.join(" ")).not.toContain("very-secret-pass");
+    expect(captured.hasDatabaseUrl).toBe(false);
+    expect(captured.hasDirectUrl).toBe(false);
+    expect(readFileSync(backup, "utf8")).toBe("postgres-dump-fixture");
+    expect(
+      execFileSync("node", [VERIFY_SCRIPT, backup], { encoding: "utf8" }),
+    ).toContain("Verified backup");
+    const metadata = JSON.parse(
+      readFileSync(`${backup}.metadata.json`, "utf8"),
+    ) as {
+      artifactType: string;
+      databaseIdentity: string;
+    };
+    expect(metadata.artifactType).toBe("postgres-full-database");
+    expect(metadata.databaseIdentity).not.toContain("very-secret-pass");
+  });
+
+  it("emits a signed, database-bound receipt after full-backup verification", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ld2l-pgreceipt-"));
+    const bin = installFakePgDump(directory);
+    const capture = path.join(directory, "capture.json");
+    const output = path.join(directory, "out");
+    const databaseUrl =
+      "postgresql://league:secret@ep-league.us-west-2.aws.neon.tech/league";
+    const secret = "receipt-signing-secret-with-32-characters-minimum";
+
+    execFileSync("node", [BACKUP_SCRIPT], {
+      env: {
+        ...envWithoutDatabaseUrls(),
+        DATABASE_URL: databaseUrl,
+        BACKUP_DIR: output,
+        PG_DUMP_CAPTURE: capture,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+      },
+    });
+    const [backup] = backupFiles(output, ".sql");
+    const stdout = execFileSync("node", [VERIFY_SCRIPT, backup], {
+      env: {
+        ...process.env,
+        BACKUP_RECEIPT_SECRET: secret,
+      },
+      encoding: "utf8",
+    });
+    const receipt = stdout.match(/Production delete receipt: (\S+)/)?.[1];
+    expect(receipt).toBeTruthy();
+    const checked = verifyBackupReceipt(receipt, {
+      databaseUrl,
+      secret,
+    });
+    expect(checked.ok).toBe(true);
+  });
+
+  it("removes partial files when pg_dump fails", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ld2l-pgdump-fail-"));
+    const bin = installFakePgDump(directory);
+    const output = path.join(directory, "out");
+    const secret = "failure-path-secret";
+    const result = spawnSync("node", [BACKUP_SCRIPT], {
+      env: {
+        ...envWithoutDatabaseUrls(),
+        DATABASE_URL: `postgresql://league:${secret}@db.example.com/league`,
+        BACKUP_DIR: output,
+        PG_DUMP_CAPTURE: path.join(directory, "capture.json"),
+        PG_DUMP_FAIL: "1",
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Backup failed");
+    expect(result.stderr).not.toContain(secret);
+    expect(readdirSync(output)).toEqual([]);
   });
 });

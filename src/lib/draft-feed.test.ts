@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   FEED_MAX,
   draftFeedDiff,
+  draftFeedInvalidated,
+  draftFeedResetReason,
   seedDraftFeed,
   type FeedSeedSnapshot,
   type FeedSnapshot,
@@ -108,6 +110,116 @@ describe("seedDraftFeed", () => {
       }),
     );
     expect(lines[0].text).toBe("— nominated Pudge");
+  });
+});
+
+describe("draftFeedResetReason", () => {
+  const lifecycle = (status: string, snapshot: FeedSnapshot = snap()) => ({
+    status,
+    teams: snapshot.teams,
+    nominatedPlayer: snapshot.nominatedPlayer,
+  });
+
+  it("invalidates immediately when an auction is aborted before any sale", () => {
+    const before = lifecycle("IN_PROGRESS");
+    const after = lifecycle("NOT_STARTED");
+    expect(draftFeedResetReason(before, after)).toBe("auction-reset");
+    expect(draftFeedInvalidated(before, after)).toBe(true);
+  });
+
+  it("invalidates when Undo or a correction retracts a purchased roster row", () => {
+    const before = withSale(snap(), "t1", "p1", 14);
+    expect(
+      draftFeedResetReason(
+        lifecycle("IN_PROGRESS", before),
+        lifecycle("IN_PROGRESS"),
+      ),
+    ).toBe("roster-retracted");
+  });
+
+  it("invalidates a completed auction that is reopened", () => {
+    expect(
+      draftFeedResetReason(lifecycle("COMPLETE"), lifecycle("IN_PROGRESS")),
+    ).toBe("auction-reopened");
+  });
+
+  it("invalidates a mistaken lot when an admin voids it while paused", () => {
+    const lot = snap({
+      nominatedPlayer: { userId: "p1", name: "Pudge" },
+      currentBid: 7,
+      currentBidTeamId: "t2",
+    });
+    expect(
+      draftFeedResetReason(lifecycle("PAUSED", lot), lifecycle("PAUSED")),
+    ).toBe("lot-voided");
+  });
+
+  it("keeps the feed for ordinary nominations, bids, and purchases", () => {
+    const base = snap();
+    const nominated = snap({
+      nominatedPlayer: { userId: "p1", name: "Pudge" },
+      currentBid: 1,
+    });
+    const bid = { ...nominated, currentBid: 7, currentBidTeamId: "t2" };
+    const sold = withSale(bid, "t2", "p1", 7);
+
+    expect(
+      draftFeedResetReason(
+        lifecycle("IN_PROGRESS", base),
+        lifecycle("IN_PROGRESS", nominated),
+      ),
+    ).toBeNull();
+    expect(
+      draftFeedResetReason(
+        lifecycle("IN_PROGRESS", nominated),
+        lifecycle("IN_PROGRESS", bid),
+      ),
+    ).toBeNull();
+    expect(
+      draftFeedResetReason(
+        lifecycle("IN_PROGRESS", bid),
+        lifecycle("IN_PROGRESS", sold),
+      ),
+    ).toBeNull();
+    expect(
+      draftFeedInvalidated(
+        lifecycle("IN_PROGRESS", bid),
+        lifecycle("IN_PROGRESS", sold),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not confuse a captaincy flag change with a retracted purchase", () => {
+    const before = snap({
+      teams: [
+        {
+          id: "t1",
+          name: "Alpha",
+          members: [
+            member("oldcap", { isCaptain: true }),
+            member("newcap", { isCaptain: false, price: 5 }),
+          ],
+        },
+      ],
+    });
+    const after = snap({
+      teams: [
+        {
+          id: "t1",
+          name: "Alpha",
+          members: [
+            member("oldcap", { isCaptain: false }),
+            member("newcap", { isCaptain: true, price: 5 }),
+          ],
+        },
+      ],
+    });
+    expect(
+      draftFeedResetReason(
+        lifecycle("COMPLETE", before),
+        lifecycle("COMPLETE", after),
+      ),
+    ).toBeNull();
   });
 });
 

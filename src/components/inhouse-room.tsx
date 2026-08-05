@@ -59,6 +59,24 @@ import type { InhouseState } from "@/lib/inhouse-service";
 
 type LobbyTeam = NonNullable<InhouseState["lobby"]>["teams"][number];
 type Player = LobbyTeam["players"][number];
+type RoomMe = InhouseState["me"] & {
+  /**
+   * A UI capability, not an attention signal. Captains on the current turn and
+   * administrators can both submit the service's `pick` action, but only the
+   * captain should receive the chime and "Your pick" title driven by
+   * `isOnClock`.
+   */
+  canPick: boolean;
+};
+
+function scrollToRoomTop() {
+  window.scrollTo({
+    top: 0,
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth",
+  });
+}
 
 // Radiant = green, Dire = red — matching the in-client colors so it reads fast.
 function sideMeta(isRadiant: boolean) {
@@ -98,10 +116,16 @@ export function InhouseRoom({
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
+  const [connectivity, setConnectivity] = useState<
+    "online" | "offline" | "resyncing"
+  >("online");
+  const connectionUnavailable = connectivity !== "online";
   const [reqPending, setPending] = useState(false);
+  const [actionReconciling, setActionReconciling] = useState(false);
   // Disconnected = all actions disabled: a pick/vote against stale state
   // would fail (or look accepted) while the real lobby moved on.
-  const pending = reqPending || disconnected;
+  const pending =
+    reqPending || actionReconciling || disconnected || connectionUnavailable;
   const [selected, setSelected] = useState<string | null>(null);
   const [mmr, setMmr] = useState<number>(defaultMmr);
   const [soundOn, setSoundOn] = usePersistedFlag("inhouseSound");
@@ -182,13 +206,27 @@ export function InhouseRoom({
   // while their real 60s clock burned. Never key this off `s.now`: it's
   // per-instance wall-clock and can skew between serverless instances.
   const seqRef = useRef(ROOM_SEQUENCE_START);
+  // A timeout, 5xx, or unreadable 2xx can happen after the mutation committed.
+  // Keep controls locked until a state poll that STARTED after that action is
+  // successfully applied; an older in-flight payload is not reconciliation.
+  const actionReconcileSeqRef = useRef<number | null>(null);
+  // Only a poll that starts after the latest offline/online transition may
+  // make controls live again. Transport-held pre-outage responses are stale.
+  const connectivityEpochRef = useRef(0);
+  // Unlike React state, this can be read safely inside the long-lived poll
+  // effect without resubscribing it. A 429 after a good snapshot is ordinary
+  // back-pressure; a cold page receiving only 429s still needs to leave its
+  // otherwise-endless Loading state.
+  const hasLoadedRef = useRef(false);
 
   const apply = useCallback((s: InhouseState, seq: number) => {
     const { accept, next } = acceptSequence(seqRef.current, seq);
     seqRef.current = next;
-    if (!accept) return; // lost the response race — stale
+    if (!accept) return false; // lost the response race — stale
+    hasLoadedRef.current = true;
     setOffsetMs((prev) => nextClockOffset(prev, s.now, Date.now()));
     setState(s);
+    return true;
   }, []);
 
   // Keep the poll loop's "has stake" flag current for its hidden-tab decision.
@@ -203,14 +241,25 @@ export function InhouseRoom({
   // IDLE-slow when just spectating. While the tab is HIDDEN: a viewer with a
   // stake (queued or in a lobby) keeps a slow KEEPALIVE so their presence
   // heartbeat holds the spot and a forming ready check's chime/title still
-  // reaches them; a hidden spectator doesn't fetch at all (the sitewide
-  // /api/sync ping advances lobbies meanwhile). Either way it re-syncs the
-  // instant it's refocused. Mirrors <ResultSyncPing>; kills the ~40 req/min an
-  // idle open tab used to fire.
+  // reaches them; a hidden spectator doesn't fetch at all (authenticated room
+  // traffic and the leased worker advance lobbies meanwhile). Either way it
+  // re-syncs the instant it's refocused. Mirrors <ResultSyncPing>; kills the
+  // ~40 req/min an idle open tab used to fire.
   useEffect(() => {
     let alive = true;
     let inFlight = false;
+    // An action can finish while a slower state poll is already in flight.
+    // Remember the requested reconciliation until that poll settles; merely
+    // replacing its timer is insufficient because the timer can fire, see
+    // `inFlight`, and disappear without ever starting a post-action request.
+    let rerunRequested = false;
+    let consecutiveFailures = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const markFailure = () => {
+      consecutiveFailures += 1;
+      pollFail();
+    };
 
     const schedule = (ms: number) => {
       if (!alive) return;
@@ -222,10 +271,16 @@ export function InhouseRoom({
       // inFlight also guards a visibilitychange firing mid-request — the active
       // call reschedules when it settles.
       if (!alive || inFlight) return;
+      // This tick satisfies any queued action reconciliation. A new action
+      // that lands during the await will set the latch again.
+      rerunRequested = false;
       // Hidden with nothing at stake: don't fetch (browsers throttle background
       // timers anyway); the visibility listener wakes us on focus. Rules +
       // reasoning in inhousePollCadence, where they're unit-tested.
+      const browserOffline = navigator.onLine === false;
+      if (browserOffline) setConnectivity("offline");
       const pre = inhousePollCadence({
+        offline: browserOffline,
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
@@ -244,8 +299,10 @@ export function InhouseRoom({
       // nothing (see room-sequence.ts; the source guard is what catches that).
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
+      const pollConnectivityEpoch = connectivityEpochRef.current;
       let next: InhouseState | null = null;
       let rateLimited = false;
+      let supersededByConnectivityChange = false;
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
@@ -255,34 +312,70 @@ export function InhouseRoom({
           // both freeze the same way without it.
           signal: AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS),
         });
-        if (res.ok) {
-          next = (await res.json()) as InhouseState;
-          apply(next, seq);
-          pollOk();
+        if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+          supersededByConnectivityChange = true;
+        } else if (res.ok) {
+          const payload = (await res.json()) as InhouseState;
+          if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+            supersededByConnectivityChange = true;
+          } else {
+            next = payload;
+            const applied = apply(next, seq);
+            const actionSeq = actionReconcileSeqRef.current;
+            if (applied && actionSeq !== null && seq > actionSeq) {
+              actionReconcileSeqRef.current = null;
+              setActionReconciling(false);
+            }
+            consecutiveFailures = 0;
+            pollOk();
+            setConnectivity(navigator.onLine === false ? "offline" : "online");
+          }
         } else if (res.status === 429) {
-          // Deliberately NOT a poll failure — it must not count toward
-          // `disconnected`, and it must slow us down rather than speed us up
-          // (inhousePollCadence rule 1 has the whole story).
+          // Once a snapshot exists this is deliberately NOT a poll failure: it
+          // must slow us down rather than disable a usable room. Cold-start
+          // rate limits are different — without a failure signal they leave the
+          // page saying Loading forever, so they participate in the same
+          // retryable initial-error threshold as other non-success responses.
           rateLimited = true;
+          if (!hasLoadedRef.current) markFailure();
         } else {
-          pollFail();
+          markFailure();
         }
       } catch {
-        pollFail(); // transient blip (or the abort above); next poll retries
+        if (pollConnectivityEpoch !== connectivityEpochRef.current) {
+          supersededByConnectivityChange = true;
+        } else {
+          markFailure(); // transient blip (or the abort above); next poll retries
+        }
       } finally {
         inFlight = false;
       }
+      if (supersededByConnectivityChange) {
+        setConnectivity(navigator.onLine === false ? "offline" : "resyncing");
+        schedule(0);
+        return;
+      }
+      if (rerunRequested) {
+        // The action response may be unreadable or time out after the server
+        // committed. Always start one poll *after* that action, even when the
+        // earlier 250ms timer fired harmlessly during this request.
+        rerunRequested = false;
+        schedule(0);
+        return;
+      }
       // Recompute visibility HERE (not from the pre-fetch snapshot): if the tab
       // was refocused mid-fetch this reschedules at the active rate instead of
-      // the 45s keepalive, so refocus stays snappy. Stake is MEMBERSHIP, not
+      // the hidden-tab keepalive, so refocus stays snappy. Stake is MEMBERSHIP, not
       // mere existence of a lobby — five people watching a 45min game were each
       // firing 40 req/min because one existed.
       schedule(
         inhousePollCadence({
+          offline: navigator.onLine === false,
           hidden: document.visibilityState === "hidden",
           hasStake: !!next && (next.me.inLobby || next.me.inQueue),
           rateLimited,
           reached: !!next,
+          failureCount: consecutiveFailures,
           activeMs: pollMs,
         }).delayMs,
       );
@@ -291,17 +384,35 @@ export function InhouseRoom({
     const onVisibility = () => {
       if (document.visibilityState === "visible") tick();
     };
+    const onOffline = () => {
+      connectivityEpochRef.current += 1;
+      setConnectivity("offline");
+    };
+    const onOnline = () => {
+      // Do not re-enable a stale queue/lobby merely because the interface came
+      // back. A successful state payload below is the recovery boundary.
+      connectivityEpochRef.current += 1;
+      setConnectivity("resyncing");
+      tick();
+    };
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
     // An action that changes the viewer's state (join/accept/vote/pick) calls
     // this to poll again almost immediately, so the cadence re-locks to fast
     // right after joining instead of finishing a pending idle wait.
-    bumpPollRef.current = () => schedule(250);
+    bumpPollRef.current = () => {
+      rerunRequested = true;
+      schedule(250);
+    };
     tick();
 
     return () => {
       alive = false;
       bumpPollRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
       if (timer) clearTimeout(timer);
     };
   }, [apply, pollOk, pollFail, pollMs]);
@@ -381,10 +492,25 @@ export function InhouseRoom({
 
   const act = useCallback(
     async (body: Record<string, unknown>): Promise<boolean> => {
+      if (connectionUnavailable) {
+        pushToast(
+          "info",
+          connectivity === "offline"
+            ? "You're offline. Reconnect before using queue or lobby actions."
+            : "We're confirming the current room state before enabling actions.",
+        );
+        return false;
+      }
       unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
+      const reconcileUnknown = (message: string) => {
+        pushToast("info", message);
+        actionReconcileSeqRef.current = seq;
+        setActionReconciling(true);
+        bumpPollRef.current?.();
+      };
       try {
         const res = await fetch("/api/inhouse", {
           method: "POST",
@@ -404,12 +530,34 @@ export function InhouseRoom({
               : ROOM_ACTION_TIMEOUT_MS,
           ),
         });
-        const data = await res.json();
+        const data = (await res.json().catch(() => null)) as
+          (InhouseState & { error?: string }) | null;
         // Toast, not an inline banner — same reasoning as the draft room:
         // pick-race rejections land while the captain is scrolled into the
         // pool, where a top-of-room banner is invisible and went stale.
         if (!res.ok) {
-          pushToast("error", data.error || "Action failed");
+          if (res.status >= 500) {
+            reconcileUnknown(
+              "The server couldn't confirm the action — checking the current room state",
+            );
+            return false;
+          }
+          pushToast(
+            "error",
+            data && typeof data.error === "string"
+              ? data.error
+              : `Action failed (${res.status})`,
+          );
+          return false;
+        }
+        // A successful mutation can commit before its response is truncated by
+        // a proxy or a dropped connection. Treat an unreadable success exactly
+        // like a timeout: never invite a duplicate pick/bet, and let the next
+        // authoritative state poll tell the player what happened.
+        if (!data || typeof data.now !== "number") {
+          reconcileUnknown(
+            "The response was incomplete — checking the current room state",
+          );
           return false;
         }
         apply(data, seq);
@@ -423,25 +571,24 @@ export function InhouseRoom({
         // have committed. Saying "that didn't go through" would send a captain
         // to re-click a pick that already landed. Nudge the poll instead — the
         // next state payload is the honest answer either way.
-        if ((e as Error)?.name === "TimeoutError") {
-          pushToast("info", "That's taking a while — checking where things got to");
-          bumpPollRef.current?.();
-        } else {
-          pushToast("error", "Network error — that didn't go through");
-        }
+        reconcileUnknown(
+          (e as Error)?.name === "TimeoutError"
+            ? "That's taking a while — checking where things got to"
+            : "We lost the response — checking the current room state",
+        );
         return false;
       } finally {
         setPending(false);
       }
     },
-    [apply],
+    [apply, connectionUnavailable, connectivity],
   );
 
   // ?join=1 — the one-tap join a Discord ping links to. Waits for the first
   // state so it can refuse the cases where an auto-join would be wrong, then
   // scrubs the param so a refresh can never re-enqueue you.
   useEffect(() => {
-    if (!state || autoJoinedRef.current) return;
+    if (!state || autoJoinedRef.current || connectionUnavailable) return;
     const url = new URL(window.location.href);
     if (url.searchParams.get("join") !== "1") return;
     autoJoinedRef.current = true;
@@ -465,13 +612,65 @@ export function InhouseRoom({
       });
     }, 0);
     return () => clearTimeout(t);
-  }, [state, act, mmr]);
+  }, [state, act, connectionUnavailable, mmr]);
 
   if (!state) {
-    return <div className="py-12 text-center text-muted">Loading inhouse…</div>;
+    return disconnected || connectionUnavailable ? (
+      <section
+        role="alert"
+        aria-labelledby="inhouse-load-error-title"
+        className="rounded-[var(--radius)] border border-danger/40 bg-danger/10 px-5 py-6 text-center"
+      >
+        <h2 id="inhouse-load-error-title" className="font-semibold text-danger">
+          {connectivity === "offline"
+            ? "You're offline"
+            : connectivity === "resyncing"
+              ? "Back online — checking the room"
+              : "We can't load the inhouse room"}
+        </h2>
+        <p className="mx-auto mt-2 max-w-lg text-sm text-muted">
+          {connectivity === "offline"
+            ? "Reconnect to load the current queue or lobby. Actions stay unavailable while this page has no current server state."
+            : "We're reconnecting automatically. Queue and lobby actions stay unavailable until a current server state arrives."}
+        </p>
+        <button
+          type="button"
+          onClick={() => bumpPollRef.current?.()}
+          disabled={connectivity === "offline"}
+          title={
+            connectivity === "offline"
+              ? "Reconnect to the internet before retrying."
+              : undefined
+          }
+          className={buttonClasses("secondary", "md", "mt-4")}
+        >
+          {connectivity === "offline"
+            ? "Waiting for connection"
+            : "Try again now"}
+        </button>
+      </section>
+    ) : (
+      <div
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        className="py-12 text-center text-muted"
+      >
+        Loading inhouse…
+      </div>
+    );
   }
 
-  const { lobby, me } = state;
+  const { lobby } = state;
+  // The service already authorizes administrators to recover a stuck draft by
+  // picking for the captain on the current side. Keep that broader CAPABILITY
+  // separate from `isOnClock`, which remains the captain-only attention flag
+  // used by the tab title, chime and "Your pick" badge.
+  const me: RoomMe = {
+    ...state.me,
+    canPick:
+      lobby?.status === "DRAFTING" && (state.me.isOnClock || state.me.isAdmin),
+  };
   const offset = offsetMsState; // serverNow - clientNow, for the pick clock
   // A selection is only meaningful while its player is still in the pool.
   // Derived, not synced through an effect: `selected` is otherwise cleared
@@ -482,7 +681,9 @@ export function InhouseRoom({
   // reading "Draft " with no name, and every click was a "Player already
   // drafted" toast while their real 60s clock burned.
   const selectedInPool =
-    selected && lobby?.pool.some((p) => p.userId === selected) ? selected : null;
+    selected && lobby?.pool.some((p) => p.userId === selected)
+      ? selected
+      : null;
 
   // The one state a PLAIN cancel is guaranteed to refuse: a live game carrying
   // confirmed bets. `cancelLobby`'s claim has exactly this predicate (the pot
@@ -522,6 +723,23 @@ export function InhouseRoom({
         </button>
       </div>
 
+      {connectionUnavailable ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            "rounded-lg border px-4 py-2 text-sm",
+            connectivity === "offline"
+              ? "border-danger/40 bg-danger/10 text-danger"
+              : "border-info/40 bg-info/10 text-info",
+          )}
+        >
+          {connectivity === "offline"
+            ? "⚠️ You're offline — the queue and lobby keep running on the server. Actions are paused until you reconnect and the current room is confirmed."
+            : "Connection restored — checking the current queue and lobby. Actions remain paused until the latest room state arrives."}
+        </div>
+      ) : null}
+
       {disconnected ? (
         <div
           role="status"
@@ -530,6 +748,17 @@ export function InhouseRoom({
         >
           ⚠️ Connection lost — reconnecting… The lobby keeps running on the
           server; actions are paused until we&apos;re back.
+        </div>
+      ) : null}
+
+      {actionReconciling ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
+        >
+          Checking the current queue and lobby after an interrupted action.
+          Controls will unlock when the server confirms the latest state.
         </div>
       ) : null}
 
@@ -551,8 +780,8 @@ export function InhouseRoom({
           </span>
           <span className="min-w-0 flex-1 text-sm">
             <strong>
-              {state.lastResult.winnerSide} win {state.lastResult.radiantScore}
-              –{state.lastResult.direScore}
+              {state.lastResult.winnerSide} win {state.lastResult.radiantScore}–
+              {state.lastResult.direScore}
             </strong>{" "}
             — {state.lastResult.myTeamWon ? "victory" : "defeat"} for you,{" "}
             <strong
@@ -565,7 +794,13 @@ export function InhouseRoom({
             </strong>
             {/* Only for the people who were in the pot: null means they sat it
                 out, and "+0 Cred" announced to the other eight is noise. */}
-            {state.lastResult.credDelta != null ? (
+            {state.lastResult.credPending ? (
+              <span className="text-muted">
+                {" "}
+                · Cred settlement is pending; your balance will update
+                automatically
+              </span>
+            ) : state.lastResult.credDelta != null ? (
               <CredDelta delta={state.lastResult.credDelta} />
             ) : null}
             .{" "}
@@ -607,23 +842,61 @@ export function InhouseRoom({
         </div>
       ) : null}
 
-      {/* Someone queued while a lobby is live (the 11th player on a busy
-          night) is NOT in that lobby — without this they lost sight of the
-          queue entirely and had no way to leave it for the ~45min the game
-          ran, while their heartbeat kept holding the spot. */}
-      {lobby && !me.inLobby && me.inQueue ? (
-        <QueueView state={state} pending={pending} mmr={mmr} setMmr={setMmr} mmrHint={mmrHint} act={act} />
+      {/* A live lobby does not close the queue. People outside it need a clear
+          next-game entry point; once queued, the full view keeps their position
+          and Leave control visible for the life of the current game. */}
+      {lobby && !me.inLobby ? (
+        me.inQueue ? (
+          <QueueView
+            state={state}
+            pending={pending}
+            mmr={mmr}
+            setMmr={setMmr}
+            mmrHint={mmrHint}
+            act={act}
+            nextGame
+          />
+        ) : (
+          <NextGameQueueCard
+            state={state}
+            pending={pending}
+            mmr={mmr}
+            setMmr={setMmr}
+            mmrHint={mmrHint}
+            act={act}
+          />
+        )
       ) : null}
 
       {!lobby ? (
-        <QueueView state={state} pending={pending} mmr={mmr} setMmr={setMmr} mmrHint={mmrHint} act={act} />
+        <QueueView
+          state={state}
+          pending={pending}
+          mmr={mmr}
+          setMmr={setMmr}
+          mmrHint={mmrHint}
+          act={act}
+        />
       ) : lobby.status === "READY_CHECK" ? (
-        <ReadyCheckView lobby={lobby} me={me} offset={offset} pending={pending} act={act} />
+        <ReadyCheckView
+          lobby={lobby}
+          me={me}
+          offset={offset}
+          pending={pending}
+          act={act}
+        />
       ) : lobby.status === "CAPTAIN_VOTE" ? (
-        <VoteView lobby={lobby} me={me} offset={offset} pending={pending} act={act} />
+        <VoteView
+          lobby={lobby}
+          me={me}
+          offset={offset}
+          pending={pending}
+          act={act}
+        />
       ) : lobby.status === "DRAFTING" ? (
         <DraftView
           state={state}
+          me={me}
           lobby={lobby}
           offset={offset}
           selected={selectedInPool}
@@ -769,31 +1042,71 @@ function ForceCancelLobby({
   const [typed, setTyped] = useState("");
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // Trim only — otherwise EXACT. A fuzzy match would let a half-read code
   // through, and reproducing it exactly IS the whole barrier.
   const armed = typed.trim() === code;
 
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+  const closeDialog = useCallback(() => {
+    setOpen(false);
+    setTyped("");
+  }, []);
 
-  // Escape closes, and closing always disarms: reopening must start from a
-  // blank field so a code typed a minute ago can't linger and auto-arm.
+  // Keep keyboard focus and page scrolling inside the destructive dialog.
+  // Closing always disarms and returns focus to the trigger, including Escape;
+  // reopening must start from a blank field so a code typed a minute ago can't
+  // linger and auto-arm.
   useEffect(() => {
     if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    const trigger = triggerRef.current;
+    document.body.style.overflow = "hidden";
+    inputRef.current?.focus();
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setOpen(false);
-        setTyped("");
+        e.preventDefault();
+        closeDialog();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+
+      const current = document.activeElement;
+      if (e.shiftKey && (current === first || !dialog.contains(current))) {
+        e.preventDefault();
+        last.focus();
+      } else if (
+        !e.shiftKey &&
+        (current === last || !dialog.contains(current))
+      ) {
+        e.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+      trigger?.focus();
+    };
+  }, [open, closeDialog]);
 
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         disabled={pending}
         onClick={() => {
@@ -813,13 +1126,15 @@ function ForceCancelLobby({
       </p>
 
       {open ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={`${inputId}-title`}
-        >
-          <div className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl border border-danger/40 bg-surface p-5 text-left shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${inputId}-title`}
+            aria-describedby={`${inputId}-description`}
+            className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl border border-danger/40 bg-surface p-5 text-left shadow-xl"
+          >
             <h2
               id={`${inputId}-title`}
               className="text-lg font-semibold text-danger"
@@ -829,31 +1144,34 @@ function ForceCancelLobby({
             {/* The real numbers, read from the pot this room is already
                 rendering — the /admin rule: a confirm that can't state what
                 dies is a confirm that gets skimmed. */}
-            <ul className="mt-3 space-y-1 text-sm text-fg">
-              {[
-                `${staked} Cred across ${bettors} ${
-                  bettors === 1 ? "bet" : "bets"
-                } is refunded in full — nobody wins or loses on this game.`,
-                "The game is scrapped: no result, no Elo, nothing in the ladder or the history, even if the ten finish it in Dota.",
-                "All ten go back into the queue and re-confirm on their next poll.",
-                "It is logged as an admin action, naming the pot.",
-              ].map((c) => (
-                <li key={c} className="flex gap-2">
-                  <span aria-hidden className="text-danger">
-                    •
-                  </span>
-                  <span className="min-w-0">{c}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-xs text-muted">
-              The money is the recoverable half — refunds are automatic and land
-              on the next page view anywhere on the site. The game is not: once
-              the lobby reads cancelled there is nothing left for a result to
-              attach to. Do this when a live lobby is stuck, because it is
-              holding the one active-lobby slot and nobody in the league can
-              start another game until it clears.
-            </p>
+            <div id={`${inputId}-description`}>
+              <ul className="mt-3 space-y-1 text-sm text-fg">
+                {[
+                  `${staked} Cred across ${bettors} ${
+                    bettors === 1 ? "bet" : "bets"
+                  } is refunded in full — nobody wins or loses on this game.`,
+                  "The game is scrapped: no result, no Elo, nothing in the ladder or the history, even if the ten finish it in Dota.",
+                  "All ten go back into the queue and re-confirm on their next poll.",
+                  "It is logged as an admin action, naming the pot.",
+                ].map((c) => (
+                  <li key={c} className="flex gap-2">
+                    <span aria-hidden className="text-danger">
+                      •
+                    </span>
+                    <span className="min-w-0">{c}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-xs text-muted">
+                The money is the recoverable half — the server attempts the
+                automatic refund before this action returns, and any interrupted
+                refund is retried on the next page view anywhere on the site.
+                The game is not: once the lobby reads cancelled there is nothing
+                left for a result to attach to. Do this when a live lobby is
+                stuck, because it is holding the one active-lobby slot and
+                nobody in the league can start another game until it clears.
+              </p>
+            </div>
             <label htmlFor={inputId} className="mt-4 block text-sm text-muted">
               Type the lobby code <b className="font-mono text-fg">{code}</b> to
               confirm:
@@ -877,10 +1195,7 @@ function ForceCancelLobby({
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setTyped("");
-                }}
+                onClick={closeDialog}
                 className={buttonClasses("secondary", "md")}
               >
                 Keep the game
@@ -889,8 +1204,7 @@ function ForceCancelLobby({
                 type="button"
                 disabled={!armed || pending}
                 onClick={async () => {
-                  setOpen(false);
-                  setTyped("");
+                  closeDialog();
                   // Only claim success once the server agrees. A forced cancel
                   // still loses to a result that landed mid-dialog — the claim
                   // keeps its `status: { in: ACTIVE }` predicate — and telling
@@ -906,7 +1220,7 @@ function ForceCancelLobby({
                     // AdminAction the server writes carries the exact pot.
                     pushToast(
                       "success",
-                      "Live game scrapped — the pot is refunded in full, players re-queued",
+                      "Live game scrapped — players re-queued and Cred refunds are resolving",
                     );
                   }
                 }}
@@ -924,6 +1238,133 @@ function ForceCancelLobby({
 
 // ---------- Queue ----------
 
+type QueueControlProps = {
+  me: InhouseState["me"];
+  pending: boolean;
+  mmr: number;
+  setMmr: (n: number) => void;
+  mmrHint: string | null;
+  act: (body: Record<string, unknown>) => void;
+  nextGame?: boolean;
+};
+
+/**
+ * The single join/leave/sign-in control used by both the idle queue and the
+ * compact live-lobby card. Keeping this in one component prevents the live
+ * path from drifting back to a hidden API-only affordance.
+ */
+function QueueControls({
+  me,
+  pending,
+  mmr,
+  setMmr,
+  mmrHint,
+  act,
+  nextGame = false,
+}: QueueControlProps) {
+  const mmrInputId = useId();
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        {!me.isLoggedIn ? (
+          <a
+            href="/login?next=/inhouse"
+            className={buttonClasses("primary", "lg")}
+          >
+            {nextGame ? "Sign in for next game" : "Sign in to queue"}
+          </a>
+        ) : me.inQueue ? (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => act({ action: "leave" })}
+            className={buttonClasses("secondary", "lg")}
+          >
+            Leave queue
+          </button>
+        ) : (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <label htmlFor={mmrInputId} className="text-sm text-muted">
+              MMR
+            </label>
+            <input
+              id={mmrInputId}
+              type="number"
+              min={0}
+              max={12000}
+              inputMode="numeric"
+              value={mmr || ""}
+              placeholder="0"
+              onChange={(e) => setMmr(Number(e.target.value))}
+              title="Seeds captain selection and the balance meter. If you've registered for a season, your league signup MMR is used instead."
+              className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
+            />
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => act({ action: "join", mmr })}
+              className={buttonClasses("accent", "lg")}
+            >
+              {nextGame ? "Join next-game queue →" : "Join queue →"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Stays visible after joining — it's the explanation for why the listed
+          MMR can differ from what was typed. */}
+      {mmrHint ? <p className="mt-3 text-xs text-muted">{mmrHint}</p> : null}
+    </div>
+  );
+}
+
+/** A small entry point above a lobby for people who are not part of that game. */
+function NextGameQueueCard({
+  state,
+  pending,
+  mmr,
+  setMmr,
+  mmrHint,
+  act,
+}: Omit<QueueControlProps, "me" | "nextGame"> & { state: InhouseState }) {
+  const titleId = useId();
+  const present = state.queue.filter((q) => !q.away).length;
+
+  return (
+    <section
+      aria-labelledby={titleId}
+      className="rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-4 sm:px-5"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id={titleId} className="font-semibold">
+              Queue for the next game
+            </h2>
+            <Badge tone="accent">{present} queued</Badge>
+          </div>
+          <p className="mt-1 max-w-xl text-sm text-muted">
+            This lobby is already underway. The next ready check can only start
+            after it closes.
+          </p>
+        </div>
+        <div className="shrink-0">
+          <QueueControls
+            me={state.me}
+            pending={pending}
+            mmr={mmr}
+            setMmr={setMmr}
+            mmrHint={mmrHint}
+            act={act}
+            nextGame
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function QueueView({
   state,
   pending,
@@ -931,6 +1372,7 @@ function QueueView({
   setMmr,
   mmrHint,
   act,
+  nextGame = false,
 }: {
   state: InhouseState;
   pending: boolean;
@@ -938,6 +1380,8 @@ function QueueView({
   setMmr: (n: number) => void;
   mmrHint: string | null;
   act: (body: Record<string, unknown>) => void;
+  /** The visible queue will not form until the active lobby closes. */
+  nextGame?: boolean;
 }) {
   const { queue, lobbySize, needed, me } = state;
   // "Away" players (heartbeat gone quiet) keep their row for a grace window
@@ -959,17 +1403,21 @@ function QueueView({
     <div className="space-y-4">
       <div className="overflow-hidden rounded-[var(--radius)] border border-accent/30 bg-gradient-to-b from-surface-3/70 to-surface/40 shadow-lg shadow-black/25">
         <div className="px-5 py-6 text-center sm:px-6">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-accent/90">
-            Inhouse queue
-          </div>
+          <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-accent/90">
+            {nextGame ? "Next-game queue" : "Inhouse queue"}
+          </h2>
           <div className="mt-1.5 font-display text-6xl font-bold leading-none tabular-nums">
             {present.length}
-            <span className="text-muted/70"> / {lobbySize}</span>
+            <span className="text-muted"> / {lobbySize}</span>
           </div>
           <div className="mt-2 text-sm text-muted">
-            {needed > 0
-              ? `${needed} more ${needed === 1 ? "player" : "players"} to fire up a game`
-              : "Lobby full — starting the ready check…"}
+            {nextGame
+              ? needed > 0
+                ? `${needed} more ${needed === 1 ? "player" : "players"} for a full next-game lobby`
+                : "Queue full — ready check waits for the current lobby to close"
+              : needed > 0
+                ? `${needed} more ${needed === 1 ? "player" : "players"} to fire up a game`
+                : "Lobby full — starting the ready check…"}
             {queueAvg > 0 ? (
               <span className="tabular-nums"> · avg {queueAvg} MMR</span>
             ) : null}
@@ -977,57 +1425,34 @@ function QueueView({
 
           <div className="mx-auto mt-4 h-2 w-full max-w-md overflow-hidden rounded-full bg-surface-2">
             <div
+              role="progressbar"
+              aria-label={
+                nextGame ? "Next-game queue progress" : "Inhouse queue progress"
+              }
+              aria-valuemin={0}
+              aria-valuemax={lobbySize}
+              aria-valuenow={Math.min(present.length, lobbySize)}
               className="h-full rounded-full bg-brand transition-all duration-500"
               style={{ width: `${pct}%` }}
             />
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
-            {!me.isLoggedIn ? (
-              <a href="/login?next=/inhouse" className={buttonClasses("primary", "lg")}>
-                Sign in to queue
-              </a>
-            ) : me.inQueue ? (
-              <button
-                disabled={pending}
-                onClick={() => act({ action: "leave" })}
-                className={buttonClasses("secondary", "lg")}
-              >
-                Leave queue
-              </button>
-            ) : (
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <label htmlFor="inhouse-mmr" className="text-sm text-muted">
-                  MMR
-                </label>
-                <input
-                  id="inhouse-mmr"
-                  type="number"
-                  min={0}
-                  max={12000}
-                  value={mmr || ""}
-                  placeholder="0"
-                  onChange={(e) => setMmr(Number(e.target.value))}
-                  title="Seeds captain selection and the balance meter. If you've registered for a season, your league signup MMR is used instead."
-                  className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
-                />
-                <button
-                  disabled={pending}
-                  onClick={() => act({ action: "join", mmr })}
-                  className={buttonClasses("accent", "lg")}
-                >
-                  Join queue →
-                </button>
-              </div>
-            )}
+          <div className="mt-5">
+            <QueueControls
+              me={me}
+              pending={pending}
+              mmr={mmr}
+              setMmr={setMmr}
+              mmrHint={mmrHint}
+              act={act}
+              nextGame={nextGame}
+            />
           </div>
 
-          {/* Stays visible after joining — it's the explanation for why the
-              listed MMR can differ from what was typed. */}
-          {mmrHint ? <p className="mt-3 text-xs text-muted">{mmrHint}</p> : null}
           <p className="mt-3 text-xs text-muted">
-            Keep this page open to hold your spot — players who close it are
-            marked away and dropped from the queue after a few minutes.
+            {nextGame
+              ? "Keep this page open to hold your next-game spot. Your ready check starts only after the current lobby closes."
+              : "Keep this page open to hold your spot — players who close it are marked away and dropped from the queue after a few minutes."}
           </p>
         </div>
 
@@ -1050,10 +1475,10 @@ function QueueView({
                     key={`open-${i}`}
                     className="flex items-center gap-2.5 rounded-lg border border-dashed border-line/50 px-2.5 py-1.5"
                   >
-                    <span className="w-5 shrink-0 text-center text-xs tabular-nums text-muted/50">
+                    <span className="w-5 shrink-0 text-center text-xs tabular-nums text-muted">
                       {i + 1}
                     </span>
-                    <span className="text-sm text-muted/50">Open slot</span>
+                    <span className="text-sm text-muted">Open slot</span>
                   </li>
                 );
               }
@@ -1090,7 +1515,9 @@ function QueueView({
                   ) : null}
                   <span className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted">
                     <RankBadge rankTier={q.rankTier} />
-                    {q.mmr > 0 ? <span className="tabular-nums">{q.mmr}</span> : null}
+                    {q.mmr > 0 ? (
+                      <span className="tabular-nums">{q.mmr}</span>
+                    ) : null}
                   </span>
                 </li>
               );
@@ -1126,8 +1553,8 @@ function QueueView({
 
       <p className="text-center text-xs text-muted">
         How it works: {lobbySize} players queue → everyone accepts the match →
-        vote how captains are chosen (elect them, highest MMR, or best record)
-        → captains snake-draft <span className="text-success">Radiant</span> &{" "}
+        vote how captains are chosen (elect them, highest MMR, or best record) →
+        captains snake-draft <span className="text-success">Radiant</span> &{" "}
         <span className="text-danger">Dire</span> (1, then 2 at a time) → anyone
         hosts a private lobby in Dota 2 and the result records itself.
       </p>
@@ -1170,7 +1597,7 @@ function ReadyCheckView({
       {offscreen ? (
         <button
           type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          onClick={scrollToRoomTop}
           aria-label="Back to the match accept"
           className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
         >
@@ -1198,11 +1625,11 @@ function ReadyCheckView({
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold">
+            <h2 className="text-sm font-semibold">
               {me.canAccept
                 ? "🎮 Match found — accept to play!"
                 : "🎮 A match is filling up"}
-            </div>
+            </h2>
             <div className="text-xs text-muted">
               {check.acceptedCount}/{check.total} accepted
               {waitingOn > 0
@@ -1210,7 +1637,11 @@ function ReadyCheckView({
                 : ""}
               {me.canAccept
                 ? " · accept before the timer or you'll lose your spot"
-                : " · you're next in line — this match has to fill first"}
+                : me.inQueue
+                  ? " · you're queued for the next game — this lobby closes first"
+                  : me.isLoggedIn
+                    ? " · you're spectating — join the next-game queue above"
+                    : " · you're spectating — sign in above to queue for the next game"}
             </div>
           </div>
           <SecondsClock
@@ -1283,7 +1714,7 @@ function ReadyCheckView({
               <span
                 role="img"
                 aria-label={`${p.name} hasn't accepted yet`}
-                className="animate-pulse text-sm text-muted"
+                className="animate-pulse text-sm text-muted motion-reduce:animate-none"
               >
                 <span aria-hidden>…</span>
               </span>
@@ -1336,7 +1767,7 @@ function VoteView({
       {offscreen ? (
         <button
           type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          onClick={scrollToRoomTop}
           aria-label="Back to the captain vote"
           className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
         >
@@ -1363,11 +1794,12 @@ function VoteView({
         className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3"
       >
         <div>
-          <div className="text-sm font-semibold">
+          <h2 className="text-sm font-semibold">
             🗳️ How should captains be picked?
-          </div>
+          </h2>
           <div className="text-xs text-muted">
-            {vote.votedCount}/{vote.voterCount} voted · lobby decides by majority
+            {vote.votedCount}/{vote.voterCount} voted · lobby decides by
+            majority
           </div>
         </div>
         <SecondsClock
@@ -1433,15 +1865,21 @@ function VoteView({
                 disabled={!me.canVote || pending}
                 aria-pressed={picked}
                 aria-label={`Vote for ${c.name} as captain`}
-                onClick={() => act({ action: "vote", method: "VOTE", nomineeId: c.userId })}
+                onClick={() =>
+                  act({ action: "vote", method: "VOTE", nomineeId: c.userId })
+                }
                 className={cn(
                   "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",
                   me.canVote ? "hover:border-accent/50" : "cursor-default",
-                  picked ? "border-accent bg-accent/15" : "border-line bg-surface-2/40",
+                  picked
+                    ? "border-accent bg-accent/15"
+                    : "border-line bg-surface-2/40",
                 )}
               >
                 <Avatar name={c.name} src={c.avatar} size={26} />
-                <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {c.name}
+                </span>
                 {c.nominations > 0 ? (
                   <Badge tone="accent">
                     {c.nominations} {c.nominations === 1 ? "vote" : "votes"}
@@ -1452,7 +1890,9 @@ function VoteView({
                 </span>
                 <RankBadge rankTier={c.rankTier} />
                 {c.mmr > 0 ? (
-                  <span className="text-xs text-muted tabular-nums">{c.mmr}</span>
+                  <span className="text-xs text-muted tabular-nums">
+                    {c.mmr}
+                  </span>
                 ) : null}
               </button>
             );
@@ -1462,7 +1902,8 @@ function VoteView({
 
       {!me.isLoggedIn ? (
         <p className="text-center text-xs text-muted">
-          Sign in to join future inhouses — this one&apos;s already drafting soon.
+          Sign in to join future inhouses — this one&apos;s already drafting
+          soon.
         </p>
       ) : null}
     </div>
@@ -1533,7 +1974,7 @@ function MethodCard({
             ))}
           </div>
         ) : (
-          <span className="text-xs text-muted/70">{previewEmpty}</span>
+          <span className="text-xs text-muted">{previewEmpty}</span>
         )}
       </div>
     </button>
@@ -1544,6 +1985,7 @@ function MethodCard({
 
 function DraftView({
   state,
+  me,
   lobby,
   offset,
   selected,
@@ -1552,6 +1994,7 @@ function DraftView({
   act,
 }: {
   state: InhouseState;
+  me: RoomMe;
   lobby: NonNullable<InhouseState["lobby"]>;
   offset: number;
   selected: string | null;
@@ -1559,7 +2002,7 @@ function DraftView({
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
 }) {
-  const { me, teamSize } = state;
+  const { teamSize } = state;
   // Same mobile treatment as the league draft room: when the pick-clock
   // banner scrolls away, a compact fixed bar keeps the clock visible.
   const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
@@ -1573,9 +2016,16 @@ function DraftView({
   // picks come in.
   const sideMmrs = (t: LobbyTeam) =>
     (t.captain ? [t.captain, ...t.players] : t.players).map((p) => p.mmr);
-  const balance = mmrBalance(sideMmrs(lobby.teams[0]), sideMmrs(lobby.teams[1]));
+  const balance = mmrBalance(
+    sideMmrs(lobby.teams[0]),
+    sideMmrs(lobby.teams[1]),
+  );
   const leader =
-    balance.diff > 0 ? lobby.teams[0] : balance.diff < 0 ? lobby.teams[1] : null;
+    balance.diff > 0
+      ? lobby.teams[0]
+      : balance.diff < 0
+        ? lobby.teams[1]
+        : null;
   const balanceLabel =
     balance.avg1 > 0 && balance.avg2 > 0
       ? leader
@@ -1591,7 +2041,7 @@ function DraftView({
       {offscreen ? (
         <button
           type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          onClick={scrollToRoomTop}
           aria-label="Back to the pick clock"
           className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
         >
@@ -1628,7 +2078,7 @@ function DraftView({
           onClockSide?.ring ?? "border-line",
         )}
       >
-        <div className="text-sm">
+        <h2 className="text-sm font-normal">
           <span className="text-muted">On the clock: </span>
           <span className="font-semibold">
             {lobby.onClockCaptain?.name ?? "—"}
@@ -1641,7 +2091,7 @@ function DraftView({
           <span className="ml-2 text-xs text-muted tabular-nums">
             Pick {Math.min(picksMade + 1, totalPicks)} of {totalPicks}
           </span>
-        </div>
+        </h2>
         <div className="flex items-center gap-3">
           {balanceLabel ? (
             <span className="hidden text-xs text-muted sm:inline">
@@ -1667,6 +2117,18 @@ function DraftView({
         neither side gets the better player at every tier.
       </p>
 
+      {me.isAdmin && !me.isOnClock ? (
+        <p
+          role="note"
+          className="rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-sm text-muted"
+        >
+          <strong className="text-fg">Admin recovery:</strong> you can pick for{" "}
+          {lobby.onClockCaptain?.name ?? "the current captain"} if they are
+          disconnected or unable to act. The current team, clock, and stale-turn
+          safeguards still apply.
+        </p>
+      ) : null}
+
       {/* Pool FIRST in DOM: on phones the on-clock captain needs it now —
           Team 1's roster card would otherwise bury it (same treatment as the
           league draft room). lg:order-* restores the three-column desktop. */}
@@ -1678,7 +2140,7 @@ function DraftView({
           </div>
           <div className="space-y-1.5 p-3">
             {lobby.pool.map((p) => {
-              const pickable = me.isOnClock;
+              const pickable = me.canPick;
               const isSel = selected === p.userId;
               return (
                 <button
@@ -1709,7 +2171,9 @@ function DraftView({
                   ) : null}
                   <RankBadge rankTier={p.rankTier} />
                   {p.mmr > 0 ? (
-                    <span className="text-xs text-muted tabular-nums">{p.mmr}</span>
+                    <span className="text-xs text-muted tabular-nums">
+                      {p.mmr}
+                    </span>
                   ) : null}
                 </button>
               );
@@ -1720,16 +2184,22 @@ function DraftView({
               </p>
             ) : null}
           </div>
-          {me.isOnClock ? (
+          {me.canPick ? (
             <div className="border-t border-line p-3">
               <button
                 disabled={pending || !selected}
-                onClick={() => selected && act({ action: "pick", userId: selected })}
+                onClick={() =>
+                  selected && act({ action: "pick", userId: selected })
+                }
                 className={buttonClasses("accent", "md", "w-full")}
               >
                 {selected
-                  ? `Draft ${lobby.pool.find((p) => p.userId === selected)?.name ?? ""}`
-                  : "Select a player to draft"}
+                  ? me.isOnClock
+                    ? `Draft ${lobby.pool.find((p) => p.userId === selected)?.name ?? ""}`
+                    : `Admin: draft ${lobby.pool.find((p) => p.userId === selected)?.name ?? ""} for ${lobby.onClockCaptain?.name ?? "the current captain"}`
+                  : me.isOnClock
+                    ? "Select a player to draft"
+                    : `Select a player to draft for ${lobby.onClockCaptain?.name ?? "the current captain"}`}
               </button>
             </div>
           ) : null}
@@ -1764,10 +2234,7 @@ function TeamColumn({
   onClock: boolean;
 }) {
   const meta = sideMeta(team.isRadiant);
-  const roster: (Player | null)[] = [
-    team.captain,
-    ...team.players,
-  ];
+  const roster: (Player | null)[] = [team.captain, ...team.players];
   while (roster.length < teamSize) roster.push(null);
   const avgMmr = avgKnownMmr(roster.map((p) => p?.mmr ?? 0));
 
@@ -1802,20 +2269,25 @@ function TeamColumn({
             key={p?.userId ?? i}
             className={cn(
               "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm",
-              p ? "border-line bg-surface-2/40" : "border-dashed border-line/60",
+              p
+                ? "border-line bg-surface-2/40"
+                : "border-dashed border-line/60",
             )}
           >
             {p ? (
               <>
                 <Avatar name={p.name} src={p.avatar} size={24} />
-                <PlayerLink userId={p.userId} className="min-w-6 flex-1 truncate">
+                <PlayerLink
+                  userId={p.userId}
+                  className="min-w-6 flex-1 truncate"
+                >
                   {p.name}
                 </PlayerLink>
                 {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}
                 {i > 0 && p.pickIndex != null ? (
                   <span
                     title={`Draft pick ${p.pickIndex + 1}`}
-                    className="text-[10px] tabular-nums text-muted/70"
+                    className="text-[10px] tabular-nums text-muted"
                   >
                     #{p.pickIndex + 1}
                   </span>
@@ -1823,7 +2295,7 @@ function TeamColumn({
                 <RankBadge rankTier={p.rankTier} />
               </>
             ) : (
-              <span className="py-0.5 pl-1 text-muted/50">Empty slot</span>
+              <span className="py-0.5 pl-1 text-muted">Empty slot</span>
             )}
           </div>
         ))}
@@ -1857,7 +2329,7 @@ function ReadyView({
     <div className="space-y-5">
       <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-6 py-5 text-center">
         <div className="text-2xl">🎮</div>
-        <div className="mt-1 text-lg font-semibold">Teams are set!</div>
+        <h2 className="mt-1 text-lg font-semibold">Teams are set!</h2>
         <p className="mx-auto mt-1 max-w-md text-sm text-muted">
           Set up the Dota lobby and hop into voice — the steps are just below.
           Then hit start once everyone&apos;s in. No ticket or league id needed;
@@ -2013,7 +2485,8 @@ function PotPanel({
   const balance = me.cred ?? 0;
   const maxPool = Math.max(pot.pool1, pot.pool2);
   const myPool = me.myTeam === 1 ? pot.pool1 : me.myTeam === 2 ? pot.pool2 : 0;
-  const theirPool = me.myTeam === 1 ? pot.pool2 : me.myTeam === 2 ? pot.pool1 : 0;
+  const theirPool =
+    me.myTeam === 1 ? pot.pool2 : me.myTeam === 2 ? pot.pool1 : 0;
   // ELIGIBILITY, straight from the server (in the ten, on a side, hasn't bet,
   // window still open). Affordability is the chips' business below, via the
   // same `betGateError` the write refuses with.
@@ -2096,7 +2569,9 @@ function PotPanel({
     Math.min(theirPool - myPool, INHOUSE_BETS.MAX_STAKE, balance),
   );
   const canCover =
-    canBet && coverAmount >= INHOUSE_BETS.MIN_STAKE && gate(coverAmount) === null;
+    canBet &&
+    coverAmount >= INHOUSE_BETS.MIN_STAKE &&
+    gate(coverAmount) === null;
   // Derived, not asserted: a cover lands on the short side and is therefore
   // matched in full, but the button quotes potView like every other control
   // rather than trusting that sentence.
@@ -2133,7 +2608,7 @@ function PotPanel({
       {offscreen ? (
         <button
           type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          onClick={scrollToRoomTop}
           aria-label="Back to the pot"
           className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
         >
@@ -2309,7 +2784,7 @@ function PotPanel({
                     </li>
                   ))}
                   {slips.length === 0 ? (
-                    <li className="text-xs text-muted/60">Nobody in yet</li>
+                    <li className="text-xs text-muted">Nobody in yet</li>
                   ) : null}
                 </ul>
               </div>
@@ -2545,24 +3020,25 @@ function InProgressView({
   // minutes in; the visible timer keeps ticking in <ElapsedClock>.
   const elapsedMs =
     lobby.startedAt != null ? serverNow - lobby.startedAt : null;
-  const scanLive =
-    elapsedMs != null && elapsedMs >= detectMinMinutes * 60_000;
+  const scanLive = elapsedMs != null && elapsedMs >= detectMinMinutes * 60_000;
 
   return (
     <div className="space-y-5">
       <div className="rounded-[var(--radius)] border border-info/40 bg-info/10 px-6 py-5 text-center">
-        <div className="flex items-center justify-center gap-2 text-lg font-semibold">
+        <h2 className="flex items-center justify-center gap-2 text-lg font-semibold">
           <span className="relative flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-info/70" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-info/70 motion-reduce:animate-none" />
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-info" />
           </span>
           Game in progress
           {lobby.startedAt != null ? (
             <ElapsedClock startedAtMs={lobby.startedAt} offsetMs={offset} />
           ) : null}
-        </div>
+        </h2>
         {lobby.startedByName ? (
-          <p className="mt-1 text-sm text-muted">Hosted by {lobby.startedByName}</p>
+          <p className="mt-1 text-sm text-muted">
+            Hosted by {lobby.startedByName}
+          </p>
         ) : null}
         {me.canRecord ? (
           <div className="mt-4 space-y-3">
@@ -2587,6 +3063,12 @@ function InProgressView({
               </label>
               <input
                 id="inhouse-match-id"
+                type="text"
+                inputMode="numeric"
+                enterKeyHint="done"
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
                 value={matchId}
                 onChange={(e) => setMatchId(e.target.value)}
                 placeholder="e.g. 7891234567"
@@ -2594,7 +3076,9 @@ function InProgressView({
               />
               <button
                 disabled={pending || !matchId.trim()}
-                onClick={() => act({ action: "record", matchId: matchId.trim() })}
+                onClick={() =>
+                  act({ action: "record", matchId: matchId.trim() })
+                }
                 className={buttonClasses("secondary", "sm")}
               >
                 Record
@@ -2764,11 +3248,7 @@ function GameSetupCard({
 
 // ---------- Shared roster grid ----------
 
-function MatchupGrid({
-  lobby,
-}: {
-  lobby: NonNullable<InhouseState["lobby"]>;
-}) {
+function MatchupGrid({ lobby }: { lobby: NonNullable<InhouseState["lobby"]> }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       {lobby.teams.map((t) => {
@@ -2780,7 +3260,10 @@ function MatchupGrid({
         return (
           <div
             key={t.team}
-            className={cn("rounded-[var(--radius)] border bg-surface/80", meta.ring)}
+            className={cn(
+              "rounded-[var(--radius)] border bg-surface/80",
+              meta.ring,
+            )}
           >
             <div className="flex items-center justify-between border-b border-line px-4 py-3">
               <div className="flex items-center gap-2 font-semibold">
@@ -2795,7 +3278,10 @@ function MatchupGrid({
               {roster.map((p, i) => (
                 <div key={p.userId} className="flex items-center gap-2 text-sm">
                   <Avatar name={p.name} src={p.avatar} size={24} />
-                  <PlayerLink userId={p.userId} className="min-w-6 flex-1 truncate">
+                  <PlayerLink
+                    userId={p.userId}
+                    className="min-w-6 flex-1 truncate"
+                  >
                     {p.name}
                   </PlayerLink>
                   {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}

@@ -1,7 +1,4 @@
-import {
-  DRAFT_STATUS,
-  SEASON_STATUS,
-} from "./constants";
+import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 
 /**
  * "What do I do next?" for the admin panel.
@@ -186,7 +183,7 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: "Next step: seed the bracket.",
         detail:
-          "The season is in the Playoffs phase but no bracket exists — press Start playoffs in the Playoffs card.",
+          "The season is in the Playoffs phase but no bracket exists. Move it back to Regular season, verify the final standings, then use Start playoffs to seed the bracket and enter Playoffs atomically.",
         tone: "warning",
       };
     }
@@ -201,27 +198,28 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
     return {
       title: "The bracket is finished but no champion is recorded.",
       detail:
-        "Re-save the final's result in Schedule & results to advance the bracket and crown the winner.",
+        "Result sync normally reconciles this automatically. Reload once; if it remains, inspect the grand final in Schedule & results and correct or reopen that result without resetting earlier rounds.",
       tone: "warning",
     };
   }
 
   if (seasonStatus === SEASON_STATUS.COMPLETE) {
-    if (!hasChampion && unfinishedPlayoffCount > 0) {
+    if (!hasChampion) {
       return {
-        title: "This season ended without a champion.",
+        title: "Complete is missing its champion.",
         detail:
-          "The bracket still has unplayed matches, and in Complete no playoff result advances it. Move the season back to Playoffs to finish it — no bracket rebuild needed.",
+          playoffMatchCount === 0
+            ? "No postseason fixtures exist. Move the season to Regular season, verify the final standings, then use Start playoffs to seed a bracket; a raw phase change cannot safely invent one."
+            : unfinishedPlayoffCount > 0
+              ? "This is a legacy close-out state. Move the season back to Playoffs and finish the remaining bracket; new phase controls no longer create Complete without a champion."
+              : "This is a recovery state, not a finished season. Move back to Playoffs and inspect the grand final so result reconciliation can crown the authoritative winner.",
         tone: "warning",
       };
     }
     return {
-      title: "Season complete. Next step: create the next season.",
-      // Name the control EXACTLY as the page labels it — this copy said "Start
-      // next season", which is not what the section is called, and inventing a
-      // control name is the same defect the audit found three times elsewhere.
+      title: "Season complete. Choose the league's next state.",
       detail:
-        "Open “Create a new season” at the bottom of this page. It archives this one (results, rosters and the champion are kept and stay browsable under History) and opens signups for the new one.",
+        "Open “Season handoff” below. You can archive this season and enter an offseason, or preserve it while immediately opening signups for the next season. Results, rosters, and the champion are kept under History either way.",
       tone: "done",
     };
   }

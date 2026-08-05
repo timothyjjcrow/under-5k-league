@@ -20,6 +20,7 @@ import {
   setPingRole,
   type GuildJoin,
 } from "./discord-roles";
+import { discordMutationsAllowed } from "./discord-mutation-policy";
 
 type Db = Pick<PrismaClient, "user">;
 
@@ -73,8 +74,7 @@ export async function linkDiscordAccount(
     const prior = self?.discordId ?? null;
     return {
       ok: true,
-      previousDiscordId:
-        prior && prior !== profile.discordId ? prior : null,
+      previousDiscordId: prior && prior !== profile.discordId ? prior : null,
     };
   } catch (e) {
     // P2002 = the unique race: someone else linked this Discord account
@@ -139,11 +139,13 @@ const DEFAULT_DEPS: CallbackDeps = {
   exchange: exchangeDiscordCode,
   fetchIdentity: fetchDiscordIdentity,
   joinGuild: async (discordId, accessToken) => {
+    if (!discordMutationsAllowed()) return null;
     const cfg = getGuildConfig();
     if (!cfg) return null;
     return joinGuild(discordId, accessToken, cfg);
   },
   stripPingRole: async (discordId) => {
+    if (!discordMutationsAllowed()) return;
     const cfg = await getRoleConfig();
     if (!cfg) return; // no ping role configured — nothing to strip
     await setPingRole(discordId, false, cfg);
@@ -175,17 +177,28 @@ export async function handleDiscordCallback(
   input: CallbackInput,
   deps: CallbackDeps = DEFAULT_DEPS,
 ): Promise<{ redirect: string }> {
-  // Session gone → sign in and retry (login lands them back on /me).
-  if (!input.userId) return { redirect: "/login?next=/me" };
-
-  // User clicked Cancel on Discord's consent screen — a normal outcome.
-  if (input.errorParam) return { redirect: "/me?discord=denied" };
+  // Session gone → sign in and retry. Carry a one-shot explanation through
+  // the validated return path so landing back on /me doesn't look like the
+  // Discord link silently did nothing.
+  if (!input.userId) {
+    return { redirect: "/login?next=%2Fme%3Fdiscord%3Dsession" };
+  }
 
   // CSRF gate: the state must round-trip AND match this browser's cookie.
   const packed = unpackOauthCookie(input.cookie);
-  if (!packed || !input.state || !safeEqual(packed.state, input.state)) {
+  if (
+    !packed ||
+    !input.state ||
+    !safeEqual(packed.state, input.state) ||
+    !safeEqual(packed.userId, input.userId)
+  ) {
     return { redirect: "/me?discord=state" };
   }
+
+  // User clicked Cancel on Discord's consent screen — a normal outcome, but
+  // only after proving this callback belongs to the browser's active flow. A
+  // forged `?error=access_denied` must not cancel someone else's link attempt.
+  if (input.errorParam) return { redirect: "/me?discord=denied" };
 
   if (!input.code) return { redirect: "/me?discord=error" };
 

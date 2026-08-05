@@ -1,14 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 // The last line of defence in front of the league's only copy of its history.
-// `npm run db:seed` deletes every row and `npm run db:reset` drops the schema
-// first; both used to run wherever DATABASE_URL happened to point, silently and
-// with a zero exit code — while the README teaches the operator to put the
-// production url on a command line for backups. Drive the real guard so the
+// `npm run db:seed` deletes every row, `npm run db:reset` drops the schema first,
+// and `npm run db:push` can mutate a remote schema. Drive the real guard so the
 // rule that protects the live database is pinned by a test.
 const SCRIPT = path.resolve(process.cwd(), "scripts/assert-local-db.mjs");
 
@@ -100,10 +98,33 @@ describe("assert-local-db destructive-command guard", () => {
     expect(r.stderr).toContain("I_UNDERSTAND_THIS_WIPES_THE_DATABASE=1");
   });
 
-  it("does not leak the url only — it prints it so the mistake is visible", () => {
-    expect(run("postgresql://u:p@ep-prod.neon.tech/league").stderr).toContain(
-      "ep-prod.neon.tech",
-    );
+  it("identifies the target without leaking credentials or URL parameters", () => {
+    const raw =
+      "postgresql://league-admin:do-not-print@ep-prod.neon.tech:5432/league?sslmode=require&api_key=also-secret#private";
+    const stderr = run(raw).stderr;
+
+    expect(stderr).toContain("postgresql://ep-prod.neon.tech:5432");
+    expect(stderr).toContain("credentials, path, and parameters redacted");
+    expect(stderr).not.toContain(raw);
+    for (const secret of [
+      "league-admin",
+      "do-not-print",
+      "/league",
+      "sslmode=require",
+      "also-secret",
+      "#private",
+    ]) {
+      expect(stderr).not.toContain(secret);
+    }
+  });
+
+  it("redacts the entire configured value when it cannot be parsed safely", () => {
+    const malformed = "not a URL with credential=do-not-print";
+    const stderr = run(malformed).stderr;
+
+    expect(stderr).toContain("DATABASE_URL = (set; value redacted)");
+    expect(stderr).not.toContain(malformed);
+    expect(stderr).not.toContain("do-not-print");
   });
 
   it("honours the explicit override", () => {
@@ -132,5 +153,15 @@ describe("assert-local-db destructive-command guard", () => {
     const res = runIn(dirWithEnv(), undefined);
     expect(res.code).toBe(1);
     expect(res.stderr).toContain("(unset)");
+  });
+
+  it("runs the local-database guard before db:push", () => {
+    const packageJson = JSON.parse(
+      readFileSync(path.resolve(process.cwd(), "package.json"), "utf8"),
+    ) as { scripts?: Record<string, string> };
+
+    expect(packageJson.scripts?.["db:push"]).toBe(
+      'node scripts/assert-local-db.mjs "Pushing the database schema" && prisma db push',
+    );
   });
 });

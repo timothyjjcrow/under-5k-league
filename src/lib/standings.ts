@@ -41,6 +41,8 @@ export type TeamStanding = {
    * a seed line is a coin flip the league should SEE, not discover.
    */
   idDecided?: boolean;
+  /** Stable identifier for every row in the same fully unresolved tie. */
+  idTieGroup?: string;
 };
 
 /**
@@ -67,6 +69,29 @@ export function seriesScoreError(
   return null;
 }
 
+/**
+ * Validate that a score labelled FINAL is actually a played-to-completion
+ * series. Administrative rulings/forfeits may end early and deliberately use
+ * the looser `seriesScoreError` contract.
+ */
+export function playedSeriesFinalError(
+  bestOf: number,
+  homeScore: number,
+  awayScore: number,
+): string | null {
+  const impossible = seriesScoreError(bestOf, homeScore, awayScore);
+  if (impossible) return impossible;
+  if (bestOf % 2 === 0) {
+    return homeScore + awayScore === bestOf
+      ? null
+      : `A played best-of-${bestOf} is final after ${bestOf} games — mark this as a forfeit/ruling if the series ended early.`;
+  }
+  const needed = Math.floor(bestOf / 2) + 1;
+  return homeScore === needed || awayScore === needed
+    ? null
+    : `A played best-of-${bestOf} is final when one team reaches ${needed} wins — mark this as a forfeit/ruling if the series ended early.`;
+}
+
 export type ClinchStatus = "CLINCHED" | "ELIMINATED" | null;
 
 /**
@@ -79,7 +104,8 @@ export function standingsMovement(
   matches: (MatchLike & { week: number })[],
 ): Map<string, number> {
   const completedRegular = matches.filter(
-    (m) => m.phase === MATCH_PHASE.REGULAR && m.status === MATCH_STATUS.COMPLETED,
+    (m) =>
+      m.phase === MATCH_PHASE.REGULAR && m.status === MATCH_STATUS.COMPLETED,
   );
   const movement = new Map(teamIds.map((id) => [id, 0]));
   if (completedRegular.length === 0) return movement;
@@ -128,7 +154,8 @@ export function clinchStatuses(
 ): Map<string, ClinchStatus> {
   const remaining = new Map<string, number>();
   for (const m of matches) {
-    if (m.phase !== MATCH_PHASE.REGULAR || m.status === MATCH_STATUS.COMPLETED) continue;
+    if (m.phase !== MATCH_PHASE.REGULAR || m.status === MATCH_STATUS.COMPLETED)
+      continue;
     remaining.set(m.homeTeamId, (remaining.get(m.homeTeamId) ?? 0) + 1);
     remaining.set(m.awayTeamId, (remaining.get(m.awayTeamId) ?? 0) + 1);
   }
@@ -231,7 +258,7 @@ export function computeStandings(
   // transitive (A beat B, B beat C, C beat A would break Array.sort).
   const samePrimary = (a: TeamStanding, b: TeamStanding) =>
     a.points === b.points && a.gameDiff === b.gameDiff && a.wins === b.wins;
-  for (let i = 0; i < rows.length; ) {
+  for (let i = 0; i < rows.length;) {
     let j = i + 1;
     while (j < rows.length && samePrimary(rows[i], rows[j])) j++;
     if (j - i > 1) {
@@ -245,13 +272,23 @@ export function computeStandings(
           h2h.get(a.teamId)! - h2h.get(b.teamId)! ||
           a.teamId.localeCompare(b.teamId),
       );
-      // Adjacent members sharing a mini-rank were ordered by the id alone —
-      // flag both so every standings surface can say "this order is a coin
-      // flip" instead of printing strict ordinals over a dead heat.
-      for (let k = 0; k < group.length - 1; k++) {
-        if (h2h.get(group[k].teamId) === h2h.get(group[k + 1].teamId)) {
-          group[k].idDecided = true;
-          group[k + 1].idDecided = true;
+      // Every shared mini-rank is one unresolved group ordered only by id.
+      // Preserve the group identity so a playoff-cut consumer can name the
+      // WHOLE dead heat without merging adjacent but unrelated tie groups.
+      const byMiniRank = new Map<number, TeamStanding[]>();
+      for (const row of group) {
+        const rank = h2h.get(row.teamId)!;
+        byMiniRank.set(rank, [...(byMiniRank.get(rank) ?? []), row]);
+      }
+      for (const tied of byMiniRank.values()) {
+        if (tied.length < 2) continue;
+        const key = tied
+          .map((row) => row.teamId)
+          .sort((a, b) => a.localeCompare(b))
+          .join("|");
+        for (const row of tied) {
+          row.idDecided = true;
+          row.idTieGroup = key;
         }
       }
       rows.splice(i, j - i, ...group);
@@ -275,7 +312,8 @@ export function headToHeadRanks(
   const inGroup = new Set(tiedIds);
   const mini = new Map(tiedIds.map((id) => [id, { points: 0, diff: 0 }]));
   for (const m of matches) {
-    if (m.status !== MATCH_STATUS.COMPLETED || m.phase !== MATCH_PHASE.REGULAR) continue;
+    if (m.status !== MATCH_STATUS.COMPLETED || m.phase !== MATCH_PHASE.REGULAR)
+      continue;
     if (!inGroup.has(m.homeTeamId) || !inGroup.has(m.awayTeamId)) continue;
     const home = mini.get(m.homeTeamId)!;
     const away = mini.get(m.awayTeamId)!;

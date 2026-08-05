@@ -1,0 +1,2 @@
+# Copy to .dev.vars for local Wrangler testing. Never commit the real values.
+AUTOMATION_SECRET="replace-with-the-same-random-value-as-vercel-cron-secret"

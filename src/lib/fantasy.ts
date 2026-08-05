@@ -41,6 +41,31 @@ export function fantasyCap(
 }
 
 /**
+ * Fair salary values for a drafted pool. A missing legacy/signup MMR must not
+ * make a player a zero-cost fantasy pick: impute the known-pool average,
+ * rounded to the same 50-MMR granularity as the cap. If nobody has a known
+ * rating, keep the whole pool at zero and the feature explicitly runs uncapped
+ * rather than pretending those zeroes are real prices.
+ */
+export function fantasyPrices(
+  rosterMmrs: Map<string, number>,
+): Map<string, number> {
+  const known = [...rosterMmrs.values()].filter((mmr) => mmr > 0);
+  const estimate =
+    known.length > 0
+      ? Math.round(
+          (known.reduce((sum, mmr) => sum + mmr, 0) / known.length) / 50,
+        ) * 50
+      : 0;
+  return new Map(
+    [...rosterMmrs].map(([userId, mmr]) => [
+      userId,
+      mmr > 0 ? mmr : estimate,
+    ]),
+  );
+}
+
+/**
  * Validate a manager's picks. Returns an error message or null when legal.
  * `eligibleMmr` maps every rostered league player to their signup MMR.
  */

@@ -36,15 +36,22 @@ export default defineConfig({
     // make the DB servable itself (schema + seed) before booting the server;
     // globalSetup then re-seeds for the reuse-an-existing-server path (the
     // seed script resets first, so running it twice is harmless).
-    command: `npx prisma db push --skip-generate --accept-data-loss && npm run db:seed && npm run dev -- -p ${E2E_PORT}`,
+    command: `node scripts/prepare-sqlite-test-db.mjs signupE2e && npx prisma db push --skip-generate --accept-data-loss && npm run db:seed && npm run dev -- -p ${E2E_PORT}`,
     url: `http://localhost:${E2E_PORT}`,
-    // Anything already on this port is a previous e2e server (same DB) —
-    // a dev server on :3000 is never reused, so dev.db stays untouched.
-    reuseExistingServer: true,
+    // Local reruns may reuse this suite's dedicated port and database. CI must
+    // always own a fresh process so a stale server cannot make a clean-checkout
+    // run pass against old code.
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     env: {
       DATABASE_URL: E2E_DB_URL,
       ALLOW_DEV_LOGIN: "true",
+      // Next's dev worker restarts at 80% of its V8 heap limit. The full
+      // single-server browser suite intentionally compiles almost every route;
+      // the default constrained heap restarted between two poll-resilience
+      // tests and stranded the next page before hydration. Raising the ceiling
+      // keeps the test server stable without changing production runtime limits.
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=8192`.trim(),
     },
   },
   globalSetup: "./e2e/global-setup.ts",

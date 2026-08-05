@@ -1,20 +1,31 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
-import { computeStandings } from "./standings";
+import { nextRoundPairings, upcomingMatchNight } from "./schedule";
+import { projectPlayoffField } from "./playoff-field";
 import {
-  pickBracketSize,
-  playoffFirstRound,
-  nextRoundPairings,
-  upcomingMatchNight,
-} from "./schedule";
+  playoffSetupRevision,
+  type PlayoffCommandIntent,
+} from "./playoff-command";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { championMessage, getWebhookUrl, sendDiscordMessage } from "./discord";
 import { raceHook } from "./race-hook";
 import {
-  ANNOUNCE_FAILED_PREFIX,
   championAnnouncedKey,
   playoffGamesArchiveKey,
+  resultAnnouncedKey,
+  SETTING_KEYS,
+  weekReminderKey,
 } from "./settings";
+import { regularSeasonStatus } from "./schedule-status";
+import { resolveChampionPresentation } from "./champion-presentation";
+import {
+  announcementDedupeKey,
+  claimAnnouncementMarker,
+  markAnnouncementFailed,
+  markAnnouncementSent,
+  releaseAnnouncementClaim,
+} from "./announcement-marker";
+import { UserFacingError } from "./user-facing-error";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -22,6 +33,12 @@ type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
 /** The round-build's inputs stopped being true mid-flight (reset / correction /
  *  close-out) — thrown inside the build transaction so nothing commits. */
 class StaleBracketError extends Error {}
+
+/** The bracket-build snapshot lost a race before its guarded phase write. */
+class BracketBuildRaceError extends Error {}
+
+const BRACKET_BUILD_RACE_MESSAGE =
+  "The season, standings, or playoff bracket changed while it was being built — reload and try again";
 
 /**
  * Exactly-once marker for "round N of this season's bracket has been built".
@@ -36,7 +53,9 @@ const playoffRoundKey = (seasonId: string, round: number) =>
 function parseSlot(slot: string | null): { round: number; match: number } {
   if (!slot) return { round: 0, match: 0 };
   const m = slot.match(/^R(\d+)M(\d+)$/);
-  return m ? { round: Number(m[1]), match: Number(m[2]) } : { round: 0, match: 0 };
+  return m
+    ? { round: Number(m[1]), match: Number(m[2]) }
+    : { round: 0, match: 0 };
 }
 
 /**
@@ -55,58 +74,33 @@ export type StandDown = {
   week: number;
 };
 
-export async function createPlayoffBracket(
+export type PlayoffBracketClaim = {
+  intent: PlayoffCommandIntent;
+  expectedSeasonStatus: string;
+  expectedRevision: string;
+};
+
+type PostseasonRemoval = {
+  standDowns: StandDown[];
+  removedGameCount: number;
+};
+
+/**
+ * Remove the current postseason without losing the only durable receipt for
+ * imported OpenDota ids. Reset playoffs and Return to regular season share
+ * this command so their cascade cleanup cannot drift apart.
+ */
+async function removePostseason(
+  tx: Prisma.TransactionClient,
   seasonId: string,
-): Promise<{ standDowns: StandDown[] }> {
-  const [season, teams, matches] = await Promise.all([
-    prisma.season.findUnique({ where: { id: seasonId } }),
-    prisma.team.findMany({ where: { seasonId } }),
-    prisma.match.findMany({ where: { seasonId } }),
-  ]);
-  if (!season) throw new Error("No season");
-  // A WITHDRAWN team (withdrawTeam — quit mid-season, remaining fixtures
-  // forfeited) is excluded from seeding HERE, not by the standings: a team
-  // that banked points before dying can out-rank the cut, and the standings
-  // table deliberately keeps showing it (badged) because its played results
-  // are real. The bracket size shrinks with the field.
-  const alive = teams.filter((t) => !t.withdrawn);
-  if (alive.length < 2) throw new Error("Need at least 2 teams for playoffs");
-
-  const standings = computeStandings(
-    alive.map((t) => t.id),
-    matches,
+  matches: { id: string; phase: string; week: number }[],
+): Promise<PostseasonRemoval> {
+  const postseasonMatches = matches.filter(
+    (match) => match.phase !== MATCH_PHASE.REGULAR,
   );
-  const bracketSize = pickBracketSize(alive.length);
-  const seeded = standings.slice(0, bracketSize).map((s) => s.teamId);
-  const pairings = playoffFirstRound(seeded, bracketSize);
-  const lastRegularWeek = matches
-    .filter((m) => m.phase === MATCH_PHASE.REGULAR)
-    .reduce((mx, m) => Math.max(mx, m.week), 0);
-  const phase = pairings.length === 1 ? MATCH_PHASE.FINAL : MATCH_PHASE.PLAYOFF;
-  const bestOf =
-    phase === MATCH_PHASE.FINAL ? season.finalBestOf : season.playoffBestOf;
-
-  // SERIALIZABLE, because this is a clear-and-reseed: under READ COMMITTED a
-  // concurrent copy (an admin double-clicking "Start playoffs", or Start
-  // racing Reset) cannot see the other's uncommitted deleteMany, so both
-  // delete nothing of each other's and both insert a full first round —
-  // a doubled bracket. Both copies unconditionally update the same Season row
-  // below, so that write-write pair is what SSI aborts one of; the loser gets
-  // P2034 and is caught as "someone else already built it".
-  // ARCHIVE the playoff games before the clear-and-reseed throws them away.
-  //
-  // "Recreate the bracket" is the ONLY correction path once a round has
-  // advanced — recordResult, reopenMatch and removeGame all refuse and all
-  // three point here — and Game cascades with Match (schema.prisma), so
-  // correcting one mis-attributed game cost every playoff box score, MVP,
-  // fantasy point, hero-meta pick, record-book entry and per-game Elo of the
-  // whole postseason. The MATCHES are cheap to replay; the imported games were
-  // not recoverable at all, because `importGameForMatch` needs a dotaMatchId
-  // and nothing anywhere still held one. Keeping just the ids makes the reset
-  // reversible by re-import, which is the part that actually mattered.
   const archiveKey = playoffGamesArchiveKey(seasonId);
-  const [doomedGames, priorRaw] = await Promise.all([
-    prisma.game.findMany({
+  const [doomedGames, priorRaw, doomedCover] = await Promise.all([
+    tx.game.findMany({
       where: {
         match: {
           seasonId,
@@ -118,54 +112,8 @@ export async function createPlayoffBracket(
         match: { select: { bracketSlot: true, week: true } },
       },
     }),
-    prisma.setting.findUnique({ where: { key: archiveKey } }),
-  ]);
-
-  // MERGE, never replace. The archive is the only record of a deleted
-  // postseason, and a plain overwrite quietly destroyed it in the most likely
-  // repair sequence there is: reset (12 ids archived) → re-import one game to
-  // check something → reset again, where `doomedGames` is now length 1 and the
-  // other 11 ids are gone for good. Union by dotaMatchId so the archive only
-  // ever grows. Reading outside the transaction is safe because the reset runs
-  // SERIALIZABLE and both copies write this same row, so SSI aborts one (P2034,
-  // already handled below).
-  let prior: ArchivedGame[] = [];
-  try {
-    const parsed = JSON.parse(priorRaw?.value ?? "[]");
-    if (Array.isArray(parsed)) prior = parsed as ArchivedGame[];
-  } catch {
-    // corrupt archive — better to start fresh than to lose this reset's ids
-  }
-  const merged = [
-    ...prior,
-    ...doomedGames.map((g) => ({
-      dotaMatchId: g.dotaMatchId,
-      slot: g.match.bracketSlot,
-      week: g.match.week,
-    })),
-  ];
-  const archiveValue = JSON.stringify(
-    [...new Map(merged.map((g) => [g.dotaMatchId, g])).values()],
-  );
-
-  let doomedCover: {
-    teamId: string;
-    standin: { name: string; discordId: string | null };
-    match: {
-      week: number;
-      homeTeam: { name: string };
-      awayTeam: { name: string };
-    };
-  }[] = [];
-  try {
-    const results = await prisma.$transaction([
-    // The cover this teardown is about to delete, read INSIDE the transaction:
-    // afterwards the rows are gone, and reading before it would miss a booking
-    // made in the gap. Each is a standin holding a live @-mentioned
-    // instruction to turn up for a playoff match that is about to stop
-    // existing. MUST stay element 0 — batch results come back positionally and
-    // the archive upsert below is a conditional spread.
-    prisma.standinAssignment.findMany({
+    tx.setting.findUnique({ where: { key: archiveKey } }),
+    tx.standinAssignment.findMany({
       where: {
         match: {
           seasonId,
@@ -184,77 +132,381 @@ export async function createPlayoffBracket(
         },
       },
     }),
-    // Round markers are per-round exactly-once claims (see playoffRoundKey);
-    // a reset must release them or the rebuilt bracket can never advance.
-    prisma.setting.deleteMany({
-      where: { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
-    }),
-    // A reset UN-CROWNS the season (championTeamId: null + PLAYOFFS below), so
-    // release the champion marker too — without this the rebuilt bracket's
-    // champion would be announced to nobody, a NEW permanent silence created
-    // by the very change that removed the old one.
-    prisma.setting.deleteMany({ where: { key: championAnnouncedKey(seasonId) } }),
-    // Written inside the SAME transaction as the delete, so the archive can
-    // never claim games that are still live, nor be lost if the reset aborts.
-    ...(doomedGames.length
-      ? [
-          prisma.setting.upsert({
-            where: { key: archiveKey },
-            create: { key: archiveKey, value: archiveValue },
-            update: { value: archiveValue },
-          }),
-        ]
-      : []),
-    prisma.match.deleteMany({
-      where: {
-        seasonId,
-        phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
-      },
-    }),
-    prisma.match.createMany({
-      data: pairings.map((p, i) => ({
-        seasonId,
-        week: lastRegularWeek + 1,
-        phase,
-        homeTeamId: p.home,
-        awayTeamId: p.away,
-        bracketSlot: `R0M${i}`,
-        bestOf,
-        // Never stamp a kickoff that has already passed — it would put the
-        // match outside its own auto-sync window before anyone plays it.
-        scheduledAt: season.firstMatchNight
-          ? upcomingMatchNight(
-              season.firstMatchNight,
-              lastRegularWeek + 1,
-              Date.now(),
-            )
-          : null,
-      })),
-    }),
-    prisma.season.update({
-      where: { id: seasonId },
-      data: { status: SEASON_STATUS.PLAYOFFS, championTeamId: null },
-    }),
-    ],
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-    doomedCover = results[0] as typeof doomedCover;
-  } catch (e) {
-    // Lost the serialization race — the other copy built the same bracket,
-    // and ITS caller owns the stand-downs.
-    if ((e as { code?: string }).code === "P2034") return { standDowns: [] };
-    throw e;
+  ]);
+
+  // Test-only deterministic seam: every recovery/stand-down dependency has
+  // been snapshotted, but no teardown write has begun. A child row committed
+  // here must make this Serializable transaction lose rather than disappear
+  // through the Match cascade without appearing in the snapshot above.
+  await raceHook("playoffs.removePostseason.afterSnapshot");
+
+  let prior: ArchivedGame[] = [];
+  try {
+    const parsed = JSON.parse(priorRaw?.value ?? "[]");
+    if (Array.isArray(parsed)) prior = parsed as ArchivedGame[];
+  } catch {
+    // A corrupt prior receipt must not cost the ids being removed now.
   }
+  const merged = [
+    ...prior,
+    ...doomedGames.map((game) => ({
+      dotaMatchId: game.dotaMatchId,
+      slot: game.match.bracketSlot,
+      week: game.match.week,
+    })),
+  ];
+  const archiveValue = JSON.stringify([
+    ...new Map(merged.map((game) => [game.dotaMatchId, game])).values(),
+  ]);
+
+  await tx.setting.deleteMany({
+    where: { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
+  });
+  await tx.setting.deleteMany({
+    where: { key: championAnnouncedKey(seasonId) },
+  });
+  if (postseasonMatches.length > 0) {
+    await tx.setting.deleteMany({
+      where: {
+        key: {
+          in: postseasonMatches.map((match) => resultAnnouncedKey(match.id)),
+        },
+      },
+    });
+    const postseasonWeeks = [
+      ...new Set(postseasonMatches.map((match) => match.week)),
+    ];
+    await tx.setting.deleteMany({
+      where: {
+        OR: postseasonWeeks.map((week) => ({
+          key: { startsWith: `${weekReminderKey(seasonId, week)}:` },
+        })),
+      },
+    });
+  }
+  if (doomedGames.length > 0) {
+    await tx.setting.upsert({
+      where: { key: archiveKey },
+      create: { key: archiveKey, value: archiveValue },
+      update: { value: archiveValue },
+    });
+  }
+  await tx.match.deleteMany({
+    where: {
+      seasonId,
+      phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+    },
+  });
+
   return {
-    standDowns: doomedCover.map((a) => ({
-      standinName: a.standin.name,
-      discordId: a.standin.discordId,
-      teamId: a.teamId,
-      homeName: a.match.homeTeam.name,
-      awayName: a.match.awayTeam.name,
-      week: a.match.week,
+    removedGameCount: doomedGames.length,
+    standDowns: doomedCover.map((assignment) => ({
+      standinName: assignment.standin.name,
+      discordId: assignment.standin.discordId,
+      teamId: assignment.teamId,
+      homeName: assignment.match.homeTeam.name,
+      awayName: assignment.match.awayTeam.name,
+      week: assignment.match.week,
     })),
   };
+}
+
+export async function createPlayoffBracket(
+  seasonId: string,
+  claim?: PlayoffBracketClaim,
+): Promise<{ standDowns: StandDown[]; removedGameCount: number }> {
+  // Test seam immediately before the authoritative snapshot. Every input used
+  // below is read after this point, so a result, withdrawal, game import or
+  // phase change that lands while an admin is looking at a stale page is either
+  // included in the new bracket or refused — never silently overwritten.
+  await raceHook("playoffs.create.beforeTx");
+
+  try {
+    return await prisma.$transaction(
+      async (tx) => {
+        const season = await tx.season.findUnique({ where: { id: seasonId } });
+        if (!season) throw new UserFacingError("No season");
+        if (!season.isActive) {
+          throw new UserFacingError(
+            "Only the active season can start or reset playoffs",
+          );
+        }
+
+        const teams = await tx.team.findMany({ where: { seasonId } });
+        if (
+          season.status !== SEASON_STATUS.REGULAR_SEASON &&
+          season.status !== SEASON_STATUS.PLAYOFFS &&
+          season.status !== SEASON_STATUS.COMPLETE
+        ) {
+          throw new UserFacingError(
+            "Playoffs can only start after the regular season or be reset from Playoffs/Complete",
+          );
+        }
+
+        const matches = await tx.match.findMany({
+          where: { seasonId },
+          include: {
+            games: { select: { id: true, dotaMatchId: true } },
+            availability: { select: { id: true, userId: true, status: true } },
+            standins: {
+              select: {
+                id: true,
+                teamId: true,
+                standinUserId: true,
+                replacingUserId: true,
+              },
+            },
+            predictions: {
+              select: { id: true, userId: true, pickedTeamId: true },
+            },
+            reschedules: {
+              select: {
+                id: true,
+                proposedById: true,
+                proposedTime: true,
+                status: true,
+              },
+            },
+          },
+        });
+        const hasPostseason = matches.some(
+          (match) => match.phase !== MATCH_PHASE.REGULAR,
+        );
+        if (claim) {
+          if (season.status !== claim.expectedSeasonStatus) {
+            throw new UserFacingError(
+              "The season phase changed while this playoff control was open — reload and try again",
+            );
+          }
+          const currentRevision = playoffSetupRevision({
+            season,
+            teams,
+            matches,
+          });
+          if (currentRevision !== claim.expectedRevision) {
+            throw new UserFacingError(
+              "The standings, playoff bracket, imported games, or playoff activity changed while this control was open — reload before trying again",
+            );
+          }
+          if (claim.intent === "start") {
+            if (hasPostseason) {
+              throw new UserFacingError(
+                "The playoff bracket already exists — reload before using the separate Reset playoffs control",
+              );
+            }
+            if (season.status !== SEASON_STATUS.REGULAR_SEASON) {
+              throw new UserFacingError(
+                "A new playoff bracket can only start from the Regular season phase",
+              );
+            }
+          } else {
+            if (!hasPostseason) {
+              throw new UserFacingError(
+                "There is no playoff bracket to reset — reload before starting it",
+              );
+            }
+            if (
+              season.status !== SEASON_STATUS.PLAYOFFS &&
+              season.status !== SEASON_STATUS.COMPLETE
+            ) {
+              throw new UserFacingError(
+                "A playoff bracket can only reset from Playoffs or Complete",
+              );
+            }
+          }
+        }
+        const playoffField = projectPlayoffField(teams, matches);
+        if (playoffField.eligibleTeamIds.length < 2) {
+          throw new UserFacingError(
+            "Need at least 2 eligible teams for playoffs",
+          );
+        }
+
+        const regular = regularSeasonStatus(matches);
+        if (!regular.allComplete) {
+          if (regular.total === 0) {
+            throw new UserFacingError(
+              "Generate and complete the regular-season schedule before starting playoffs",
+            );
+          }
+          throw new UserFacingError(
+            `${regular.pending} regular-season result${regular.pending === 1 ? " is" : "s are"} still outstanding`,
+          );
+        }
+
+        const pairings = playoffField.pairings;
+        const lastRegularWeek = matches
+          .filter((match) => match.phase === MATCH_PHASE.REGULAR)
+          .reduce((max, match) => Math.max(max, match.week), 0);
+        const phase =
+          pairings.length === 1 ? MATCH_PHASE.FINAL : MATCH_PHASE.PLAYOFF;
+        const bestOf =
+          phase === MATCH_PHASE.FINAL
+            ? season.finalBestOf
+            : season.playoffBestOf;
+        // These teardown reads and deletes share this Serializable snapshot
+        // with the fresh bracket creation. A late game import or standin claim
+        // therefore conflicts instead of disappearing through a cascade.
+        const removed = await removePostseason(tx, seasonId, matches);
+        await tx.match.createMany({
+          data: pairings.map((pairing, index) => ({
+            seasonId,
+            week: lastRegularWeek + 1,
+            phase,
+            homeTeamId: pairing.home,
+            awayTeamId: pairing.away,
+            bracketSlot: `R0M${index}`,
+            bestOf,
+            scheduledAt: season.firstMatchNight
+              ? upcomingMatchNight(
+                  season.firstMatchNight,
+                  lastRegularWeek + 1,
+                  Date.now(),
+                )
+              : null,
+          })),
+        });
+        const phaseClaim = await tx.season.updateMany({
+          where: {
+            id: seasonId,
+            isActive: true,
+            status: season.status,
+          },
+          data: { status: SEASON_STATUS.PLAYOFFS, championTeamId: null },
+        });
+        if (phaseClaim.count === 0) throw new BracketBuildRaceError();
+        const changedAt = new Date().toISOString();
+        await tx.setting.upsert({
+          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
+          update: { value: changedAt },
+        });
+
+        return {
+          ...removed,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if (
+      error instanceof BracketBuildRaceError ||
+      (error as { code?: string }).code === "P2034"
+    ) {
+      throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Deliberately tear down the postseason and reopen the existing regular
+ * season for result correction. This is the only supported backward phase
+ * transition once a bracket exists: a raw status flip would leave stale
+ * playoff winners and a champion attached to a mutable table.
+ */
+export async function returnToRegularSeason(
+  seasonId: string,
+  claim: Pick<PlayoffBracketClaim, "expectedSeasonStatus" | "expectedRevision">,
+): Promise<PostseasonRemoval> {
+  await raceHook("playoffs.returnToRegular.beforeTx");
+  try {
+    return await prisma.$transaction(
+      async (tx) => {
+        const season = await tx.season.findUnique({ where: { id: seasonId } });
+        if (!season?.isActive) {
+          throw new UserFacingError(
+            "Only the active season can return to the regular season",
+          );
+        }
+        if (
+          season.status !== SEASON_STATUS.PLAYOFFS &&
+          season.status !== SEASON_STATUS.COMPLETE
+        ) {
+          throw new UserFacingError(
+            "Only a Playoffs or Complete season can return to the regular season",
+          );
+        }
+        const [teams, matches] = await Promise.all([
+          tx.team.findMany({ where: { seasonId } }),
+          tx.match.findMany({
+            where: { seasonId },
+            include: {
+              games: { select: { id: true, dotaMatchId: true } },
+              availability: {
+                select: { id: true, userId: true, status: true },
+              },
+              standins: {
+                select: {
+                  id: true,
+                  teamId: true,
+                  standinUserId: true,
+                  replacingUserId: true,
+                },
+              },
+              predictions: {
+                select: { id: true, userId: true, pickedTeamId: true },
+              },
+              reschedules: {
+                select: {
+                  id: true,
+                  proposedById: true,
+                  proposedTime: true,
+                  status: true,
+                },
+              },
+            },
+          }),
+        ]);
+        if (season.status !== claim.expectedSeasonStatus) {
+          throw new UserFacingError(
+            "The season phase changed while this recovery control was open — reload and try again",
+          );
+        }
+        if (
+          playoffSetupRevision({ season, teams, matches }) !==
+          claim.expectedRevision
+        ) {
+          throw new UserFacingError(
+            "The standings, playoff bracket, imported games, or playoff activity changed while this recovery control was open — reload before trying again",
+          );
+        }
+        if (!matches.some((match) => match.phase !== MATCH_PHASE.REGULAR)) {
+          throw new UserFacingError("There is no playoff bracket to remove");
+        }
+
+        const removed = await removePostseason(tx, seasonId, matches);
+        const moved = await tx.season.updateMany({
+          where: {
+            id: seasonId,
+            isActive: true,
+            status: season.status,
+          },
+          data: {
+            status: SEASON_STATUS.REGULAR_SEASON,
+            championTeamId: null,
+          },
+        });
+        if (moved.count !== 1) throw new BracketBuildRaceError();
+        const changedAt = new Date().toISOString();
+        await tx.setting.upsert({
+          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
+          update: { value: changedAt },
+        });
+        return removed;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if (
+      error instanceof BracketBuildRaceError ||
+      (error as { code?: string }).code === "P2034"
+    ) {
+      throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -278,27 +530,32 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
   // rule: a league that wires Discord up later must still get its champion).
   if (!(await getWebhookUrl())) return false;
   const marker = championAnnouncedKey(seasonId);
-  try {
-    await prisma.setting.create({
-      data: { key: marker, value: new Date().toISOString() },
-    });
-  } catch (e) {
-    if ((e as { code?: string }).code !== "P2002") throw e;
-    // Only a FAILED marker may be re-claimed — otherwise a retry would
-    // re-announce a champion the channel already has.
-    const reclaimed = await prisma.setting.updateMany({
-      where: { key: marker, value: { startsWith: ANNOUNCE_FAILED_PREFIX } },
-      data: { value: new Date().toISOString() },
-    });
-    if (reclaimed.count === 0) return false;
-  }
-  const season = await prisma.season.findUnique({
-    where: { id: seasonId },
-    select: { name: true, status: true, championTeamId: true },
-  });
-  const champion = season?.championTeamId
-    ? await prisma.team.findUnique({
-        where: { id: season.championTeamId },
+  const claim = await claimAnnouncementMarker(marker);
+  if (!claim) return false;
+  const [season, matches] = await Promise.all([
+    prisma.season.findUnique({
+      where: { id: seasonId },
+      select: { name: true, status: true, championTeamId: true },
+    }),
+    prisma.match.findMany({
+      where: { seasonId },
+      select: {
+        id: true,
+        phase: true,
+        bracketSlot: true,
+        status: true,
+        winnerTeamId: true,
+        homeTeamId: true,
+        awayTeamId: true,
+      },
+    }),
+  ]);
+  const presentedChampionTeamId = season
+    ? resolveChampionPresentation(season, matches).championTeamId
+    : null;
+  const champion = presentedChampionTeamId
+    ? await prisma.team.findFirst({
+        where: { id: presentedChampionTeamId, seasonId },
         select: { name: true },
       })
     : null;
@@ -307,33 +564,44 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
   // than stamping `failed:`, which would make the sweep retry it forever and
   // starve real failures out of its take-window — the orphan lesson already
   // learned in retryFailedAnnouncements.
-  if (!season || season.status !== SEASON_STATUS.COMPLETE || !champion) {
-    await prisma.setting.deleteMany({ where: { key: marker } });
+  if (!season || !champion) {
+    await releaseAnnouncementClaim(claim);
     return false;
   }
   const sent = await sendDiscordMessage(
-    championMessage(season.name, champion.name),
+    championMessage(season.name, champion.name, seasonId),
+    undefined,
+    {
+      dedupeKey: announcementDedupeKey("champion", claim),
+      marker: { key: claim.key, eventId: claim.eventId },
+    },
   );
   if (!sent) {
-    await prisma.setting.updateMany({
-      where: { key: marker },
-      data: { value: `${ANNOUNCE_FAILED_PREFIX}${new Date().toISOString()}` },
-    });
+    await markAnnouncementFailed(claim);
     return false;
   }
-  return true;
+  return markAnnouncementSent(claim);
 }
 
-export async function advancePlayoffBracket(seasonId: string) {
+/** Returns true only when this caller committed a new round or champion. */
+export async function advancePlayoffBracket(
+  seasonId: string,
+): Promise<boolean> {
   const season = await prisma.season.findUnique({ where: { id: seasonId } });
-  if (!season || season.status !== SEASON_STATUS.PLAYOFFS) return;
+  if (!season?.isActive || season.status !== SEASON_STATUS.PLAYOFFS)
+    return false;
 
   const playoff = await prisma.match.findMany({
-    where: { seasonId, phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] } },
+    where: {
+      seasonId,
+      phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+    },
   });
-  if (playoff.length === 0) return;
+  if (playoff.length === 0) return false;
 
-  const maxRound = Math.max(...playoff.map((m) => parseSlot(m.bracketSlot).round));
+  const maxRound = Math.max(
+    ...playoff.map((m) => parseSlot(m.bracketSlot).round),
+  );
   const current = playoff
     .filter((m) => parseSlot(m.bracketSlot).round === maxRound)
     .sort(
@@ -343,38 +611,119 @@ export async function advancePlayoffBracket(seasonId: string) {
   const allDecided = current.every(
     (m) => m.status === MATCH_STATUS.COMPLETED && m.winnerTeamId,
   );
-  if (!allDecided) return;
+  if (!allDecided) return false;
+
+  // A sole latest row is a crown only when bracket construction explicitly
+  // labelled it FINAL. Treating any lone PLAYOFF as a final let the writer
+  // create a COMPLETE state every public reader immediately rejected.
+  if (current.length === 1 && current[0]?.phase !== MATCH_PHASE.FINAL) {
+    return false;
+  }
 
   if (current.length === 1) {
-    // The final is decided — crown the champion. Conditional write: a manual
-    // recordResult racing an auto-import both reach here, and only the call
-    // that actually flips PLAYOFFS→COMPLETE may announce (no double ping).
-    // Seam: a rival moving the season OFF PlayOffs between the read at the top
-    // of this function and the claim below — an admin's close-out, or another
-    // caller's crowning. The status predicate is the only thing that stops a
-    // stale advance re-stamping a season that has already moved on.
+    // The final is decided — crown the champion. Everything above is a cheap
+    // preflight; the transaction below re-proves that this exact final is still
+    // the sole latest round, is still completed, and still names the same
+    // winner. A remove/reopen/correction changes the Match row, while crowning
+    // changes the Season row, so a season-only CAS cannot detect that race.
     await raceHook("playoffs.advance.beforeCrown");
-    const crowned = await prisma.season.updateMany({
-      where: { id: seasonId, status: SEASON_STATUS.PLAYOFFS },
-      data: {
-        championTeamId: current[0].winnerTeamId,
-        status: SEASON_STATUS.COMPLETE,
-      },
-    });
-    if (crowned.count === 0) return;
+    const expectedFinal = current[0];
+    let championTeamId: string | null = null;
+    try {
+      championTeamId = await prisma.$transaction(
+        async (tx) => {
+          const [seasonNow, playoffNow] = await Promise.all([
+            tx.season.findUnique({
+              where: { id: seasonId },
+              select: { isActive: true, status: true },
+            }),
+            tx.match.findMany({
+              where: {
+                seasonId,
+                phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+              },
+              select: {
+                id: true,
+                phase: true,
+                bracketSlot: true,
+                status: true,
+                winnerTeamId: true,
+                homeTeamId: true,
+                awayTeamId: true,
+              },
+            }),
+          ]);
+          if (
+            !seasonNow?.isActive ||
+            seasonNow.status !== SEASON_STATUS.PLAYOFFS
+          )
+            return null;
+
+          const latestRound = Math.max(
+            ...playoffNow.map((match) => parseSlot(match.bracketSlot).round),
+          );
+          const latest = playoffNow.filter(
+            (match) => parseSlot(match.bracketSlot).round === latestRound,
+          );
+          const finalNow = latest.length === 1 ? latest[0] : null;
+          const winnerStillValid =
+            finalNow?.id === expectedFinal.id &&
+            finalNow.phase === MATCH_PHASE.FINAL &&
+            finalNow.status === MATCH_STATUS.COMPLETED &&
+            finalNow.winnerTeamId === expectedFinal.winnerTeamId &&
+            (finalNow.winnerTeamId === finalNow.homeTeamId ||
+              finalNow.winnerTeamId === finalNow.awayTeamId);
+          if (!winnerStillValid) return null;
+
+          const crowned = await tx.season.updateMany({
+            where: {
+              id: seasonId,
+              isActive: true,
+              status: SEASON_STATUS.PLAYOFFS,
+            },
+            data: {
+              championTeamId: finalNow.winnerTeamId,
+              status: SEASON_STATUS.COMPLETE,
+            },
+          });
+          if (crowned.count !== 1) return null;
+          const changedAt = new Date().toISOString();
+          await tx.setting.upsert({
+            where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+            create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
+            update: { value: changedAt },
+          });
+          return finalNow.winnerTeamId;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      // A concurrent correction/crown/reset won the Serializable ordering. Its
+      // own caller either advances the fresh state or leaves it for the next
+      // idempotent sync pass; this stale caller must not surface a false error.
+      if ((error as { code?: string }).code !== "P2034") throw error;
+      return false;
+    }
+    if (!championTeamId) return false;
     // Best-effort AND retryable: the `crowned` claim above is still the
     // single-winner gate; the marker only adds a way back from a Discord blip.
-    await announceChampionOnce(seasonId);
-    return;
+    // The database crown is already committed, so even an unexpected marker or
+    // transport exception must not erase this caller's truthful mutation signal.
+    try {
+      await announceChampionOnce(seasonId);
+    } catch {
+      // The crown is already durable. Log only a stable code: transport and
+      // database exceptions can embed webhook URLs or player-controlled text,
+      // while the persisted automation/outbox state is the operator detail.
+      console.error("[playoffs] CHAMPION_ANNOUNCEMENT_FAILED");
+    }
+    return true;
   }
 
   const winners = current.map((m) => m.winnerTeamId as string);
   const pairings = nextRoundPairings(winners);
   const nextRound = maxRound + 1;
   const phase = pairings.length === 1 ? MATCH_PHASE.FINAL : MATCH_PHASE.PLAYOFF;
-  const bestOf =
-    phase === MATCH_PHASE.FINAL ? season.finalBestOf : season.playoffBestOf;
-  const week = Math.max(...playoff.map((m) => m.week)) + 1;
 
   // Two imports can decide the round's last two series near-simultaneously —
   // both reach here with allDecided true.
@@ -398,7 +747,7 @@ export async function advancePlayoffBracket(seasonId: string) {
     where: { seasonId, bracketSlot: { startsWith: `R${nextRound}M` } },
     select: { id: true },
   });
-  if (exists) return; // cheap fast path; the claim below is the real guard
+  if (exists) return false; // cheap fast path; the claim below is the real guard
   await raceHook("playoffs.advance.beforeBuild");
   try {
     await prisma.$transaction(
@@ -413,20 +762,35 @@ export async function advancePlayoffBracket(seasonId: string) {
         // never advance, no champion, and the only repair is ANOTHER reset.
         // Re-reading the current round catches it (the reset deleted those
         // match rows); re-reading the winners catches a removeGame /
-        // recordResult correction landing mid-build; re-reading season.status
-        // catches a close-out phase flip racing the final import (a round
-        // must not be built into a COMPLETE season).
+        // recordResult correction landing mid-build; re-reading Season catches
+        // both a close-out phase flip and an explicit unfinished-season
+        // cancellation racing the import (a round must not be built into a
+        // COMPLETE or inactive season).
         const [seasonNow, currentNow] = await Promise.all([
           tx.season.findUnique({
             where: { id: seasonId },
-            select: { status: true },
+            select: {
+              isActive: true,
+              status: true,
+              playoffBestOf: true,
+              finalBestOf: true,
+              firstMatchNight: true,
+            },
           }),
           tx.match.findMany({
             where: { id: { in: current.map((m) => m.id) } },
-            select: { id: true, status: true, winnerTeamId: true },
+            select: {
+              id: true,
+              week: true,
+              status: true,
+              winnerTeamId: true,
+            },
           }),
         ]);
-        if (seasonNow?.status !== SEASON_STATUS.PLAYOFFS) {
+        if (
+          !seasonNow?.isActive ||
+          seasonNow.status !== SEASON_STATUS.PLAYOFFS
+        ) {
           throw new StaleBracketError();
         }
         const winnerById = new Map(current.map((m) => [m.id, m.winnerTeamId]));
@@ -445,6 +809,11 @@ export async function advancePlayoffBracket(seasonId: string) {
             value: new Date().toISOString(),
           },
         });
+        const week = Math.max(...currentNow.map((match) => match.week)) + 1;
+        const bestOf =
+          phase === MATCH_PHASE.FINAL
+            ? seasonNow.finalBestOf
+            : seasonNow.playoffBestOf;
         await tx.match.createMany({
           data: pairings.map((p, i) => ({
             seasonId,
@@ -456,10 +825,16 @@ export async function advancePlayoffBracket(seasonId: string) {
             bestOf,
             // Same guard as the first round: a round created after its arithmetic
             // date has passed must roll forward, not be born already stale.
-            scheduledAt: season.firstMatchNight
-              ? upcomingMatchNight(season.firstMatchNight, week, Date.now())
+            scheduledAt: seasonNow.firstMatchNight
+              ? upcomingMatchNight(seasonNow.firstMatchNight, week, Date.now())
               : null,
           })),
+        });
+        const changedAt = new Date().toISOString();
+        await tx.setting.upsert({
+          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
+          update: { value: changedAt },
         });
       },
       // Serializable so the reset (also Serializable, touching the same
@@ -467,13 +842,14 @@ export async function advancePlayoffBracket(seasonId: string) {
       // one of them aborts with P2034 instead of interleaving.
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+    return true;
   } catch (e) {
     // Someone else is building (or already built) this exact round.
-    if ((e as { code?: string }).code === "P2002") return;
+    if ((e as { code?: string }).code === "P2002") return false;
     // SSI loser — a rival build or a reset serialized ahead of us.
-    if ((e as { code?: string }).code === "P2034") return;
+    if ((e as { code?: string }).code === "P2034") return false;
     // The bracket we computed from no longer exists as we read it.
-    if (e instanceof StaleBracketError) return;
+    if (e instanceof StaleBracketError) return false;
     throw e;
   }
 }

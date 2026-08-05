@@ -25,6 +25,15 @@ describe("sortNews", () => {
     sortNews(posts);
     expect(posts.map((p) => p.id)).toEqual(["a", "b"]);
   });
+
+  it("uses descending id as a stable final tiebreak", () => {
+    const posts = [
+      { id: "a", pinned: false, createdAt: 100 },
+      { id: "c", pinned: false, createdAt: 100 },
+      { id: "b", pinned: false, createdAt: 100 },
+    ];
+    expect(sortNews(posts).map((post) => post.id)).toEqual(["c", "b", "a"]);
+  });
 });
 
 describe("newsPostError", () => {
@@ -39,9 +48,9 @@ describe("newsPostError", () => {
     expect(
       newsPostError("t".repeat(NEWS_LIMITS.TITLE_MAX + 1), "body"),
     ).toMatch(/title/i);
-    expect(newsPostError("title", "b".repeat(NEWS_LIMITS.BODY_MAX + 1))).toMatch(
-      /body/i,
-    );
+    expect(
+      newsPostError("title", "b".repeat(NEWS_LIMITS.BODY_MAX + 1)),
+    ).toMatch(/body/i);
   });
 });
 

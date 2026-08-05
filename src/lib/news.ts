@@ -7,6 +7,7 @@ export const NEWS_LIMITS = {
 } as const;
 
 export type NewsLike = {
+  id?: string;
   pinned: boolean;
   createdAt: Date | number;
 };
@@ -20,7 +21,8 @@ export function sortNews<T extends NewsLike>(posts: T[]): T[] {
   return [...posts].sort(
     (a, b) =>
       Number(b.pinned) - Number(a.pinned) ||
-      toMs(b.createdAt) - toMs(a.createdAt),
+      toMs(b.createdAt) - toMs(a.createdAt) ||
+      (b.id ?? "").localeCompare(a.id ?? ""),
   );
 }
 

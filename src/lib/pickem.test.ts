@@ -3,6 +3,7 @@ import {
   groupOpenByWeek,
   pickemStandings,
   pickSplit,
+  partitionPickemMatches,
   predictionOpen,
   predictionOpenWhere,
 } from "./pickem";
@@ -101,18 +102,38 @@ describe("predictionOpen — live series", () => {
   });
 });
 
-describe("groupOpenByWeek", () => {
-  it("groups by week ascending, preserving in-week order", () => {
+describe("partitionPickemMatches", () => {
+  it("keeps every match in exactly one open, locked, graded, or void bucket", () => {
+    const now = new Date("2026-08-03T20:00:00Z");
     const rows = [
-      { week: 3, id: "c" },
-      { week: 1, id: "a" },
-      { week: 3, id: "d" },
-      { week: 1, id: "b" },
+      m("open", "SCHEDULED", null, new Date("2026-08-03T21:00:00Z")),
+      m("locked", "LIVE", null, new Date("2026-08-03T19:00:00Z")),
+      m("graded", "COMPLETED", "A"),
+      m("void", "COMPLETED", null),
+    ];
+    const buckets = partitionPickemMatches(rows, now);
+    expect(buckets.open.map((row) => row.id)).toEqual(["open"]);
+    expect(buckets.locked.map((row) => row.id)).toEqual(["locked"]);
+    expect(buckets.graded.map((row) => row.id)).toEqual(["graded"]);
+    expect(buckets.voided.map((row) => row.id)).toEqual(["void"]);
+    expect(
+      Object.values(buckets).flatMap((bucket) => bucket.map((row) => row.id)),
+    ).toHaveLength(rows.length);
+  });
+});
+
+describe("groupOpenByWeek", () => {
+  it("puts the week with the next real deadline first and sorts within it", () => {
+    const rows = [
+      { week: 3, id: "c", scheduledAt: new Date("2026-08-05T20:00:00Z") },
+      { week: 1, id: "a", scheduledAt: new Date("2026-08-07T20:00:00Z") },
+      { week: 3, id: "d", scheduledAt: new Date("2026-08-04T20:00:00Z") },
+      { week: 1, id: "b", scheduledAt: null },
     ];
     const grouped = groupOpenByWeek(rows);
-    expect(grouped.map((g) => g.week)).toEqual([1, 3]);
-    expect(grouped[0].matches.map((m) => m.id)).toEqual(["a", "b"]);
-    expect(grouped[1].matches.map((m) => m.id)).toEqual(["c", "d"]);
+    expect(grouped.map((g) => g.week)).toEqual([3, 1]);
+    expect(grouped[0].matches.map((row) => row.id)).toEqual(["d", "c"]);
+    expect(grouped[1].matches.map((row) => row.id)).toEqual(["a", "b"]);
   });
 
   it("handles an empty list", () => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   fantasyPoints,
   fantasyCap,
+  fantasyPrices,
   validateFantasyPicks,
   pointsByPlayer,
   fantasyStandings,
@@ -33,6 +34,34 @@ describe("fantasyCap", () => {
   it("ignores unknown MMRs and handles an empty pool", () => {
     expect(fantasyCap([3000, 0, 0], 5)).toBe(fantasyCap([3000], 5));
     expect(fantasyCap([], 5)).toBe(0);
+  });
+});
+
+describe("fantasyPrices", () => {
+  it("charges an unrated player the rounded known-pool average", () => {
+    expect(
+      [...fantasyPrices(new Map([
+        ["known-a", 3000],
+        ["known-b", 4100],
+        ["unknown", 0],
+      ]))],
+    ).toEqual([
+      ["known-a", 3000],
+      ["known-b", 4100],
+      ["unknown", 3550],
+    ]);
+  });
+
+  it("uses explicit uncapped zeroes only when the entire pool is unrated", () => {
+    expect(
+      [...fantasyPrices(new Map([
+        ["a", 0],
+        ["b", 0],
+      ]))],
+    ).toEqual([
+      ["a", 0],
+      ["b", 0],
+    ]);
   });
 });
 

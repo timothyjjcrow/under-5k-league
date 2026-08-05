@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
 import { steamIdToAccountId } from "@/lib/dota";
-import { MATCH_PHASE } from "@/lib/constants";
+import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
+import { SETTING_KEYS } from "@/lib/settings";
 import {
   autoDetectGamesForMatch,
   gatherTeamAccounts,
@@ -24,6 +25,13 @@ vi.mock("@/lib/dota", async (importOriginal) => {
 import { fetchOpenDotaMatch, fetchRecentMatchIds } from "@/lib/dota";
 
 async function regularMatch(seasonId: string, homeId: string, awayId: string) {
+  // A league match can only accept imported games after the auction has moved
+  // into a playing phase. Keep every import fixture honest about that lifecycle
+  // instead of relying on the old results-blind importer.
+  await prisma.season.update({
+    where: { id: seasonId },
+    data: { status: "REGULAR_SEASON" },
+  });
   return prisma.match.create({
     data: {
       seasonId,
@@ -35,9 +43,19 @@ async function regularMatch(seasonId: string, homeId: string, awayId: string) {
   });
 }
 
-async function addGame(matchId: string, dotaMatchId: string, winnerTeamId: string) {
+async function addGame(
+  matchId: string,
+  dotaMatchId: string,
+  winnerTeamId: string,
+) {
   return prisma.game.create({
-    data: { matchId, dotaMatchId, radiantWin: true, winnerTeamId, players: "[]" },
+    data: {
+      matchId,
+      dotaMatchId,
+      radiantWin: true,
+      winnerTeamId,
+      players: "[]",
+    },
   });
 }
 
@@ -276,15 +294,110 @@ describe("gatherTeamAccounts", () => {
 describe("importGameForMatch", () => {
   afterEach(() => vi.mocked(fetchOpenDotaMatch).mockReset());
 
-  it("imports a valid game, classifies sides, rolls up, and dedupes", async () => {
+  it("refuses a valid-looking game before the league reaches a playing phase", async () => {
+    const season = await makeSeason({
+      teamSize: 3,
+      status: "DRAFT",
+    });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeAccts: number[] = [];
+    const awayAccts: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      homeAccts.push(await addMember(season.id, home.id, `EarlyH${i}`));
+      awayAccts.push(await addMember(season.id, away.id, `EarlyA${i}`));
+    }
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+      },
+    });
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 554,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        ...homeAccts.map((account_id, index) => ({
+          account_id,
+          player_slot: index,
+          hero_id: 1,
+          isRadiant: true,
+          kills: 1,
+          deaths: 0,
+          assists: 0,
+        })),
+        ...awayAccts.map((account_id, index) => ({
+          account_id,
+          player_slot: 128 + index,
+          hero_id: 2,
+          isRadiant: false,
+          kills: 0,
+          deaths: 1,
+          assists: 0,
+        })),
+      ],
+    });
+
+    const result = await importGameForMatch(match.id, "554");
+
+    expect(result.ok).toBe(false);
+    if (result.ok)
+      throw new Error("expected the phase race to reject the import");
+    expect(result.error).toMatch(/results are locked/i);
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [SEASON_STATUS.PLAYOFFS, MATCH_PHASE.REGULAR],
+    [SEASON_STATUS.REGULAR_SEASON, MATCH_PHASE.PLAYOFF],
+  ])(
+    "refuses a %s season / %s fixture phase mismatch before fetching",
+    async (seasonStatus, matchPhase) => {
+      const season = await makeSeason({ status: seasonStatus });
+      const home = await makeTeam(season.id, "Home", 0);
+      const away = await makeTeam(season.id, "Away", 1);
+      const match = await prisma.match.create({
+        data: {
+          seasonId: season.id,
+          week: 1,
+          phase: matchPhase,
+          homeTeamId: home.id,
+          awayTeamId: away.id,
+        },
+      });
+
+      const result = await importGameForMatch(match.id, "553");
+
+      expect(result).toEqual({
+        ok: false,
+        error: expect.stringMatching(/results are locked/i),
+      });
+      expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+      expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+    },
+  );
+
+  it("commits the game, series projection, and result cursor together, then dedupes", async () => {
     const season = await makeSeason({ teamSize: 3 });
     const home = await makeTeam(season.id, "Home", 0);
     const away = await makeTeam(season.id, "Away", 1);
     const homeAccts: number[] = [];
     const awayAccts: number[] = [];
-    for (let i = 0; i < 3; i++) homeAccts.push(await addMember(season.id, home.id, `H${i}`));
-    for (let i = 0; i < 3; i++) awayAccts.push(await addMember(season.id, away.id, `A${i}`));
+    for (let i = 0; i < 3; i++)
+      homeAccts.push(await addMember(season.id, home.id, `H${i}`));
+    for (let i = 0; i < 3; i++)
+      awayAccts.push(await addMember(season.id, away.id, `A${i}`));
     const match = await regularMatch(season.id, home.id, away.id);
+    const oldCursor = "2000-01-01T00:00:00.000Z";
+    await prisma.setting.create({
+      data: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: oldCursor },
+    });
 
     vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
       match_id: 555,
@@ -316,16 +429,41 @@ describe("importGameForMatch", () => {
     });
 
     const r = await importGameForMatch(match.id, "555");
-    expect(r.ok).toBe(true);
-
-    const m = await prisma.match.findUniqueOrThrow({
-      where: { id: match.id },
-      include: { games: true },
+    expect(r).toMatchObject({
+      ok: true,
+      homeScore: 1,
+      awayScore: 0,
+      winnerTeamId: home.id,
+      status: "COMPLETED",
+      decided: true,
     });
-    expect(m.games).toHaveLength(1);
-    expect(m.winnerTeamId).toBe(home.id); // home = radiant, radiant won
-    expect(m.homeScore).toBe(1);
-    expect(m.status).toBe("COMPLETED");
+
+    // Read all three durable effects in one snapshot immediately after the
+    // single import call returns. No follow-up recompute/cursor repair call is
+    // needed to make the result coherent to another request.
+    const snapshot = await prisma.$transaction(async (tx) => ({
+      game: await tx.game.findUnique({ where: { dotaMatchId: "555" } }),
+      match: await tx.match.findUniqueOrThrow({ where: { id: match.id } }),
+      season: await tx.season.findUniqueOrThrow({ where: { id: season.id } }),
+      cursor: await tx.setting.findUnique({
+        where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+      }),
+    }));
+    expect(snapshot.game).toMatchObject({
+      matchId: match.id,
+      winnerTeamId: home.id,
+    });
+    expect(snapshot.match).toMatchObject({
+      winnerTeamId: home.id,
+      homeScore: 1,
+      awayScore: 0,
+      status: "COMPLETED",
+    });
+    expect(snapshot.season.fantasyLockedAt).toBeInstanceOf(Date);
+    expect(snapshot.cursor?.value).not.toBe(oldCursor);
+    expect(Date.parse(snapshot.cursor?.value ?? "")).toBeGreaterThan(
+      Date.parse(oldCursor),
+    );
 
     // Same dota match id can't be imported twice.
     const dup = await importGameForMatch(match.id, "555");
@@ -410,14 +548,23 @@ describe("autoDetectGamesForMatch", () => {
     };
   }
 
-  async function roster(seasonId: string, teamId: string, prefix: string, n: number) {
+  async function roster(
+    seasonId: string,
+    teamId: string,
+    prefix: string,
+    n: number,
+  ) {
     const accts: number[] = [];
-    for (let i = 0; i < n; i++) accts.push(await addMember(seasonId, teamId, `${prefix}${i}`));
+    for (let i = 0; i < n; i++)
+      accts.push(await addMember(seasonId, teamId, `${prefix}${i}`));
     return accts;
   }
 
   it("finds the real match from the players who played and skips an unrelated pub", async () => {
-    const season = await makeSeason({ teamSize: 5 });
+    const season = await makeSeason({
+      teamSize: 5,
+      status: "REGULAR_SEASON",
+    });
     const home = await makeTeam(season.id, "Home", 0);
     const away = await makeTeam(season.id, "Away", 1);
     const homeAccts = await roster(season.id, home.id, "H", 5);
@@ -429,13 +576,20 @@ describe("autoDetectGamesForMatch", () => {
     const recent = new Map<number, number[]>();
     homeAccts.forEach((a, i) => recent.set(a, i < 4 ? [REAL, PUB] : [REAL]));
     awayAccts.forEach((a) => recent.set(a, [REAL]));
-    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchRecentMatchIds).mockImplementation(
+      async (acc) => recent.get(acc) ?? [],
+    );
 
     vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) => {
       if (id === String(REAL)) return gameOf(REAL, homeAccts, awayAccts, true);
       if (id === String(PUB))
         // Home 4-stack + 6 strangers: classifyGame can't find the away team.
-        return gameOf(PUB, homeAccts.slice(0, 4), [70001, 70002, 70003, 70004, 70005, 70006], true);
+        return gameOf(
+          PUB,
+          homeAccts.slice(0, 4),
+          [70001, 70002, 70003, 70004, 70005, 70006],
+          true,
+        );
       return null;
     });
 
@@ -458,7 +612,13 @@ describe("autoDetectGamesForMatch", () => {
     const homeRegulars = await roster(season.id, home.id, "H", 4);
     const benched = await makeUser("Benched");
     await prisma.teamMember.create({
-      data: { seasonId: season.id, teamId: home.id, userId: benched.id, isCaptain: false, price: 0 },
+      data: {
+        seasonId: season.id,
+        teamId: home.id,
+        userId: benched.id,
+        isCaptain: false,
+        price: 0,
+      },
     });
     const awayAccts = await roster(season.id, away.id, "A", 5);
     const match = await regularMatch(season.id, home.id, away.id);
@@ -479,7 +639,9 @@ describe("autoDetectGamesForMatch", () => {
     const REAL = 8100;
     const recent = new Map<number, number[]>();
     [...homeOnField, ...awayAccts].forEach((a) => recent.set(a, [REAL]));
-    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchRecentMatchIds).mockImplementation(
+      async (acc) => recent.get(acc) ?? [],
+    );
     vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) =>
       id === String(REAL) ? gameOf(REAL, homeOnField, awayAccts, false) : null,
     );
@@ -487,8 +649,13 @@ describe("autoDetectGamesForMatch", () => {
     const res = await autoDetectGamesForMatch(match.id);
     expect(res.imported).toBe(1);
 
-    const game = await prisma.game.findFirstOrThrow({ where: { matchId: match.id } });
-    const players = JSON.parse(game.players) as { userId: string | null; teamId: string | null }[];
+    const game = await prisma.game.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+    const players = JSON.parse(game.players) as {
+      userId: string | null;
+      teamId: string | null;
+    }[];
     const standinRow = players.find((p) => p.userId === standin.id);
     expect(standinRow?.teamId).toBe(home.id); // counted for the team they covered
     const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
@@ -496,7 +663,10 @@ describe("autoDetectGamesForMatch", () => {
   });
 
   it("imports every game of a best-of-3 and rolls the series up", async () => {
-    const season = await makeSeason({ teamSize: 5 });
+    const season = await makeSeason({
+      teamSize: 5,
+      status: "REGULAR_SEASON",
+    });
     const home = await makeTeam(season.id, "Home", 0);
     const away = await makeTeam(season.id, "Away", 1);
     const homeAccts = await roster(season.id, home.id, "H", 5);
@@ -516,7 +686,9 @@ describe("autoDetectGamesForMatch", () => {
     const G2 = 8202;
     const recent = new Map<number, number[]>();
     [...homeAccts, ...awayAccts].forEach((a) => recent.set(a, [G1, G2]));
-    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchRecentMatchIds).mockImplementation(
+      async (acc) => recent.get(acc) ?? [],
+    );
     vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) => {
       if (id === String(G1)) return gameOf(G1, homeAccts, awayAccts, true); // home wins
       if (id === String(G2)) return gameOf(G2, homeAccts, awayAccts, true); // home wins
@@ -546,10 +718,14 @@ describe("autoDetectGamesForMatch", () => {
     const NEW = 8401;
     const recent = new Map<number, number[]>();
     [...homeAccts, ...awayAccts].forEach((a) => recent.set(a, [NEW, OLD]));
-    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchRecentMatchIds).mockImplementation(
+      async (acc) => recent.get(acc) ?? [],
+    );
     vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) => {
-      if (id === String(OLD)) return gameOf(OLD, awayAccts, homeAccts, true, 1_600_000_000); // away won the old one
-      if (id === String(NEW)) return gameOf(NEW, homeAccts, awayAccts, true, 1_700_000_000); // home won today
+      if (id === String(OLD))
+        return gameOf(OLD, awayAccts, homeAccts, true, 1_600_000_000); // away won the old one
+      if (id === String(NEW))
+        return gameOf(NEW, homeAccts, awayAccts, true, 1_700_000_000); // home won today
       return null;
     });
 
@@ -583,7 +759,9 @@ describe("autoDetectGamesForMatch", () => {
     // Auto-detecting the rematch must NOT steal week 1's game.
     const recent = new Map<number, number[]>();
     [...homeAccts, ...awayAccts].forEach((a) => recent.set(a, [REAL]));
-    vi.mocked(fetchRecentMatchIds).mockImplementation(async (acc) => recent.get(acc) ?? []);
+    vi.mocked(fetchRecentMatchIds).mockImplementation(
+      async (acc) => recent.get(acc) ?? [],
+    );
 
     const res = await autoDetectGamesForMatch(rematch.id);
     expect(res.imported).toBe(0);
@@ -610,7 +788,10 @@ describe("enrichStoredGames", () => {
     teamId: "team-legacy",
   };
 
-  async function legacyGame(dotaMatchId: string, lines: unknown[] = [LEGACY_LINE]) {
+  async function legacyGame(
+    dotaMatchId: string,
+    lines: unknown[] = [LEGACY_LINE],
+  ) {
     const season = await makeSeason();
     const home = await makeTeam(season.id, "Home", 0);
     const away = await makeTeam(season.id, "Away", 1);
@@ -655,7 +836,9 @@ describe("enrichStoredGames", () => {
     expect(res.failed).toBe(0);
     expect(res.remaining).toBe(0);
 
-    const stored = await prisma.game.findUniqueOrThrow({ where: { id: game.id } });
+    const stored = await prisma.game.findUniqueOrThrow({
+      where: { id: game.id },
+    });
     const lines = JSON.parse(stored.players);
     expect(lines[0]).toMatchObject({
       // attribution and original stats untouched
@@ -704,12 +887,17 @@ describe("enrichStoredGames", () => {
 
     const res = await enrichStoredGames();
     expect(res.enriched).toBe(1);
-    const stored = await prisma.game.findUniqueOrThrow({ where: { id: game.id } });
+    const stored = await prisma.game.findUniqueOrThrow({
+      where: { id: game.id },
+    });
     const lines = JSON.parse(stored.players);
     expect(lines[0].xpm).toBe(333);
     // the null marker still lands, so this game never rescans
     expect(lines[0].benchmarks).toBeNull();
-    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, remaining: 0 });
+    expect(await enrichStoredGames()).toMatchObject({
+      enriched: 0,
+      remaining: 0,
+    });
   });
 
   it("counts a game OpenDota can't return as failed and leaves it for retry", async () => {
@@ -737,6 +925,10 @@ describe("enrichStoredGames", () => {
     await prisma.game.update({
       where: { id: dead.id },
       data: { fetchedAt: new Date(Date.now() - 60_000) },
+    });
+    await prisma.season.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
     });
     const alive9005 = await legacyGame("9005");
     await prisma.game.update({

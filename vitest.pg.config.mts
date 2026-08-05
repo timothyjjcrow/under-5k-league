@@ -1,14 +1,15 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
+import { assertPostgresTestUrl } from "./scripts/test-db-safety.mjs";
 
 // Same integration suite, pointed at a real POSTGRES database — the production
 // engine. SQLite serializes writers, which masks the read-then-write races the
 // mutation guards exist for; this config is how we verify them for real.
 //   PG_TEST_URL="postgresql://…" npx vitest run --config vitest.pg.config.mts
-// Requires the schema to already be on the postgresql provider + pushed
-// (scripts/switch-db-provider.mjs postgresql && prisma db push).
+// Requires the schema to already be on the postgresql provider with committed
+// migrations deployed (`npm run pg:up` performs the guarded setup).
 const url = process.env.PG_TEST_URL;
-if (!url) throw new Error("Set PG_TEST_URL to the throwaway Postgres database.");
+assertPostgresTestUrl(url);
 
 export default defineConfig({
   resolve: {

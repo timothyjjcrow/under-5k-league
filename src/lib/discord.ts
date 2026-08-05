@@ -3,6 +3,26 @@ import { resolveSiteUrl } from "./site-url";
 import { splitLinks } from "./linkify";
 import { escapeDiscordText } from "./discord-escape";
 import { potTier, tierLabel, type BetOutcome } from "./inhouse-bets";
+import {
+  DISCORD_CONTENT_MAX,
+  isValidDiscordContent,
+  materializeAllowedMentions,
+  normalizeMentionAllowlist,
+  type MentionAllowlist,
+} from "./discord-payload";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+  hasPendingLeagueAnnouncements,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+  type LeagueAnnouncementDelivery,
+  type LeagueAnnouncementMarker,
+} from "./league-announcement-outbox";
+import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
+import { discordMutationsAllowed } from "./discord-mutation-policy";
+
+export { materializeAllowedMentions } from "./discord-payload";
+export type { MentionAllowlist } from "./discord-payload";
 
 /**
  * Player and team names are user-controlled (Steam personas, captain-chosen
@@ -53,7 +73,27 @@ export function draftScheduledMessage(
   seasonName: string,
   whenMs: number,
 ): string {
-  return `🗓️ **The ${seasonName} draft is set for <t:${Math.floor(whenMs / 1000)}:F>** — captains and players, be there: <${resolveSiteUrl()}/draft>`;
+  return `🗓️ **The ${seasonName} draft is set for <t:${Math.floor(whenMs / 1000)}:F>** — players and captains, confirm you can make it: <${resolveSiteUrl()}/me>`;
+}
+
+export function draftRescheduledMessage(
+  seasonName: string,
+  whenMs: number,
+): string {
+  return `🔄 **The ${seasonName} draft moved to <t:${Math.floor(whenMs / 1000)}:F>.** Previous confirmations expired — confirm the new time: <${resolveSiteUrl()}/me>`;
+}
+
+export function draftCancelledMessage(seasonName: string): string {
+  return `⚠️ **The scheduled ${seasonName} draft night was cleared.** The league admin will post a new time — watch the league dashboard for the update: <${resolveSiteUrl()}>`;
+}
+
+export function captainAssignedMessage(
+  captainName: string,
+  teamName: string,
+  discordId?: string | null,
+): string {
+  const captain = discordId ? `<@${discordId}>` : `**${name(captainName)}**`;
+  return `🧭 ${captain}, **you now captain ${name(teamName)}.** Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
 }
 
 export function draftStartedMessage(seasonName: string): string {
@@ -61,7 +101,43 @@ export function draftStartedMessage(seasonName: string): string {
 }
 
 export function draftCompleteMessage(seasonName: string): string {
-  return `✅ **The ${seasonName} draft is complete!** Rosters are locked — see the teams at <${resolveSiteUrl()}/teams>`;
+  return `✅ **The ${seasonName} draft is complete — the auction has closed.** See every roster — including any open seats still needing free agents or standins — at <${resolveSiteUrl()}/teams>`;
+}
+
+export function regularSeasonStartedMessage(seasonName: string): string {
+  return `⚔️ **The ${name(seasonName)} Regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
+}
+
+export function draftPausedMessage(seasonName: string): string {
+  return `⏸️ **The ${seasonName} auction is paused.** Clocks are parked; stay in the draft room for the restart: <${resolveSiteUrl()}/draft>`;
+}
+
+export function draftResumedMessage(seasonName: string): string {
+  return `▶️ **The ${seasonName} auction has resumed.** A fresh clock is running now: <${resolveSiteUrl()}/draft>`;
+}
+
+export function draftLotVoidedMessage(
+  seasonName: string,
+  playerName: string,
+): string {
+  return `↩️ **The live lot for ${name(playerName)} was voided by an admin.** No sale was recorded; ${seasonName} remains paused until the admin resumes it.`;
+}
+
+export function draftSaleUndoneMessage(
+  seasonName: string,
+  playerName: string,
+  teamName: string,
+  price: number,
+): string {
+  return `↩️ **The ${seasonName} sale of ${name(playerName)} to ${name(teamName)} for $${price} was undone.** The player is back in the pool and the auction must finish again: <${resolveSiteUrl()}/draft>`;
+}
+
+export function draftAbortedMessage(
+  seasonName: string,
+  playersReturned: number,
+  matchesRemoved: number,
+): string {
+  return `🛑 **The ${seasonName} auction was aborted and the season is back in Signups.** ${playersReturned} non-captain roster member(s) returned to the pool${matchesRemoved ? `; ${matchesRemoved} unplayed fixture(s) were cleared` : ""}. Wait for the admin to announce the restart: <${resolveSiteUrl()}>`;
 }
 
 /** Draft-night superlatives, appended right after the complete message. */
@@ -71,7 +147,9 @@ export function draftRecapMessage(r: {
   topSpender: { teamName: string; spent: number } | null;
   totalSpent: number;
 }): string {
-  const lines = [`📊 **Draft night in numbers** — $${r.totalSpent} changed hands.`];
+  const lines = [
+    `📊 **Draft night in numbers** — $${r.totalSpent} changed hands.`,
+  ];
   if (r.biggestSpend) {
     lines.push(
       `💰 Biggest buy: **${name(r.biggestSpend.name)}** to ${name(r.biggestSpend.teamName)} for $${r.biggestSpend.price}`,
@@ -115,11 +193,7 @@ export function matchResultMessage(m: {
   const home = name(m.homeName);
   const away = name(m.awayName);
   const winner =
-    m.homeScore > m.awayScore
-      ? home
-      : m.awayScore > m.homeScore
-        ? away
-        : null;
+    m.homeScore > m.awayScore ? home : m.awayScore > m.homeScore ? away : null;
   const line = `⚔️ **${label}:** ${home} ${m.homeScore}–${m.awayScore} ${away}`;
   const tail = winner
     ? m.forfeit
@@ -133,15 +207,23 @@ export function playoffsStartedMessage(
   seasonName: string,
   pairings: { home: string; away: string }[],
 ): string {
-  const lines = pairings.map((p) => `• ${name(p.home)} vs ${name(p.away)}`).join("\n");
+  const lines = pairings
+    .map((p) => `• ${name(p.home)} vs ${name(p.away)}`)
+    .join("\n");
   return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
+}
+
+export function playoffsReturnedToRegularMessage(seasonName: string): string {
+  return `↩️ **${name(seasonName)} playoffs have been withdrawn for a standings correction.** The current bracket is void and the league is back in the Regular season phase. A fresh bracket will be posted after the results are corrected: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function championMessage(
   seasonName: string,
   teamName: string,
+  seasonId: string,
 ): string {
-  return `👑 **${name(teamName)}** are the **${seasonName}** champions! GG everyone — recap at <${resolveSiteUrl()}/recap>`;
+  const recap = `${resolveSiteUrl()}/recap?${new URLSearchParams({ season: seasonId })}`;
+  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — recap at <${recap}>`;
 }
 
 export function freeAgentSignedMessage(
@@ -408,9 +490,7 @@ export function playerOutMessage(m: {
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
   // page with the assign form, not on the front door (the week-reminder shape).
-  const link = m.matchId
-    ? ` <${resolveSiteUrl()}/matches/${m.matchId}>`
-    : "";
+  const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
   return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
 }
 
@@ -440,9 +520,7 @@ export function standinAssignedMessage(m: {
     : `fills an open roster seat for **${name(m.teamName)}**`;
   // "check in on the match page" without the page is a scavenger hunt for
   // someone who arrived from a phone ping — link the page (week-reminder shape).
-  const link = m.matchId
-    ? `: <${resolveSiteUrl()}/matches/${m.matchId}>`
-    : ".";
+  const link = m.matchId ? `: <${resolveSiteUrl()}/matches/${m.matchId}>` : ".";
   return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page${link}`;
 }
 
@@ -493,46 +571,162 @@ export function rescheduleDeclinedMessage(m: {
  *  longer Discord line. */
 const WAITING_SHOWN = 8;
 
-export function weekReminderMessage(m: {
+export type WeekReminderFixture = {
+  matchId: string;
+  homeName: string;
+  awayName: string;
+  /** Epoch ms — rendered as <t:…> so every reader sees their own zone. */
+  scheduledAt: number;
+  homeIn: number;
+  homeSize: number;
+  awayIn: number;
+  awaySize: number;
+  /** Roster members with no RSVP yet. Linked players are mentioned by id so
+   *  their phone actually buzzes; the rest are named so a captain still
+   *  knows who to chase. */
+  waitingOn: { name: string; discordId: string | null }[];
+};
+
+export type WeekReminderInput = {
   week: number;
   isPlayoff: boolean;
-  fixtures: {
-    matchId: string;
-    homeName: string;
-    awayName: string;
-    /** Epoch ms — rendered as <t:…> so every reader sees their own zone. */
-    scheduledAt: number;
-    homeIn: number;
-    homeSize: number;
-    awayIn: number;
-    awaySize: number;
-    /** Roster members with no RSVP yet. Linked players are mentioned by id so
-     *  their phone actually buzzes; the rest are named so a captain still
-     *  knows who to chase. */
-    waitingOn: { name: string; discordId: string | null }[];
-  }[];
-}): string {
+  fixtures: WeekReminderFixture[];
+};
+
+export type WeekReminderAnnouncement = {
+  content: string;
+  /** Exact linked users visibly named in `content`. Passing anything else to
+   *  allowed_mentions makes Discord prepend a hidden waiter to the message. */
+  mentionUserIds: string[];
+};
+
+function reminderFixtureBlock(
+  f: WeekReminderFixture,
+  site: string,
+): {
+  lines: string[];
+  mentionUserIds: string[];
+} {
+  const t = Math.floor(f.scheduledAt / 1000);
+  const lines = [
+    `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
+  ];
+  if (f.waitingOn.length === 0) return { lines, mentionUserIds: [] };
+
+  const shown = f.waitingOn.slice(0, WAITING_SHOWN);
+  const validIds = new Set(
+    normalizeMentionAllowlist({
+      users: shown.flatMap((p) => (p.discordId ? [p.discordId] : [])),
+    })?.users ?? [],
+  );
+  const mentionUserIds: string[] = [];
+  const who = shown
+    .map((p) => {
+      const id = p.discordId?.trim();
+      if (id && validIds.has(id)) {
+        mentionUserIds.push(id);
+        return `<@${id}>`;
+      }
+      return name(p.name);
+    })
+    .join(", ");
+  const extra = f.waitingOn.length - shown.length;
+  lines.push(`　Still waiting on: ${who}${extra > 0 ? ` +${extra} more` : ""}`);
+  return { lines, mentionUserIds };
+}
+
+function reminderFixtureSummary(
+  omitted: number,
+  shown: number,
+  withLink: boolean,
+  site: string,
+): string {
+  const count = `${omitted} more fixture${omitted === 1 ? "" : "s"}`;
+  const lead =
+    shown > 0
+      ? `…and ${count} at this kickoff.`
+      : `${omitted} fixture${omitted === 1 ? " is" : "s are"} scheduled at this kickoff.`;
+  return withLink
+    ? `${lead} Full slate: <${site}/schedule>`
+    : `${lead} View the full schedule on the league site.`;
+}
+
+/**
+ * Build the reminder body and its mention allowlist together.
+ *
+ * Discord rejects webhook content above 2,000 characters. A 32-team league
+ * can put 16 fixtures (and scores of unanswered players) at one kickoff, so a
+ * formatter that simply maps every row can poison the durable queue forever.
+ * Keep complete fixture blocks in their stable input order while they fit,
+ * then account for every remaining fixture in one actionable summary. Because
+ * the allowlist is derived only from blocks that survived packing, the
+ * transport never materializes an invisible/omitted player's mention.
+ */
+export function weekReminderAnnouncement(
+  m: WeekReminderInput,
+): WeekReminderAnnouncement {
   const site = resolveSiteUrl();
   const label = m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
+  const footer = "RSVP on your match page so captains can plan standins early.";
   const lines = [`⏰ **${label} coming up — check in!**`];
-  for (const f of m.fixtures) {
-    const t = Math.floor(f.scheduledAt / 1000);
-    lines.push(
-      `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
-    );
-    if (f.waitingOn.length > 0) {
-      const shown = f.waitingOn.slice(0, WAITING_SHOWN);
-      const extra = f.waitingOn.length - shown.length;
-      const who = shown
-        .map((p) => (p.discordId ? `<@${p.discordId}>` : name(p.name)))
-        .join(", ");
-      lines.push(
-        `　Still waiting on: ${who}${extra > 0 ? ` +${extra} more` : ""}`,
+  const includedMentions: string[] = [];
+  let shownFixtures = 0;
+
+  const packedContent = (
+    body: string[],
+    omitted: number,
+    shown: number,
+  ): string | null => {
+    const summaries =
+      omitted > 0
+        ? [
+            reminderFixtureSummary(omitted, shown, true, site),
+            reminderFixtureSummary(omitted, shown, false, site),
+          ]
+        : [null];
+    for (const summary of summaries) {
+      const content = [...body, ...(summary ? [summary] : []), footer].join(
+        "\n",
       );
+      if (content.length <= DISCORD_CONTENT_MAX) return content;
     }
+    return null;
+  };
+
+  for (let index = 0; index < m.fixtures.length; index += 1) {
+    const block = reminderFixtureBlock(m.fixtures[index], site);
+    const candidate = [...lines, ...block.lines];
+    const omitted = m.fixtures.length - index - 1;
+    if (!packedContent(candidate, omitted, index + 1)) break;
+    lines.push(...block.lines);
+    includedMentions.push(...block.mentionUserIds);
+    shownFixtures += 1;
   }
-  lines.push("RSVP on your match page so captains can plan standins early.");
-  return lines.join("\n");
+
+  const omitted = m.fixtures.length - shownFixtures;
+  const content = packedContent(lines, omitted, shownFixtures);
+  if (!content) {
+    // Defensive last resort for corrupted/unbounded input (for example an
+    // absurd environment URL). Keep the reminder deliverable and explicit;
+    // no user is allowlisted because this compact form displays no user.
+    return {
+      content:
+        "⏰ **Match night is coming up — check in!**\n" +
+        `${m.fixtures.length} fixture${m.fixtures.length === 1 ? " is" : "s are"} scheduled. View the full schedule on the league site.\n` +
+        footer,
+      mentionUserIds: [],
+    };
+  }
+
+  const mentionUserIds = [...new Set(includedMentions)].filter((id) =>
+    content.includes(`<@${id}>`),
+  );
+  return { content, mentionUserIds };
+}
+
+/** Backward-compatible pure formatter for surfaces/tests that need only text. */
+export function weekReminderMessage(m: WeekReminderInput): string {
+  return weekReminderAnnouncement(m).content;
 }
 
 export function weeklyHonorsMessage(honors: {
@@ -542,8 +736,14 @@ export function weeklyHonorsMessage(honors: {
   heroName: string | null;
   teamName: string | null;
   teamGameWins: number;
+  /** A prior award was retracted by a result/box-score correction. */
+  corrected?: boolean;
 }): string {
-  const lines = [`🏅 **Week ${honors.week} honors are in!**`];
+  const lines = [
+    honors.corrected
+      ? `🏅 **Correction: Week ${honors.week} honors have been updated.**`
+      : `🏅 **Week ${honors.week} honors are in!**`,
+  ];
   if (honors.playerName) {
     lines.push(
       `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} fantasy pts${honors.heroName ? ` on ${honors.heroName}` : ""}`,
@@ -552,6 +752,11 @@ export function weeklyHonorsMessage(honors: {
   if (honors.teamName) {
     lines.push(
       `🛡️ Team of the Week: **${name(honors.teamName)}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
+    );
+  }
+  if (honors.corrected && !honors.playerName && !honors.teamName) {
+    lines.push(
+      "The previous honors are withdrawn; no eligible box-score award remains for this week.",
     );
   }
   lines.push(`Full leaderboards: <${resolveSiteUrl()}/leaders>`);
@@ -603,7 +808,8 @@ export function newsMessage(title: string, body: string, id?: string): string {
     .join("")
     .replace(/\s+/g, " ")
     .trim();
-  const snippet = prose.length > 200 ? `${prose.slice(0, 199).trimEnd()}…` : prose;
+  const snippet =
+    prose.length > 200 ? `${prose.slice(0, 199).trimEnd()}…` : prose;
   const link = `${resolveSiteUrl()}/news${id ? `#${id}` : ""}`;
   const lines = [`📣 **${title}**`];
   if (snippet) lines.push(snippet);
@@ -616,9 +822,39 @@ export function newsMessage(title: string, body: string, id?: string): string {
 // Sending
 // ---------------------------------------------------------------------------
 
+function runtimeWebhookUrl(value: string | null | undefined): string | null {
+  const normalized = normalizeDiscordWebhookUrl(value);
+  if (normalized) return normalized;
+  // The transport integration suite uses a loopback HTTP server to inspect
+  // the exact webhook wire format. Never widen the production validator for a
+  // test stand-in; keep the exception both environment- and host-pinned here.
+  if (process.env.NODE_ENV === "test" && value) {
+    try {
+      const url = new URL(value);
+      if (
+        url.protocol === "http:" &&
+        url.hostname === "127.0.0.1" &&
+        /^\/api\/webhooks\/\d+\/[A-Za-z0-9._-]+$/.test(url.pathname) &&
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash
+      ) {
+        return value;
+      }
+    } catch {
+      // Invalid test input remains disabled.
+    }
+  }
+  return null;
+}
+
 export async function getWebhookUrl(): Promise<string | null> {
   const fromDb = await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL);
-  return fromDb || process.env.DISCORD_WEBHOOK_URL || null;
+  return (
+    runtimeWebhookUrl(fromDb) ??
+    runtimeWebhookUrl(process.env.DISCORD_WEBHOOK_URL)
+  );
 }
 
 /**
@@ -632,11 +868,10 @@ export async function getWebhookUrl(): Promise<string | null> {
  */
 export async function getInhouseAlertWebhookUrl(): Promise<string | null> {
   const fromDb = await getSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL);
-  return (
-    fromDb ||
-    process.env.DISCORD_INHOUSE_ALERT_WEBHOOK_URL ||
-    (await getInhouseWebhookUrl())
-  );
+  const configured =
+    runtimeWebhookUrl(fromDb) ??
+    runtimeWebhookUrl(process.env.DISCORD_INHOUSE_ALERT_WEBHOOK_URL);
+  return configured || (await getInhouseWebhookUrl());
 }
 
 /**
@@ -652,19 +887,20 @@ export async function getInhousePingRoleId(): Promise<string | null> {
 }
 
 /**
- * Where INHOUSE traffic goes: the queue board, "match found", the two-short
- * ping and inhouse results. A Discord webhook is bound to the channel it was
- * created in, so routing these separately is the only way to keep an evening
- * of pick-up games out of the channel carrying league signups and results.
+ * Where the persistent INHOUSE BOARD goes. Alerts have their own resolver
+ * (`getInhouseAlertWebhookUrl`) and fall back here when no alert channel is
+ * configured. A Discord webhook is bound to the channel it was created in, so
+ * this separation can keep a quiet board-only channel even on a busy night.
  *
  * FALLS BACK to the league webhook when unset, which is what every league that
  * never configures this keeps getting — one channel, exactly as before.
  */
 export async function getInhouseWebhookUrl(): Promise<string | null> {
   const fromDb = await getSetting(SETTING_KEYS.INHOUSE_WEBHOOK_URL);
-  return (
-    fromDb || process.env.DISCORD_INHOUSE_WEBHOOK_URL || (await getWebhookUrl())
-  );
+  const configured =
+    runtimeWebhookUrl(fromDb) ??
+    runtimeWebhookUrl(process.env.DISCORD_INHOUSE_WEBHOOK_URL);
+  return configured || (await getWebhookUrl());
 }
 
 /**
@@ -725,8 +961,11 @@ export async function postWebhookMessage(
   url: string,
   payload: WebhookPayload,
 ): Promise<{ id: string } | null> {
+  const target = runtimeWebhookUrl(url);
+  if (!target) return null;
+  if (!discordMutationsAllowed()) return null;
   try {
-    const res = await fetch(`${webhookApiUrl(url)}?wait=true`, {
+    const res = await fetch(`${webhookApiUrl(target)}?wait=true`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...payload, allowed_mentions: NO_MENTIONS }),
@@ -735,9 +974,9 @@ export async function postWebhookMessage(
     if (!res.ok) return null;
     const json = (await res.json()) as { id?: unknown };
     return typeof json.id === "string" ? { id: json.id } : null;
-  } catch (err) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] webhook post failed:", err);
+      console.warn("[discord] webhook post failed");
     }
     return null;
   }
@@ -765,9 +1004,12 @@ export async function patchWebhookMessage(
   messageId: string,
   payload: WebhookPayload,
 ): Promise<WebhookEditResult> {
+  const target = runtimeWebhookUrl(url);
+  if (!target) return "failed";
+  if (!discordMutationsAllowed()) return "failed";
   try {
     const res = await fetch(
-      `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
+      `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -786,9 +1028,9 @@ export async function patchWebhookMessage(
       return "gone";
     }
     return "failed";
-  } catch (err) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] webhook edit failed:", err);
+      console.warn("[discord] webhook edit failed");
     }
     return "failed";
   }
@@ -799,9 +1041,12 @@ export async function deleteWebhookMessage(
   url: string,
   messageId: string,
 ): Promise<boolean> {
+  const target = runtimeWebhookUrl(url);
+  if (!target) return false;
+  if (!discordMutationsAllowed()) return false;
   try {
     const res = await fetch(
-      `${webhookApiUrl(url)}/messages/${encodeURIComponent(messageId)}`,
+      `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
       { method: "DELETE", signal: AbortSignal.timeout(2500) },
     );
     return res.ok || res.status === 404; // already gone is a success
@@ -810,21 +1055,117 @@ export async function deleteWebhookMessage(
   }
 }
 
+export type DiscordSendOptions = {
+  /** Stable domain-event identity. Ignored for explicit direct sends. */
+  dedupeKey?: string;
+  /** Setting marker generation that must still own this queued payload. */
+  marker?: LeagueAnnouncementMarker;
+  /** False is reserved for webhook health checks and transport tests. */
+  durable?: boolean;
+};
+
 /**
- * POST a message to the configured webhook. Best-effort: resolves false on
- * any failure (no webhook configured, network error, non-2xx) and never throws.
+ * Persist a league announcement before webhook I/O. `true` means the work is
+ * durably accepted (not necessarily delivered yet); the leased queue owns a
+ * temporary Discord failure from that point onward. With `durable: false`,
+ * preserve the old direct transport result for admin webhook health checks.
  */
 export async function sendDiscordMessage(
   content: string,
   mentions?: MentionAllowlist,
+  options: DiscordSendOptions = {},
 ): Promise<boolean> {
-  return sendTo(await getWebhookUrl(), content, mentions);
+  // Do not even enqueue from a preview: a successful return would claim an
+  // external notification was accepted when the preview is intentionally
+  // forbidden from delivering it.
+  if (!discordMutationsAllowed()) return false;
+  const allowed = normalizeMentionAllowlist(mentions);
+  if (
+    !content.trim() ||
+    !isValidDiscordContent(materializeAllowedMentions(content, allowed))
+  ) {
+    return false;
+  }
+
+  let url: string | null;
+  try {
+    url = await getWebhookUrl();
+  } catch {
+    return false;
+  }
+  if (!url) return false;
+  if (options.durable === false) return sendTo(url, content, allowed);
+
+  let event: Awaited<ReturnType<typeof enqueueLeagueAnnouncement>>;
+  try {
+    event = await enqueueLeagueAnnouncement({
+      content,
+      mentions: allowed,
+      dedupeKey: options.dedupeKey,
+      marker: options.marker,
+    });
+  } catch {
+    return false;
+  }
+
+  // Persistence is the success boundary. Make one best-effort attempt for the
+  // immediate UX, but a DB/Discord failure after enqueue belongs to the cron
+  // drain and must not make the domain action believe its notification vanished.
+  if (event.status !== LEAGUE_ANNOUNCEMENT_STATUS.SENT) {
+    try {
+      await deliverLeagueAnnouncements({
+        limit: 1,
+        send: (queuedContent, queuedMentions) =>
+          sendTo(url, queuedContent, queuedMentions),
+      });
+    } catch {
+      // Durable row remains pending; the worker retries it.
+    }
+  }
+  return true;
+}
+
+export type PendingLeagueAnnouncementDeliveryOptions = {
+  now?: Date;
+  limit?: number;
+};
+
+/** Bounded production drain for the unattended maintenance worker. */
+export async function deliverPendingLeagueAnnouncements(
+  options: PendingLeagueAnnouncementDeliveryOptions = {},
+): Promise<LeagueAnnouncementDelivery> {
+  if (!discordMutationsAllowed()) {
+    const pending = await hasPendingLeagueAnnouncements();
+    return {
+      attempted: 0,
+      delivered: 0,
+      pending,
+      ...(pending
+        ? { blocked: "DISCORD_MUTATIONS_DISABLED" as const }
+        : {}),
+    };
+  }
+  const url = await getWebhookUrl();
+  if (!url) {
+    const pending = await hasPendingLeagueAnnouncements();
+    return {
+      attempted: 0,
+      delivered: 0,
+      pending,
+      ...(pending ? { blocked: "WEBHOOK_UNAVAILABLE" as const } : {}),
+    };
+  }
+  return deliverLeagueAnnouncements({
+    now: options.now,
+    limit: options.limit ?? 1,
+    send: (content, mentions) => sendTo(url, content, mentions),
+  });
 }
 
 /**
- * Announce to the INHOUSE channel (see getInhouseWebhookUrl). Everything the
- * inhouse mode posts goes through here so a league can keep pick-up traffic
- * out of its league-announcement channel with one setting.
+ * Announce an inhouse EVENT through the alerts resolver. Queue/match/result
+ * alerts can live apart from the persistent board; when unset they fall back
+ * to the board channel, then ultimately the league channel.
  */
 export async function sendInhouseDiscordMessage(
   content: string,
@@ -847,39 +1188,43 @@ export async function sendInhouseDiscordMessage(
  * alongside a `roles`/`users` array — an empty parse with an allowlist is the
  * documented way to say "these and nothing else".
  */
-export type MentionAllowlist = { roles?: string[]; users?: string[] };
-
 async function sendTo(
   url: string | null,
   content: string,
   mentions?: MentionAllowlist,
 ): Promise<boolean> {
-  if (!url) return false;
+  const target = runtimeWebhookUrl(url);
+  if (!target) return false;
+  if (!discordMutationsAllowed()) return false;
   try {
+    const allowed = normalizeMentionAllowlist(mentions);
+    const renderedContent = materializeAllowedMentions(content, allowed);
+    if (!isValidDiscordContent(renderedContent)) return false;
     // webhookApiUrl, not the raw URL: an unversioned /api/webhooks/… routes to
     // Discord's DEFAULT version, still v6 and deprecated. The board's transport
     // has always pinned v10 and these ~28 announcements silently didn't — the
     // same webhook string reaching Discord two different ways.
-    const res = await fetch(webhookApiUrl(url), {
+    const res = await fetch(webhookApiUrl(target), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      // allowed_mentions: parse:[] means NO mention ever resolves — a player
-      // whose Steam persona is "@everyone" (or a team/news title with @here,
-      // <@id>, <@&role>) can't turn an announcement into a mass ping.
+      // parse:[] disables every automatic mention. Only the normalized ids we
+      // explicitly materialized above may resolve, so a player whose Steam
+      // persona is "@everyone" (or a team/news title with @here, <@id>,
+      // <@&role>) cannot turn an announcement into an unrelated mass ping.
       body: JSON.stringify({
-        content,
+        content: renderedContent,
         allowed_mentions: {
           parse: [],
-          ...(mentions?.roles?.length ? { roles: mentions.roles } : {}),
-          ...(mentions?.users?.length ? { users: mentions.users } : {}),
+          ...(allowed?.roles?.length ? { roles: allowed.roles } : {}),
+          ...(allowed?.users?.length ? { users: allowed.users } : {}),
         },
       }),
       signal: AbortSignal.timeout(5000),
     });
     return res.ok;
-  } catch (err) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[discord] webhook send failed:", err);
+      console.warn("[discord] webhook send failed");
     }
     return false;
   }

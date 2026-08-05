@@ -1,16 +1,20 @@
 import Link from "next/link";
-import { parseGamePlayers } from "@/lib/player-stats";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGamesForRecap } from "@/lib/cached-queries";
 import { shareMetadata } from "@/lib/share-metadata";
-import { computeSeasonAwards, type AwardGame, type Award } from "@/lib/awards";
-import type { PlayerStat } from "@/lib/match-import";
+import { singleSearchParam } from "@/lib/search-params";
+import { computeSeasonAwards, type Award } from "@/lib/awards";
+import { summarizeRecapGames } from "@/lib/recap";
 import { heroById } from "@/lib/heroes";
+import { formatMatchTime } from "@/lib/match-time";
+import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
+import { Bracket } from "@/components/bracket";
+import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   Avatar,
-  Badge,
   Card,
   CardBody,
   EmptyState,
@@ -25,17 +29,49 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = shareMetadata(
-  "Season Recap",
-  "Awards, superlatives, and the story of the season in GGD2L.",
-);
+type RecapSearchParams = { season?: string | string[] };
+
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<RecapSearchParams>;
+}): Promise<Metadata> {
+  const seasonId = singleSearchParam((await searchParams).season);
+  if (seasonId === null) notFound();
+  if (!seasonId) {
+    return shareMetadata(
+      "Season Recap",
+      "Awards, superlatives, and the story of the season in GGD2L.",
+      "/recap",
+    );
+  }
+  const season = await prisma.season.findUnique({
+    where: { id: seasonId },
+    select: { name: true, isActive: true },
+  });
+  if (!season) notFound();
+  if (season.isActive) {
+    return shareMetadata(
+      "Season Recap",
+      "Awards, superlatives, and the story of the season in GGD2L.",
+      "/recap",
+    );
+  }
+  const path = `/recap?${new URLSearchParams({ season: seasonId })}`;
+  return shareMetadata(
+    `${season.name} recap`,
+    `Champion, bracket, awards, and season totals from ${season.name}.`,
+    path,
+  );
+}
 
 export default async function RecapPage({
   searchParams,
 }: {
-  searchParams: Promise<{ season?: string }>;
+  searchParams: Promise<RecapSearchParams>;
 }) {
-  const { season: seasonParam } = await searchParams;
+  const seasonParam = singleSearchParam((await searchParams).season);
+  if (seasonParam === null) notFound();
   // ?season=<id> recaps an archived (or any) season; default is the active one.
   const season = seasonParam
     ? await prisma.season.findUnique({ where: { id: seasonParam } })
@@ -77,63 +113,40 @@ export default async function RecapPage({
     );
   }
 
-  const games = await getSeasonGamesForRecap(season.id);
+  const [games, matches, teams] = await Promise.all([
+    getSeasonGamesForRecap(season.id),
+    prisma.match.findMany({
+      where: { seasonId: season.id },
+      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+    }),
+    prisma.team.findMany({
+      where: { seasonId: season.id },
+      select: { id: true, name: true },
+    }),
+  ]);
+  const teamName = new Map(teams.map((team) => [team.id, team.name]));
+  const championPresentation = resolveChampionPresentation(season, matches);
+  const playoffMatches = matches.filter((match) => match.phase !== "REGULAR");
+  const bracketRounds = buildBracketRounds(
+    playoffMatches,
+    teamName,
+    seedsFromFirstRound(playoffMatches),
+    (date) => formatMatchTime(date, "short"),
+  );
+  const completedSeries = matches.filter(
+    (match) => match.status === "COMPLETED",
+  ).length;
 
-  if (games.length === 0) {
-    return (
-      <div className="space-y-6">
-        <PageTitle title="Season Recap" subtitle={season.name} />
-        <EmptyState
-          title="No games yet"
-          description="The recap fills in with awards and superlatives once matches are played."
-        />
-      </div>
-    );
-  }
-
-  // Build the pure award input + a few headline totals.
-  const awardGames: AwardGame[] = [];
-  // Header radiantScore/direScore and durationSecs can be legitimately
-  // unreported (0) — fall back to summing the player lines for kills, and
-  // average duration only over games that actually carry one.
-  let headerKills = 0;
-  let lineKills = 0;
-  let totalDuration = 0;
-  let timedGames = 0;
-  const players = new Set<string>();
-  const heroes = new Set<number>();
-  for (const g of games) {
-    headerKills += g.radiantScore + g.direScore;
-    if (g.durationSecs > 0) {
-      totalDuration += g.durationSecs;
-      timedGames++;
-    }
-    // ALL lines feed the awards input — hero tallies must match /meta (a
-    // ringer's pick is still a pick); computeSeasonAwards itself skips
-    // unmapped lines for player awards.
-    const lines = parseGamePlayers<PlayerStat>(g.players).map((p) => {
-      lineKills += p.kills;
-      if (p.userId) players.add(p.userId);
-      heroes.add(p.heroId);
-      return {
-        userId: p.userId,
-        heroId: p.heroId,
-        isRadiant: p.isRadiant,
-        kills: p.kills,
-        deaths: p.deaths,
-        assists: p.assists,
-        netWorth: p.netWorth,
-        gpm: p.gpm,
-      };
-    });
-    awardGames.push({
-      matchId: g.matchId,
-      radiantWin: g.radiantWin,
-      radiantScore: g.radiantScore,
-      direScore: g.direScore,
-      lines,
-    });
-  }
+  const recapGames = summarizeRecapGames(games);
+  const {
+    awardGames,
+    totalKills,
+    trustedStatGames,
+    totalDuration,
+    timedGames,
+    playerIds: players,
+    heroIds: heroes,
+  } = recapGames;
 
   const awards = computeSeasonAwards(awardGames);
 
@@ -148,9 +161,9 @@ export default async function RecapPage({
           select: { id: true, name: true, avatar: true, rankTier: true },
         })
       : Promise.resolve([]),
-    season.championTeamId
+    championPresentation.championTeamId
       ? prisma.team.findUnique({
-          where: { id: season.championTeamId },
+          where: { id: championPresentation.championTeamId },
           include: { members: { include: { user: true } } },
         })
       : Promise.resolve(null),
@@ -166,7 +179,6 @@ export default async function RecapPage({
   const teamByUser = new Map(memberships.map((m) => [m.userId, m.team]));
 
   const isComplete = season.status === "COMPLETE";
-  const totalKills = headerKills > 0 ? headerKills : lineKills;
   const avgMins =
     timedGames > 0 ? Math.round(totalDuration / timedGames / 60) : null;
 
@@ -176,12 +188,24 @@ export default async function RecapPage({
         title="Season Recap"
         subtitle={isComplete ? season.name : `${season.name} · awards so far`}
         action={
-          <Link
-            href={`/leaders${seasonParam ? `?season=${season.id}` : ""}`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Leaderboards →
-          </Link>
+          <span className="flex flex-wrap items-center gap-2">
+            {!season.isActive ? (
+              <Link
+                href={`/seasons/${season.id}`}
+                className={buttonClasses("secondary", "sm")}
+              >
+                Season archive
+              </Link>
+            ) : null}
+            {games.length > 0 ? (
+              <Link
+                href={`/leaders${seasonParam ? `?season=${season.id}` : ""}`}
+                className={buttonClasses("secondary", "sm")}
+              >
+                Leaderboards →
+              </Link>
+            ) : null}
+          </span>
         }
       />
 
@@ -235,9 +259,41 @@ export default async function RecapPage({
         </Card>
       ) : null}
 
+      {season.status === "COMPLETE" && !champion ? (
+        <div className="rounded-xl border border-accent/40 bg-accent/10 px-5 py-4 text-sm">
+          <div className="font-medium">Champion state needs review</div>
+          <p className="mt-1 text-muted">
+            This season is marked complete without an authoritative champion.
+            The series history below is preserved, but no title is attributed
+            until administrators reconcile the grand final.
+          </p>
+        </div>
+      ) : null}
+
+      {bracketRounds.length > 0 ? (
+        <Card className="overflow-hidden">
+          <CardBody className="p-0 pt-4">
+            <Bracket
+              rounds={bracketRounds}
+              championTeamId={championPresentation.championTeamId}
+            />
+          </CardBody>
+        </Card>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Games played" value={games.length} />
-        <Stat label="Total kills" value={totalKills} />
+        <Stat label="Completed series" value={completedSeries} />
+        <Stat
+          label="Imported games"
+          value={games.length}
+          hint={
+            games.length > 0
+              ? trustedStatGames > 0
+                ? `${trustedStatGames} trusted · ${totalKills} kills`
+                : "no trusted box scores"
+              : undefined
+          }
+        />
         <Stat label="Players" value={players.size} />
         <Stat
           label="Avg game"
@@ -248,17 +304,34 @@ export default async function RecapPage({
 
       <div className="space-y-4">
         <SectionTitle>Season awards</SectionTitle>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {awards.map((a) => (
-            <AwardCard
-              key={a.key}
-              award={a}
-              user={a.userId ? userMap.get(a.userId) : undefined}
-              team={a.userId ? teamByUser.get(a.userId) : undefined}
-              heroName={a.heroId ? (heroById(a.heroId)?.name ?? undefined) : undefined}
-            />
-          ))}
-        </div>
+        {awards.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {awards.map((a) => (
+              <AwardCard
+                key={a.key}
+                award={a}
+                user={a.userId ? userMap.get(a.userId) : undefined}
+                team={a.userId ? teamByUser.get(a.userId) : undefined}
+                heroName={
+                  a.heroId ? (heroById(a.heroId)?.name ?? undefined) : undefined
+                }
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title={
+              games.length > 0
+                ? "No trusted game stats"
+                : "No imported game stats"
+            }
+            description={
+              games.length > 0
+                ? "Stored games exist, but none has a complete, trustworthy 5v5 box score. Official series results, the bracket, and any champion remain visible; player awards stay hidden rather than turning partial data into league records."
+                : "Official series results, the playoff bracket, and any champion remain part of this recap. Player awards need imported Dota games, so none can be calculated for a season decided entirely by manual results or rulings."
+            }
+          />
+        )}
       </div>
     </div>
   );
@@ -271,7 +344,12 @@ function AwardCard({
   heroName,
 }: {
   award: Award;
-  user?: { id: string; name: string; avatar: string | null; rankTier: number | null };
+  user?: {
+    id: string;
+    name: string;
+    avatar: string | null;
+    rankTier: number | null;
+  };
   team?: { id: string; name: string };
   heroName?: string;
 }) {
@@ -327,9 +405,7 @@ function AwardCard({
             View the match →
           </Link>
         ) : (
-          <span className="text-sm text-muted">
-            {heroName ?? "—"}
-          </span>
+          <span className="text-sm text-muted">{heroName ?? "—"}</span>
         )}
       </div>
 

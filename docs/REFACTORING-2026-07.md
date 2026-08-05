@@ -10,6 +10,10 @@
 > and immediately protected); both Playwright suites green. Every new guard
 > and test was sabotage-verified red before being trusted. The Deferred and
 > Rejected sections below remain binding until re-argued with new evidence.
+>
+> **Current ratchet (2026-08-03):** subsequent audit work expanded this to 102
+> live claims: 62 protected, 40 reviewed equivalents, and 0 unprotected. The
+> July figures above remain the historical result of this specific pass.
 
 The record of the 2026-07-30 architecture audit: what was changed, in what
 order, and — equally important — what was **deliberately not changed** and why.
@@ -123,7 +127,7 @@ Risk: low. R23 is the only one with subtle semantics; its verification steps
 | R31 | Resolver-chain parity guard: source test asserting `getInhouseState` and `syncInhouse` run the same resolver SET (orderings differ deliberately and are not compared) | a resolver added to one chain but not the other fails silently — the class that caused the documented `resolveAbandonedLobby` outage |
 | R32 | `action-form-guards.test.ts` source guard pinning ActionForm's three load-bearing wirings (React-19 auto-reset opt-out, reset-only-on-success, rejected-promise→toast) | unrenderable under node-only vitest; pure extraction not viable — guard is the honest floor |
 | R33 | Unit tests for untested pure modules: `match-time` (in R10), `form.ts`, `site-url.ts`, `share-metadata.ts`, `inhouse-box.ts` | small, pure, and load-bearing (form parsing feeds every action) |
-| R34 | Integration test for `GET /api/admin/season-export` — the only production-reachable backup behind Delete season, currently exercised by nothing | untested recovery path, the exact class the betting post-mortem warns about |
+| R34 | Integration test for `GET /api/admin/season-export` — the season-scoped JSON audit archive offered near Delete season, currently exercised by nothing | untested archive path; it is not a whole-database backup or restore artifact |
 | R35 | Session itest: exercise epoch rejection through the real JWT path (mint token at epoch N, bump, assert rejection), not just the Setting-row functions | the revocation feature was tested only up to the number in the table |
 
 ## Stage G — small bug fixes (each names its observable change)

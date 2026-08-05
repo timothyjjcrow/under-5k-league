@@ -4,11 +4,74 @@ import { test, expect } from "@playwright/test";
 // hydration errors a browser sees but a raw HTML fetch would not. They must not
 // mutate season state (so they stay compatible with the smoke tests).
 
+test("signed-out profile requests explain sign-in without a duplicate header CTA", async ({
+  page,
+}) => {
+  await page.goto("/me");
+  await expect(page).toHaveURL(/\/login\?next=%2Fme|\/login\?next=\/me/);
+  await expect(
+    page.getByRole("heading", { name: "Sign in to GGD2L", level: 1 }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Sign in to open your profile and continue setting up your league account.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("banner").getByRole("link", { name: "Sign in" }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Steam signs you into this site.")).toBeVisible();
+});
+
+test("retired policy routes stay absent and the login page fits a phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+
+  const expectNoHorizontalOverflow = async () => {
+    const widths = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
+    expect(
+      widths.document,
+      `document width ${widths.document}px exceeds ${widths.viewport}px viewport`,
+    ).toBeLessThanOrEqual(widths.viewport);
+  };
+
+  await page.goto("/login");
+  await expect(page.locator('a[href="/privacy"]')).toHaveCount(0);
+  await expect(page.locator('a[href="/terms"]')).toHaveCount(0);
+  await expectNoHorizontalOverflow();
+
+  const privacyResponse = await page.goto("/privacy");
+  expect(privacyResponse?.status()).toBe(404);
+
+  const termsResponse = await page.goto("/terms");
+  expect(termsResponse?.status()).toBe(404);
+});
+
+test("logout confirms the session ended", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const steamId = "76561198" + String(Date.now()).slice(-9);
+  await page.goto(
+    `/api/auth/dev?name=LogoutTester&steamId=${steamId}&redirect=/me`,
+  );
+  await page.getByRole("button", { name: "Logout", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/login\?signedOut=1$/);
+  await expect(page.getByRole("status")).toContainText("You're signed out");
+});
+
 test("players page renders the pool scouting tools", async ({ page }) => {
   await page.goto("/players");
   await expect(page.getByPlaceholder("Search players…")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Wants captain" })).toBeVisible();
-  await expect(page.getByRole("group", { name: "Filter by role" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Wants captain" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Filter by role" }),
+  ).toBeVisible();
 });
 
 // The pool's filters live in the URL, so a captain can send someone "the pos-1
@@ -57,11 +120,24 @@ test("home renders the season timeline, pool composition, and footer", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Pool composition")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Pool composition", level: 2 }),
+  ).toBeVisible();
   // The old hero tagline went away when the footer was slimmed down — anchor
   // the footer assertion on its stable Discord CTA instead.
   await expect(
     page.getByRole("contentinfo").getByText("Join our Discord"),
+  ).toBeVisible();
+});
+
+test("internal pages keep the active league phase visible in the header", async ({
+  page,
+}) => {
+  await page.goto("/features");
+  await expect(
+    page.getByRole("link", {
+      name: "League status: Season 1 — Signups",
+    }),
   ).toBeVisible();
 });
 
@@ -71,15 +147,45 @@ test("mobile menu surfaces club pages and My profile", async ({ page }) => {
   await page.goto(
     "/api/auth/dev?name=Menu+Tester&steamId=76561190000000042&redirect=/",
   );
-  await page.getByRole("button", { name: "Open menu" }).click();
+  const profile = page.getByRole("link", { name: "My profile — Menu Tester" });
+  const menuButton = page.getByRole("button", { name: "Open menu" });
+  await expect(profile).toHaveCSS("min-height", "44px");
+  await expect(menuButton).toHaveCSS("height", "44px");
+  await menuButton.click();
   const menu = page.locator("#mobile-nav");
   await expect(menu.getByRole("link", { name: "News" })).toBeVisible();
   await expect(menu.getByRole("link", { name: "Hall of Fame" })).toBeVisible();
   await expect(menu.getByRole("link", { name: "Record book" })).toBeVisible();
+  await expect(
+    menu.getByRole("link", { name: "Compare players" }),
+  ).toBeVisible();
   await expect(menu.getByRole("link", { name: "My profile" })).toBeVisible();
   // SIGNUPS phase: Features is already an inline nav item — the club group
   // must not duplicate it.
   await expect(menu.getByRole("link", { name: "Features" })).toHaveCount(1);
+});
+
+test("desktop Explore menu keeps evergreen league pages discoverable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/features");
+  const button = page.getByRole("button", { name: /Explore/ });
+  await expect(button).toBeVisible();
+  await button.click();
+  const explore = page.getByRole("navigation", { name: "Explore" });
+  await expect(
+    explore.getByRole("link", { name: "League news" }),
+  ).toBeVisible();
+  await expect(
+    explore.getByRole("link", { name: "Record book" }),
+  ).toBeVisible();
+  await expect(
+    explore.getByRole("link", { name: "Compare players" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(explore).toHaveCount(0);
+  await expect(button).toBeFocused();
 });
 
 test("features tour renders the showcase and phase-aware chapters", async ({
@@ -94,19 +200,109 @@ test("features tour renders the showcase and phase-aware chapters", async ({
     page.getByRole("heading", { name: "Not your average league site" }),
   ).toBeVisible();
   await expect(page.getByText("Every game gets graded")).toBeVisible();
+  await expect(
+    page.getByText("Illustrative preview", { exact: true }),
+  ).toHaveCount(3);
+  // SIGNUPS has no report cards, scenario board, or playoff bracket yet. The
+  // examples stay visible, but must not masquerade as live destinations.
+  await expect(
+    page.getByRole("link", { name: "Open this feature" }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Five phases. One champion.")).toBeVisible();
   // Seeded DB sits in SIGNUPS — that chapter (and only a chapter, not the
   // whole page) carries the live badge.
   await expect(page.getByText("Happening now")).toBeVisible();
   await expect(
+    page.getByRole("heading", { name: "Signups are open", level: 2 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Sign up with Steam" }).last(),
+  ).toHaveAttribute("href", "/login?next=/me");
+  await expect(
     page.getByRole("heading", { name: "Pick your obsession" }),
+  ).toBeVisible();
+  const obsessions = page.getByRole("region", { name: "Pick your obsession" });
+  await expect(obsessions.getByRole("link", { name: "Leaders" })).toHaveCount(
+    0,
+  );
+  await expect(obsessions.getByRole("link", { name: "Pick'em" })).toHaveCount(
+    0,
+  );
+  await expect(obsessions.getByRole("link", { name: "Records" })).toBeVisible();
+  await expect(
+    obsessions.getByText(/Opens when regular-season results arrive/).first(),
   ).toBeVisible();
 });
 
+test("public statistics and news explain their pre-result empty states", async ({
+  page,
+}) => {
+  for (const [path, emptyTitle] of [
+    ["/leaders", "No stats yet"],
+    ["/meta", "No games yet"],
+    ["/records", "No records yet"],
+    ["/players/compare", "No player careers yet"],
+    ["/news", "Nothing yet"],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.getByText(emptyTitle, { exact: true })).toBeVisible();
+  }
+});
+
 test("profile page renders the searchable hero picker", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
   const steamId = "76561199" + String(Date.now()).slice(-9);
+  await page.goto(`/api/auth/dev?name=HeroFan&steamId=${steamId}&redirect=/me`);
+  await expect(
+    page.getByRole("heading", { name: "Your profile" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Dota / Dotabuff account", level: 2 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Discord", level: 2 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Signup —/, level: 2 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "+ Add heroes" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("captain setup and draft preflight fit a phone viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
   await page.goto(
-    `/api/auth/dev?name=HeroFan&steamId=${steamId}&redirect=/me`,
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
   );
-  await expect(page.getByRole("heading", { name: "Your profile" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "+ Add heroes" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Captains & draft", level: 2 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Draft preflight", level: 3 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Randomize order" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Start draft" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("heading", { name: "Automation runner", level: 3 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Run maintenance now" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
 });

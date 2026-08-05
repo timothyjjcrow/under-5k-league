@@ -12,6 +12,8 @@ describe("shareMetadata", () => {
       openGraph: {
         title: "Team page",
         description: "The Radiant Rejects, week 4",
+        siteName: "GGD2L",
+        type: "website",
         images: ["/opengraph-image.png"],
       },
       twitter: {
@@ -30,5 +32,15 @@ describe("shareMetadata", () => {
     expect(meta.openGraph?.title).toBe(title);
     expect(meta.twitter?.title).toBe(title);
     expect(meta.description).toBe("");
+  });
+
+  it("adds a canonical and Open Graph URL when the route supplies a pathname", () => {
+    const meta = shareMetadata(
+      "Record book",
+      "All-time league records",
+      "/records",
+    );
+    expect(meta.alternates).toEqual({ canonical: "/records" });
+    expect(meta.openGraph).toMatchObject({ url: "/records" });
   });
 });

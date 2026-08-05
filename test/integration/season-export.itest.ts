@@ -10,7 +10,8 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { GET } from "@/app/api/admin/season-export/route";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
-import { makePlayer, makeSeason, makeTeam } from "./factories";
+import { SEASON_EXPORT_MAX_RESPONSE_BYTES } from "@/lib/season-export-response";
+import { makePlayer, makeSeason, makeTeam, makeUser } from "./factories";
 
 function exportReq(seasonId?: string): NextRequest {
   const url = new URL("http://localhost:3000/api/admin/season-export");
@@ -21,10 +22,11 @@ function exportReq(seasonId?: string): NextRequest {
 /** A small but complete season: two teams, a registration, a completed match
  *  and one imported Game carrying a players JSON box score — the part the
  *  route's docstring calls out as unrecoverable once OpenDota ages it out. */
-async function stageSeason(name: string) {
+async function stageSeason(name: string, isActive = true) {
   const season = await makeSeason({
     name,
     status: SEASON_STATUS.REGULAR_SEASON,
+    isActive,
   });
   const home = await makeTeam(season.id, `${name} Home`, 0);
   const away = await makeTeam(season.id, `${name} Away`, 1);
@@ -54,15 +56,70 @@ async function stageSeason(name: string) {
       players,
     },
   });
-  return { season, home, away, player, match, game, players };
+  const outsider = await makeUser(`${name} Oracle`);
+  await prisma.prediction.create({
+    data: {
+      matchId: match.id,
+      userId: outsider.id,
+      pickedTeamId: home.id,
+    },
+  });
+  await prisma.fantasyRoster.create({
+    data: {
+      seasonId: season.id,
+      userId: outsider.id,
+      picks: { create: { userId: player.id } },
+    },
+  });
+  await prisma.setting.createMany({
+    data: [
+      { key: `championAnnounced:${season.id}`, value: "sent" },
+      { key: `resultAnnounced:${match.id}`, value: "sent" },
+    ],
+  });
+  await prisma.setting.upsert({
+    where: { key: "discordWebhookUrl" },
+    create: { key: "discordWebhookUrl", value: "global-secret" },
+    update: { value: "global-secret" },
+  });
+  await prisma.adminAction.create({
+    data: {
+      actorId: outsider.id,
+      actorName: outsider.name,
+      action: "recordResult",
+      summary: `Recorded ${name}'s result`,
+      seasonId: season.id,
+    },
+  });
+  return {
+    season,
+    home,
+    away,
+    player,
+    outsider,
+    match,
+    game,
+    players,
+  };
 }
 
 describe("GET /api/admin/season-export", () => {
   it("exports the season's rows — box-score players JSON included — scoped to that season", async () => {
     vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
     const a = await stageSeason("Alpha");
+    await prisma.user.update({
+      where: { id: a.player.id },
+      data: {
+        dotaAccountIdV2: 388_000_001,
+        legacyDotaAccountId: 388_000_002,
+      },
+    });
+    await prisma.user.update({
+      where: { id: a.outsider.id },
+      data: { legacyDotaAccountId: 388_000_003 },
+    });
     // A second season proves the export filters rather than dumping the DB.
-    await stageSeason("Beta");
+    await stageSeason("Beta", false);
 
     const res = await GET(exportReq(a.season.id));
     expect(res.status).toBe(200);
@@ -70,12 +127,19 @@ describe("GET /api/admin/season-export", () => {
     // The filename slugs the season name and appends the id — the browser
     // download is the only artifact this route produces.
     expect(res.headers.get("content-disposition")).toBe(
-      `attachment; filename="ld2l-alpha-${a.season.id}.json"`,
+      `attachment; filename="ld2l-audit-archive-alpha-${a.season.id}.json"`,
     );
     expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-ld2l-artifact-purpose")).toBe(
+      "audit-only-not-restorable",
+    );
 
     const body = await res.json();
-    expect(body.formatVersion).toBe(1);
+    expect(body.formatVersion).toBe(2);
+    expect(body.artifactPurpose).toBe("AUDIT_ARCHIVE_ONLY");
+    expect(body.restorable).toBe(false);
+    expect(body.recoveryWarning).toMatch(/cannot restore/i);
+    expect(body.archiveDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(body.season.id).toBe(a.season.id);
     expect(body.season.name).toBe("Alpha");
 
@@ -101,11 +165,50 @@ describe("GET /api/admin/season-export", () => {
     expect(body.games[0].players).toBe(a.players);
     expect(JSON.parse(body.games[0].players)[0].kills).toBe(7);
 
+    // Identity references that do not have a Registration (predictors,
+    // fantasy managers, standins, admins) are still self-contained.
+    expect(body.users.map((u: { id: string }) => u.id)).toContain(a.outsider.id);
+    expect(body.users).toHaveLength(4); // two captains + player + outsider
+    expect(body.users[0]).not.toHaveProperty("discordId");
+    expect(body.users[0]).not.toHaveProperty("role");
+    const archivedPlayer = body.users.find(
+      (u: { id: string }) => u.id === a.player.id,
+    );
+    const archivedOutsider = body.users.find(
+      (u: { id: string }) => u.id === a.outsider.id,
+    );
+    expect(archivedPlayer).toMatchObject({ dotaAccountId: 388_000_001 });
+    expect(archivedOutsider).toMatchObject({ dotaAccountId: 388_000_003 });
+    expect(archivedPlayer).not.toHaveProperty("dotaAccountIdV2");
+    expect(archivedPlayer).not.toHaveProperty("legacyDotaAccountId");
+    expect(body.predictions).toHaveLength(1);
+    expect(body.fantasyRosters[0].picks).toHaveLength(1);
+
+    // Relationless season/match state and audit history are part of v2, but
+    // global secrets are not.
+    expect(body.settings.map((s: { key: string }) => s.key).sort()).toEqual(
+      [
+        `championAnnounced:${a.season.id}`,
+        `resultAnnounced:${a.match.id}`,
+      ].sort(),
+    );
+    expect(body.settings.map((s: { key: string }) => s.key)).not.toContain(
+      "discordWebhookUrl",
+    );
+    expect(body.adminActions).toHaveLength(1);
+    expect(body.adminActions[0].summary).toContain("Alpha");
+
     expect(body.counts).toEqual({
+      users: 4,
       registrations: 1,
       teams: 2,
+      teamMembers: 0,
       matches: 1,
       games: 1,
+      predictions: 1,
+      fantasyRosters: 1,
+      settings: 2,
+      adminActions: 1,
     });
   });
 
@@ -127,10 +230,44 @@ describe("GET /api/admin/season-export", () => {
     expect(await res.json()).toEqual({ error: "seasonId required" });
   });
 
+  it("rejects an oversized season id before querying the archive", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
+    const res = await GET(exportReq("s".repeat(129)));
+
+    expect(res.status).toBe(400);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "seasonId is too long" });
+  });
+
   it("404s on a bogus seasonId (admin-confirmed, so this one may say why)", async () => {
     vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
     const res = await GET(exportReq("no-such-season"));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Unknown season" });
+  });
+
+  it("fails safely before returning an archive above the hosted response ceiling", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
+    const a = await stageSeason("Oversize");
+    // Fire is four UTF-8 bytes but only two JavaScript UTF-16 code units. This
+    // makes the route test pin byte-based sizing all the way through the real
+    // database/archive path rather than accidentally enforcing string.length.
+    await prisma.game.update({
+      where: { id: a.game.id },
+      data: {
+        players: "🔥".repeat(
+          Math.ceil(SEASON_EXPORT_MAX_RESPONSE_BYTES / 4),
+        ),
+      },
+    });
+
+    const res = await GET(exportReq(a.season.id));
+    expect(res.status).toBe(413);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("content-disposition")).toBeNull();
+    expect(await res.json()).toEqual({
+      error:
+        "This season's audit archive is too large for the hosted download limit. Use the verified full-database backup workflow and arrange an approved out-of-band audit export before deleting this season.",
+    });
   });
 });

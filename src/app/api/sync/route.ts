@@ -1,65 +1,29 @@
-import { NextRequest, NextResponse } from "next/server";
-import { revalidatePath, revalidateTag } from "next/cache";
-import { runResultSync } from "@/lib/result-sync-service";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { NextResponse } from "next/server";
+import { getResultSyncSnapshot } from "@/lib/result-sync-status";
 
 export const dynamic = "force-dynamic";
-// One roster scan is up to ~22 sequential OpenDota fetches; on a slow night
-// that outruns the platform default and the request is killed mid-scan, which
-// also makes an uptime monitor pointed at this endpoint page the admin about a
-// perfectly healthy site. The scan has its own deadline (SCAN_BUDGET_MS in
-// match-import.ts) — this just gives it room to finish and return cleanly.
-export const maxDuration = 60;
 
-// The automatic-result-sync trigger, POSTed by the sitewide <ResultSyncPing>
-// on page views (and slow-polled on match nights). A route handler — not a
-// server-component ping like <WeekReminderPing> — because imported games must
-// bust the unstable_cache "games" tag, and revalidateTag is only legal from a
-// request scope (CLAUDE.md), never mid-render.
-async function handleSync(req: NextRequest) {
-  // Unauthenticated + triggers outbound OpenDota calls — same per-IP speed
-  // bump as the Steam callback. The service's atomic claims are the real
-  // budget guard; this just stops one source hammering the endpoint.
-  const ip = clientIp(req);
-  if (
-    !rateLimit(`sync:${ip}`, { limit: 30, windowMs: 60_000 }, Date.now())
-      .allowed
-  ) {
-    return NextResponse.json(
-      { updated: false, watch: false, cursor: null },
-      { status: 429 },
-    );
-  }
-
-  const out = await runResultSync();
-  if (out.imported > 0) {
-    // New games change every cached stat roll-up — mirror refreshGames().
-    revalidateTag("games", "max");
-    revalidatePath("/", "layout");
-  }
-  // `updated` = THIS request performed the import (its claim won). `cursor`
-  // moves for every viewer whenever ANY path lands a result — the client
-  // refreshes on either, so parked dashboards that lost the claim race (or
-  // never raced) still repaint.
+// Public clients only observe automation state. The authenticated scheduler is
+// the sole worker trigger, so page traffic can neither mutate league data nor
+// multiply third-party calls across tabs and visitors.
+export async function GET() {
+  const snapshot = await getResultSyncSnapshot();
   return NextResponse.json(
     {
-      updated: out.imported > 0 || out.inhouse,
-      watch: out.watch,
-      cursor: out.cursor,
+      updated: false,
+      watch: snapshot.watch,
+      cursor: snapshot.cursor,
     },
-    { headers: { "cache-control": "no-store" } },
+    {
+      headers: {
+        // The payload is viewer-independent. Browsers always revalidate, while
+        // Vercel collapses a burst of tabs into one origin snapshot for five
+        // seconds. The worker cadence is one minute, so this cannot hide a
+        // state transition longer than the clients already tolerate.
+        "cache-control": "public, max-age=0, must-revalidate",
+        "vercel-cdn-cache-control":
+          "public, max-age=5, stale-while-revalidate=10",
+      },
+    },
   );
-}
-
-export async function POST(req: NextRequest) {
-  return handleSync(req);
-}
-
-// GET exists for external pingers (a free 5-minute uptime monitor): the whole
-// lazy automation layer otherwise only runs while a human has a page open —
-// a match finishing at 1am with no visitors would wait until morning, and
-// site downtime itself would alert no one. Same throttled sync, so pointing a
-// monitor here buys a sync backstop AND downtime alerting in one move.
-export async function GET(req: NextRequest) {
-  return handleSync(req);
 }
