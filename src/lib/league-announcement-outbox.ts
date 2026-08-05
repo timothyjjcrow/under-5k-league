@@ -41,7 +41,7 @@ export type LeagueAnnouncementDelivery = {
   delivered: number;
   pending: boolean;
   /** A stable operator-facing reason that pending work could not be tried. */
-  blocked?: "WEBHOOK_UNAVAILABLE";
+  blocked?: "WEBHOOK_UNAVAILABLE" | "DISCORD_MUTATIONS_DISABLED";
 };
 
 export type LeagueAnnouncementMarker = {

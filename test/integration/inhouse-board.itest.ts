@@ -63,6 +63,7 @@ const mockPatch = vi.mocked(patchWebhookMessage);
 const mockDelete = vi.mocked(deleteWebhookMessage);
 
 beforeEach(() => {
+  delete process.env.VERCEL_ENV;
   // The empty-state stats are memoised in-process on a TTL — without this,
   // one test's league history leaks into the next one's empty board.
   resetBoardStatsCache();
@@ -150,6 +151,38 @@ describe("inhouse board — stable last-game chronology", () => {
 });
 
 describe("inhouse board — creation", () => {
+  it("does not post or reserve board state from a Vercel preview", async () => {
+    process.env.VERCEL_ENV = "preview";
+
+    await expect(createInhouseBoard()).resolves.toEqual({
+      ok: false,
+      error:
+        "Discord posting is disabled in this preview so it cannot alter the live server.",
+    });
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(await boardRow()).toBeNull();
+  });
+
+  it("preserves copied board state without editing or deleting the live message", async () => {
+    await createInhouseBoard();
+    const copiedState = await boardRow();
+    mockPatch.mockClear();
+    mockDelete.mockClear();
+    process.env.VERCEL_ENV = "preview";
+
+    await enqueue(1, "preview");
+    await syncInhouseBoard();
+    await expect(removeInhouseBoard()).resolves.toEqual({
+      ok: false,
+      error:
+        "Discord deletion is disabled in this preview so it cannot alter the live server.",
+    });
+
+    expect(mockPatch).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(await boardRow()).toBe(copiedState);
+  });
+
   it("posts once and remembers the message id and webhook", async () => {
     await enqueue(3);
     expect(await createInhouseBoard()).toEqual({ ok: true });

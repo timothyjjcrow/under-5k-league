@@ -34,6 +34,7 @@ import { raceHook } from "./race-hook";
 import { resolveSiteUrl } from "./site-url";
 import { pingOptInAvailable } from "./discord-roles";
 import { inhouseEndedAt } from "./inhouse-history";
+import { discordMutationsAllowed } from "./discord-mutation-policy";
 
 // The pinned Discord queue board — one message, rewritten in place forever.
 //
@@ -507,6 +508,10 @@ async function resolveSnapshot(
 export async function syncInhouseBoard(
   snapshot?: BoardSnapshotInput,
 ): Promise<void> {
+  // A production snapshot can include the live board's credential and state.
+  // Preview must not edit the real message or mutate its copied retry/throttle
+  // bookkeeping as though an intentional safety block were an outage.
+  if (!discordMutationsAllowed()) return;
   const raw = await getSetting(SETTING_KEYS.INHOUSE_BOARD);
   const state = parseState(raw);
   if (!state || !raw) return; // off — the cheap exit, taken on almost every call
@@ -574,6 +579,13 @@ export async function createInhouseBoard(): Promise<{
   ok: boolean;
   error?: string;
 }> {
+  if (!discordMutationsAllowed()) {
+    return {
+      ok: false,
+      error:
+        "Discord posting is disabled in this preview so it cannot alter the live server.",
+    };
+  }
   const url = await getInhouseWebhookUrl();
   if (!url) return { ok: false, error: "Set a Discord webhook first" };
   const webhookId = webhookIdOf(url);
@@ -668,6 +680,13 @@ export async function createInhouseBoard(): Promise<{
 export async function removeInhouseBoard(
   opts: { force?: boolean } = {},
 ): Promise<{ ok: boolean; orphaned?: boolean; error?: string }> {
+  if (!discordMutationsAllowed()) {
+    return {
+      ok: false,
+      error:
+        "Discord deletion is disabled in this preview so it cannot alter the live server.",
+    };
+  }
   const raw = await getSetting(SETTING_KEYS.INHOUSE_BOARD);
   const state = parseState(raw);
   if (!state) {

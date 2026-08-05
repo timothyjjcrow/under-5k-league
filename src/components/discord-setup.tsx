@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { getGuildConfig, memoGuildMembership } from "@/lib/discord-roles";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { Card, CardBody, DiscordButton, buttonClasses } from "@/components/ui";
+import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 
 // The "you signed up, now finish" prompt.
 //
@@ -219,13 +220,14 @@ export async function DiscordSetupPrompt({
     process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
   );
   const guildCfg = getGuildConfig();
+  const autoJoins = discordMutationsAllowed() && !!guildCfg;
   // next="/": these instances live on the dashboard, and a successful link
   // should put the player back where they clicked, not on /me.
   if (!user?.discordId) {
     return (
       <DiscordSetupCard
         linkAvailable={linkAvailable}
-        autoJoins={!!guildCfg}
+        autoJoins={autoJoins}
         next="/"
         isCaptain={!!member?.isCaptain}
       />
@@ -238,7 +240,7 @@ export async function DiscordSetupPrompt({
   return (
     <DiscordJoinCard
       membership={membership}
-      linkAvailable={linkAvailable}
+      linkAvailable={linkAvailable && autoJoins}
       next="/"
       handle={user.discordName}
     />

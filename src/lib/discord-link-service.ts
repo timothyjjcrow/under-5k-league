@@ -20,6 +20,7 @@ import {
   setPingRole,
   type GuildJoin,
 } from "./discord-roles";
+import { discordMutationsAllowed } from "./discord-mutation-policy";
 
 type Db = Pick<PrismaClient, "user">;
 
@@ -138,11 +139,13 @@ const DEFAULT_DEPS: CallbackDeps = {
   exchange: exchangeDiscordCode,
   fetchIdentity: fetchDiscordIdentity,
   joinGuild: async (discordId, accessToken) => {
+    if (!discordMutationsAllowed()) return null;
     const cfg = getGuildConfig();
     if (!cfg) return null;
     return joinGuild(discordId, accessToken, cfg);
   },
   stripPingRole: async (discordId) => {
+    if (!discordMutationsAllowed()) return;
     const cfg = await getRoleConfig();
     if (!cfg) return; // no ping role configured — nothing to strip
     await setPingRole(discordId, false, cfg);

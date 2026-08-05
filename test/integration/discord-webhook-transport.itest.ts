@@ -84,6 +84,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  delete process.env.VERCEL_ENV;
   recorded = [];
   respond = () => ({ status: 200, body: { id: "1379001234567890123" } });
   // resetDb() in setup.ts has already wiped Settings; point the real
@@ -186,6 +187,31 @@ describe("sendDiscordMessage", () => {
       else process.env.DISCORD_WEBHOOK_URL = previous;
     }
     expect(await prisma.leagueAnnouncement.count()).toBe(0);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("does not enqueue, claim, or send Discord work from a Vercel preview", async () => {
+    process.env.VERCEL_ENV = "preview";
+
+    expect(await sendDiscordMessage("Preview-only event")).toBe(false);
+    expect(await prisma.leagueAnnouncement.count()).toBe(0);
+
+    const queued = await enqueueLeagueAnnouncement({
+      content: "Copied pending production event",
+    });
+    await expect(
+      deliverPendingLeagueAnnouncements({ limit: 1 }),
+    ).resolves.toEqual({
+      attempted: 0,
+      delivered: 0,
+      pending: true,
+      blocked: "DISCORD_MUTATIONS_DISABLED",
+    });
+    expect(await prisma.leagueAnnouncement.findUnique({ where: { id: queued.id } }))
+      .toMatchObject({
+        status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+        attempts: 0,
+      });
     expect(recorded).toHaveLength(0);
   });
 

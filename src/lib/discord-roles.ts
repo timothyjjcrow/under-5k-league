@@ -2,6 +2,7 @@ import { prisma } from "./prisma";
 import { REGISTRATION_STATUS } from "./constants";
 import { getInhousePingRoleId } from "./discord";
 import type { DiscordReachFunnel, ReachPlayer } from "./discord-reach";
+import { discordMutationsAllowed } from "./discord-mutation-policy";
 
 // Self-serve opt-in to the inhouse ping role.
 //
@@ -63,7 +64,7 @@ export async function getRoleConfig(): Promise<RoleConfig | null> {
 
 /** True when the site can offer the opt-in at all (bot token + guild + role). */
 export async function pingOptInAvailable(): Promise<boolean> {
-  return (await getRoleConfig()) !== null;
+  return discordMutationsAllowed() && (await getRoleConfig()) !== null;
 }
 
 async function call(
@@ -72,6 +73,11 @@ async function call(
   method: "GET" | "PUT" | "DELETE",
   body?: unknown,
 ): Promise<Response | null> {
+  // Preview may carry the real bot token so membership/health GETs can be
+  // acceptance-tested. Block writes here, at the shared transport boundary,
+  // so no page, action, callback, or background path can mutate the live
+  // Discord guild from an isolated database preview.
+  if (method !== "GET" && !discordMutationsAllowed()) return null;
   try {
     return await fetch(`${cfg.apiBase ?? API}${path}`, {
       method,

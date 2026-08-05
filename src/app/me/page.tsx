@@ -22,6 +22,7 @@ import {
   primeMembershipMemo,
 } from "@/lib/discord-roles";
 import { DiscordJoinCard, DiscordSetupCard } from "@/components/discord-setup";
+import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import {
@@ -148,7 +149,8 @@ export default async function MePage({
   // `guilds.join`, so linking adds them to the server in the same click. The
   // copy has to match what the consent screen actually asks for.
   const guildCfg = getGuildConfig();
-  const discordAutoJoins = !!guildCfg;
+  const discordWritesEnabled = discordMutationsAllowed();
+  const discordAutoJoins = discordWritesEnabled && !!guildCfg;
 
   const [reg, member, draft, memberInfo, pingCfg] = await Promise.all([
     season
@@ -171,7 +173,7 @@ export default async function MePage({
     dbUser?.discordId && guildCfg
       ? fetchGuildMember(dbUser.discordId, guildCfg)
       : null,
-    dbUser?.discordId ? getRoleConfig() : null,
+    dbUser?.discordId && discordWritesEnabled ? getRoleConfig() : null,
   ]);
 
   // Returning player: no signup for this season yet, but one from a past
@@ -293,7 +295,7 @@ export default async function MePage({
            rule: it disappears the moment the join/rules step is complete. */
         <DiscordJoinCard
           membership={membership}
-          linkAvailable={discordLinkAvailable}
+          linkAvailable={discordLinkAvailable && discordAutoJoins}
           handle={dbUser?.discordName}
         />
       ) : null}

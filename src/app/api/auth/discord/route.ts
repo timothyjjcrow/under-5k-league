@@ -10,6 +10,7 @@ import {
   randomOauthValue,
 } from "@/lib/discord-oauth";
 import { getGuildConfig } from "@/lib/discord-roles";
+import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 
 // Kicks off Discord account LINKING (not login — a session is required, so
 // the callback knows exactly which site account the proven Discord identity
@@ -44,7 +45,7 @@ export async function GET(req: NextRequest) {
       codeChallenge: codeChallengeS256(verifier),
       // Only ask to join servers on a league that HAS one wired up — otherwise
       // the consent screen promises something the callback can't deliver.
-      withGuildJoin: !!getGuildConfig(),
+      withGuildJoin: discordMutationsAllowed() && !!getGuildConfig(),
     }),
   );
   res.cookies.set(

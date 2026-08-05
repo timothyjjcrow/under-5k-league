@@ -117,6 +117,7 @@ import { DangerSubmit } from "@/components/danger-submit";
 import { ChaseCopy } from "@/components/chase-copy";
 import { cn } from "@/lib/utils";
 import { maskWebhookUrl } from "@/lib/discord";
+import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import {
   getInhouseBoardStatus,
   type InhouseBoardStatus,
@@ -4792,7 +4793,13 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
  * invisible until a player clicks the button and gets an error. This says
  * which one, in the order they have to be fixed.
  */
-function PingHealthLines({ health }: { health: PingHealth }) {
+function PingHealthLines({
+  health,
+  mutationsAllowed,
+}: {
+  health: PingHealth;
+  mutationsAllowed: boolean;
+}) {
   const rows: { ok: boolean | null; label: string; fix: string }[] = [
     {
       ok: health.hasToken,
@@ -4887,7 +4894,11 @@ function PingHealthLines({ health }: { health: PingHealth }) {
       {health.hasToken && health.hasGuild ? (
         <div className="mt-2 border-t border-line pt-2">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <span className="text-muted">Auto-join on link:</span>
+            <span className="text-muted">
+              {mutationsAllowed
+                ? "Auto-join on link:"
+                : "Production auto-join readiness:"}
+            </span>
             {joinRows.map((r) => (
               <span
                 key={r.label}
@@ -4905,6 +4916,12 @@ function PingHealthLines({ health }: { health: PingHealth }) {
           </div>
           {firstBrokenJoin ? (
             <p className="mt-1 text-xs text-danger">{firstBrokenJoin.fix}</p>
+          ) : null}
+          {!mutationsAllowed ? (
+            <p className="mt-1 text-xs text-muted">
+              Preview verifies these credentials with read-only checks but does
+              not request guild-join permission or add members.
+            </p>
           ) : null}
         </div>
       ) : null}
@@ -4949,6 +4966,7 @@ async function DiscordSection({ seasonId }: { seasonId: string | null }) {
       board={board}
       pingHealth={pingHealth}
       discordReach={discordReach}
+      mutationsAllowed={discordMutationsAllowed()}
     />
   );
 }
@@ -4958,11 +4976,13 @@ function DiscordControls({
   board,
   pingHealth,
   discordReach,
+  mutationsAllowed,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
   board: InhouseBoardStatus;
   pingHealth: PingHealth;
   discordReach: DiscordReachFunnel;
+  mutationsAllowed: boolean;
 }) {
   const { configured, masked, envManaged } = status;
   return (
@@ -4972,11 +4992,27 @@ function DiscordControls({
       subtitle="Configure league announcements plus the year-round inhouse queue board, alerts, and ping role."
     >
       <CardBody className="space-y-3">
+        {!mutationsAllowed ? (
+          <div
+            role="status"
+            className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm"
+          >
+            <b>Read-only Discord preview.</b> Identity, membership, bot, and
+            permission checks are live. Posting messages, joining members, and
+            changing or deleting live Discord roles/messages are disabled.
+            Configuration edits below affect only the isolated preview
+            database.
+          </div>
+        ) : null}
         {/* Moved out of the card header: a button inside a <summary> toggles
             the disclosure instead of submitting. */}
         <div className="flex justify-end">
           <ActionForm action={testDiscordWebhook}>
-            <SubmitButton variant="secondary" size="sm" disabled={!configured}>
+            <SubmitButton
+              variant="secondary"
+              size="sm"
+              disabled={!configured || !mutationsAllowed}
+            >
               Send test message
             </SubmitButton>
           </ActionForm>
@@ -5056,7 +5092,11 @@ function DiscordControls({
               </span>
             ) : null}
             <ActionForm action={testInhouseWebhook}>
-              <SubmitButton variant="ghost" size="sm">
+              <SubmitButton
+                variant="ghost"
+                size="sm"
+                disabled={!mutationsAllowed}
+              >
                 Test
               </SubmitButton>
             </ActionForm>
@@ -5194,7 +5234,10 @@ function DiscordControls({
             </SubmitButton>
           </ActionForm>
 
-          <PingHealthLines health={pingHealth} />
+          <PingHealthLines
+            health={pingHealth}
+            mutationsAllowed={mutationsAllowed}
+          />
           <DiscordReachLine reach={discordReach} />
 
           <p className="text-xs text-muted">
@@ -5312,6 +5355,7 @@ function DiscordControls({
                 <SubmitButton
                   variant="ghost"
                   size="sm"
+                  disabled={!mutationsAllowed}
                   confirm="Delete the queue board message from Discord?"
                 >
                   Remove board
@@ -5322,6 +5366,7 @@ function DiscordControls({
                 <SubmitButton
                   variant="ghost"
                   size="sm"
+                  disabled={!mutationsAllowed}
                   confirm="Clear the interrupted board post? First check Discord and delete any board message that may have been created, because the site never received its message id."
                 >
                   Clear interrupted post
@@ -5335,7 +5380,9 @@ function DiscordControls({
                   // Gated on the INHOUSE webhook, which is what the board
                   // actually posts through — a league that configured only the
                   // inhouse one had a working board behind a disabled button.
-                  disabled={!configured && !board.separateChannel}
+                  disabled={
+                    !mutationsAllowed || (!configured && !board.separateChannel)
+                  }
                 >
                   Post queue board
                 </SubmitButton>

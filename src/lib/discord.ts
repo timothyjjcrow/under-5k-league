@@ -19,6 +19,7 @@ import {
   type LeagueAnnouncementMarker,
 } from "./league-announcement-outbox";
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
+import { discordMutationsAllowed } from "./discord-mutation-policy";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -962,6 +963,7 @@ export async function postWebhookMessage(
 ): Promise<{ id: string } | null> {
   const target = runtimeWebhookUrl(url);
   if (!target) return null;
+  if (!discordMutationsAllowed()) return null;
   try {
     const res = await fetch(`${webhookApiUrl(target)}?wait=true`, {
       method: "POST",
@@ -1004,6 +1006,7 @@ export async function patchWebhookMessage(
 ): Promise<WebhookEditResult> {
   const target = runtimeWebhookUrl(url);
   if (!target) return "failed";
+  if (!discordMutationsAllowed()) return "failed";
   try {
     const res = await fetch(
       `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
@@ -1040,6 +1043,7 @@ export async function deleteWebhookMessage(
 ): Promise<boolean> {
   const target = runtimeWebhookUrl(url);
   if (!target) return false;
+  if (!discordMutationsAllowed()) return false;
   try {
     const res = await fetch(
       `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
@@ -1071,6 +1075,10 @@ export async function sendDiscordMessage(
   mentions?: MentionAllowlist,
   options: DiscordSendOptions = {},
 ): Promise<boolean> {
+  // Do not even enqueue from a preview: a successful return would claim an
+  // external notification was accepted when the preview is intentionally
+  // forbidden from delivering it.
+  if (!discordMutationsAllowed()) return false;
   const allowed = normalizeMentionAllowlist(mentions);
   if (
     !content.trim() ||
@@ -1126,6 +1134,17 @@ export type PendingLeagueAnnouncementDeliveryOptions = {
 export async function deliverPendingLeagueAnnouncements(
   options: PendingLeagueAnnouncementDeliveryOptions = {},
 ): Promise<LeagueAnnouncementDelivery> {
+  if (!discordMutationsAllowed()) {
+    const pending = await hasPendingLeagueAnnouncements();
+    return {
+      attempted: 0,
+      delivered: 0,
+      pending,
+      ...(pending
+        ? { blocked: "DISCORD_MUTATIONS_DISABLED" as const }
+        : {}),
+    };
+  }
   const url = await getWebhookUrl();
   if (!url) {
     const pending = await hasPendingLeagueAnnouncements();
@@ -1176,6 +1195,7 @@ async function sendTo(
 ): Promise<boolean> {
   const target = runtimeWebhookUrl(url);
   if (!target) return false;
+  if (!discordMutationsAllowed()) return false;
   try {
     const allowed = normalizeMentionAllowlist(mentions);
     const renderedContent = materializeAllowedMentions(content, allowed);

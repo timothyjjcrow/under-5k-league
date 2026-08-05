@@ -46,6 +46,7 @@ import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 import { claimProviderCooldown } from "@/lib/settings";
+import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 
 function refresh() {
   revalidatePath("/", "layout");
@@ -1313,7 +1314,8 @@ export async function unlinkDiscord(
   await unlinkDiscordAccount(prisma, user.id);
 
   let roleLeft = false;
-  if (before?.discordId) {
+  const previewReadOnly = !discordMutationsAllowed();
+  if (before?.discordId && !previewReadOnly) {
     const cfg = await getRoleConfig();
     if (cfg) {
       // Best-effort, and it must not fail the unlink — the site half is done
@@ -1326,11 +1328,12 @@ export async function unlinkDiscord(
 
   refresh();
   return {
-    message:
-      "Discord unlinked — your handle was removed from the site" +
-      (roleLeft
-        ? ". We couldn't remove your inhouse ping role in Discord — take it off there, or the pings continue."
-        : ""),
+    message: previewReadOnly
+      ? "Discord unlinked from this preview only — the live site, server membership, and Discord roles were not changed."
+      : "Discord unlinked — your handle was removed from the site" +
+        (roleLeft
+          ? ". We couldn't remove your inhouse ping role in Discord — take it off there, or the pings continue."
+          : ""),
   };
 }
 
@@ -1352,6 +1355,12 @@ export async function setInhousePingOptIn(
     user = await requireUser();
   } catch {
     return { error: "Sign in required" };
+  }
+  if (!discordMutationsAllowed()) {
+    return {
+      error:
+        "Discord role changes are disabled in this preview so it cannot alter the live server.",
+    };
   }
   const on = str(formData, "on") === "1";
 

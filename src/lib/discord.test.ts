@@ -45,7 +45,10 @@ import {
   type InhouseBetSlip,
 } from "./discord";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete process.env.VERCEL_ENV;
+});
 
 describe("Discord mention materialization", () => {
   it("adds every allowlisted user and role that is absent from the message", () => {
@@ -969,6 +972,24 @@ describe("Discord transport diagnostics", () => {
   it("rejects untrusted transport targets before any network request", async () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     const target = "https://league.example/internal/admin";
+
+    await expect(
+      postWebhookMessage(target, { content: "test" }),
+    ).resolves.toBeNull();
+    await expect(
+      patchWebhookMessage(target, "message-1", { content: "test" }),
+    ).resolves.toBe("failed");
+    await expect(deleteWebhookMessage(target, "message-1")).resolves.toBe(
+      false,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("makes no webhook mutation request from a Vercel preview", async () => {
+    process.env.VERCEL_ENV = "preview";
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const target =
+      "https://discord.com/api/webhooks/1379001234567890123/safe-test-token";
 
     await expect(
       postWebhookMessage(target, { content: "test" }),
