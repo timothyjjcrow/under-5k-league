@@ -537,8 +537,11 @@ Rules that follow from the layering:
   `getInhouseState` retain guarded resolvers so a fleet-throttled authenticated
   room poll can respond immediately without multiplying writes or provider
   calls across every tab. Anonymous room snapshots never run them. Sitewide
-  work is different: a one-minute scheduler calls
-  `GET /api/cron/automation` with `Authorization: Bearer <CRON_SECRET>`.
+  work is different: the private Cloudflare Worker in
+  `ops/cloudflare-automation-worker` owns the repository's only one-minute Cron
+  Trigger and calls `GET /api/cron/automation` with `Authorization: Bearer
+  <CRON_SECRET>`. Vercel deliberately has no cron registration, so the same
+  deployment works on Hobby without creating a second clock.
   `runAutomation` elects one runner across all instances with a tokened,
   database-global 90-second lease, fences finalization with the same token,
   and gives `runResultSync` a 45-second deadline/abort budget. The persisted
@@ -838,14 +841,21 @@ enums, so every status column is a string whose allowed values live in
 
 ## 7. Background/automatic processes
 
-The production clock is explicit. `vercel.json` schedules
-`GET /api/cron/automation` once per minute; a trusted external scheduler may
-call the same route. `src/lib/cron-auth.ts` accepts only a header bearer token
-matching a non-placeholder `CRON_SECRET` and compares fixed-length digests in
-constant time. Query strings and browser cookies are not credential sources.
-The route returns 401 before worker work on bad auth, 202 when another owner
-holds the lease, 200 only for a healthy completed pass, and non-2xx for a
-degraded, failed, or unavailable pass.
+The production clock is explicit and single-owner. `vercel.json` has no `crons`
+entry; `ops/cloudflare-automation-worker/wrangler.jsonc` declares the only
+`* * * * *` trigger. Its private scheduled handler validates an exact canonical
+HTTPS `AUTOMATION_URL` pinned as a reviewed, non-secret Wrangler `var`, refuses
+redirects, sends encrypted `AUTOMATION_SECRET` as the bearer, limits the
+response to 2 KiB, and accepts only HTTP 200 with `{ ok: true, status:
+"SUCCEEDED" }`. `AUTOMATION_SECRET` is the same byte-for-byte value stored as
+Vercel's `CRON_SECRET` and is the Worker's only required secret binding.
+`src/lib/cron-auth.ts` accepts only the header bearer token matching the
+non-placeholder `CRON_SECRET` and compares fixed-length digests in constant
+time. Query strings and browser cookies are not credential sources. The route
+returns 401 before worker work on bad auth, 202 when another owner holds the
+lease, 200 only for a healthy completed pass, and non-2xx for a degraded,
+failed, or unavailable pass; those outcomes fail the Cloudflare Cron Event so
+provider monitoring can alert while the next minute owns recovery.
 
 `src/lib/automation-service.ts` wraps every scheduled and admin-requested pass
 in the same database-global 90-second owner/token lease. Work gets a 45-second
@@ -858,7 +868,7 @@ an expired RUNNING lease before taking ownership.
 
 | Process | What it does | Trigger | Bound / recovery contract |
 | ------- | ------------ | ------- | ------------------------- |
-| Scheduled maintenance (`runAutomation` → `runResultSync`) | Owns unattended league, draft, inhouse, reminder, playoff, Discord, and cursor work | Authenticated cron every minute; Admin → Automation → **Run maintenance now** uses the same election path | One global 90s tokened lease; 45s work budget; independent steps report stable issue/deferred codes instead of suppressing unrelated work |
+| Scheduled maintenance (`runAutomation` → `runResultSync`) | Owns unattended league, draft, inhouse, reminder, playoff, Discord, and cursor work | Private Cloudflare Cron Trigger every minute; Admin → Automation → **Run maintenance now** uses the same election path | One global 90s tokened lease; 45s work budget; independent steps report stable issue/deferred codes instead of suppressing unrelated work |
 | Draft clock resolver (`resolveExpiredNomination` / `resolveStalledNomination`) | Resolves an expired nomination or bid clock when no draft-room client remains open | Every maintenance pass; draft-room reads also resolve immediately | Cheap due-time preflight plus phase/turn/lot write claims; duplicate room/worker attempts are harmless |
 | Result sync, roster scan (`syncDueMatches` → `autoDetectGamesForMatch`) | Claims one due fixture and roster-scans OpenDota | Every pass in REGULAR_SEASON/PLAYOFFS when the match throttle permits | Global `rosterAutoSyncAt`, per-match compare-and-set, exponential empty-scan backoff; recent-list and match calls receive the worker deadline/abort signal, and an unreachable/deadline scan releases its throttle for recovery |
 | Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, per-season skip memory, and the same deadline/abort propagation; manual admin sync remains a bounded override |
@@ -1109,7 +1119,9 @@ rejected so concurrent migration commands retain Prisma's database lock.
 Errors identify fields without echoing their values. Production has no
 first-user bootstrap path. Secrets belong in Vercel
 or another secret manager and a private process environment, never literal
-command arguments, source, logs, or chat.
+command arguments, source, logs, or chat. Cloudflare stores the same cron value
+only as encrypted `AUTOMATION_SECRET`; the reviewed, non-secret
+`AUTOMATION_URL` remains pinned in `wrangler.jsonc`.
 
 **Build and schema order.** `build:vercel` is deliberately linear: validate the
 environment → switch the Prisma provider to PostgreSQL → validate the
@@ -1142,28 +1154,36 @@ promoting the previous application build, not attempting a destructive SQL
 down migration. The automation/outbox tables are additive and safe for that
 older binary to ignore.
 
-**Scheduler and health launch gate.** The repository's `vercel.json` registers
-`/api/cron/automation` on `* * * * *`. This requires Vercel Pro/Enterprise;
-Hobby's once-daily, broad-window cron cannot meet the application's lifecycle
-or recovery contract. A trusted external one-minute scheduler is compatible
-with the route if it sends the same Authorization bearer, but a Hobby
-deployment must omit the unsupported Vercel cron registration through an
-explicitly reviewed deployment configuration. `CRON_SECRET` is a machine
-boundary, never a browser credential: Vercel injects it as a bearer header and
-external schedulers must do the same. The route returns non-2xx for degraded or
-failed work because Vercel does not retry a failed cron request; the next
-minute's invocation and persisted recovery primitives own retry, while
-observability owns alerting.
+**Scheduler and health launch gate.** `vercel.json` deliberately omits `crons`,
+so Vercel Hobby can deploy the application without accepting its unsafe daily
+cadence. `ops/cloudflare-automation-worker/wrangler.jsonc` is the sole clock: it
+pins the reviewed production `AUTOMATION_URL`, declares one `* * * * *` Cron
+Trigger, disables `workers.dev`, and requires only encrypted
+`AUTOMATION_SECRET`. That secret must equal Vercel's `CRON_SECRET`; it is a
+machine boundary, never a browser credential or URL/query value. The Worker
+throws for every redirect, non-200, oversized/invalid response, or body other
+than `SUCCEEDED`, making the Cron Event fail visibly. The next minute's
+invocation and persisted recovery primitives own retry, while observability
+owns alerting.
+
+Cloudflare Workers Free currently permits 100,000 requests/day, five Cron
+Triggers/account, 50 external subrequests/invocation, 10 ms CPU per Cron
+Trigger, and 15 minutes wall time. This Worker consumes about 1,440 scheduled
+invocations/day, one trigger, one external fetch per invocation, a 65-second
+timeout, and a bounded 2 KiB parse. Those limits are shared provider state, not
+an application guarantee, so launch evidence must re-check capacity and current
+[Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
 
 Before promotion, a production-like candidate on a non-production database must prove: `/api/health/live` returns 200
 without dependency work; `/api/health/ready` returns 200 with the target
 database and 503 when that probe fails; unauthenticated/incorrect-auth cron is
 401; POST `/api/sync` is 405; GET `/api/sync` is a read-only
-`updated`/`watch`/`cursor` response; and a manual Admin run or reviewed external
-staging invocation can complete. Vercel Cron does not target preview
-deployments. Immediately after a controlled production promotion, exactly one
-authoritative scheduler must produce two consecutive authenticated one-minute
-200/SUCCEEDED invocations, and `/api/health/automation` must return 200. The evergreen Admin →
+`updated`/`watch`/`cursor` response; and a manual Admin run or separate reviewed
+staging invocation can complete. The production Cloudflare Worker must never
+target a Vercel preview. Immediately after a controlled production promotion,
+the sole Cloudflare trigger must produce two consecutive authenticated
+one-minute 200/SUCCEEDED invocations, and `/api/health/automation` must return
+200. The evergreen Admin →
 Automation card must show those attempts and successes, Source = Scheduled
 cron, cleared leases, and zero consecutive failures. The manual control must
 complete under Source = Admin manual run while idle and refuse to overlap an
@@ -1172,10 +1192,14 @@ minutes without a completed pass. The pinned-commit promotion, launch evidence,
 traffic freeze, rollback, PITR recovery, and secret-rotation contract lives in
 `docs/PRODUCTION-OPERATIONS.md`.
 
-**Application rollback sequencing.** Vercel rollback does not reliably update
-cron configuration, so pause/remove the schedule first and confirm invocations
-have stopped. Wait at least the 90-second lease duration and verify the admin
-health card shows no active owner; never delete or overwrite a live lease.
+**Application rollback sequencing.** The Cloudflare clock is independent of a
+Vercel rollback. Deploy the committed `wrangler.paused.jsonc` through
+`npm run scheduler:pause`; its empty `crons` array removes every Cron Trigger
+without relying on dashboard-only drift. Wait the full 15-minute propagation
+bound, prove no Scheduled cron attempt lands across two further expected minute
+slots, then wait at least 90 seconds after the last possible attempt and verify
+the admin health card shows no active owner. Never delete or overwrite a live
+lease.
 Promote the previous tested application build while leaving the additive
 migrations/tables intact, then verify Steam login, the current schedule, and a
 known database-backed read. Verify live/ready only if that release exposes
@@ -1183,9 +1207,10 @@ those probes. Never use `/api/sync` as a rollback health check: an older build
 may still mutate state on GET. Keep scheduling disabled if that build predates
 the authenticated route and point platform probes at endpoints that exist in
 the rollback release. After the forward repair is deployed, re-enable the
-one-minute bearer-authenticated schedule and repeat the two-consecutive-success
-gate. A data incident follows the rehearsed restore path below, never an
-improvised SQL down migration.
+one-minute bearer-authenticated Cloudflare trigger from the reviewed Worker
+configuration and repeat the two-consecutive-success gate. A data incident
+follows the rehearsed restore path below, never an improvised SQL down
+migration.
 
 **Database backups.** `npm run db:backup` prefers `DIRECT_URL`, translates the
 connection into dedicated libpq environment fields rather than passing a URI

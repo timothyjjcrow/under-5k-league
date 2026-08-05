@@ -100,7 +100,7 @@ export default async function RootLayout({
           hasHistory={archivedCount > 0}
         />
         <Toaster />
-        {/* Lazy automatic result sync — league + inhouse update themselves. */}
+        {/* Observe worker progress so parked pages refresh after results land. */}
         <ResultSyncPing initialCursor={resultCursorAtRender} />
       </body>
     </html>

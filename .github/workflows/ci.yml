@@ -44,6 +44,10 @@ jobs:
         run: npm run lint -- --max-warnings=0
       - name: Type check
         run: npx tsc --noEmit
+      - name: Validate active scheduler artifact
+        run: npm run scheduler:check
+      - name: Validate paused scheduler artifact
+        run: npm run scheduler:check:paused
       # `github-actions` emits ANNOTATIONS naming the failing test, file, line
       # and error on the run summary — readable WITHOUT repo auth. Same reason
       # the e2e job carries Playwright's `github` reporter: a red job whose only

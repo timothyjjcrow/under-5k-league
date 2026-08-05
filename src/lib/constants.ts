@@ -410,9 +410,9 @@ export const INHOUSE_BETS = {
   TIER_MARQUEE: 800,
 } as const;
 
-// Match-night Discord reminder: announced lazily from dashboard//schedule
-// renders for the next week whose matches kick off inside the window. Sent at
-// most once per season+week (atomic Setting-row claim).
+// Match-night Discord reminder: announced by the leased maintenance worker for
+// the next week whose matches kick off inside the window. Sent at most once per
+// season+week (atomic Setting-row claim).
 export const WEEK_REMINDER = {
   AHEAD_HOURS: 24, // announce once kickoff is within a day
   BEHIND_HOURS: 3, // still worth announcing shortly after kickoff
@@ -426,9 +426,9 @@ export const WEEK_REMINDER = {
 export const RSVP_OUT_PING_THROTTLE_SECONDS = 6 * 60 * 60;
 
 // Automatic result sync: league games are pulled from OpenDota without anyone
-// pressing a button. Driven lazily by the sitewide <ResultSyncPing> hitting
-// POST /api/sync (no cron/websocket — same philosophy as the draft clock).
-// A match is scannable from shortly after kickoff (a Dota game can't be over
+// pressing a button. The bearer-authenticated maintenance worker owns writes;
+// the sitewide <ResultSyncPing> only observes its cursor/watch snapshot. A
+// match is scannable from shortly after kickoff (a Dota game can't be over
 // sooner) until the window closes (after that it's captain/admin territory —
 // no point burning API budget on a fixture nobody played).
 export const AUTO_SYNC = {

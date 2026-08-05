@@ -3,14 +3,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("production automation configuration", () => {
-  it("registers one production minute cron on the authenticated worker path", () => {
+  it("does not register an unsupported Vercel Hobby cron", () => {
     const config = JSON.parse(
       readFileSync(path.resolve(process.cwd(), "vercel.json"), "utf8"),
     ) as { crons?: Array<{ path: string; schedule: string }> };
 
-    expect(config.crons).toEqual([
-      { path: "/api/cron/automation", schedule: "* * * * *" },
-    ]);
+    expect(config.crons).toBeUndefined();
   });
 
   it("documents the dedicated scheduler credential without making it public", () => {

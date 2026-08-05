@@ -18,9 +18,10 @@ deployment check) pinned to the reviewed commit. Disable unreviewed automatic
 production builds for the launch window. Preview builds must use a separate
 database branch and non-production credentials.
 
-Exactly one one-minute scheduler may be authoritative. Use either the Vercel
-Pro/Enterprise cron registered in `vercel.json` or one reviewed external
-scheduler—not both. Vercel Hobby is not compatible with this release.
+Exactly one one-minute scheduler may be authoritative. Vercel Hobby hosts the
+application with no Vercel cron registration; the reviewed Cloudflare Worker in
+`ops/cloudflare-automation-worker` owns the only `* * * * *` trigger. Do not add
+a second Vercel, monitor, or external schedule.
 
 ## Required owners
 
@@ -59,6 +60,9 @@ Hosting plan and Node 22 evidence:
 Manual promotion / deployment-check evidence:
 Production-vs-preview database isolation evidence:
 Authoritative scheduler (exactly one) and one-minute cadence evidence:
+Cloudflare Worker deployment/version and sole Cron Trigger evidence:
+Cloudflare Free-plan capacity/limits review:
+Encrypted `AUTOMATION_SECRET` binding-name evidence (never its value):
 Production function region / database region / pool-limit evidence:
 Deployment Protection for previews and generated deployment URLs:
 
@@ -105,8 +109,8 @@ External-provider and backup limitations verified against the public page:
 live probe result:
 ready probe result:
 automation probe result:
-Two consecutive production cron result timestamps:
-Cron/readiness/automation/provider alert-delivery evidence:
+Two consecutive production Cloudflare Cron result timestamps:
+Cloudflare Cron/readiness/automation/provider alert-delivery evidence:
 Rollback deployment rehearsal result:
 Traffic-freeze rehearsal result:
 Final smoke-test result:
@@ -118,9 +122,12 @@ Residual risks explicitly accepted:
 1. Select one immutable commit. Require the full CI gate to pass for that exact
    SHA and record the run. Record the previous known-good deployment and commit.
 2. Confirm production promotion requires a human approval or protected
-   deployment check. Pause the production scheduler during the release window.
-3. Confirm Node 22, Vercel Pro/Enterprise (or the reviewed external scheduler),
-   database spend/protection limits, production/preview database isolation,
+   deployment check. Run `npm run scheduler:pause` for the release window,
+   verify zero Cloudflare Cron Triggers, wait the full 15-minute propagation
+   bound, and prove Scheduled cron attempts have stopped before continuing.
+3. Confirm Node 22, Vercel Hobby (with no Vercel cron), Cloudflare Workers
+   account capacity, database spend/protection limits, production/preview
+   database isolation,
    Deployment Protection on previews/generated deployment URLs, a function
    region close to the database, and reviewed runtime/direct connection-pool
    ceilings. Complete the edge/proxy/abuse gate below before opening traffic.
@@ -143,8 +150,8 @@ Residual risks explicitly accepted:
 6. On a production-like candidate backed by a non-production database, verify
    `/api/health/live`, `/api/health/ready`, unauthorized cron = 401, POST
    `/api/sync` = 405, and read-only GET `/api/sync`. Exercise one bounded manual
-   Admin maintenance run or a reviewed staging scheduler invocation. Do not
-   enable Vercel Cron on a preview—it runs only for production deployments.
+   Admin maintenance run or a separate reviewed staging scheduler invocation.
+   The production Cloudflare Worker must never target a preview deployment.
 7. Complete real credential smoke tests: allowlisted Steam login/profile,
    Discord OAuth, guild membership/role behavior, each configured webhook,
    OpenDota profile lookup, and one known Dota match import. Confirm failure UI
@@ -162,9 +169,117 @@ Residual risks explicitly accepted:
    windows and enforcement mechanisms; do not rely on an unsupported public
    promise.
 9. Configure independent monitors for liveness, readiness, automation freshness,
-   cron non-2xx, and database/provider faults. Deliver and acknowledge a test
-   alert through a channel that remains available if Discord or this site is
-   down.
+   failed Cloudflare Cron Events/route non-2xx, and database/provider faults.
+   Deliver and acknowledge a test alert through a channel that remains available
+   if Discord or this site is down.
+
+## Cloudflare scheduler runbook
+
+`vercel.json` must have no `crons` entry. The only production clock is
+`ggd2l-automation-scheduler`, defined by
+`ops/cloudflare-automation-worker/wrangler.jsonc`: `workers.dev` is disabled,
+the reviewed non-secret `AUTOMATION_URL` is pinned to the exact Vercel production
+route, and one `* * * * *` Cron Trigger invokes its `scheduled()` handler. The
+sibling `wrangler.paused.jsonc` has the same reviewed settings and an empty
+`crons` array; it is the only supported pause configuration.
+`AUTOMATION_SECRET` is its only encrypted secret binding and must be
+byte-for-byte identical to Vercel's `CRON_SECRET`. Never expose that value in a
+command argument, URL, source, `.dev.vars`, launch record, log, screenshot,
+issue, or chat.
+
+Cloudflare Workers Free currently permits 100,000 requests/day, five Cron
+Triggers/account, 50 external subrequests/invocation, 10 ms CPU per Cron
+Trigger, and 15 minutes wall time. This Worker uses about 1,440 invocations/day,
+one trigger, one outbound request per invocation, a 65-second timeout, and a
+bounded 2 KiB response parse. Before every launch, verify that other account
+work has not consumed those shared limits and re-check the current
+[Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
+An exceeded quota or CPU limit is a failed scheduler event, not an accepted
+residual risk.
+
+### Provision and roll out
+
+Deploy only after the pinned Vercel production release exposes a healthy
+`/api/cron/automation` route. Use the exact reviewed Wrangler version. Enter the
+secret only at Wrangler's hidden prompt; `secret list` should reveal its name
+and type, never its value.
+
+```bash
+npx wrangler@4.118.0 login
+npx wrangler@4.118.0 secret put AUTOMATION_SECRET --cwd ops/cloudflare-automation-worker
+npx wrangler@4.118.0 secret list --cwd ops/cloudflare-automation-worker
+npm run scheduler:deploy
+npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
+```
+
+Confirm the deployed `AUTOMATION_URL` matches the reviewed config, Cloudflare
+shows exactly one `* * * * *` trigger, and Vercel shows none. Adding, changing,
+or deleting a Cloudflare
+[Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
+can take up to 15 minutes to propagate.
+After propagation, require two consecutive one-minute HTTP 200 `SUCCEEDED`
+passes, `/api/health/automation` = 200, a cleared lease, and zero consecutive
+failures before opening traffic.
+
+### Pause and resume
+
+To pause, deploy the reviewed empty-trigger configuration and record the
+successful deployment:
+
+```bash
+npm run scheduler:pause
+npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
+```
+
+Verify the Cloudflare dashboard shows zero Cron Triggers. Wait the full
+15-minute propagation bound, then confirm Admin → Automation shows no new
+Scheduled cron attempt across two further expected minute slots. Wait another
+90 seconds after the last possible attempt and prove no active lease remains.
+A trigger removal is not immediate, disabling a monitor does not pause the
+Worker, and dashboard-only deletion creates drift from Wrangler's source of
+truth.
+
+To resume the reviewed current release, run:
+
+```bash
+npm run scheduler:deploy
+npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
+```
+
+The committed config reattaches exactly one trigger. Allow for propagation and
+repeat the two-pass health gate. Stop if Vercel has acquired any cron or a second
+Cloudflare/external schedule exists.
+
+### Rotate or roll back
+
+For `CRON_SECRET` rotation, pause first and drain the lease. Generate one new
+value in the approved password manager, update Vercel's production
+`CRON_SECRET`, promote the reviewed Vercel deployment, then replace the
+Worker's encrypted binding through the hidden prompt:
+
+```bash
+npx wrangler@4.118.0 secret put AUTOMATION_SECRET --cwd ops/cloudflare-automation-worker
+npx wrangler@4.118.0 secret list --cwd ops/cloudflare-automation-worker
+```
+
+Resume and require two clean passes before retiring the old password-manager
+entry. Never overlap old/new schedulers to bridge the credential change.
+`AUTOMATION_URL` is committed non-secret configuration: changing it requires a
+code review and Worker deployment, not an ad-hoc dashboard variable.
+
+For a Worker-code incident, pause and drain first, then select the recorded
+known-good version and roll back it explicitly:
+
+```bash
+npx wrangler@4.118.0 deployments list --cwd ops/cloudflare-automation-worker
+npx wrangler@4.118.0 rollback "REVIEWED_VERSION_ID" --message "scheduler rollback" --cwd ops/cloudflare-automation-worker
+npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
+```
+
+Cloudflare resource bindings are not restored by a code rollback. Confirm the
+reviewed `AUTOMATION_URL`, encrypted `AUTOMATION_SECRET` binding name, and paused
+trigger state separately. Re-enable exactly one trigger only after the rolled
+back Worker and target application are verified, then repeat the two-pass gate.
 
 ## Edge, proxy, cache, and abuse-control gate
 
@@ -372,10 +487,12 @@ opens.
 3. Confirm the promoted deployment ID and commit. Verify liveness, readiness,
    canonical redirects, Steam login, a public season page, and one authorized
    non-destructive admin read.
-4. Enable exactly one one-minute scheduler. Observe two consecutive HTTP 200
-   `SUCCEEDED` runs, then require `/api/health/automation` to return HTTP 200.
-   Confirm Admin → Automation shows Scheduled cron, a cleared lease, a fresh
-   success, and zero consecutive failures.
+4. Deploy the reviewed Cloudflare Worker and confirm Vercel has no cron. Allow
+   up to 15 minutes for its sole `* * * * *` trigger to propagate. Observe two
+   consecutive HTTP 200 `SUCCEEDED` runs, then require
+   `/api/health/automation` to return HTTP 200. Confirm Admin → Automation shows
+   Scheduled cron, a cleared lease, a fresh success, and zero consecutive
+   failures.
 5. Run the actor/phase smoke checklist for the live league state, verify Discord
    delivery, and confirm the configured monitoring alerts remain green. Only
    then open general traffic and close the release window.
@@ -385,7 +502,9 @@ opens.
 The first action in a suspected data-integrity incident is to stop new writes,
 not to deploy a speculative fix.
 
-1. Pause the scheduler and confirm no new cron request starts.
+1. Run `npm run scheduler:pause`, verify zero Cloudflare Cron Triggers, wait the
+   full 15-minute propagation bound, and confirm no new Scheduled cron request
+   starts across two further expected minute slots.
 2. Enable the rehearsed hosting-provider maintenance/firewall rule that blocks
    all public traffic to the deployment, including OAuth callbacks and the cron
    route. A method-only rule is insufficient because several authentication
@@ -414,7 +533,8 @@ compatible with the additive schema already applied.
 3. Against protected operator access, verify login, the current schedule, one
    database-backed read, and the probes exposed by that release. A pre-release
    `/api/sync` may mutate on GET, so never use it as a generic rollback probe.
-4. Deploy the repaired forward release. Re-enable exactly one scheduler,
+4. Deploy the repaired forward release and reviewed Worker configuration.
+   Confirm Vercel still has no cron and Cloudflare has exactly one trigger,
    observe two successful passes, verify automation freshness, and then lift
    the traffic freeze.
 
@@ -439,8 +559,8 @@ Use this when data is corrupt, missing, or of uncertain integrity.
    database-owner approval that the recovered data will not resurrect it.
 6. Obtain database-owner and release-owner approval for cutover. Point
    production secrets to the recovered target through a manually approved
-   deployment, verify postflight and application health, then enable one
-   scheduler and observe two clean passes.
+   deployment, verify postflight and application health, then deploy the sole
+   Cloudflare trigger and observe two clean passes.
 7. Lift the traffic freeze only after monitoring and player-visible state are
    verified. Preserve the original database and incident artifacts according to
    the recorded provider and case-retention decisions; do not keep them under an
@@ -450,9 +570,11 @@ Use this when data is corrupt, missing, or of uncertain integrity.
 
 - `AUTH_SECRET`: rotate it, redeploy under the traffic freeze, and expect every
   existing session to be invalidated.
-- `CRON_SECRET`: pause the scheduler, rotate both application and scheduler
-  copies, verify unauthorized = 401 and one authorized scheduled pass, then
-  resume. Never put it in a URL or monitor.
+- `CRON_SECRET`: run `npm run scheduler:pause`, wait the full propagation bound
+  and lease drain, rotate Vercel's production value and the Worker's encrypted
+  `AUTOMATION_SECRET` to the same new value, verify unauthorized = 401, then
+  resume and require two authorized scheduled passes. Never put it in a URL,
+  command argument, monitor, log, or launch record.
 - Database credentials: rotate the shared username's pooled/direct passwords,
   update production only, then rerun readiness plus direct/runtime tests.
 - Discord bot token or webhook: revoke/rotate at Discord first, replace the

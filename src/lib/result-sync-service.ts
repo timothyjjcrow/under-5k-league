@@ -76,8 +76,8 @@ export type ResultSyncOutcome = {
   /** Playoff reconciliation built a round or crowned the champion this run. */
   playoff: boolean;
   /** Matches are in their detection window, an inhouse lobby is live, or an
-   *  auction clock is running — the client should poll fast so unattended
-   *  workflows keep advancing and parked dashboards update themselves. */
+   *  auction clock is running — clients should poll fast so parked dashboards
+   *  observe the scheduled worker's changes promptly. */
   watch: boolean;
   /** Change cursor (`resultChangedAt` Setting): bumped by EVERY result path —
    *  auto sync, captain import, admin record, inhouse, and playoff

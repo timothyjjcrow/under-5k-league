@@ -339,18 +339,18 @@ Local dev stays on SQLite; production runs on Postgres via a build-time provider
 swap (`scripts/switch-db-provider.mjs`, wired up in `vercel.json`) — you don't
 change any code. The draft uses HTTP polling (no websockets), so it runs fine on
 serverless. Unattended league work uses an authenticated one-minute scheduler;
-the repository's `vercel.json` registers `GET /api/cron/automation` on
-`* * * * *`.
+`vercel.json` deliberately omits Vercel Cron so the application can deploy on
+Vercel Hobby. The repository's private Cloudflare Worker at
+`ops/cloudflare-automation-worker` owns the only `* * * * *` trigger and calls
+`GET /api/cron/automation` once per minute.
 
-The repository as committed requires **Vercel Pro or Enterprise**. Vercel Hobby
-cron is limited to one run per day, with broad timing tolerance, and is not a
-safe clock for draft deadlines, result recovery, reminders, or Discord queues;
-a more-frequent Hobby cron also fails deployment. See Vercel's current
+Vercel Hobby's own cron is limited to one run per day, with broad timing
+tolerance, and is not a safe clock for draft deadlines, result recovery,
+reminders, or Discord queues; a more-frequent Hobby expression also fails
+deployment. See Vercel's current
 [cron usage and pricing](https://vercel.com/docs/cron-jobs/usage-and-pricing).
-A trusted external scheduler that sends the same bearer-authenticated request
-every minute is also supported, but a Vercel Hobby deployment must use a
-reviewed deployment configuration that omits the unsupported Vercel cron
-registration. A five-minute uptime monitor is not a scheduler substitute.
+Do not add a Vercel cron beside the Cloudflare trigger. Exactly one scheduler
+must be authoritative, and a five-minute uptime monitor is not a substitute.
 
 The supported runtime is **Node.js 22.x**. Run `nvm use` locally (the repository
 includes `.nvmrc`), keep Vercel's Project Settings → Node.js Version on 22.x,
@@ -371,14 +371,14 @@ declares the same runtime line used by every CI job.
    command, commit, issue, screenshot, or chat. `.env` is gitignored as a
    convenience, not a substitute for checking what you commit.
 3. **Import the repo at [vercel.com](https://vercel.com)** (New Project → pick
-   the repo) under a Pro or Enterprise project. It auto-detects Next.js; the
-   build command and one-minute cron are already in `vercel.json`. Protect
-   production with a manual promotion/deployment check before connecting the
-   live database: `build:vercel` applies additive migrations before compilation,
-   so an automatic production build is already a database change even when the
-   candidate is not promoted. If a trusted external scheduler is used instead,
-   configure the equivalent one-minute request and retain the authentication
-   boundary described below. Enable exactly one scheduler, never both.
+   the repo). Vercel Hobby is supported because `vercel.json` contains the build
+   command but no `crons` entry. It auto-detects Next.js. Protect production
+   with a manual promotion/deployment check before connecting the live database:
+   `build:vercel` applies additive migrations before compilation, so an
+   automatic production build is already a database change even when the
+   candidate is not promoted. The Cloudflare Worker is deployed separately and
+   is not activated until the promoted production route passes its health
+   checks.
 4. **Set Environment Variables** (Vercel → Project → Settings → Environment
    Variables):
 
@@ -403,10 +403,12 @@ declares the same runtime line used by every CI job.
    not support a first-user admin bootstrap: `ADMIN_STEAM_IDS` must already
    contain at least one trusted administrator before the first deployment.
    `CRON_SECRET` must be 32–512 characters, contain no whitespace, and be
-   distinct from both other secrets. Vercel Cron sends it
-   as `Authorization: Bearer <CRON_SECRET>`; an external scheduler must do the
-   same. Never put this value in a URL, query string, source file, or copied
-   shell command.
+   distinct from both other secrets. Store the identical value as the
+   Cloudflare Worker's encrypted `AUTOMATION_SECRET`; the Worker sends it as
+   `Authorization: Bearer <CRON_SECRET>`. The non-secret `AUTOMATION_URL` is
+   reviewed and pinned in `wrangler.jsonc`; do not override it at deploy time.
+   Never put the secret value in a URL, query string, source file, command
+   argument, commit, issue, screenshot, log, or chat.
 
    > **Privacy and terms are launch configuration, not placeholders.**
    > `/privacy` and `/terms` are public and linked from the site. Set
@@ -521,9 +523,8 @@ declares the same runtime line used by every CI job.
    writing migration metadata, keeps credentials out of process arguments, and
    never changes the committed SQLite schema or generated client. Omitting
    `--apply` fails before any database mutation.
-6. **Prove health before promotion, then prove the real scheduler immediately
-   after promotion.** Use the candidate deployment URL and a non-production
-   database first:
+6. **Prove health before promotion.** Use the candidate deployment URL and a
+   non-production database first:
 
    ```bash
    export LEAGUE_SITE_ORIGIN="https://candidate.example"
@@ -545,42 +546,84 @@ declares the same runtime line used by every CI job.
    cron request must be 401, POST `/api/sync` must be 405, and GET `/api/sync`
    must return only the read-only `updated`, `watch`, and `cursor` snapshot.
 
-   A Vercel preview does not receive Vercel Cron. Before promotion, exercise an
-   Admin manual run or a reviewed external staging invocation against the
-   non-production database. After the controlled production promotion, enable
-   exactly one scheduler using its stored secret—do not paste the secret into a
-   terminal command—and observe **two consecutive one-minute invocations
-   complete with HTTP 200 and `status: "SUCCEEDED"`**. Require
-   `/api/health/automation` to return HTTP 200. In Admin →
-   Automation, verify Last attempt and Last success advance, Source says
-   **Scheduled cron**, the lease clears after each pass, and the failure streak
-   remains zero. Exercise **Run maintenance now** once while idle and verify it
-   records an Admin manual run; if cron owns the lease, the control must refuse
-   to overlap it. Alert on cron non-2xx responses, readiness failures, or four
-   minutes without a completed pass. The complete pinned-commit promotion,
-   evidence, freeze, rollback, recovery, and secret-rotation procedure is in
+   The production Cloudflare Worker must never target a Vercel preview. Before
+   promotion, exercise an Admin manual run or a separate reviewed staging
+   invocation against the non-production database.
+
+7. **Deploy the private Cloudflare scheduler after the controlled production
+   promotion.** `ops/cloudflare-automation-worker/wrangler.jsonc` disables
+   `workers.dev`, pins the reviewed production `AUTOMATION_URL`, requires the
+   encrypted `AUTOMATION_SECRET` binding, and declares the repository's only
+   `* * * * *` trigger. The sibling `wrangler.paused.jsonc` is the reviewed stop
+   control and differs only by setting `crons` to an empty array. Enter the
+   secret only at Wrangler's hidden interactive prompt, verify only its name,
+   and deploy with the pinned Wrangler version:
+
+   ```bash
+   npx wrangler@4.118.0 login
+   npx wrangler@4.118.0 secret put AUTOMATION_SECRET --cwd ops/cloudflare-automation-worker
+   npx wrangler@4.118.0 secret list --cwd ops/cloudflare-automation-worker
+   npm run scheduler:deploy
+   npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
+   ```
+
+   Supply `AUTOMATION_SECRET` from the approved password manager without putting
+   it in shell history, standard output, or a command argument. It is
+   byte-for-byte the same value as Vercel's `CRON_SECRET`. `secret list` must
+   show the binding name, never its value. Never copy the production value into
+   `.dev.vars`; that file is for non-production local testing only. The committed
+   `AUTOMATION_URL` must remain the exact reviewed HTTPS endpoint, with no
+   credentials, port, query, or fragment.
+
+   The current Cloudflare Workers Free limits are 100,000 requests/day, five
+   Cron Triggers/account, 50 external subrequests/invocation, 10 ms CPU per Cron
+   Trigger, and 15 minutes wall time. This Worker uses about 1,440 invocations a
+   day, one trigger, one HTTPS subrequest per invocation, a 65-second timeout,
+   and only a bounded 2 KiB response parse. Confirm the account has unused
+   capacity and re-check Cloudflare's current
+   [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
+   before launch; limits are shared and can change.
+
+   Cron Trigger changes may take up to 15 minutes to propagate. Confirm the
+   Cloudflare dashboard shows exactly one `* * * * *` trigger and Vercel shows
+   none, then observe **two consecutive one-minute invocations complete with
+   HTTP 200 and `status: "SUCCEEDED"`**. Require
+   `/api/health/automation` to return HTTP 200. In Admin → Automation, verify
+   Last attempt and Last success advance, Source says **Scheduled cron**, the
+   lease clears after each pass, and the failure streak remains zero. Exercise
+   **Run maintenance now** once while idle and verify it records an Admin manual
+   run; if the Worker owns the lease, the control must refuse to overlap it.
+   Alert on failed Cloudflare Cron Events, route non-2xx responses, readiness
+   failures, or four minutes without a completed pass. The complete
+   pinned-commit promotion, evidence, pause, rollback, recovery, and
+   secret-rotation procedure is in
    [`docs/PRODUCTION-OPERATIONS.md`](docs/PRODUCTION-OPERATIONS.md).
 
-7. **Sign in with an allowlisted Steam account.** Then go to **/admin**, create
+8. **Sign in with an allowlisted Steam account.** Then go to **/admin**, create
    the season, and set the MMR cap. Steam pulls names and avatars automatically.
 
 If you add or change a custom domain, update both `APP_URL` and
 `NEXT_PUBLIC_SITE_URL` to the identical canonical HTTPS origin, redeploy, and
-update the exact Discord OAuth callback. Then repeat Steam and Discord login
-smoke tests before moving traffic.
+update the exact Discord OAuth callback. The Worker continues to use its
+reviewed Vercel production endpoint; changing `AUTOMATION_URL` is a separate
+code-reviewed scheduler change, not a custom-domain deployment variable. Repeat
+Steam and Discord login smoke tests before moving traffic.
 
 ### Application rollback order
 
 Database migrations are forward-only and additive. Rolling the application
 back means promoting a previously tested application build, not running SQL
-down migrations. Vercel rollback does not reliably reconcile cron
-configuration, so use this sequence explicitly:
+down migrations. The Cloudflare trigger is managed outside Vercel, so use this
+sequence explicitly:
 
-1. Pause or remove the one-minute schedule and confirm new cron requests have
-   stopped. Do this before promoting code that may not expose the authenticated
-   worker route.
-2. Wait at least 90 seconds, then confirm Admin → Automation shows no active
-   lease. Do not bypass or delete a live lease row.
+1. Run `npm run scheduler:pause`. It deploys the reviewed paused configuration
+   with `crons: []`; verify Cloudflare shows zero Cron Triggers. Do not edit a
+   Wrangler-managed trigger only in the dashboard.
+2. Wait the full 15-minute propagation bound, then confirm Admin → Automation
+   records no new Scheduled cron attempts across two further expected minute
+   slots. Wait at least 90 seconds after the last possible attempt and confirm
+   no active lease remains. Do not bypass or delete a live lease row. Only then
+   promote code that may not expose the authenticated worker route.
 3. Promote the previous application build. Leave all committed migrations and
    newly added tables in place; the release migrations are designed so the old
    binary can keep serving against the expanded schema.
@@ -590,8 +633,9 @@ configuration, so use this sequence explicitly:
    build predating this release may still mutate state on GET. Keep the
    scheduler paused if that build predates `/api/cron/automation`, and point
    platform probes at endpoints that actually exist in that release.
-5. After the repaired forward build is deployed, re-enable the authenticated
-   one-minute schedule and repeat the two-consecutive-success check above.
+5. After the repaired forward build is deployed, run `npm run scheduler:deploy`.
+   Confirm Vercel still has no cron, allow for Cloudflare
+   propagation, and repeat the two-consecutive-success check above.
 
 If an incident is caused by data rather than code, stop here and restore only
 through the rehearsed database recovery procedure below; do not improvise a
@@ -717,13 +761,14 @@ in Admin. Also alert on non-2xx `/api/cron/automation` responses.
 Do **not** point a monitor at `/api/sync` to run maintenance. It is a public,
 read-only cursor/watch snapshot used by visible browser tabs; it never imports
 games, advances phases, sends Discord messages, or drains an outbox. The
-bearer-authenticated one-minute scheduler is the only unattended worker
-trigger. An administrator can explicitly request the same bounded worker from
-Admin → Automation, under the same lease.
-Vercel does not retry a failed cron invocation, so the next minute's run plus
-the persisted leases/outboxes provide recovery; monitoring must still surface
-the failed pass. See Vercel's [cron management
-guidance](https://vercel.com/docs/cron-jobs/manage-cron-jobs).
+bearer-authenticated Cloudflare Worker is the only unattended worker trigger.
+An administrator can explicitly request the same bounded worker from Admin →
+Automation, under the same lease. The Worker treats every response other than
+HTTP 200 with `{ ok: true, status: "SUCCEEDED" }` as a failed Cron Event; the next
+minute's invocation plus the persisted leases/outboxes provide recovery, while
+monitoring must still surface the failed pass. Review Cloudflare's
+[Cron Trigger operations](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
+and the private Admin automation state together.
 
 ### Alternatives (keep SQLite, no DB change)
 
