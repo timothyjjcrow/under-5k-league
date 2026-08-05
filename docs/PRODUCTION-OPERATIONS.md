@@ -200,17 +200,36 @@ residual risk.
 ### Provision and roll out
 
 Deploy only after the pinned Vercel production release exposes a healthy
-`/api/cron/automation` route. Use the exact reviewed Wrangler version. Enter the
-secret only at Wrangler's hidden prompt; `secret list` should reveal its name
-and type, never its value.
+`/api/cron/automation` route. Use the exact reviewed Wrangler version. On a
+brand-new account, `wrangler secret put` fails because the Worker does not yet
+exist. Bootstrap it with the paused config and a private, short-lived secrets
+file, then verify the binding before enabling the trigger. `secret list` should
+reveal its name and type, never its value.
 
 ```bash
 npx wrangler@4.118.0 login
-npx wrangler@4.118.0 secret put AUTOMATION_SECRET --cwd ops/cloudflare-automation-worker
+umask 077
+task_secrets_file="$(mktemp)"
+trap 'rm -f -- "$task_secrets_file"' EXIT
+printf 'AUTOMATION_SECRET: ' >&2
+IFS= read -r -s task_scheduler_secret
+printf '\n' >&2
+printf 'AUTOMATION_SECRET=%s\n' "$task_scheduler_secret" > "$task_secrets_file"
+unset task_scheduler_secret
+npx wrangler@4.118.0 deploy \
+  --config ops/cloudflare-automation-worker/wrangler.paused.jsonc \
+  --secrets-file "$task_secrets_file"
+rm -f -- "$task_secrets_file"
+trap - EXIT
 npx wrangler@4.118.0 secret list --cwd ops/cloudflare-automation-worker
 npm run scheduler:deploy
 npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
 ```
+
+The temporary file must be mode 0600, must remain outside the repository, and
+must be removed immediately after the paused bootstrap. The active deployment
+must not run until the production route is healthy and Vercel's `CRON_SECRET`
+matches the encrypted binding.
 
 Confirm the deployed `AUTOMATION_URL` matches the reviewed config, Cloudflare
 shows exactly one `* * * * *` trigger, and Vercel shows none. Adding, changing,

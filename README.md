@@ -555,20 +555,36 @@ declares the same runtime line used by every CI job.
    `workers.dev`, pins the reviewed production `AUTOMATION_URL`, requires the
    encrypted `AUTOMATION_SECRET` binding, and declares the repository's only
    `* * * * *` trigger. The sibling `wrangler.paused.jsonc` is the reviewed stop
-   control and differs only by setting `crons` to an empty array. Enter the
-   secret only at Wrangler's hidden interactive prompt, verify only its name,
-   and deploy with the pinned Wrangler version:
+   control and differs only by setting `crons` to an empty array. On a brand-new
+   Cloudflare account the Worker does not exist yet, so `wrangler secret put`
+   cannot be the first command. Bootstrap the Worker with the paused config and
+   a private, short-lived secrets file; only then deploy the active config. Use
+   the pinned Wrangler version:
 
    ```bash
    npx wrangler@4.118.0 login
-   npx wrangler@4.118.0 secret put AUTOMATION_SECRET --cwd ops/cloudflare-automation-worker
+   umask 077
+   task_secrets_file="$(mktemp)"
+   trap 'rm -f -- "$task_secrets_file"' EXIT
+   printf 'AUTOMATION_SECRET: ' >&2
+   IFS= read -r -s task_scheduler_secret
+   printf '\n' >&2
+   printf 'AUTOMATION_SECRET=%s\n' "$task_scheduler_secret" > "$task_secrets_file"
+   unset task_scheduler_secret
+   npx wrangler@4.118.0 deploy \
+     --config ops/cloudflare-automation-worker/wrangler.paused.jsonc \
+     --secrets-file "$task_secrets_file"
+   rm -f -- "$task_secrets_file"
+   trap - EXIT
    npx wrangler@4.118.0 secret list --cwd ops/cloudflare-automation-worker
    npm run scheduler:deploy
    npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
    ```
 
    Supply `AUTOMATION_SECRET` from the approved password manager without putting
-   it in shell history, standard output, or a command argument. It is
+   it in shell history, standard output, or a command argument. The temporary
+   file must be mode 0600, must stay outside the repository, and must be removed
+   immediately after the paused bootstrap. It is
    byte-for-byte the same value as Vercel's `CRON_SECRET`. `secret list` must
    show the binding name, never its value. Never copy the production value into
    `.dev.vars`; that file is for non-production local testing only. The committed

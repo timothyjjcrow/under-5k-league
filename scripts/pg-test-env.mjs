@@ -30,14 +30,40 @@ try {
 
 const run = (cmd, env = {}) =>
   execSync(cmd, { stdio: "inherit", env: { ...process.env, ...env } });
-const adminUrl = new URL(parsed);
-adminUrl.pathname = "/postgres";
-const databaseToolEnv = { ...process.env, PGDATABASE: adminUrl.toString() };
+const decodeCredential = (value, name) => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    console.error(`PG_TEST_URL contains an invalid encoded ${name}.`);
+    process.exit(2);
+  }
+};
+const databaseToolEnv = {
+  ...process.env,
+  PGHOST: parsed.hostname.replace(/^\[(.*)\]$/, "$1"),
+  PGPORT: parsed.port || "5432",
+  PGDATABASE: "postgres",
+};
+if (parsed.username) {
+  databaseToolEnv.PGUSER = decodeCredential(parsed.username, "username");
+} else {
+  delete databaseToolEnv.PGUSER;
+}
+if (parsed.password) {
+  databaseToolEnv.PGPASSWORD = decodeCredential(parsed.password, "password");
+} else {
+  delete databaseToolEnv.PGPASSWORD;
+}
 delete databaseToolEnv.DATABASE_URL;
 delete databaseToolEnv.DIRECT_URL;
+delete databaseToolEnv.PG_TEST_URL;
+const maintenanceArgs = ["--maintenance-db=postgres"];
 const quietDatabaseTool = (command, args) => {
   try {
-    execFileSync(command, args, { stdio: "pipe", env: databaseToolEnv });
+    execFileSync(command, [...maintenanceArgs, ...args], {
+      stdio: "pipe",
+      env: databaseToolEnv,
+    });
   } catch {
     /* best effort */
   }
@@ -48,7 +74,10 @@ const dbEnv = { DATABASE_URL: url, DIRECT_URL: url };
 
 if (mode === "up") {
   quietDatabaseTool("dropdb", ["--if-exists", "--force", DB]);
-  execFileSync("createdb", [DB], { stdio: "inherit", env: databaseToolEnv });
+  execFileSync("createdb", [...maintenanceArgs, DB], {
+    stdio: "inherit",
+    env: databaseToolEnv,
+  });
   run("node scripts/switch-db-provider.mjs postgresql");
   run("npm run db:migrate:validate", dbEnv);
   run("npm run db:migrate:preflight", dbEnv);
