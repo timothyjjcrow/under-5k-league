@@ -27,8 +27,8 @@ a second Vercel, monitor, or external schedule.
 
 Record names or on-call handles for all four functions. Two people should be
 able to access the hosting and database providers with MFA before traffic is
-opened. The privacy owner and deputy must each have independent MFA access to
-the privacy mailbox and private case register; a shared password is not
+opened. The data correction owner and deputy must each have independent MFA
+access to the private support channel and case register; a shared password is not
 continuity.
 
 - Release owner: controls the pinned deployment and final go/no-go.
@@ -36,7 +36,7 @@ continuity.
 - Incident/communications owner: owns monitoring acknowledgement and player
   communication through a channel independent of the application and Discord
   bot being recovered.
-- Privacy request owner and deputy: own private intake, identity verification,
+- Data correction owner and deputy: own private intake, identity verification,
   request scoping, the case register, reviewed fulfillment, and restoration
   replay. The deputy must be able to continue the process without the primary.
 
@@ -53,7 +53,7 @@ Previous production deployment ID + commit:
 Candidate deployment ID + commit:
 Production deployment ID + commit:
 Release owner / database owner / communications owner:
-Privacy request owner / deputy:
+Data correction owner / deputy:
 Go/no-go approvers:
 
 Hosting plan and Node 22 evidence:
@@ -97,14 +97,12 @@ League/inhouse webhook channel result:
 OpenDota profile and real match-import result:
 Temporary credential failure/timeout log-trace inspection + rotation result:
 Largest representative season archive byte size / 413 rehearsal result:
-Published privacy mailbox and page verification:
-Verified hosting/database/backup/log storage countries:
-Primary/deputy mailbox MFA and continuity result:
+Private support contact test and continuity result:
+Primary/deputy contact-channel MFA result:
 Private case-register storage/access/encryption/retention evidence:
-Privacy action/replay register location and access evidence:
-Privacy contact test case ID + send/acknowledgement result (no request content):
-Privacy request/retention/restore tabletop result:
-External-provider and backup limitations verified against the public page:
+Data-correction replay register location and access evidence:
+Support test case ID + send/acknowledgement result (no request content):
+Data-correction/retention/restore tabletop result:
 
 live probe result:
 ready probe result:
@@ -161,13 +159,10 @@ Residual risks explicitly accepted:
    path tokens, then rotate the temporary values. Platform tracing is outside
    application catch blocks; any captured credential is a release stop until
    tracing is redacted/disabled and the credential is rotated.
-8. Verify the privacy/data-use page matches the selected host, database,
-   backups, scheduler, logging, retention behavior, external-provider limits,
-   and contact process. Confirm the privacy primary and deputy can independently
-   reach the protected mailbox and case register, send and acknowledge one test
+8. Confirm the data correction primary and deputy can independently reach the
+   private support channel and case register, send and acknowledge one test
    request, and complete the tabletop below. Record the real provider retention
-   windows and enforcement mechanisms; do not rely on an unsupported public
-   promise.
+   windows and enforcement mechanisms in the private release record.
 9. Configure independent monitors for liveness, readiness, automation freshness,
    failed Cloudflare Cron Events/route non-2xx, and database/provider faults.
    Deliver and acknowledge a test alert through a channel that remains available
@@ -356,7 +351,7 @@ name intentionally invalidates sessions from the previous release; announce and
 verify the one-time sign-in requirement rather than adding a legacy-cookie
 fallback that restores sibling-domain cookie tossing.
 
-## Privacy requests and retention
+## Data correction and retention
 
 This is the manual operating contract for the first release. It is not a
 self-service export or deletion feature, does not decide whether a particular
@@ -367,9 +362,9 @@ outside this runbook rather than improvising against production data.
 
 ### Intake, verification, and case handling
 
-1. Accept requests only through the private mailbox published on the
-   privacy/data-use page. The mailbox must remain available if the application
-   or Discord is unavailable. Never direct private request details to a public
+1. Accept requests only through the private support contact chosen by league
+   operators. The contact channel must remain available if the application or
+   Discord is unavailable. Never direct private request details to a public
    Discord channel, repository issue, ordinary support log, or an application
    `AdminAction` summary.
 2. Reply with an opaque case ID and open a record in the access-controlled case
@@ -415,7 +410,7 @@ outside this runbook rather than improvising against production data.
    correction at that provider before the next local refresh.
 4. A database correction or de-identification that is not an existing tested
    application action requires a written, row-scoped change plan. The database
-   owner and privacy owner must review it, create or reconfirm a recovery point,
+   owner and data correction owner must review it, create or reconfirm a recovery point,
    rehearse it against a disposable clone, record credential-free before/after
    counts and invariants, run it in a controlled traffic-free window, and verify
    connected league pages and workflows afterward. Never use an unreviewed
@@ -449,9 +444,9 @@ outside this runbook rather than improvising against production data.
   record the providers' encryption and protected-access controls; do not infer
   them from marketing language or leave them as an undocumented assumption.
 - Discord messages and roles already delivered, and source records held by
-  Steam, OpenDota, or Discord, are controlled through those providers. The public
-  page and case closure must distinguish a local unlink/correction from deletion
-  at an external provider. Backups and PITR can retain an older value until their
+  Steam, OpenDota, or Discord, are controlled through those providers. The case
+  closure must distinguish a local unlink/correction from deletion at an external
+  provider. Backups and PITR can retain an older value until their
   configured expiry even after the live database is corrected.
 - Maintain a private restoration-replay register for every approved correction
   or de-identification. Store the opaque case ID, stable subject identifiers,
@@ -460,14 +455,15 @@ outside this runbook rather than improvising against production data.
   prose, or exported personal data. Protect it like the case register.
 - Before promoting any restored snapshot, compare its recovery time with the
   replay register. Reapply and verify every later approved correction or
-  de-identification on the disposable restore, then obtain privacy-owner and
+  de-identification on the disposable restore, then obtain data-correction-owner and
   database-owner approval. A technically healthy restore that resurrects a
   previously corrected value is not safe to promote.
 - A future retention cleanup must be a focused, reviewed release with backup,
-  dry-run/rehearsal, bounded deletion, observability, and tests. Until then, keep
-  the privacy page truthful about the absence of automatic expiry.
+  dry-run/rehearsal, bounded deletion, observability, and tests. Until then,
+  keep the private operator inventory accurate about the absence of automatic
+  expiry.
 
-### Pre-launch privacy tabletop
+### Pre-launch data-handling tabletop
 
 Run all five scenarios with fixture-only request content and record the opaque
 case IDs, operators, outcomes, and unresolved gaps in the private launch record:
@@ -486,10 +482,10 @@ case IDs, operators, outcomes, and unresolved gaps in the private launch record:
    find the later action in the replay register, reapply it, and verify it before
    declaring the restore eligible for promotion.
 5. The primary is unavailable. The deputy independently accesses the MFA-backed
-   mailbox and encrypted case register, acknowledges the test case, and follows
+   contact channel and encrypted case register, acknowledges the test case, and follows
    the same verification rules without a shared credential.
 
-An unverified mailbox, inaccessible deputy path, missing storage/encryption or
+An unverified contact channel, inaccessible deputy path, missing storage/encryption or
 retention evidence, unsafe subject extraction, failed rehearsal, or incomplete
 restore replay is a release stop, not a residual risk to discover after traffic
 opens.
@@ -573,8 +569,8 @@ Use this when data is corrupt, missing, or of uncertain integrity.
    Confirm reads and a disposable transactional write/rollback through the
    runtime role. Exercise the actor/phase smoke checklist.
 5. Compare the restore point with the private restoration-replay register.
-   Reapply every later approved privacy correction or de-identification on the
-   clone, verify its subject-specific postflight, and obtain privacy-owner and
+   Reapply every later approved data correction or de-identification on the
+   clone, verify its subject-specific postflight, and obtain data-correction-owner and
    database-owner approval that the recovered data will not resurrect it.
 6. Obtain database-owner and release-owner approval for cutover. Point
    production secrets to the recovered target through a manually approved

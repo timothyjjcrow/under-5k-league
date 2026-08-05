@@ -393,8 +393,6 @@ declares the same runtime line used by every CI job.
    | `APP_URL`                                     | canonical HTTPS origin, e.g. `https://league.example`                |
    | `NEXT_PUBLIC_SITE_URL`                        | the same canonical HTTPS origin as `APP_URL`                         |
    | `ADMIN_STEAM_IDS`                             | one or more valid, unique SteamID64s, comma-separated                |
-   | `PRIVACY_CONTACT_EMAIL`                       | monitored public mailbox for access/correction/deletion requests     |
-   | `PRIVACY_DATA_LOCATIONS`                      | verified storage countries used by hosting, DB, backups, and logs    |
    | `OPENDOTA_API_KEY`                            | optional                                                             |
    | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional — enables "Link Discord" account verification               |
    | `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID`      | optional — Discord join + inhouse role; bot needs Manage Roles + Create Invite |
@@ -409,17 +407,6 @@ declares the same runtime line used by every CI job.
    reviewed and pinned in `wrangler.jsonc`; do not override it at deploy time.
    Never put the secret value in a URL, query string, source file, command
    argument, commit, issue, screenshot, log, or chat.
-
-   > **Privacy and terms are launch configuration, not placeholders.**
-   > `/privacy` and `/terms` are public and linked from the site. Set
-   > `PRIVACY_CONTACT_EMAIL` to a monitored, deliverable mailbox, then verify
-   > the actual hosting, database, backup, and application-log countries before
-   > setting `PRIVACY_DATA_LOCATIONS`; do not infer a country from the operator's
-   > address or the provider's company address. Before promotion, the operator
-   > must review both pages for the league's real practices and jurisdiction,
-   > monitor the published mailbox, and put the canonical `/privacy` URL in the
-   > Discord Developer Portal. Update the notices and effective dates whenever
-   > those practices materially change.
 
    > **`ADMIN_STEAM_IDS` is authoritative.** Exactly those accounts are admins;
    > authorization is recomputed on every authenticated request, so removing an
@@ -482,8 +469,6 @@ declares the same runtime line used by every CI job.
    used for migrations, placeholder or short auth/backup-receipt secrets, a
    missing/placeholder Steam API key, an unusable cron secret, incomplete
    Discord OAuth or bot/guild pairs, a production `DISCORD_API_BASE` test seam,
-   a missing/placeholder public privacy mailbox, missing verified data-storage
-   locations,
    missing/invalid/duplicate admin SteamIDs, non-HTTPS or divergent site
    origins, enabled dev login, and configured test-only or obsolete release
    overrides. Runtime and migration URLs may legitimately use different

@@ -46,8 +46,6 @@ export default defineConfig({
     env: {
       DATABASE_URL: E2E_DB_URL,
       ALLOW_DEV_LOGIN: "true",
-      PRIVACY_CONTACT_EMAIL: "privacy@ggd2l.org",
-      PRIVACY_DATA_LOCATIONS: "United States, Germany",
       // Next's dev worker restarts at 80% of its V8 heap limit. The full
       // single-server browser suite intentionally compiles almost every route;
       // the default constrained heap restarted between two poll-resilience

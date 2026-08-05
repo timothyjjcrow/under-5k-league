@@ -18,8 +18,6 @@ const VALID = {
   ADMIN_STEAM_IDS: "76561198000000001,76561198000000002",
   APP_URL: "https://league.example",
   NEXT_PUBLIC_SITE_URL: "https://league.example",
-  PRIVACY_CONTACT_EMAIL: "privacy@ggd2l.org",
-  PRIVACY_DATA_LOCATIONS: "United States",
   ALLOW_DEV_LOGIN: "false",
 } satisfies NodeJS.ProcessEnv;
 
@@ -76,9 +74,6 @@ describe("production environment validation", () => {
     ],
     ["APP_URL", "http://league.example", "APP_URL"],
     ["NEXT_PUBLIC_SITE_URL", "https://league.example/path", "NEXT_PUBLIC_SITE_URL"],
-    ["PRIVACY_CONTACT_EMAIL", "", "PRIVACY_CONTACT_EMAIL"],
-    ["PRIVACY_DATA_LOCATIONS", "", "PRIVACY_DATA_LOCATIONS"],
-    ["PRIVACY_DATA_LOCATIONS", "TBD", "PRIVACY_DATA_LOCATIONS"],
     ["ALLOW_DEV_LOGIN", "true", "ALLOW_DEV_LOGIN"],
   ])("rejects unsafe %s configuration", (key, value, message) => {
     const result = run({ [key]: value });
@@ -91,25 +86,6 @@ describe("production environment validation", () => {
     const result = run({ NEXT_PUBLIC_SITE_URL: "https://www.league.example" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("same canonical origin");
-  });
-
-  it.each([
-    " privacy@ggd2l.org",
-    "Privacy Team <privacy@ggd2l.org>",
-    "mailto:privacy@ggd2l.org",
-    "privacy@ggd2l.org,other@ggd2l.org",
-    "privacy@league.example",
-    "privacy@example.com",
-    "privacy@league.invalid",
-    "privacy@league.test",
-    `privacy@ggd2l.org\nBcc: attacker@evil.example`,
-    `${"a".repeat(245)}@ggd2l.org`,
-  ])("rejects unsafe or placeholder privacy contact %j", (value) => {
-    const result = run({ PRIVACY_CONTACT_EMAIL: value });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("PRIVACY_CONTACT_EMAIL");
-    expect(result.stderr).not.toContain(value);
-    expect(result.stderr).not.toContain(VALID.AUTH_SECRET);
   });
 
   it("requires the backup receipt key to be independent from session signing", () => {

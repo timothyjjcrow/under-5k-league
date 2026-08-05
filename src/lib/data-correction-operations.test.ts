@@ -18,7 +18,7 @@ function between(startMarker: string, endMarker: string): string {
 
 const OWNERS = between("## Required owners", "## Launch evidence record");
 const RUNBOOK = between(
-  "## Privacy requests and retention",
+  "## Data correction and retention",
   "## Controlled promotion",
 );
 const INTAKE = RUNBOOK.slice(
@@ -31,24 +31,20 @@ const FULFILLMENT = RUNBOOK.slice(
 );
 const RETENTION = RUNBOOK.slice(
   RUNBOOK.indexOf("### Retention and restoration replay"),
-  RUNBOOK.indexOf("### Pre-launch privacy tabletop"),
+  RUNBOOK.indexOf("### Pre-launch data-handling tabletop"),
 );
 const TABLETOP = RUNBOOK.slice(
-  RUNBOOK.indexOf("### Pre-launch privacy tabletop"),
+  RUNBOOK.indexOf("### Pre-launch data-handling tabletop"),
 );
 
-const compact = (source: string) => source.replace(/\s+/g, " ");
+const compact = (sourceText: string) => sourceText.replace(/\s+/g, " ");
 
-/**
- * Source guards are appropriate here because the contract is operator prose,
- * not executable application behavior. Match concepts inside their runbook
- * sections so wording can improve without silently dropping a safety boundary.
- */
-describe("production privacy operations contract", () => {
+describe("production data-correction operations contract", () => {
   it("keeps independent primary/deputy ownership and private case handling", () => {
-    expect(OWNERS).toMatch(/privacy request owner and deputy/i);
-    expect(OWNERS).toMatch(/independent MFA access/i);
-    expect(OWNERS).toMatch(/deputy must be able to continue/i);
+    const owners = compact(OWNERS);
+    expect(owners).toMatch(/data correction owner and deputy/i);
+    expect(owners).toMatch(/independent MFA access/i);
+    expect(owners).toMatch(/deputy must be able to continue/i);
     expect(compact(INTAKE)).toMatch(
       /(?:access-controlled|private)[^.]{0,80}case register/i,
     );
@@ -73,7 +69,7 @@ describe("production privacy operations contract", () => {
   it("requires a complete source inventory and a subject-only response", () => {
     const fulfillment = compact(FULFILLMENT);
     expect(fulfillment).toMatch(/source inventory/i);
-    for (const source of [
+    for (const dataSource of [
       /database/i,
       /backups?\b|PITR/i,
       /application logs/i,
@@ -81,7 +77,7 @@ describe("production privacy operations contract", () => {
       /Steam/i,
       /OpenDota/i,
     ]) {
-      expect(fulfillment).toMatch(source);
+      expect(fulfillment).toMatch(dataSource);
     }
 
     expect(fulfillment).toMatch(/subject-specific/i);
@@ -92,12 +88,12 @@ describe("production privacy operations contract", () => {
 
   it("requires two-person review and disposable-clone rehearsal", () => {
     const fulfillment = compact(FULFILLMENT);
-    expect(fulfillment).toMatch(/database owner and privacy owner must review/i);
+    expect(fulfillment).toMatch(/database owner and data correction owner must review/i);
     expect(fulfillment).toMatch(/rehearse[^.]*disposable clone/i);
     expect(fulfillment).toMatch(/correction or de-identification/i);
   });
 
-  it("makes restore replay and failed privacy evidence release stops", () => {
+  it("makes restore replay and failed handling evidence release stops", () => {
     const retention = compact(RETENTION);
     const tabletop = compact(TABLETOP);
     expect(retention).toMatch(/before promoting any restored snapshot/i);
@@ -105,7 +101,7 @@ describe("production privacy operations contract", () => {
     expect(retention).toMatch(/reapply and verify/i);
 
     for (const stopCondition of [
-      /unverified mailbox/i,
+      /unverified contact channel/i,
       /inaccessible deputy/i,
       /storage\/encryption[^.]*retention evidence/i,
       /unsafe subject extraction/i,

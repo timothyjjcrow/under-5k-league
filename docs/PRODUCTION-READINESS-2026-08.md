@@ -1011,8 +1011,6 @@ and must be recorded in `PRODUCTION-OPERATIONS.md` before traffic is opened:
 - Credentialed Steam, Discord, and OpenDota smoke tests plus a sacrificial
   failure trace/log inspection and immediate credential rotation.
 - A largest-representative-season export rehearsal below the enforced limit.
-- A monitored privacy mailbox, accurate storage-country/provider disclosures,
-  reviewed legal/process evidence, and deputy-operation proof.
 - Monitoring and alert routing, exactly one scheduler, traffic freeze and
   rollback rehearsal, and two named operator approvals.
 
@@ -1033,4 +1031,22 @@ could make that transient presentation impossible too.
 
 **External candidate deployment and evidence collection only: provider restore
 and migration, edge/WAF/cache/cookie proofs, credentialed integration smoke,
-monitoring, rollback, privacy operations, and two-operator launch approval.**
+monitoring, rollback, data-correction operations, and two-operator launch
+approval.**
+
+## Deployment follow-up — retire public policy pages
+
+The league operator later chose not to publish standalone privacy or terms
+pages for this friends league. That decision supersedes the public-policy-page
+work recorded in the historical iteration above without changing the app's
+actual data flow or visibility rules.
+
+- Removed `/privacy` and `/terms`, their login/profile/footer links, and their
+  sitemap entries. Both old routes now use the normal 404 response.
+- Removed `PRIVACY_CONTACT_EMAIL` and `PRIVACY_DATA_LOCATIONS` from production
+  validation, example configuration, CI, and browser fixtures.
+- Kept point-of-use explanations for Steam/OpenDota refreshes, public signup
+  fields, restricted Discord contact data, and irreversible external Discord
+  messages.
+- Kept private, two-person data-correction and restore-replay safeguards in the
+  operator runbook. These are recovery controls, not public policy pages.

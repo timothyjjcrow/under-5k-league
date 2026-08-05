@@ -917,15 +917,7 @@ export default async function MePage({
                     </p>
                     <p className="mt-1 text-xs text-muted">
                       Discord contact is limited to you, league admins, and
-                      active league participants. Read{" "}
-                      <Link href="/privacy" className={textLink()}>
-                        Privacy &amp; data use
-                      </Link>{" "}
-                      and the{" "}
-                      <Link href="/terms" className={textLink()}>
-                        league terms
-                      </Link>
-                      .
+                      active league participants.
                     </p>
                   </div>
 

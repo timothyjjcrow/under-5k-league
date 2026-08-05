@@ -1251,10 +1251,7 @@ export function SteamSafetyNote({ className }: { className?: string }) {
         This creates or updates your league profile with your public name,
         avatar, and profile link; we derive your Dota account and use OpenDota
         for your medal and public match activity. You sign in on Steam&apos;s own
-        site, so we never receive your Steam password or email.{" "}
-        <Link href="/privacy" className={textLink()}>
-          How your data is used →
-        </Link>
+        site, so we never receive your Steam password or email.
       </p>
     </div>
   );

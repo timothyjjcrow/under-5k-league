@@ -21,11 +21,11 @@ describe("public sitemap", () => {
       "/hall-of-fame",
       "/seasons",
       "/inhouse/history",
-      "/privacy",
-      "/terms",
     ]) {
       expect(urls).toContain(`https://league.example${path}`);
     }
+    expect(urls).not.toContain("https://league.example/privacy");
+    expect(urls).not.toContain("https://league.example/terms");
     expect(new Set(urls).size).toBe(urls.length);
   });
 

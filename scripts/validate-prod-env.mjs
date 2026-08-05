@@ -3,10 +3,6 @@
 // NODE_ENV=production for preview builds too, so an explicit non-production
 // VERCEL_ENV always wins and skips this production-only gate.
 import { postgresDatabaseIdentity } from "../src/lib/postgres-identity.mjs";
-import {
-  normalizePrivacyContactEmail,
-  normalizePrivacyDataLocations,
-} from "../src/lib/privacy-contact.mjs";
 import { normalizeDiscordWebhookUrl } from "../src/lib/discord-webhook.mjs";
 
 // Individual Steam accounts are universe/type/instance base 76561197960265728
@@ -97,22 +93,6 @@ function placeholderSecret(value) {
       trimmed,
     ) ||
     new Set(trimmed).size < 8
-  );
-}
-
-function placeholderPrivacyContact(value) {
-  const lower = value.toLowerCase();
-  const domain = lower.split("@")[1] ?? "";
-  return (
-    /(?:change[-_ ]?me|replace|placeholder|your[-_ ]?(?:email|domain)|todo|tbd)/i.test(
-      value,
-    ) ||
-    domain === "example.com" ||
-    domain === "example.net" ||
-    domain === "example.org" ||
-    domain.endsWith(".example") ||
-    domain.endsWith(".invalid") ||
-    domain.endsWith(".test")
   );
 }
 
@@ -252,25 +232,6 @@ export function validateProductionEnv(env) {
   }
   if (appOrigin && publicOrigin && appOrigin !== publicOrigin) {
     errors.push("APP_URL and NEXT_PUBLIC_SITE_URL must use the same canonical origin");
-  }
-
-  const privacyContact = normalizePrivacyContactEmail(
-    env.PRIVACY_CONTACT_EMAIL,
-  );
-  if (!privacyContact) {
-    errors.push(
-      "PRIVACY_CONTACT_EMAIL must be one plain, valid public mailbox",
-    );
-  } else if (placeholderPrivacyContact(privacyContact)) {
-    errors.push(
-      "PRIVACY_CONTACT_EMAIL must not use a placeholder or reserved test domain",
-    );
-  }
-
-  if (!normalizePrivacyDataLocations(env.PRIVACY_DATA_LOCATIONS)) {
-    errors.push(
-      "PRIVACY_DATA_LOCATIONS must name the verified countries where league-controlled data is stored or processed",
-    );
   }
 
   if (env.ALLOW_DEV_LOGIN && env.ALLOW_DEV_LOGIN !== "false") {
