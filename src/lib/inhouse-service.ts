@@ -1619,7 +1619,7 @@ export async function autoDetectResult(
       ok: false,
       error: unreachable
         ? "OpenDota didn't respond (down or rate-limited) — try again in a minute, or paste the match ID."
-        : "Couldn't find the game on OpenDota yet — make sure it's finished and players have 'Expose Public Match Data' on. You can also paste the match ID.",
+        : `Couldn't find the game on OpenDota yet — make sure it's finished, the ${INHOUSE.LOBBY_TICKET} ticket was used, and players have 'Expose Public Match Data' on. You can also paste the match ID.`,
     };
   }
   if (!(await applyResult(lobby.id, found))) {

@@ -1006,12 +1006,10 @@ export function InhouseRoom({
  * TYPED confirmation, for the /admin reason: `window.confirm` focuses OK by
  * default, so it is one Enter away, and it looks identical whether it guards a
  * rename or the scrapping of a live game ten people are inside. The token is
- * the LOBBY CODE — the Dota password those ten are playing under, and the value
- * `GameSetupCard` prints for anyone who is in the lobby. Like DangerSubmit's
- * season name it is shown in the dialog rather than kept secret (it is a
- * barrier against reflex, not against knowledge), but it means confirming
- * NAMES the exact game being killed instead of reproducing a magic word — an
- * admin who has the wrong lobby on screen has to notice.
+ * a stable code derived from the lobby id. It is shown in the dialog rather
+ * than kept secret (it is a barrier against reflex, not against knowledge),
+ * but it means confirming the exact game being killed instead of reproducing
+ * a fixed word — an admin who has the wrong lobby on screen has to notice.
  *
  * Inline rather than `<DangerSubmit>`: that one reads `useFormStatus` and
  * submits a server action, while this room is a fetch client whose pending
@@ -1031,7 +1029,7 @@ function ForceCancelLobby({
   pending,
   act,
 }: {
-  /** `inhouseLobbyCode(lobby.id)` — the token, and the game's own name. */
+  /** `inhouseLobbyCode(lobby.id)` — the per-lobby confirmation token. */
   code: string;
   bettors: number;
   staked: number;
@@ -2331,9 +2329,8 @@ function ReadyView({
         <div className="text-2xl">🎮</div>
         <h2 className="mt-1 text-lg font-semibold">Teams are set!</h2>
         <p className="mx-auto mt-1 max-w-md text-sm text-muted">
-          Set up the Dota lobby and hop into voice — the steps are just below.
-          Then hit start once everyone&apos;s in. No ticket or league id needed;
-          the result is found from players&apos; match histories.
+          Create the Dota lobby with the name, password, and league ticket
+          below. Once all ten players are in, start the game here.
         </p>
         {me.canStart ? (
           <button
@@ -3053,7 +3050,7 @@ function InProgressView({
               <p className="mx-auto mt-1.5 max-w-sm text-xs text-muted">
                 Finds your game on OpenDota and pulls the full box score.{" "}
                 {scanLive
-                  ? "Background auto-scan is live too — it re-checks every few minutes (needs players' “Expose Public Match Data” on)."
+                  ? `Background auto-scan is live too — it re-checks every few minutes (needs the ${INHOUSE.LOBBY_TICKET} ticket and players' “Expose Public Match Data” on).`
                   : `Background auto-scan kicks in ${detectMinMinutes} minutes into the game.`}
               </p>
             </div>
@@ -3146,10 +3143,11 @@ function CopyChip({ value, label }: { value: string; label: string }) {
 }
 
 /**
- * What the ten players do once teams lock: one hosts the Dota 2 lobby with a
- * shared name + password everyone sees, and each joins their team's Discord
- * voice channel. The lobby name/password are derived from the lobby id, so all
- * ten see the SAME values with no server round-trip.
+ * What the ten players do once teams lock: one hosts the Dota 2 lobby with the
+ * fixed shared credentials, selects the required league ticket, and everyone
+ * joins their team's Discord voice channel. Result discovery remains the
+ * existing player-account scan; the ticket makes the private game available
+ * to OpenDota for that scan to find.
  */
 function GameSetupCard({
   lobby,
@@ -3158,8 +3156,6 @@ function GameSetupCard({
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
 }) {
-  const code = inhouseLobbyCode(lobby.id);
-  const lobbyName = `${INHOUSE.LOBBY_NAME_PREFIX} #${code}`;
   const voiceByTeam = (team: number) =>
     team === 1 ? INHOUSE.VOICE_TEAM_1 : INHOUSE.VOICE_TEAM_2;
 
@@ -3173,33 +3169,51 @@ function GameSetupCard({
           1
         </span>
         <div className="min-w-0 text-sm">
-          <div className="font-medium">One player hosts the Dota 2 lobby</div>
+          <div className="font-medium">Create the custom lobby</div>
           <p className="mt-1 text-muted">
             In Dota 2: <strong>Play → Custom Lobbies → Create Lobby</strong>.
-            Set the name and password below, then invite/accept everyone.
+            One player hosts it with these exact details:
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
             <span className="flex items-center gap-2">
               <span className="text-xs text-muted">Lobby name</span>
-              <CopyChip value={lobbyName} label="lobby name" />
+              <CopyChip value={INHOUSE.LOBBY_NAME} label="lobby name" />
             </span>
             <span className="flex items-center gap-2">
               <span className="text-xs text-muted">Password</span>
-              <CopyChip value={code} label="password" />
+              <CopyChip value={INHOUSE.LOBBY_PASSWORD} label="password" />
             </span>
           </div>
           <p className="mt-2 text-xs text-muted">
             Everyone else: open <strong>Custom Lobbies</strong>, find{" "}
-            <span className="font-mono text-fg">{lobbyName}</span> in the list
-            (or ask the host to invite you) and join with the password.
+            <span className="font-mono text-fg">{INHOUSE.LOBBY_NAME}</span> in
+            the list (or ask the host to invite you) and join with the password.
           </p>
         </div>
       </div>
 
-      {/* Step 2 — join your team's voice channel */}
+      {/* Step 2 — select the ticket that makes the game visible to OpenDota. */}
       <div className="mt-4 flex gap-3">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
           2
+        </span>
+        <div className="min-w-0 text-sm">
+          <div className="font-medium">Set the required league ticket</div>
+          <p className="mt-1 text-muted">
+            In <strong>Lobby Settings</strong>, set the league/ticket to{" "}
+            <CopyChip value={INHOUSE.LOBBY_TICKET} label="league ticket" />.
+          </p>
+          <p className="mt-2 text-xs font-medium text-danger">
+            Required: without this ticket, the game will not appear on OpenDota
+            and cannot be recorded on the site.
+          </p>
+        </div>
+      </div>
+
+      {/* Step 3 — join your team's voice channel */}
+      <div className="mt-4 flex gap-3">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
+          3
         </span>
         <div className="min-w-0 text-sm">
           <div className="font-medium">

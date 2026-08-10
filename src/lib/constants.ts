@@ -209,9 +209,12 @@ export const INHOUSE = {
   // here if they're ever renamed.
   VOICE_TEAM_1: "inhouse team 1",
   VOICE_TEAM_2: "inhouse team 2",
-  // Prefix for the Dota 2 lobby name players host (a stable per-lobby code is
-  // appended so all ten find the same one — see inhouseLobbyCode).
-  LOBBY_NAME_PREFIX: "GGD2L",
+  // Fixed custom-lobby details. The league ticket is operationally required:
+  // without it Valve does not publish the private game to OpenDota, so the
+  // existing player-account result scan has nothing to discover.
+  LOBBY_NAME: "GGD2L Inhouse",
+  LOBBY_PASSWORD: "ggd2l",
+  LOBBY_TICKET: "Under 5K In-House League",
   // Inhouse room client poll cadence (ms). The room polls fast while the
   // viewer has skin in the game — in a lobby (ready check / vote / draft /
   // live) or waiting in the queue, where seconds matter — and idle-slow when

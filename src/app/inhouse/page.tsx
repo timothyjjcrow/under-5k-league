@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { INHOUSE_STATUS } from "@/lib/constants";
+import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
 import {
   parseInhouseBox,
   type InhouseBoxPlayer as BoxPlayer,
@@ -562,6 +562,14 @@ function OpenDotaGuide({ open }: { open: boolean }) {
           </li>
           <li className="flex gap-3">
             <GuideStep n={3} />
+            <span>
+              When teams lock, the host must select the{" "}
+              <b>{INHOUSE.LOBBY_TICKET}</b> ticket in Lobby Settings. Without it,
+              the private game will not appear on OpenDota.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <GuideStep n={4} />
             <span>
               Play your inhouse. When it ends, the result is fetched from
               OpenDota automatically (usually within a few minutes) — or anyone

@@ -29,6 +29,8 @@ type HeaderUser = {
   role: string;
 } | null;
 
+type NavItem = { href: string; label: string };
+
 // Which nav links are visible depends on the season phase — this is the core of
 // "hide what isn't relevant right now".
 function navItems(
@@ -36,7 +38,7 @@ function navItems(
   myTeamId: string | null,
   hasHistory: boolean,
 ) {
-  const items: { href: string; label: string }[] = [
+  const items: NavItem[] = [
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },
     // Inhouse is a standalone pick-up mode — always available, season or not.
@@ -60,11 +62,6 @@ function navItems(
     // phase. The page itself explains the locked/in-progress state earlier in
     // DRAFT, so hiding this link only made a valid published schedule a secret.
     items.push({ href: "/schedule", label: "Schedule" });
-    // Side games open the moment the auction completes, before the admin's
-    // explicit phase advance. Keep them discoverable throughout Draft; each
-    // page explains the auction lock until that handoff is actually complete.
-    items.push({ href: "/fantasy", label: "Fantasy" });
-    items.push({ href: "/pickem", label: "Pick'em" });
   }
   if (
     phase === "REGULAR_SEASON" ||
@@ -75,10 +72,6 @@ function navItems(
       href: "/schedule",
       label: scheduleDestinationLabel(phase),
     });
-    items.push({ href: "/leaders", label: "Leaders" });
-    items.push({ href: "/meta", label: "Meta" });
-    items.push({ href: "/fantasy", label: "Fantasy" });
-    items.push({ href: "/pickem", label: "Pick'em" });
   }
   // The recap is the season's headline once it wraps; in-season it's reachable
   // from the Leaders page ("awards so far") to keep the nav from crowding.
@@ -86,6 +79,32 @@ function navItems(
   // Past seasons only exist once one has been archived.
   if (hasHistory) items.push({ href: "/seasons", label: "History" });
   return items;
+}
+
+// High-density stats and side games live under Explore so the primary bar
+// stays readable at ordinary laptop widths. Their phase gates are unchanged:
+// Fantasy/Pick'em open with the completed auction, while Leaders/Meta join
+// once regular-season results can exist.
+function phaseExploreItems(phase: string | null): NavItem[] {
+  if (phase === "DRAFT") {
+    return [
+      { href: "/fantasy", label: "Fantasy" },
+      { href: "/pickem", label: "Pick'em" },
+    ];
+  }
+  if (
+    phase === "REGULAR_SEASON" ||
+    phase === "PLAYOFFS" ||
+    phase === "COMPLETE"
+  ) {
+    return [
+      { href: "/leaders", label: "Leaders" },
+      { href: "/meta", label: "Meta" },
+      { href: "/fantasy", label: "Fantasy" },
+      { href: "/pickem", label: "Pick'em" },
+    ];
+  }
+  return [];
 }
 
 // Highlight the current section. "/teams" (index) and "My Team" (/teams/<id>)
@@ -125,7 +144,8 @@ export function SiteHeader({
   const items = navItems(phase, myTeamId, hasHistory);
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
   const [open, setOpen] = useState(false);
-  const [exploreOpen, setExploreOpen] = useState(false);
+  const [desktopExploreOpen, setDesktopExploreOpen] = useState(false);
+  const [mobileExploreOpen, setMobileExploreOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const exploreButtonRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
@@ -138,26 +158,29 @@ export function SiteHeader({
   if (menuPath !== pathname) {
     setMenuPath(pathname);
     setOpen(false);
-    setExploreOpen(false);
+    setDesktopExploreOpen(false);
+    setMobileExploreOpen(false);
   }
 
   // While the mobile menu is open, Escape closes it (returning focus to the
   // toggle so keyboard users don't lose their place) and a tap/click outside
   // the header dismisses it — a route change already closes it otherwise.
   useEffect(() => {
-    if (!open && !exploreOpen) return;
+    if (!open && !desktopExploreOpen) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         const returnTo = open ? buttonRef.current : exploreButtonRef.current;
         setOpen(false);
-        setExploreOpen(false);
+        setDesktopExploreOpen(false);
+        setMobileExploreOpen(false);
         returnTo?.focus();
       }
     }
     function onPointerDown(e: PointerEvent) {
       if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
         setOpen(false);
-        setExploreOpen(false);
+        setDesktopExploreOpen(false);
+        setMobileExploreOpen(false);
       }
     }
     document.addEventListener("keydown", onKeyDown);
@@ -166,29 +189,12 @@ export function SiteHeader({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open, exploreOpen]);
+  }, [open, desktopExploreOpen]);
 
   const adminActive = pathname.startsWith("/admin");
 
-  // Club pages that otherwise live only in the footer — on phones that's
-  // below very long pages, so the menu is their only discoverable home.
-  // Deduped against navItems: Features is already inline during
-  // SIGNUPS/DRAFT, and History (/seasons) is inline once archives exist.
-  const teamsExist =
-    phase === "DRAFT" ||
-    phase === "REGULAR_SEASON" ||
-    phase === "PLAYOFFS" ||
-    phase === "COMPLETE";
-  const clubItems: { href: string; label: string }[] = [
-    ...(teamsExist && phase !== "DRAFT"
-      ? [{ href: "/features", label: "Features" }]
-      : []),
-    { href: "/news", label: "News" },
-    { href: "/hall-of-fame", label: "Hall of Fame" },
-    { href: "/records", label: "Record book" },
-    { href: "/players/compare", label: "Compare players" },
-  ];
-  const exploreItems: { href: string; label: string }[] = [
+  const exploreItems: NavItem[] = [
+    ...phaseExploreItems(phase),
     { href: "/news", label: "League news" },
     { href: "/features", label: "Feature tour" },
     { href: "/records", label: "Record book" },
@@ -196,6 +202,16 @@ export function SiteHeader({
     { href: "/hall-of-fame", label: "Hall of Fame" },
     ...(hasHistory ? [{ href: "/seasons", label: "Past seasons" }] : []),
   ];
+  // The mobile primary menu already carries phase-native links such as
+  // Features and History. Filter those duplicates while keeping the same
+  // Explore ownership for Leaders, Meta, Fantasy and Pick'em on every size.
+  const primaryHrefs = new Set(items.map((item) => item.href));
+  const mobileExploreItems = exploreItems.filter(
+    (item) => !primaryHrefs.has(item.href),
+  );
+  const exploreActive = exploreItems.some((item) =>
+    isActive(pathname, item.href, myTeamHref),
+  );
 
   return (
     <header
@@ -280,14 +296,17 @@ export function SiteHeader({
           <button
             ref={exploreButtonRef}
             type="button"
-            aria-expanded={exploreOpen}
+            aria-expanded={desktopExploreOpen}
             aria-controls="desktop-explore-nav"
-            onClick={() => setExploreOpen((value) => !value)}
-            className="rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+            onClick={() => setDesktopExploreOpen((value) => !value)}
+            className={cn(
+              "rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+              exploreActive ? "bg-accent/15 text-fg" : "text-muted",
+            )}
           >
-            Explore <span aria-hidden>{exploreOpen ? "↑" : "↓"}</span>
+            Explore <span aria-hidden>{desktopExploreOpen ? "↑" : "↓"}</span>
           </button>
-          {exploreOpen ? (
+          {desktopExploreOpen ? (
             <nav
               id="desktop-explore-nav"
               aria-label="Explore"
@@ -300,7 +319,7 @@ export function SiteHeader({
                     key={item.href}
                     href={item.href}
                     aria-current={active ? "page" : undefined}
-                    onClick={() => setExploreOpen(false)}
+                    onClick={() => setDesktopExploreOpen(false)}
                     className={cn(
                       "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
                       active
@@ -380,7 +399,11 @@ export function SiteHeader({
           <button
             ref={buttonRef}
             type="button"
-            onClick={() => setOpen((o) => !o)}
+            onClick={() => {
+              const next = !open;
+              setOpen(next);
+              if (!next) setMobileExploreOpen(false);
+            }}
             aria-label={open ? "Close menu" : "Open menu"}
             aria-expanded={open}
             aria-controls="mobile-nav"
@@ -419,26 +442,49 @@ export function SiteHeader({
               );
             })}
 
-            {/* Club pages — footer-only otherwise, invisible on phones. */}
-            <div className="mt-1 space-y-1 border-t border-line/80 pt-2">
-              {clubItems.map((item) => {
-                const active = isActive(pathname, item.href, myTeamHref);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                      active
-                        ? "bg-accent/15 text-fg"
-                        : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                    )}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
+            {/* Explore is a disclosure on phones too; the four dense league
+                tools no longer expand the primary menu unless requested. */}
+            <div className="mt-1 border-t border-line/80 pt-2">
+              <button
+                type="button"
+                aria-expanded={mobileExploreOpen}
+                aria-controls="mobile-explore-nav"
+                onClick={() => setMobileExploreOpen((value) => !value)}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
+                  exploreActive ? "bg-accent/15 text-fg" : "text-muted",
+                )}
+              >
+                Explore
+                <span aria-hidden>{mobileExploreOpen ? "↑" : "↓"}</span>
+              </button>
+              {mobileExploreOpen ? (
+                <div
+                  id="mobile-explore-nav"
+                  role="group"
+                  aria-label="Explore"
+                  className="mt-1 space-y-1 border-l border-line/80 pl-2"
+                >
+                  {mobileExploreItems.map((item) => {
+                    const active = isActive(pathname, item.href, myTeamHref);
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
+                          active
+                            ? "bg-accent/15 text-fg"
+                            : "text-muted hover:bg-surface-2/60 hover:text-fg",
+                        )}
+                      >
+                        {item.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
 
             {(user?.role === "ADMIN" || user || seasonName) && (

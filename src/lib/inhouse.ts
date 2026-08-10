@@ -190,10 +190,9 @@ export function queueSlots<T extends { away: boolean }>(
 }
 
 /**
- * A stable 4-digit code for a lobby, derived from its id — so all ten players
- * see the SAME suggested Dota 2 lobby name (`GGD2L #4821`) and password (`4821`)
- * with no server round-trip or stored field. The host types them; everyone else
- * finds that exact lobby in Dota's custom-lobby list and joins with the code.
+ * A stable 4-digit code for a lobby, derived from its id. The public setup card
+ * now uses fixed Dota credentials; this per-lobby value remains the admin's
+ * typed confirmation token when force-cancelling a live game with bets.
  */
 export function inhouseLobbyCode(lobbyId: string): string {
   let h = 0;

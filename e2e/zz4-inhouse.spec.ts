@@ -211,7 +211,16 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // and which voice channel to join (their team's is highlighted).
   await expect(page.getByText("Teams are set!")).toBeVisible();
   await expect(page.getByText("How to play this game")).toBeVisible();
-  await expect(page.getByText(/GGD2L #\d{4}/).first()).toBeVisible();
+  await expect(page.getByTitle("Copy lobby name")).toContainText(
+    "GGD2L Inhouse",
+  );
+  await expect(page.getByTitle("Copy password")).toContainText("ggd2l");
+  await expect(page.getByTitle("Copy league ticket")).toContainText(
+    "Under 5K In-House League",
+  );
+  await expect(
+    page.getByText(/without this ticket, the game will not appear on OpenDota/i),
+  ).toBeVisible();
   await expect(page.getByText(/inhouse team [12]/).first()).toBeVisible();
 
   // --- Betting: the 45s window opens on this same transition ---------------

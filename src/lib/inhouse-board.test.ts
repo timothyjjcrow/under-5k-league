@@ -97,6 +97,12 @@ describe("the board carries no emoji", () => {
     expect(rack(9, 3)).toBe("▰ ▰ ▰"); // never more filled than there are
     expect(rack(-2, 2)).toBe("▱ ▱");
   });
+
+  it("reminds hosts that the inhouse ticket is required", () => {
+    expect(renderBoard(snap()).embed.footer.text).toBe(
+      "Private lobby — use the Under 5K In-House League ticket. Results import from player match histories.",
+    );
+  });
 });
 
 describe("empty state — the 95% surface", () => {

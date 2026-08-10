@@ -153,15 +153,21 @@ test("mobile menu surfaces club pages and My profile", async ({ page }) => {
   await expect(menuButton).toHaveCSS("height", "44px");
   await menuButton.click();
   const menu = page.locator("#mobile-nav");
-  await expect(menu.getByRole("link", { name: "News" })).toBeVisible();
+  const exploreButton = menu.getByRole("button", { name: "Explore" });
+  await expect(exploreButton).toHaveAttribute("aria-expanded", "false");
+  await exploreButton.click();
+  const explore = menu.getByRole("group", { name: "Explore" });
+  await expect(
+    explore.getByRole("link", { name: "League news" }),
+  ).toBeVisible();
   await expect(menu.getByRole("link", { name: "Hall of Fame" })).toBeVisible();
   await expect(menu.getByRole("link", { name: "Record book" })).toBeVisible();
   await expect(
     menu.getByRole("link", { name: "Compare players" }),
   ).toBeVisible();
   await expect(menu.getByRole("link", { name: "My profile" })).toBeVisible();
-  // SIGNUPS phase: Features is already an inline nav item — the club group
-  // must not duplicate it.
+  // SIGNUPS phase: Features is already an inline nav item — Explore must not
+  // duplicate it.
   await expect(menu.getByRole("link", { name: "Features" })).toHaveCount(1);
 });
 
