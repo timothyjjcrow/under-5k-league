@@ -6,6 +6,7 @@ import {
   autoSyncIntervalSeconds,
   autoSyncOpensAt,
   isAutoSyncDue,
+  leagueFallbackOpensAt,
   minutesSinceAutoSyncOpen,
   nextAutoSyncAt,
   syncPingStep,
@@ -66,6 +67,15 @@ describe("isAutoSyncDue", () => {
     expect(isAutoSyncDue(match(-3 * HOUR), autoSyncClosesAt(kickoff) + 1)).toBe(
       false,
     );
+  });
+});
+
+describe("leagueFallbackOpensAt", () => {
+  it("starts player-account recovery three hours after the scheduled time", () => {
+    expect(leagueFallbackOpensAt(NOW)).toBe(
+      NOW + AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF * 60_000,
+    );
+    expect(AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF).toBe(180);
   });
 });
 
@@ -205,10 +215,7 @@ describe("syncPingStep", () => {
   it("treats a null server-render cursor as a real baseline", () => {
     // First result ever: there was deliberately no Setting row at render. A
     // concurrent import creating it is still a post-render change.
-    const step = syncPingStep(
-      { updated: false, cursor: "first-result" },
-      null,
-    );
+    const step = syncPingStep({ updated: false, cursor: "first-result" }, null);
     expect(step.refresh).toBe(true);
     expect(step.cursor).toBe("first-result");
   });

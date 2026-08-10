@@ -10,6 +10,18 @@ import { prisma } from "@/lib/prisma";
 async function main() {
   const url = process.env.DATABASE_URL ?? "";
   assertExpectedFixtureDatabase(url, ["midseason"], "stage midseason data");
+  // Exercise the production league-feed-first captain journey. The public
+  // /api/sync endpoint is read-only, so this stable fake id never triggers a
+  // real provider call during browser tests.
+  const activeSeason = await prisma.season.findFirst({
+    where: { isActive: true },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!activeSeason) throw new Error("fixture has no active season");
+  await prisma.season.update({
+    where: { id: activeSeason.id },
+    data: { dotaLeagueId: "17119" },
+  });
   const open = await prisma.match.findMany({
     where: { status: { not: "COMPLETED" } },
     orderBy: { week: "asc" },

@@ -434,6 +434,13 @@ export const RSVP_OUT_PING_THROTTLE_SECONDS = 6 * 60 * 60;
 export const AUTO_SYNC = {
   MIN_MINUTES_AFTER_KICKOFF: 25,
   WINDOW_HOURS: 48,
+  // A configured Valve league id remains the cheap, authoritative first
+  // result path. If a whole fixture is still missing three hours after its
+  // scheduled time, roster scanning becomes the automatic recovery path for a
+  // lobby that used an old/wrong ticket. A LIVE series is eligible immediately
+  // so game two of a Bo2 does not wait three hours when only one lobby carried
+  // the right ticket.
+  LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF: 180,
   // One roster scan is ~10 recentMatches + up to 12 match fetches, so each
   // match is rescanned at most once per interval, ONE match per sync run —
   // that keeps worst-case OpenDota usage inside the free tier on a full

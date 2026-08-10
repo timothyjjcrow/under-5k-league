@@ -68,7 +68,27 @@ test("captains can report an open series and get a clear correction handoff once
 
   await page.goto(openHref!);
   await expect(
-    page.getByRole("heading", { name: "Report your result" }),
+    page.getByRole("heading", { name: "Official lobby checklist" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Result recording" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      /League-feed checks begin 25 minutes .* repeat about every 3 minutes/,
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Current league id", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("17119", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "This is a Bo2: create two separate Bo1 lobbies and select this league ticket in both.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Copy league id" }),
   ).toBeVisible();
   const matchRef = page.getByRole("textbox", {
     name: "Dota match ID or URL",

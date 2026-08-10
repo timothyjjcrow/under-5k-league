@@ -224,6 +224,27 @@ describe("pickSeriesGames", () => {
     expect(chosen.map((c) => c.id)).toEqual([1, 2]);
   });
 
+  it("keeps two separate Bo2 lobbies when the break is over four hours", () => {
+    const chosen = pickSeriesGames([g(1, 0, "A"), g(2, 5, "B")], 2);
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it("still separates Bo2 sessions when the break is over eight hours", () => {
+    const chosen = pickSeriesGames(
+      [g(9, -12, "A"), g(1, 0, "A"), g(2, 1, "B")],
+      2,
+    );
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it("keeps the tighter boundary when a Bo2 has an extra warm-up candidate", () => {
+    const chosen = pickSeriesGames(
+      [g(9, -5, "B"), g(1, 0, "A"), g(2, 1, "B")],
+      2,
+    );
+    expect(chosen.map((c) => c.id)).toEqual([1, 2]);
+  });
+
   it("ignores an older session — a scrim days earlier isn't the series", () => {
     const chosen = pickSeriesGames(
       [g(9, -48, "B"), g(1, 0, "A"), g(2, 1, "A")],
@@ -239,10 +260,10 @@ describe("pickSeriesGames", () => {
     expect(chosen.map((c) => c.id)).toEqual([1]);
   });
 
-  it("treats a >4h gap as a different session", () => {
+  it("treats a >4h gap as a different session outside Bo2", () => {
     const chosen = pickSeriesGames(
       [g(1, 0, "A"), g(2, 1, "A"), g(3, 9, "B"), g(4, 10, "B")],
-      2,
+      3,
     );
     // Same size, so the later session wins — it is the night just played.
     expect(chosen.map((c) => c.id)).toEqual([3, 4]);

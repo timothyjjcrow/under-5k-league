@@ -16,6 +16,13 @@ export function autoSyncClosesAt(scheduledAtMs: number): number {
   return scheduledAtMs + AUTO_SYNC.WINDOW_HOURS * 3600_000;
 }
 
+/** When a league-ticket fixture may fall back to roster/player-id discovery. */
+export function leagueFallbackOpensAt(scheduledAtMs: number): number {
+  return (
+    scheduledAtMs + AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF * MINUTE_MS
+  );
+}
+
 /**
  * Is this match inside its automatic-detection window? Unscheduled matches are
  * never auto-scanned (no kickoff → no way to window the roster scan, and the

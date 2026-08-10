@@ -401,54 +401,57 @@ describe("result sync — league matches (integration)", () => {
   // This seam needs two simultaneous writers against an MVCC database.
   // SQLite holds the outer writer lock until the interactive transaction
   // times out, so it cannot model the production serialization retry.
-  it.runIf(ON_POSTGRES)("retries when a reminder finalizes during the atomic first-game write", async () => {
-    const { season, match, homeAccts, awayAccts } = await setupNight({
-      offsetMs: -2 * HOUR,
-    });
-    const marker = await claimAnnouncementMarker(
-      weekReminderKey(season.id, match.week, match.scheduledAt!.getTime()),
-    );
-    expect(marker).not.toBeNull();
-    if (!marker) throw new Error("Reminder marker claim was not created");
+  it.runIf(ON_POSTGRES)(
+    "retries when a reminder finalizes during the atomic first-game write",
+    async () => {
+      const { season, match, homeAccts, awayAccts } = await setupNight({
+        offsetMs: -2 * HOUR,
+      });
+      const marker = await claimAnnouncementMarker(
+        weekReminderKey(season.id, match.week, match.scheduledAt!.getTime()),
+      );
+      expect(marker).not.toBeNull();
+      if (!marker) throw new Error("Reminder marker claim was not created");
 
-    const G = 8880778;
-    mockMatch.mockResolvedValue(
-      odGame(G, homeAccts, awayAccts, Date.now() - HOUR),
-    );
+      const G = 8880778;
+      mockMatch.mockResolvedValue(
+        odGame(G, homeAccts, awayAccts, Date.now() - HOUR),
+      );
 
-    let invalidationAttempts = 0;
-    let reminderFinalized = false;
-    setRaceHook(async (label) => {
-      if (label !== "match-import.importGame.beforeReminderInvalidation") {
-        return;
+      let invalidationAttempts = 0;
+      let reminderFinalized = false;
+      setRaceHook(async (label) => {
+        if (label !== "match-import.importGame.beforeReminderInvalidation") {
+          return;
+        }
+        invalidationAttempts++;
+        if (invalidationAttempts === 1) {
+          // A different connection performs the reminder writer's real CAS
+          // after import's Serializable snapshot, before its marker delete.
+          reminderFinalized = await markAnnouncementSent(marker);
+        }
+      });
+
+      let result: Awaited<ReturnType<typeof importGameForMatch>>;
+      try {
+        result = await importGameForMatch(match.id, String(G));
+      } finally {
+        setRaceHook(null);
       }
-      invalidationAttempts++;
-      if (invalidationAttempts === 1) {
-        // A different connection performs the reminder writer's real CAS
-        // after import's Serializable snapshot, before its marker delete.
-        reminderFinalized = await markAnnouncementSent(marker);
-      }
-    });
 
-    let result: Awaited<ReturnType<typeof importGameForMatch>>;
-    try {
-      result = await importGameForMatch(match.id, String(G));
-    } finally {
-      setRaceHook(null);
-    }
-
-    expect(reminderFinalized).toBe(true);
-    expect(invalidationAttempts).toBe(2); // first snapshot aborted, retry won
-    expect(result).toMatchObject({ ok: true, decided: true });
-    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
-    expect(
-      (
-        await prisma.setting.findUniqueOrThrow({
-          where: { key: marker.key },
-        })
-      ).value,
-    ).toMatch(/^sent:v2:/);
-  });
+      expect(reminderFinalized).toBe(true);
+      expect(invalidationAttempts).toBe(2); // first snapshot aborted, retry won
+      expect(result).toMatchObject({ ok: true, decided: true });
+      expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
+      expect(
+        (
+          await prisma.setting.findUniqueOrThrow({
+            where: { key: marker.key },
+          })
+        ).value,
+      ).toMatch(/^sent:v2:/);
+    },
+  );
 
   it("backs off exponentially on empty scans and resets on a productive one", async () => {
     const { match, homeAccts, awayAccts } = await setupNight({
@@ -598,6 +601,87 @@ describe("result sync — league matches (integration)", () => {
     expect(again.imported).toBe(0);
     expect(again.watch).toBe(true);
     expect(mockLeague).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to player accounts when a ticketed fixture is still missing after three hours", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -4 * HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17172" },
+    });
+    const G = 6660002;
+    mockLeague.mockResolvedValue([]);
+    mockRecent.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue(
+      odGame(G, homeAccts, awayAccts, Date.now() - HOUR),
+    );
+
+    const out = await runResultSync();
+
+    expect(out.imported).toBe(1);
+    expect(mockLeague).toHaveBeenCalledTimes(1);
+    expect(mockRecent).toHaveBeenCalled();
+    const stored = await prisma.match.findUniqueOrThrow({
+      where: { id: match.id },
+      include: { games: true },
+    });
+    expect(stored.status).toBe(MATCH_STATUS.COMPLETED);
+    expect(stored.games.map((game) => game.dotaMatchId)).toEqual([String(G)]);
+  });
+
+  it("uses player-account recovery immediately for a partial ticketed series", async () => {
+    const { season, home, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -HOUR,
+      bestOf: 2,
+    });
+    const G1 = 6660003;
+    const G2 = 6660004;
+    await prisma.game.create({
+      data: {
+        matchId: match.id,
+        dotaMatchId: String(G1),
+        radiantWin: true,
+        radiantTeamId: home.id,
+        direTeamId: match.awayTeamId,
+        winnerTeamId: home.id,
+      },
+    });
+    await prisma.match.update({
+      where: { id: match.id },
+      data: {
+        status: MATCH_STATUS.LIVE,
+        homeScore: 1,
+        winnerTeamId: null,
+      },
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17173" },
+    });
+    mockLeague.mockResolvedValue([]);
+    mockRecent.mockResolvedValue([G1, G2]);
+    mockMatch.mockImplementation(async (id) =>
+      id === String(G2)
+        ? odGame(G2, homeAccts, awayAccts, Date.now() - 10 * 60_000)
+        : null,
+    );
+
+    const out = await runResultSync();
+
+    expect(out.imported).toBe(1);
+    expect(mockRecent).toHaveBeenCalled();
+    const stored = await prisma.match.findUniqueOrThrow({
+      where: { id: match.id },
+      include: { games: true },
+    });
+    expect(stored.status).toBe(MATCH_STATUS.COMPLETED);
+    expect(stored.homeScore).toBe(2);
+    expect(stored.games.map((game) => game.dotaMatchId).sort()).toEqual([
+      String(G1),
+      String(G2),
+    ]);
   });
 });
 
@@ -1227,6 +1311,40 @@ describe("syncLeagueGames — the clinch-stop applies to the league feed too", (
     expect(m.awayScore).toBe(0);
     expect(m.winnerTeamId).toBe(home.id);
     expect(m.games.map((g) => g.dotaMatchId).sort()).toEqual([
+      String(G1),
+      String(G2),
+    ]);
+  });
+
+  it("keeps two Bo2 lobbies separated by more than four hours", async () => {
+    const { season, match, home, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -7 * HOUR,
+      bestOf: 2,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18185" },
+    });
+    const G1 = 6663001;
+    const G2 = 6663002;
+    const games: Record<string, ReturnType<typeof odGame>> = {
+      [String(G1)]: odGame(G1, homeAccts, awayAccts, Date.now() - 6 * HOUR),
+      [String(G2)]: odGame(G2, homeAccts, awayAccts, Date.now() - HOUR),
+    };
+    mockLeague.mockResolvedValue([G2, G1]);
+    mockMatch.mockImplementation(async (id) => games[id] ?? null);
+
+    const res = await syncLeagueGames(season.id, { auto: true });
+
+    expect(res.imported).toBe(2);
+    const stored = await prisma.match.findUniqueOrThrow({
+      where: { id: match.id },
+      include: { games: true },
+    });
+    expect(stored.status).toBe(MATCH_STATUS.COMPLETED);
+    expect(stored.homeScore).toBe(2);
+    expect(stored.winnerTeamId).toBe(home.id);
+    expect(stored.games.map((game) => game.dotaMatchId).sort()).toEqual([
       String(G1),
       String(G2),
     ]);

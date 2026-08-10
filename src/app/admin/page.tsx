@@ -20,7 +20,7 @@ import {
   SEASON_PHASE_ORDER,
   SEASON_STATUS,
 } from "@/lib/constants";
-import { nextAutoSyncAt } from "@/lib/result-sync";
+import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
 import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
@@ -3882,14 +3882,12 @@ async function AutomationRunnerHealth() {
             )
           ) : (
             <p className="mt-2 text-sm text-danger">
-              Backlog state is unavailable until database readiness is
-              restored.
+              Backlog state is unavailable until database readiness is restored.
             </p>
           )}
           <p className="mt-2 text-xs text-muted">
             Pending work survives a process restart and drains in order. A
-            growing count means Discord or the scheduled runner needs
-            attention.
+            growing count means Discord or the scheduled runner needs attention.
           </p>
         </div>
 
@@ -3992,7 +3990,11 @@ async function AutoSyncHealth({ season }: { season: Season }) {
       <CardHeader
         headingLevel={2}
         title="Automatic result sync"
-        subtitle="What the OpenDota watcher is doing right now — nobody should need the manual buttons unless something here looks stuck."
+        subtitle={
+          season.dotaLeagueId
+            ? `The league feed checks first about every ${Math.round(AUTO_SYNC.LEAGUE_INTERVAL_SECONDS / 60)} minutes; linked player accounts recover unfinished fixtures that used an old or incorrect ticket.`
+            : "What the OpenDota watcher is doing right now — nobody should need the manual buttons unless something here looks stuck."
+        }
       />
       <CardBody className="space-y-3">
         {inWindow.length === 0 ? (
@@ -4006,6 +4008,15 @@ async function AutoSyncHealth({ season }: { season: Season }) {
             {inWindow.map((m) => {
               const next = nextAutoSyncAt(m.autoSyncedAt, m.autoSyncAttempts);
               const backedOff = m.autoSyncAttempts >= 3;
+              const fallbackAt = m.scheduledAt
+                ? new Date(leagueFallbackOpensAt(m.scheduledAt.getTime()))
+                : null;
+              const waitingForFallback =
+                season.dotaLeagueId &&
+                m.status !== "LIVE" &&
+                !m.autoSyncedAt &&
+                fallbackAt != null &&
+                fallbackAt.getTime() > now;
               return (
                 <li
                   key={m.id}
@@ -4019,13 +4030,14 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                   </Link>
                   {m.status === "LIVE" ? (
                     <Badge tone="accent">
-                      LIVE {m.homeScore}–{m.awayScore}
+                      Game {m.homeScore + m.awayScore} recorded · series{" "}
+                      {m.homeScore}–{m.awayScore}
                     </Badge>
                   ) : null}
                   <span className="text-xs text-muted">
                     {m.autoSyncedAt ? (
                       <>
-                        scanned{" "}
+                        player accounts scanned{" "}
                         <LocalTime
                           ts={m.autoSyncedAt.getTime()}
                           variant="short"
@@ -4045,14 +4057,29 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                           "on the next ping"
                         )}
                       </>
+                    ) : waitingForFallback ? (
+                      <>
+                        waiting for league feed · player-account recovery starts{" "}
+                        <LocalTime
+                          ts={fallbackAt!.getTime()}
+                          variant="short"
+                          initial={formatMatchTime(fallbackAt!, "short")}
+                        />
+                      </>
+                    ) : season.dotaLeagueId ? (
+                      m.status === "LIVE" ? (
+                        "waiting for the next lobby · player-account recovery is ready"
+                      ) : (
+                        "waiting for league feed · player-account recovery is ready"
+                      )
                     ) : (
                       "not scanned yet — next ping picks it up"
                     )}
                   </span>
                   {backedOff ? (
                     <Badge tone="danger">
-                      backed off — check players&apos; public match data or
-                      import manually
+                      player recovery backed off — check account links or import
+                      the Dota match id
                     </Badge>
                   ) : null}
                 </li>
@@ -4062,7 +4089,9 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         )}
         {privatePlayers.length > 0 ? (
           <p className="text-xs text-danger">
-            Private match data (roster scans can&apos;t see their games):{" "}
+            {season.dotaLeagueId
+              ? "Player-account recovery is limited for these private profiles (league-ticket games are unaffected): "
+              : "Private match data (roster scans can't see their games): "}
             {privatePlayers.map((p, i) => (
               <span key={p.id}>
                 {i > 0 ? ", " : ""}
@@ -5000,8 +5029,7 @@ function DiscordControls({
             <b>Read-only Discord preview.</b> Identity, membership, bot, and
             permission checks are live. Posting messages, joining members, and
             changing or deleting live Discord roles/messages are disabled.
-            Configuration edits below affect only the isolated preview
-            database.
+            Configuration edits below affect only the isolated preview database.
           </div>
         ) : null}
         {/* Moved out of the card header: a button inside a <summary> toggles

@@ -8,7 +8,11 @@ import {
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
-import { autoSyncClaimCutoff, minutesSinceAutoSyncOpen } from "./result-sync";
+import {
+  autoSyncClaimCutoff,
+  leagueFallbackOpensAt,
+  minutesSinceAutoSyncOpen,
+} from "./result-sync";
 import { queuePresentCutoff } from "./inhouse";
 import {
   ANNOUNCE_FAILED_PREFIX,
@@ -152,10 +156,11 @@ const claimSyncThrottle = claimThrottle;
 /**
  * Scan due league matches for finished games. "Due" = unplayed/partial, with a
  * kickoff between MIN_MINUTES_AFTER_KICKOFF and WINDOW_HOURS ago. With a Valve
- * league id one throttled /leagues call covers everything; otherwise ONE due
- * match (stalest scan first) is claimed per run and roster-scanned via the
- * existing autoDetectGamesForMatch — a full league night rotates through its
- * matches within a few intervals while staying inside the API budget.
+ * league id one throttled /leagues call is the first path. A still-missing
+ * fixture later falls back to the same roster/player-id scan used by unticketed
+ * seasons; a partial LIVE series falls back immediately so a wrong-ticket game
+ * two is not stranded. Only ONE due match (stalest scan first) is roster-scanned
+ * per run, keeping a full league night inside the API budget.
  */
 async function syncDueMatches(
   nowMs: number,
@@ -190,6 +195,7 @@ async function syncDueMatches(
     },
     select: {
       id: true,
+      status: true,
       autoSyncedAt: true,
       autoSyncAttempts: true,
       scheduledAt: true,
@@ -197,41 +203,74 @@ async function syncDueMatches(
   });
   if (due.length === 0) return { imported: 0, watch: false };
 
+  let leagueImported = 0;
+  let fallbackDue = due;
   if (season.dotaLeagueId) {
     if (!canStartWork(options)) {
       return { imported: 0, watch: true, deadlineReached: true };
     }
-    if (
-      !(await claimSyncThrottle(
-        SETTING_KEYS.LEAGUE_AUTO_SYNC_AT,
-        AUTO_SYNC.LEAGUE_INTERVAL_SECONDS,
-        nowMs,
-      ))
-    ) {
-      return { imported: 0, watch: true };
-    }
-    const res = await syncLeagueGames(season.id, {
-      auto: true,
-      deadlineMs: options.deadlineMs,
-      signal: options.signal,
-    });
-    if (res.unreachable || res.deadlineReached) {
-      // Roll our own claim back so the next tick can retry immediately —
-      // otherwise every outage tick costs one full throttle interval (the
-      // roster path's rollback pattern). Value-scoped to the exact ISO
-      // claimThrottle stamped, so a NEWER claim is never deleted.
-      await prisma.setting.deleteMany({
-        where: {
-          key: SETTING_KEYS.LEAGUE_AUTO_SYNC_AT,
-          value: new Date(nowMs).toISOString(),
-        },
+    const leagueClaimed = await claimSyncThrottle(
+      SETTING_KEYS.LEAGUE_AUTO_SYNC_AT,
+      AUTO_SYNC.LEAGUE_INTERVAL_SECONDS,
+      nowMs,
+    );
+    if (leagueClaimed) {
+      const res = await syncLeagueGames(season.id, {
+        auto: true,
+        deadlineMs: options.deadlineMs,
+        signal: options.signal,
       });
+      leagueImported = res.imported;
+      if (res.unreachable || res.deadlineReached) {
+        // Roll our own claim back so the next tick can retry immediately —
+        // otherwise every outage tick costs one full throttle interval (the
+        // roster path's rollback pattern). Value-scoped to the exact ISO
+        // claimThrottle stamped, so a NEWER claim is never deleted.
+        await prisma.setting.deleteMany({
+          where: {
+            key: SETTING_KEYS.LEAGUE_AUTO_SYNC_AT,
+            value: new Date(nowMs).toISOString(),
+          },
+        });
+      }
+      if (res.deadlineReached) {
+        return {
+          imported: leagueImported,
+          watch: true,
+          deadlineReached: true,
+        };
+      }
     }
-    return {
-      imported: res.imported,
-      watch: true,
-      ...(res.deadlineReached ? { deadlineReached: true } : {}),
-    };
+
+    // The league feed may have moved a Bo2 from SCHEDULED to LIVE (or closed
+    // another fixture) since `due` was read. Re-read the small due set before
+    // choosing player-id recovery so its status and score are authoritative.
+    fallbackDue = await prisma.match.findMany({
+      where: {
+        seasonId: season.id,
+        status: { not: MATCH_STATUS.COMPLETED },
+        scheduledAt: {
+          gte: new Date(nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000),
+          lte: new Date(nowMs - AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF * 60_000),
+        },
+      },
+      select: {
+        id: true,
+        status: true,
+        autoSyncedAt: true,
+        autoSyncAttempts: true,
+        scheduledAt: true,
+      },
+    });
+    fallbackDue = fallbackDue.filter(
+      (match) =>
+        match.status === MATCH_STATUS.LIVE ||
+        (match.scheduledAt != null &&
+          nowMs >= leagueFallbackOpensAt(match.scheduledAt.getTime())),
+    );
+    if (fallbackDue.length === 0) {
+      return { imported: leagueImported, watch: true };
+    }
   }
 
   // Each match's rescan interval backs off exponentially with consecutive
@@ -243,7 +282,7 @@ async function syncDueMatches(
     m.scheduledAt
       ? minutesSinceAutoSyncOpen(m.scheduledAt.getTime(), nowMs)
       : Number.POSITIVE_INFINITY;
-  const claimable = [...due]
+  const claimable = [...fallbackDue]
     .filter(
       (m) =>
         !m.autoSyncedAt ||
@@ -254,13 +293,17 @@ async function syncDueMatches(
       (a, b) =>
         (a.autoSyncedAt?.getTime() ?? 0) - (b.autoSyncedAt?.getTime() ?? 0),
     );
-  if (claimable.length === 0) return { imported: 0, watch: true };
+  if (claimable.length === 0) return { imported: leagueImported, watch: true };
 
   // Global speed bump BEFORE the per-match claims: without it N simultaneous
   // pollers each claim a DIFFERENT due match and fan out into N parallel
   // roster scans — a burst past OpenDota's per-minute cap on league nights.
   if (!canStartWork(options)) {
-    return { imported: 0, watch: true, deadlineReached: true };
+    return {
+      imported: leagueImported,
+      watch: true,
+      deadlineReached: true,
+    };
   }
   if (
     !(await claimSyncThrottle(
@@ -269,7 +312,7 @@ async function syncDueMatches(
       nowMs,
     ))
   ) {
-    return { imported: 0, watch: true };
+    return { imported: leagueImported, watch: true };
   }
 
   for (const m of claimable) {
@@ -280,7 +323,11 @@ async function syncDueMatches(
           value: new Date(nowMs).toISOString(),
         },
       });
-      return { imported: 0, watch: true, deadlineReached: true };
+      return {
+        imported: leagueImported,
+        watch: true,
+        deadlineReached: true,
+      };
     }
     // Claim before scanning — concurrent pollers race here, one wins. The
     // increment counts this scan as empty until proven otherwise.
@@ -361,12 +408,12 @@ async function syncDueMatches(
       });
     }
     return {
-      imported: res.imported,
+      imported: leagueImported + res.imported,
       watch: true,
       ...(res.deadlineReached ? { deadlineReached: true } : {}),
     };
   }
-  return { imported: 0, watch: true };
+  return { imported: leagueImported, watch: true };
 }
 
 /**

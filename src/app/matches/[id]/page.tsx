@@ -10,6 +10,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
+import { AUTO_SYNC } from "@/lib/constants";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
 import { seatValue } from "@/lib/standin";
@@ -49,6 +50,7 @@ import {
   captainRemoveStandin,
 } from "@/app/actions/standins";
 import { MatchImportControls } from "@/components/match-import-controls";
+import { LeagueLobbyChecklist } from "@/components/league-lobby-checklist";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   cardAverage,
@@ -132,6 +134,7 @@ export default async function MatchDetailPage({
           status: true,
           name: true,
           championTeamId: true,
+          dotaLeagueId: true,
         },
       },
     },
@@ -317,7 +320,7 @@ export default async function MatchDetailPage({
 
       {/* Captains report their own results (OpenDota import) — league night
           doesn't wait for an admin. Stays up while a Bo3/Bo5 is mid-series. */}
-      <ReportResultSection match={match} />
+      <ReportResultSection match={match} renderedAt={renderedAt} />
 
       {/* Captains line up their own standin cover — the OUT-ping → DM-the-admin
           relay is gone. Admin's panel keeps the any-team override. */}
@@ -1339,16 +1342,26 @@ function ReportCardStrip({ line }: { line: PlayerStat }) {
 // bottlenecking on an admin. Guards live in match-report-service.ts.
 async function ReportResultSection({
   match,
+  renderedAt,
 }: {
   match: {
     id: string;
     seasonId: string;
     phase: string;
     status: string;
-    season: { isActive: boolean; status: string };
+    bestOf: number;
+    scheduledAt: Date | null;
+    homeScore: number;
+    awayScore: number;
+    season: {
+      isActive: boolean;
+      status: string;
+      dotaLeagueId: string | null;
+    };
     homeTeam: { name: string; captainId: string };
     awayTeam: { name: string; captainId: string };
   };
+  renderedAt: number;
 }) {
   const viewer = await getSessionUser();
   const isCaptain =
@@ -1381,20 +1394,55 @@ async function ReportResultSection({
       </Card>
     );
   }
+  const afterScheduledTime =
+    match.scheduledAt != null && match.scheduledAt.getTime() <= renderedAt;
+  const gamesRecorded = match.homeScore + match.awayScore;
+  const leagueCheckMinutes = Math.round(AUTO_SYNC.LEAGUE_INTERVAL_SECONDS / 60);
+  const leagueTitle =
+    match.status === "LIVE"
+      ? `Game ${gamesRecorded} recorded — series ${match.homeScore}–${match.awayScore}`
+      : afterScheduledTime
+        ? "Waiting for league result"
+        : "Result recording";
+  const leagueSubtitle =
+    match.status === "LIVE"
+      ? `The series stays open for the next lobby. The league feed keeps checking about every ${leagueCheckMinutes} minutes, and player-account recovery is already available if the next lobby uses the wrong ticket.`
+      : afterScheduledTime
+        ? `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. If the whole series is still missing ${Math.round(AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF / 60)} hours after the scheduled match time, player-account recovery starts automatically.`
+        : `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. Player-account recovery protects the result if an old or incorrect ticket is used.`;
   return (
-    <Card>
-      <CardHeader
-        title="Report your result"
-        subtitle="Played it? Pull the finished game from OpenDota — no admin needed. Auto-fetch scans both rosters; a pasted ID must fall near this fixture's kickoff so an old scrim or rematch cannot claim the result."
-      />
-      <CardBody>
-        <MatchImportControls
-          matchId={match.id}
-          importAction={captainImportGame}
-          detectAction={captainAutoDetect}
+    <div className="space-y-6">
+      {match.season.dotaLeagueId ? (
+        <LeagueLobbyChecklist
+          leagueId={match.season.dotaLeagueId}
+          bestOf={match.bestOf}
+          homeTeamName={match.homeTeam.name}
         />
-      </CardBody>
-    </Card>
+      ) : null}
+      <Card>
+        <CardHeader
+          title={match.season.dotaLeagueId ? leagueTitle : "Report your result"}
+          subtitle={
+            match.season.dotaLeagueId
+              ? leagueSubtitle
+              : "Played it? Pull the finished game from OpenDota — no admin needed. Auto-fetch scans both rosters; a pasted ID must fall near this fixture's scheduled match time so an old scrim or rematch cannot claim the result."
+          }
+        />
+        <CardBody className="space-y-3">
+          {match.season.dotaLeagueId ? (
+            <p className="text-xs text-muted">
+              Need recovery now? Auto-fetch checks the linked player accounts,
+              or add either lobby&apos;s Dota match id directly.
+            </p>
+          ) : null}
+          <MatchImportControls
+            matchId={match.id}
+            importAction={captainImportGame}
+            detectAction={captainAutoDetect}
+          />
+        </CardBody>
+      </Card>
+    </div>
   );
 }
 

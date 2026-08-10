@@ -270,6 +270,12 @@ export function classifyGame(
  *  back-to-back; a bigger gap means a different session entirely (a scrim, a
  *  prior meeting, a rematch for fun the next day). */
 export const SERIES_SESSION_GAP_MS = 4 * 60 * 60 * 1000;
+/** A Bo2 is commonly two separately-created Bo1 lobbies. Allow a longer
+ * between-lobby break when those are the only two candidates. If an extra
+ * candidate exists, keep the tighter session boundary so an earlier warm-up
+ * cannot be swept into the official series. Fixture-window and closest-meeting
+ * checks still run before this selection. */
+export const BO2_SERIES_SESSION_GAP_MS = 8 * 60 * 60 * 1000;
 
 /** How long one roster scan may spend fetching candidate games. */
 export const SCAN_BUDGET_MS = 25_000;
@@ -334,9 +340,13 @@ export function pickSeriesGames<T extends SeriesCandidate>(
 
   const sessions: T[][] = [];
   let cur: T[] = [sorted[0]!];
+  const sessionGapMs =
+    bestOf === 2 && sorted.length === 2
+      ? BO2_SERIES_SESSION_GAP_MS
+      : SERIES_SESSION_GAP_MS;
   for (let i = 1; i < sorted.length; i++) {
     const gapMs = (sorted[i]!.startTime - sorted[i - 1]!.startTime) * 1000;
-    if (gapMs > SERIES_SESSION_GAP_MS) {
+    if (gapMs > sessionGapMs) {
       sessions.push(cur);
       cur = [sorted[i]!];
     } else {
