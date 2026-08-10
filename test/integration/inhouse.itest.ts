@@ -550,8 +550,8 @@ describe("inhouse — starting the game", () => {
   });
 });
 
-describe("inhouse — finding + recording the game (NO league ticket)", () => {
-  it("auto-detects a plain public-lobby match from players' recent games and scores it", async () => {
+describe("inhouse — finding + recording the game from player IDs", () => {
+  it("auto-detects a shared match from players' recent games and scores it", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
     const { team1, team2 } = await teamAccounts(lobby.id);
@@ -560,7 +560,10 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
 
     // Every player's recent-match list contains the shared game...
     mockRecent.mockResolvedValue([MATCH_ID]);
-    // ...and the match itself is an ordinary lobby game — NO leagueid at all.
+    // The importer stays roster-based rather than trusting leagueid. In real
+    // Dota, hosts must select the inhouse ticket so this private game reaches
+    // OpenDota in the first place; that external ingestion rule lives in the
+    // setup instructions rather than in result classification.
     mockMatch.mockResolvedValue(
       fakeMatch({
         matchId: MATCH_ID,
@@ -595,13 +598,15 @@ describe("inhouse — finding + recording the game (NO league ticket)", () => {
     expect(box.every((b) => b.userId !== null)).toBe(true); // all 10 mapped to users
   });
 
-  it("records the game from a pasted match id, with no league ticket involved", async () => {
+  it("records the game from a pasted match id without changing player-ID validation", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
     const { team1, team2 } = await teamAccounts(lobby.id);
     const MATCH_ID = 7000000002;
 
-    // leagueid: 0 is exactly what a normal (non-ticketed) public lobby reports.
+    // Deliberately do not make leagueid part of the validation contract. The
+    // required ticket makes the match discoverable externally; once fetched,
+    // the linked players and played sides remain the source of truth.
     mockMatch.mockResolvedValue(
       fakeMatch({
         matchId: MATCH_ID,

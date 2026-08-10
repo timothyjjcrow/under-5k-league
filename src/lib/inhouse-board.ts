@@ -511,7 +511,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
         ].join("\n"),
         fields,
         footer: {
-          text: "Private lobby — no ticket, nothing to report. Results import from your match history.",
+          text: "Private lobby — use the Under 5K In-House League ticket. Results import from player match histories.",
         },
       },
     };

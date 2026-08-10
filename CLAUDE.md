@@ -874,9 +874,12 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   vs `[]` for a genuinely empty history — the detect button's error blames
   OpenDota when it was unreachable and privacy settings only when it wasn't.
   League caller (`autoDetectGamesForMatch`) treats null as empty.
-- **No ticket required — keep the copy honest**: inhouses are plain private
-  lobbies; results come from players' match histories. Never reintroduce
-  "league ticket" language on inhouse surfaces.
+- **The Under 5K In-House League ticket is required operationally**: result
+  matching still scans linked players' histories and does not query a league
+  feed, but Valve will not publish the private custom game to OpenDota without
+  that ticket. The setup card uses the fixed lobby name `GGD2L Inhouse`, fixed
+  password `ggd2l`, and explicitly warns that omitting the ticket makes the
+  game unrecordable.
 - **Seeded demo queue entries are born AWAY** (backdated `lastSeenAt`) — they
   dress the page but can never be pulled into a real first-night lobby.
 - **e2e**: `e2e/zz4-inhouse.spec.ts` (main suite, runs zz-last) drives the
@@ -969,11 +972,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   shorter than both action windows, but membership remains the correct gate.
 - **Game-setup instructions**: once teams lock, the READY and IN_PROGRESS
   views render a `GameSetupCard` — step 1 hosts the Dota 2 lobby with a shared
-  name (`GGD2L #<code>`) + password (`<code>`) all ten derive identically from
-  the lobby id (pure `inhouseLobbyCode`, tested — no server round-trip/field),
-  shown as click-to-copy chips; step 2 points each player to their team's
+  fixed name (`GGD2L Inhouse`) + password (`ggd2l`), shown as click-to-copy
+  chips; step 2 requires the `Under 5K In-House League` ticket so the private
+  game reaches OpenDota; step 3 points each player to their team's
   Discord voice channel (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side
-  highlighted via `me.myTeam`). Channel names + lobby prefix are constants.
+  highlighted via `me.myTeam`). Lobby details and channel names are constants.
+  `inhouseLobbyCode` remains only as the per-lobby typed confirmation token for
+  force-cancelling a live game with bets.
 - **Captain-selection vote**: a filled lobby opens in `READY_CHECK`; after all
   ten accept it enters `CAPTAIN_VOTE`. The players choose `VOTE` (elect
   specific players), `MMR` (highest 2), or `RECORD` (best 2 inhouse records).

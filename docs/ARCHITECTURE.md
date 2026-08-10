@@ -455,9 +455,10 @@ completion, and the real no-active-season offseason.
    (`src/lib/inhouse-bets.ts` pure matched-pool math,
    `src/lib/inhouse-bet-service.ts` for every money write). Pressing Start
    never closes the window.
-7. **Game setup** — READY/IN_PROGRESS render lobby name/password derived
-   client-side from the lobby id (`inhouseLobbyCode`) plus team voice
-   channels.
+7. **Game setup** — READY/IN_PROGRESS render the fixed `GGD2L Inhouse` lobby
+   name, `ggd2l` password, required `Under 5K In-House League` ticket, and team
+   voice channels. Player-account matching remains authoritative; the ticket
+   is what makes the private game available to OpenDota for that scan.
 8. **Result detection and publication** — OpenDota only, no manual winner:
    background scan
    (`maybeAutoDetectResult`), the detect button, or a pasted match id all
