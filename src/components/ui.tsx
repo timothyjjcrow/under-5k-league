@@ -508,12 +508,14 @@ export function TeamCrest({
   seed,
   logoUrl,
   size = 40,
+  imageFit = "contain",
   className,
 }: {
   name: string;
   seed: string;
   logoUrl?: string | null;
   size?: number;
+  imageFit?: "contain" | "cover";
   className?: string;
 }) {
   const src = logoUrl?.trim();
@@ -533,7 +535,9 @@ export function TeamCrest({
       }}
     >
       {initials(name)}
-      {src ? <TeamLogoImage key={src} src={src} size={size} /> : null}
+      {src ? (
+        <TeamLogoImage key={src} src={src} size={size} fit={imageFit} />
+      ) : null}
     </span>
   );
 }

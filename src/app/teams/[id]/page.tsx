@@ -332,7 +332,8 @@ export default async function TeamPage({
               name={team.name}
               seed={team.id}
               logoUrl={team.logoUrl}
-              size={80}
+              size={112}
+              imageFit="cover"
               className="rounded-2xl shadow-lg"
             />
             <div className="min-w-0 flex-1">

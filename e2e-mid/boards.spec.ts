@@ -306,6 +306,7 @@ test("team page renders roster, form, and the what-we-need card", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/teams");
   await expect(page.getByRole("heading", { name: "Teams" })).toBeVisible();
   // Into the first team's page via its standings-ordered card link.
@@ -313,6 +314,7 @@ test("team page renders roster, form, and the what-we-need card", async ({
   await expect(page).toHaveURL(/\/teams\/.+/);
   await expect(page.getByText("Roster").first()).toBeVisible();
   await expect(page.getByText("Head-to-head")).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/teams/[id]");
   assertNoErrors();
 });
 
