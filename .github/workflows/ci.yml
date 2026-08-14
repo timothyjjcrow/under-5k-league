@@ -162,7 +162,10 @@ jobs:
             psql -X --set=ON_ERROR_STOP=on --tuples-only --no-align \
               --command="SELECT (SELECT COUNT(*) FROM \"User\" WHERE \"id\" = 'legacy-restore-user'), (SELECT COUNT(*) FROM \"Season\" WHERE \"id\" = 'legacy-restore-season'), (SELECT COUNT(*) FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL)"
           )"
-          test "${restored_counts}" = "1|1|3"
+          expected_migration_count="$(
+            find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' '
+          )"
+          test "${restored_counts}" = "1|1|${expected_migration_count}"
           npm run pg:up
       - name: Generate the migrated PostgreSQL client
         run: npx prisma generate
