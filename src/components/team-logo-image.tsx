@@ -14,7 +14,15 @@ export function shouldRenderTeamLogo(
  * The only client-stateful part of TeamCrest. Returning null after an image
  * error reveals the deterministic monogram rendered underneath by the parent.
  */
-export function TeamLogoImage({ src, size }: { src: string; size: number }) {
+export function TeamLogoImage({
+  src,
+  size,
+  fit,
+}: {
+  src: string;
+  size: number;
+  fit: "contain" | "cover";
+}) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   if (!shouldRenderTeamLogo(src, failedSrc)) return null;
 
@@ -32,7 +40,9 @@ export function TeamLogoImage({ src, size }: { src: string; size: number }) {
       decoding="async"
       referrerPolicy="no-referrer"
       onError={() => setFailedSrc(src)}
-      className="absolute inset-0 block bg-surface-2 object-contain"
+      className={`absolute inset-0 block bg-surface-2 ${
+        fit === "cover" ? "object-cover" : "object-contain"
+      }`}
       // Tailwind's image reset sets height:auto. Inline dimensions guarantee
       // the loaded image fills the parent's fixed square despite that reset.
       style={{ width: "100%", height: "100%" }}

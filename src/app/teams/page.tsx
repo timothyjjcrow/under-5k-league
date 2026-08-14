@@ -322,7 +322,7 @@ export default async function TeamsPage() {
         </Card>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {ordered.map((t) => {
           const rank = rankOf.get(t.id) ?? 0;
           const row = rowOf.get(t.id);
@@ -340,7 +340,8 @@ export default async function TeamsPage() {
                     name={t.name}
                     seed={t.id}
                     logoUrl={t.logoUrl}
-                    size={44}
+                    size={64}
+                    imageFit="cover"
                   />
                   <div className="min-w-0">
                     <Link

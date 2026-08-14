@@ -26,8 +26,24 @@ describe("TeamCrest", () => {
     expect(html).toContain('height="48"');
     expect(html).toContain('style="width:48px;height:48px');
     expect(html).toContain('style="width:100%;height:100%"');
+    expect(html).toContain("object-contain");
     // The monogram stays mounted underneath so an errored image can reveal it.
     expect(html).toContain("AD");
+  });
+
+  it("can crop a configured logo to fill its crest", () => {
+    const html = renderToStaticMarkup(
+      createElement(TeamCrest, {
+        name: "Ancient Defenders",
+        seed: "team-1",
+        logoUrl: "https://cdn.example.com/wide-logo.png",
+        size: 64,
+        imageFit: "cover",
+      }),
+    );
+
+    expect(html).toContain("object-cover");
+    expect(html).not.toContain("object-contain");
   });
 
   it("keeps the generated monogram when no usable logo URL exists", () => {
@@ -73,7 +89,31 @@ describe("TeamCrest", () => {
 
     const crestSource = readFileSync(join(__dirname, "ui.tsx"), "utf8");
     expect(crestSource).toContain(
-      "<TeamLogoImage key={src} src={src} size={size} />",
+      "<TeamLogoImage key={src} src={src} size={size} fit={imageFit} />",
     );
+  });
+
+  it("uses larger, crop-filled crests for the primary team views", () => {
+    const crestWithName = (source: string, nameProp: string) =>
+      (source.match(/<TeamCrest[\s\S]*?\/>/g) ?? []).find((crest) =>
+        crest.includes(nameProp),
+      );
+
+    const teamsPage = readFileSync(
+      join(__dirname, "../app/teams/page.tsx"),
+      "utf8",
+    );
+    const cardCrest = crestWithName(teamsPage, "name={t.name}");
+    expect(cardCrest).toContain("size={64}");
+    expect(cardCrest).toContain('imageFit="cover"');
+    expect(teamsPage).toContain("md:grid-cols-2");
+
+    const teamPage = readFileSync(
+      join(__dirname, "../app/teams/[id]/page.tsx"),
+      "utf8",
+    );
+    const heroCrest = crestWithName(teamPage, "name={team.name}");
+    expect(heroCrest).toContain("size={112}");
+    expect(heroCrest).toContain('imageFit="cover"');
   });
 });
