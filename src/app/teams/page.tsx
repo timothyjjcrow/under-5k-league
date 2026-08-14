@@ -158,6 +158,7 @@ export default async function TeamsPage() {
     teams.map((t) => t.id),
   );
   const powerName = new Map(teams.map((t) => [t.id, t.name]));
+  const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
   const withdrawnTeamIds = new Set(
     teams.filter((team) => team.withdrawn).map((team) => team.id),
   );
@@ -216,6 +217,7 @@ export default async function TeamsPage() {
                   <TeamCrest
                     name={powerName.get(row.teamId) ?? "?"}
                     seed={row.teamId}
+                    logoUrl={teamLogoUrl.get(row.teamId)}
                     size={24}
                     className="shrink-0 rounded-md"
                   />
@@ -334,7 +336,12 @@ export default async function TeamsPage() {
             >
               <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
                 <div className="flex min-w-0 items-center gap-3">
-                  <TeamCrest name={t.name} seed={t.id} size={44} />
+                  <TeamCrest
+                    name={t.name}
+                    seed={t.id}
+                    logoUrl={t.logoUrl}
+                    size={44}
+                  />
                   <div className="min-w-0">
                     <Link
                       href={`/teams/${t.id}`}

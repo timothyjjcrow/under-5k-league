@@ -129,6 +129,7 @@ describe("migration SQL safety gate", () => {
       BASELINE_MIGRATION,
       "20260804010000_release_readiness",
       "20260804020000_automation_run_state",
+      "20260814000000_team_logo",
     ]);
   });
 
@@ -149,6 +150,12 @@ describe("migration SQL safety gate", () => {
   it("fails closed when the automation-state migration changes", () => {
     expect(() =>
       validateMigrations(migrationFixture("20260804020000_automation_run_state")),
+    ).toThrow(/immutable migration checksum mismatch/);
+  });
+
+  it("fails closed when the team-logo migration changes", () => {
+    expect(() =>
+      validateMigrations(migrationFixture("20260814000000_team_logo")),
     ).toThrow(/immutable migration checksum mismatch/);
   });
 });

@@ -2139,6 +2139,7 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   <TeamCrest
                     name={t.name}
                     seed={t.id}
+                    logoUrl={t.logoUrl}
                     size={22}
                     className="shrink-0 rounded-md"
                   />

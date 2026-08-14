@@ -193,6 +193,7 @@ export default async function TeamPage({
   const rank = standings.findIndex((s) => s.teamId === id) + 1;
   const row = standings.find((s) => s.teamId === id);
   const teamName = new Map(allTeams.map((t) => [t.id, t.name]));
+  const teamLogoUrl = new Map(allTeams.map((t) => [t.id, t.logoUrl]));
   // "What we need": this team's playoff scenario, from the exact engine.
   const stakesReport =
     team.season.status === "REGULAR_SEASON"
@@ -330,6 +331,7 @@ export default async function TeamPage({
             <TeamCrest
               name={team.name}
               seed={team.id}
+              logoUrl={team.logoUrl}
               size={80}
               className="rounded-2xl shadow-lg"
             />
@@ -584,6 +586,7 @@ export default async function TeamPage({
                       <TeamCrest
                         name={teamName.get(r.opponentId) ?? "?"}
                         seed={r.opponentId}
+                        logoUrl={teamLogoUrl.get(r.opponentId)}
                         size={20}
                         className="shrink-0 rounded"
                       />
@@ -640,6 +643,7 @@ export default async function TeamPage({
                         <TeamCrest
                           name={teamName.get(oppId) ?? "?"}
                           seed={oppId}
+                          logoUrl={teamLogoUrl.get(oppId)}
                           size={20}
                           className="shrink-0 rounded"
                         />

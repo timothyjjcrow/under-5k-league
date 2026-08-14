@@ -26,7 +26,7 @@ export default async function SeasonsPage() {
     prisma.season.findMany({
       orderBy: { createdAt: "desc" },
       include: {
-        teams: { select: { id: true, name: true } },
+        teams: { select: { id: true, name: true, logoUrl: true } },
         matches: {
           where: { phase: { not: "REGULAR" } },
           select: {
@@ -125,6 +125,7 @@ export default async function SeasonsPage() {
                         <TeamCrest
                           name={champion.name}
                           seed={champion.id}
+                          logoUrl={champion.logoUrl}
                           size={26}
                           className="rounded-lg"
                         />

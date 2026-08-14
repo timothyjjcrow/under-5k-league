@@ -1385,6 +1385,7 @@ export default async function PlayerProfilePage({
                   <TeamCrest
                     name={m.team.name}
                     seed={m.teamId}
+                    logoUrl={m.team.logoUrl}
                     size={22}
                     className="shrink-0 rounded-md"
                   />

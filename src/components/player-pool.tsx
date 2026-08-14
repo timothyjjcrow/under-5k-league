@@ -38,7 +38,12 @@ import { DiscordTag } from "@/components/discord-tag";
  * PoolPlayer type). `price` is null for captains — no draft price shown. */
 export type PoolDraftInfo = Record<
   string,
-  { teamId: string; teamName: string; price: number | null }
+  {
+    teamId: string;
+    teamName: string;
+    teamLogoUrl?: string | null;
+    price: number | null;
+  }
 >;
 
 type PoolStatus = "all" | "drafted" | "free";
@@ -677,7 +682,12 @@ function StatusChip({
 function TeamChip({
   info,
 }: {
-  info: { teamId: string; teamName: string; price: number | null };
+  info: {
+    teamId: string;
+    teamName: string;
+    teamLogoUrl?: string | null;
+    price: number | null;
+  };
 }) {
   return (
     <Link
@@ -687,6 +697,7 @@ function TeamChip({
       <TeamCrest
         name={info.teamName}
         seed={info.teamId}
+        logoUrl={info.teamLogoUrl}
         size={16}
         className="rounded"
       />

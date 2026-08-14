@@ -121,10 +121,11 @@ export default async function RecapPage({
     }),
     prisma.team.findMany({
       where: { seasonId: season.id },
-      select: { id: true, name: true },
+      select: { id: true, name: true, logoUrl: true },
     }),
   ]);
   const teamName = new Map(teams.map((team) => [team.id, team.name]));
+  const teamLogoUrl = new Map(teams.map((team) => [team.id, team.logoUrl]));
   const championPresentation = resolveChampionPresentation(season, matches);
   const playoffMatches = matches.filter((match) => match.phase !== "REGULAR");
   const bracketRounds = buildBracketRounds(
@@ -132,6 +133,7 @@ export default async function RecapPage({
     teamName,
     seedsFromFirstRound(playoffMatches),
     (date) => formatMatchTime(date, "short"),
+    teamLogoUrl,
   );
   const completedSeries = matches.filter(
     (match) => match.status === "COMPLETED",
@@ -170,7 +172,10 @@ export default async function RecapPage({
     userIds.length
       ? prisma.teamMember.findMany({
           where: { seasonId: season.id, userId: { in: userIds } },
-          select: { userId: true, team: { select: { id: true, name: true } } },
+          select: {
+            userId: true,
+            team: { select: { id: true, name: true, logoUrl: true } },
+          },
         })
       : Promise.resolve([]),
   ]);
@@ -223,6 +228,7 @@ export default async function RecapPage({
               <TeamCrest
                 name={champion.name}
                 seed={champion.id}
+                logoUrl={champion.logoUrl}
                 size={72}
                 className="rounded-2xl shadow-lg ring-2 ring-amber-400/50"
               />
@@ -350,7 +356,7 @@ function AwardCard({
     avatar: string | null;
     rankTier: number | null;
   };
-  team?: { id: string; name: string };
+  team?: { id: string; name: string; logoUrl: string | null };
   heroName?: string;
 }) {
   const hero = award.heroId ? heroById(award.heroId) : null;
@@ -383,7 +389,12 @@ function AwardCard({
                   href={`/teams/${team.id}`}
                   className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted hover:text-info"
                 >
-                  <TeamCrest name={team.name} seed={team.id} size={14} />
+                  <TeamCrest
+                    name={team.name}
+                    seed={team.id}
+                    logoUrl={team.logoUrl}
+                    size={14}
+                  />
                   <span className="truncate">{team.name}</span>
                 </Link>
               ) : null}

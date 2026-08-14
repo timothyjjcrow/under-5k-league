@@ -15,6 +15,7 @@ import { StandingsTableClient, type StandingsRowView } from "./standings-table";
 export function StandingsTable({
   standings,
   teamName,
+  teamLogoUrl,
   formByTeam,
   playoffCut,
   clinch,
@@ -27,6 +28,7 @@ export function StandingsTable({
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
+  teamLogoUrl?: Map<string, string | null>;
   formByTeam?: Map<string, FormResult[]>;
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
   playoffCut?: number;
@@ -57,6 +59,7 @@ export function StandingsTable({
   const rows: StandingsRowView[] = standings.map((s, i) => ({
     teamId: s.teamId,
     name: teamName.get(s.teamId) ?? "—",
+    logoUrl: teamLogoUrl?.get(s.teamId) ?? null,
     rank: i + 1,
     wins: s.wins,
     draws: s.draws,

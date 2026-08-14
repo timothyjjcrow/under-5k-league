@@ -233,6 +233,7 @@ export default async function SchedulePage() {
   );
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
 
   // Match-night RSVPs: roster per team + rows per match → per-side summaries.
   const rosterByTeam = new Map<string, string[]>();
@@ -377,6 +378,8 @@ export default async function SchedulePage() {
       awayTeamId: m.awayTeamId,
       homeName: teamName.get(m.homeTeamId) ?? "?",
       awayName: teamName.get(m.awayTeamId) ?? "?",
+      homeLogoUrl: teamLogoUrl.get(m.homeTeamId) ?? null,
+      awayLogoUrl: teamLogoUrl.get(m.awayTeamId) ?? null,
       homeScore: m.homeScore,
       awayScore: m.awayScore,
       done: m.status === "COMPLETED",
@@ -473,6 +476,7 @@ export default async function SchedulePage() {
     // a corrected regular result must not relabel (or blank) bracket seeds.
     seedsFromFirstRound(playoff),
     (d) => fmtWhen(d) ?? "",
+    teamLogoUrl,
   );
   const postseasonPhase =
     season.status === "PLAYOFFS" || season.status === "COMPLETE";
@@ -620,6 +624,9 @@ export default async function SchedulePage() {
         <ChampionBanner
           teamId={championPresentation.championTeamId}
           teamName={champion}
+          teamLogoUrl={teamLogoUrl.get(
+            championPresentation.championTeamId,
+          )}
           seasonName={season.name}
         />
       ) : null}
@@ -646,6 +653,7 @@ export default async function SchedulePage() {
           <StandingsTable
             standings={standings}
             teamName={teamName}
+            teamLogoUrl={teamLogoUrl}
             eligibleTeams={playoffField.eligibleTeamIds.length}
             withdrawnIds={
               new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
@@ -674,11 +682,13 @@ export default async function SchedulePage() {
           <PlayoffPicture
             standings={playoffField.eligibleStandings}
             teamName={teamName}
+            teamLogoUrl={teamLogoUrl}
             report={stakesReport}
           />
           <RunIn
             standings={playoffField.eligibleStandings}
             teamName={teamName}
+            teamLogoUrl={teamLogoUrl}
             remaining={remainingSchedule(playoffField.eligibleTeamIds, matches)}
             playoffCut={playoffField.bracketSize}
           />
@@ -714,6 +724,7 @@ export default async function SchedulePage() {
                 <SeasonGrid
                   standings={standings}
                   teamName={teamName}
+                  teamLogoUrl={teamLogoUrl}
                   matches={matches}
                 />
               ) : null}
@@ -721,7 +732,11 @@ export default async function SchedulePage() {
                 weeks={weekViews}
                 teams={[...teams]
                   .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((t) => ({ id: t.id, name: t.name }))}
+                  .map((t) => ({
+                    id: t.id,
+                    name: t.name,
+                    logoUrl: t.logoUrl,
+                  }))}
               />
             </>
           )}
@@ -737,10 +752,12 @@ export default async function SchedulePage() {
 function SeasonGrid({
   standings,
   teamName,
+  teamLogoUrl,
   matches,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
+  teamLogoUrl: Map<string, string | null>;
   matches: CrossMatch[];
 }) {
   const order = standings.map((s) => s.teamId);
@@ -806,6 +823,7 @@ function SeasonGrid({
                     <TeamCrest
                       name={teamName.get(colId) ?? "?"}
                       seed={colId}
+                      logoUrl={teamLogoUrl.get(colId)}
                       size={22}
                       className="rounded"
                     />
@@ -838,6 +856,7 @@ function SeasonGrid({
                     <TeamCrest
                       name={teamName.get(rowId) ?? "?"}
                       seed={rowId}
+                      logoUrl={teamLogoUrl.get(rowId)}
                       size={20}
                       className="shrink-0 rounded"
                     />
@@ -895,10 +914,12 @@ function SeasonGrid({
 function PlayoffPicture({
   standings,
   teamName,
+  teamLogoUrl,
   report,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
+  teamLogoUrl: Map<string, string | null>;
   report: ScenarioReport | null;
 }) {
   const order = standings.map((s) => s.teamId);
@@ -960,6 +981,7 @@ function PlayoffPicture({
               teamId={p.home}
               seed={seedOf.get(p.home)}
               teamName={teamName}
+              teamLogoUrl={teamLogoUrl}
               align="right"
             />
             <span className="shrink-0 text-xs text-muted">vs</span>
@@ -967,6 +989,7 @@ function PlayoffPicture({
               teamId={p.away}
               seed={seedOf.get(p.away)}
               teamName={teamName}
+              teamLogoUrl={teamLogoUrl}
               align="left"
             />
           </div>
@@ -985,6 +1008,7 @@ function PlayoffPicture({
                   <TeamCrest
                     name={teamName.get(n.teamId) ?? "?"}
                     seed={n.teamId}
+                    logoUrl={teamLogoUrl.get(n.teamId)}
                     size={18}
                     className="shrink-0 rounded"
                   />
@@ -1016,11 +1040,13 @@ function ProjectedSide({
   teamId,
   seed,
   teamName,
+  teamLogoUrl,
   align,
 }: {
   teamId: string;
   seed: number | undefined;
   teamName: Map<string, string>;
+  teamLogoUrl: Map<string, string | null>;
   align: "left" | "right";
 }) {
   const name = teamName.get(teamId) ?? "?";
@@ -1038,6 +1064,7 @@ function ProjectedSide({
       <TeamCrest
         name={name}
         seed={teamId}
+        logoUrl={teamLogoUrl.get(teamId)}
         size={20}
         className="shrink-0 rounded"
       />
@@ -1052,11 +1079,13 @@ function ProjectedSide({
 function RunIn({
   standings,
   teamName,
+  teamLogoUrl,
   remaining,
   playoffCut,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
+  teamLogoUrl: Map<string, string | null>;
   remaining: Map<string, { week: number; opponentId: string }[]>;
   playoffCut: number;
 }) {
@@ -1085,6 +1114,7 @@ function RunIn({
               <TeamCrest
                 name={teamName.get(s.teamId) ?? "?"}
                 seed={s.teamId}
+                logoUrl={teamLogoUrl.get(s.teamId)}
                 size={20}
                 className="shrink-0 rounded"
               />

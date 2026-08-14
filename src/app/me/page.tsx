@@ -765,6 +765,7 @@ export default async function MePage({
                 <TeamCrest
                   name={member.team.name}
                   seed={member.team.id}
+                  logoUrl={member.team.logoUrl}
                   size={40}
                 />
                 <div className="min-w-0">

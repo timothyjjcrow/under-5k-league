@@ -110,6 +110,9 @@ export default async function SeasonArchivePage({
   if (!season) notFound();
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
+  const teamLogoUrl = new Map(
+    season.teams.map((t) => [t.id, t.logoUrl]),
+  );
   const standings = computeStandings(
     season.teams.map((t) => t.id),
     season.matches,
@@ -134,6 +137,7 @@ export default async function SeasonArchivePage({
         hour: "numeric",
         minute: "2-digit",
       }),
+    teamLogoUrl,
   );
   const champion = championPresentation.championTeamId
     ? season.teams.find((t) => t.id === championPresentation.championTeamId)
@@ -213,6 +217,7 @@ export default async function SeasonArchivePage({
         <ChampionBanner
           teamId={champion.id}
           teamName={champion.name}
+          teamLogoUrl={champion.logoUrl}
           seasonName={season.name}
         />
       ) : null}
@@ -243,6 +248,7 @@ export default async function SeasonArchivePage({
             <StandingsTable
               standings={standings}
               teamName={teamName}
+              teamLogoUrl={teamLogoUrl}
               withdrawnIds={
                 new Set(
                   season.teams
@@ -306,6 +312,7 @@ export default async function SeasonArchivePage({
                       <TeamCrest
                         name={t.name}
                         seed={t.id}
+                        logoUrl={t.logoUrl}
                         size={24}
                         className="rounded-md"
                       />

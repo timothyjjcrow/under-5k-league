@@ -243,6 +243,7 @@ export default async function MatchDetailPage({
             <TeamSide
               name={match.homeTeam.name}
               teamId={match.homeTeamId}
+              logoUrl={match.homeTeam.logoUrl}
               score={match.homeScore}
               win={match.winnerTeamId === match.homeTeamId}
             />
@@ -252,6 +253,7 @@ export default async function MatchDetailPage({
             <TeamSide
               name={match.awayTeam.name}
               teamId={match.awayTeamId}
+              logoUrl={match.awayTeam.logoUrl}
               score={match.awayScore}
               win={match.winnerTeamId === match.awayTeamId}
               right
@@ -444,8 +446,8 @@ async function MatchPreview({
     scheduledAt: Date | null;
     homeTeamId: string;
     awayTeamId: string;
-    homeTeam: { name: string; captainId: string };
-    awayTeam: { name: string; captainId: string };
+    homeTeam: { name: string; logoUrl: string | null; captainId: string };
+    awayTeam: { name: string; logoUrl: string | null; captainId: string };
     standins: {
       id: string;
       teamId: string;
@@ -539,7 +541,7 @@ async function MatchPreview({
     (h) => h.opponentId === match.awayTeamId,
   );
 
-  const side = (teamId: string, name: string) => {
+  const side = (teamId: string, name: string, logoUrl: string | null) => {
     const roster = members.filter((m) => m.teamId === teamId);
     const subs = match.standins.filter((s) => s.teamId === teamId);
     const replacedIds = new Set(
@@ -551,11 +553,11 @@ async function MatchPreview({
         (m) => m.homeTeamId === teamId || m.awayTeamId === teamId,
       ),
     );
-    return { teamId, name, roster, subs, replacedIds, form };
+    return { teamId, name, logoUrl, roster, subs, replacedIds, form };
   };
   const sides = [
-    side(match.homeTeamId, match.homeTeam.name),
-    side(match.awayTeamId, match.awayTeam.name),
+    side(match.homeTeamId, match.homeTeam.name, match.homeTeam.logoUrl),
+    side(match.awayTeamId, match.awayTeam.name, match.awayTeam.logoUrl),
   ];
 
   return (
@@ -602,6 +604,7 @@ async function MatchPreview({
                   <TeamCrest
                     name={s.name}
                     seed={s.teamId}
+                    logoUrl={s.logoUrl}
                     size={24}
                     className="rounded-md"
                   />
@@ -698,6 +701,7 @@ async function MatchPreview({
         sides={sides.map((s) => ({
           teamId: s.teamId,
           name: s.name,
+          logoUrl: s.logoUrl,
           roster: s.roster.map((m) => ({
             userId: m.userId,
             name: m.user.name,
@@ -730,8 +734,8 @@ async function StakesBanner({
     phase: string;
     homeTeamId: string;
     awayTeamId: string;
-    homeTeam: { name: string };
-    awayTeam: { name: string };
+    homeTeam: { name: string; logoUrl: string | null };
+    awayTeam: { name: string; logoUrl: string | null };
   };
   // Passed down from MatchPreview, which already loaded the season's matches.
   seasonMatches: (StakesMatchRow & {
@@ -775,6 +779,10 @@ async function StakesBanner({
     [match.homeTeamId, match.homeTeam.name],
     [match.awayTeamId, match.awayTeam.name],
   ]);
+  const logoOf = new Map([
+    [match.homeTeamId, match.homeTeam.logoUrl],
+    [match.awayTeamId, match.awayTeam.logoUrl],
+  ]);
   return (
     <Card className="border-accent/30">
       <CardHeader
@@ -799,6 +807,7 @@ async function StakesBanner({
               <TeamCrest
                 name={nameOf.get(s.teamId) ?? "?"}
                 seed={s.teamId}
+                logoUrl={logoOf.get(s.teamId)}
                 size={22}
                 className="shrink-0 rounded-md"
               />
@@ -828,6 +837,7 @@ async function ScoutingReport({
   sides: {
     teamId: string;
     name: string;
+    logoUrl: string | null;
     roster: { userId: string; name: string; roles: string }[];
   }[];
 }) {
@@ -886,6 +896,7 @@ async function ScoutingReport({
               <TeamCrest
                 name={d.name}
                 seed={d.teamId}
+                logoUrl={d.logoUrl}
                 size={22}
                 className="rounded-md"
               />
@@ -1042,12 +1053,14 @@ function PaceLine({
 function TeamSide({
   name,
   teamId,
+  logoUrl,
   score,
   win,
   right,
 }: {
   name: string;
   teamId: string;
+  logoUrl: string | null;
   score: number;
   win: boolean;
   right?: boolean;
@@ -1059,7 +1072,12 @@ function TeamSide({
         right && "flex-row-reverse",
       )}
     >
-      <TeamCrest name={name} seed={teamId} size={44} />
+      <TeamCrest
+        name={name}
+        seed={teamId}
+        logoUrl={logoUrl}
+        size={44}
+      />
       <Link
         href={`/teams/${teamId}`}
         className={cn(

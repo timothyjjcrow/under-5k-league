@@ -167,6 +167,7 @@ export default async function PickemPage({
   }
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
   const userName = new Map(users.map((u) => [u.id, u.name]));
   const userAvatar = new Map(users.map((u) => [u.id, u.avatar]));
   const myPicks = viewer
@@ -311,6 +312,7 @@ export default async function PickemPage({
                                 <TeamCrest
                                   name={name}
                                   seed={teamId}
+                                  logoUrl={teamLogoUrl.get(teamId)}
                                   size={20}
                                   className="rounded"
                                 />
