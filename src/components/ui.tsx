@@ -9,6 +9,7 @@ import type { FormResult } from "@/lib/team-matches";
 import { splitLinks } from "@/lib/linkify";
 import { CountUp } from "./count-up";
 import { NewsMedia } from "./news-media";
+import { TeamLogoImage } from "./team-logo-image";
 
 // ---------- Button ----------
 
@@ -498,26 +499,30 @@ export function teamHue(seed: string): number {
 }
 
 /**
- * A generated monogram "crest" for a team (teams have no uploaded logos): the
- * team's initials on a gradient tinted with its own color identity.
+ * A team's configured logo, or a deterministic generated monogram when the
+ * team has not configured one. Crests are decorative wherever they appear;
+ * the adjacent team name remains the accessible label.
  */
 export function TeamCrest({
   name,
   seed,
+  logoUrl,
   size = 40,
   className,
 }: {
   name: string;
   seed: string;
+  logoUrl?: string | null;
   size?: number;
   className?: string;
 }) {
+  const src = logoUrl?.trim();
   const hue = teamHue(seed);
   return (
     <span
       aria-hidden
       className={cn(
-        "grid shrink-0 place-items-center rounded-xl font-display font-bold uppercase text-white shadow ring-1 ring-white/15",
+        "relative grid shrink-0 place-items-center overflow-hidden rounded-xl font-display font-bold uppercase text-white shadow ring-1 ring-white/15",
         className,
       )}
       style={{
@@ -528,6 +533,7 @@ export function TeamCrest({
       }}
     >
       {initials(name)}
+      {src ? <TeamLogoImage key={src} src={src} size={size} /> : null}
     </span>
   );
 }

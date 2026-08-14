@@ -16,6 +16,9 @@ import {
   postgresUrlForSchema,
   rehearseBackupRestore,
 } from "../../scripts/rehearse-backup-restore.mjs";
+import { MIGRATION_SHA256 } from "../../scripts/migration-safety.mjs";
+
+const CURRENT_MIGRATION_COUNT = Object.keys(MIGRATION_SHA256).length;
 
 const SCRIPT = path.resolve(
   process.cwd(),
@@ -54,7 +57,7 @@ if (command === "psql" && args.includes("--tuples-only")) {
   process.stdout.write(
     args.includes("--command")
       ? (process.env.PG_DISCOVERED_SCHEMAS || "league_data\\n")
-      : (process.env.PG_SMOKE_RESULT || "3|3\\n")
+      : (process.env.PG_SMOKE_RESULT || "${CURRENT_MIGRATION_COUNT}|3\\n")
   );
 }
 `;
@@ -109,7 +112,7 @@ describe("PostgreSQL backup restore rehearsal", () => {
         postflightUrls.push(env.DIRECT_URL ?? "");
         return {
           schema: "league_data",
-          migrationCount: 3,
+          migrationCount: CURRENT_MIGRATION_COUNT,
           nativeObjectCount: 14,
         };
       },
@@ -127,9 +130,12 @@ describe("PostgreSQL backup restore rehearsal", () => {
 
     expect(result).toMatchObject({
       applicationSchema: "league_data",
-      migrationCount: 3,
+      migrationCount: CURRENT_MIGRATION_COUNT,
       coreTableCount: 3,
-      attestation: { migrationCount: 3, nativeObjectCount: 14 },
+      attestation: {
+        migrationCount: CURRENT_MIGRATION_COUNT,
+        nativeObjectCount: 14,
+      },
     });
     expect(postflightUrls).toHaveLength(1);
     expect(new URL(postflightUrls[0]).searchParams.get("schema")).toBe(
@@ -223,7 +229,7 @@ describe("PostgreSQL backup restore rehearsal", () => {
         scopedUrls.push(childEnv.DIRECT_URL ?? "");
         return {
           schema: "legacy_league",
-          migrationCount: 3,
+          migrationCount: CURRENT_MIGRATION_COUNT,
           nativeObjectCount: 14,
         };
       },
@@ -244,7 +250,7 @@ describe("PostgreSQL backup restore rehearsal", () => {
       legacyBaseline: true,
       attestation: {
         schema: "legacy_league",
-        migrationCount: 3,
+        migrationCount: CURRENT_MIGRATION_COUNT,
         nativeObjectCount: 14,
       },
     });

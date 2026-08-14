@@ -132,6 +132,7 @@ export default async function PlayersPage() {
       draftInfo[m.userId] = {
         teamId: t.id,
         teamName: t.name,
+        teamLogoUrl: t.logoUrl,
         price: m.isCaptain ? null : m.price,
       };
     }
@@ -439,6 +440,7 @@ export default async function PlayersPage() {
                       <TeamCrest
                         name={t.name}
                         seed={t.id}
+                        logoUrl={t.logoUrl}
                         size={22}
                         className="rounded-md"
                       />

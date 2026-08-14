@@ -16,6 +16,7 @@ import type { ClinchStatus } from "@/lib/standings";
 export type StandingsRowView = {
   teamId: string;
   name: string;
+  logoUrl?: string | null;
   /** 1-based league rank in points order (the default sort). */
   rank: number;
   wins: number;
@@ -256,6 +257,7 @@ export function StandingsTableClient({
                     <TeamCrest
                       name={row.name}
                       seed={row.teamId}
+                      logoUrl={row.logoUrl}
                       size={22}
                       className="rounded-md shrink-0"
                     />

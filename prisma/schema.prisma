@@ -165,6 +165,9 @@ model Team {
   id         String   @id @default(cuid())
   seasonId   String
   name       String
+  // Admin-managed image URL. Null keeps the deterministic monogram crest so
+  // historical teams and newly designated captains always have a usable mark.
+  logoUrl    String?
   captainId  String
   budget     Int      @default(100)
   draftOrder Int      @default(0)

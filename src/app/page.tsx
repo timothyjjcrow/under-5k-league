@@ -394,6 +394,7 @@ export default async function Home() {
         <TeamCrest
           name={champion.name}
           seed={champion.id}
+          logoUrl={champion.logoUrl}
           size={26}
           className="rounded-md ring-2 ring-amber-400/50"
         />
@@ -1648,6 +1649,7 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
                     <TeamCrest
                       name={t.name}
                       seed={t.id}
+                      logoUrl={t.logoUrl}
                       size={24}
                       className="rounded-md"
                     />
@@ -1751,6 +1753,7 @@ async function SeasonView({
   const playoffField = projectPlayoffField(teams, matches);
   const standings = playoffField.standings;
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
   const teamForm = formByTeam(
     teams.map((t) => t.id),
     matches,
@@ -1805,6 +1808,7 @@ async function SeasonView({
     // a corrected regular result must not relabel (or blank) bracket seeds.
     seedsFromFirstRound(playoffMatches),
     (d) => fmtWhen(d) ?? "",
+    teamLogoUrl,
   );
   const showBracket =
     season.status === "PLAYOFFS" && bracketRoundsView.length > 0;
@@ -1945,6 +1949,7 @@ async function SeasonView({
           matches={matches}
           teams={teams}
           teamName={teamName}
+          teamLogoUrl={teamLogoUrl}
           report={report}
           showCheckins={showCheckins}
         />
@@ -1992,6 +1997,7 @@ async function SeasonView({
                 totalTeams={standings.length}
                 eligibleTeams={playoffField.eligibleTeamIds.length}
                 teamName={teamName}
+                teamLogoUrl={teamLogoUrl}
                 withdrawnIds={
                   new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
                 }
@@ -2177,6 +2183,7 @@ async function SeasonView({
                         <TeamCrest
                           name={teamName.get(m.homeTeamId) ?? "?"}
                           seed={m.homeTeamId}
+                          logoUrl={teamLogoUrl.get(m.homeTeamId)}
                           size={16}
                           className="rounded"
                         />
@@ -2194,6 +2201,7 @@ async function SeasonView({
                         <TeamCrest
                           name={teamName.get(m.awayTeamId) ?? "?"}
                           seed={m.awayTeamId}
+                          logoUrl={teamLogoUrl.get(m.awayTeamId)}
                           size={16}
                           className="rounded"
                         />
@@ -2260,6 +2268,7 @@ async function ThisWeek({
   matches,
   teams,
   teamName,
+  teamLogoUrl,
   report,
   showCheckins,
 }: {
@@ -2267,6 +2276,7 @@ async function ThisWeek({
   matches: Match[];
   teams: SeasonSnapshot["teams"];
   teamName: Map<string, string>;
+  teamLogoUrl: Map<string, string | null>;
   report: ScenarioReport | null;
   showCheckins: boolean;
 }) {
@@ -2393,6 +2403,7 @@ async function ThisWeek({
                       <TeamCrest
                         name={teamName.get(teamId) ?? "?"}
                         seed={teamId}
+                        logoUrl={teamLogoUrl.get(teamId)}
                         size={18}
                         className="shrink-0 rounded"
                       />
@@ -2698,6 +2709,7 @@ async function CompleteView({
     matches,
   );
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
   const teamForm = formByTeam(
     teams.map((t) => t.id),
     matches,
@@ -2744,6 +2756,7 @@ async function CompleteView({
               <TeamCrest
                 name={champion.name}
                 seed={champion.id}
+                logoUrl={champion.logoUrl}
                 size={76}
                 className="rounded-2xl shadow-lg ring-2 ring-amber-400/50"
               />
@@ -2816,6 +2829,7 @@ async function CompleteView({
       <CompleteBracket
         matches={matches}
         teamName={teamName}
+        teamLogoUrl={teamLogoUrl}
         championTeamId={championPresentation.championTeamId}
       />
 
@@ -2839,6 +2853,7 @@ async function CompleteView({
               <StandingsTable
                 standings={standings}
                 teamName={teamName}
+                teamLogoUrl={teamLogoUrl}
                 withdrawnIds={
                   new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
                 }
@@ -2889,10 +2904,12 @@ async function CompleteView({
 function CompleteBracket({
   matches,
   teamName,
+  teamLogoUrl,
   championTeamId,
 }: {
   matches: Match[];
   teamName: Map<string, string>;
+  teamLogoUrl: Map<string, string | null>;
   championTeamId: string | null;
 }) {
   const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
@@ -2901,6 +2918,7 @@ function CompleteBracket({
     teamName,
     seedsFromFirstRound(playoffMatches),
     (d) => fmtWhen(d) ?? "",
+    teamLogoUrl,
   );
   if (rounds.length === 0) return null;
   return (

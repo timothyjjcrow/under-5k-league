@@ -178,6 +178,7 @@ import {
 } from "@/lib/schedule-status";
 import { MatchImportControls } from "@/components/match-import-controls";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { TEAM_LOGO_URL_MAX_LENGTH } from "@/lib/team-logo";
 import {
   Avatar,
   Badge,
@@ -194,6 +195,7 @@ import {
   Stat,
   StatCell,
   StatStrip,
+  TeamCrest,
   buttonClasses,
   textLink,
 } from "@/components/ui";
@@ -1710,6 +1712,12 @@ function CaptainControls({
                             size={24}
                           />
                         </PlayerLink>
+                        <TeamCrest
+                          name={t.name}
+                          seed={t.id}
+                          logoUrl={t.logoUrl}
+                          size={28}
+                        />
                         <Link
                           href={`/teams/${t.id}`}
                           className="min-w-0 truncate hover:text-info hover:underline"
@@ -1787,11 +1795,11 @@ function CaptainControls({
                     {season.status !== SEASON_STATUS.COMPLETE ? (
                       <details className="mt-1.5">
                         <summary className="cursor-pointer text-xs text-muted hover:text-fg">
-                          ✎ Rename team
+                          ✎ Edit team
                         </summary>
                         <ActionForm
                           action={renameTeam}
-                          className="mt-1.5 flex flex-wrap items-center gap-2"
+                          className="mt-1.5 grid max-w-md grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]"
                           hidden={{
                             teamId: t.id,
                             expectedActiveSeasonId: season.id,
@@ -1802,11 +1810,28 @@ function CaptainControls({
                             type="text"
                             maxLength={60}
                             defaultValue={t.name}
-                            aria-label={`New name for ${t.name}`}
-                            className="h-8 w-52 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                            aria-label={`Name for ${t.name}`}
+                            className="h-8 min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
                           />
+                          <input
+                            name="logoUrl"
+                            type="text"
+                            inputMode="url"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            maxLength={TEAM_LOGO_URL_MAX_LENGTH}
+                            defaultValue={t.logoUrl ?? ""}
+                            placeholder="https://…/logo.png"
+                            aria-label={`Logo URL for ${t.name}`}
+                            className="h-8 min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-sm sm:col-span-2"
+                          />
+                          <p className="text-xs text-muted sm:col-span-2">
+                            Paste an HTTPS image URL. Leave it blank to use the
+                            generated initials crest.
+                          </p>
                           <SubmitButton variant="secondary" size="sm">
-                            Save name
+                            Save team
                           </SubmitButton>
                         </ActionForm>
                       </details>

@@ -9,10 +9,12 @@ import { TeamCrest } from "./ui";
 export function ChampionBanner({
   teamId,
   teamName,
+  teamLogoUrl,
   seasonName,
 }: {
   teamId: string;
   teamName: string;
+  teamLogoUrl?: string | null;
   seasonName: string;
 }) {
   return (
@@ -24,6 +26,7 @@ export function ChampionBanner({
         <TeamCrest
           name={teamName}
           seed={teamId}
+          logoUrl={teamLogoUrl}
           size={44}
           className="rounded-xl ring-2 ring-amber-400/50"
         />

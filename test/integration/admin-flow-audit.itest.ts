@@ -142,6 +142,88 @@ describe("renameTeam — cached record matchups", () => {
     ).toMatchObject({ name: "Renamed Radiants" });
     expect(vi.mocked(updateTag)).toHaveBeenCalledWith("games");
   });
+
+  it("saves and clears a validated team logo", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const teamId = matches[0].homeTeamId;
+
+    const saved = await renameTeam(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        teamId,
+        name: "Radiant Crests",
+        logoUrl: " https://cdn.example/radiant.png ",
+      }),
+    );
+    expect(saved?.error).toBeUndefined();
+    expect(
+      await prisma.team.findUniqueOrThrow({ where: { id: teamId } }),
+    ).toMatchObject({
+      name: "Radiant Crests",
+      logoUrl: "https://cdn.example/radiant.png",
+    });
+
+    const rejected = await renameTeam(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        teamId,
+        name: "Must Stay",
+        logoUrl: "http://cdn.example/insecure.png",
+      }),
+    );
+    expect(rejected?.error).toMatch(/HTTPS/);
+    expect(
+      await prisma.team.findUniqueOrThrow({ where: { id: teamId } }),
+    ).toMatchObject({
+      name: "Radiant Crests",
+      logoUrl: "https://cdn.example/radiant.png",
+    });
+
+    const cleared = await renameTeam(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        teamId,
+        name: "Radiant Crests",
+        logoUrl: "",
+      }),
+    );
+    expect(cleared?.error).toBeUndefined();
+    expect(
+      await prisma.team.findUniqueOrThrow({ where: { id: teamId } }),
+    ).toMatchObject({ logoUrl: null });
+  });
+
+  it("cannot use the active-season form to change a historical team's logo", async () => {
+    const { season } = await seasonWithSchedule();
+    const historicalSeason = await makeSeason({
+      name: "Historical season",
+      status: SEASON_STATUS.COMPLETE,
+      isActive: false,
+    });
+    const historicalTeam = await makeTeam(
+      historicalSeason.id,
+      "Historical team",
+      0,
+    );
+
+    const result = await renameTeam(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        teamId: historicalTeam.id,
+        name: "Cross-season edit",
+        logoUrl: "https://cdn.example/wrong-season.png",
+      }),
+    );
+
+    expect(result?.error).toBe("Unknown team");
+    expect(
+      await prisma.team.findUniqueOrThrow({ where: { id: historicalTeam.id } }),
+    ).toMatchObject({ name: "Historical team", logoUrl: null });
+  });
 });
 
 describe("removeGame — the removal must survive automatic re-import", () => {

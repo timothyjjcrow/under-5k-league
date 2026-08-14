@@ -419,6 +419,7 @@ function TeamRow({
       <TeamCrest
         name={side.name}
         seed={side.teamId}
+        logoUrl={side.logoUrl}
         size={18}
         className="shrink-0 rounded"
       />

@@ -1037,6 +1037,7 @@ export async function getDraftState(
             select: {
               id: true,
               name: true,
+              logoUrl: true,
               budget: true,
               draftOrder: true,
               captainId: true,
@@ -1119,6 +1120,7 @@ export async function getDraftState(
       const teamViews = teams.map((team) => ({
         id: team.id,
         name: team.name,
+        logoUrl: team.logoUrl,
         budget: displayBudgets.byTeam.get(team.id) ?? team.budget,
         draftOrder: team.draftOrder,
         captainId: team.captainId,

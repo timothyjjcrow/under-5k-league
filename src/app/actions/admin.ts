@@ -149,6 +149,7 @@ import {
 } from "@/lib/season-phase-policy";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
+import { normalizeTeamLogoUrl } from "@/lib/team-logo";
 
 /**
  * Thrown from inside a `$transaction` callback when a precondition that was
@@ -1478,7 +1479,7 @@ export async function transferCaptaincy(
   };
 }
 
-/** Rename a team in the active season (captains can't set their own name). */
+/** Update a team's public identity (captains can't edit it themselves). */
 export async function renameTeam(
   _prev: ActionResult,
   formData: FormData,
@@ -1494,12 +1495,16 @@ export async function renameTeam(
   if (!expectedActiveSeasonId || expectedActiveSeasonId !== season.id) {
     return {
       error:
-        "The active season changed while this page was open — reload before renaming a team.",
+        "The active season changed while this page was open — reload before editing a team.",
     };
   }
   const teamId = str(formData, "teamId");
   const name = str(formData, "name").trim().slice(0, 60);
   if (!name) return { error: "Enter a team name" };
+  const logo = formData.has("logoUrl")
+    ? normalizeTeamLogoUrl(str(formData, "logoUrl"))
+    : null;
+  if (logo && "error" in logo) return logo;
   try {
     await prisma.$transaction(
       async (tx) => {
@@ -1510,12 +1515,15 @@ export async function renameTeam(
         if (!currentSeason?.isActive) throw new ActiveSeasonChangedError();
         if (currentSeason.status === SEASON_STATUS.COMPLETE) {
           throw new DraftSetupLockedError(
-            "The season is complete — team names are historical and read-only.",
+            "The season is complete — team details are historical and read-only.",
           );
         }
         const changed = await tx.team.updateMany({
           where: { id: teamId, seasonId: expectedActiveSeasonId },
-          data: { name },
+          data: {
+            name,
+            ...(logo ? { logoUrl: logo.logoUrl } : {}),
+          },
         });
         if (changed.count === 0) throw new CaptainStateChangedError();
       },
@@ -1535,15 +1543,17 @@ export async function renameTeam(
     }
     throw error;
   }
-  // The record-book cache embeds matchup team names under the shared games
-  // tag, so a rename must expire that dependency as well as the page shell.
+  // The record-book cache embeds matchup team identity under the shared games
+  // tag, so an edit must expire that dependency as well as the page shell.
   await logAdminAction({
     action: "renameTeam",
-    summary: `Renamed team ${teamId} to "${name}"`,
+    summary: logo
+      ? `Updated team ${teamId} identity to "${name}" (${logo.logoUrl ? "custom logo" : "generated crest"})`
+      : `Renamed team ${teamId} to "${name}"`,
     seasonId: season.id,
   });
   refreshGames();
-  return { message: `Renamed to ${name}` };
+  return { message: `Saved ${name}` };
 }
 
 /**

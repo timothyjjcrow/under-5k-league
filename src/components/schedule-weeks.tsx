@@ -24,6 +24,8 @@ export type MatchView = {
   awayTeamId: string;
   homeName: string;
   awayName: string;
+  homeLogoUrl?: string | null;
+  awayLogoUrl?: string | null;
   homeScore: number;
   awayScore: number;
   done: boolean;
@@ -74,7 +76,7 @@ export function ScheduleWeeks({
   teams,
 }: {
   weeks: WeekView[];
-  teams: { id: string; name: string }[];
+  teams: { id: string; name: string; logoUrl?: string | null }[];
 }) {
   const [filterTeam, setFilterTeam] = useState<string | null>(null);
   // Per-week collapsed overrides on top of the default rule (past weeks with
@@ -130,6 +132,7 @@ export function ScheduleWeeks({
               <TeamCrest
                 name={t.name}
                 seed={t.id}
+                logoUrl={t.logoUrl}
                 size={16}
                 className="shrink-0 rounded"
               />
@@ -312,6 +315,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           <TeamCrest
             name={m.homeName}
             seed={m.homeTeamId}
+            logoUrl={m.homeLogoUrl}
             size={24}
             className="rounded-lg"
           />
@@ -386,6 +390,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           <TeamCrest
             name={m.awayName}
             seed={m.awayTeamId}
+            logoUrl={m.awayLogoUrl}
             size={24}
             className="rounded-lg"
           />

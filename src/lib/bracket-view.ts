@@ -14,6 +14,7 @@ import {
 export type BracketSide = {
   teamId: string;
   name: string;
+  logoUrl?: string | null;
   seed: number | null;
 };
 
@@ -60,11 +61,15 @@ export function buildBracketRounds(
   teamName: Map<string, string>,
   seedByTeam: Map<string, number>,
   formatWhen: (d: Date) => string,
+  teamLogoUrl: Map<string, string | null> = new Map(),
 ): BracketRound[] {
   const { totalRounds, rounds } = bracketSkeleton(matches);
   const side = (teamId: string): BracketSide => ({
     teamId,
     name: teamName.get(teamId) ?? "?",
+    ...(teamLogoUrl.has(teamId)
+      ? { logoUrl: teamLogoUrl.get(teamId) ?? null }
+      : {}),
     seed: seedByTeam.get(teamId) ?? null,
   });
   return rounds.map(({ round, slots }) => ({
