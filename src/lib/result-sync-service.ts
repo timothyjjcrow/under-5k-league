@@ -242,26 +242,30 @@ async function syncDueMatches(
       }
     }
 
-    // The league feed may have moved a Bo2 from SCHEDULED to LIVE (or closed
-    // another fixture) since `due` was read. Re-read the small due set before
-    // choosing player-id recovery so its status and score are authoritative.
-    fallbackDue = await prisma.match.findMany({
-      where: {
-        seasonId: season.id,
-        status: { not: MATCH_STATUS.COMPLETED },
-        scheduledAt: {
-          gte: new Date(nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000),
-          lte: new Date(nowMs - AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF * 60_000),
+    if (leagueClaimed) {
+      // The league feed may have moved a Bo2 from SCHEDULED to LIVE (or closed
+      // another fixture) since `due` was read. Re-read only after THIS run
+      // actually called it. A throttle loser did not mutate match state and
+      // can safely reuse `due`; the guarded per-match claim below still
+      // re-asserts not-COMPLETED if another worker is finishing concurrently.
+      fallbackDue = await prisma.match.findMany({
+        where: {
+          seasonId: season.id,
+          status: { not: MATCH_STATUS.COMPLETED },
+          scheduledAt: {
+            gte: new Date(nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000),
+            lte: new Date(nowMs - AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF * 60_000),
+          },
         },
-      },
-      select: {
-        id: true,
-        status: true,
-        autoSyncedAt: true,
-        autoSyncAttempts: true,
-        scheduledAt: true,
-      },
-    });
+        select: {
+          id: true,
+          status: true,
+          autoSyncedAt: true,
+          autoSyncAttempts: true,
+          scheduledAt: true,
+        },
+      });
+    }
     fallbackDue = fallbackDue.filter(
       (match) =>
         match.status === MATCH_STATUS.LIVE ||

@@ -2240,13 +2240,48 @@ export async function getInhouseState(
   const [queue, lobbyRow] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
       orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
-      include: { user: true },
+      select: {
+        userId: true,
+        mmr: true,
+        lastSeenAt: true,
+        user: {
+          select: { name: true, avatar: true, rankTier: true },
+        },
+      },
     }),
     prisma.inhouseLobby.findFirst({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-      include: {
-        startedBy: true,
-        players: { include: { user: true } },
+      select: {
+        id: true,
+        status: true,
+        acceptEndsAt: true,
+        voteEndsAt: true,
+        pickTeam: true,
+        pickEndsAt: true,
+        radiantTeam: true,
+        winnerTeam: true,
+        startedAt: true,
+        betsCloseAt: true,
+        startedBy: { select: { name: true } },
+        players: {
+          select: {
+            userId: true,
+            team: true,
+            isCaptain: true,
+            pickIndex: true,
+            mmr: true,
+            acceptedAt: true,
+            votedMethod: true,
+            votedNomineeId: true,
+            wins: true,
+            losses: true,
+            games: true,
+            queuedAt: true,
+            user: {
+              select: { name: true, avatar: true, rankTier: true },
+            },
+          },
+        },
       },
     }),
   ]);

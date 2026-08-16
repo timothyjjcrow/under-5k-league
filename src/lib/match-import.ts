@@ -1527,6 +1527,12 @@ export type LeagueSyncResult = {
   deadlineReached?: boolean;
 };
 
+// Stay below SQLite's conservative bind-parameter ceiling while also keeping
+// a typo'd league id from turning one lookup into an unbounded SQL statement.
+// PostgreSQL supports the same Prisma `in` shape, so both providers share the
+// batching path.
+const LEAGUE_GAME_LOOKUP_BATCH_SIZE = 500;
+
 /**
  * Pull every game from the season's registered Valve league id (via OpenDota)
  * and import the ones that match a scheduled league match. This is the cleanest
@@ -1649,73 +1655,100 @@ export async function syncLeagueGames(
       winnerTeamId: string | null;
     }[]
   >();
-  for (const dotaId of leagueMatchIds) {
-    const idStr = String(dotaId);
-    if (skip.has(idStr)) continue;
-    if (await prisma.game.findUnique({ where: { dotaMatchId: idStr } }))
-      continue;
-    if (fetches >= maxFetches) break;
-    if (budgetStopped()) {
-      deadlineReached = true;
-      break;
-    }
-    fetches++;
-    const od = await fetchOpenDotaMatch(idStr, fetchOptions);
-    if (!od) {
-      if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
+  feed: for (
+    let offset = 0;
+    offset < leagueMatchIds.length;
+    offset += LEAGUE_GAME_LOOKUP_BATCH_SIZE
+  ) {
+    const batch = leagueMatchIds.slice(
+      offset,
+      offset + LEAGUE_GAME_LOOKUP_BATCH_SIZE,
+    );
+    // `dotaMatchId` is globally unique, not season-scoped. Query the same
+    // global key the old per-id findUnique used, but collapse up to 500 reads
+    // into one. De-duplicating SQL parameters does not de-duplicate feed
+    // processing, so ordering, retry, and skip-list behaviour stay unchanged.
+    const idsToCheck = [
+      ...new Set(batch.map(String).filter((id) => !skip.has(id))),
+    ];
+    const recorded = new Set(
+      idsToCheck.length === 0
+        ? []
+        : (
+            await prisma.game.findMany({
+              where: { dotaMatchId: { in: idsToCheck } },
+              select: { dotaMatchId: true },
+            })
+          ).map((game) => game.dotaMatchId),
+    );
+
+    for (const dotaId of batch) {
+      const idStr = String(dotaId);
+      if (skip.has(idStr)) continue;
+      if (recorded.has(idStr)) continue;
+      if (fetches >= maxFetches) break feed;
+      if (budgetStopped()) {
         deadlineReached = true;
-        break;
+        break feed;
       }
-      continue; // transient fetch failure — retry later, never skip-listed
-    }
-    await ensureAccounts();
+      fetches++;
+      const od = await fetchOpenDotaMatch(idStr, fetchOptions);
+      if (!od) {
+        if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
+          deadlineReached = true;
+          break feed;
+        }
+        continue; // transient fetch failure — retry later, never skip-listed
+      }
+      await ensureAccounts();
 
-    // classifyGame is roster-based and time-blind, and a single round robin
-    // means every playoff pairing is a regular-season rematch — so collect
-    // EVERY match these rosters fit, then attribute by kickoff proximity.
-    // COMPLETED matches never take a game: a decided series (or an admin's
-    // manual/forfeit ruling) must not be silently rewritten by a late import —
-    // amending one is an explicit per-match admin action.
-    const fits: {
-      m: (typeof scheduled)[number];
-      winnerTeamId: string | null;
-    }[] = [];
-    for (const m of scheduled) {
-      const acc = accountsByMatch.get(m.id);
-      if (!acc) continue;
-      if (m.games.length >= m.bestOf) continue;
-      if (m.status === MATCH_STATUS.COMPLETED) continue;
-      const cls = classifyGame(
-        od,
-        { teamId: m.homeTeamId, accountIds: acc.home },
-        { teamId: m.awayTeamId, accountIds: acc.away },
-        Math.min(3, acc.teamSize),
-      );
-      if (cls.ok) fits.push({ m, winnerTeamId: cls.winnerTeamId });
-    }
-    if (fits.length === 0) {
-      newlySkipped.push(idStr);
-      continue;
-    }
+      // classifyGame is roster-based and time-blind, and a single round robin
+      // means every playoff pairing is a regular-season rematch — so collect
+      // EVERY match these rosters fit, then attribute by kickoff proximity.
+      // COMPLETED matches never take a game: a decided series (or an admin's
+      // manual/forfeit ruling) must not be silently rewritten by a late import —
+      // amending one is an explicit per-match admin action.
+      const fits: {
+        m: (typeof scheduled)[number];
+        winnerTeamId: string | null;
+      }[] = [];
+      for (const m of scheduled) {
+        const acc = accountsByMatch.get(m.id);
+        if (!acc) continue;
+        if (m.games.length >= m.bestOf) continue;
+        if (m.status === MATCH_STATUS.COMPLETED) continue;
+        const cls = classifyGame(
+          od,
+          { teamId: m.homeTeamId, accountIds: acc.home },
+          { teamId: m.awayTeamId, accountIds: acc.away },
+          Math.min(3, acc.teamSize),
+        );
+        if (cls.ok) fits.push({ m, winnerTeamId: cls.winnerTeamId });
+      }
+      if (fits.length === 0) {
+        newlySkipped.push(idStr);
+        continue;
+      }
 
-    const gameMs = (od.start_time ?? 0) * 1000;
-    const best = fits.reduce((a, b) => {
-      const da = a.m.scheduledAt
-        ? Math.abs(gameMs - a.m.scheduledAt.getTime())
-        : Number.MAX_SAFE_INTEGER;
-      const db = b.m.scheduledAt
-        ? Math.abs(gameMs - b.m.scheduledAt.getTime())
-        : Number.MAX_SAFE_INTEGER;
-      return db < da ? b : a;
-    });
-    const list = candidatesByMatch.get(best.m.id) ?? [];
-    list.push({
-      id: Number(idStr),
-      idStr,
-      startTime: od.start_time ?? 0,
-      winnerTeamId: best.winnerTeamId,
-    });
-    candidatesByMatch.set(best.m.id, list);
+      const gameMs = (od.start_time ?? 0) * 1000;
+      const best = fits.reduce((a, b) => {
+        const da = a.m.scheduledAt
+          ? Math.abs(gameMs - a.m.scheduledAt.getTime())
+          : Number.MAX_SAFE_INTEGER;
+        const db = b.m.scheduledAt
+          ? Math.abs(gameMs - b.m.scheduledAt.getTime())
+          : Number.MAX_SAFE_INTEGER;
+        return db < da ? b : a;
+      });
+      const list = candidatesByMatch.get(best.m.id) ?? [];
+      list.push({
+        id: Number(idStr),
+        idStr,
+        startTime: od.start_time ?? 0,
+        winnerTeamId: best.winnerTeamId,
+      });
+      candidatesByMatch.set(best.m.id, list);
+    }
   }
 
   // Phase 2 — per match, keep only the real series (biggest session, clinch
