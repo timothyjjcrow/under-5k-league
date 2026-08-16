@@ -3893,7 +3893,7 @@ async function AutomationRunnerHealth() {
               Production checks the schedule every minute. When work is due it
               runs the database-owned maintenance pass; when caught up it can
               sleep until the next known deadline, with a hard reconciliation
-              roughly every 15 minutes.
+              roughly once per hour.
             </p>
             <p className="mt-2 text-xs text-muted">
               A manual pass uses the same owner-and-token lease as cron. It can

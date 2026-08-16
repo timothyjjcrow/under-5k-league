@@ -1230,7 +1230,7 @@ const loadCachedAutomationGateSnapshot = unstable_cache(
     tags: [AUTOMATION_GATE_TAG],
     // Never renew the absolute hard wake in the background. A timer-based
     // stale-while-revalidate could let a health/admin read install a fresh
-    // 15-minute snapshot just before cron observes the old one as due. Only
+    // one-hour snapshot just before cron observes the old one as due. Only
     // an explicit mutation or a completed worker pass may rebuild this value.
     revalidate: false,
   },

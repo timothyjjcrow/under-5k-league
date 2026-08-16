@@ -128,11 +128,12 @@ function inputs(
 }
 
 describe("computeAutomationGateSnapshot", () => {
-  it("uses an immutable 15-minute hard horizon for quiet state", () => {
+  it("uses an immutable one-hour hard horizon for quiet state", () => {
     const snapshot = computeAutomationGateSnapshot(inputs(), NOW);
 
+    expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 2,
+      version: 3,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -152,7 +153,8 @@ describe("computeAutomationGateSnapshot", () => {
   });
 
   it("anchors the hard wake to the last completed pass, not a later reader", () => {
-    const lastFinishedAt = NOW - 14 * 60_000;
+    const lastFinishedAt =
+      NOW - AUTOMATION_GATE_HARD_HORIZON_MS + 60_000;
     const snapshot = computeAutomationGateSnapshot(
       inputs({
         runner: {
@@ -225,7 +227,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 2,
+      version: 3,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -885,7 +887,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 2,
+      version: 3,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

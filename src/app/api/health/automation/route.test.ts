@@ -99,7 +99,7 @@ describe("GET /api/health/automation", () => {
     gate.mockResolvedValue({
       run: false,
       snapshot: {
-        version: 2,
+        version: 3,
         computedAtMs: NOW - 1_000,
         nextWakeAtMs: NOW + 60_000,
         hardWakeAtMs: NOW + 120_000,
@@ -120,7 +120,7 @@ describe("GET /api/health/automation", () => {
     gate.mockResolvedValue({
       run: false,
       snapshot: {
-        version: 2,
+        version: 3,
         computedAtMs: NOW - 1_000,
         nextWakeAtMs: Number.MAX_SAFE_INTEGER,
         hardWakeAtMs: NOW + 120_000,
@@ -147,7 +147,7 @@ describe("GET /api/health/automation", () => {
     gate.mockResolvedValue({
       run: false,
       snapshot: {
-        version: 2,
+        version: 3,
         computedAtMs: NOW - 1_000,
         nextWakeAtMs: NOW + 60_001,
         hardWakeAtMs: NOW + 120_000,

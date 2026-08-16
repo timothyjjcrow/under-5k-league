@@ -232,7 +232,7 @@ describe("POST /api/inhouse request boundary", () => {
       syncBoard: false,
     });
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
       expire: 0,
     });
   });
@@ -244,7 +244,7 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
       expire: 0,
     });
   });
@@ -255,7 +255,7 @@ describe("POST /api/inhouse request boundary", () => {
     await expect(POST(request({ action: "leave" }))).rejects.toThrow(
       "read failed",
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
       expire: 0,
     });
   });
@@ -273,7 +273,7 @@ describe("POST /api/inhouse request boundary", () => {
       runMaintenance: true,
       syncBoard: true,
     });
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
       expire: 0,
     });
   });
