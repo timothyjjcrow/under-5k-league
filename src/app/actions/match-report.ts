@@ -4,6 +4,7 @@
 // integration-tested captain guards) — the reschedule-actions pattern.
 
 import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import {
@@ -17,6 +18,7 @@ import { actionErrorMessage } from "@/lib/user-facing-error";
 // bust the tag from a request scope) — mirrors admin.ts's refreshGames.
 function refreshGames() {
   updateTag("games");
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
 }
 

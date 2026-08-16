@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // setAvailability had ZERO integration coverage (only its pure helpers were
 // tested) while being the one mutation every rostered player runs weekly.
 // Stub the request-scope bits and drive the real action against the test DB.
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+  updateTag: vi.fn(),
+}));
 vi.mock("@/lib/auth", () => ({ requireUser: vi.fn(), requireAdmin: vi.fn() }));
 vi.mock("@/lib/discord", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/discord")>()),

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { runAutomation } from "@/lib/automation-service";
 import { validCronBearer } from "@/lib/cron-auth";
+import { getAutomationGateDecision } from "@/lib/automation-gate";
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,7 +24,34 @@ export async function GET(request: Request) {
     );
   }
 
+  let attempted = false;
   try {
+    const nowMs = Date.now();
+    let gate: Awaited<ReturnType<typeof getAutomationGateDecision>> = {
+      run: true,
+    };
+    try {
+      gate = await getAutomationGateDecision(nowMs);
+    } catch {
+      // Any cache/query uncertainty preserves today's behavior.
+    }
+    if (!gate.run) {
+      const nextWakeAtMs = Math.min(
+        gate.snapshot.nextWakeAtMs,
+        gate.snapshot.hardWakeAtMs,
+      );
+      return NextResponse.json(
+        {
+          ok: true,
+          status: "SUCCEEDED",
+          skipped: "NOT_DUE",
+          nextWakeAt: new Date(nextWakeAtMs).toISOString(),
+        },
+        { status: 200, headers: NO_STORE },
+      );
+    }
+
+    attempted = true;
     const result = await runAutomation({ source: "CRON", signal: request.signal });
     if (result.kind === "lease-held") {
       return NextResponse.json(
@@ -41,6 +70,14 @@ export async function GET(request: Request) {
         },
       );
     }
+    // Recompute after every owned pass. This lets active league/inhouse work
+    // sleep to its exact provider backoff or phase deadline instead of keeping
+    // the full worker hot once per minute for the whole activity window.
+    //
+    // Always rebuild after an owned pass. Besides learning the worker's exact
+    // next deadline, this ensures a degraded/failed runner row cannot remain
+    // hidden behind an older clean snapshot used by the health endpoint.
+    invalidateAutomationGateBestEffort();
 
     if (result.imported > 0) {
       revalidateTag("games", { expire: 0 });
@@ -69,6 +106,7 @@ export async function GET(request: Request) {
       headers: NO_STORE,
     });
   } catch {
+    if (attempted) invalidateAutomationGateBestEffort();
     // The database may be unavailable before a lease can be acquired or while
     // health is being finalized. Keep details in server logs/observability;
     // this machine boundary returns no exception text or configuration data.

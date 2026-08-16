@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
+  revalidateTag: vi.fn(),
   getSessionUser: vi.fn(),
   getActiveSeason: vi.fn(),
   getDraftState: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   claimThrottle: vi.fn(),
 }));
 
+vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
 vi.mock("@/lib/auth", () => ({ getSessionUser: mocks.getSessionUser }));
 vi.mock("@/lib/season", () => ({ getActiveSeason: mocks.getActiveSeason }));
 vi.mock("@/lib/draft-service", () => ({
@@ -110,6 +112,9 @@ describe("POST /api/draft/tick", () => {
       expect.objectContaining({ limit: 300 }),
       expect.any(Number),
     );
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+      expire: 0,
+    });
   });
 
   it("rejects a parked tab after the active season changes", async () => {
@@ -145,6 +150,7 @@ describe("POST /api/draft/tick", () => {
       resolveDeadlines: false,
     });
     expect(mocks.claimThrottle).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("keeps a signed-in viewer personalized when another poll owns deadline recovery", async () => {
@@ -156,6 +162,7 @@ describe("POST /api/draft/tick", () => {
     expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, user, {
       resolveDeadlines: false,
     });
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("rejects an oversized body after the IP preflight but before auth or database work", async () => {
@@ -223,6 +230,10 @@ describe("POST /api/draft/bid", () => {
       expect.objectContaining({ limit: 120 }),
       expect.any(Number),
     );
+    expect(mocks.revalidateTag).toHaveBeenCalledOnce();
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+      expire: 0,
+    });
   });
 
   it("rate-limits repeated authenticated mutations before reading the season", async () => {
@@ -253,6 +264,11 @@ describe("POST /api/draft/bid", () => {
     });
     const response = await bid(request("bid", { ...lot, amount: 8 }));
     expect(response.status).toBe(409);
+    // placeBid can first resolve an expired lot before discovering that this
+    // request lost the race, so a dispatched attempt always expires the gate.
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+      expire: 0,
+    });
   });
 
   it("fails closed on malformed JSON", async () => {
@@ -293,12 +309,16 @@ describe("nomination routes", () => {
         nominationEndsAt: turn.nominationEndsAt,
       }),
     );
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+      expire: 0,
+    });
   });
 
   it("keeps the admin fallback role-restricted", async () => {
     const response = await adminNominate(request("admin-nominate", turn));
     expect(response.status).toBe(403);
     expect(mocks.nominatePlayer).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("requires the exact nomination turn metadata", async () => {
@@ -338,5 +358,18 @@ describe("nomination routes", () => {
         nominationEndsAt: turn.nominationEndsAt,
       }),
     );
+  });
+
+  it("expires the gate when the admin state read resolves a clock then returns early", async () => {
+    mocks.getSessionUser.mockResolvedValue(admin);
+    mocks.getDraftState.mockResolvedValue(null);
+
+    const response = await adminNominate(request("admin-nominate", turn));
+
+    expect(response.status).toBe(404);
+    expect(mocks.nominatePlayer).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v2", {
+      expire: 0,
+    });
   });
 });

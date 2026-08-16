@@ -5,9 +5,14 @@ import {
   automationHealthView,
   formatAutomationDuration,
   type AutomationHealthRecord,
+  type AutomationIdleWindow,
 } from "./automation-health";
 
 const NOW = Date.parse("2026-08-04T18:00:00.000Z");
+const IDLE_WINDOW: AutomationIdleWindow = {
+  nextWakeAtMs: NOW + 60_000,
+  hardWakeAtMs: NOW + 180_000,
+};
 
 function record(
   overrides: Partial<AutomationHealthRecord> = {},
@@ -84,6 +89,120 @@ describe("automationHealthView", () => {
     expect(view.signals).toContain(
       "No completed run has been recorded within the four-minute health window",
     );
+  });
+
+  it("keeps a stale clean success healthy during a valid idle window", () => {
+    const view = automationHealthView(
+      record({
+        lastFinishedAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+        lastSuccessAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+      }),
+      NOW,
+      IDLE_WINDOW,
+    );
+
+    expect(view).toMatchObject({
+      kind: "HEALTHY",
+      label: "Healthy",
+      headline: "The automation worker is caught up",
+      description:
+        "No maintenance work is due: the worker is caught up and will run again by the next wake.",
+      canRunNow: true,
+    });
+    expect(view.signals).not.toContain(
+      "No completed run has been recorded within the four-minute health window",
+    );
+  });
+
+  it.each([
+    ["next wake is current time", { ...IDLE_WINDOW, nextWakeAtMs: NOW }],
+    ["hard wake is current time", { ...IDLE_WINDOW, hardWakeAtMs: NOW }],
+    [
+      "next wake follows the hard wake",
+      { nextWakeAtMs: NOW + 2, hardWakeAtMs: NOW + 1 },
+    ],
+    ["next wake is fractional", { ...IDLE_WINDOW, nextWakeAtMs: NOW + 0.5 }],
+    ["hard wake is infinite", { ...IDLE_WINDOW, hardWakeAtMs: Infinity }],
+    [
+      "next wake is unsafe",
+      { ...IDLE_WINDOW, nextWakeAtMs: Number.MAX_SAFE_INTEGER + 1 },
+    ],
+  ] as const)("rejects an idle window whose %s", (_label, idleWindow) => {
+    const view = automationHealthView(
+      record({
+        lastFinishedAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+        lastSuccessAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+      }),
+      NOW,
+      idleWindow,
+    );
+
+    expect(view.kind).toBe("DEGRADED");
+    expect(view.signals).toContain(
+      "No completed run has been recorded within the four-minute health window",
+    );
+  });
+
+  it("accepts one timestamp as both the next and hard wake", () => {
+    const wakeAtMs = NOW + 1;
+    const view = automationHealthView(
+      record({
+        lastFinishedAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+        lastSuccessAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+      }),
+      NOW,
+      { nextWakeAtMs: wakeAtMs, hardWakeAtMs: wakeAtMs },
+    );
+
+    expect(view.kind).toBe("HEALTHY");
+  });
+
+  it.each([
+    [
+      "active lease",
+      record({
+        lastStatus: "RUNNING",
+        leaseExpiresAt: new Date(NOW + 1),
+      }),
+      "RUNNING",
+    ],
+    [
+      "expired lease",
+      record({
+        lastStatus: "RUNNING",
+        leaseExpiresAt: new Date(NOW),
+      }),
+      "DEGRADED",
+    ],
+    ["failed run", record({ lastStatus: "FAILED" }), "DEGRADED"],
+    ["degraded run", record({ lastStatus: "DEGRADED" }), "DEGRADED"],
+    ["unknown status", record({ lastStatus: "SURPRISE" }), "DEGRADED"],
+    [
+      "failure streak",
+      record({ consecutiveFailures: 1 }),
+      "DEGRADED",
+    ],
+  ] as const)(
+    "does not let an idle window hide an %s",
+    (_label, state, expectedKind) => {
+      expect(automationHealthView(state, NOW, IDLE_WINDOW).kind).toBe(
+        expectedKind,
+      );
+    },
+  );
+
+  it("does not let an idle window hide unavailable or never-run state", () => {
+    expect(automationHealthView(undefined, NOW, IDLE_WINDOW).kind).toBe(
+      "UNAVAILABLE",
+    );
+    expect(automationHealthView(null, NOW, IDLE_WINDOW).kind).toBe("NEVER");
+    expect(
+      automationHealthView(
+        record({ lastStatus: "NEVER", lastAttemptAt: null }),
+        NOW,
+        IDLE_WINDOW,
+      ).kind,
+    ).toBe("NEVER");
   });
 
   it("makes an expired RUNNING row recoverable without treating it as owned", () => {
@@ -206,5 +325,45 @@ describe("automationProbeView", () => {
         NOW,
       ).status,
     ).toBe("lease-expired");
+  });
+
+  it("waives only stale success during a valid idle window", () => {
+    const staleSuccess = record({
+      lastSuccessAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+    });
+
+    expect(automationProbeView(staleSuccess, NOW, IDLE_WINDOW)).toEqual({
+      ok: true,
+      status: "healthy",
+    });
+
+    const guardedCases = [
+      [undefined, "unavailable"],
+      [null, "never-run"],
+      [record({ lastStatus: "NEVER" }), "never-run"],
+      [record({ lastStatus: "FAILED" }), "failed"],
+      [record({ lastStatus: "DEGRADED" }), "degraded"],
+      [record({ lastStatus: "SURPRISE" }), "degraded"],
+      [record({ consecutiveFailures: 1 }), "degraded"],
+      [
+        record({
+          lastStatus: "RUNNING",
+          leaseExpiresAt: new Date(NOW + 1),
+          lastSuccessAt: staleSuccess.lastSuccessAt,
+        }),
+        "running",
+      ],
+      [
+        record({
+          lastStatus: "RUNNING",
+          leaseExpiresAt: new Date(NOW),
+        }),
+        "lease-expired",
+      ],
+    ] as const;
+
+    for (const [state, status] of guardedCases) {
+      expect(automationProbeView(state, NOW, IDLE_WINDOW).status).toBe(status);
+    }
   });
 });

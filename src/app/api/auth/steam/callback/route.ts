@@ -10,6 +10,7 @@ import {
   safeReturnPath,
 } from "@/lib/return-path";
 import { expireHttpOnlyCookie } from "@/lib/cookie-policy";
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 
 function failedLogin(
   req: NextRequest,
@@ -83,6 +84,8 @@ export async function GET(req: NextRequest) {
   // account already has instead of stamping a placeholder over it.
   const profile = await fetchSteamProfile(steamId);
   const user = await upsertLeagueUser(prisma, { steamId, profile });
+  // Steam persona names are part of the pinned inhouse-board digest.
+  invalidateAutomationGateBestEffort();
   // Pull their ranked medal + pub-scouting snapshot now so accounts that log
   // in but never sign up still show them (best-effort; the medal is a no-op
   // once set, the snapshot once fresh). In parallel — they're independent

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { raceHook } from "@/lib/race-hook";
@@ -235,6 +236,7 @@ function seasonCompleteError(championTeamId: string | null): string {
 }
 
 function refresh() {
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
 }
 
@@ -247,6 +249,7 @@ function refreshGames() {
   // entry immediately, while revalidateTag(..., "max") would deliberately
   // serve the first reader stale data and refresh in the background.
   updateTag("games");
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
 }
 
@@ -2404,6 +2407,9 @@ export async function undoLastSaleAction(
   await sendDiscordMessage(
     draftSaleUndoneMessage(season.name, res.player, res.team, res.price),
   );
+  // The durable send may have enqueued work after the earlier refresh. Expire
+  // once more so a snapshot rebuilt during Discord I/O cannot miss the row.
+  updateTag(AUTOMATION_GATE_TAG);
   return {
     message: `Undid ${res.player} → ${res.team} ($${res.price}) — they're back in the pool, ${res.team} has the money and the next nomination.${
       res.paused ? " The auction is still paused; press Resume when ready." : ""
@@ -2518,6 +2524,9 @@ export async function pauseDraftAction(
     };
   }
   const res = await pauseDraft(season.id, admin);
+  // pauseDraft may first resolve an expired auction clock even when its final
+  // pause claim loses. Rebuild the deadline proof after every dispatched call.
+  updateTag(AUTOMATION_GATE_TAG);
   if (!res.ok) return { error: res.error };
   await logAdminAction({
     action: "pauseDraft",
@@ -2991,6 +3000,11 @@ export async function startPlayoffs(
     };
   }
 
+  // The bracket transaction is already durable. Expire the preflight before
+  // Discord/admin-log follow-ups so a failure there cannot leave automation
+  // sleeping on the old regular-season snapshot.
+  updateTag(AUTOMATION_GATE_TAG);
+
   // Announce the fresh first-round pairings.
   const [bracket, teams] = await Promise.all([
     prisma.match.findMany({
@@ -3085,6 +3099,11 @@ export async function returnToRegularSeasonAction(
       ),
     };
   }
+
+  // The playoff removal is committed before the presentation/Discord reads
+  // below. Wake the scheduler even if one of those best-effort follow-ups
+  // fails after the write.
+  updateTag(AUTOMATION_GATE_TAG);
 
   const names = new Map(
     (
@@ -3409,6 +3428,11 @@ export async function recordResult(
     }
     throw error;
   }
+
+  // Queue gate expiry as soon as the result transaction commits. The
+  // announcement/bracket follow-ups below are deliberately recoverable and
+  // must not be the only path to invalidation if one of them throws.
+  updateTag(AUTOMATION_GATE_TAG);
 
   // The activity card's copy promises result changes are logged — and a
   // manual score can override an auto-import, which is exactly the "what did
@@ -5268,6 +5292,10 @@ export async function removeGame(
         : corrected.uncrownedFinal
           ? "Game removed — series recomputed; the corrected grand final is still decided, but champion re-crowning could not be confirmed. Automatic sync won't re-import it; press \u201cAuto-fetch games\u201d on this match to add it back."
           : "Game removed — series recomputed. Automatic sync won't re-import it; press \u201cAuto-fetch games\u201d on this match to add it back.";
+  // Follow-ups can advance the bracket or create retryable announcements after
+  // the early signal above. Queue another expiry before returning; an
+  // in-flight cache fill is still bounded by the immutable hard wake.
+  updateTag(AUTOMATION_GATE_TAG);
   return {
     message: `${message}${followUpWarning}`,
   };
@@ -5524,6 +5552,11 @@ export async function setWeekNight(
           : ""),
     };
   }
+
+  // The retime, RSVP cleanup, proposal cancellation, and reminder release all
+  // committed in the transaction above. Invalidate before logging and clash
+  // detection so a later read failure cannot hide the new kickoff from cron.
+  updateTag(AUTOMATION_GATE_TAG);
 
   // Counts only, no formatted datetime (the server-TZ rule): a week-wide
   // retime wipes RSVPs and open proposals — it belongs in the activity log.
@@ -6777,14 +6810,21 @@ export async function syncSteamProfiles(
   const users = await prisma.user.findMany();
   const profiles = await fetchSteamProfiles(users.map((u) => u.steamId));
   let updated = 0;
-  for (const u of users) {
-    const p = profiles.get(u.steamId);
-    if (!p) continue;
-    await prisma.user.update({
-      where: { id: u.id },
-      data: { name: p.name, avatar: p.avatar, profileUrl: p.profileUrl },
-    });
-    updated++;
+  try {
+    for (const u of users) {
+      const p = profiles.get(u.steamId);
+      if (!p) continue;
+      await prisma.user.update({
+        where: { id: u.id },
+        data: { name: p.name, avatar: p.avatar, profileUrl: p.profileUrl },
+      });
+      updated++;
+    }
+  } finally {
+    // Persona names are part of the pinned board digest. Preserve partial
+    // progress if a later profile update fails without issuing one cache
+    // operation per user on a successful batch.
+    if (updated > 0) updateTag(AUTOMATION_GATE_TAG);
   }
   refresh();
   return { message: `Updated ${updated} of ${users.length} Steam profiles` };

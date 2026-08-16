@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-const mocks = vi.hoisted(() => ({ runAutomation: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  runAutomation: vi.fn(),
+  getAutomationGateDecision: vi.fn(),
+  invalidateAutomationGateBestEffort: vi.fn(),
+}));
 
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
@@ -10,6 +14,13 @@ vi.mock("next/cache", () => ({
 
 vi.mock("@/lib/automation-service", () => ({
   runAutomation: mocks.runAutomation,
+}));
+vi.mock("@/lib/automation-gate", () => ({
+  getAutomationGateDecision: mocks.getAutomationGateDecision,
+}));
+vi.mock("@/lib/automation-gate-invalidation", () => ({
+  invalidateAutomationGateBestEffort:
+    mocks.invalidateAutomationGateBestEffort,
 }));
 
 import { GET, maxDuration } from "./route";
@@ -27,6 +38,10 @@ describe("GET /api/cron/automation", () => {
   beforeEach(() => {
     vi.stubEnv("CRON_SECRET", SECRET);
     mocks.runAutomation.mockReset();
+    mocks.getAutomationGateDecision.mockReset().mockResolvedValue({
+      run: true,
+    });
+    mocks.invalidateAutomationGateBestEffort.mockReset();
     vi.mocked(revalidatePath).mockReset();
     vi.mocked(revalidateTag).mockReset();
     mocks.runAutomation.mockResolvedValue({
@@ -58,6 +73,7 @@ describe("GET /api/cron/automation", () => {
         error: "Unauthorized",
       });
       expect(mocks.runAutomation).not.toHaveBeenCalled();
+      expect(mocks.getAutomationGateDecision).not.toHaveBeenCalled();
     },
   );
 
@@ -84,6 +100,104 @@ describe("GET /api/cron/automation", () => {
       status: "SUCCEEDED",
       durationMs: 25,
     });
+    expect(mocks.invalidateAutomationGateBestEffort).toHaveBeenCalledOnce();
+  });
+
+  it("skips Neon entirely while the cached idle window is still current", async () => {
+    const nextWakeAtMs = Date.now() + 120_000;
+    mocks.getAutomationGateDecision.mockResolvedValue({
+      run: false,
+      snapshot: {
+        version: 2,
+        computedAtMs: Date.now(),
+        nextWakeAtMs,
+        hardWakeAtMs: nextWakeAtMs + 60_000,
+        reason: "LEAGUE",
+        runnerHealthy: true,
+      },
+    });
+
+    const response = await GET(request(`Bearer ${SECRET}`));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      ok: true,
+      status: "SUCCEEDED",
+      skipped: "NOT_DUE",
+      nextWakeAt: new Date(nextWakeAtMs).toISOString(),
+    });
+    expect(mocks.runAutomation).not.toHaveBeenCalled();
+    expect(mocks.invalidateAutomationGateBestEffort).not.toHaveBeenCalled();
+  });
+
+  it("fails open to the normal leased pass when gate evaluation is unavailable", async () => {
+    mocks.getAutomationGateDecision.mockRejectedValue(new Error("cache down"));
+
+    const response = await GET(request(`Bearer ${SECRET}`));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runAutomation).toHaveBeenCalledOnce();
+    expect(mocks.invalidateAutomationGateBestEffort).toHaveBeenCalledOnce();
+  });
+
+  it("recomputes the gate after active work so exact backoffs can sleep", async () => {
+    mocks.runAutomation.mockResolvedValue({
+      kind: "completed",
+      status: "SUCCEEDED",
+      durationMs: 25,
+      recoveredExpiredLease: false,
+      errorCode: null,
+      summary: "{}",
+      imported: 0,
+    });
+
+    const response = await GET(request(`Bearer ${SECRET}`));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runAutomation).toHaveBeenCalledOnce();
+    expect(mocks.invalidateAutomationGateBestEffort).toHaveBeenCalledOnce();
+  });
+
+  it("recomputes after a board pass so health sees the new runner state", async () => {
+    const now = Date.now();
+    mocks.getAutomationGateDecision.mockResolvedValue({
+      run: true,
+      snapshot: {
+        version: 2,
+        computedAtMs: now - 60_000,
+        nextWakeAtMs: now - 60_000,
+        hardWakeAtMs: now + 60_000,
+        reason: "BOARD",
+        runnerHealthy: true,
+      },
+    });
+
+    const response = await GET(request(`Bearer ${SECRET}`));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runAutomation).toHaveBeenCalledOnce();
+    expect(mocks.invalidateAutomationGateBestEffort).toHaveBeenCalledOnce();
+  });
+
+  it("also refreshes a board snapshot at its hard reconciliation", async () => {
+    const now = Date.now();
+    mocks.getAutomationGateDecision.mockResolvedValue({
+      run: true,
+      snapshot: {
+        version: 2,
+        computedAtMs: now - 120_000,
+        nextWakeAtMs: now - 120_000,
+        hardWakeAtMs: now - 1,
+        reason: "BOARD",
+        runnerHealthy: true,
+      },
+    });
+
+    const response = await GET(request(`Bearer ${SECRET}`));
+
+    expect(response.status).toBe(200);
+    expect(mocks.invalidateAutomationGateBestEffort).toHaveBeenCalledOnce();
   });
 
   it("expires game and layout caches when the owned pass imports a game", async () => {
@@ -119,6 +233,7 @@ describe("GET /api/cron/automation", () => {
       ok: true,
       skipped: "LEASE_HELD",
     });
+    expect(mocks.invalidateAutomationGateBestEffort).not.toHaveBeenCalled();
   });
 
   it("returns a server error for a persisted failed run without exception text", async () => {
@@ -175,5 +290,6 @@ describe("GET /api/cron/automation", () => {
       ok: false,
       status: "UNAVAILABLE",
     });
+    expect(mocks.invalidateAutomationGateBestEffort).toHaveBeenCalledOnce();
   });
 });

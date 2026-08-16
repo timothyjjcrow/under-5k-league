@@ -1,6 +1,7 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
@@ -49,6 +50,7 @@ import { claimProviderCooldown } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 
 function refresh() {
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
 }
 

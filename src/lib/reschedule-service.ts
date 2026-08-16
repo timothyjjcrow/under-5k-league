@@ -74,6 +74,15 @@ export type RescheduleOutcome =
   | (AcceptedReschedule & { accepted: true })
   | (DeclinedReschedule & { accepted: false });
 
+export type RespondRescheduleOptions = {
+  /**
+   * Runs immediately after an accepted retime commits and before fallible
+   * presentation reads. It is deliberately best-effort: cache signalling can
+   * never turn a successful database write into a failed response.
+   */
+  onAcceptedCommit?: () => void;
+};
+
 // Sanity bounds for a proposed time: a datetime-local typo (year 0002 from
 // typing "2", 20268 from a stray digit) or a past date would otherwise sail
 // straight into Match.scheduledAt on acceptance.
@@ -202,6 +211,7 @@ export async function respondReschedule(
   userId: string,
   requestId: string,
   accept: boolean,
+  options: RespondRescheduleOptions = {},
 ): Promise<RescheduleOutcome> {
   let outcome;
   try {
@@ -350,6 +360,11 @@ export async function respondReschedule(
   }
 
   if (!outcome.accepted) return outcome;
+  try {
+    options.onAcceptedCommit?.();
+  } catch {
+    // A missed cache signal is bounded by the automation gate's hard wake.
+  }
   // Accepting a reschedule moves the fixture, which can put a standin on two
   // games the same night — standinConflict is only checked when cover is
   // arranged, never when a match later moves onto that night. Reported, not

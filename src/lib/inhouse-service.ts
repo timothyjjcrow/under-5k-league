@@ -65,6 +65,7 @@ import { clampMmrToRank } from "./rank";
 import { logAdminAction } from "./admin-log";
 import { raceHook } from "./race-hook";
 import type { SessionUser } from "./auth";
+import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
 
 export type InhouseActionResult = { ok: true } | { ok: false; error: string };
 
@@ -1929,6 +1930,10 @@ export async function voidLastResult(
   if (!voided) {
     return { ok: false, error: "That result was already voided" };
   }
+  // The lobby cancellation and correction outbox are durable at this point.
+  // Signal before cursor, settlement, and audit follow-ups so none of those
+  // best-effort steps can hide the correction from a sleeping worker.
+  invalidateAutomationGateBestEffort();
   await stampResultChange();
 
   // Await the canonical settlement resolver before returning. The state flip

@@ -1,6 +1,7 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { newsMediaHint, newsPostError } from "@/lib/news";
@@ -12,6 +13,7 @@ import type { ActionResult } from "@/lib/action-result";
 const NEWS_CREATE_REQUEST_PREFIX = "newsPostRequest:";
 
 function refreshNewsSurfaces() {
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/");
   revalidatePath("/news");
   revalidatePath("/admin");
@@ -92,6 +94,10 @@ export async function createNewsPost(
   const discordSent = await sendDiscordMessage(
     newsMessage(title, body, post.id),
   );
+  // Discord persistence happens after the first surface refresh. Expire again
+  // immediately so a later, non-essential audit-log failure cannot leave a
+  // gate filled during the network call hiding the new outbox row.
+  updateTag(AUTOMATION_GATE_TAG);
   await logAdminAction({
     action: "createNewsPost",
     summary: `Published news post "${title}"`,

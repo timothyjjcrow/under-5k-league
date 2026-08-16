@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { SignJWT } from "jose";
 
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+  updateTag: vi.fn(),
+}));
 
 // PARTIAL mock: requireAdmin is stubbed (revokeAllSessions is an admin action),
 // but createSession/getSessionUser stay REAL — the whole point of the JWT-path

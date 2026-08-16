@@ -377,6 +377,22 @@ export async function loadBoardStats(
   if (statsCache && nowMs - statsCache.at < STATS_TTL_MS)
     return statsCache.value;
 
+  return loadFreshBoardStats(nowMs);
+}
+
+/**
+ * Read the empty-board proof-of-life from its canonical database sources even
+ * when the ordinary 60-second render cache is warm. The automation gate uses
+ * this before deciding that the worker may sleep: a result can complete while
+ * the cached empty render still describes the previous game, and sleeping on
+ * that stale digest would leave the pinned message behind until the hard
+ * reconciliation pass.
+ *
+ * A fresh read replaces the cache as well as bypassing it. If the probe finds
+ * work, syncInhouseBoard can reuse the exact stats it just proved were current
+ * instead of immediately repeating the three history queries.
+ */
+async function loadFreshBoardStats(nowMs: number): Promise<BoardStats> {
   const [last, lobbiesPlayed, ladderRows] = await Promise.all([
     prisma.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.COMPLETED },
@@ -486,15 +502,54 @@ export function resetBoardStatsCache(): void {
  *  for them and a board that is off never reaches here at all. */
 async function resolveSnapshot(
   base: BoardSnapshotInput,
+  statsLoader: (nowMs: number) => Promise<BoardStats> = loadBoardStats,
 ): Promise<BoardSnapshot> {
   const empty = !base.lobby && base.presentNames.length === 0;
   // Both extras are only consulted for the EMPTY render — the state that has
   // room for them and the one people actually read.
   const [stats, pingOptIn] = await Promise.all([
-    empty ? loadBoardStats(base.nowMs) : Promise.resolve(null),
+    empty ? statsLoader(base.nowMs) : Promise.resolve(null),
     empty ? pingOptInAvailable() : Promise.resolve(false),
   ]);
   return { ...base, stats, pingOptIn };
+}
+
+/**
+ * Read-only preflight for the automation scheduler. `raw` is the board Setting
+ * value the gate already loaded, so this never repeats that primary-key read.
+ * True means the ordinary worker must run; false means the board cannot need
+ * unattended work right now.
+ *
+ * Reservations intentionally remain an admin-recovery state. A process may
+ * have posted to Discord before dying without recording the message id, so an
+ * automatic retry must never turn an uncertain reservation into a duplicate
+ * pinned board.
+ */
+export async function inhouseBoardNeedsSync(
+  raw: string | null | undefined,
+  nowMs: number,
+): Promise<boolean> {
+  if (!discordMutationsAllowed() || !raw) return false;
+
+  if (parseReservation(raw)) return false;
+  const state = parseState(raw);
+  if (!state) {
+    // The gate's public decision boundary fails open on this error and runs
+    // the established worker. Never infer "nothing to do" from corrupt live
+    // state: doing so could park a board indefinitely.
+    throw new Error("Malformed live inhouse board state");
+  }
+
+  const url = await getInhouseWebhookUrl();
+  if (!url) return false;
+  if (webhookIdOf(url) !== state.webhookId) return true;
+  if (!Number.isFinite(nowMs)) {
+    throw new Error("Invalid inhouse board probe time");
+  }
+
+  const base = await loadBoardSnapshot(nowMs);
+  const snapshot = await resolveSnapshot(base, loadFreshBoardStats);
+  return renderBoard(snapshot).digest !== state.digest;
 }
 
 /**
