@@ -109,7 +109,7 @@ describe("side-game archive: the season archive links to them", () => {
 describe("side-game live-state integrity", () => {
   it("the homepage honors Fantasy's durable information lock", () => {
     expect(HOME).toMatch(
-      /const fantasyLocked =\s*season\.fantasyLockedAt != null \|\| seasonGames > 0;/,
+      /const fantasyLocked =\s*season\.fantasyLockedAt != null \|\| gamesOnRecord > 0;/,
     );
   });
 

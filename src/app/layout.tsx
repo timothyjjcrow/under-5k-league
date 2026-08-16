@@ -52,17 +52,21 @@ export const viewport: Viewport = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [user, season, archivedCount, resultCursorAtRender] =
+  const [user, season, archivedSeason, resultCursorAtRender] =
     await Promise.all([
       getSessionUser(),
       getActiveSeason(),
-      prisma.season.count({ where: { isActive: false } }),
+      prisma.season.findFirst({
+        where: { isActive: false },
+        select: { id: true },
+      }),
       // This is the causality boundary for ResultSyncPing's first heartbeat.
       // If a concurrent request changes a result after this render, even a
       // heartbeat that loses the import claim can see the cursor advance and
       // refresh the stale RSC payload.
       getSetting(SETTING_KEYS.RESULT_CHANGED_AT),
     ]);
+  const hasHistory = archivedSeason != null;
   const myTeam =
     user && season
       ? await prisma.teamMember.findFirst({
@@ -86,7 +90,7 @@ export default async function RootLayout({
           phase={season?.status ?? null}
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}
-          hasHistory={archivedCount > 0}
+          hasHistory={hasHistory}
         />
         <main
           id="main"
@@ -97,7 +101,7 @@ export default async function RootLayout({
         <SiteFooter
           seasonName={season?.name ?? null}
           phase={season?.status ?? null}
-          hasHistory={archivedCount > 0}
+          hasHistory={hasHistory}
         />
         <Toaster />
         {/* Observe worker progress so parked pages refresh after results land. */}

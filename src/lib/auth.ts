@@ -95,7 +95,16 @@ export const getSessionUser = cache(async function getSessionUser(): Promise<Ses
     const tokenEpoch = Number(payload.ep ?? 0);
     if (tokenEpoch < (await getSessionEpoch(Date.now()))) return null;
     const uid = payload.uid as string;
-    const user = await prisma.user.findUnique({ where: { id: uid } });
+    const user = await prisma.user.findUnique({
+      where: { id: uid },
+      select: {
+        id: true,
+        steamId: true,
+        name: true,
+        avatar: true,
+        role: true,
+      },
+    });
     if (!user) return null;
     return {
       id: user.id,

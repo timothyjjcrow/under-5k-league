@@ -494,6 +494,7 @@ export default async function Home() {
               snapshot={snapshot}
               userId={user?.id}
               matches={matches}
+              gamesOnRecord={gamesOnRecord}
               championTeamId={championPresentation.championTeamId}
               showCheckins={canViewAvailabilitySummary(
                 user,
@@ -1740,12 +1741,14 @@ async function SeasonView({
   snapshot,
   userId,
   matches,
+  gamesOnRecord,
   championTeamId,
   showCheckins,
 }: {
   snapshot: SeasonSnapshot;
   userId?: string;
   matches: Match[];
+  gamesOnRecord: number;
   championTeamId: string | null;
   showCheckins: boolean;
 }) {
@@ -1842,15 +1845,14 @@ async function SeasonView({
     .filter((m) => predictionOpen(m))
     .map((m) => m.id);
   const pickemOpen = openPickemIds.length;
-  const [seasonGames, picksMade] = await Promise.all([
-    prisma.game.count({ where: { match: { seasonId: season.id } } }),
+  const picksMade =
     userId && pickemOpen > 0
-      ? prisma.prediction.count({
+      ? await prisma.prediction.count({
           where: { userId, matchId: { in: openPickemIds } },
         })
-      : 0,
-  ]);
-  const fantasyLocked = season.fantasyLockedAt != null || seasonGames > 0;
+      : 0;
+  const fantasyLocked =
+    season.fantasyLockedAt != null || gamesOnRecord > 0;
   const picksMissing = pickemOpen - picksMade;
 
   // The side-game band renders BELOW the table now. It used to sit above both

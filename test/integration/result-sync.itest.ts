@@ -603,6 +603,34 @@ describe("result sync — league matches (integration)", () => {
     expect(mockLeague).toHaveBeenCalledTimes(1);
   });
 
+  it("re-reads due fixtures only when this run owns the league-feed claim", async () => {
+    const { season } = await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17174" },
+    });
+    const matchReads = vi.spyOn(prisma.match, "findMany");
+    const dueReadCount = () =>
+      matchReads.mock.calls.filter(
+        ([args]) => args?.select?.autoSyncedAt === true,
+      ).length;
+
+    try {
+      const claimed = await runResultSync();
+      expect(claimed.watch).toBe(true);
+      expect(mockLeague).toHaveBeenCalledTimes(1);
+      expect(dueReadCount()).toBe(2); // initial scan + post-feed refresh
+
+      matchReads.mockClear();
+      const throttled = await runResultSync();
+      expect(throttled.watch).toBe(true);
+      expect(mockLeague).toHaveBeenCalledTimes(1); // this run lost the claim
+      expect(dueReadCount()).toBe(1); // reuse the authoritative initial scan
+    } finally {
+      matchReads.mockRestore();
+    }
+  });
+
   it("falls back to player accounts when a ticketed fixture is still missing after three hours", async () => {
     const { season, match, homeAccts, awayAccts } = await setupNight({
       offsetMs: -4 * HOUR,
@@ -1225,6 +1253,67 @@ describe("syncLeagueGames — the clinch-stop applies to the league feed too", (
       deadlineReached: true,
     });
     expect(mockLeague).not.toHaveBeenCalled();
+  });
+
+  it("bulk-checks recorded feed ids across every season", async () => {
+    const { season, match } = await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18186" },
+    });
+    const foreignSeason = await makeSeason({
+      isActive: false,
+      status: SEASON_STATUS.REGULAR_SEASON,
+    });
+    const foreignHome = await makeTeam(foreignSeason.id, "Foreign Home", 0);
+    const foreignAway = await makeTeam(foreignSeason.id, "Foreign Away", 1);
+    const foreignMatch = await prisma.match.create({
+      data: {
+        seasonId: foreignSeason.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: foreignHome.id,
+        awayTeamId: foreignAway.id,
+        bestOf: 1,
+      },
+    });
+    const LOCAL = 6660005;
+    const FOREIGN = 6660006;
+    await prisma.game.createMany({
+      data: [
+        {
+          matchId: match.id,
+          dotaMatchId: String(LOCAL),
+          radiantWin: true,
+        },
+        {
+          matchId: foreignMatch.id,
+          dotaMatchId: String(FOREIGN),
+          radiantWin: false,
+        },
+      ],
+    });
+    mockLeague.mockResolvedValue([FOREIGN, LOCAL, FOREIGN]);
+    const findMany = vi.spyOn(prisma.game, "findMany");
+    const findUnique = vi.spyOn(prisma.game, "findUnique");
+
+    try {
+      const result = await syncLeagueGames(season.id, { auto: true });
+
+      expect(result).toMatchObject({ imported: 0, scanned: 3 });
+      expect(mockMatch).not.toHaveBeenCalled();
+      expect(findUnique).not.toHaveBeenCalled();
+      expect(findMany).toHaveBeenCalledTimes(1);
+      expect(findMany).toHaveBeenCalledWith({
+        where: {
+          dotaMatchId: { in: [String(FOREIGN), String(LOCAL)] },
+        },
+        select: { dotaMatchId: true },
+      });
+    } finally {
+      findMany.mockRestore();
+      findUnique.mockRestore();
+    }
   });
 
   it("drops the bonus game after a decided Bo3, whatever the feed order", async () => {
