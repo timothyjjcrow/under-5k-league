@@ -46,8 +46,11 @@ export function SiteFooter({
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },
     { href: "/inhouse", label: "Inhouse" },
+    { href: "/scrims", label: "Scrims" },
   ];
-  if (teamsExist) leagueLinks.push({ href: "/teams", label: "Teams" });
+  if (teamsExist) {
+    leagueLinks.push({ href: "/teams", label: "Teams" });
+  }
   if (phase === "DRAFT") {
     leagueLinks.push({ href: "/draft", label: "Draft" });
     leagueLinks.push({ href: "/schedule", label: "Schedule" });

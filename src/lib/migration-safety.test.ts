@@ -130,6 +130,7 @@ describe("migration SQL safety gate", () => {
       "20260804010000_release_readiness",
       "20260804020000_automation_run_state",
       "20260814000000_team_logo",
+      "20260817000000_scrims",
     ]);
   });
 
@@ -156,6 +157,12 @@ describe("migration SQL safety gate", () => {
   it("fails closed when the team-logo migration changes", () => {
     expect(() =>
       validateMigrations(migrationFixture("20260814000000_team_logo")),
+    ).toThrow(/immutable migration checksum mismatch/);
+  });
+
+  it("fails closed when the scrims migration changes", () => {
+    expect(() =>
+      validateMigrations(migrationFixture("20260817000000_scrims")),
     ).toThrow(/immutable migration checksum mismatch/);
   });
 });

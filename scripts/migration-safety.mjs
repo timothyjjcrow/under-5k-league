@@ -12,6 +12,8 @@ export const MIGRATION_SHA256 = Object.freeze({
     "5e03b414ee0a46bd2e7476cb0d2ca717b7579ff0bfacf44157499f93a412069d",
   "20260814000000_team_logo":
     "db38b63dbfcb34209e2de6cab898b5794bad50b75f9e2a91fefcecb5dea61b2b",
+  "20260817000000_scrims":
+    "4dbadb273a1990c98bf7d93bc3bd749ef3f93f897f5f1ef5dd0768a1c70a6752",
 });
 export const BASELINE_SCHEMA_SHA256 =
   "8234d47b06f9adf2444b5caaef29f645f6ea2817dc4353c3d6d012b070cb6133";

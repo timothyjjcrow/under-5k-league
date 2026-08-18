@@ -57,23 +57,27 @@ model User {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  registrations       Registration[]
-  teamMemberships     TeamMember[]
-  captainedTeams      Team[]               @relation("TeamCaptain")
-  bids                Bid[]
-  standinAssignments  StandinAssignment[]  @relation("StandinUser")
-  replacedAssignments StandinAssignment[]  @relation("ReplacedUser")
-  inhouseQueue        InhouseQueueEntry?
-  inhouseLobbies      InhouseLobbyPlayer[]
-  startedInhouses     InhouseLobby[]       @relation("InhouseStarter")
-  inhouseBets         InhouseBet[]
-  inhouseCredit       InhouseCredit?
-  matchAvailability   MatchAvailability[]
-  rescheduleProposals RescheduleRequest[]
-  fantasyRosters      FantasyRoster[]
-  fantasyPickedBy     FantasyPick[]
-  predictions         Prediction[]
-  newsPosts           NewsPost[]
+  registrations          Registration[]
+  teamMemberships        TeamMember[]
+  captainedTeams         Team[]               @relation("TeamCaptain")
+  bids                   Bid[]
+  standinAssignments     StandinAssignment[]  @relation("StandinUser")
+  replacedAssignments    StandinAssignment[]  @relation("ReplacedUser")
+  inhouseQueue           InhouseQueueEntry?
+  inhouseLobbies         InhouseLobbyPlayer[]
+  startedInhouses        InhouseLobby[]       @relation("InhouseStarter")
+  inhouseBets            InhouseBet[]
+  inhouseCredit          InhouseCredit?
+  matchAvailability      MatchAvailability[]
+  rescheduleProposals    RescheduleRequest[]
+  fantasyRosters         FantasyRoster[]
+  fantasyPickedBy        FantasyPick[]
+  predictions            Prediction[]
+  newsPosts              NewsPost[]
+  teamStaffRoles         TeamStaff[]
+  createdScrims          Scrim[]              @relation("ScrimCreator")
+  scrimParticipations    ScrimParticipant[]   @relation("ScrimParticipantUser")
+  addedScrimParticipants ScrimParticipant[]   @relation("ScrimParticipantAdder")
 }
 
 // Admin-authored league announcements, shown on the dashboard + /news.
@@ -129,6 +133,7 @@ model Season {
   teamMembers    TeamMember[]
   bids           Bid[]
   fantasyRosters FantasyRoster[]
+  scrims         Scrim[]
 }
 
 model Registration {
@@ -178,15 +183,37 @@ model Team {
   withdrawn  Boolean  @default(false)
   createdAt  DateTime @default(now())
 
-  season      Season       @relation(fields: [seasonId], references: [id], onDelete: Cascade)
-  captain     User         @relation("TeamCaptain", fields: [captainId], references: [id])
-  members     TeamMember[]
-  bids        Bid[]
-  homeMatches Match[]      @relation("HomeTeam")
-  awayMatches Match[]      @relation("AwayTeam")
-  predictions Prediction[]
+  season            Season             @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  captain           User               @relation("TeamCaptain", fields: [captainId], references: [id])
+  members           TeamMember[]
+  bids              Bid[]
+  homeMatches       Match[]            @relation("HomeTeam")
+  awayMatches       Match[]            @relation("AwayTeam")
+  predictions       Prediction[]
+  staff             TeamStaff[]
+  hostedScrims      Scrim[]            @relation("ScrimHostTeam")
+  opponentScrims    Scrim[]            @relation("ScrimOpponentTeam")
+  wonScrims         Scrim[]            @relation("ScrimWinnerTeam")
+  scrimParticipants ScrimParticipant[]
 
   @@unique([seasonId, captainId])
+}
+
+// Optional team staff can manage casual scrims without changing the drafted
+// roster. Captains remain authoritative through Team.captainId; this table is
+// deliberately scoped to additive staff roles such as COACH.
+model TeamStaff {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  role      String   @default("COACH") // COACH
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
 }
 
 model TeamMember {
@@ -363,6 +390,100 @@ model Game {
 
   // Every stat roll-up joins game → match; recomputeSeries loads a match's games.
   @@index([matchId])
+}
+
+// A casual, team-vs-team availability post. Scrims belong to a Season so they
+// can reuse that season's Valve league ticket, but their results never share
+// the league Match/Game projection.
+model Scrim {
+  id             String   @id @default(cuid())
+  seasonId       String
+  hostTeamId     String
+  opponentTeamId String?
+  createdById    String
+  scheduledAt    DateTime
+  bestOf         Int      @default(1)
+  status         String   @default("OPEN") // OPEN | SCHEDULED | LIVE | COMPLETED | CANCELLED
+  hostScore      Int      @default(0)
+  awayScore      Int      @default(0)
+  winnerTeamId   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  season       Season             @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  hostTeam     Team               @relation("ScrimHostTeam", fields: [hostTeamId], references: [id], onDelete: Cascade)
+  opponentTeam Team?              @relation("ScrimOpponentTeam", fields: [opponentTeamId], references: [id], onDelete: Cascade)
+  winnerTeam   Team?              @relation("ScrimWinnerTeam", fields: [winnerTeamId], references: [id], onDelete: SetNull)
+  createdBy    User               @relation("ScrimCreator", fields: [createdById], references: [id])
+  participants ScrimParticipant[]
+  games        ScrimGame[]
+
+  @@index([seasonId, status, scheduledAt])
+  @@index([hostTeamId])
+  @@index([opponentTeamId])
+  @@index([winnerTeamId])
+  @@index([createdById])
+}
+
+// The lineup snapshot used for player-id discovery. A participant may be a
+// registered user or an account-only guest; either way the immutable Dota id
+// is sufficient to find the game without formally registering a stand-in.
+model ScrimParticipant {
+  id            String   @id @default(cuid())
+  scrimId       String
+  teamId        String
+  userId        String?
+  dotaAccountId Float
+  displayName   String
+  guest         Boolean  @default(false)
+  addedById     String?
+  createdAt     DateTime @default(now())
+
+  scrim   Scrim @relation(fields: [scrimId], references: [id], onDelete: Cascade)
+  team    Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user    User? @relation("ScrimParticipantUser", fields: [userId], references: [id], onDelete: SetNull)
+  addedBy User? @relation("ScrimParticipantAdder", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([scrimId, dotaAccountId])
+  @@index([scrimId, teamId])
+  @@index([teamId])
+  @@index([userId])
+  @@index([addedById])
+}
+
+// Scrim games intentionally mirror league Game rows while remaining in a
+// separate table, so league standings, fantasy, records, and awards cannot
+// accidentally consume casual results.
+model ScrimGame {
+  id            String   @id @default(cuid())
+  scrimId       String
+  dotaMatchId   String   @unique
+  radiantWin    Boolean
+  durationSecs  Int      @default(0)
+  startTime     Int      @default(0)
+  radiantScore  Int      @default(0)
+  direScore     Int      @default(0)
+  radiantTeamId String?
+  direTeamId    String?
+  winnerTeamId  String?
+  players       String   @default("[]") // JSON: per-player stats mapped to known users where possible
+  fetchedAt     DateTime @default(now())
+
+  scrim Scrim @relation(fields: [scrimId], references: [id], onDelete: Cascade)
+
+  @@index([scrimId])
+}
+
+// Global match ownership guard. contextId is polymorphic: it identifies the
+// league Match or Scrim selected by kind. Existing Game rows are checked at
+// runtime instead of being backfilled during the additive migration.
+model DotaMatchClaim {
+  dotaMatchId String   @id
+  kind        String // LEAGUE | SCRIM
+  contextId   String
+  createdAt   DateTime @default(now())
+
+  @@index([kind, contextId])
 }
 
 // Simple key/value store for global config (e.g. discordWebhookUrl), plus a

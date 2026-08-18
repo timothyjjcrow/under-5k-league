@@ -9,6 +9,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { path: "/players", changeFrequency: "daily", priority: 0.8 },
     { path: "/teams", changeFrequency: "daily", priority: 0.8 },
     { path: "/schedule", changeFrequency: "daily", priority: 0.8 },
+    { path: "/scrims", changeFrequency: "daily", priority: 0.7 },
     { path: "/leaders", changeFrequency: "daily", priority: 0.8 },
     { path: "/meta", changeFrequency: "daily", priority: 0.7 },
     { path: "/fantasy", changeFrequency: "daily", priority: 0.7 },

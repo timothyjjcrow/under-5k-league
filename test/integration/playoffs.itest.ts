@@ -9,6 +9,7 @@ import {
 import { pickBracketSize } from "@/lib/schedule";
 import { playoffSetupRevision } from "@/lib/playoff-command";
 import { projectPlayoffField } from "@/lib/playoff-field";
+import { DOTA_MATCH_KIND } from "@/lib/constants";
 import {
   generateRegularSchedule,
   makeSeason,
@@ -329,6 +330,13 @@ describe("playoffs — canonical eligibility and replay-safe commands", () => {
         players: "[]",
       },
     });
+    await prisma.dotaMatchClaim.create({
+      data: {
+        dotaMatchId: "return-to-regular-game",
+        kind: DOTA_MATCH_KIND.LEAGUE,
+        contextId: match.id,
+      },
+    });
     await prisma.setting.createMany({
       data: [
         {
@@ -374,6 +382,11 @@ describe("playoffs — canonical eligibility and replay-safe commands", () => {
     expect(
       await prisma.setting.findUnique({ where: { key: "resultChangedAt" } }),
     ).not.toBeNull();
+    expect(
+      await prisma.dotaMatchClaim.findUnique({
+        where: { dotaMatchId: "return-to-regular-game" },
+      }),
+    ).toBeNull();
   });
 });
 

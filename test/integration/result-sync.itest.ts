@@ -10,12 +10,15 @@ import {
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
+  ROLE,
+  SCRIM_STATUS,
   SEASON_STATUS,
 } from "@/lib/constants";
 import { steamIdToAccountId } from "@/lib/dota";
 import { runResultSync } from "@/lib/result-sync-service";
 import { nominatePlayer } from "@/lib/draft-service";
 import { importGameForMatch, syncLeagueGames } from "@/lib/match-import";
+import { importScrimGame } from "@/lib/scrim-result-service";
 import { SETTING_KEYS, weekReminderKey } from "@/lib/settings";
 import {
   claimAnnouncementMarker,
@@ -196,6 +199,46 @@ function odGame(
       })),
     ],
   };
+}
+
+async function makeBookedScrim(opts: {
+  seasonId: string;
+  hostTeamId: string;
+  awayTeamId: string;
+  createdById: string;
+  scheduledAt: Date;
+  hostAccts: number[];
+  awayAccts: number[];
+}) {
+  return prisma.scrim.create({
+    data: {
+      seasonId: opts.seasonId,
+      hostTeamId: opts.hostTeamId,
+      opponentTeamId: opts.awayTeamId,
+      createdById: opts.createdById,
+      scheduledAt: opts.scheduledAt,
+      bestOf: 1,
+      status: SCRIM_STATUS.SCHEDULED,
+      participants: {
+        create: [
+          ...opts.hostAccts.map((dotaAccountId, index) => ({
+            teamId: opts.hostTeamId,
+            dotaAccountId,
+            displayName: `Scrim host ${index + 1}`,
+            guest: true,
+            addedById: opts.createdById,
+          })),
+          ...opts.awayAccts.map((dotaAccountId, index) => ({
+            teamId: opts.awayTeamId,
+            dotaAccountId,
+            displayName: `Scrim away ${index + 1}`,
+            guest: true,
+            addedById: opts.createdById,
+          })),
+        ],
+      },
+    },
+  });
 }
 
 describe("result sync — league matches (integration)", () => {
@@ -1224,6 +1267,107 @@ describe("result sync — a claim that needs a staged interleaving", () => {
     // still being worked — the one thing that card exists to rule out.
     expect(m.autoSyncedAt).toBeNull();
     expect(m.autoSyncAttempts).toBe(0);
+  });
+});
+
+describe("syncLeagueGames — booked scrim ownership", () => {
+  it("remembers a scrim-only feed game without blocking manual scrim import", async () => {
+    const { season, home, away } = await setupNight({
+      offsetMs: -5 * HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18187" },
+    });
+    const SCRIM_GAME = 6664001;
+    const hostAccts = [770_001, 770_002, 770_003];
+    const awayAccts = [880_001, 880_002, 880_003];
+    const kickoff = new Date(Date.now() - HOUR);
+    const scrim = await makeBookedScrim({
+      seasonId: season.id,
+      hostTeamId: home.id,
+      awayTeamId: away.id,
+      createdById: home.captainId,
+      scheduledAt: kickoff,
+      hostAccts,
+      awayAccts,
+    });
+    const fetched = odGame(
+      SCRIM_GAME,
+      hostAccts,
+      awayAccts,
+      kickoff.getTime(),
+    );
+    mockLeague.mockResolvedValue([SCRIM_GAME]);
+    mockMatch.mockResolvedValue(fetched);
+
+    const first = await syncLeagueGames(season.id, { auto: true });
+
+    expect(first).toMatchObject({ imported: 0, scanned: 1 });
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(SCRIM_GAME)]) });
+    // This is deliberately not the shared admin-removal skip read by the
+    // scrim scanner. The official feed must not hide the game from scrims.
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `importSkip:${season.id}` },
+      }),
+    ).toBeNull();
+
+    mockMatch.mockClear();
+    await syncLeagueGames(season.id, { auto: true });
+    expect(mockMatch).not.toHaveBeenCalled();
+
+    mockMatch.mockResolvedValue(fetched);
+    const imported = await importScrimGame(
+      { id: home.captainId, role: ROLE.USER },
+      scrim.id,
+      String(SCRIM_GAME),
+    );
+    expect(imported).toMatchObject({ ok: true, imported: 1 });
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembers an equidistant game that fits both official and scrim lineups", async () => {
+    const { season, home, away, match, homeAccts, awayAccts } =
+      await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18188" },
+    });
+    const SCRIM_GAME = 6664002;
+    const kickoff = match.scheduledAt!;
+    await makeBookedScrim({
+      seasonId: season.id,
+      hostTeamId: home.id,
+      awayTeamId: away.id,
+      createdById: home.captainId,
+      scheduledAt: kickoff,
+      hostAccts: homeAccts,
+      awayAccts,
+    });
+    mockLeague.mockResolvedValue([SCRIM_GAME]);
+    mockMatch.mockResolvedValue(
+      odGame(SCRIM_GAME, homeAccts, awayAccts, kickoff.getTime()),
+    );
+
+    const result = await syncLeagueGames(season.id, { auto: true });
+
+    expect(result).toMatchObject({ imported: 0, scanned: 1 });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(SCRIM_GAME)]) });
+
+    mockMatch.mockClear();
+    await syncLeagueGames(season.id, { auto: true });
+    expect(mockMatch).not.toHaveBeenCalled();
   });
 });
 

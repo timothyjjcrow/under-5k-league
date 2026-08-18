@@ -58,7 +58,8 @@ async function main() {
   console.log("Resetting database…");
   // Order matters for FK constraints.
   //
-  // These three survive `user.deleteMany()` and every other line here, so they
+  // These relationless or SetNull rows survive `user.deleteMany()` and every
+  // other line here, so they
   // have to be named: InhouseCreditEntry and AdminAction carry NO foreign key
   // at all — deliberately, since a staking record and an audit record have to
   // outlive the account they describe (see the model comments in
@@ -71,6 +72,7 @@ async function main() {
   await prisma.inhouseCreditEntry.deleteMany();
   await prisma.adminAction.deleteMany();
   await prisma.newsPost.deleteMany();
+  await prisma.dotaMatchClaim.deleteMany();
   await prisma.bid.deleteMany();
   await prisma.standinAssignment.deleteMany();
   await prisma.match.deleteMany();

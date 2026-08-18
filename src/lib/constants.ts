@@ -61,6 +61,28 @@ export const MATCH_PHASE = {
   FINAL: "FINAL",
 } as const;
 
+export const TEAM_STAFF_ROLE = {
+  COACH: "COACH",
+} as const;
+export type TeamStaffRole =
+  (typeof TEAM_STAFF_ROLE)[keyof typeof TEAM_STAFF_ROLE];
+
+export const SCRIM_STATUS = {
+  OPEN: "OPEN",
+  SCHEDULED: "SCHEDULED",
+  LIVE: "LIVE",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+} as const;
+export type ScrimStatus = (typeof SCRIM_STATUS)[keyof typeof SCRIM_STATUS];
+
+export const DOTA_MATCH_KIND = {
+  LEAGUE: "LEAGUE",
+  SCRIM: "SCRIM",
+} as const;
+export type DotaMatchKind =
+  (typeof DOTA_MATCH_KIND)[keyof typeof DOTA_MATCH_KIND];
+
 export const ROLE = {
   USER: "USER",
   ADMIN: "ADMIN",

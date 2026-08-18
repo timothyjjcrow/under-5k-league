@@ -70,6 +70,9 @@ export async function resetDb() {
   // cleared explicitly before User or fixture resets leak announcements into
   // the next lifecycle state.
   await prisma.newsPost.deleteMany();
+  // DotaMatchClaim is intentionally polymorphic and has no FK to either Game
+  // or ScrimGame, so neither event cascade can clear the shared ownership row.
+  await prisma.dotaMatchClaim.deleteMany();
   await prisma.game.deleteMany();
   await prisma.standinAssignment.deleteMany();
   await prisma.bid.deleteMany();

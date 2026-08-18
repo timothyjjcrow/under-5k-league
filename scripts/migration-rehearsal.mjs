@@ -17,6 +17,7 @@ const BASELINE_MIGRATION = "20260804000000_baseline";
 const RELEASE_MIGRATION = "20260804010000_release_readiness";
 const AUTOMATION_MIGRATION = "20260804020000_automation_run_state";
 const TEAM_LOGO_MIGRATION = "20260814000000_team_logo";
+const SCRIMS_MIGRATION = "20260817000000_scrims";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -141,6 +142,7 @@ async function rehearseFreshDatabase(url) {
           RELEASE_MIGRATION,
           AUTOMATION_MIGRATION,
           TEAM_LOGO_MIGRATION,
+          SCRIMS_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -383,6 +385,7 @@ async function rehearseExistingLegacyDatabase(url) {
           RELEASE_MIGRATION,
           AUTOMATION_MIGRATION,
           TEAM_LOGO_MIGRATION,
+          SCRIMS_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );

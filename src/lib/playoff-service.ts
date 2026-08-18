@@ -6,7 +6,13 @@ import {
   playoffSetupRevision,
   type PlayoffCommandIntent,
 } from "./playoff-command";
-import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
+import {
+  DOTA_MATCH_KIND,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SCRIM_STATUS,
+  SEASON_STATUS,
+} from "./constants";
 import { championMessage, getWebhookUrl, sendDiscordMessage } from "./discord";
 import { raceHook } from "./race-hook";
 import {
@@ -26,6 +32,7 @@ import {
   releaseAnnouncementClaim,
 } from "./announcement-marker";
 import { UserFacingError } from "./user-facing-error";
+import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -37,8 +44,32 @@ class StaleBracketError extends Error {}
 /** The bracket-build snapshot lost a race before its guarded phase write. */
 class BracketBuildRaceError extends Error {}
 
+/** A dated playoff round would double-book at least one participating team. */
+class PlayoffScrimConflictError extends Error {}
+
 const BRACKET_BUILD_RACE_MESSAGE =
   "The season, standings, or playoff bracket changed while it was being built — reload and try again";
+
+const PLAYOFF_SCRIM_CONFLICT_MESSAGE =
+  "A playoff team has a booked scrim within four hours of that round's kickoff. Move or cancel the scrim before building the bracket.";
+
+async function assertNoPlayoffScrimConflict(
+  tx: Prisma.TransactionClient,
+  seasonId: string,
+  pairings: Array<{ home: string; away: string }>,
+  scheduledAt: Date | null,
+): Promise<void> {
+  if (!scheduledAt || pairings.length === 0) return;
+  if (
+    await hasConfirmedScrimConflict(tx, {
+      seasonId,
+      teamIds: [...new Set(pairings.flatMap((p) => [p.home, p.away]))],
+      scheduledAt,
+    })
+  ) {
+    throw new PlayoffScrimConflictError();
+  }
+}
 
 /**
  * Exactly-once marker for "round N of this season's bracket has been built".
@@ -189,6 +220,18 @@ async function removePostseason(
       where: { key: archiveKey },
       create: { key: archiveKey, value: archiveValue },
       update: { value: archiveValue },
+    });
+    // The archive exists specifically so these games can be re-imported onto
+    // the rebuilt bracket. Release their cross-mode claims in the same commit
+    // that deletes the old playoff fixtures; otherwise the new global registry
+    // would turn the recovery receipt into unusable IDs.
+    await tx.dotaMatchClaim.deleteMany({
+      where: {
+        dotaMatchId: {
+          in: doomedGames.map((game) => game.dotaMatchId),
+        },
+        kind: DOTA_MATCH_KIND.LEAGUE,
+      },
     });
   }
   await tx.match.deleteMany({
@@ -344,6 +387,23 @@ export async function createPlayoffBracket(
           phase === MATCH_PHASE.FINAL
             ? season.finalBestOf
             : season.playoffBestOf;
+        const playoffScheduledAt = season.firstMatchNight
+          ? upcomingMatchNight(
+              season.firstMatchNight,
+              lastRegularWeek + 1,
+              Date.now(),
+            )
+          : null;
+        // Do this before teardown. The transaction would roll a teardown back
+        // on failure, but checking first also keeps the intent explicit: reset
+        // never destroys the current bracket merely to discover the replacement
+        // round would collide with a confirmed casual booking.
+        await assertNoPlayoffScrimConflict(
+          tx,
+          seasonId,
+          pairings,
+          playoffScheduledAt,
+        );
         // These teardown reads and deletes share this Serializable snapshot
         // with the fresh bracket creation. A late game import or standin claim
         // therefore conflicts instead of disappearing through a cascade.
@@ -357,13 +417,7 @@ export async function createPlayoffBracket(
             awayTeamId: pairing.away,
             bracketSlot: `R0M${index}`,
             bestOf,
-            scheduledAt: season.firstMatchNight
-              ? upcomingMatchNight(
-                  season.firstMatchNight,
-                  lastRegularWeek + 1,
-                  Date.now(),
-                )
-              : null,
+            scheduledAt: playoffScheduledAt,
           })),
         });
         const phaseClaim = await tx.season.updateMany({
@@ -389,6 +443,9 @@ export async function createPlayoffBracket(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
+    if (error instanceof PlayoffScrimConflictError) {
+      throw new UserFacingError(PLAYOFF_SCRIM_CONFLICT_MESSAGE);
+    }
     if (
       error instanceof BracketBuildRaceError ||
       (error as { code?: string }).code === "P2034"
@@ -687,6 +744,16 @@ export async function advancePlayoffBracket(
             },
           });
           if (crowned.count !== 1) return null;
+          // The league is over: unstarted practice offers should not remain
+          // actionable in the archive. Preserve LIVE scrims so an in-progress
+          // series can still record its remaining games.
+          await tx.scrim.updateMany({
+            where: {
+              seasonId,
+              status: { in: [SCRIM_STATUS.OPEN, SCRIM_STATUS.SCHEDULED] },
+            },
+            data: { status: SCRIM_STATUS.CANCELLED },
+          });
           const changedAt = new Date().toISOString();
           await tx.setting.upsert({
             where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
@@ -814,6 +881,18 @@ export async function advancePlayoffBracket(
           phase === MATCH_PHASE.FINAL
             ? seasonNow.finalBestOf
             : seasonNow.playoffBestOf;
+        const scheduledAt = seasonNow.firstMatchNight
+          ? upcomingMatchNight(seasonNow.firstMatchNight, week, Date.now())
+          : null;
+        // Leave the build marker unclaimed while a casual booking blocks this
+        // round. Reconciliation can retry the same winners after that scrim is
+        // completed or cancelled; no result needs to be replayed.
+        await assertNoPlayoffScrimConflict(
+          tx,
+          seasonId,
+          pairings,
+          scheduledAt,
+        );
         await tx.match.createMany({
           data: pairings.map((p, i) => ({
             seasonId,
@@ -825,9 +904,7 @@ export async function advancePlayoffBracket(
             bestOf,
             // Same guard as the first round: a round created after its arithmetic
             // date has passed must roll forward, not be born already stale.
-            scheduledAt: seasonNow.firstMatchNight
-              ? upcomingMatchNight(seasonNow.firstMatchNight, week, Date.now())
-              : null,
+            scheduledAt,
           })),
         });
         const changedAt = new Date().toISOString();
@@ -850,6 +927,10 @@ export async function advancePlayoffBracket(
     if ((e as { code?: string }).code === "P2034") return false;
     // The bracket we computed from no longer exists as we read it.
     if (e instanceof StaleBracketError) return false;
+    // A confirmed scrim owns this time for now. Do not turn a successfully
+    // recorded series result into a failed request; the scheduled reconciler
+    // calls this idempotent advance again after the conflict is cleared.
+    if (e instanceof PlayoffScrimConflictError) return false;
     throw e;
   }
 }

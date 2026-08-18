@@ -26,6 +26,8 @@ import {
   DRAFT_STATUS,
   MATCH_STATUS,
   MATCH_PHASE,
+  DOTA_MATCH_KIND,
+  SCRIM_STATUS,
   DEFAULTS,
   HARD_MMR_CEILING,
   type SeasonStatus,
@@ -151,6 +153,7 @@ import {
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
 import { normalizeTeamLogoUrl } from "@/lib/team-logo";
+import { hasConfirmedScrimConflict } from "@/lib/scrim-schedule-conflict";
 
 /**
  * Thrown from inside a `$transaction` callback when a precondition that was
@@ -209,6 +212,7 @@ class WithdrawnTeamsError extends Error {
 class ScheduleMatchChangedError extends Error {}
 class ScheduledWeekEmptyError extends Error {}
 class UnknownScheduleMatchError extends Error {}
+class ScrimScheduleConflictError extends Error {}
 class DraftAlreadyStartedError extends Error {}
 class DraftSetupLockedError extends Error {}
 class CaptainStateChangedError extends Error {}
@@ -673,9 +677,24 @@ export async function deleteSeason(
           select: { id: true },
         })
       ).map((match) => match.id);
+      const claimedDotaIds = [
+        ...(await tx.game.findMany({
+          where: { match: { seasonId } },
+          select: { dotaMatchId: true },
+        })),
+        ...(await tx.scrimGame.findMany({
+          where: { scrim: { seasonId } },
+          select: { dotaMatchId: true },
+        })),
+      ].map((game) => game.dotaMatchId);
       await tx.setting.deleteMany({
         where: seasonSettingScopeWhere(seasonId, matchIds),
       });
+      if (claimedDotaIds.length > 0) {
+        await tx.dotaMatchClaim.deleteMany({
+          where: { dotaMatchId: { in: claimedDotaIds } },
+        });
+      }
       await tx.match.deleteMany({ where: { seasonId } });
       const gone = await tx.season.deleteMany({
         where: {
@@ -1176,6 +1195,29 @@ export async function removeCaptain(
           );
         }
         if (playedNow > 0 || gamesNow > 0) throw new ResultsLandedError();
+
+        // Scrims cascade through Team, while their polymorphic ownership
+        // claims deliberately have no FK. Gather and clear those claims in
+        // this same transaction so removing a pre-draft captain cannot leave
+        // a Valve match id permanently reserved by a deleted scrim.
+        const scrimDotaIds = (
+          await tx.scrimGame.findMany({
+            where: {
+              scrim: {
+                OR: [{ hostTeamId: team.id }, { opponentTeamId: team.id }],
+              },
+            },
+            select: { dotaMatchId: true },
+          })
+        ).map((game) => game.dotaMatchId);
+        if (scrimDotaIds.length > 0) {
+          await tx.dotaMatchClaim.deleteMany({
+            where: {
+              dotaMatchId: { in: scrimDotaIds },
+              kind: DOTA_MATCH_KIND.SCRIM,
+            },
+          });
+        }
 
         if (fixtures > 0) {
           await tx.match.deleteMany({ where: { seasonId: currentSeason.id } });
@@ -2743,6 +2785,24 @@ export async function generateSchedule(
           })),
         );
 
+        // A generated schedule is just as authoritative as a manual retime.
+        // Check every dated fixture before replacing the old schedule so an
+        // already-booked SCHEDULED/LIVE scrim cannot be hidden underneath a
+        // new official kickoff. Both this path and scrim claiming are
+        // Serializable, so a concurrent claim/generate race has one loser.
+        for (const row of rows) {
+          if (
+            row.scheduledAt &&
+            (await hasConfirmedScrimConflict(tx, {
+              seasonId: currentSeason.id,
+              teamIds: [row.homeTeamId, row.awayTeamId],
+              scheduledAt: row.scheduledAt,
+            }))
+          ) {
+            throw new ScrimScheduleConflictError();
+          }
+        }
+
         // The results counts above protect games, but NOT the night-specific state
         // that hangs off a fixture id: MatchAvailability, Prediction,
         // StandinAssignment and RescheduleRequest all cascade with the match
@@ -2863,6 +2923,12 @@ export async function generateSchedule(
     }
     if (e instanceof ScheduleNeedsTeamsError) {
       return { error: "Need at least 2 active teams" };
+    }
+    if (e instanceof ScrimScheduleConflictError) {
+      return {
+        error:
+          "A team has a booked scrim within four hours of a generated kickoff. Move or cancel that scrim before replacing the schedule.",
+      };
     }
     if ((e as { code?: string }).code === "P2034") {
       return {
@@ -4291,6 +4357,14 @@ export async function withdrawTeam(
         if (flagged.count === 0) {
           throw new TeamAlreadyWithdrawnError(team.name);
         }
+        const cancelledScrims = await tx.scrim.updateMany({
+          where: {
+            seasonId: expectedActiveSeasonId,
+            status: { in: [SCRIM_STATUS.OPEN, SCRIM_STATUS.SCHEDULED] },
+            OR: [{ hostTeamId: teamId }, { opponentTeamId: teamId }],
+          },
+          data: { status: SCRIM_STATUS.CANCELLED },
+        });
 
         // Standins booked on the doomed fixtures become inert history when
         // those matches are ruled. Carry the rows out so the post-commit path
@@ -4371,6 +4445,7 @@ export async function withdrawTeam(
           open,
           mootCover,
           matchClaims,
+          cancelledScrims: cancelledScrims.count,
           // Matches that completed after the presentation read but before the
           // transaction are not in `open`; retain the old truthful toast note.
           completedBeforeClaim: observedNow.filter(
@@ -4399,8 +4474,14 @@ export async function withdrawTeam(
     throw error;
   }
 
-  const { team, open, mootCover, matchClaims, completedBeforeClaim } =
-    withdrawal;
+  const {
+    team,
+    open,
+    mootCover,
+    matchClaims,
+    cancelledScrims,
+    completedBeforeClaim,
+  } = withdrawal;
   const forfeited = matchClaims.reduce((n, r) => n + r.count, 0);
   const raced = open.length - forfeited + completedBeforeClaim;
 
@@ -4442,7 +4523,7 @@ export async function withdrawTeam(
   await sendDiscordMessage(teamWithdrewMessage(team.name, forfeited));
   await logAdminAction({
     action: "withdrawTeam",
-    summary: `Withdrew ${team.name} — ${forfeited} remaining fixture(s) forfeited to the opponents${raced ? ` (${raced} completed for real mid-flight and kept their result)` : ""}`,
+    summary: `Withdrew ${team.name} — ${forfeited} remaining fixture(s) forfeited to the opponents and ${cancelledScrims} unplayed scrim(s) cancelled${raced ? ` (${raced} completed for real mid-flight and kept their result)` : ""}`,
     seasonId: season.id,
   });
   refresh();
@@ -4453,6 +4534,9 @@ export async function withdrawTeam(
       : null,
     stoodDown.length
       ? `${stoodDown.length} standin booking(s) on those fixtures stood down`
+      : null,
+    cancelledScrims
+      ? `${cancelledScrims} unplayed scrim(s) cancelled`
       : null,
     "excluded from playoff seeding · rosters and played results are kept",
     // The withdrawn team's players are the league's most natural standin pool
@@ -5104,6 +5188,17 @@ export async function removeGame(
         if (removed.count === 0) {
           throw new ResultWriteError("That game is already gone");
         }
+        // Release the cross-mode ownership record with the game correction.
+        // Existing pre-scrim games legitimately have no claim, so deleteMany
+        // keeps this migration-safe while preventing a removed import from
+        // permanently blocking the same Valve id on a corrected event.
+        await tx.dotaMatchClaim.deleteMany({
+          where: {
+            dotaMatchId: fresh.dotaMatchId,
+            kind: DOTA_MATCH_KIND.LEAGUE,
+            contextId: match.id,
+          },
+        });
         await tx.match.update({
           where: { id: match.id },
           data: {
@@ -5438,6 +5533,15 @@ export async function setWeekNight(
         }
 
         for (const { match, scheduledAt } of moves) {
+          if (
+            await hasConfirmedScrimConflict(tx, {
+              seasonId: expectedActiveSeasonId,
+              teamIds: [match.homeTeamId, match.awayTeamId],
+              scheduledAt,
+            })
+          ) {
+            throw new ScrimScheduleConflictError();
+          }
           const updated = await tx.match.updateMany({
             where: {
               id: match.id,
@@ -5530,6 +5634,12 @@ export async function setWeekNight(
       return {
         error:
           "A match went live, finished, or was retimed while this move was being applied — nothing was changed. Reload and try again.",
+      };
+    }
+    if (error instanceof ScrimScheduleConflictError) {
+      return {
+        error:
+          "A team in this schedule move has a booked scrim within four hours of its new kickoff. Move or cancel that scrim first.",
       };
     }
     if ((error as { code?: string }).code === "P2034") {
@@ -5654,6 +5764,8 @@ export async function setMatchTime(
                 seasonId: true,
                 week: true,
                 status: true,
+                homeTeamId: true,
+                awayTeamId: true,
               },
             }),
           ]);
@@ -5681,6 +5793,16 @@ export async function setMatchTime(
             rsvps: 0,
             proposals: 0,
           };
+        }
+        if (
+          scheduledAt &&
+          (await hasConfirmedScrimConflict(tx, {
+            seasonId: expectedActiveSeasonId,
+            teamIds: [before.homeTeamId, before.awayTeamId],
+            scheduledAt,
+          }))
+        ) {
+          throw new ScrimScheduleConflictError();
         }
 
         // Status and old kickoff are both claims. A result import or competing
@@ -5745,6 +5867,12 @@ export async function setMatchTime(
       return {
         error:
           "Only a scheduled match can be retimed — this match is live, final, or changed in another tab. Reload before trying again.",
+      };
+    }
+    if (error instanceof ScrimScheduleConflictError) {
+      return {
+        error:
+          "One of these teams has a booked scrim within four hours of that kickoff. Move or cancel the scrim first.",
       };
     }
     if ((error as { code?: string }).code === "P2034") {

@@ -43,6 +43,8 @@ function navItems(
     { href: "/players", label: "Players" },
     // Inhouse is a standalone pick-up mode — always available, season or not.
     { href: "/inhouse", label: "Inhouse" },
+    // Scrim archives remain useful between seasons, so this link is evergreen.
+    { href: "/scrims", label: "Scrims" },
   ];
   const teamsExist =
     phase === "DRAFT" ||
@@ -54,7 +56,9 @@ function navItems(
   if (!teamsExist || phase === "DRAFT") {
     items.push({ href: "/features", label: "Features" });
   }
-  if (teamsExist) items.push({ href: "/teams", label: "Teams" });
+  if (teamsExist) {
+    items.push({ href: "/teams", label: "Teams" });
+  }
   if (myTeamId) items.push({ href: `/teams/${myTeamId}`, label: "My Team" });
   if (phase === "DRAFT") {
     items.push({ href: "/draft", label: "Draft" });
