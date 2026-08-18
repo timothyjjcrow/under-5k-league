@@ -1,7 +1,8 @@
 "use server";
 
 import { Prisma } from "@prisma/client";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
@@ -233,6 +234,7 @@ export async function setAvailability(
     // invites the player to submit it again.
   }
 
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
   return {
     message:

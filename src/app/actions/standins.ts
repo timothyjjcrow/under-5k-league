@@ -6,7 +6,8 @@
 // override, same as their panel. The Discord announcement stays here — a
 // webhook failure must never affect the assignment itself.
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import { parseSeatTarget } from "@/lib/standin";
@@ -19,6 +20,7 @@ import { reachabilityNote } from "@/lib/discord-roles";
 import type { ActionResult } from "@/lib/action-result";
 
 function refresh() {
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
 }
 

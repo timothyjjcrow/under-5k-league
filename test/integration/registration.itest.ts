@@ -3,7 +3,10 @@ import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 // The action calls revalidatePath (Next request scope), requireUser (cookies),
 // and — for new signups — fetchPlayerRankTier (network). Stub all three so we
 // can drive the real saveRegistration end-to-end against the test DB.
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+  updateTag: vi.fn(),
+}));
 vi.mock("@/lib/auth", () => ({
   requireUser: vi.fn(),
   requireAdmin: vi.fn(),

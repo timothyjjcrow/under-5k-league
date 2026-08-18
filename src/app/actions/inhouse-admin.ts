@@ -14,7 +14,8 @@
 // renders a per-row Void for admins through this action, with the game named
 // in the confirm.
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { requireAdmin } from "@/lib/auth";
 import { str } from "@/lib/form";
 import { voidLastResult } from "@/lib/inhouse-service";
@@ -34,6 +35,7 @@ export async function voidInhouseResult(
   if (!lobbyId) return { error: "Missing game" };
   const res = await voidLastResult(user, lobbyId);
   if (!res.ok) return { error: res.error };
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
   return {
     message:

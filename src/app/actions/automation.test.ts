@@ -74,7 +74,8 @@ describe("runMaintenanceNow", () => {
       actor: ADMIN,
     });
     expect(revalidatePath).toHaveBeenCalledWith("/admin");
-    expect(updateTag).not.toHaveBeenCalled();
+    expect(updateTag).toHaveBeenCalledOnce();
+    expect(updateTag).toHaveBeenCalledWith("automation-gate:v3");
     expect(result).toEqual({
       message: "Maintenance finished successfully — no new games were found.",
     });
@@ -105,7 +106,8 @@ describe("runMaintenanceNow", () => {
 
     expect(result?.error).toContain("already running");
     expect(result?.error).toContain("never overrides");
-    expect(updateTag).not.toHaveBeenCalled();
+    expect(updateTag).toHaveBeenCalledWith("automation-gate:v3");
+    expect(updateTag).not.toHaveBeenCalledWith("games");
     expect(mocks.logAdminAction).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "runMaintenanceNow",

@@ -40,6 +40,7 @@ import {
   recoverableAnnouncementMarker,
   releaseAnnouncementClaim,
 } from "./announcement-marker";
+import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
@@ -1117,6 +1118,11 @@ export async function importGameForMatch(
 
   if (!committed)
     throw new Error("Import committed without a series projection");
+
+  // Signal immediately after each durable game write. Auto-detect and league
+  // sync can import several games in a loop; if a later iteration or
+  // post-commit effect fails, earlier imports must still wake/rebuild the gate.
+  invalidateAutomationGateBestEffort();
 
   // External effects are deliberately post-commit: OpenDota data and the
   // series projection are durable even if Discord or bracket reconciliation

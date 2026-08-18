@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { getDraftState } from "@/lib/draft-service";
@@ -81,8 +82,17 @@ export async function POST(req: NextRequest) {
         Date.now(),
       )
     : false;
-  const state = await getDraftState(season.id, user, { resolveDeadlines });
-  return NextResponse.json(state, {
-    headers: { "cache-control": "no-store" },
-  });
+  try {
+    const state = await getDraftState(season.id, user, { resolveDeadlines });
+    return NextResponse.json(state, {
+      headers: { "cache-control": "no-store" },
+    });
+  } finally {
+    // Only the throttle winner may mutate clocks. Expire after its resolving
+    // read. The immutable hard wake remains the fallback if a cache fill that
+    // began earlier finishes after this best-effort expiry signal.
+    if (resolveDeadlines) {
+      invalidateAutomationGateBestEffort();
+    }
+  }
 }

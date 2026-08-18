@@ -24,6 +24,8 @@ describe("public result status route", () => {
     const response = await GET();
 
     expect(response.status).toBe(200);
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(snapshot).toHaveBeenCalledWith();
     expect(response.headers.get("cache-control")).toBe(
       "public, max-age=0, must-revalidate",
     );
@@ -56,6 +58,8 @@ describe("public result status route", () => {
     const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
     expect(source).not.toContain("runResultSync");
     expect(source).not.toContain("runAutomation");
+    expect(source).not.toContain("loadResultSyncSnapshot");
+    expect(source).not.toContain("@/lib/prisma");
     expect(source).not.toContain("revalidateTag");
     expect(source).not.toMatch(/export\s+async\s+function\s+POST/);
   });

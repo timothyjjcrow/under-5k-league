@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { getDraftState, placeBid } from "@/lib/draft-service";
@@ -54,14 +55,20 @@ export async function POST(req: NextRequest) {
   }
   const amount = Number(body.amount);
 
-  const res = await placeBid(season.id, user, amount, expectedLot.value);
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: res.error },
-      { status: draftActionErrorStatus(res.error) },
-    );
+  try {
+    const res = await placeBid(season.id, user, amount, expectedLot.value);
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: res.error },
+        { status: draftActionErrorStatus(res.error) },
+      );
+    }
+    return NextResponse.json(await getDraftState(season.id, user));
+  } finally {
+    // The service can resolve an expired clock before rejecting the bid.
+    // Expire after every dispatched attempt, including a failed follow-up
+    // state read. Next queues this best-effort signal; the gate's hard wake
+    // bounds the rare case where an older cache fill finishes afterward.
+    invalidateAutomationGateBestEffort();
   }
-
-  const state = await getDraftState(season.id, user);
-  return NextResponse.json(state);
 }

@@ -8,6 +8,7 @@ import {
   removeInhouseBoard,
   syncInhouseBoard,
   getInhouseBoardStatus,
+  inhouseBoardNeedsSync,
   loadBoardStats,
   resetBoardStatsCache,
 } from "@/lib/inhouse-board-service";
@@ -147,6 +148,102 @@ describe("inhouse board — stable last-game chronology", () => {
     expect(stats.lastLobbyId).toBe(newer.id);
     expect(stats.lastEndedAtMs).toBe(now - 20 * 60_000);
     expect(stats.lastWinnerSide).toBe("Dire");
+  });
+});
+
+describe("inhouse board — automation preflight", () => {
+  it("sleeps when Discord mutations are disabled", async () => {
+    await enqueue(1);
+    await createInhouseBoard();
+    const raw = await boardRow();
+    process.env.VERCEL_ENV = "preview";
+
+    await expect(inhouseBoardNeedsSync(raw, Date.now())).resolves.toBe(false);
+  });
+
+  it("sleeps when the board has no usable webhook", async () => {
+    await enqueue(1);
+    await createInhouseBoard();
+    const raw = await boardRow();
+    mockHook.mockResolvedValue(null);
+
+    await expect(inhouseBoardNeedsSync(raw, Date.now())).resolves.toBe(false);
+  });
+
+  it("leaves a posting reservation for explicit admin recovery", async () => {
+    const raw = JSON.stringify({
+      webhookId: "11111",
+      messageId: "",
+      digest: "posting:11111",
+      reservedAt: new Date().toISOString(),
+    });
+
+    await expect(inhouseBoardNeedsSync(raw, Date.now())).resolves.toBe(false);
+  });
+
+  it("throws on malformed live state so the scheduler fails open", async () => {
+    const raw = JSON.stringify({
+      webhookId: "11111",
+      messageId: MSG_ID,
+      // A live board without its canonical digest cannot be proved current.
+    });
+
+    await expect(inhouseBoardNeedsSync(raw, Date.now())).rejects.toThrow(
+      /malformed live inhouse board state/i,
+    );
+  });
+
+  it("runs when the configured webhook no longer owns the message", async () => {
+    await createInhouseBoard();
+    const raw = await boardRow();
+    mockHook.mockResolvedValue(OTHER_HOOK);
+
+    await expect(inhouseBoardNeedsSync(raw, Date.now())).resolves.toBe(true);
+  });
+
+  it("sleeps when a fresh canonical render matches the stored digest", async () => {
+    await enqueue(3);
+    await createInhouseBoard();
+
+    await expect(
+      inhouseBoardNeedsSync(await boardRow(), Date.now()),
+    ).resolves.toBe(false);
+  });
+
+  it("detects the final queue deletion", async () => {
+    await enqueue(1);
+    await createInhouseBoard();
+    const raw = await boardRow();
+    await prisma.inhouseQueueEntry.deleteMany();
+
+    await expect(inhouseBoardNeedsSync(raw, Date.now())).resolves.toBe(true);
+    // A preflight only answers whether the ordinary worker should run. It
+    // neither edits Discord nor advances either piece of persisted board state.
+    expect(mockPatch).not.toHaveBeenCalled();
+    expect(await boardRow()).toBe(raw);
+    expect(await getSetting(SETTING_KEYS.INHOUSE_BOARD_AT)).toBeNull();
+  });
+
+  it("bypasses the warm stats cache when a result just completed", async () => {
+    const now = Date.now();
+    // Warm the exact cache entry the ordinary board renderer is allowed to
+    // reuse for 60 seconds, then store an empty-board digest based on it.
+    await loadBoardStats(now);
+    await createInhouseBoard();
+    const raw = await boardRow();
+
+    await prisma.inhouseLobby.create({
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(now + 500),
+        winnerTeam: 1,
+        radiantTeam: 1,
+      },
+    });
+
+    // A cached stats load would still match `raw`. The scheduler preflight
+    // must see the new result now, before deciding it can sleep.
+    await expect(inhouseBoardNeedsSync(raw, now + 1_000)).resolves.toBe(true);
   });
 });
 

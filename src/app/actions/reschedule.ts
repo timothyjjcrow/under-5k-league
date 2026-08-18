@@ -4,7 +4,8 @@
 // integration-tested guards). Discord announcement stays here — a webhook
 // failure must never affect the retiming itself.
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import {
@@ -23,6 +24,7 @@ import type { ActionResult } from "@/lib/action-result";
 import { actionErrorMessage } from "@/lib/user-facing-error";
 
 function refresh() {
+  updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
 }
 
@@ -103,6 +105,7 @@ export async function respondReschedule(
       user.id,
       str(formData, "requestId"),
       accept,
+      { onAcceptedCommit: () => updateTag(AUTOMATION_GATE_TAG) },
     );
   } catch (e) {
     return {
@@ -113,6 +116,11 @@ export async function respondReschedule(
       ),
     };
   }
+
+  // The response service may have committed a new kickoff before the
+  // best-effort Discord audience reads below. Queue gate expiry immediately
+  // so those follow-ups cannot suppress the scheduler refresh.
+  updateTag(AUTOMATION_GATE_TAG);
 
   if (outcome.accepted) {
     await sendDiscordMessage(

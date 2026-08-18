@@ -98,6 +98,24 @@ describe("Cloudflare automation scheduler", () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("accepts an authenticated not-due tick as scheduler success", async () => {
+    const fetcher = vi.fn(async () =>
+      response({
+        ok: true,
+        status: "SUCCEEDED",
+        skipped: "NOT_DUE",
+        nextWakeAt: "2026-08-16T08:00:00.000Z",
+      }),
+    );
+
+    await expect(
+      invokeAutomation(
+        { AUTOMATION_URL: URL, AUTOMATION_SECRET: SECRET },
+        fetcher as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it.each([
     "http://league.example/api/cron/automation",
     "https://user@league.example/api/cron/automation",

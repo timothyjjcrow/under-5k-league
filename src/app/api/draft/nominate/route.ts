@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { getDraftState, nominatePlayer } from "@/lib/draft-service";
@@ -55,20 +56,24 @@ export async function POST(req: NextRequest) {
   const playerId = String(body.playerId ?? "");
   const amount = Number(body.amount);
 
-  const res = await nominatePlayer(
-    season.id,
-    user,
-    playerId,
-    amount,
-    expectedTurn.value,
-  );
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: res.error },
-      { status: draftActionErrorStatus(res.error) },
+  try {
+    const res = await nominatePlayer(
+      season.id,
+      user,
+      playerId,
+      amount,
+      expectedTurn.value,
     );
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: res.error },
+        { status: draftActionErrorStatus(res.error) },
+      );
+    }
+    return NextResponse.json(await getDraftState(season.id, user));
+  } finally {
+    // The service can resolve an expired clock before rejecting a nomination.
+    // Expire after every dispatched attempt and its follow-up state read.
+    invalidateAutomationGateBestEffort();
   }
-
-  const state = await getDraftState(season.id, user);
-  return NextResponse.json(state);
 }

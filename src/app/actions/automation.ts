@@ -4,9 +4,11 @@ import { revalidatePath, updateTag } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { logAdminAction } from "@/lib/admin-log";
 import { runAutomation } from "@/lib/automation-service";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import type { ActionResult } from "@/lib/action-result";
 
 function refreshAutomationSurfaces(imported: number) {
+  updateTag(AUTOMATION_GATE_TAG);
   // A manual pass shares the cron worker but not the cron route, so it owns
   // the same cache contract: imported games must immediately leave cached
   // leader/meta/history scans as well as the rendered application shell.

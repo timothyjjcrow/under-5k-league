@@ -107,6 +107,7 @@ import {
 import { adminNextStep } from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
+import { getAutomationGateDecision } from "@/lib/automation-gate";
 import {
   automationHealthView,
   type AutomationHealthRecord,
@@ -3723,8 +3724,15 @@ async function AutomationRunnerHealth() {
         markerRetries: number;
       }
     | undefined;
+  let idleWindow:
+    | { nextWakeAtMs: number; hardWakeAtMs: number }
+    | undefined;
+  // Async SERVER component: one value per request. The React purity rule is
+  // aimed at client re-renders, not a server health snapshot.
+  // eslint-disable-next-line react-hooks/purity
+  const now = Date.now();
   try {
-    const [runner, league, inhouse, markerRetries] = await Promise.all([
+    const [runner, league, inhouse, markerRetries, gate] = await Promise.all([
       prisma.automationRunState.findUnique({
         where: { key: AUTOMATION_RUN_KEY },
         select: {
@@ -3772,9 +3780,19 @@ async function AutomationRunnerHealth() {
           ],
         },
       }),
+      getAutomationGateDecision(now).catch(() => ({ run: true }) as const),
     ]);
     state = runner;
     backlog = { league, inhouse, markerRetries };
+    if (!gate.run) {
+      idleWindow = {
+        nextWakeAtMs: Math.min(
+          gate.snapshot.nextWakeAtMs,
+          gate.snapshot.hardWakeAtMs,
+        ),
+        hardWakeAtMs: gate.snapshot.hardWakeAtMs,
+      };
+    }
   } catch {
     // The admin panel remains usable during a migration/readiness incident.
     // `undefined` is intentionally distinct from a missing (never-run) row.
@@ -3782,11 +3800,7 @@ async function AutomationRunnerHealth() {
     backlog = undefined;
   }
 
-  // Async SERVER component: one value per request. The React purity rule is
-  // aimed at client re-renders, not a server health snapshot.
-  // eslint-disable-next-line react-hooks/purity
-  const now = Date.now();
-  const health = automationHealthView(state, now);
+  const health = automationHealthView(state, now, idleWindow);
   const emptyTime = state === undefined ? "Unavailable" : "Never";
   const badgeTone =
     health.kind === "HEALTHY"
@@ -3876,9 +3890,10 @@ async function AutomationRunnerHealth() {
           <div className="rounded-lg border border-line bg-surface-2/30 p-4">
             <h4 className="font-medium text-fg">Expected cadence</h4>
             <p className="mt-2 text-sm text-muted">
-              Production should invoke one maintenance pass every minute. The
-              health state becomes degraded after four minutes without a
-              completed pass, allowing for deploy and scheduler jitter.
+              Production checks the schedule every minute. When work is due it
+              runs the database-owned maintenance pass; when caught up it can
+              sleep until the next known deadline, with a hard reconciliation
+              roughly once per hour.
             </p>
             <p className="mt-2 text-xs text-muted">
               A manual pass uses the same owner-and-token lease as cron. It can

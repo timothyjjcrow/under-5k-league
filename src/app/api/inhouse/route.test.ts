@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
+  revalidateTag: vi.fn(),
   getSessionUser: vi.fn(),
   clientIp: vi.fn(),
   rateLimit: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   claimThrottle: vi.fn(),
 }));
 
+vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
 vi.mock("@/lib/auth", () => ({ getSessionUser: mocks.getSessionUser }));
 vi.mock("@/lib/rate-limit", () => ({
   clientIp: mocks.clientIp,
@@ -142,6 +144,7 @@ describe("POST /api/inhouse request boundary", () => {
       runMaintenance: false,
       syncBoard: false,
     });
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("rejects malformed JSON instead of silently running a state poll", async () => {
@@ -228,6 +231,33 @@ describe("POST /api/inhouse request boundary", () => {
       runMaintenance: false,
       syncBoard: false,
     });
+    expect(mocks.revalidateTag).toHaveBeenCalledOnce();
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
+      expire: 0,
+    });
+  });
+
+  it("expires the gate after a dispatched mutation returns an error", async () => {
+    mocks.makePick.mockResolvedValue({ ok: false, error: "Pick expired" });
+
+    const response = await POST(request({ action: "pick", userId: "late" }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.getInhouseState).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
+      expire: 0,
+    });
+  });
+
+  it("expires the gate when the post-commit state read fails", async () => {
+    mocks.getInhouseState.mockRejectedValue(new Error("read failed"));
+
+    await expect(POST(request({ action: "leave" }))).rejects.toThrow(
+      "read failed",
+    );
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
+      expire: 0,
+    });
   });
 
   it("lets the fleet-throttled authenticated poll winner run recovery", async () => {
@@ -243,6 +273,9 @@ describe("POST /api/inhouse request boundary", () => {
       runMaintenance: true,
       syncBoard: true,
     });
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v3", {
+      expire: 0,
+    });
   });
 
   it("returns personalized state without maintenance when another instance owns the throttle", async () => {
@@ -255,6 +288,7 @@ describe("POST /api/inhouse request boundary", () => {
       runMaintenance: false,
       syncBoard: false,
     });
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 429 before dispatching a rate-limited mutation", async () => {
@@ -271,6 +305,7 @@ describe("POST /api/inhouse request boundary", () => {
     );
     expect(mocks.leaveQueue).not.toHaveBeenCalled();
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("treats a force string as false and only literal true as forced", async () => {
@@ -291,5 +326,6 @@ describe("POST /api/inhouse request boundary", () => {
     expect(response.status).toBe(400);
     expect((await response.json()).error).toMatch(/unknown action/i);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 });

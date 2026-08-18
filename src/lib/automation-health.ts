@@ -4,6 +4,11 @@ export const AUTOMATION_EXPECTED_CADENCE_MS = 60_000;
 // platform jitter.
 export const AUTOMATION_STALE_AFTER_MS = 4 * AUTOMATION_EXPECTED_CADENCE_MS;
 
+export type AutomationIdleWindow = {
+  nextWakeAtMs: number;
+  hardWakeAtMs: number;
+};
+
 export type AutomationHealthRecord = {
   lastStatus: string;
   leaseExpiresAt: Date | null;
@@ -171,6 +176,23 @@ function recentTimestamp(value: Date | null, nowMs: number): boolean {
   );
 }
 
+function validIdleWindow(
+  idleWindow: AutomationIdleWindow | null | undefined,
+  nowMs: number,
+): idleWindow is AutomationIdleWindow {
+  return (
+    idleWindow !== null &&
+    idleWindow !== undefined &&
+    Number.isFinite(idleWindow.nextWakeAtMs) &&
+    Number.isSafeInteger(idleWindow.nextWakeAtMs) &&
+    Number.isFinite(idleWindow.hardWakeAtMs) &&
+    Number.isSafeInteger(idleWindow.hardWakeAtMs) &&
+    idleWindow.nextWakeAtMs > nowMs &&
+    idleWindow.hardWakeAtMs > nowMs &&
+    idleWindow.nextWakeAtMs <= idleWindow.hardWakeAtMs
+  );
+}
+
 /**
  * Minimal public monitoring contract. It intentionally exposes no timestamps,
  * lease owner/token, summaries, error codes, or backlog details. An active run
@@ -181,6 +203,7 @@ function recentTimestamp(value: Date | null, nowMs: number): boolean {
 export function automationProbeView(
   state: AutomationProbeRecord | null | undefined,
   nowMs: number,
+  idleWindow?: AutomationIdleWindow | null,
 ): AutomationProbeView {
   if (state === undefined) return { ok: false, status: "unavailable" };
   if (state === null || state.lastStatus === "NEVER") {
@@ -211,7 +234,9 @@ export function automationProbeView(
   if (state.lastStatus !== "SUCCEEDED") {
     return { ok: false, status: "degraded" };
   }
-  if (!freshSuccess) return { ok: false, status: "stale" };
+  if (!freshSuccess && !validIdleWindow(idleWindow, nowMs)) {
+    return { ok: false, status: "stale" };
+  }
   return { ok: true, status: "healthy" };
 }
 
@@ -264,6 +289,7 @@ function baseView(
 export function automationHealthView(
   state: AutomationHealthRecord | null | undefined,
   nowMs: number,
+  idleWindow?: AutomationIdleWindow | null,
 ): AutomationHealthView {
   if (state === undefined) {
     return {
@@ -382,18 +408,26 @@ export function automationHealthView(
     completionAgeMs === null ||
     completionAgeMs > AUTOMATION_STALE_AFTER_MS ||
     completionAgeMs < -AUTOMATION_EXPECTED_CADENCE_MS;
+  const idleWindowApplies =
+    state.lastStatus === "SUCCEEDED" &&
+    state.consecutiveFailures === 0 &&
+    validIdleWindow(idleWindow, nowMs);
 
   if (
     state.lastStatus === "SUCCEEDED" &&
     consecutiveFailures === 0 &&
-    !completionOverdue
+    (!completionOverdue || idleWindowApplies)
   ) {
     return {
       ...baseView(
         "HEALTHY",
         "Healthy",
-        "The automation runner is healthy",
-        "The latest pass completed successfully within the expected scheduler window.",
+        idleWindowApplies
+          ? "The automation worker is caught up"
+          : "The automation runner is healthy",
+        idleWindowApplies
+          ? "No maintenance work is due: the worker is caught up and will run again by the next wake."
+          : "The latest pass completed successfully within the expected scheduler window.",
       ),
       ...shared,
       canRunNow: true,

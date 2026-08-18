@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { getDraftState, nominatePlayer } from "@/lib/draft-service";
@@ -55,35 +56,41 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: expectedTurn.error }, { status: 409 });
   }
 
-  const state = await getDraftState(season.id, user);
-  if (!state) return NextResponse.json({ error: "No draft" }, { status: 404 });
-  if (state.nominatedPlayer) {
-    return NextResponse.json(
-      { error: "A nomination is already in progress" },
-      { status: 400 },
-    );
-  }
-  const top = state.available[0];
-  if (!top) {
-    return NextResponse.json(
-      { error: "No players available" },
-      { status: 400 },
-    );
-  }
+  try {
+    const state = await getDraftState(season.id, user);
+    if (!state)
+      return NextResponse.json({ error: "No draft" }, { status: 404 });
+    if (state.nominatedPlayer) {
+      return NextResponse.json(
+        { error: "A nomination is already in progress" },
+        { status: 400 },
+      );
+    }
+    const top = state.available[0];
+    if (!top) {
+      return NextResponse.json(
+        { error: "No players available" },
+        { status: 400 },
+      );
+    }
 
-  const res = await nominatePlayer(
-    season.id,
-    user,
-    top.userId,
-    state.minBid,
-    expectedTurn.value,
-  );
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: res.error },
-      { status: draftActionErrorStatus(res.error) },
+    const res = await nominatePlayer(
+      season.id,
+      user,
+      top.userId,
+      state.minBid,
+      expectedTurn.value,
     );
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: res.error },
+        { status: draftActionErrorStatus(res.error) },
+      );
+    }
+    return NextResponse.json(await getDraftState(season.id, user));
+  } finally {
+    // Both state reads and the nomination service can resolve expired clocks.
+    // Expire after every dispatched attempt, including early/error responses.
+    invalidateAutomationGateBestEffort();
   }
-
-  return NextResponse.json(await getDraftState(season.id, user));
 }
