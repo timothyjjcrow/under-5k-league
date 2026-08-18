@@ -700,8 +700,9 @@ backup, and does not satisfy the deletion gate.
 Receipt verification still does **not** prove restorability. Therefore, run a
 guarded local restore rehearsal before a migration release. The command verifies
 the dump again, drops and recreates **only** the exact local database
-`ld2l_restore_test`, restores in one transaction, and checks completed migrations
-plus core league tables:
+`ld2l_restore_test`, restores in one transaction, checks completed migrations
+plus core league tables, runs migration preflight, applies current migrations
+from an isolated workspace, and requires full postflight attestation:
 
 ```bash
 export PG_RESTORE_TEST_URL="postgresql://${USER}@localhost:5432/ld2l_restore_test"

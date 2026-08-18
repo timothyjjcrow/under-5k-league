@@ -561,10 +561,11 @@ Use this when data is corrupt, missing, or of uncertain integrity.
    the recovery target and accepted data-loss window.
 2. Create a provider PITR branch or restore the verified dump into a new,
    disposable database. Never overwrite the original during investigation.
-3. Run migration baseline/preflight as appropriate, current postflight, and
-   representative counts/invariants for users, seasons, registrations, teams,
-   matches, games, draft state, inhouse/Cred ledgers, announcements, and admin
-   actions. Start the pinned application against the clone.
+3. Run migration baseline as appropriate, migration preflight, isolated
+   migration deploy, current postflight, and representative counts/invariants
+   for users, seasons, registrations, teams, matches, games, draft state,
+   inhouse/Cred ledgers, announcements, and admin actions. Start the pinned
+   application against the clone.
 4. Test both the direct migration connection and the pooled runtime connection.
    Confirm reads and a disposable transactional write/rollback through the
    runtime role. Exercise the actor/phase smoke checklist.

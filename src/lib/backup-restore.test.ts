@@ -86,10 +86,11 @@ function cleanEnv(): NodeJS.ProcessEnv {
 }
 
 describe("PostgreSQL backup restore rehearsal", () => {
-  it("verifies, restores, and fully attests only the dedicated local database", async () => {
+  it("verifies, restores, upgrades, and fully attests only the dedicated local database", async () => {
     const { backup, bin, capture } = fixture();
     const secret = "restore-password-must-not-appear-in-argv";
-    const postflightUrls: string[] = [];
+    const steps: string[] = [];
+    const scopedUrls: string[] = [];
     const result = await rehearseBackupRestore({
       backupArgument: backup,
       restoreUrl: `postgresql://tester:${secret}@localhost:5432/ld2l_restore_test`,
@@ -102,14 +103,19 @@ describe("PostgreSQL backup restore rehearsal", () => {
       baselineResolver: async () => {
         throw new Error("default restore must not resolve a baseline");
       },
-      migrationPreflight: () => {
-        throw new Error("default restore must not run migration preflight");
+      migrationPreflight: (childEnv) => {
+        steps.push("preflight");
+        scopedUrls.push(childEnv.DIRECT_URL ?? "");
+        return "preflight passed";
       },
-      migrateDeploy: async () => {
-        throw new Error("default restore must not deploy migrations");
+      migrateDeploy: async ({ env: childEnv }) => {
+        steps.push("deploy");
+        scopedUrls.push(childEnv.DIRECT_URL ?? "");
+        return "migrations applied";
       },
-      postflight: async ({ env }) => {
-        postflightUrls.push(env.DIRECT_URL ?? "");
+      postflight: async ({ env: childEnv }) => {
+        steps.push("postflight");
+        scopedUrls.push(childEnv.DIRECT_URL ?? "");
         return {
           schema: "league_data",
           migrationCount: CURRENT_MIGRATION_COUNT,
@@ -137,10 +143,14 @@ describe("PostgreSQL backup restore rehearsal", () => {
         nativeObjectCount: 14,
       },
     });
-    expect(postflightUrls).toHaveLength(1);
-    expect(new URL(postflightUrls[0]).searchParams.get("schema")).toBe(
-      "league_data",
-    );
+    expect(steps).toEqual(["preflight", "deploy", "postflight"]);
+    expect(scopedUrls).toHaveLength(3);
+    for (const scopedUrl of scopedUrls) {
+      const parsed = new URL(scopedUrl);
+      expect(parsed.hostname).toBe("localhost");
+      expect(parsed.pathname).toBe("/ld2l_restore_test");
+      expect(parsed.searchParams.get("schema")).toBe("league_data");
+    }
     expect(calls.map((call) => call.command)).toEqual([
       "psql",
       "dropdb",
@@ -181,6 +191,8 @@ describe("PostgreSQL backup restore rehearsal", () => {
         backupArgument: backup,
         restoreUrl: env.PG_RESTORE_TEST_URL,
         env,
+        migrationPreflight: () => "preflight passed",
+        migrateDeploy: async () => "migrations applied",
         postflight: async () => {
           throw new Error("Postflight Prisma schema drift detected");
         },

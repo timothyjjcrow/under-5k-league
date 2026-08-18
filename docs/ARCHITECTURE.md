@@ -1218,8 +1218,11 @@ only the exact guarded local `ld2l_restore_test` target, verifies the digest
 and private file modes (plus signed metadata when a receipt secret is
 configured), recreates the database from `template0`, restores with
 `psql -X`, `ON_ERROR_STOP`, and one transaction, then requires exactly one
-application schema and runs the same full schema/migration/native-object
-postflight against that discovered schema. CI also asserts that known legacy
-User and Season fixture rows survived the round trip. A launch still requires
-the same restore drill against a disposable database on the actual hosting
-provider, with the result recorded before the backup is trusted for recovery.
+application schema. Against that discovered schema it runs migration
+preflight, deploys the reviewed migrations from an isolated Prisma workspace,
+and only then runs the same full schema/migration/native-object postflight. The
+legacy mode preserves its additional baseline-adoption step before preflight.
+CI also asserts that known legacy User and Season fixture rows survived the
+round trip. A launch still requires the same restore drill against a disposable
+database on the actual hosting provider, with the result recorded before the
+backup is trusted for recovery.

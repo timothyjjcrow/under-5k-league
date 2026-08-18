@@ -298,29 +298,30 @@ export async function rehearseBackupRestore({
     );
   }
 
-  // The smoke query gives an immediate restore-format diagnostic. The full
-  // postflight then verifies every Prisma-supported object and every reviewed
-  // PostgreSQL-native object in the schema actually discovered from the dump.
+  // The smoke query gives an immediate restore-format diagnostic. Upgrade the
+  // restored copy through the same preflight/deploy boundary used by a release
+  // before postflight verifies every Prisma-supported object and every
+  // reviewed PostgreSQL-native object in the schema discovered from the dump.
   const scopedUrl = postgresUrlForSchema(restoreUrl, applicationSchema);
   const scopedEnv = { ...env, DATABASE_URL: scopedUrl, DIRECT_URL: scopedUrl };
-  if (legacyBaseline) {
-    // resolveBaselineDatabase is deliberately one boundary: it validates the
-    // immutable migration inventory, runs unresolved-legacy data preflight,
-    // attests an exact baseline with no migration table, and only then writes
-    // the baseline metadata. Normal preflight must pass after that write before
-    // any reviewed release migration is applied.
-    try {
+  try {
+    if (legacyBaseline) {
+      // resolveBaselineDatabase is deliberately one boundary: it validates the
+      // immutable migration inventory, runs unresolved-legacy data preflight,
+      // attests an exact baseline with no migration table, and only then writes
+      // the baseline metadata. Normal preflight must pass after that write
+      // before any reviewed release migration is applied.
       await baselineResolver({ env: scopedEnv, confirmed: true });
-      migrationPreflight(scopedEnv);
-      await migrateDeploy({ env: scopedEnv });
-    } catch (error) {
-      throw new Error(
-        safeCommandOutput(
-          error instanceof Error ? error.message : "Legacy migration failed.",
-          scopedUrl,
-        ),
-      );
     }
+    migrationPreflight(scopedEnv);
+    await migrateDeploy({ env: scopedEnv });
+  } catch (error) {
+    throw new Error(
+      safeCommandOutput(
+        error instanceof Error ? error.message : "Restore migration failed.",
+        scopedUrl,
+      ),
+    );
   }
   const attestation = await postflight({
     env: scopedEnv,
@@ -331,7 +332,7 @@ export async function rehearseBackupRestore({
     );
   } else {
     console.log(
-      `Restore rehearsal passed: ${migrationCount} migrations, ${coreTableCount} core tables, and the full schema were verified in schema ${applicationSchema} of ld2l_restore_test.`,
+      `Restore rehearsal passed: ${migrationCount} restored migrations were upgraded to ${attestation.migrationCount} current migrations; ${coreTableCount} core tables and the full schema were verified in schema ${applicationSchema} of ld2l_restore_test.`,
     );
   }
   return {
