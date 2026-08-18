@@ -103,6 +103,20 @@ const EQUIVALENT = new Set([
   // copied status, lot, turn, clock and version predicates removed. Existing
   // nomination-vs-undo and N-way nomination tests pin the state-machine result.
   "src/lib/draft-service.ts::nominatePlayer::nominatedUserId+nominationEndsAt+nominatorTeamId+status+updatedAt#1",
+  // joinScrim reads the exact OPEN offer (including opponentTeamId) and then
+  // writes that same Scrim row inside one SERIALIZABLE transaction. A rival
+  // join either wins before the snapshot and fails the fresh checks, or writes
+  // after the read and forces P2034 even without the copied predicates. The
+  // Postgres N-way join test pins one winner, one opponent, and one lineup.
+  // Keeping both fields in production still documents the OPEN -> SCHEDULED
+  // transition and adds defense in depth.
+  "src/lib/scrim-service.ts::joinScrim::opponentTeamId+status#1",
+  // cancelScrim likewise reads and authorizes the exact Scrim row before its
+  // same-row write in a SERIALIZABLE transaction. A terminal/live change is
+  // either visible to that fresh read or creates a serialization failure, so
+  // deleting the copied status predicate cannot make a stale cancellation
+  // commit. The predicate remains explicit state-machine documentation.
+  "src/lib/scrim-service.ts::cancelScrim::status#1",
   // respondReschedule and cancelReschedule now read the PENDING request and
   // conditionally write that same row inside one SERIALIZABLE transaction.
   // Their same-row write conflicts make the copied `status: PENDING` WHERE
@@ -256,6 +270,7 @@ const FILES = [
   "src/lib/inhouse-service.ts",
   "src/lib/match-import.ts",
   "src/lib/reschedule-service.ts",
+  "src/lib/scrim-service.ts",
   "src/lib/standin-service.ts",
   "src/lib/playoff-service.ts",
   "src/lib/result-sync-service.ts",

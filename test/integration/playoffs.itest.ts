@@ -9,7 +9,7 @@ import {
 import { pickBracketSize } from "@/lib/schedule";
 import { playoffSetupRevision } from "@/lib/playoff-command";
 import { projectPlayoffField } from "@/lib/playoff-field";
-import { DOTA_MATCH_KIND } from "@/lib/constants";
+import { DOTA_MATCH_KIND, SCRIM_STATUS } from "@/lib/constants";
 import {
   generateRegularSchedule,
   makeSeason,
@@ -135,9 +135,47 @@ describe("playoffs bracket + champion (integration)", () => {
     const semi1 = round0.find((m) => m.bracketSlot === "R0M1")!;
     expect([semi1.homeTeamId, semi1.awayTeamId]).toEqual([ids[1], ids[2]]);
 
+    const captain = await prisma.team.findUniqueOrThrow({
+      where: { id: ids[0] },
+      select: { captainId: true },
+    });
+    const scrims = await Promise.all(
+      [
+        SCRIM_STATUS.OPEN,
+        SCRIM_STATUS.SCHEDULED,
+        SCRIM_STATUS.LIVE,
+        SCRIM_STATUS.COMPLETED,
+      ].map((status, index) =>
+        prisma.scrim.create({
+          data: {
+            seasonId: season.id,
+            hostTeamId: ids[0],
+            opponentTeamId: status === SCRIM_STATUS.OPEN ? null : ids[1],
+            createdById: captain.captainId,
+            scheduledAt: new Date(Date.now() + (index + 1) * 3600_000),
+            status,
+          },
+        }),
+      ),
+    );
+
     const final = await driveToChampion(season.id);
     expect(final.status).toBe("COMPLETE");
     expect(final.championTeamId).toBe(ids[0]);
+    const scrimStatuses = new Map(
+      (
+        await prisma.scrim.findMany({
+          where: { id: { in: scrims.map((scrim) => scrim.id) } },
+          select: { id: true, status: true },
+        })
+      ).map((scrim) => [scrim.id, scrim.status]),
+    );
+    expect(scrims.map((scrim) => scrimStatuses.get(scrim.id))).toEqual([
+      SCRIM_STATUS.CANCELLED,
+      SCRIM_STATUS.CANCELLED,
+      SCRIM_STATUS.LIVE,
+      SCRIM_STATUS.COMPLETED,
+    ]);
   });
 
   it("crowns a champion for an 8-team bracket (QF → SF → F)", async () => {

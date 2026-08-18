@@ -36,7 +36,7 @@ async function setupTeams(count = 3) {
 describe("scrim scheduling service (integration)", () => {
   it("derives captain teams, snapshots both rosters, and cancels overlapping offers on join", async () => {
     const { teams } = await setupTeams();
-    const [host, opponent] = teams;
+    const [host, opponent, third] = teams;
     const night = NIGHT();
     const hostAlternate = await createScrim(
       host.user.id,
@@ -48,6 +48,29 @@ describe("scrim scheduling service (integration)", () => {
       new Date(night.getTime() + 30 * 60 * 1000),
       3,
     );
+    // Each survivor pins one piece of the broad cleanup claim below: offers
+    // outside the collision window, offers owned by neither booked team, and
+    // terminal history must not be swept up when this offer is claimed.
+    const distantHostOffer = await createScrim(
+      host.user.id,
+      new Date(night.getTime() + 6 * 60 * 60 * 1000),
+      1,
+    );
+    const nearbyThirdOffer = await createScrim(
+      third.user.id,
+      new Date(night.getTime() + 60 * 60 * 1000),
+      1,
+    );
+    const completedHistory = await prisma.scrim.create({
+      data: {
+        seasonId: host.team.seasonId,
+        hostTeamId: host.team.id,
+        opponentTeamId: third.team.id,
+        createdById: host.user.id,
+        scheduledAt: new Date(night.getTime() + 60 * 60 * 1000),
+        status: SCRIM_STATUS.COMPLETED,
+      },
+    });
     const offer = await createScrim(host.user.id, night, 3);
 
     expect(offer).toMatchObject({
@@ -80,6 +103,21 @@ describe("scrim scheduling service (integration)", () => {
       SCRIM_STATUS.CANCELLED,
       SCRIM_STATUS.CANCELLED,
     ]);
+    const survivors = await prisma.scrim.findMany({
+      where: {
+        id: {
+          in: [distantHostOffer.id, nearbyThirdOffer.id, completedHistory.id],
+        },
+      },
+      select: { id: true, status: true },
+    });
+    expect(new Map(survivors.map((scrim) => [scrim.id, scrim.status]))).toEqual(
+      new Map([
+        [distantHostOffer.id, SCRIM_STATUS.OPEN],
+        [nearbyThirdOffer.id, SCRIM_STATUS.OPEN],
+        [completedHistory.id, SCRIM_STATUS.COMPLETED],
+      ]),
+    );
     expect(participants).toHaveLength(2);
     expect(new Set(participants.map((participant) => participant.teamId))).toEqual(
       new Set([host.team.id, opponent.team.id]),

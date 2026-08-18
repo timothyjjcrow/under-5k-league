@@ -43,8 +43,6 @@ function navItems(
     { href: "/players", label: "Players" },
     // Inhouse is a standalone pick-up mode — always available, season or not.
     { href: "/inhouse", label: "Inhouse" },
-    // Scrim archives remain useful between seasons, so this link is evergreen.
-    { href: "/scrims", label: "Scrims" },
   ];
   const teamsExist =
     phase === "DRAFT" ||
@@ -199,6 +197,9 @@ export function SiteHeader({
 
   const exploreItems: NavItem[] = [
     ...phaseExploreItems(phase),
+    // Scrim archives stay useful between seasons, but this side mode belongs
+    // with the other secondary league tools so the primary bar never scrolls.
+    { href: "/scrims", label: "Scrims" },
     { href: "/news", label: "League news" },
     { href: "/features", label: "Feature tour" },
     { href: "/records", label: "Record book" },
