@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { AUTOMATION_GATE_HARD_HORIZON_MS } from "@/lib/automation-gate-constants";
 import { announceSeriesResultOnce } from "@/lib/match-import";
 import {
   markWeekHonorsStale,
@@ -676,6 +677,32 @@ describe("weekly-honors announcement retry", () => {
     ).toMatchObject({ value: expect.stringMatching(/^sent:honors:v2:/) });
   });
 
+  it("keeps old missing honors recoverable on the hourly safety pass", async () => {
+    const { season, match } = await setupCompletedWeek();
+    await prisma.match.update({
+      where: { id: match.id },
+      data: {
+        completedAt: new Date(Date.now() - AUTOMATION_GATE_HARD_HORIZON_MS - 1),
+      },
+    });
+    await prisma.setting.create({
+      data: {
+        key: `resultAnnounced:${match.id}`,
+        value: "sent:v2:event:message",
+      },
+    });
+    await runResultSync();
+
+    expect(
+      mockSend.mock.calls.some((call) => String(call[0]).includes("honors")),
+    ).toBe(true);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `honorsAnnounced:${season.id}:1` },
+      }),
+    ).toMatchObject({ value: expect.stringMatching(/^sent:honors:v2:/) });
+  });
+
   it("does not discover honors from an untouched historical completion", async () => {
     const { season, match } = await setupCompletedWeek();
     await prisma.match.update({
@@ -890,7 +917,7 @@ describe("weekly-honors announcement retry", () => {
   );
 
   it("keeps a failed correction retryable without posting it twice", async () => {
-    const { season } = await setupCompletedWeek();
+    const { season, match } = await setupCompletedWeek();
     await maybeAnnounceWeekHonors(season.id, 1);
     await prisma.$transaction((tx) => markWeekHonorsStale(tx, season.id, 1));
     mockSend.mockResolvedValueOnce(false);
@@ -901,6 +928,15 @@ describe("weekly-honors announcement retry", () => {
       }),
     ).toMatchObject({
       value: expect.stringMatching(/^failed:honors:corrected:/),
+    });
+
+    // The cutoff applies only to a marker that never existed. A durable
+    // failed delivery must remain recoverable even when the match is old.
+    await prisma.match.update({
+      where: { id: match.id },
+      data: {
+        completedAt: new Date(Date.now() - AUTOMATION_GATE_HARD_HORIZON_MS - 1),
+      },
     });
 
     await runResultSync();

@@ -901,11 +901,20 @@ export function computeAutomationGateSnapshot(
     }
     for (const [week, matches] of regularByWeek) {
       const markerValue = inputs.settings[honorsAnnouncedKey(season.id, week)];
+      // An absent marker is post-commit crash recovery. Retry it briskly for
+      // one hard horizon, then leave old recovery to the hourly safety pass:
+      // unchanged incomplete box scores cannot become ready by polling. An
+      // explicit failed/stale/claim marker remains retryable without this cap.
       if (
         matches.length === 0 ||
         matches.some((match) => match.status !== MATCH_STATUS.COMPLETED) ||
         (markerValue === undefined &&
-          !matches.some((match) => match.completedAt !== null))
+          !matches.some(
+            (match) =>
+              match.completedAt !== null &&
+              dateMs(match.completedAt, "match.completedAt") >=
+                nowMs - AUTOMATION_GATE_HARD_HORIZON_MS,
+          ))
       ) {
         continue;
       }

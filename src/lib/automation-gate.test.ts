@@ -61,7 +61,12 @@ import {
 } from "./automation-gate";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
 import { AUTO_SYNC, INHOUSE, WEEK_REMINDER } from "./constants";
-import { SETTING_KEYS, weekReminderKey } from "./settings";
+import {
+  honorsAnnouncedKey,
+  resultAnnouncedKey,
+  SETTING_KEYS,
+  weekReminderKey,
+} from "./settings";
 
 const NOW = Date.parse("2026-08-16T20:00:00.000Z");
 
@@ -133,7 +138,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 3,
+      version: 4,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -227,7 +232,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 3,
+      version: 4,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -594,7 +599,7 @@ describe("computeAutomationGateSnapshot", () => {
     expect(kickoff - WEEK_REMINDER.AHEAD_HOURS * 3_600_000).toBeLessThan(NOW);
   });
 
-  it("detects a decided playoff round and result/honors recovery", () => {
+  it("detects a decided playoff round and missing series-result recovery", () => {
     const playoff = computeAutomationGateSnapshot(
       inputs({
         seasons: [
@@ -636,12 +641,150 @@ describe("computeAutomationGateSnapshot", () => {
           }),
         ],
         leagueWebhookConfigured: true,
+        settings: {
+          [honorsAnnouncedKey("season-1", 1)]: "sent:honors:v2:event:message",
+        },
       }),
       NOW,
     );
     expect(recovery).toMatchObject({
       nextWakeAtMs: NOW,
       reason: "ANNOUNCEMENT_RETRY",
+    });
+  });
+
+  it("stops missing-honors recovery after one hour without parking real retries", () => {
+    const completed = match({
+      status: "COMPLETED",
+      scheduledAt: null,
+      winnerTeamId: "home",
+    });
+    const sentResult = {
+      [resultAnnouncedKey(completed.id)]: "sent:v2:event:message",
+    };
+    const snapshot = (completedAt: number, honorsMarker?: string) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          seasons: [
+            season({
+              status: "REGULAR_SEASON",
+              matches: [{ ...completed, completedAt: new Date(completedAt) }],
+            }),
+          ],
+          leagueWebhookConfigured: true,
+          settings: {
+            ...sentResult,
+            ...(honorsMarker === undefined
+              ? {}
+              : { [honorsAnnouncedKey("season-1", 1)]: honorsMarker }),
+          },
+        }),
+        NOW,
+      );
+    const windowMs = AUTOMATION_GATE_HARD_HORIZON_MS;
+
+    expect(windowMs).toBe(60 * 60_000);
+    expect(snapshot(NOW - windowMs)).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "ANNOUNCEMENT_RETRY",
+    });
+    const expired = snapshot(NOW - windowMs - 1);
+    expect(expired).toMatchObject({
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      hardWakeAtMs: NOW + windowMs,
+      reason: null,
+    });
+    expect(
+      automationGateDecisionFromSnapshot(expired, NOW + windowMs - 1),
+    ).toEqual({ run: false, snapshot: expired });
+    expect(
+      automationGateDecisionFromSnapshot(expired, NOW + windowMs),
+    ).toMatchObject({ run: true, snapshot: expired });
+    expect(
+      snapshot(
+        NOW - windowMs - 1,
+        `failed:honors:initial:v2:11111111-1111-4111-8111-111111111111:${NOW - 1}`,
+      ),
+    ).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "ANNOUNCEMENT_RETRY",
+    });
+    expect(
+      snapshot(NOW - windowMs - 1, "stale:changed-box-score"),
+    ).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "ANNOUNCEMENT_RETRY",
+    });
+    expect(
+      snapshot(
+        NOW - windowMs - 1,
+        "claim:honors:v2:1:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222:initial",
+      ),
+    ).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "ANNOUNCEMENT_RETRY",
+    });
+  });
+
+  it("uses the newest completion in a week for missing-honors recovery", () => {
+    const old = match({
+      id: "match-old",
+      status: "COMPLETED",
+      scheduledAt: null,
+      completedAt: new Date(NOW - 2 * AUTOMATION_GATE_HARD_HORIZON_MS),
+      winnerTeamId: "home",
+    });
+    const recent = match({
+      id: "match-recent",
+      status: "COMPLETED",
+      scheduledAt: null,
+      completedAt: new Date(NOW - AUTOMATION_GATE_HARD_HORIZON_MS + 1),
+      winnerTeamId: "away",
+    });
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        seasons: [
+          season({
+            status: "REGULAR_SEASON",
+            matches: [old, recent],
+          }),
+        ],
+        leagueWebhookConfigured: true,
+        settings: {
+          [resultAnnouncedKey(old.id)]: "sent:v2:old:message",
+          [resultAnnouncedKey(recent.id)]: "sent:v2:recent:message",
+        },
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "ANNOUNCEMENT_RETRY",
+    });
+  });
+
+  it("ignores missing honors for untouched historical completions", () => {
+    const completed = match({
+      status: "COMPLETED",
+      scheduledAt: null,
+      completedAt: null,
+      winnerTeamId: "home",
+    });
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        seasons: [season({ status: "REGULAR_SEASON", matches: [completed] })],
+        leagueWebhookConfigured: true,
+        settings: {
+          [resultAnnouncedKey(completed.id)]: "sent:v2:event:message",
+        },
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      reason: null,
     });
   });
 
@@ -887,7 +1030,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 3,
+      version: 4,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,
