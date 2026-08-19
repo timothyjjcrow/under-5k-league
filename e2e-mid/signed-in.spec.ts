@@ -12,6 +12,25 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/api/auth/dev?name=Mid%20Season%20Viewer");
 });
 
+test("signed-in newcomers can register as a standin from the dashboard", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/");
+
+  const cta = page.getByRole("link", { name: "Register as a standin →" });
+  await expect(cta).toBeVisible();
+  await expect(cta).toHaveAttribute("href", "/me");
+  await cta.click();
+
+  await expect(
+    page.getByRole("heading", { name: "Your profile" }),
+  ).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Standin/ })).toBeChecked();
+
+  assertNoErrors();
+});
+
 test("fantasy renders standings for a signed-in viewer (league locked)", async ({
   page,
 }) => {

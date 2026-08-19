@@ -213,6 +213,16 @@ export default async function Home() {
   // Primary call-to-action, surfaced right in the hero during signups.
   const isActiveReg = snapshot.myReg?.status === "ACTIVE";
   const isRemovedReg = snapshot.myReg?.status === REGISTRATION_STATUS.REMOVED;
+  const standinRegistrationOpen =
+    (season.status === "DRAFT" ||
+      season.status === "REGULAR_SEASON" ||
+      season.status === "PLAYOFFS") &&
+    !isActiveReg &&
+    !isRemovedReg;
+  const standinRegistrationHref = user ? "/me" : "/login?next=/me";
+  const standinRegistrationLabel = user
+    ? "Register as a standin →"
+    : "Sign in to stand in →";
   let heroAction: ReactNode = null;
   if (season.status === "SIGNUPS") {
     // The feature tour rides along during signups — new visitors can't see
@@ -249,8 +259,27 @@ export default async function Home() {
     );
   } else if (season.status === "DRAFT") {
     heroAction = (
-      <Link href="/draft" className={buttonClasses("accent", "lg")}>
-        {draftPresentation.action}
+      <>
+        <Link href="/draft" className={buttonClasses("accent", "lg")}>
+          {draftPresentation.action}
+        </Link>
+        {standinRegistrationOpen ? (
+          <Link
+            href={standinRegistrationHref}
+            className={buttonClasses("secondary", "lg")}
+          >
+            {standinRegistrationLabel}
+          </Link>
+        ) : null}
+      </>
+    );
+  } else if (standinRegistrationOpen) {
+    heroAction = (
+      <Link
+        href={standinRegistrationHref}
+        className={buttonClasses("primary", "lg")}
+      >
+        {standinRegistrationLabel}
       </Link>
     );
   }
@@ -414,10 +443,9 @@ export default async function Home() {
     );
   }
 
-  // The hero's control slot. Mid-season heroAction is null — there is no
-  // league-wide CTA once the season is running — and that is exactly when a
-  // signed-in player has the most personal thing to do: check in for their next
-  // match. Everything else falls through to the phase's own CTA buttons.
+  // The hero's control slot. Active participants get their next-match check-in;
+  // newcomers get the late standin-registration CTA assembled above. Everything
+  // else falls through to the phase's own CTA buttons.
   // During SIGNUPS the same reasoning applies to a player who has ALREADY
   // signed up: heroAction falls through to the feature tour, so the biggest
   // slot on the page greeted 30 registered players with "See what you're
@@ -810,10 +838,9 @@ function HeroStat({
  * page's only <h1>. What it drops is 60px of vertical padding and the
  * centre-alignment, which is what made ~250px of prime space carry no action.
  *
- * `aside` is optional — a signed-out visitor mid-season has nothing to act on,
- * and an empty 24rem column would be worse than none, so the identity column
- * simply takes the full width. Anything passed as `aside` MUST render
- * something; that is why MyNextMatch has a no-match branch.
+ * `aside` is optional — phases without a viewer action let the identity column
+ * take the full width. Anything passed as `aside` MUST render something; that
+ * is why MyNextMatch has a no-match branch.
  */
 function Hero({
   phase,
