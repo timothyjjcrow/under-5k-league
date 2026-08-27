@@ -164,7 +164,21 @@ export function SiteFooter({
                 ) : null}
               </span>
             ) : null}
-            <span>© {year} GGD2L</span>
+            <span className="flex items-center gap-2">
+              <span>© {year} GGD2L</span>
+              <span aria-hidden="true" className="text-line">
+                •
+              </span>
+              <a
+                href="https://buymeacoffee.com/vgedota"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Support GGD2L on Buy Me a Coffee (opens in a new tab)"
+                className="rounded transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              >
+                Support the league <span aria-hidden="true">↗</span>
+              </a>
+            </span>
           </div>
         </div>
       </div>
