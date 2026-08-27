@@ -165,7 +165,7 @@ export function SiteFooter({
           </div>
         </div>
 
-        <div className="mt-10 grid gap-4 border-t border-line/60 pt-5 sm:grid-cols-[auto_1fr] sm:items-center">
+        <div className="mt-10 grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
           <div className="flex justify-center sm:justify-start">
             <DiscordButton size="sm" />
           </div>
