@@ -128,6 +128,15 @@ test("home renders the season timeline, pool composition, and footer", async ({
   await expect(
     page.getByRole("contentinfo").getByText("Join our Discord"),
   ).toBeVisible();
+  const support = page.getByRole("contentinfo").getByRole("link", {
+    name: "Support the league on Buy Me a Coffee (opens in a new tab)",
+  });
+  await expect(support).toHaveAttribute(
+    "href",
+    "https://buymeacoffee.com/vgedota",
+  );
+  await expect(support).toHaveAttribute("target", "_blank");
+  await expect(support).toHaveAttribute("rel", "noopener noreferrer");
 });
 
 test("internal pages keep the active league phase visible in the header", async ({
