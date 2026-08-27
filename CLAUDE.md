@@ -2987,20 +2987,51 @@ uses `prisma db push` and has no data-loss override.
   unique individual SteamID64 in `ADMIN_STEAM_IDS`;
   non-HTTPS, path-bearing, trailing-slash, or divergent `APP_URL` and
   `NEXT_PUBLIC_SITE_URL`; and any `ALLOW_DEV_LOGIN` value except unset/`false`.
-  It reports field names, never secret values. Vercel previews deliberately
-  skip the production-only validation, but they must use a separate database
-  if they need live data. There is no production first-user admin bootstrap.
-- **Deployment order is migration-based and fail-closed.** `vercel.json` runs
-  `npm run build:vercel`, which validates production configuration, switches
-  Prisma to PostgreSQL, validates and preflights committed migrations, applies
-  them with `prisma migrate deploy`, performs postflight attestation, generates
-  the client, and then builds Next.js. Migrations must remain additive and
-  compatible with the previously deployed binary because they run before the
-  candidate build is promoted.
-- **There is no production data-loss override.** `PRISMA_ACCEPT_DATA_LOSS`,
-  `BUILD_DB_DRY_RUN`, and disabled migration advisory locks are rejected by the
-  production environment gate. Never substitute `db push` for the reviewed
-  migration pipeline.
+  It reports field names, never secret values. In Preview/development, the
+  release pipeline performs no database gate or migration mutation. A build or
+  running preview that needs data must use a separately scoped non-production
+  database. There is no production first-user admin bootstrap.
+- **The ordinary deployment migration gate is read-only and fails closed on
+  database drift.**
+  `vercel.json` runs `npm run build:vercel`, which validates production
+  configuration, switches Prisma to PostgreSQL, validates the checksum-pinned
+  migration set, generates the client, and runs
+  `scripts/production-schema-check.mjs` for exact read-only migration,
+  Prisma-schema, and native-object attestation before building Next.js. The
+  migration gate cannot apply a pending migration. The subsequent build still
+  receives runtime configuration, so application build code must remain
+  side-effect-free. From a clean ephemeral checkout at the reviewed full
+  `HEAD` SHA, only
+  `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>` may
+  run the guarded preflight → `migrate deploy` → postflight chain, and it
+  requires `VERCEL_ENV=production` and refuses root or `prisma/` `.env` files
+  that Prisma could auto-load after validation. Migrations remain additive and
+  compatible
+  with the previously deployed binary. The wrapper enforces those technical
+  gates; the operator must separately verify exact-SHA CI, approval,
+  backup/restore, and applicable scheduler evidence.
+- **Release work is classified from canonical production, not the PR base.** A
+  trusted classifier blob is extracted from that canonical production commit;
+  the candidate never classifies itself, and a missing trusted blob selects
+  every strict/impact gate. A narrow UI-only lane may skip only PostgreSQL and
+  mutation CI; schema-neutral
+  application releases use standard CI. Schema, migration, release-plumbing,
+  scheduler, unknown-path, and unresolved-delta changes are strict. Some
+  allowlisted docs/tests are neutral companions; sensitive-path tests/docs stay
+  strict, and neutral-only changes do not create a fast lane. UI/app releases
+  need no release-only backup or scheduler pause. Strict always means full CI
+  and review, while `needs_db_release` and `needs_scheduler_pause` select
+  recovery, propagation, and lease-drain procedures. GitHub's event-base use
+  of the classifier is only a conservative job-selection optimization and
+  never substitutes for the canonical production-to-candidate release
+  decision. A Preview/non-production database rehearsal proves runtime behavior
+  but is not promoted; the exact SHA is then built as a staged production
+  candidate whose read-only database gate attests production before that same
+  artifact is promoted.
+- **There is no production data-loss override.** `BUILD_DB_DRY_RUN` is retired;
+  `PRISMA_ACCEPT_DATA_LOSS` and disabled migration advisory locks remain
+  forbidden. Never substitute `db push` or a direct Prisma CLI invocation for
+  the reviewed migration-release wrapper.
 - **`npm run db:backup` publishes private, verifiable artifacts.**
   `scripts/backup-db.mjs` uses the direct URL when available and supplies it to
   `pg_dump` through `PGDATABASE`, never argv. It writes beside the final target

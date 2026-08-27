@@ -1,9 +1,11 @@
-// Fail before a production build can touch the database when deployment
+// Fail before a production build can inspect the database when deployment
 // credentials are missing, unsafe, or internally inconsistent. Vercel sets
-// NODE_ENV=production for preview builds too, so an explicit non-production
-// VERCEL_ENV always wins and skips this production-only gate.
+// NODE_ENV=production for preview builds too, so a valid explicit
+// non-production VERCEL_ENV skips this production-only gate. Invalid values
+// fail closed.
 import { postgresDatabaseIdentity } from "../src/lib/postgres-identity.mjs";
 import { normalizeDiscordWebhookUrl } from "../src/lib/discord-webhook.mjs";
+import { productionEnvironmentRequired } from "./vercel-environment.mjs";
 
 // Individual Steam accounts are universe/type/instance base 76561197960265728
 // plus an unsigned 32-bit account id. A 17-digit shape check alone accepts
@@ -18,11 +20,6 @@ const KNOWN_AUTH_SECRET_PLACEHOLDERS = new Set([
   "insecure-dev-secret-please-change-0123456789abcd",
   "replace-with-a-random-secret-of-at-least-32-characters",
 ]);
-
-function productionBuild(env) {
-  if (env.VERCEL_ENV) return env.VERCEL_ENV === "production";
-  return env.NODE_ENV === "production";
-}
 
 function postgresTarget(value) {
   const serializedIdentity = postgresDatabaseIdentity(value);
@@ -100,7 +97,7 @@ export function validateProductionEnv(env) {
   const errors = [];
 
   if (env.BUILD_DB_DRY_RUN !== undefined) {
-    errors.push("BUILD_DB_DRY_RUN is test-only and must be unset in production");
+    errors.push("BUILD_DB_DRY_RUN is retired and must be unset in production");
   }
   if (env.PRISMA_ACCEPT_DATA_LOSS !== undefined) {
     errors.push(
@@ -281,17 +278,22 @@ export function validateProductionEnv(env) {
   return errors;
 }
 
-if (!productionBuild(process.env)) {
-  console.log(
-    `validate-prod-env: VERCEL_ENV=${process.env.VERCEL_ENV ?? "(unset)"} — production validation skipped`,
-  );
-} else {
-  const errors = validateProductionEnv(process.env);
-  if (errors.length > 0) {
-    console.error("Production environment validation failed:");
-    for (const error of errors) console.error(`  - ${error}`);
-    process.exitCode = 1;
+try {
+  if (!productionEnvironmentRequired(process.env)) {
+    console.log(
+      `validate-prod-env: VERCEL_ENV=${process.env.VERCEL_ENV ?? "(unset)"} — production validation skipped`,
+    );
   } else {
-    console.log("Production environment validation passed.");
+    const errors = validateProductionEnv(process.env);
+    if (errors.length > 0) {
+      console.error("Production environment validation failed:");
+      for (const error of errors) console.error(`  - ${error}`);
+      process.exitCode = 1;
+    } else {
+      console.log("Production environment validation passed.");
+    }
   }
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
 }

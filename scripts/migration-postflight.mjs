@@ -18,6 +18,7 @@ import {
   MIGRATION_SHA256,
   validateMigrations,
 } from "./migration-safety.mjs";
+import { validateMigrationHistory } from "./migration-history.mjs";
 
 const ROOT = new URL("../", import.meta.url);
 const ROOT_PATH = fileURLToPath(ROOT);
@@ -243,31 +244,7 @@ function assertNamedObjects(kind, actualRows, expectedByName, shapeFor) {
 }
 
 export function validatePostflightSnapshot(snapshot) {
-  const unresolved = snapshot.migrations.filter(
-    (row) => !row.finished && !row.rolledBack,
-  );
-  if (unresolved.length > 0) {
-    throw new Error(
-      `Postflight found unfinished migration history: ${unresolved
-        .map((row) => row.name)
-        .join(", ")}`,
-    );
-  }
-  const completed = snapshot.migrations.filter(
-    (row) => row.finished && !row.rolledBack,
-  );
-  const completedNames = completed.map((row) => row.name).sort();
-  const expectedMigrationNames = Object.keys(MIGRATION_SHA256).sort();
-  if (exactObject(completedNames) !== exactObject(expectedMigrationNames)) {
-    throw new Error(
-      `Postflight completed migration inventory drift (expected ${expectedMigrationNames.join(", ")}; received ${completedNames.join(", ") || "none"})`,
-    );
-  }
-  for (const row of completed) {
-    if (row.checksum !== MIGRATION_SHA256[row.name]) {
-      throw new Error(`Postflight migration checksum drift: ${row.name}`);
-    }
-  }
+  const { migrationCount } = validateMigrationHistory(snapshot.migrations);
 
   assertNamedObjects(
     "function",
@@ -336,7 +313,7 @@ export function validatePostflightSnapshot(snapshot) {
 
   return {
     schema: snapshot.schema,
-    migrationCount: completed.length,
+    migrationCount,
     nativeObjectCount:
       snapshot.functions.length +
       snapshot.triggers.length +
@@ -389,7 +366,17 @@ function safeMessage(value, url) {
   message = message.split(url).join("[database URL]");
   try {
     const parsed = new URL(url);
-    if (parsed.password) message = message.split(parsed.password).join("[password]");
+    if (parsed.password) {
+      const passwords = new Set([parsed.password]);
+      try {
+        passwords.add(decodeURIComponent(parsed.password));
+      } catch {
+        // The encoded form is still redacted below.
+      }
+      for (const password of passwords) {
+        message = message.split(password).join("[password]");
+      }
+    }
   } catch {
     // selectedUrl already validates the URL; this is only defense in depth.
   }

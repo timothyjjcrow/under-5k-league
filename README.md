@@ -249,30 +249,31 @@ heroes, last played — which the player pool and profiles render).
 
 ## Scripts
 
-| Script                        | Description                                                   |
-| ----------------------------- | ------------------------------------------------------------- |
-| `npm run dev`                 | Start the dev server                                          |
-| `npm run build` / `start`     | Production build / serve                                      |
-| `npm run build:vercel`        | Canonical validated PostgreSQL/Vercel deployment build        |
-| `npm run db:push`             | Apply the Prisma schema to SQLite                             |
-| `npm run db:seed`             | **Destructive** — wipe the DB and seed demo data              |
-| `npm run db:reset`            | **Destructive** — force-reset the DB and reseed               |
-| `npm run db:backup`           | Create a private, checksummed Postgres/SQLite backup          |
-| `npm run db:backup:verify`    | Verify a backup against its SHA-256 sidecar                   |
-| `npm run db:backup:rehearse`  | **Destructive scratch only** — restore a verified dump locally |
-| `npm run db:migrate:validate` | Validate committed migration safety and the Prisma schema     |
-| `npm run db:migrate:preflight` | Read-only checks for legacy data that would block migration  |
-| `npm run db:migrate:postflight` | Read-only attestation of schema, migration checksums, and native objects |
-| `npm run db:migrate:rehearse` | **Destructive scratch only** — rehearse fresh/legacy upgrades |
-| `npm run db:migrate:baseline-check` | Read-only compatibility check for a pre-migration database |
-| `npm run db:migrate:baseline-resolve` | Record the verified one-time baseline with explicit approval |
-| `npm run set-admins`          | Reconcile existing accounts to `ADMIN_STEAM_IDS`              |
-| `npm test`                    | Run unit tests (Vitest)                                       |
-| `npm run test:integration`    | Run integration tests (isolated `prisma/test.db`)             |
-| `npm run test:pg`             | Run the integration suite against guarded scratch Postgres    |
-| `npm run test:e2e`            | Run end-to-end tests (Playwright)                             |
-| `npm run test:e2e:mid`        | Run the mid-season browser suite                              |
-| `npm run test:e2e:postseason` | Run the playoffs/completed-season browser suite              |
+| Script                                                     | Description                                                                    |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `npm run dev`                                              | Start the dev server                                                           |
+| `npm run build` / `start`                                  | Production build / serve                                                       |
+| `npm run build:vercel`                                     | Canonical Vercel build; its production database attestation is read-only       |
+| `npm run db:push`                                          | Apply the Prisma schema to SQLite                                              |
+| `npm run db:seed`                                          | **Destructive** — wipe the DB and seed demo data                               |
+| `npm run db:reset`                                         | **Destructive** — force-reset the DB and reseed                                |
+| `npm run db:backup`                                        | Create a private, checksummed Postgres/SQLite backup                           |
+| `npm run db:backup:verify`                                 | Verify a backup against its SHA-256 sidecar                                    |
+| `npm run db:backup:rehearse`                               | **Destructive scratch only** — restore a verified dump locally                 |
+| `npm run db:migrate:validate`                              | Validate committed migration safety and the Prisma schema                      |
+| `npm run db:migrate:preflight`                             | Read-only checks for legacy data that would block migration                    |
+| `npm run db:migrate:postflight`                            | Read-only attestation of schema, migration checksums, and native objects       |
+| `npm run db:migrate:release -- --apply <40-char HEAD SHA>` | Apply a reviewed production migration release from a clean ephemeral checkout  |
+| `npm run db:migrate:rehearse`                              | **Destructive scratch only** — rehearse fresh/legacy upgrades                  |
+| `npm run db:migrate:baseline-check`                        | Read-only compatibility check for a pre-migration database                     |
+| `npm run db:migrate:baseline-resolve`                      | Record the verified one-time baseline with explicit approval                   |
+| `npm run set-admins`                                       | Reconcile existing accounts to `ADMIN_STEAM_IDS`                               |
+| `npm test`                                                 | Run unit tests (Vitest)                                                        |
+| `npm run test:integration`                                 | Run integration tests (isolated `prisma/test.db`)                              |
+| `npm run test:pg`                                          | Run the integration suite against guarded scratch Postgres                     |
+| `npm run test:e2e`                                         | Run end-to-end tests (Playwright)                                              |
+| `npm run test:e2e:mid`                                     | Run the mid-season browser suite                                               |
+| `npm run test:e2e:postseason`                              | Run the playoffs/completed-season browser suite                                |
 
 > **The local seed/reset scripts refuse to run against a non-local database.**
 > `db:seed` deletes every row and `db:reset` drops the schema first, so both
@@ -373,12 +374,14 @@ declares the same runtime line used by every CI job.
 3. **Import the repo at [vercel.com](https://vercel.com)** (New Project → pick
    the repo). Vercel Hobby is supported because `vercel.json` contains the build
    command but no `crons` entry. It auto-detects Next.js. Protect production
-   with a manual promotion/deployment check before connecting the live database:
-   `build:vercel` applies additive migrations before compilation, so an
-   automatic production build is already a database change even when the
-   candidate is not promoted. The Cloudflare Worker is deployed separately and
-   is not activated until the promoted production route passes its health
-   checks.
+   promotion with a manual approval or deployment check. The ordinary
+   `build:vercel` migration gate cannot apply migrations: in production it
+   performs exact, read-only migration, schema, and native-object attestation
+   before compiling.
+   In Preview and development, the release pipeline performs no database gate
+   or migration mutation. A build or running preview that needs data must use a
+   separately scoped non-production database. The Cloudflare Worker is deployed
+   separately and remains the sole production clock.
 4. **Set Environment Variables** (Vercel → Project → Settings → Environment
    Variables):
 
@@ -423,67 +426,146 @@ declares the same runtime line used by every CI job.
    > rejects anything else, and the Admin save controls apply the same parser.
    > Rotate a URL immediately if it ever appears in logs, screenshots, or chat.
 
-   > Scope `DATABASE_URL`/`DIRECT_URL` to the **Production** environment. Point
-   > Preview at a separate branch database if previews need live data. The
-   > migration command is a no-op outside production, but an application
-   > preview that shares production credentials could still read or write live
-   > league data after it starts.
+   > Scope production `DATABASE_URL`/`DIRECT_URL` values to the **Production**
+   > environment. In Preview and development, the release pipeline performs no
+   > database gate or migration mutation. Point any build or running preview
+   > that needs data at a separate branch database; a preview that shares
+   > production credentials could still read or write live league data.
 
-5. **Deploy only the reviewed commit through a manual approval.** Vercel and
-   PostgreSQL CI both run the canonical
-   `npm run build:vercel` pipeline. Production uses this fail-fast sequence:
+5. **Classify and deploy only the reviewed commit through a manual approval.**
+   For release authorization, run the classifier blob from the commit on the
+   current canonical production deployment against the candidate commit. Never
+   trust the candidate's copy to classify itself. The production SHA must be
+   fetchable and an ancestor of the candidate. With both provider-verified full
+   SHAs in private shell variables, run:
+
+   ```bash
+   release_classifier_dir="$(mktemp -d)"
+   release_classifier_path="$release_classifier_dir/classify-release.mjs"
+   trap 'rm -f -- "$release_classifier_path"; rmdir -- "$release_classifier_dir"' EXIT
+   if git show \
+       "$production_release_sha:scripts/classify-release.mjs" \
+       > "$release_classifier_path" 2>/dev/null \
+     && node "$release_classifier_path" \
+       --base "$production_release_sha" \
+       --head "$candidate_release_sha" \
+       --format json; then
+     :
+   else
+     printf '%s\n' '{"lane":"strict","needs_postgres":true,"needs_mutation":true,"needs_e2e":true,"needs_db_release":true,"needs_scheduler_pause":true,"reasons":["trusted production classifier unavailable"]}'
+   fi
+   rm -f -- "$release_classifier_path"
+   rmdir -- "$release_classifier_dir"
+   trap - EXIT
+   ```
+
+   The temporary trusted script parses the exact NUL-delimited Git change
+   inventory. If the production commit predates the classifier or extraction
+   or the trusted classifier fails, the printed fallback is deliberately strict
+   and selects every impact procedure; do not substitute the candidate script
+   to recover a fast lane.
+
+   - `ui-only` is a narrow allowlist of presentation-only paths. It may skip
+     only the PostgreSQL and mutation jobs; lint, types, ordinary tests/build
+     checks, and the focused browser verification still run.
+   - `app` is schema-neutral application code. It uses the standard application
+     CI and candidate/promotion checks.
+   - `strict` covers schema, migrations, server actions, cron/scheduler or build
+     plumbing, unexpected statuses, and every unknown path. It receives full CI
+     and manual review. Separate `needs_db_release` and
+     `needs_scheduler_pause` flags decide whether the recovery or scheduler
+     procedures are also required.
+
+   A UI-only or app release does **not** require a fresh database backup or a
+   scheduler pause. Its migration gate contains no writer, and the classifier
+   reports neither impact flag. Do not force an unknown change into a faster
+   lane.
+
+   GitHub CI likewise extracts the classifier from its trusted event base only
+   to decide whether its PostgreSQL and mutation jobs can be reused or skipped.
+   That optimization is not production release authorization. If the
+   canonical-production delta is strict, every strict gate must have passed for
+   the candidate even when the event-based CI comparison was narrower. Missing
+   canonical deployment metadata or an unfetchable/non-ancestor production SHA
+   blocks the fast release path.
+
+   In production, the database-attestation portion of `npm run build:vercel` is
+   a read-only, fail-fast sequence:
 
    1. validate production environment values;
-   2. switch Prisma to PostgreSQL;
-   3. reject unsafe committed migration SQL and validate the PostgreSQL schema;
-   4. run a read-only data preflight with actionable legacy-data diagnostics;
-   5. run `prisma migrate deploy` against the direct database connection;
-   6. attest the resulting Prisma schema, exact migration checksums, and
-      PostgreSQL-native constraints, partial indexes, functions, and triggers;
-   7. generate the Prisma client; then
-   8. complete `next build`.
+   2. switch Prisma to PostgreSQL and validate the checksum-pinned committed
+      migration set;
+   3. generate the Prisma client;
+   4. run `scripts/production-schema-check.mjs` to attest the target's exact
+      migration ledger, Prisma schema, and required PostgreSQL-native objects
+      read-only; then
+   5. complete `next build`.
 
-   The preflight is read-only and no-ops on a truly empty database. The same
-   invariants run again inside the migration transaction, so a write between
-   preflight and deploy still fails atomically instead of bypassing the gate.
+   Production compilation stops on a missing, pending, failed, extra, or changed
+   migration or schema/native-object drift. Preview, development, and local
+   builds perform no production database attestation or migration deploy. The
+   subsequent Next.js build still receives the configured runtime environment,
+   so application build code must remain side-effect-free; the read-only claim
+   applies to the release gate, not arbitrary application code.
 
-   Migrations intentionally run before compilation. Every production migration
-   must therefore be additive and compatible with the currently deployed app:
-   if generation or compilation fails, Vercel does not promote the new build
-   and the old release keeps serving against the expanded schema. Breaking
-   changes require an expand/deploy/backfill/contract sequence, with the
-   contract migration released only after the old binary can no longer run.
+   A schema or migration release is a separate, explicit operation. When the
+   classifier reports `needs_db_release`, complete strict CI plus the fresh
+   backup/restore and applicable scheduler pause/propagation/lease-drain
+   prerequisites in `docs/PRODUCTION-OPERATIONS.md`. Then use a clean ephemeral
+   checkout whose `HEAD` is the reviewed commit and run:
 
-   CI validates the committed migration history, rehearses both an empty
-   database and a legacy populated database, proves postflight rejects both
-   Prisma-supported and database-native drift, creates and verifies a real
-   `pg_dump`, restores and fully attests it in a second scratch database, runs
-   PostgreSQL integration tests, and finally exercises the exact production
-   migration and build pipeline. The destructive rehearsal targets are
-   hard-coded to local databases named `ld2l_pgtest` and
-   `ld2l_restore_test`; the scripts refuse remote or similarly named targets.
+   ```text
+   npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>
+   ```
+
+   Replace the placeholder with the full lowercase commit SHA; an abbreviated
+   SHA is not accepted. The wrapper requires `VERCEL_ENV=production`, binds
+   approval to that clean checkout, refuses root or `prisma/` `.env` files that
+   Prisma could auto-load after validation, and runs production environment
+   validation, committed-migration safety, the read-only data preflight,
+   `prisma migrate deploy` through the direct connection, and exact postflight
+   attestation. Stop on any non-zero step. Never call its internal migration
+   command directly to bypass the reviewed-SHA or clean-checkout guards.
+   These are technical guards only: the wrapper cannot prove that CI passed or
+   that provider backup, restore, scheduler, and approval evidence exists. The
+   release owner must verify and record those operator prerequisites before
+   invoking it.
+
+   Every production migration remains additive and compatible with the
+   currently deployed app because the old release continues serving while the
+   explicit migration step runs. Breaking changes require an
+   expand/deploy/backfill/contract sequence, with the contract migration
+   released only after the old binary can no longer run.
+
+   CI validates and rehearses the explicit release chain against disposable
+   PostgreSQL, including empty and populated legacy upgrades, a real `pg_dump`,
+   a restore and full attestation, and PostgreSQL integration tests. The
+   destructive rehearsal targets remain hard-coded to local databases named
+   `ld2l_pgtest` and `ld2l_restore_test`; the scripts refuse remote or similarly
+   named targets.
 
    Environment validation rejects missing/non-PostgreSQL database URLs,
-   different database, schema, or PostgreSQL usernames, mismatched managed-provider projects,
-   recognizable direct URLs used as the runtime pool, recognizable pooler URLs
-   used for migrations, placeholder or short auth/backup-receipt secrets, a
+   different database, schema, or PostgreSQL usernames, mismatched
+   managed-provider projects, recognizable direct URLs used as the runtime
+   pool, recognizable pooler URLs used for migrations, placeholder or short
+   auth/backup-receipt secrets, a
    missing/placeholder Steam API key, an unusable cron secret, incomplete
    Discord OAuth or bot/guild pairs, a production `DISCORD_API_BASE` test seam,
    missing/invalid/duplicate admin SteamIDs, non-HTTPS or divergent site
    origins, enabled dev login, and configured test-only or obsolete release
    overrides. Runtime and migration URLs may legitimately use different
-   passwords and least-privilege database users. Neon and Supabase projects can
-   also be matched across their standard pool/direct hosts and ports. Unknown
-   providers must use the same normalized hostname and effective port; support
-   for a custom pool/direct gateway pair requires an explicit reviewed
-   normalization rule.
+   passwords, but this release requires the same PostgreSQL username in both.
+   Separate least-privilege roles are not yet supported. Neon and Supabase
+   projects can also be matched across their standard pool/direct hosts and
+   ports. Unknown providers must use the same normalized hostname and effective
+   port; support for a custom pool/direct gateway pair requires an explicit
+   reviewed normalization rule.
 
-   `BUILD_DB_DRY_RUN=1` remains an exact test-only seam paired with
-   `NODE_ENV=test`. `PRISMA_ACCEPT_DATA_LOSS` is obsolete, and
-   `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` would permit unsafe concurrent
-   migration commands. Remove all three from Vercel: production validation
-   fails if any is configured. There is no production data-loss override and
-   no automatic rollback; Prisma's migration advisory lock remains mandatory.
+   `BUILD_DB_DRY_RUN` is retired and must be unset. `PRISMA_ACCEPT_DATA_LOSS` is
+   obsolete, and `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` would permit unsafe
+   concurrent migration commands. Remove all three from Vercel. There is no
+   production data-loss override and no automatic rollback; Prisma's migration
+   advisory lock remains mandatory.
 
    **One-time baseline for a database created by the old `db push` process:**
 
@@ -496,20 +578,24 @@ declares the same runtime line used by every CI job.
       pooled-URL fallback), run
       `npm run db:migrate:baseline-resolve -- --apply` only if that read-only
       fingerprint passes;
-   4. deploy normally so `20260804010000_release_readiness`,
+   4. from the clean ephemeral checkout at the reviewed full `HEAD` SHA, run
+      `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>`
+      so `20260804010000_release_readiness`,
       `20260804020000_automation_run_state`, and any later committed migrations
-      are applied.
+      are applied and attested before building the candidate.
 
    Stop and reconcile the database if the baseline check reports any
    difference. Never mark the baseline applied merely to get past a failed
-   deploy. A brand-new empty database does **not** need this procedure;
-   `prisma migrate deploy` applies the baseline and later migrations itself.
+   deploy. A brand-new empty database does **not** need baseline adoption; the
+   guarded `db:migrate:release` command applies the baseline and later
+   migrations through its pinned `prisma migrate deploy` step.
    The guarded resolver repeats the exact read-only check immediately before
    writing migration metadata, keeps credentials out of process arguments, and
    never changes the committed SQLite schema or generated client. Omitting
    `--apply` fails before any database mutation.
-6. **Prove health before promotion.** Use the candidate deployment URL and a
-   non-production database first:
+6. **Prove health before promotion in two stages.** First use a Preview or
+   staging deployment and a separately scoped non-production database to
+   exercise runtime behavior:
 
    ```bash
    export LEAGUE_SITE_ORIGIN="https://candidate.example"
@@ -531,9 +617,18 @@ declares the same runtime line used by every CI job.
    cron request must be 401, POST `/api/sync` must be 405, and GET `/api/sync`
    must return only the read-only `updated`, `watch`, and `cursor` snapshot.
 
-   The production Cloudflare Worker must never target a Vercel preview. Before
-   promotion, exercise an Admin manual run or a separate reviewed staging
-   invocation against the non-production database.
+   Exercise an Admin manual run or a separate reviewed staging invocation there.
+   This non-production rehearsal is not the artifact that gets promoted.
+
+   Next, create a staged **production** candidate for the exact reviewed SHA
+   without assigning the canonical domain (for example, the protected
+   `vercel --prod --skip-domain` workflow). Its production release gate must
+   attest the actual production database read-only. Against that generated URL,
+   repeat the read-only probes, one public database-backed page, focused UI
+   checks, and an error-log scan; do not exercise mutation or scheduler actions
+   against live data. Promote that exact staged production deployment without
+   rebuilding it. The production Cloudflare Worker must never target a Preview
+   deployment or the generated candidate URL.
 
 7. **Deploy the private Cloudflare scheduler after the controlled production
    promotion.** `ops/cloudflare-automation-worker/wrangler.jsonc` disables
@@ -614,8 +709,12 @@ Steam and Discord login smoke tests before moving traffic.
 
 Database migrations are forward-only and additive. Rolling the application
 back means promoting a previously tested application build, not running SQL
-down migrations. The Cloudflare trigger is managed outside Vercel, so use this
-sequence explicitly:
+down migrations. A schema-neutral rollback between releases with the same
+authenticated automation contract does not require a backup or scheduler pause;
+promote the known-good build, verify its probes and one database-backed read,
+and keep watching the next two scheduled passes. If the rollback crosses a
+schema or scheduler boundary, predates the authenticated cron route, or has
+uncertain compatibility, use this strict sequence:
 
 1. Run `npm run scheduler:pause`. It deploys the reviewed paused configuration
    with `crons: []`; verify Cloudflare shows zero Cron Triggers. Do not edit a

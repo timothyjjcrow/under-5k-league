@@ -45,6 +45,18 @@ describe("production environment validation", () => {
     expect(out).toContain("validation skipped");
   });
 
+  it.each(["", "staging", "Production", " preview "])(
+    "fails closed for invalid VERCEL_ENV=%j",
+    (value) => {
+      const result = run({ VERCEL_ENV: value });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "VERCEL_ENV must be exactly production, preview, or development",
+      );
+      expect(result.stdout).not.toContain("validation skipped");
+    },
+  );
+
   it.each([
     ["DATABASE_URL", "file:./dev.db", "DATABASE_URL"],
     ["DIRECT_URL", "", "DIRECT_URL"],
@@ -125,7 +137,7 @@ describe("production environment validation", () => {
       const result = run({ BUILD_DB_DRY_RUN: value });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(
-        "BUILD_DB_DRY_RUN is test-only and must be unset in production",
+        "BUILD_DB_DRY_RUN is retired and must be unset in production",
       );
     },
   );

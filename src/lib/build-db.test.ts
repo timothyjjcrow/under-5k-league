@@ -1,115 +1,108 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  VERCEL_BUILD_STEPS,
+  vercelBuildEnvironment,
+} from "../../scripts/vercel-build.mjs";
 
-// The Vercel build's DB step is a deploy-safety gate: committed migrations are
-// validated and deployed before the new client/build, only production may
-// mutate the schema, and there is no data-loss override. Drive the real script
-// through its exact test-only dry-run seam so the decision remains pinned
-// without touching a database.
-const SCRIPT = path.resolve(process.cwd(), "scripts/build-db.mjs");
-
-const CLEAN_ENV = Object.fromEntries(
-  Object.entries(process.env).filter(
-    ([key]) =>
-      ![
-        "BUILD_DB_DRY_RUN",
-        "NODE_ENV",
-        "VERCEL_ENV",
-      ].includes(key),
-  ),
-);
-
-function decide(vercelEnv?: string): string {
-  return execFileSync("node", [SCRIPT], {
-    env: {
-      ...CLEAN_ENV,
-      NODE_ENV: "test",
-      BUILD_DB_DRY_RUN: "1",
-      ...(vercelEnv === undefined ? {} : { VERCEL_ENV: vercelEnv }),
-    },
-    encoding: "utf8",
-  });
-}
-
-describe("build-db deploy gate", () => {
-  it("deploys validated migrations before generating or building new code", () => {
+describe("Vercel build database boundary", () => {
+  it("keeps the production migration gate read-only and attests the full schema after client generation", () => {
     const config = JSON.parse(
       readFileSync(path.resolve(process.cwd(), "vercel.json"), "utf8"),
     ) as { buildCommand: string };
     const manifest = JSON.parse(
       readFileSync(path.resolve(process.cwd(), "package.json"), "utf8"),
     ) as { scripts: Record<string, string> };
-    const stages = manifest.scripts["build:vercel"].split(" && ");
 
     expect(config.buildCommand).toBe("npm run build:vercel");
-    expect(stages).toEqual([
-      "node scripts/validate-prod-env.mjs",
-      "node scripts/switch-db-provider.mjs postgresql",
-      "npm run db:migrate:validate",
-      "npm run db:migrate:preflight",
-      "node scripts/build-db.mjs",
-      "npm run db:migrate:postflight",
-      "npx prisma generate",
-      "next build",
+    expect(manifest.scripts["build:vercel"]).toBe(
+      "node scripts/vercel-build.mjs",
+    );
+    expect(VERCEL_BUILD_STEPS.map((step) => step.id)).toEqual([
+      "validate-environment",
+      "switch-provider",
+      "validate-migrations",
+      "generate-client",
+      "attest-production-schema",
+      "build-application",
     ]);
   });
 
-  it("deploys committed production migrations without a schema-push escape hatch", () => {
-    const out = decide("production");
-    expect(out).toContain("prisma migrate deploy");
-    expect(out).not.toContain("db push");
-    expect(out).not.toContain("--accept-data-loss");
+  it("contains no migration writer or preflight stage", () => {
+    const build = VERCEL_BUILD_STEPS.map((step) => step.args.join(" ")).join(
+      "\n",
+    );
+
+    expect(build).not.toContain("migrate deploy");
+    expect(build).not.toContain("db:push");
+    expect(build).not.toContain("db:backup");
+    expect(build).not.toContain("db:migrate:preflight");
+    expect(build).toContain("production-schema-check.mjs");
+    expect(build).not.toContain("scheduler:");
+    expect(build).not.toContain("release-migrations");
+    expect(build).not.toContain("build-db");
   });
 
-  it("preview and development deploys do not mutate or regenerate", () => {
-    expect(decide("preview")).toContain("skip migration deploy");
-    expect(decide("preview")).not.toContain("db push");
-    expect(decide("preview")).not.toContain("migrate deploy");
-    expect(decide("preview")).not.toContain("prisma generate");
-    expect(decide("development")).toContain("skip migration deploy");
+  it("exposes migration writes only through the explicit release command", () => {
+    const manifest = JSON.parse(
+      readFileSync(path.resolve(process.cwd(), "package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
+
+    expect(manifest.scripts["db:migrate:release"]).toBe(
+      "node scripts/release-migrations.mjs",
+    );
+    expect(
+      Object.entries(manifest.scripts)
+        .filter(([name]) => name !== "db:migrate:release")
+        .map(([, command]) => command)
+        .join("\n"),
+    ).not.toContain("release-migrations.mjs");
   });
 
-  it("an unset VERCEL_ENV (local build) never deploys migrations", () => {
-    const out = execFileSync("node", [SCRIPT], {
-      env: {
-        ...CLEAN_ENV,
-        NODE_ENV: "test",
-        BUILD_DB_DRY_RUN: "1",
-      },
-      encoding: "utf8",
-    });
-    expect(out).toContain("skip migration deploy");
-    expect(out).not.toContain("db push");
-    expect(out).not.toContain("migrate deploy");
-  });
-
-  it.each([
-    ["1", "production"],
-    ["1", "development"],
-    ["true", "test"],
-    ["0", "test"],
-    ["", "test"],
-  ] as const)(
-    "fails closed for BUILD_DB_DRY_RUN=%j with NODE_ENV=%s",
-    (dryRun, nodeEnv) => {
-      const result = spawnSync(process.execPath, [SCRIPT], {
+  it("skips schema attestation for preview builds without opening a database", () => {
+    const output = execFileSync(
+      process.execPath,
+      [path.resolve(process.cwd(), "scripts/production-schema-check.mjs")],
+      {
         env: {
-          ...CLEAN_ENV,
-          NODE_ENV: nodeEnv,
-          VERCEL_ENV: "production",
-          BUILD_DB_DRY_RUN: dryRun,
+          PATH: process.env.PATH,
+          NODE_ENV: "production",
+          VERCEL_ENV: "preview",
         },
         encoding: "utf8",
-      });
+      },
+    );
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "BUILD_DB_DRY_RUN is allowed only as exact value 1 when NODE_ENV=test",
-      );
-      expect(result.stdout).not.toContain("prisma db push");
-      expect(result.stdout).not.toContain("prisma migrate deploy");
-    },
-  );
+    expect(output).toContain("schema attestation skipped");
+  });
+
+  it("uses inert loopback datasource values only when a non-production build has none", () => {
+    const preview = vercelBuildEnvironment({
+      NODE_ENV: "production",
+      VERCEL_ENV: "preview",
+    });
+    expect(preview.DATABASE_URL).toMatch(
+      /^postgresql:\/\/preview_build:preview_build@127\.0\.0\.1:1\//,
+    );
+    expect(preview.DIRECT_URL).toBe(preview.DATABASE_URL);
+
+    const configured = vercelBuildEnvironment({
+      NODE_ENV: "production",
+      VERCEL_ENV: "preview",
+      DATABASE_URL: "postgresql://preview:runtime@preview.example/league",
+      DIRECT_URL: "postgresql://preview:direct@preview.example/league",
+    });
+    expect(configured.DATABASE_URL).toContain("preview.example");
+    expect(configured.DIRECT_URL).toContain("preview.example");
+
+    const production: NodeJS.ProcessEnv = {
+      NODE_ENV: "production",
+      VERCEL_ENV: "production",
+      DATABASE_URL: "postgresql://production:runtime@prod.example/league",
+      DIRECT_URL: "postgresql://production:direct@prod.example/league",
+    };
+    expect(vercelBuildEnvironment(production)).toBe(production);
+  });
 });
