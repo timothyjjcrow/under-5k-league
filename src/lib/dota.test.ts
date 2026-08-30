@@ -41,6 +41,82 @@ describe("bounded OpenDota fetches", () => {
   });
 });
 
+describe("fetchLeagueMatchIds", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("uses the amateur-compatible feed and normalizes unique safe ids", async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      json: async () => [
+        8973220882,
+        "8973213121",
+        8973220882,
+        "8973220882",
+      ],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await fetchLeagueMatchIds("20001")).toEqual([
+      8973220882, 8973213121,
+    ]);
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.pathname).toBe("/api/leagues/20001/matchIds");
+  });
+
+  it("keeps a successful empty league feed distinct from an outage", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => [] })),
+    );
+
+    expect(await fetchLeagueMatchIds("20001")).toEqual([]);
+  });
+
+  it("returns null for a malformed league feed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ matchIds: [] }) })),
+    );
+    expect(await fetchLeagueMatchIds("20001")).toBeNull();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => [8973220882, "not-a-match-id"],
+      })),
+    );
+    expect(await fetchLeagueMatchIds("20001")).toBeNull();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+      })),
+    );
+    expect(await fetchLeagueMatchIds("20001")).toBeNull();
+  });
+
+  it("returns null for HTTP and network failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, json: async () => [] })),
+    );
+    expect(await fetchLeagueMatchIds("20001")).toBeNull();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network failure");
+      }),
+    );
+    expect(await fetchLeagueMatchIds("20001")).toBeNull();
+  });
+});
+
 describe("steamIdToAccountId", () => {
   it("converts a SteamID64 to a 32-bit Dota account id and back", () => {
     expect(steamIdToAccountId("76561198030654385")).toBe(70388657);

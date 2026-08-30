@@ -171,6 +171,30 @@ function odGame(
   awayAccts: number[],
   startTimeMs: number,
 ) {
+  const radiantFillers = Array.from(
+    { length: Math.max(0, 5 - homeAccts.length) },
+    (_, i) => ({
+      account_id: null,
+      player_slot: homeAccts.length + i,
+      hero_id: 100 + i,
+      isRadiant: true,
+      kills: 0,
+      deaths: 0,
+      assists: 0,
+    }),
+  );
+  const direFillers = Array.from(
+    { length: Math.max(0, 5 - awayAccts.length) },
+    (_, i) => ({
+      account_id: null,
+      player_slot: 128 + awayAccts.length + i,
+      hero_id: 110 + i,
+      isRadiant: false,
+      kills: 0,
+      deaths: 0,
+      assists: 0,
+    }),
+  );
   return {
     match_id: matchId,
     radiant_win: true,
@@ -197,6 +221,8 @@ function odGame(
         deaths: 5,
         assists: 2,
       })),
+      ...radiantFillers,
+      ...direFillers,
     ],
   };
 }
@@ -610,17 +636,20 @@ describe("result sync — league matches (integration)", () => {
   });
 
   it("uses the cheap league-id path (globally throttled) when one is set", async () => {
-    const { season, match, homeAccts, awayAccts } = await setupNight({
+    const { season, homeAccts, awayAccts } = await setupNight({
       offsetMs: -2 * HOUR,
     });
-    // A second due fixture keeps the season "due" after the first completes.
+    // A second due fixture between other teams keeps the season "due" after
+    // the first completes without creating an ambiguous same-pair kickoff.
+    const third = await makeTeam(season.id, "Third", 2);
+    const fourth = await makeTeam(season.id, "Fourth", 3);
     await prisma.match.create({
       data: {
         seasonId: season.id,
         week: 2,
         phase: MATCH_PHASE.REGULAR,
-        homeTeamId: match.homeTeamId,
-        awayTeamId: match.awayTeamId,
+        homeTeamId: third.id,
+        awayTeamId: fourth.id,
         scheduledAt: new Date(Date.now() - HOUR),
       },
     });
@@ -644,6 +673,112 @@ describe("result sync — league matches (integration)", () => {
     expect(again.imported).toBe(0);
     expect(again.watch).toBe(true);
     expect(mockLeague).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries league ids whose OpenDota detail row is not final yet", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17175" },
+    });
+    const G = 6660007;
+    const complete = odGame(
+      G,
+      homeAccts,
+      awayAccts,
+      Date.now() - 30 * 60_000,
+    );
+    mockLeague.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue({
+      ...complete,
+      players: complete.players.slice(0, 1),
+    });
+
+    const first = await syncLeagueGames(season.id, { auto: true });
+
+    expect(first).toMatchObject({ imported: 0, scanned: 1 });
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toBeNull();
+
+    mockMatch.mockClear();
+    mockMatch.mockResolvedValue(complete);
+    const retried = await syncLeagueGames(season.id, { auto: true });
+
+    expect(retried.imported).toBe(1);
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
+  });
+
+  it("does not attach an old ticket game outside the fixture window", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17176" },
+    });
+    const G = 6660008;
+    mockLeague.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue(
+      odGame(G, homeAccts, awayAccts, Date.now() - 10 * 24 * HOUR),
+    );
+
+    const result = await syncLeagueGames(season.id, { auto: true });
+
+    expect(result).toMatchObject({ imported: 0, scanned: 1 });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(G)]) });
+  });
+
+  it("keeps an old game with its completed meeting, not a future rematch", async () => {
+    const { season, home, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: 24 * HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17177" },
+    });
+    const oldKickoff = new Date(Date.now() - 24 * HOUR);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 0,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: match.homeTeamId,
+        awayTeamId: match.awayTeamId,
+        bestOf: 1,
+        scheduledAt: oldKickoff,
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 1,
+        awayScore: 0,
+        winnerTeamId: home.id,
+        completedAt: new Date(),
+      },
+    });
+    const G = 6660009;
+    mockLeague.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue(
+      odGame(G, homeAccts, awayAccts, oldKickoff.getTime()),
+    );
+
+    const result = await syncLeagueGames(season.id, { auto: true });
+
+    expect(result).toMatchObject({ imported: 0, scanned: 1 });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(G)]) });
   });
 
   it("re-reads due fixtures only when this run owns the league-feed claim", async () => {

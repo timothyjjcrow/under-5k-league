@@ -343,7 +343,9 @@ export async function fetchPubStats(
 }
 
 /**
- * All match ids for a Valve league id (from OpenDota /leagues/{id}/matches).
+ * All match ids for a Valve league id (from OpenDota
+ * /leagues/{id}/matchIds). Unlike the sibling `/matches` summary route, this
+ * feed includes amateur leagues.
  *
  * `null` means OpenDota was UNREACHABLE (429/5xx/timeout/garbage) — the
  * fetchRecentMatchIds contract — vs `[]` for a league with genuinely no
@@ -358,16 +360,34 @@ export async function fetchLeagueMatchIds(
   const signal = boundedSignal(OPEN_DOTA_LEAGUE_TIMEOUT_MS, options);
   if (!signal) return null;
   try {
-    const res = await fetch(withKey(`${BASE}/leagues/${leagueId}/matches`), {
+    const res = await fetch(withKey(`${BASE}/leagues/${leagueId}/matchIds`), {
       cache: "no-store",
       signal,
     });
     if (!res.ok) return null;
     const data = await res.json();
     if (!Array.isArray(data)) return null;
-    return data
-      .map((m: { match_id?: number }) => m.match_id)
-      .filter((x): x is number => typeof x === "number");
+
+    // The live endpoint currently emits numbers while OpenDota's published
+    // schema declares decimal strings. Accept both representations, but fail
+    // the whole response closed if any element is malformed: silently turning
+    // provider drift into an empty/partial league would burn the auto-sync
+    // throttle and could strand real games.
+    const ids: number[] = [];
+    const seen = new Set<number>();
+    for (const value of data) {
+      const id =
+        typeof value === "number"
+          ? value
+          : typeof value === "string" && /^\d+$/.test(value)
+            ? Number(value)
+            : Number.NaN;
+      if (!Number.isSafeInteger(id) || id <= 0) return null;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
   } catch {
     return null;
   }

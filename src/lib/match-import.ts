@@ -277,6 +277,27 @@ export function classifyGame(
   return { ok: true, radiantTeamId, direTeamId, winnerTeamId };
 }
 
+/**
+ * `/leagues/{id}/matchIds` can publish an id before OpenDota has finished
+ * parsing its detail row. Such a row is not a conclusive roster mismatch and
+ * must never enter the league scanner's permanent skip memory.
+ */
+function hasFinalLeagueMatchDetails(
+  match: OpenDotaMatch,
+  expectedMatchId: number,
+): boolean {
+  return (
+    match.match_id === expectedMatchId &&
+    Number.isFinite(match.start_time) &&
+    match.start_time > 0 &&
+    Number.isFinite(match.duration) &&
+    match.duration > 0 &&
+    typeof match.radiant_win === "boolean" &&
+    Array.isArray(match.players) &&
+    match.players.length >= 10
+  );
+}
+
 /** Max gap between consecutive games of one series. A real Bo2/Bo3 is played
  *  back-to-back; a bigger gap means a different session entirely (a scrim, a
  *  prior meeting, a rematch for fun the next day). */
@@ -773,9 +794,11 @@ export type ImportGameOptions = {
   /** Automation-only absolute budget. Manual callers omit both fields. */
   deadlineMs?: number;
   signal?: AbortSignal;
+  /** Internal league-scan handoff: a finalized provider row already fetched. */
+  prefetchedLeagueMatch?: OpenDotaMatch;
 };
 
-/** Fetch a specific Dota match and record it against a scheduled league match. */
+/** Fetch (or reuse) a Dota match and record it against a scheduled league match. */
 export async function importGameForMatch(
   matchId: string,
   dotaMatchId: string,
@@ -889,7 +912,18 @@ export async function importGameForMatch(
       };
     }
   }
-  const od = await fetchOpenDotaMatch(dotaMatchId, fetchOptions);
+  let od: OpenDotaMatch | null;
+  if (options.prefetchedLeagueMatch) {
+    const expectedMatchId = Number(dotaMatchId);
+    od = hasFinalLeagueMatchDetails(
+      options.prefetchedLeagueMatch,
+      expectedMatchId,
+    )
+      ? options.prefetchedLeagueMatch
+      : null;
+  } else {
+    od = await fetchOpenDotaMatch(dotaMatchId, fetchOptions);
+  }
   if (!od) {
     if (openDotaBudgetExpired(fetchOptions)) {
       return {
@@ -1812,6 +1846,7 @@ export async function syncLeagueGames(
       idStr: string;
       startTime: number;
       winnerTeamId: string | null;
+      details: OpenDotaMatch;
     }[]
   >();
   feed: for (
@@ -1869,6 +1904,12 @@ export async function syncLeagueGames(
         }
         continue; // transient fetch failure — retry later, never skip-listed
       }
+      if (!hasFinalLeagueMatchDetails(od, dotaId)) {
+        // The id feed can lead the parsed match endpoint by a few minutes.
+        // Retry next run instead of permanently classifying a partial row as
+        // unrelated to every roster.
+        continue;
+      }
       await ensureAccounts();
 
       // classifyGame is roster-based and time-blind, and a single round robin
@@ -1880,19 +1921,29 @@ export async function syncLeagueGames(
       const fits: {
         m: (typeof scheduled)[number];
         winnerTeamId: string | null;
+        kickoffMs: number;
       }[] = [];
       for (const m of scheduled) {
         const acc = accountsByMatch.get(m.id);
         if (!acc) continue;
         if (m.games.length >= m.bestOf) continue;
         if (m.status === MATCH_STATUS.COMPLETED) continue;
+        const kickoffMs = m.scheduledAt?.getTime();
+        if (
+          kickoffMs === undefined ||
+          !isWithinLeagueResultWindow(od.start_time, kickoffMs)
+        ) {
+          continue;
+        }
         const cls = classifyGame(
           od,
           { teamId: m.homeTeamId, accountIds: acc.home },
           { teamId: m.awayTeamId, accountIds: acc.away },
           Math.min(3, acc.teamSize),
         );
-        if (cls.ok) fits.push({ m, winnerTeamId: cls.winnerTeamId });
+        if (cls.ok) {
+          fits.push({ m, winnerTeamId: cls.winnerTeamId, kickoffMs });
+        }
       }
 
       // A scrim may deliberately use the season's Valve league ticket. That
@@ -1941,17 +1992,40 @@ export async function syncLeagueGames(
 
       const gameMs = (od.start_time ?? 0) * 1000;
       const best = fits.reduce((a, b) => {
-        const da = a.m.scheduledAt
-          ? Math.abs(gameMs - a.m.scheduledAt.getTime())
-          : Number.MAX_SAFE_INTEGER;
-        const db = b.m.scheduledAt
-          ? Math.abs(gameMs - b.m.scheduledAt.getTime())
-          : Number.MAX_SAFE_INTEGER;
+        const da = Math.abs(gameMs - a.kickoffMs);
+        const db = Math.abs(gameMs - b.kickoffMs);
         return db < da ? b : a;
       });
-      const officialDistance = best.m.scheduledAt
-        ? Math.abs(gameMs - best.m.scheduledAt.getTime())
-        : Number.MAX_SAFE_INTEGER;
+      const samePair = (teamA: string, teamB: string | null) =>
+        teamB !== null &&
+        ((teamA === best.m.homeTeamId && teamB === best.m.awayTeamId) ||
+          (teamA === best.m.awayTeamId && teamB === best.m.homeTeamId));
+      const competingKickoffs = eligibleCompetingMeetingKickoffs(
+        od.start_time,
+        {
+          league: scheduled.flatMap((other) =>
+            other.id !== best.m.id &&
+            other.scheduledAt &&
+            samePair(other.homeTeamId, other.awayTeamId)
+              ? [other.scheduledAt.getTime()]
+              : [],
+          ),
+          scrims: scheduledScrims.flatMap((other) =>
+            samePair(other.hostTeamId, other.opponentTeamId)
+              ? [other.scheduledAt.getTime()]
+              : [],
+          ),
+        },
+      );
+      if (!claimsGame(gameMs, best.kickoffMs, competingKickoffs)) {
+        // A historical game can share today's roster. Attribute by the same
+        // meeting-window/nearest-kickoff rules as per-fixture detection, and
+        // fail closed on an exact tie.
+        newlySkipped.push(idStr);
+        skip.add(idStr);
+        continue;
+      }
+      const officialDistance = Math.abs(gameMs - best.kickoffMs);
       const scrimOwnsCandidate = scrimFits.some(
         ({ scrim }) =>
           Math.abs(gameMs - scrim.scheduledAt.getTime()) <= officialDistance,
@@ -1967,6 +2041,7 @@ export async function syncLeagueGames(
         idStr,
         startTime: od.start_time ?? 0,
         winnerTeamId: best.winnerTeamId,
+        details: od,
       });
       candidatesByMatch.set(best.m.id, list);
     }
@@ -1988,7 +2063,10 @@ export async function syncLeagueGames(
         deadlineReached = true;
         break;
       }
-      const r = await importGameForMatch(matchId, c.idStr, fetchOptions);
+      const r = await importGameForMatch(matchId, c.idStr, {
+        ...fetchOptions,
+        prefetchedLeagueMatch: c.details,
+      });
       if (r.ok) {
         imported++;
       } else if (r.deadlineReached) {

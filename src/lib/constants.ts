@@ -489,7 +489,7 @@ export const AUTO_SYNC = {
   // can otherwise each claim a DIFFERENT due match in the same instant and
   // burst past OpenDota's per-minute cap on league nights.
   SCAN_GAP_SECONDS: 45,
-  // The league-id path (one /leagues/{id}/matches call) is cheap; its global
+  // The league-id path (one /leagues/{id}/matchIds call) is cheap; its global
   // throttle can be tighter.
   LEAGUE_INTERVAL_SECONDS: 180,
   // Automated league-id runs fetch at most this many unknown game ids per run

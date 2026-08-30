@@ -435,7 +435,7 @@ has to justify it.
   link/refresh (`updateDotaAccount`/`refreshRank`) and in bulk via admin
   `syncPlayerRanks`. Medals render on players/teams/draft (a captain resource).
 - **In-client league sync**: `Season.dotaLeagueId` + `syncLeagueGames` (fetch
-  `/leagues/{id}/matches`, `classifyGame` each vs. scheduled matches, import).
+  `/leagues/{id}/matchIds`, `classifyGame` each vs. scheduled matches, import).
   Admin `setLeagueId` / `syncLeagueAction`. League registration is done at
   dota2.com/league; games are tagged by hosting private lobbies with the id.
 - **Discord contact**: `User.discordName` (empty string = unset; persists
@@ -3449,4 +3449,4 @@ partial-refill bookings (report-only, captain owns the choice).
   @-mentioned, and `removeGame`/`reopenMatch` both bump the result cursor.
 - Production deploy config (swap SQLite → Postgres, real Steam key).
 - Optional: sync from a Valve `leagueid` (field exists on `Season`) if the
-  league ever gets ticketed — `/leagues/{id}/matches` + `classifyGame`.
+  league ever gets ticketed — `/leagues/{id}/matchIds` + `classifyGame`.
