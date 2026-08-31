@@ -14,6 +14,8 @@ export const MIGRATION_SHA256 = Object.freeze({
     "db38b63dbfcb34209e2de6cab898b5794bad50b75f9e2a91fefcecb5dea61b2b",
   "20260817000000_scrims":
     "4dbadb273a1990c98bf7d93bc3bd749ef3f93f897f5f1ef5dd0768a1c70a6752",
+  "20260831000000_inhouse_queue_idle_timeout":
+    "6d8c8c62c69d0586c527306e94d20f58347d36385c8e55b364ae0030314cfe16",
 });
 export const BASELINE_SCHEMA_SHA256 =
   "8234d47b06f9adf2444b5caaef29f645f6ea2817dc4353c3d6d012b070cb6133";
@@ -164,8 +166,8 @@ const SAFE_STATEMENT_STARTS = [
   /^UPDATE\b/i,
   /^CREATE\s+TABLE\b/i,
   /^CREATE\s+(?:UNIQUE\s+)?INDEX\b/i,
-  /^CREATE\s+FUNCTION\s+"ld2l_(?:sync_legacy_dota_account_id|preserve_inhouse_queue_time|stamp_inhouse_completion|stamp_match_completion|lock_fantasy_after_game)"\(\)\s+RETURNS\s+trigger\b/i,
-  /^CREATE\s+TRIGGER\s+"ld2l_(?:sync_legacy_dota_account_id|preserve_inhouse_queue_time|stamp_inhouse_completion|stamp_match_completion|lock_fantasy_after_game)_trigger"\s/i,
+  /^CREATE\s+FUNCTION\s+"ld2l_(?:sync_legacy_dota_account_id|preserve_inhouse_queue_time|refresh_inhouse_queue_idle_deadline|stamp_inhouse_completion|stamp_match_completion|lock_fantasy_after_game)"\(\)\s+RETURNS\s+trigger\b/i,
+  /^CREATE\s+TRIGGER\s+"ld2l_(?:(?:sync_legacy_dota_account_id|preserve_inhouse_queue_time|stamp_inhouse_completion|stamp_match_completion|lock_fantasy_after_game)_trigger|refresh_inhouse_queue_idle_deadline_(?:insert|delete)_trigger)"\s/i,
 ];
 
 export function validateMigrationSql(name, sql, { baseline = false } = {}) {

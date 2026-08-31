@@ -119,7 +119,7 @@ describe("PostgreSQL backup restore rehearsal", () => {
         return {
           schema: "league_data",
           migrationCount: CURRENT_MIGRATION_COUNT,
-          nativeObjectCount: 14,
+          nativeObjectCount: 17,
         };
       },
     });
@@ -140,7 +140,7 @@ describe("PostgreSQL backup restore rehearsal", () => {
       coreTableCount: 3,
       attestation: {
         migrationCount: CURRENT_MIGRATION_COUNT,
-        nativeObjectCount: 14,
+        nativeObjectCount: 17,
       },
     });
     expect(steps).toEqual(["preflight", "deploy", "postflight"]);
@@ -242,7 +242,7 @@ describe("PostgreSQL backup restore rehearsal", () => {
         return {
           schema: "legacy_league",
           migrationCount: CURRENT_MIGRATION_COUNT,
-          nativeObjectCount: 14,
+          nativeObjectCount: 17,
         };
       },
     });
@@ -263,7 +263,7 @@ describe("PostgreSQL backup restore rehearsal", () => {
       attestation: {
         schema: "legacy_league",
         migrationCount: CURRENT_MIGRATION_COUNT,
-        nativeObjectCount: 14,
+        nativeObjectCount: 17,
       },
     });
   });

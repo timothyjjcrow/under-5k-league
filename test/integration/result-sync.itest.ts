@@ -1133,6 +1133,33 @@ describe("result sync — inhouse (integration)", () => {
     return { lobby, team1, team2 };
   }
 
+  it("clears a four-hour-static waiting queue with no room open", async () => {
+    const user = await makeUser("Static queue");
+    const staleAt = new Date(
+      Date.now() - INHOUSE.QUEUE_IDLE_HOURS * HOUR - 60_000,
+    );
+    const entry = await prisma.inhouseQueueEntry.create({
+      data: {
+        userId: user.id,
+        mmr: 3000,
+        joinedAt: staleAt,
+        // Fresh presence used to keep this row and every observer hot forever.
+        lastSeenAt: new Date(),
+      },
+    });
+    // The production rollback trigger correctly refreshes every actual insert;
+    // backdate afterward to model four hours elapsing without queue activity.
+    await prisma.inhouseQueueEntry.update({
+      where: { id: entry.id },
+      data: { idleExpiresAt: staleAt },
+    });
+
+    const out = await runResultSync();
+
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    expect(out).toMatchObject({ inhouse: false, watch: false });
+  });
+
   it("closes a finished inhouse game from any page view — no room open", async () => {
     const { lobby, team1, team2 } = await setupLobby(
       INHOUSE.DETECT_MIN_MINUTES + 5,

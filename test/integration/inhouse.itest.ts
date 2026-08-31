@@ -19,6 +19,7 @@ import {
   joinQueue,
   leaveQueue,
   makePick,
+  maybeFormLobby,
   maybeAutoDetectResult,
   recordMatch,
   resolveAbandonedLobby,
@@ -1180,6 +1181,252 @@ describe("inhouse — queue presence", () => {
     expect(afterStale.lastSeenAt.getTime()).toBeGreaterThan(
       before.lastSeenAt.getTime(),
     );
+    // Presence is not queue activity. Otherwise a tab left open forever would
+    // also renew the four-hour static-queue window forever.
+    expect(afterStale.idleExpiresAt?.getTime()).toBe(
+      before.idleExpiresAt?.getTime(),
+    );
+  });
+
+  it("does not treat a duplicate join request as queue activity", async () => {
+    const [p] = await enqueue(1, () => 3000);
+    const before = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: p.user.id },
+    });
+
+    expect((await joinQueue(p.session, 3000)).ok).toBe(true);
+
+    const after = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: p.user.id },
+    });
+    expect(after.joinedAt.getTime()).toBe(before.joinedAt.getTime());
+    expect(after.idleExpiresAt?.getTime()).toBe(
+      before.idleExpiresAt?.getTime(),
+    );
+  });
+
+  it("uses a strict four-hour cutoff for stored and legacy deadlines", async () => {
+    const user = await makeUser("Exact queue cutoff");
+    await prisma.inhouseQueueEntry.create({ data: { userId: user.id } });
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await prisma.inhouseQueueEntry.update({
+        where: { userId: user.id },
+        data: { lastSeenAt: new Date(now), idleExpiresAt: new Date(now) },
+      });
+      expect(await maybeFormLobby()).toBe(false);
+      expect(await prisma.inhouseQueueEntry.count()).toBe(1);
+
+      await prisma.inhouseQueueEntry.update({
+        where: { userId: user.id },
+        data: { idleExpiresAt: new Date(now - 1) },
+      });
+      expect(await maybeFormLobby()).toBe(false);
+      expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+
+      await prisma.inhouseQueueEntry.create({ data: { userId: user.id } });
+      await prisma.inhouseQueueEntry.update({
+        where: { userId: user.id },
+        data: {
+          joinedAt: new Date(now - INHOUSE.QUEUE_IDLE_HOURS * 3_600_000),
+          lastSeenAt: new Date(now),
+          idleExpiresAt: null,
+        },
+      });
+      expect(await maybeFormLobby()).toBe(false);
+      expect(await prisma.inhouseQueueEntry.count()).toBe(1);
+
+      await prisma.inhouseQueueEntry.update({
+        where: { userId: user.id },
+        data: {
+          joinedAt: new Date(
+            now - INHOUSE.QUEUE_IDLE_HOURS * 3_600_000 - 1,
+          ),
+        },
+      });
+      expect(await maybeFormLobby()).toBe(false);
+      expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("resets a heartbeat-fresh queue after four hours with no membership changes", async () => {
+    const [p] = await enqueue(1, () => 3000);
+    const staleAt = new Date(
+      Date.now() - INHOUSE.QUEUE_IDLE_HOURS * 3_600_000 - 60_000,
+    );
+    await prisma.inhouseQueueEntry.update({
+      where: { userId: p.user.id },
+      data: {
+        joinedAt: staleAt,
+        // This is the reported failure mode: an open page keeps presence fresh
+        // even though nobody has joined or left all day.
+        lastSeenAt: new Date(),
+        idleExpiresAt: staleAt,
+      },
+    });
+
+    const state = await getInhouseState(p.session, { syncBoard: false });
+    expect(state.queue).toEqual([]);
+    expect(state.me.inQueue).toBe(false);
+    expect(state.me.canJoin).toBe(true);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+
+    // No automatic requeue: the player must explicitly join again, and that
+    // click starts a new static window with a fresh queue position.
+    expect((await joinQueue(p.session, 3000)).ok).toBe(true);
+    const rejoined = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: p.user.id },
+    });
+    expect(rejoined.joinedAt.getTime()).toBeGreaterThan(staleAt.getTime());
+    expect(rejoined.idleExpiresAt?.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("starts a fresh four-hour window when someone leaves before expiry", async () => {
+    const players = await enqueue(2, () => 3000);
+    const almostExpiredAt = new Date(Date.now() + 60_000);
+    await prisma.inhouseQueueEntry.updateMany({
+      data: {
+        lastSeenAt: new Date(),
+        idleExpiresAt: almostExpiredAt,
+      },
+    });
+
+    expect((await leaveQueue(players[1].session)).ok).toBe(true);
+    const remaining = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: players[0].user.id },
+    });
+    expect(remaining.idleExpiresAt?.getTime()).toBeGreaterThan(Date.now());
+    expect((await getInhouseState(players[0].session)).me.inQueue).toBe(true);
+  });
+
+  it("does not let a post-expiry leave rescue the old queue", async () => {
+    const players = await enqueue(2, () => 3000);
+    await prisma.inhouseQueueEntry.updateMany({
+      data: {
+        lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() - 60_000),
+      },
+    });
+
+    expect((await leaveQueue(players[1].session)).ok).toBe(true);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+  });
+
+  it("fails closed by clearing everyone if queue deadlines ever diverge", async () => {
+    const players = await enqueue(2, () => 3000);
+    await prisma.inhouseQueueEntry.update({
+      where: { userId: players[0].user.id },
+      data: { idleExpiresAt: new Date(Date.now() - 60_000) },
+    });
+
+    expect(await maybeFormLobby()).toBe(false);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+  });
+
+  it("clears ten expired present rows before they can form a lobby", async () => {
+    for (let i = 0; i < INHOUSE.LOBBY_SIZE; i += 1) {
+      const user = await makeUser(`Expired full queue ${i}`);
+      await prisma.inhouseQueueEntry.create({
+        data: { userId: user.id, mmr: 3000 },
+      });
+    }
+    await prisma.inhouseQueueEntry.updateMany({
+      data: {
+        lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() - 60_000),
+      },
+    });
+
+    expect(await maybeFormLobby()).toBe(false);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
+  });
+
+  it("does not let a post-expiry join revive the old queue", async () => {
+    const stalePlayers = await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+    const expiredAt = new Date(Date.now() - 60_000);
+    await prisma.inhouseQueueEntry.updateMany({
+      data: { lastSeenAt: new Date(), idleExpiresAt: expiredAt },
+    });
+    const newcomer = await makeUser("Fresh after queue expiry");
+
+    expect((await joinQueue(sessionFor(newcomer), 3000)).ok).toBe(true);
+
+    const queued = await prisma.inhouseQueueEntry.findMany();
+    expect(queued.map((q) => q.userId)).toEqual([newcomer.id]);
+    expect(
+      stalePlayers.every((p) => !queued.some((q) => q.userId === p.user.id)),
+    ).toBe(true);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
+  });
+
+  it("serializes distinct simultaneous joins onto one shared deadline", async () => {
+    const [existing] = await enqueue(1, () => 3000);
+    const newcomers = [];
+    for (let i = 0; i < 4; i += 1) {
+      const user = await makeUser(`Concurrent queue join ${i}`);
+      newcomers.push({ user, session: sessionFor(user) });
+    }
+
+    const results = await raceAll(
+      newcomers.map((p) => () => joinQueue(p.session, 3000)),
+    );
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    const queued = await prisma.inhouseQueueEntry.findMany();
+    expect(queued).toHaveLength(newcomers.length + 1);
+    expect(queued.map((q) => q.userId)).toContain(existing.user.id);
+    expect(new Set(queued.map((q) => q.idleExpiresAt?.getTime())).size).toBe(1);
+  });
+
+  it("serializes simultaneous leaves without reviving a deadline", async () => {
+    const players = await enqueue(4, () => 3000);
+
+    const results = await raceAll(
+      players.map((p) => () => leaveQueue(p.session)),
+    );
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+  });
+
+  it("keeps only a newcomer when their join races an expired-queue sweep", async () => {
+    await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+    await prisma.inhouseQueueEntry.updateMany({
+      data: {
+        lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() - 60_000),
+      },
+    });
+    const newcomer = await makeUser("Queue expiry race newcomer");
+
+    const [joined] = await raceAll([
+      () => joinQueue(sessionFor(newcomer), 3000),
+      async () => {
+        await maybeFormLobby();
+        return { ok: true as const };
+      },
+    ]);
+
+    expect(joined).toMatchObject({ ok: true });
+    const queued = await prisma.inhouseQueueEntry.findMany();
+    expect(queued.map((q) => q.userId)).toEqual([newcomer.id]);
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
   });
 
   it("a cancelled lobby's ghosts drop out instead of re-forming it", async () => {
@@ -1303,6 +1550,13 @@ describe("inhouse — ready check", () => {
 
     const queued = await prisma.inhouseQueueEntry.findMany();
     const byId = new Map(queued.map((q) => [q.userId, q]));
+    const idleDeadlines = new Set(
+      queued.map((q) => q.idleExpiresAt?.getTime()),
+    );
+    expect(idleDeadlines.size).toBe(1);
+    expect(queued[0].idleExpiresAt?.getTime()).toBeGreaterThan(
+      Date.now() + (INHOUSE.QUEUE_IDLE_HOURS * 3_600_000 - 60_000),
+    );
     // The decliner is out entirely.
     expect(byId.has(players[8].user.id)).toBe(false);
     const now = Date.now();
@@ -1490,7 +1744,12 @@ describe("inhouse — ready check", () => {
     expect((await prisma.inhouseLobby.findFirstOrThrow()).status).toBe(
       INHOUSE_STATUS.CANCELLED,
     );
-    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
+    const queued = await prisma.inhouseQueueEntry.findMany();
+    expect(queued).toHaveLength(INHOUSE.LOBBY_SIZE);
+    expect(new Set(queued.map((q) => q.idleExpiresAt?.getTime())).size).toBe(1);
+    expect(queued[0].idleExpiresAt?.getTime()).toBeGreaterThan(
+      Date.now() + (INHOUSE.QUEUE_IDLE_HOURS * 3_600_000 - 60_000),
+    );
   });
 });
 

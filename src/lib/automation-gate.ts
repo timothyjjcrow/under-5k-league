@@ -152,7 +152,11 @@ export type AutomationGateInputs = {
     updatedAt: Date;
     betsCloseAt: Date | null;
   }>;
-  queue: Array<{ lastSeenAt: Date }>;
+  queue: Array<{
+    joinedAt: Date;
+    lastSeenAt: Date;
+    idleExpiresAt: Date | null;
+  }>;
   unsettledBet: boolean;
   repairableInhouseResult: boolean;
   leagueOutbox: Array<{
@@ -615,8 +619,22 @@ export function computeAutomationGateSnapshot(
   if (!lobby && present.length >= INHOUSE.LOBBY_SIZE) {
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
   }
-  for (const entry of inputs.queue) {
-    const seenAt = dateMs(entry.lastSeenAt, "queue.lastSeenAt");
+  for (const [index, entry] of inputs.queue.entries()) {
+    const seenAt = dateMs(entry.lastSeenAt, `queue[${index}].lastSeenAt`);
+    const joinedAt = dateMs(entry.joinedAt, `queue[${index}].joinedAt`);
+    const storedIdleExpiresAt = optionalDateMs(
+      entry.idleExpiresAt,
+      `queue[${index}].idleExpiresAt`,
+    );
+    // New rows share one persisted deadline. joinedAt is the rollback bridge
+    // for rows written by an older binary during a rolling deployment.
+    addCandidate(
+      candidates,
+      nowMs,
+      (storedIdleExpiresAt ??
+        joinedAt + INHOUSE.QUEUE_IDLE_HOURS * 3_600_000) + 1,
+      "INHOUSE",
+    );
     const awayAt = seenAt + INHOUSE.QUEUE_AWAY_SECONDS * 1_000 + 1;
     const dropAt = seenAt + INHOUSE.QUEUE_DROP_SECONDS * 1_000 + 1;
     addCandidate(
@@ -1073,7 +1091,11 @@ export async function loadAutomationGateSnapshot(
       },
     }),
     prisma.inhouseQueueEntry.findMany({
-      select: { lastSeenAt: true },
+      select: {
+        joinedAt: true,
+        lastSeenAt: true,
+        idleExpiresAt: true,
+      },
     }),
     prisma.inhouseLobby.findFirst({
       where: {

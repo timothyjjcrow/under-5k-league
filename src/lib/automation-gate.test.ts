@@ -132,13 +132,24 @@ function inputs(
   };
 }
 
+function queued(
+  overrides: Partial<AutomationGateInputs["queue"][number]> = {},
+): AutomationGateInputs["queue"][number] {
+  return {
+    joinedAt: new Date(NOW),
+    lastSeenAt: new Date(NOW),
+    idleExpiresAt: new Date(NOW + INHOUSE.QUEUE_IDLE_HOURS * 3_600_000),
+    ...overrides,
+  };
+}
+
 describe("computeAutomationGateSnapshot", () => {
   it("uses an immutable one-hour hard horizon for quiet state", () => {
     const snapshot = computeAutomationGateSnapshot(inputs(), NOW);
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 4,
+      version: 5,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -232,7 +243,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 4,
+      version: 5,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -460,6 +471,7 @@ describe("computeAutomationGateSnapshot", () => {
     });
 
     const queue = Array.from({ length: INHOUSE.LOBBY_SIZE }, (_, index) => ({
+      ...queued(),
       lastSeenAt: new Date(NOW - index),
     }));
     expect(
@@ -486,6 +498,58 @@ describe("computeAutomationGateSnapshot", () => {
         NOW,
       ),
     ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+  });
+
+  it("runs immediately for a legacy queue older than four hours", () => {
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        queue: [
+          queued({
+            joinedAt: new Date(
+              NOW - INHOUSE.QUEUE_IDLE_HOURS * 3_600_000 - 1,
+            ),
+            idleExpiresAt: null,
+          }),
+        ],
+      }),
+      NOW,
+    );
+
+    // Presence alone would wake at the 90s away boundary. The joinedAt
+    // fallback instead wakes now so a pre-deploy 13-hour queue is cleared.
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("treats an overdue shared queue deadline as immediately due", () => {
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        queue: [queued({ idleExpiresAt: new Date(NOW - 1) })],
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("wakes one millisecond after the strict queue deadline", () => {
+    const idleExpiresAt = NOW + 30_000;
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        queue: [queued({ idleExpiresAt: new Date(idleExpiresAt) })],
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: idleExpiresAt + 1,
+      reason: "INHOUSE",
+    });
   });
 
   it("keeps an in-progress betting close ahead of result detection", () => {
@@ -1030,7 +1094,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 4,
+      version: 5,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

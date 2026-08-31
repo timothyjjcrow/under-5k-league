@@ -634,13 +634,18 @@ model Prediction {
 // A single global queue of players waiting for the next inhouse. One row per
 // user (a user can only wait once); the earliest to join are pulled into a lobby.
 model InhouseQueueEntry {
-  id         String   @id @default(cuid())
-  userId     String   @unique
-  mmr        Int      @default(0) // snapshot used to seed captains
-  joinedAt   DateTime @default(now())
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  mmr           Int       @default(0) // snapshot used to seed captains
+  joinedAt      DateTime  @default(now())
   // Presence heartbeat — refreshed (throttled) by the player's own /inhouse
   // polls. Entries that go silent stop counting toward a lobby, then drop.
-  lastSeenAt DateTime @default(now())
+  lastSeenAt    DateTime  @default(now())
+  // Shared deadline for the current waiting-queue composition. Every semantic
+  // join/leave/formation/requeue refreshes ALL remaining rows to the same
+  // value; presence heartbeats never touch it. Nullable for rollback safety
+  // with older application binaries; null rows fall back to joinedAt + 4h.
+  idleExpiresAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

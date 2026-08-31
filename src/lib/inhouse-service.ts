@@ -76,6 +76,45 @@ const pickDeadline = () => new Date(Date.now() + INHOUSE.PICK_SECONDS * 1000);
 const voteDeadline = () => new Date(Date.now() + INHOUSE.VOTE_SECONDS * 1000);
 const acceptDeadline = () =>
   new Date(Date.now() + INHOUSE.ACCEPT_SECONDS * 1000);
+const QUEUE_WRITE_RETRY_ATTEMPTS = 8;
+
+const queueIdleDeadline = (nowMs = Date.now()) =>
+  new Date(nowMs + INHOUSE.QUEUE_IDLE_HOURS * 3_600_000);
+
+const expiredQueuePredicates = (
+  nowMs: number,
+): Prisma.InhouseQueueEntryWhereInput[] => [
+  { idleExpiresAt: { lt: new Date(nowMs) } },
+  {
+    // Rollback bridge for rows written by an older binary. The release
+    // migration backfills this field, but old code can still insert null
+    // during the deployment window.
+    idleExpiresAt: null,
+    joinedAt: {
+      lt: new Date(nowMs - INHOUSE.QUEUE_IDLE_HOURS * 3_600_000),
+    },
+  },
+];
+
+/** Clear a roster whose four-hour window elapsed before a new change lands. */
+async function expireStaticQueue(tx: Tx, nowMs = Date.now()) {
+  const expired = await tx.inhouseQueueEntry.findFirst({
+    where: { OR: expiredQueuePredicates(nowMs) },
+    select: { id: true },
+  });
+  if (!expired) return { count: 0 };
+  // Fail closed if rolling-deploy or contention ever leaves mixed deadlines:
+  // one expired shared clock resets the WHOLE waiting roster, never a subset
+  // that then receives another four-hour extension.
+  return tx.inhouseQueueEntry.deleteMany();
+}
+
+/** Refresh every current waiter after a semantic queue-composition change. */
+async function refreshQueueIdleDeadline(tx: Tx, nowMs = Date.now()) {
+  await tx.inhouseQueueEntry.updateMany({
+    data: { idleExpiresAt: queueIdleDeadline(nowMs) },
+  });
+}
 
 /**
  * The DRAFTING → READY transition, written in ONE place because there are TWO
@@ -161,13 +200,45 @@ export async function maybeFormLobby(): Promise<boolean> {
     formed = await prisma.$transaction(
       async (tx) => {
         const now = Date.now();
-        // Ghosts never get drafted: drop entries whose heartbeat went silent (the
-        // player closed /inhouse long ago), so the queue count everyone watches
-        // stays honest. Runs on each claimed maintenance pass — the table only
-        // ever holds a handful of rows.
-        await tx.inhouseQueueEntry.deleteMany({
-          where: { lastSeenAt: { lt: queueDropCutoff(now) } },
+        // One bounded cleanup query owns both kinds of stale waiter:
+        // - presence went silent (closed tab), or
+        // - the WHOLE waiting roster has been unchanged for four hours.
+        //
+        // idleExpiresAt is shared and refreshed across every current row when
+        // membership changes, so the second predicate clears the whole static
+        // queue at once. SERIALIZABLE makes a racing join linearizable: a
+        // join-first refresh prevents this delete (or forces a safe retry),
+        // while a reset-first commit leaves the later new row untouched.
+        const stale = await tx.inhouseQueueEntry.findMany({
+          where: {
+            OR: [
+              { lastSeenAt: { lt: queueDropCutoff(now) } },
+              ...expiredQueuePredicates(now),
+            ],
+          },
+          select: {
+            joinedAt: true,
+            lastSeenAt: true,
+            idleExpiresAt: true,
+          },
         });
+        if (stale.length > 0) {
+          const idleExpired = stale.some((entry) =>
+            entry.idleExpiresAt
+              ? entry.idleExpiresAt.getTime() < now
+              : entry.joinedAt.getTime() +
+                    INHOUSE.QUEUE_IDLE_HOURS * 3_600_000 <
+                  now,
+          );
+          const removed = await tx.inhouseQueueEntry.deleteMany({
+            where: idleExpired
+              ? undefined
+              : { lastSeenAt: { lt: queueDropCutoff(now) } },
+          });
+          // A ghost disappearing is also a composition change. If this was the
+          // four-hour reset there are no rows left and this is a cheap no-op.
+          if (removed.count > 0) await refreshQueueIdleDeadline(tx, now);
+        }
 
         const active = await tx.inhouseLobby.findFirst({
           where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
@@ -219,6 +290,7 @@ export async function maybeFormLobby(): Promise<boolean> {
         await tx.inhouseQueueEntry.deleteMany({
           where: { userId: { in: queue.map((q) => q.userId) } },
         });
+        await refreshQueueIdleDeadline(tx, now);
 
         // Player names for the Discord announcement, in queue order. discordId
         // comes along so the ten can be mentioned by id — the only escalation the
@@ -338,6 +410,14 @@ async function failReadyCheck(
         a.userId.localeCompare(b.userId),
     );
   const now = Date.now();
+  const expired = await expireStaticQueue(tx, now);
+  const idleExpiresAt = queueIdleDeadline(now);
+  if (expired.count > 0 || requeue.length > 0) {
+    // Lock/update the existing queue before inserting individual requeue rows.
+    // Every queue mutation uses this order so concurrent joins cannot deadlock
+    // by each holding its own row while waiting on the other's.
+    await refreshQueueIdleDeadline(tx, now);
+  }
   for (const p of requeue) {
     const lastSeenAt =
       p.acceptedAt != null ? new Date() : requeueLastSeenAt(now);
@@ -348,8 +428,14 @@ async function failReadyCheck(
     const joinedAt = p.queuedAt;
     await tx.inhouseQueueEntry.upsert({
       where: { userId: p.userId },
-      create: { userId: p.userId, mmr: p.mmr, joinedAt, lastSeenAt },
-      update: { joinedAt, lastSeenAt },
+      create: {
+        userId: p.userId,
+        mmr: p.mmr,
+        joinedAt,
+        lastSeenAt,
+        idleExpiresAt,
+      },
+      update: { joinedAt, lastSeenAt, idleExpiresAt },
     });
   }
   return true;
@@ -977,35 +1063,83 @@ export async function joinQueue(
   // player's InhouseLobbyPlayer row between the check and the upsert, leaving
   // them rostered in the live lobby AND queued for the next one. Serializable
   // makes the two conflict, and the loser aborts with P2034.
-  let joined: boolean;
-  try {
-    joined = await prisma.$transaction(
-      async (tx) => {
-        const inActiveLobby = await tx.inhouseLobbyPlayer.findFirst({
-          where: {
-            userId: viewer.id,
-            lobby: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-          },
-          select: { id: true },
-        });
-        if (inActiveLobby) return false;
-        await tx.inhouseQueueEntry.upsert({
-          where: { userId: viewer.id },
-          create: { userId: viewer.id, mmr: safeMmr },
-          // Keep original joinedAt so we don't lose queue position; an explicit
-          // re-join is also a fresh sign of life.
-          update: { mmr: safeMmr, lastSeenAt: new Date() },
-        });
-        return true;
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-  } catch (e) {
-    // Lost the race to a lobby forming around this player.
-    if ((e as { code?: string }).code === "P2034") {
+  let joined: boolean | null = null;
+  for (let attempt = 0; attempt < QUEUE_WRITE_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      joined = await prisma.$transaction(
+        async (tx) => {
+          const inActiveLobby = await tx.inhouseLobbyPlayer.findFirst({
+            where: {
+              userId: viewer.id,
+              lobby: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+            },
+            select: { id: true },
+          });
+          if (inActiveLobby) return false;
+          const now = Date.now();
+          const expired = await expireStaticQueue(tx, now);
+          const queued = await tx.inhouseQueueEntry.findUnique({
+            where: { userId: viewer.id },
+            select: { id: true },
+          });
+          const idleExpiresAt = queueIdleDeadline(now);
+          if (expired.count > 0 || !queued) {
+            // Shared rows first, then this user's row: concurrent distinct
+            // joins take locks in the same order instead of cross-locking.
+            await refreshQueueIdleDeadline(tx, now);
+          }
+          await tx.inhouseQueueEntry.upsert({
+            where: { userId: viewer.id },
+            create: { userId: viewer.id, mmr: safeMmr, idleExpiresAt },
+            // A duplicate request is presence, not a composition change. Keep
+            // both the original queue position and shared idle deadline.
+            update: { mmr: safeMmr, lastSeenAt: new Date(now) },
+          });
+          return true;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+      break;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (
+        (code === "P2034" || code === "P2002") &&
+        attempt + 1 < QUEUE_WRITE_RETRY_ATTEMPTS
+      ) {
+        // Queue-wide deadline writes intentionally serialize semantic changes.
+        // Brief backoff lets the winner commit before this request re-reads the
+        // active-lobby guard and current queue composition.
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, 2 ** attempt),
+        );
+        continue;
+      }
+      if (code !== "P2034" && code !== "P2002") throw error;
+    }
+  }
+  if (joined === null) {
+    // A final fresh read distinguishes the original formation race from
+    // ordinary queue contention instead of falsely calling both a live game.
+    const [inActiveLobby, inQueue] = await Promise.all([
+      prisma.inhouseLobbyPlayer.findFirst({
+        where: {
+          userId: viewer.id,
+          lobby: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+        },
+        select: { id: true },
+      }),
+      prisma.inhouseQueueEntry.findUnique({
+        where: { userId: viewer.id },
+        select: { id: true },
+      }),
+    ]);
+    if (inActiveLobby) {
       return { ok: false, error: "You're already in a live inhouse" };
     }
-    throw e;
+    if (!inQueue) {
+      return { ok: false, error: "The queue changed — please try joining again" };
+    }
+    joined = true;
   }
   if (!joined) {
     return { ok: false, error: "You're already in a live inhouse" };
@@ -1070,7 +1204,22 @@ async function touchQueueHeartbeat(viewerId: string): Promise<void> {
 export async function leaveQueue(
   viewer: SessionUser,
 ): Promise<InhouseActionResult> {
-  await prisma.inhouseQueueEntry.deleteMany({ where: { userId: viewer.id } });
+  await prisma.$transaction(async (tx) => {
+    const now = Date.now();
+    const expired = await expireStaticQueue(tx, now);
+    const queued = await tx.inhouseQueueEntry.findUnique({
+      where: { userId: viewer.id },
+      select: { id: true },
+    });
+    if (expired.count > 0 || queued) {
+      // Take the shared queue locks before deleting the caller's row. Two
+      // simultaneous leaves then serialize instead of cross-locking A and B.
+      await refreshQueueIdleDeadline(tx, now);
+    }
+    await tx.inhouseQueueEntry.deleteMany({
+      where: { userId: viewer.id },
+    });
+  });
   return { ok: true };
 }
 
@@ -2047,6 +2196,12 @@ export async function cancelLobby(
     // players. The heartbeat is backdated: players still on the page
     // re-confirm on their next poll, while the ghosts that likely caused the
     // cancel never do — so the same lobby can't instantly re-form around them.
+    const now = Date.now();
+    const expired = await expireStaticQueue(tx, now);
+    const idleExpiresAt = queueIdleDeadline(now);
+    if (expired.count > 0 || requeuePlayers.length > 0) {
+      await refreshQueueIdleDeadline(tx, now);
+    }
     for (const [i, p] of requeuePlayers.entries()) {
       await tx.inhouseQueueEntry.upsert({
         where: { userId: p.userId },
@@ -2054,10 +2209,14 @@ export async function cancelLobby(
           userId: p.userId,
           mmr: p.mmr,
           // Stagger joins so queue order stays deterministic.
-          joinedAt: new Date(Date.now() + i),
-          lastSeenAt: requeueLastSeenAt(Date.now()),
+          joinedAt: new Date(now + i),
+          lastSeenAt: requeueLastSeenAt(now),
+          idleExpiresAt,
         },
-        update: { lastSeenAt: requeueLastSeenAt(Date.now()) },
+        update: {
+          lastSeenAt: requeueLastSeenAt(now),
+          idleExpiresAt,
+        },
       });
     }
     return true;
@@ -2222,8 +2381,9 @@ export async function getInhouseState(
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
   if (runMaintenance) {
-    // Abandoned first: it frees the single active-lobby slot, so maybeFormLobby
-    // can form the next game on this very poll instead of the one after.
+    // Abandoned lobby first: it frees the single active-lobby slot, so
+    // maybeFormLobby can form the next game on this poll instead of the one
+    // after.
     await resolveAbandonedLobby();
     // …then the pot, immediately, and for the same reason the abandon sweep
     // runs first: that sweep is what flips a dead lobby to CANCELLED, so a

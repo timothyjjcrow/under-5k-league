@@ -304,6 +304,12 @@ export const INHOUSE = {
   // instantly re-form around ghosts, and past QUEUE_HEARTBEAT_SECONDS (30),
   // so a present player's very next poll writes the refresh.
   QUEUE_RECONFIRM_SECONDS: 75,
+  // Reset the waiting queue when its membership has not changed for this long.
+  // Presence heartbeats deliberately do NOT refresh this clock: an open tab
+  // can prove a player is still online, but it must not keep one static queue
+  // on the fast poll/automation cadence forever. A join, leave, lobby
+  // formation, or requeue starts a fresh window for everyone still waiting.
+  QUEUE_IDLE_HOURS: 4,
   // A lobby that reaches READY or IN_PROGRESS has no clock — nothing expires
   // it, and no resolver can move it — so an abandoned one holds the single
   // active-lobby slot indefinitely: no new lobby can form, and its own ten
