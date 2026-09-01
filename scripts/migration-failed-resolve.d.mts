@@ -37,6 +37,11 @@ export function directMigrationUrl(env: NodeJS.ProcessEnv): string;
 
 export function assertPinnedPrismaVersion(version: string): void;
 
+export function verifyFailedMigrationInspectorGeneration(options?: {
+  env?: NodeJS.ProcessEnv;
+  url?: string;
+}): void;
+
 export function validateFailedMigrationSnapshot(
   snapshot: FailedMigrationSnapshot,
 ): string;

@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertPinnedPrismaVersion,
@@ -8,6 +10,7 @@ import {
   runFailedMigrationResolve,
   validateFailedMigrationSnapshot,
   validateResolvedMigrationSnapshot,
+  verifyFailedMigrationInspectorGeneration,
   type FailedMigrationSnapshot,
 } from "../../scripts/migration-failed-resolve.mjs";
 import { MIGRATION_SHA256 } from "../../scripts/migration-safety.mjs";
@@ -131,6 +134,63 @@ describe("guarded failed migration recovery", () => {
         }),
       ),
     ).toThrow(/not a pooler/);
+  });
+
+  it("generates the real isolated Prisma inspector from installed dependencies", () => {
+    const directUrl =
+      "postgresql://owner:not-used@127.0.0.1:5432/generation_only";
+    expect(() =>
+      verifyFailedMigrationInspectorGeneration({
+        env: testEnv({ DIRECT_URL: directUrl, DATABASE_URL: directUrl }),
+        url: directUrl,
+      }),
+    ).not.toThrow();
+  }, 30_000);
+
+  it("surfaces secret-free diagnostics when inspector generation fails", () => {
+    const directUrl =
+      "postgresql://owner:top%2Fsecret@127.0.0.1:5432/generation_only";
+    let failure: unknown;
+    try {
+      verifyFailedMigrationInspectorGeneration({
+        env: testEnv({
+          DIRECT_URL: directUrl,
+          DATABASE_URL: directUrl,
+          NODE_OPTIONS: "--ld2l-invalid-generation-option",
+        }),
+        url: directUrl,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toMatch(
+      /Could not generate the isolated failed-migration inspector/,
+    );
+    expect(message).toMatch(/NODE_OPTIONS|ld2l-invalid-generation-option/);
+    expect(message).not.toContain(directUrl);
+    expect(message).not.toContain("top%2Fsecret");
+    expect(message).not.toContain("top/secret");
+  });
+
+  it("exits nonzero when the CLI guard rejects an invocation", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL(
+            "../../scripts/migration-failed-resolve.mjs",
+            import.meta.url,
+          ),
+        ),
+      ],
+      { encoding: "utf8", env: testEnv() },
+    );
+    expect(result.status).toBe(1);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toMatch(/Usage: npm run db:migrate:failed-resolve/);
   });
 
   it("accepts only one exact zero-step unresolved target with a clean catalog", () => {

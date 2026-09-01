@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,9 @@ const MIGRATIONS = fileURLToPath(
 );
 const PRISMA_CLI = fileURLToPath(
   new URL("../node_modules/prisma/build/index.js", import.meta.url),
+);
+const NODE_MODULES = fileURLToPath(
+  new URL("../node_modules/", import.meta.url),
 );
 
 export const FAILED_MIGRATION_TARGET =
@@ -397,11 +401,27 @@ function runPrisma(args, { env, schemaPath }) {
   );
 }
 
-async function withInspector({ env, url }, work) {
+function generatedPrismaDiagnostics(result, url) {
+  const output = [result.stdout, result.stderr]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return safeMessage(output, url);
+}
+
+function createInspectorWorkspace({ env, url }) {
   const temporary = mkdtempSync(path.join(tmpdir(), "ld2l-failed-resolve-"));
   const schemaPath = path.join(temporary, "schema.prisma");
   const childEnv = { ...env, DATABASE_URL: url, DIRECT_URL: url };
   try {
+    // Prisma 5.22 resolves @prisma/client relative to the temporary schema.
+    // Expose the already-installed, pinned dependencies without installing or
+    // generating anything in the clean release checkout.
+    symlinkSync(
+      NODE_MODULES,
+      path.join(temporary, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     writeFileSync(schemaPath, postgresInspectorSchema(), {
       encoding: "utf8",
       mode: 0o600,
@@ -411,12 +431,41 @@ async function withInspector({ env, url }, work) {
     });
     const generated = runPrisma(["generate"], { env: childEnv, schemaPath });
     if (generated.status !== 0) {
+      const diagnostics = generatedPrismaDiagnostics(generated, url);
       throw new Error(
-        "Could not generate the isolated failed-migration inspector",
+        `Could not generate the isolated failed-migration inspector${
+          diagnostics ? `:\n${diagnostics}` : "."
+        }`,
       );
     }
+    return { temporary, schemaPath, childEnv };
+  } catch (error) {
+    rmSync(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function verifyFailedMigrationInspectorGeneration({
+  env = process.env,
+  url = directMigrationUrl(env),
+} = {}) {
+  const workspace = createInspectorWorkspace({ env, url });
+  try {
+    if (!existsSync(path.join(workspace.temporary, "client", "index.js"))) {
+      throw new Error(
+        "The isolated failed-migration inspector generated no client entry point",
+      );
+    }
+  } finally {
+    rmSync(workspace.temporary, { recursive: true, force: true });
+  }
+}
+
+async function withInspector({ env, url }, work) {
+  const workspace = createInspectorWorkspace({ env, url });
+  try {
     const { PrismaClient } = await import(
-      pathToFileURL(path.join(temporary, "client", "index.js")).href
+      pathToFileURL(path.join(workspace.temporary, "client", "index.js")).href
     );
     const client = new PrismaClient({ datasources: { db: { url } } });
     try {
@@ -425,7 +474,10 @@ async function withInspector({ env, url }, work) {
         resolve: () => {
           const result = runPrisma(
             ["migrate", "resolve", "--rolled-back", FAILED_MIGRATION_TARGET],
-            { env: childEnv, schemaPath },
+            {
+              env: workspace.childEnv,
+              schemaPath: workspace.schemaPath,
+            },
           );
           if (result.status !== 0) {
             throw new Error(
@@ -438,7 +490,7 @@ async function withInspector({ env, url }, work) {
       await client.$disconnect();
     }
   } finally {
-    rmSync(temporary, { recursive: true, force: true });
+    rmSync(workspace.temporary, { recursive: true, force: true });
   }
 }
 
