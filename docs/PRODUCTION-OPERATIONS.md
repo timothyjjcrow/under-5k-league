@@ -32,7 +32,13 @@ not alone imply a database release or scheduler pause; the classifier's
 `needs_db_release` and `needs_scheduler_pause` flags select those procedures.
 Production migration writes occur only through
 `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>` from a
-clean ephemeral checkout at that exact commit.
+clean ephemeral checkout at that exact commit. Both URL variables supplied to
+that process must use one DDL-capable username: it must own every existing
+application relation and function (or immediately inherit each owning role's
+privileges) and have `CREATE` on the application schema. A least-privilege
+runtime role may remain deployed only when both DDL URLs are injected into the
+trusted release process temporarily and the normal runtime environment is
+restored before the application build.
 
 Use a manually approved production deployment (or an equivalent protected
 deployment check) pinned to the reviewed commit. Preview runtime data, when
@@ -108,7 +114,10 @@ Fresh backup artifact name + SHA-256 (no receipt):
 Backup verification result/time:
 Disposable restore target + result/time:
 Baseline fingerprint / migration preflight / postflight results:
+Migration username ownership/membership + schema-CREATE evidence (no credential):
 Explicit migration-release command/result and bound HEAD SHA (`needs_db_release` only):
+Failed-migration guarded resolve result, if applicable:
+Release-only database environment removed/runtime environment restored before build:
 Runtime and direct-connection read/write smoke results:
 Application-log retention and protected-access evidence:
 Backup/PITR expiry and deletion-process evidence:
@@ -232,13 +241,32 @@ Complete only the branches selected by `needs_db_release` and
 3. When `needs_db_release` is true, validate production configuration with no
    test overrides. The pooled and direct PostgreSQL URLs must identify
    the same project, database, schema, and username; only their host form, port,
-   and password may differ. Confirm the runtime role can read and write on a
-   disposable restored copy—postflight through the direct URL alone is not
-   enough.
+   and password may differ. For the release process, that shared username must
+   own every existing application relation and function or immediately inherit
+   each owning role's privileges, have `CREATE` on the application schema, and
+   have any required `TRIGGER` privilege. Ordinary
+   `SELECT`/`INSERT`/`UPDATE`/`DELETE` grants do not authorize `ALTER TABLE`.
+   The read-only migration preflight inventories these ownership rights before
+   its data checks; any reported object is a release stop.
+
+   The application may use a different least-privilege runtime username. If it
+   does, retrieve a pooled and direct URL for the DDL-capable role through the
+   approved secret channel and inject **both** only into the migration process.
+   Do not combine one runtime URL with one migration URL. Record the
+   credential-free role/capability result, then restore or unset the temporary
+   release variables before the staged production application build. Confirm
+   the restored runtime role can read and write on a disposable copy;
+   postflight through the DDL direct URL alone is not enough.
+
 4. Still when `needs_db_release` is true, create a fresh full production dump
    through `npm run db:backup`, verify it, record its SHA-256 and a provider PITR
-   point, and complete a disposable restore rehearsal. For an old `db push`
-   database, complete the guarded legacy baseline procedure in the README first.
+   point, and complete a disposable restore rehearsal. The dump uses
+   `--no-owner --no-privileges`, so the local restore role owns the restored
+   objects; that pass can mask a production ownership or grant failure. Also
+   exercise the exact DDL release username read-only and then through the
+   guarded release path on a provider PITR/restore branch that preserves object
+   ownership. For an old `db push` database, complete the guarded legacy
+   baseline procedure in the README first.
 5. When `needs_db_release` is true, use a clean ephemeral checkout at the
    reviewed commit, verify its full 40-character `HEAD` SHA, supply production
    credentials through the trusted environment, and run exactly:
@@ -256,7 +284,10 @@ Complete only the branches selected by `needs_db_release` and
    release owner must verify and record those prerequisites before invoking it.
    Stop on any non-zero result; never invoke
    `prisma migrate deploy`, mark a migration applied, or use an
-   abbreviated/different SHA to bypass the wrapper.
+   abbreviated/different SHA to bypass the wrapper. Remove the temporary DDL
+   URLs and restore the normal runtime environment before building the staged
+   production candidate.
+
 6. When `needs_scheduler_pause` is true, validate the active and paused Worker
    artifacts and confirm the reviewed `AUTOMATION_URL` and encrypted binding
    name. Keep the scheduler paused through candidate verification and promotion,
@@ -266,6 +297,64 @@ Complete only the branches selected by `needs_db_release` and
 Build the staged production candidate after postflight succeeds when a database
 release ran; otherwise build it after the required strict CI and review. A
 scheduler-only change does not invent a database postflight prerequisite.
+
+### Fully rolled-back failed migration
+
+A failed `db:migrate:release` is a release stop, not permission to rerun Prisma.
+Preserve the first PostgreSQL/Prisma error, the reviewed SHA and migration name,
+the provider timestamp, and credential-free ledger/catalog evidence. Use a new
+provider PITR branch from immediately before the attempt to reproduce the
+failure with the exact DDL release username. Do not diagnose privileges from a
+local dump alone: `--no-owner --no-privileges` makes the local restore role own
+the restored objects and can hide the production ownership failure.
+
+An error such as `must be owner of table InhouseQueueEntry` on the first
+`ALTER TABLE`, even when ordinary DML works, means the supplied release role
+does not own or immediately inherit the table owner's privileges. Correct and
+prove the DDL credential or role membership on the provider branch before any
+ledger recovery. Do not transfer objects or add broad grants ad hoc during the
+failed release.
+
+The narrow resolver below is allowed only for one exact, atomic, fully rolled-
+back attempt. Its guard requires a clean checkout at the reviewed full SHA,
+`VERCEL_ENV=production`, a direct non-pooled DDL connection, the immutable
+migration inventory, the repository-pinned Prisma version, no Prisma dotenv
+files, a valid completed prior ledger, one unresolved target row with the
+reviewed checksum, zero applied steps and no finished target row. It also
+requires every catalog object that migration would create to be absent and the
+current role to own or immediately inherit ownership of the affected table,
+with the required schema/trigger privileges. If any condition is uncertain or
+the guard rejects it, stop and prepare a reviewed forward-recovery or restore
+plan; do not weaken the check.
+
+From the same clean reviewed checkout, run exactly:
+
+```text
+npm run db:migrate:failed-resolve -- --apply <reviewed 40-character HEAD SHA> <migration-name>
+```
+
+The migration argument is not free-form. It must be the exact reviewed target
+printed by the command's usage message; every other name is refused.
+
+The command only changes that proven failed row to rolled back and re-attests
+the unchanged catalog and ledger shape. It does not mark the migration applied
+and does not execute its SQL. After it succeeds:
+
+1. Create and verify a **new** production backup and record a new provider PITR
+   point.
+2. Repeat the disposable restore rehearsal and the exact-role test on a
+   provider branch that preserves ownership.
+3. Run the complete guarded
+   `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>`
+   workflow with both temporary URLs on the DDL-capable username.
+4. Require postflight, remove the temporary DDL environment, restore the
+   least-privilege runtime environment, and only then build the production
+   candidate.
+
+Never use `migrate resolve --applied`, run `prisma migrate resolve` directly,
+edit `_prisma_migrations` with manual SQL, mark an unapplied migration finished,
+or blindly retry `migrate deploy`. Those shortcuts can make the ledger claim a
+schema state the catalog never reached.
 
 ### Initial launch and affected-subsystem evidence
 

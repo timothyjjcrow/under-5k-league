@@ -22,6 +22,7 @@
     "db:migrate:preflight": "node scripts/migration-preflight.mjs",
     "db:migrate:postflight": "node scripts/migration-postflight.mjs",
     "db:migrate:release": "node scripts/release-migrations.mjs",
+    "db:migrate:failed-resolve": "node scripts/migration-failed-resolve.mjs",
     "db:migrate:rehearse": "node scripts/migration-rehearsal.mjs",
     "db:migrate:baseline-check": "node scripts/migration-baseline-check.mjs",
     "db:migrate:baseline-resolve": "node scripts/migration-baseline-resolve.mjs",

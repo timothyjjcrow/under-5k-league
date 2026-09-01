@@ -264,6 +264,7 @@ heroes, last played — which the player pool and profiles render).
 | `npm run db:migrate:preflight`                             | Read-only checks for legacy data that would block migration                    |
 | `npm run db:migrate:postflight`                            | Read-only attestation of schema, migration checksums, and native objects       |
 | `npm run db:migrate:release -- --apply <40-char HEAD SHA>` | Apply a reviewed production migration release from a clean ephemeral checkout  |
+| `npm run db:migrate:failed-resolve -- --apply <40-char HEAD SHA> <migration-name>` | Guardedly record one proven fully rolled-back failed migration for retry |
 | `npm run db:migrate:rehearse`                              | **Destructive scratch only** — rehearse fresh/legacy upgrades                  |
 | `npm run db:migrate:baseline-check`                        | Read-only compatibility check for a pre-migration database                     |
 | `npm run db:migrate:baseline-resolve`                      | Record the verified one-time baseline with explicit approval                   |
@@ -363,10 +364,25 @@ declares the same runtime line used by every CI job.
    - the **pooled** one (host contains `-pooler`) → use for `DATABASE_URL`
    - the **direct** one (no `-pooler`) → use for `DIRECT_URL`
 
-   This release requires both URLs to use the same PostgreSQL username. Hosts,
-   ports, and passwords may differ. The migration history does not provision a
-   second runtime role, and a restore made with `--no-owner --no-privileges`
-   cannot attest grants for one.
+   Each release invocation requires both URLs to use the same PostgreSQL
+   username. Hosts, ports, and passwords may differ. For a migration release,
+   that username must be DDL-capable: it must own every existing application
+   relation and function (or immediately inherit each owning role's privileges)
+   and have `CREATE` on the application schema. Ordinary table DML grants are
+   not enough for `ALTER TABLE`.
+
+   The guarded migration preflight checks schema `CREATE` plus immediately
+   usable ownership of existing application relations and functions before it
+   inspects migration data. Any named ownership gap is a release stop.
+
+   The deployed application may keep a separate least-privilege runtime
+   username. In that arrangement, load **both** a pooled `DATABASE_URL` and a
+   direct `DIRECT_URL` for the DDL-capable username into only the trusted
+   migration process, then restore or unset those temporary values before any
+   application build. Do not mix runtime and migration usernames within one
+   release invocation or copy the release credentials into source, argv, logs,
+   or persistent runtime configuration.
+
 2. **Push this repo to GitHub.** Keep connection strings, API keys, and session
    secrets in the deployment platform or a password manager — never in a
    command, commit, issue, screenshot, or chat. `.env` is gitignored as a
@@ -531,6 +547,48 @@ declares the same runtime line used by every CI job.
    release owner must verify and record those operator prerequisites before
    invoking it.
 
+   Supply a DDL-capable username in both URL variables for this command. The
+   role must own every existing application relation and function, or
+   immediately inherit each owning role's privileges, and it must have `CREATE`
+   on the application schema. A successful local restore does not establish
+   this: PostgreSQL dumps made by this repository omit owners and grants, so the
+   local restore role becomes the owner and can mask a production ownership
+   failure. Verify the exact release role against a provider PITR/restore branch
+   before touching production. If the application normally uses a
+   least-privilege role, inject both DDL URLs from a trusted secret channel for
+   this command only and restore the normal runtime environment before the
+   candidate build.
+
+   If a migration release fails, preserve the first server error and stop; do
+   not blindly rerun it. The guarded resolver accepts only one exact unresolved
+   target row with the reviewed checksum, zero applied steps, no finished copy,
+   a valid prior ledger, and none of that migration's expected catalog objects.
+   It also checks that the current role owns or immediately inherits ownership
+   of the affected table and can create schema objects, so resolving cannot
+   simply lead to the same DDL failure. Only when those checks prove that the
+   atomic attempt rolled back completely may the release owner run, with
+   `VERCEL_ENV=production`, the required direct DDL URL, and the same clean
+   reviewed checkout:
+
+   ```text
+   npm run db:migrate:failed-resolve -- --apply <reviewed 40-character HEAD SHA> <migration-name>
+   ```
+
+   `<migration-name>` must be the exact reviewed target printed by the command's
+   usage message; arbitrary migrations are refused. The command also requires
+   the repository-pinned Prisma version and refuses Prisma dotenv files.
+
+   This guarded command records the proven failed attempt as rolled back; it
+   does not mark the migration applied and does not apply any migration SQL.
+   After it succeeds, create and verify a fresh backup and PITR point, repeat
+   the disposable restore rehearsal and the provider-branch ownership check,
+   and run the complete `db:migrate:release` wrapper again. If any statement
+   committed, the catalog or data is ambiguous, another unresolved row exists,
+   or the guard refuses the ledger state, stop for a reviewed forward-recovery
+   plan. Never use `migrate resolve --applied`, edit `_prisma_migrations`
+   manually, invoke Prisma's resolver directly, or turn a failed ledger row
+   into a blind retry.
+
    Every production migration remains additive and compatible with the
    currently deployed app because the old release continues serving while the
    explicit migration step runs. Breaking changes require an
@@ -553,9 +611,12 @@ declares the same runtime line used by every CI job.
    Discord OAuth or bot/guild pairs, a production `DISCORD_API_BASE` test seam,
    missing/invalid/duplicate admin SteamIDs, non-HTTPS or divergent site
    origins, enabled dev login, and configured test-only or obsolete release
-   overrides. Runtime and migration URLs may legitimately use different
-   passwords, but this release requires the same PostgreSQL username in both.
-   Separate least-privilege roles are not yet supported. Neon and Supabase
+   overrides. The two URLs in one invocation may legitimately use different
+   passwords, but they must use the same PostgreSQL username. A separate
+   least-privilege runtime role is supported only by keeping both normal runtime
+   URLs on that role and temporarily replacing both variables with pooled and
+   direct URLs for one DDL-capable role inside the trusted migration process.
+   Restore the runtime values before the application build. Neon and Supabase
    projects can also be matched across their standard pool/direct hosts and
    ports. Unknown providers must use the same normalized hostname and effective
    port; support for a custom pool/direct gateway pair requires an explicit
@@ -593,6 +654,7 @@ declares the same runtime line used by every CI job.
    writing migration metadata, keeps credentials out of process arguments, and
    never changes the committed SQLite schema or generated client. Omitting
    `--apply` fails before any database mutation.
+
 6. **Prove health before promotion in two stages.** First use a Preview or
    staging deployment and a separately scoped non-production database to
    exercise runtime behavior:
@@ -812,6 +874,16 @@ unset PG_RESTORE_TEST_URL
 It requires compatible `psql`, `dropdb`, and `createdb` clients and a local role
 that may recreate that scratch database. Remote hosts and similarly named
 databases are rejected before a client runs.
+
+The dump deliberately uses `--no-owner --no-privileges`. That makes it
+portable, but it also makes every restored object belong to the local restore
+role and discards the production role memberships and grants. A passing restore
+therefore proves the backup, data, and migration SQL—not that the production
+migration username can run DDL. Before release, use a provider PITR/restore
+branch to confirm that the exact username supplied in both migration URLs owns
+every existing application relation and function (or immediately inherits each
+owning role), has `CREATE` on the application schema, and can create the
+required triggers. Treat a local-only pass as insufficient ownership evidence.
 
 An old production database created by `prisma db push` has no
 `_prisma_migrations` table, so use the explicit legacy mode for that backup:
