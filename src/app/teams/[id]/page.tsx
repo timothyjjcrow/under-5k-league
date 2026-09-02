@@ -264,6 +264,11 @@ export default async function TeamPage({
             {team.season.isActive ? "← All teams" : "← Season archive"}
           </Link>
           <span className="flex items-center gap-4">
+            {team.season.isActive ? (
+              <Link href="/scrims" className={textLink("text-sm")}>
+                Scrims →
+              </Link>
+            ) : null}
             {team.season.isActive &&
             (team.season.status === "REGULAR_SEASON" ||
               team.season.status === "PLAYOFFS") ? (

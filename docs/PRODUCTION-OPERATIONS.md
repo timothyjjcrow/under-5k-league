@@ -1,6 +1,6 @@
-# Production operations and launch evidence
+# Production operations and release evidence
 
-This is the executable operating contract for the first production release.
+This is the executable operating contract for production releases and recovery.
 It does not make a deployment safe by itself: the release owner must attach
 evidence from the actual hosting, database, DNS, identity, Discord, monitoring,
 and backup providers. Never put a secret, connection URL, session cookie,
@@ -8,15 +8,43 @@ backup receipt, or bearer header in this record.
 
 ## Release stop rule
 
-Do not start a production build until every pre-promotion item below has an
-owner and evidence. `npm run build:vercel` applies additive migrations before
-the Next.js compilation finishes, so an automatic production build is already
-a database change even if Vercel never promotes the resulting application.
+Do not promote until the release delta has been classified from the commit on
+the current canonical production deployment to the candidate commit. The base
+must be fetchable and an ancestor of the candidate. Missing metadata, unknown
+paths, unexpected Git statuses, and changes to schema, migrations, release
+plumbing, server actions, cron, or scheduler code fail closed to the strict
+lane. Some allowlisted documentation and test paths are neutral companions;
+sensitive-path tests and policy/runbook documents remain strict, and a
+neutral-only delta never establishes the UI-only fast path by itself.
+
+The migration gate inside `npm run build:vercel` cannot apply migrations. In
+production, `scripts/production-schema-check.mjs` attests the exact migration
+ledger, Prisma schema, and required PostgreSQL-native objects read-only before
+compiling. The subsequent Next.js build still receives its runtime environment
+and must remain side-effect-free.
+In Preview and development, the release pipeline performs no production
+database gate or migration mutation. A build or running preview that needs data
+must use a separately scoped non-production database.
+
+Schema-neutral UI and application releases require neither a fresh backup nor a
+scheduler pause. A strict classification requires full CI and review, but does
+not alone imply a database release or scheduler pause; the classifier's
+`needs_db_release` and `needs_scheduler_pause` flags select those procedures.
+Production migration writes occur only through
+`npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>` from a
+clean ephemeral checkout at that exact commit. Both URL variables supplied to
+that process must use one DDL-capable username: it must own every existing
+application relation and function (or immediately inherit each owning role's
+privileges) and have `CREATE` on the application schema. A least-privilege
+runtime role may remain deployed only when both DDL URLs are injected into the
+trusted release process temporarily and the normal runtime environment is
+restored before the application build.
 
 Use a manually approved production deployment (or an equivalent protected
-deployment check) pinned to the reviewed commit. Disable unreviewed automatic
-production builds for the launch window. Preview builds must use a separate
-database branch and non-production credentials.
+deployment check) pinned to the reviewed commit. Preview runtime data, when
+needed, must use a separate database branch and non-production credentials. A
+Preview rehearsal is not promotable: promotion uses an exact staged production
+candidate built with production configuration but without the canonical domain.
 
 Exactly one one-minute scheduler may be authoritative. Vercel Hobby hosts the
 application with no Vercel cron registration; the reviewed Cloudflare Worker in
@@ -40,7 +68,7 @@ continuity.
   request scoping, the case register, reviewed fulfillment, and restoration
   replay. The deputy must be able to continue the process without the primary.
 
-## Launch evidence record
+## Release evidence record
 
 Copy this section into a private release record and fill it in. Links may point
 to access-controlled provider pages; never paste credentials.
@@ -48,6 +76,8 @@ to access-controlled provider pages; never paste credentials.
 ```text
 Release date/time (UTC):
 Reviewed commit SHA:
+Canonical production base SHA:
+Classifier lane, reasons, and exact changed-file inventory:
 CI run URL and result:
 Previous production deployment ID + commit:
 Candidate deployment ID + commit:
@@ -84,6 +114,10 @@ Fresh backup artifact name + SHA-256 (no receipt):
 Backup verification result/time:
 Disposable restore target + result/time:
 Baseline fingerprint / migration preflight / postflight results:
+Migration username ownership/membership + schema-CREATE evidence (no credential):
+Explicit migration-release command/result and bound HEAD SHA (`needs_db_release` only):
+Failed-migration guarded resolve result, if applicable:
+Release-only database environment removed/runtime environment restored before build:
 Runtime and direct-connection read/write smoke results:
 Application-log retention and protected-access evidence:
 Backup/PITR expiry and deletion-process evidence:
@@ -115,58 +149,224 @@ Final smoke-test result:
 Residual risks explicitly accepted:
 ```
 
+When the classifier reports neither `needs_db_release` nor
+`needs_scheduler_pause`, mark the corresponding backup, restore, migration,
+scheduler-pause, and lease-drain fields
+`not required — no affected subsystem` and attach the classifier evidence. Do
+not fabricate or refresh recovery artifacts merely to fill those fields.
+Complete every field selected by an impact flag before changing that subsystem.
+
 ## Pre-promotion procedure
 
-1. Select one immutable commit. Require the full CI gate to pass for that exact
-   SHA and record the run. Record the previous known-good deployment and commit.
-2. Confirm production promotion requires a human approval or protected
-   deployment check. Run `npm run scheduler:pause` for the release window,
-   verify zero Cloudflare Cron Triggers, wait the full 15-minute propagation
-   bound, and prove Scheduled cron attempts have stopped before continuing.
-3. Confirm Node 22, Vercel Hobby (with no Vercel cron), Cloudflare Workers
-   account capacity, database spend/protection limits, production/preview
-   database isolation,
-   Deployment Protection on previews/generated deployment URLs, a function
-   region close to the database, and reviewed runtime/direct connection-pool
-   ceilings. Complete the edge/proxy/abuse gate below before opening traffic.
-4. Validate production configuration with no test overrides. The pooled and
-   direct PostgreSQL URLs must identify the same project, database, schema, and
-   username for this release; only their host form, port, and password may
-   differ. Confirm the runtime role can read and write on a disposable restored
-   copy—postflight through the direct URL alone is not enough.
-5. Create a fresh full production dump through `npm run db:backup`, verify it,
-   and record its artifact name and SHA-256. Record a provider PITR point and
-   configured restore window. Complete a disposable restore rehearsal. For an
-   old `db push` database, use the guarded legacy-baseline rehearsal documented
-   in the README before recording the baseline on the live database. On the
-   production-like candidate, download the largest representative season audit
-   archive and record its UTF-8 response size. If it reaches the application's
-   4,000,000-byte ceiling and returns 413, approve and rehearse an out-of-band
-   audit-export path before allowing that season to be deleted; the full backup
-   is required recovery evidence but does not replace this multi-user audit
-   artifact.
-6. On a production-like candidate backed by a non-production database, verify
-   `/api/health/live`, `/api/health/ready`, unauthorized cron = 401, POST
-   `/api/sync` = 405, and read-only GET `/api/sync`. Exercise one bounded manual
-   Admin maintenance run or a separate reviewed staging scheduler invocation.
-   The production Cloudflare Worker must never target a preview deployment.
-7. Complete real credential smoke tests: allowlisted Steam login/profile,
-   Discord OAuth, guild membership/role behavior, each configured webhook,
-   OpenDota profile lookup, and one known Dota match import. Confirm failure UI
-   does not disclose credentials. With temporary/sacrificial provider
-   credentials, exercise a rejected request and timeout, inspect host logs and
-   outbound traces for Steam/OpenDota query credentials and Discord webhook
-   path tokens, then rotate the temporary values. Platform tracing is outside
-   application catch blocks; any captured credential is a release stop until
-   tracing is redacted/disabled and the credential is rotated.
-8. Confirm the data correction primary and deputy can independently reach the
-   private support channel and case register, send and acknowledge one test
-   request, and complete the tabletop below. Record the real provider retention
-   windows and enforcement mechanisms in the private release record.
-9. Configure independent monitors for liveness, readiness, automation freshness,
-   failed Cloudflare Cron Events/route non-2xx, and database/provider faults.
-   Deliver and acknowledge a test alert through a channel that remains available
-   if Discord or this site is down.
+### Every release
+
+1. Resolve the immutable full SHA behind the current canonical production
+   deployment, fetch it, and confirm it is an ancestor of the candidate `HEAD`.
+   Extract the classifier from that trusted production commit, run it across
+   the exact delta, and record its lane, reasons, and changed-file inventory.
+   Never let the candidate's copy classify itself:
+
+   ```bash
+   release_classifier_dir="$(mktemp -d)"
+   release_classifier_path="$release_classifier_dir/classify-release.mjs"
+   trap 'rm -f -- "$release_classifier_path"; rmdir -- "$release_classifier_dir"' EXIT
+   if git show \
+       "$production_release_sha:scripts/classify-release.mjs" \
+       > "$release_classifier_path" 2>/dev/null \
+     && node "$release_classifier_path" \
+       --base "$production_release_sha" \
+       --head "$candidate_release_sha" \
+       --format json; then
+     :
+   else
+     printf '%s\n' '{"lane":"strict","needs_postgres":true,"needs_mutation":true,"needs_e2e":true,"needs_db_release":true,"needs_scheduler_pause":true,"reasons":["trusted production classifier unavailable"]}'
+   fi
+   rm -f -- "$release_classifier_path"
+   rmdir -- "$release_classifier_dir"
+   trap - EXIT
+   ```
+
+   Both variables must contain provider-verified full lowercase SHAs. Never
+   classify a production release from the PR merge base. If the production
+   commit has no classifier, extraction fails, or the trusted classifier fails,
+   the fallback selects the strict lane and every impact procedure. Do not run
+   the candidate classifier to bypass that result.
+
+2. Require the CI gates selected by the classifier to pass for the exact
+   candidate SHA. `ui-only` may narrowly skip PostgreSQL and mutation jobs;
+   `app` runs standard application CI; `strict` runs every CI gate. Only
+   allowlisted documentation/test paths are neutral companions; sensitive-path
+   tests and runbook/policy changes remain strict, and a neutral-only delta does
+   not earn a fast lane. GitHub's event-base classifier is only a CI
+   optimization; it is not release authorization. If the canonical production
+   delta is strict, confirm every strict job ran, even if event-based CI skipped
+   one. Missing canonical deployment metadata blocks the fast path.
+3. Record the previous known-good deployment. First exercise a Preview or
+   staging deployment against a separately scoped non-production database. Run
+   the liveness/readiness and endpoint contract checks, an appropriate public
+   database-backed page, focused desktop/mobile browser verification for UI
+   changes, affected API/auth/actor checks for application changes, and an
+   error-log scan. This rehearsal may include a bounded Admin or staging
+   scheduler invocation, but it is not the artifact that will be promoted.
+4. If either `needs_db_release` or `needs_scheduler_pause` is set, complete the
+   applicable procedure below. A strict lane with both flags clear needs full CI
+   and review but no database backup/release or scheduler pause.
+5. Build a staged **production** candidate for the exact reviewed SHA with
+   production configuration but without assigning the canonical domain (for
+   example, the protected `vercel --prod --skip-domain` workflow). Its migration
+   gate must attest the actual production database's migration ledger, Prisma
+   schema, and native objects read-only. The Next.js build that follows remains
+   responsible for side-effect-free application build code. Any drift stops the
+   release.
+6. Against the generated production-candidate URL, repeat the read-only probes,
+   one public database-backed page, focused UI checks, and an error-log scan. Do
+   not run mutation or scheduler actions against live data. Promote that exact
+   tested deployment rather than rebuilding it.
+7. When `needs_scheduler_pause` is false, leave the sole Cloudflare trigger in
+   place and observe at least two consecutive HTTP 200 `SUCCEEDED` passes plus
+   `/api/health/automation` = 200 after promotion.
+
+### Database- or scheduler-impact prerequisites
+
+Complete only the branches selected by `needs_db_release` and
+`needs_scheduler_pause`. A `strict` lane by itself does not select either branch.
+
+1. Confirm production promotion still requires a human approval or protected
+   deployment check and that full CI passed for the exact SHA.
+2. When `needs_scheduler_pause` is true, run `npm run scheduler:pause`, verify
+   zero Cloudflare Cron Triggers, wait the full 15-minute propagation bound,
+   prove no Scheduled cron attempt lands across two further expected minute
+   slots, then wait at least 90 seconds after the last possible attempt and
+   prove no active lease remains.
+3. When `needs_db_release` is true, validate production configuration with no
+   test overrides. The pooled and direct PostgreSQL URLs must identify
+   the same project, database, schema, and username; only their host form, port,
+   and password may differ. For the release process, that shared username must
+   own every existing application relation and function or immediately inherit
+   each owning role's privileges, have `CREATE` on the application schema, and
+   have any required `TRIGGER` privilege. Ordinary
+   `SELECT`/`INSERT`/`UPDATE`/`DELETE` grants do not authorize `ALTER TABLE`.
+   The read-only migration preflight inventories these ownership rights before
+   its data checks; any reported object is a release stop.
+
+   The application may use a different least-privilege runtime username. If it
+   does, retrieve a pooled and direct URL for the DDL-capable role through the
+   approved secret channel and inject **both** only into the migration process.
+   Do not combine one runtime URL with one migration URL. Record the
+   credential-free role/capability result, then restore or unset the temporary
+   release variables before the staged production application build. Confirm
+   the restored runtime role can read and write on a disposable copy;
+   postflight through the DDL direct URL alone is not enough.
+
+4. Still when `needs_db_release` is true, create a fresh full production dump
+   through `npm run db:backup`, verify it, record its SHA-256 and a provider PITR
+   point, and complete a disposable restore rehearsal. The dump uses
+   `--no-owner --no-privileges`, so the local restore role owns the restored
+   objects; that pass can mask a production ownership or grant failure. Also
+   exercise the exact DDL release username read-only and then through the
+   guarded release path on a provider PITR/restore branch that preserves object
+   ownership. For an old `db push` database, complete the guarded legacy
+   baseline procedure in the README first.
+5. When `needs_db_release` is true, use a clean ephemeral checkout at the
+   reviewed commit, verify its full 40-character `HEAD` SHA, supply production
+   credentials through the trusted environment, and run exactly:
+
+   ```text
+   npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>
+   ```
+
+   This is the only production migration writer. It enforces technical
+   environment, immutable-checkout, reviewed-SHA, migration-safety, preflight,
+   deploy, and postflight gates, and refuses root or `prisma/` `.env` files that
+   Prisma could auto-load after validation. It does **not** prove human
+   approval, CI,
+   provider backup/restore, scheduler propagation, or lease-drain evidence; the
+   release owner must verify and record those prerequisites before invoking it.
+   Stop on any non-zero result; never invoke
+   `prisma migrate deploy`, mark a migration applied, or use an
+   abbreviated/different SHA to bypass the wrapper. Remove the temporary DDL
+   URLs and restore the normal runtime environment before building the staged
+   production candidate.
+
+6. When `needs_scheduler_pause` is true, validate the active and paused Worker
+   artifacts and confirm the reviewed `AUTOMATION_URL` and encrypted binding
+   name. Keep the scheduler paused through candidate verification and promotion,
+   then deploy the reviewed active configuration, allow for propagation, and
+   require the two-pass health gate before closing the window.
+
+Build the staged production candidate after postflight succeeds when a database
+release ran; otherwise build it after the required strict CI and review. A
+scheduler-only change does not invent a database postflight prerequisite.
+
+### Fully rolled-back failed migration
+
+A failed `db:migrate:release` is a release stop, not permission to rerun Prisma.
+Preserve the first PostgreSQL/Prisma error, the reviewed SHA and migration name,
+the provider timestamp, and credential-free ledger/catalog evidence. Use a new
+provider PITR branch from immediately before the attempt to reproduce the
+failure with the exact DDL release username. Do not diagnose privileges from a
+local dump alone: `--no-owner --no-privileges` makes the local restore role own
+the restored objects and can hide the production ownership failure.
+
+An error such as `must be owner of table InhouseQueueEntry` on the first
+`ALTER TABLE`, even when ordinary DML works, means the supplied release role
+does not own or immediately inherit the table owner's privileges. Correct and
+prove the DDL credential or role membership on the provider branch before any
+ledger recovery. Do not transfer objects or add broad grants ad hoc during the
+failed release.
+
+The narrow resolver below is allowed only for one exact, atomic, fully rolled-
+back attempt. Its guard requires a clean checkout at the reviewed full SHA,
+`VERCEL_ENV=production`, a direct non-pooled DDL connection, the immutable
+migration inventory, the repository-pinned Prisma version, no Prisma dotenv
+files, a valid completed prior ledger, one unresolved target row with the
+reviewed checksum, zero applied steps and no finished target row. It also
+requires every catalog object that migration would create to be absent and the
+current role to own or immediately inherit ownership of the affected table,
+with the required schema/trigger privileges. If any condition is uncertain or
+the guard rejects it, stop and prepare a reviewed forward-recovery or restore
+plan; do not weaken the check.
+
+From the same clean reviewed checkout, run exactly:
+
+```text
+npm run db:migrate:failed-resolve -- --apply <reviewed 40-character HEAD SHA> <migration-name>
+```
+
+The migration argument is not free-form. It must be the exact reviewed target
+printed by the command's usage message; every other name is refused.
+
+The command only changes that proven failed row to rolled back and re-attests
+the unchanged catalog and ledger shape. It does not mark the migration applied
+and does not execute its SQL. After it succeeds:
+
+1. Create and verify a **new** production backup and record a new provider PITR
+   point.
+2. Repeat the disposable restore rehearsal and the exact-role test on a
+   provider branch that preserves ownership.
+3. Run the complete guarded
+   `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>`
+   workflow with both temporary URLs on the DDL-capable username.
+4. Require postflight, remove the temporary DDL environment, restore the
+   least-privilege runtime environment, and only then build the production
+   candidate.
+
+Never use `migrate resolve --applied`, run `prisma migrate resolve` directly,
+edit `_prisma_migrations` with manual SQL, mark an unapplied migration finished,
+or blindly retry `migrate deploy`. Those shortcuts can make the ledger claim a
+schema state the catalog never reached.
+
+### Initial launch and affected-subsystem evidence
+
+Re-run the broader platform checks when first launching or when their subsystem
+changes: Node 22 and hosting plan; production/preview database isolation;
+Deployment Protection; function/database regions and pool limits; Cloudflare
+capacity; WAF/proxy/cache behavior; Steam, Discord, webhook, and OpenDota
+credentials; largest season-audit export; support/case-register continuity;
+retention and restore-replay controls; and independent alert delivery. A
+schema-neutral footer edit does not require repeating unrelated provider or
+data-handling rehearsals. The detailed gates below remain authoritative for the
+subsystem they cover.
 
 ## Cloudflare scheduler runbook
 
@@ -186,8 +386,9 @@ Cloudflare Workers Free currently permits 100,000 requests/day, five Cron
 Triggers/account, 50 external subrequests/invocation, 10 ms CPU per Cron
 Trigger, and 15 minutes wall time. This Worker uses about 1,440 invocations/day,
 one trigger, one outbound request per invocation, a 65-second timeout, and a
-bounded 2 KiB response parse. Before every launch, verify that other account
-work has not consumed those shared limits and re-check the current
+bounded 2 KiB response parse. Before initial launch and before a scheduler or
+account-capacity change, verify that other account work has not consumed those
+shared limits and re-check the current
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
 An exceeded quota or CPU limit is a failed scheduler event, not an accepted
 residual risk.
@@ -492,25 +693,26 @@ opens.
 
 ## Controlled promotion
 
-1. Reconfirm the fresh backup, PITR point, approved commit, previous deployment,
-   and paused scheduler. Do not merge or trigger an unrelated production build
-   during this window.
-2. Trigger exactly one manually approved production build for the pinned SHA.
-   Watch the environment gate, migration safety/preflight, `migrate deploy`,
-   postflight, client generation, and Next.js build. Stop on any non-zero step;
-   never mark a migration applied merely to bypass an error.
-3. Confirm the promoted deployment ID and commit. Verify liveness, readiness,
-   canonical redirects, Steam login, a public season page, and one authorized
-   non-destructive admin read.
-4. Deploy the reviewed Cloudflare Worker and confirm Vercel has no cron. Allow
-   up to 15 minutes for its sole `* * * * *` trigger to propagate. Observe two
-   consecutive HTTP 200 `SUCCEEDED` runs, then require
-   `/api/health/automation` to return HTTP 200. Confirm Admin → Automation shows
-   Scheduled cron, a cleared lease, a fresh success, and zero consecutive
-   failures.
-5. Run the actor/phase smoke checklist for the live league state, verify Discord
-   delivery, and confirm the configured monitoring alerts remain green. Only
-   then open general traffic and close the release window.
+1. Reconfirm the classifier result, approved full candidate SHA, exact green CI
+   run, previous deployment, and tested candidate deployment. Do not rebuild
+   during promotion.
+2. Reconfirm fresh backup, PITR, restore, and the successful reviewed-SHA
+   `db:migrate:release` result only when `needs_db_release` was true; reconfirm
+   the paused/drained scheduler only when `needs_scheduler_pause` was true. A
+   strict lane with neither impact flag deliberately has none of those subsystem
+   prerequisites.
+3. Confirm the candidate production build passed client generation, then its
+   read-only migration, schema, and native-object attestation, and finally the
+   Next.js build. Promote that deployment and confirm its ID and commit.
+4. Verify liveness, readiness, canonical redirects, a public season page, and
+   the smoke checks selected for the changed surface. Scan fresh runtime errors.
+5. If the Worker/scheduler was unchanged, leave its sole trigger attached and
+   observe two consecutive HTTP 200 `SUCCEEDED` runs after promotion. If it was
+   paused or changed because `needs_scheduler_pause` was true, deploy the
+   reviewed active Worker, confirm Vercel still has no cron, allow for
+   propagation, and require the same two-pass gate. In both cases require
+   `/api/health/automation` = 200, a cleared lease, a fresh success, and zero
+   consecutive failures before closing the release window.
 
 ## Traffic freeze and incident triage
 
@@ -542,6 +744,12 @@ the repository.
 Use this only when the data is trustworthy and the previous application is
 compatible with the additive schema already applied.
 
+A schema-neutral rollback between releases that preserve the authenticated cron
+contract may promote the recorded known-good deployment without pausing the
+scheduler; verify the normal probes and observe two scheduled successes. If the
+rollback crosses a schema or scheduler boundary, predates that contract, or has
+uncertain compatibility, use the strict sequence below.
+
 1. Keep the scheduler paused and traffic frozen; wait for the lease drain.
 2. Promote the recorded previous known-good deployment. Leave all migrations
    and expanded database objects in place.
@@ -561,10 +769,11 @@ Use this when data is corrupt, missing, or of uncertain integrity.
    the recovery target and accepted data-loss window.
 2. Create a provider PITR branch or restore the verified dump into a new,
    disposable database. Never overwrite the original during investigation.
-3. Run migration baseline/preflight as appropriate, current postflight, and
-   representative counts/invariants for users, seasons, registrations, teams,
-   matches, games, draft state, inhouse/Cred ledgers, announcements, and admin
-   actions. Start the pinned application against the clone.
+3. Run migration baseline as appropriate, migration preflight, isolated
+   migration deploy, current postflight, and representative counts/invariants
+   for users, seasons, registrations, teams, matches, games, draft state,
+   inhouse/Cred ledgers, announcements, and admin actions. Start the pinned
+   application against the clone.
 4. Test both the direct migration connection and the pooled runtime connection.
    Confirm reads and a disposable transactional write/rollback through the
    runtime role. Exercise the actor/phase smoke checklist.

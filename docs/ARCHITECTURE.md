@@ -931,7 +931,7 @@ provider call and an outage cannot become a retry storm.
 **OpenDota** (`src/lib/dota.ts`): match fetches (`/matches/{id}`, 12s cap),
 per-player recent-match lists (8s; returns `null` for unreachable vs `[]` for
 genuinely empty — callers use the distinction to blame the right thing),
-league feeds (`/leagues/{id}/matches`), and rank medals (`rank_tier` +
+league feeds (`/leagues/{id}/matchIds`, including amateur leagues), and rank medals (`rank_tier` +
 `fh_unavailable`), scouting (`/players/{id}/wl` + `/heroes`), and player
 profiles. These server-side requests send the relevant Dota account, match, or
 league id; there is no OpenDota login. Selected rank, visibility, and scouting
@@ -1066,9 +1066,24 @@ Five layers (depth and the doctrine behind each in CLAUDE.md):
 
 CI (`.github/workflows/ci.yml`) runs: types + unit + SQLite integration; the
 integration suite on a Postgres service container; the 4-shard mutation
-matrix; and all three Playwright suites sequentially. Destructive local
-commands (including `db:push`) are gated by `scripts/assert-local-db.mjs` and
-per-script URL guards; refusal output redacts credentials, path, and parameters;
+matrix; and all three Playwright suites sequentially. CI invokes the release
+classifier against the PR/push event base as a conservative job-selection
+optimization; only a narrow presentation-path allowlist may skip the Postgres
+and mutation jobs. Release authorization separately extracts the classifier
+blob from the resolved canonical production commit and runs it against the
+candidate, requires a fetchable ancestor base, and parses the exact
+NUL-delimited Git status stream. If the trusted blob is unavailable, every
+strict/impact gate is selected rather than trusting the candidate to classify
+itself. Schema-neutral
+application changes use the standard lane. Schema/migration/build/scheduler
+surfaces, unexpected statuses, policy changes, and unknown paths are strict.
+Only allowlisted docs and test paths are neutral companions; sensitive-path
+tests and policy/runbook docs remain strict, and neutral-only changes cannot
+create the UI fast path. Event-base classification never authorizes production:
+a strict canonical delta still requires every strict job to have passed.
+Destructive local commands (including `db:push`) are gated by
+`scripts/assert-local-db.mjs` and per-script URL guards; refusal output redacts
+credentials, path, and parameters;
 the fixture/e2e databases and guarded Postgres databases are deliberately
 separate. CI's ordinary SQLite job uses `file:./ci.db`, while Playwright's base
 job starts from its dedicated `prisma/e2e.db`; neither can inherit or target a
@@ -1078,12 +1093,14 @@ remote connection, and the browser fixture never touches `dev.db`.
 
 **Environment gate.** `scripts/validate-prod-env.mjs` runs first for a
 production Vercel build. It requires PostgreSQL `DATABASE_URL` and `DIRECT_URL`
-that name the same logical database, schema, username (and, for recognized managed
-providers, the same project). The initial release intentionally does not claim
-to provision or attest grants for a separate runtime role. It rejects a
-custom-provider pair unless hostname and effective port also match; only the
-reviewed Neon and Supabase forms normalize distinct pool/direct endpoints. It
-rejects a pooler as `DIRECT_URL`, a known direct endpoint as `DATABASE_URL`,
+that name the same logical database, schema, username (and, for recognized
+managed providers, the same project). The initial release intentionally does
+not claim to provision or attest grants for a separate runtime role; pooled and
+direct URLs must therefore retain the same username, though their passwords may
+differ. It rejects a custom-provider pair unless hostname and effective port
+also match; only the reviewed Neon and Supabase forms normalize distinct
+pool/direct endpoints. It rejects a pooler as `DIRECT_URL`, a known direct
+endpoint as `DATABASE_URL`,
 and the obsolete `PRISMA_ACCEPT_DATA_LOSS` escape hatch. It also requires
 distinct, non-placeholder `AUTH_SECRET`, `BACKUP_RECEIPT_SECRET`, and
 `CRON_SECRET` values of at least 32 characters (the cron credential is capped
@@ -1092,9 +1109,9 @@ at 512 characters and may not contain whitespace); a configured non-placeholder
 production `DISCORD_API_BASE`; at least one valid, unique individual SteamID64 in
 `ADMIN_STEAM_IDS`; identical canonical HTTPS origins in `APP_URL` and
 `NEXT_PUBLIC_SITE_URL`; and dev login unset or exactly `false`.
-`BUILD_DB_DRY_RUN` is reserved for unit tests running with `NODE_ENV=test` and
-is rejected in production. `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` is also
-rejected so concurrent migration commands retain Prisma's database lock.
+`BUILD_DB_DRY_RUN` is retired and must be unset.
+`PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` is rejected so concurrent migration
+commands retain Prisma's database lock.
 Errors identify fields without echoing their values. Production has no
 first-user bootstrap path. Secrets belong in Vercel
 or another secret manager and a private process environment, never literal
@@ -1102,19 +1119,43 @@ command arguments, source, logs, or chat. Cloudflare stores the same cron value
 only as encrypted `AUTOMATION_SECRET`; the reviewed, non-secret
 `AUTOMATION_URL` remains pinned in `wrangler.jsonc`.
 
-**Build and schema order.** `build:vercel` is deliberately linear: validate the
-environment → switch the Prisma provider to PostgreSQL → validate the
-committed migration history and schema → run the read-only data/schema
-preflight → apply `prisma migrate deploy` → run the read-only schema postflight
-→ generate the client → run the Next production build. Postflight compares all
-Prisma-supported objects to an isolated PostgreSQL copy of the datamodel,
-requires the exact completed migration inventory and checksums, and verifies
-the definitions of the release-native CHECK constraints, partial indexes,
-functions, and triggers. Migrations therefore use only the direct connection,
-land before new code is promoted, and must remain backward-compatible with the
-currently serving release. Preview, development, and local builds do not run
-the deployment step. Production has no data-loss override and never uses
-`prisma db push`.
+**Build and schema order.** The database gate in the ordinary Vercel migration
+path deliberately contains no writer. In production, `build:vercel` validates
+the environment → switches the Prisma provider to PostgreSQL → validates the
+checksum-pinned committed migration set → generates the client → attests the
+exact migration ledger, Prisma schema, and required PostgreSQL-native objects
+read-only through `scripts/production-schema-check.mjs` → runs the Next
+production build. Pending, missing, failed, extra, or changed migrations and
+schema/native-object drift stop compilation instead of being applied implicitly.
+Preview, development, and local builds do not run the production database
+attestation or migration deploy. The subsequent Next build
+still receives its runtime environment, so application build code must remain
+side-effect-free; the read-only guarantee belongs to the database gate, not to
+arbitrary application code.
+
+Database expansion is a separate controlled operation. From a clean ephemeral
+checkout whose `HEAD` is the reviewed full 40-character commit, the operator
+runs `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>`.
+The guarded wrapper binds approval to that exact checkout, validates production
+configuration and immutable migration SQL, requires `VERCEL_ENV=production`,
+refuses root or `prisma/` `.env` files that Prisma could auto-load afterward,
+runs the read-only data preflight, applies `prisma migrate deploy` through the
+direct connection, and then runs the same exact postflight. It has no
+abbreviated-SHA or build-environment mode-flag shortcut. Migrations land before
+the candidate application is promoted and must remain backward-compatible with
+the currently serving release. Production has no data-loss override and never
+uses `prisma db push`. The wrapper enforces these technical gates, but cannot
+prove human approval, exact-SHA CI success, provider backup/restore evidence,
+scheduler propagation, or lease drain; operators must verify and record every
+applicable prerequisite before invoking it.
+
+This split is also the release boundary: schema-neutral UI/app candidates need
+neither a fresh release backup nor a scheduler pause. A strict classification
+always requires full CI and review, but does not by itself imply a database
+release or scheduler pause. Separate database-release and scheduler-impact
+flags (`needs_db_release` and `needs_scheduler_pause`) select fresh recovery
+evidence and/or the 15-minute pause propagation bound, two missed slots, and
+90-second lease drain before the explicit writer.
 
 **Migration history and existing databases.** The first committed migration is
 an immutable baseline of the last production schema managed with `db push`;
@@ -1150,29 +1191,40 @@ Triggers/account, 50 external subrequests/invocation, 10 ms CPU per Cron
 Trigger, and 15 minutes wall time. This Worker consumes about 1,440 scheduled
 invocations/day, one trigger, one external fetch per invocation, a 65-second
 timeout, and a bounded 2 KiB parse. Those limits are shared provider state, not
-an application guarantee, so launch evidence must re-check capacity and current
+an application guarantee, so initial-launch or scheduler-change evidence must
+re-check capacity and current
 [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
 
-Before promotion, a production-like candidate on a non-production database must prove: `/api/health/live` returns 200
-without dependency work; `/api/health/ready` returns 200 with the target
-database and 503 when that probe fails; unauthenticated/incorrect-auth cron is
-401; POST `/api/sync` is 405; GET `/api/sync` is a read-only
-`updated`/`watch`/`cursor` response; and a manual Admin run or separate reviewed
-staging invocation can complete. The production Cloudflare Worker must never
-target a Vercel preview. Immediately after a controlled production promotion,
-the sole Cloudflare trigger must produce two consecutive authenticated
-one-minute 200/SUCCEEDED invocations, and `/api/health/automation` must return
-200. The evergreen Admin →
+Before promotion, a Preview or staging deployment on a non-production database
+must prove runtime behavior: `/api/health/live` returns 200 without dependency
+work; `/api/health/ready` returns 200 with the target database and 503 when that
+probe fails; unauthenticated/incorrect-auth cron is 401; POST `/api/sync` is
+405; GET `/api/sync` is a read-only `updated`/`watch`/`cursor` response; and a
+manual Admin run or separate reviewed staging invocation can complete. That
+rehearsal is not promotable. The exact reviewed SHA is then built as a staged
+production candidate, with production configuration but no canonical domain;
+its read-only database gate attests the actual production database. Only
+read-only probes, a public database-backed page, focused UI checks, and an
+error-log scan run against that generated candidate URL before the exact
+deployment is promoted without rebuilding. The production Cloudflare Worker
+must never target a Vercel Preview or generated candidate URL. Immediately
+after a controlled production promotion, the sole Cloudflare trigger must
+produce two consecutive authenticated one-minute 200/SUCCEEDED invocations,
+and `/api/health/automation` must return 200. The evergreen Admin →
 Automation card must show those attempts and successes, Source = Scheduled
 cron, cleared leases, and zero consecutive failures. The manual control must
 complete under Source = Admin manual run while idle and refuse to overlap an
 active scheduled lease. Alert on live/ready failure, cron non-2xx, or four
-minutes without a completed pass. The pinned-commit promotion, launch evidence,
+minutes without a completed pass. The pinned-commit promotion, release evidence,
 traffic freeze, rollback, PITR recovery, and secret-rotation contract lives in
 `docs/PRODUCTION-OPERATIONS.md`.
 
 **Application rollback sequencing.** The Cloudflare clock is independent of a
-Vercel rollback. Deploy the committed `wrangler.paused.jsonc` through
+Vercel rollback. A schema-neutral rollback that preserves the authenticated
+automation contract leaves the scheduler active, promotes the exact known-good
+artifact, verifies normal health, and observes two scheduled successes. A
+rollback that crosses a schema/scheduler boundary, predates that contract, or
+has uncertain compatibility deploys the committed `wrangler.paused.jsonc` through
 `npm run scheduler:pause`; its empty `crons` array removes every Cron Trigger
 without relying on dashboard-only drift. Wait the full 15-minute propagation
 bound, prove no Scheduled cron attempt lands across two further expected minute
@@ -1218,8 +1270,11 @@ only the exact guarded local `ld2l_restore_test` target, verifies the digest
 and private file modes (plus signed metadata when a receipt secret is
 configured), recreates the database from `template0`, restores with
 `psql -X`, `ON_ERROR_STOP`, and one transaction, then requires exactly one
-application schema and runs the same full schema/migration/native-object
-postflight against that discovered schema. CI also asserts that known legacy
-User and Season fixture rows survived the round trip. A launch still requires
-the same restore drill against a disposable database on the actual hosting
+application schema. Against that discovered schema it runs migration
+preflight, deploys the reviewed migrations from an isolated Prisma workspace,
+and only then runs the same full schema/migration/native-object postflight. The
+legacy mode preserves its additional baseline-adoption step before preflight.
+CI also asserts that known legacy User and Season fixture rows survived the
+round trip. Initial launch and every production migration release still require the
+same restore drill against a disposable database on the actual hosting
 provider, with the result recorded before the backup is trusted for recovery.

@@ -551,37 +551,43 @@ describe("computeStandings — idDecided flags the coin-flip pairs", () => {
   });
 });
 
-describe("computeStandings — forfeits are ruled, not played", () => {
-  it("a forfeit counts for points and W-L but never the game diff", () => {
+describe("computeStandings — forfeits keep their official score", () => {
+  it("gives identical Bo2 loss-and-draw records the same differential", () => {
     const s = computeStandings(
-      ["a", "b", "c"],
+      ["sisters", "vegan", "w4tkins", "bad-boys", "bleeding-heart"],
       [
-        { ...match("a", "b", 2, 0), forfeit: true }, // ruled 2-0
-        match("a", "c", 1, 1),
-        match("b", "c", 2, 1),
+        { ...match("w4tkins", "sisters", 2, 0), forfeit: true },
+        match("vegan", "w4tkins", 0, 2),
+        match("sisters", "bad-boys", 1, 1),
+        match("bleeding-heart", "vegan", 1, 1),
       ],
     );
-    const a = s.find((x) => x.teamId === "a")!;
-    const b = s.find((x) => x.teamId === "b")!;
-    expect(a.points).toBe(4); // 3 (forfeit win) + 1 (draw) — points count
-    expect(a.wins).toBe(1);
-    expect(b.losses).toBe(1);
-    // …but the ruled 2-0 never reaches the map counts.
-    expect(a.gameWins).toBe(1); // only the real 1-1
-    expect(a.gameDiff).toBe(0);
-    expect(b.gameLosses).toBe(1); // only the real 2-1 vs c
-    expect(b.gameDiff).toBe(1);
+    const sisters = s.find((x) => x.teamId === "sisters")!;
+    const vegan = s.find((x) => x.teamId === "vegan")!;
+
+    expect([
+      sisters.wins,
+      sisters.draws,
+      sisters.losses,
+      sisters.points,
+    ]).toEqual([
+      0, 1, 1, 1,
+    ]);
+    expect([vegan.wins, vegan.draws, vegan.losses, vegan.points]).toEqual([
+      0, 1, 1, 1,
+    ]);
+    expect(sisters.gameDiff).toBe(-2);
+    expect(vegan.gameDiff).toBe(-2);
   });
 
-  it("head-to-head mini-diff ignores a forfeited meeting too", () => {
-    // a and b tied on everything; their two meetings were a real 1-1 draw and
-    // a forfeited 2-0 to a. Mini-POINTS still order them (a took 3 from the
-    // forfeit) but the ruled scores never feed the mini-diff.
+  it("uses a forfeited meeting's score in the head-to-head mini-diff", () => {
+    // Each team wins a meeting. The ruled 2-0 is still the official score, so
+    // it outranks b's narrower played 2-1 win in their mini-table.
     const ranks = headToHeadRanks(
       ["a", "b"],
-      [{ ...match("a", "b", 2, 0), forfeit: true }, match("b", "a", 1, 1)],
+      [{ ...match("a", "b", 2, 0), forfeit: true }, match("b", "a", 2, 1)],
     );
-    expect(ranks.get("a")).toBe(0); // forfeit WIN still orders the pair…
+    expect(ranks.get("a")).toBe(0);
     expect(ranks.get("b")).toBe(1);
   });
 });

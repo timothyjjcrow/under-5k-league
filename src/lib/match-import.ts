@@ -29,7 +29,13 @@ import {
   weekReminderKey,
   claimProviderCooldown,
 } from "./settings";
-import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
+import {
+  AUTO_SYNC,
+  DOTA_MATCH_KIND,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SCRIM_STATUS,
+} from "./constants";
 import { matchResultsOpen } from "./league-lifecycle";
 import {
   announcementDedupeKey,
@@ -41,6 +47,10 @@ import {
   releaseAnnouncementClaim,
 } from "./announcement-marker";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
+import {
+  eligibleScrimMeetingKickoffs,
+  isWithinScrimResultWindow,
+} from "./scrim-window";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
@@ -267,6 +277,27 @@ export function classifyGame(
   return { ok: true, radiantTeamId, direTeamId, winnerTeamId };
 }
 
+/**
+ * `/leagues/{id}/matchIds` can publish an id before OpenDota has finished
+ * parsing its detail row. Such a row is not a conclusive roster mismatch and
+ * must never enter the league scanner's permanent skip memory.
+ */
+function hasFinalLeagueMatchDetails(
+  match: OpenDotaMatch,
+  expectedMatchId: number,
+): boolean {
+  return (
+    match.match_id === expectedMatchId &&
+    Number.isFinite(match.start_time) &&
+    match.start_time > 0 &&
+    Number.isFinite(match.duration) &&
+    match.duration > 0 &&
+    typeof match.radiant_win === "boolean" &&
+    Array.isArray(match.players) &&
+    match.players.length >= 10
+  );
+}
+
 /** Max gap between consecutive games of one series. A real Bo2/Bo3 is played
  *  back-to-back; a bigger gap means a different session entirely (a scrim, a
  *  prior meeting, a rematch for fun the next day). */
@@ -287,6 +318,40 @@ export const SCAN_BUDGET_MS = 25_000;
  *  not by keeping this window tight. */
 export const DETECT_WINDOW_BEFORE_MS = 3 * 24 * 60 * 60 * 1000;
 export const DETECT_WINDOW_AFTER_MS = 6 * 24 * 60 * 60 * 1000;
+
+/** Candidate eligibility for one scheduled league fixture. */
+export function isWithinLeagueResultWindow(
+  startTimeSeconds: number,
+  scheduledAtMs: number,
+): boolean {
+  const gameStartMs = Number(startTimeSeconds) * 1000;
+  return (
+    Number.isFinite(gameStartMs) &&
+    gameStartMs > 0 &&
+    gameStartMs >= scheduledAtMs - DETECT_WINDOW_BEFORE_MS &&
+    gameStartMs <= scheduledAtMs + DETECT_WINDOW_AFTER_MS
+  );
+}
+
+/**
+ * Candidate-specific arbitration set. A nearby meeting only competes when the
+ * candidate is inside that meeting's own result window; proximity alone cannot
+ * assign a game to an event that would refuse to import it.
+ */
+export function eligibleCompetingMeetingKickoffs(
+  startTimeSeconds: number,
+  meetings: {
+    league: readonly number[];
+    scrims: readonly number[];
+  },
+): number[] {
+  return [
+    ...meetings.league.filter((kickoffMs) =>
+      isWithinLeagueResultWindow(startTimeSeconds, kickoffMs),
+    ),
+    ...eligibleScrimMeetingKickoffs(startTimeSeconds, meetings.scrims),
+  ];
+}
 
 /**
  * May THIS match claim a game, given the other unplayed meetings between the
@@ -729,9 +794,11 @@ export type ImportGameOptions = {
   /** Automation-only absolute budget. Manual callers omit both fields. */
   deadlineMs?: number;
   signal?: AbortSignal;
+  /** Internal league-scan handoff: a finalized provider row already fetched. */
+  prefetchedLeagueMatch?: OpenDotaMatch;
 };
 
-/** Fetch a specific Dota match and record it against a scheduled league match. */
+/** Fetch (or reuse) a Dota match and record it against a scheduled league match. */
 export async function importGameForMatch(
   matchId: string,
   dotaMatchId: string,
@@ -793,11 +860,24 @@ export async function importGameForMatch(
     };
   }
 
-  const existing = await prisma.game.findUnique({ where: { dotaMatchId } });
+  const [existing, existingScrim, existingClaim] = await Promise.all([
+    prisma.game.findUnique({ where: { dotaMatchId } }),
+    prisma.scrimGame.findUnique({ where: { dotaMatchId } }),
+    prisma.dotaMatchClaim.findUnique({ where: { dotaMatchId } }),
+  ]);
   if (existing) {
     return existing.matchId === matchId
       ? { ok: false, error: "That game is already recorded here" }
       : { ok: false, error: "That game is already recorded for another match" };
+  }
+  if (existingScrim || existingClaim) {
+    return {
+      ok: false,
+      error:
+        existingClaim?.kind === DOTA_MATCH_KIND.SCRIM || existingScrim
+          ? "That game is already recorded as a scrim"
+          : "That game is already reserved for another scheduled event",
+    };
   }
 
   const fetchOptions: OpenDotaFetchOptions = {
@@ -832,7 +912,18 @@ export async function importGameForMatch(
       };
     }
   }
-  const od = await fetchOpenDotaMatch(dotaMatchId, fetchOptions);
+  let od: OpenDotaMatch | null;
+  if (options.prefetchedLeagueMatch) {
+    const expectedMatchId = Number(dotaMatchId);
+    od = hasFinalLeagueMatchDetails(
+      options.prefetchedLeagueMatch,
+      expectedMatchId,
+    )
+      ? options.prefetchedLeagueMatch
+      : null;
+  } else {
+    od = await fetchOpenDotaMatch(dotaMatchId, fetchOptions);
+  }
   if (!od) {
     if (openDotaBudgetExpired(fetchOptions)) {
       return {
@@ -858,47 +949,70 @@ export async function importGameForMatch(
     }
     const gameStartMs = Number(od.start_time) * 1000;
     const kickoffMs = match.scheduledAt.getTime();
-    if (
-      !Number.isFinite(gameStartMs) ||
-      gameStartMs <= 0 ||
-      gameStartMs < kickoffMs - DETECT_WINDOW_BEFORE_MS ||
-      gameStartMs > kickoffMs + DETECT_WINDOW_AFTER_MS
-    ) {
+    if (!isWithinLeagueResultWindow(od.start_time, kickoffMs)) {
       return {
         ok: false,
         error:
           "That Dota game is outside this fixture's result window — ask an admin if the kickoff was recorded incorrectly",
       };
     }
-    const otherMeetings = await prisma.match.findMany({
-      where: {
-        seasonId: match.seasonId,
-        id: { not: match.id },
-        scheduledAt: { not: null },
-        OR: [
-          {
-            homeTeamId: match.homeTeamId,
-            awayTeamId: match.awayTeamId,
+    const [otherMeetings, scrimMeetings] = await Promise.all([
+      prisma.match.findMany({
+        where: {
+          seasonId: match.seasonId,
+          id: { not: match.id },
+          scheduledAt: { not: null },
+          OR: [
+            {
+              homeTeamId: match.homeTeamId,
+              awayTeamId: match.awayTeamId,
+            },
+            {
+              homeTeamId: match.awayTeamId,
+              awayTeamId: match.homeTeamId,
+            },
+          ],
+        },
+        select: { scheduledAt: true },
+      }),
+      prisma.scrim.findMany({
+        where: {
+          seasonId: match.seasonId,
+          status: {
+            in: [
+              SCRIM_STATUS.SCHEDULED,
+              SCRIM_STATUS.LIVE,
+              SCRIM_STATUS.COMPLETED,
+            ],
           },
-          {
-            homeTeamId: match.awayTeamId,
-            awayTeamId: match.homeTeamId,
-          },
-        ],
-      },
-      select: { scheduledAt: true },
-    });
+          OR: [
+            {
+              hostTeamId: match.homeTeamId,
+              opponentTeamId: match.awayTeamId,
+            },
+            {
+              hostTeamId: match.awayTeamId,
+              opponentTeamId: match.homeTeamId,
+            },
+          ],
+        },
+        select: { scheduledAt: true },
+      }),
+    ]);
     if (
       !claimsGame(
         gameStartMs,
         kickoffMs,
-        otherMeetings.map((other) => other.scheduledAt!.getTime()),
+        eligibleCompetingMeetingKickoffs(od.start_time, {
+          league: otherMeetings.map((other) => other.scheduledAt!.getTime()),
+          scrims: scrimMeetings.map((other) => other.scheduledAt.getTime()),
+        }),
       )
     ) {
       return {
         ok: false,
         error:
-          "That Dota game is closer to another meeting between these teams — import it on that fixture instead",
+          "That Dota game is closer to another meeting between these teams — import it there instead",
       };
     }
   }
@@ -1004,6 +1118,17 @@ export async function importGameForMatch(
               `This best-of-${fresh.bestOf} already has all ${fresh.bestOf} of its games`,
             );
           }
+          // One global claim arbitrates official games and casual scrims. The
+          // two result tables deliberately stay separate so scrim stats can
+          // never leak into league roll-ups, but this shared unique key keeps
+          // the same Valve match from being counted once in each system.
+          await tx.dotaMatchClaim.create({
+            data: {
+              dotaMatchId: String(od.match_id),
+              kind: DOTA_MATCH_KIND.LEAGUE,
+              contextId: matchId,
+            },
+          });
           await tx.game.create({
             data: {
               matchId,
@@ -1321,13 +1446,26 @@ export async function autoDetectGamesForMatch(
   // recorded rematch (e.g. the playoff meeting) starves the older unrecorded
   // game out of the bestOf cap below. Admin-removed games are treated the same
   // way: a deliberate removal is a decision this scan must not overturn.
-  const recorded = new Set([
-    ...(
-      await prisma.game.findMany({
-        where: { dotaMatchId: { in: candidateIds.map(String) } },
+  const candidateIdStrings = candidateIds.map(String);
+  const [recordedLeagueGames, recordedScrimGames, recordedClaims] =
+    await Promise.all([
+      prisma.game.findMany({
+        where: { dotaMatchId: { in: candidateIdStrings } },
         select: { dotaMatchId: true },
-      })
-    ).map((g) => g.dotaMatchId),
+      }),
+      prisma.scrimGame.findMany({
+        where: { dotaMatchId: { in: candidateIdStrings } },
+        select: { dotaMatchId: true },
+      }),
+      prisma.dotaMatchClaim.findMany({
+        where: { dotaMatchId: { in: candidateIdStrings } },
+        select: { dotaMatchId: true },
+      }),
+    ]);
+  const recorded = new Set([
+    ...recordedLeagueGames.map((g) => g.dotaMatchId),
+    ...recordedScrimGames.map((g) => g.dotaMatchId),
+    ...recordedClaims.map((g) => g.dotaMatchId),
     ...(opts.ignoreSkips ? [] : await loadImportSkips(match.seasonId)),
   ]);
 
@@ -1375,9 +1513,9 @@ export async function autoDetectGamesForMatch(
   // rematch), and an unimported fixture stays a live candidate forever. Keep
   // only games inside this match's window AND closer to it than to any other
   // unplayed meeting between the same two sides — see `claimsGame`.
-  const otherKickoffs = match.scheduledAt
-    ? (
-        await prisma.match.findMany({
+  const competingMeetings = match.scheduledAt
+    ? await Promise.all([
+        prisma.match.findMany({
           where: {
             seasonId: match.seasonId,
             id: { not: match.id },
@@ -1389,16 +1527,45 @@ export async function autoDetectGamesForMatch(
             ],
           },
           select: { scheduledAt: true },
-        })
-      ).map((m) => m.scheduledAt!.getTime())
-    : [];
+        }),
+        prisma.scrim.findMany({
+          where: {
+            seasonId: match.seasonId,
+            status: {
+              in: [
+                SCRIM_STATUS.SCHEDULED,
+                SCRIM_STATUS.LIVE,
+                SCRIM_STATUS.COMPLETED,
+              ],
+            },
+            OR: [
+              {
+                hostTeamId: match.homeTeamId,
+                opponentTeamId: match.awayTeamId,
+              },
+              {
+                hostTeamId: match.awayTeamId,
+                opponentTeamId: match.homeTeamId,
+              },
+            ],
+          },
+          select: { scheduledAt: true },
+        }),
+      ]).then(([matches, scrims]) => ({
+        league: matches.map((m) => m.scheduledAt!.getTime()),
+        scrims: scrims.map((s) => s.scheduledAt.getTime()),
+      }))
+    : { league: [], scrims: [] };
 
   const windowed = match.scheduledAt
     ? valid.filter((v) => {
         const t = v.startTime * 1000;
         const night = match.scheduledAt!.getTime();
-        if (t < night - DETECT_WINDOW_BEFORE_MS) return false;
-        if (t > night + DETECT_WINDOW_AFTER_MS) return false;
+        if (!isWithinLeagueResultWindow(v.startTime, night)) return false;
+        const otherKickoffs = eligibleCompetingMeetingKickoffs(
+          v.startTime,
+          competingMeetings,
+        );
         return claimsGame(t, night, otherKickoffs);
       })
     : valid;
@@ -1598,10 +1765,30 @@ export async function syncLeagueGames(
       error: "OpenDota is unreachable right now — try again in a minute",
     };
   }
-  const scheduled = await prisma.match.findMany({
-    where: { seasonId },
-    include: { games: { select: { id: true } } },
-  });
+  const [scheduled, scheduledScrims] = await Promise.all([
+    prisma.match.findMany({
+      where: { seasonId },
+      include: { games: { select: { id: true } } },
+    }),
+    prisma.scrim.findMany({
+      where: {
+        seasonId,
+        status: {
+          in: [
+            SCRIM_STATUS.SCHEDULED,
+            SCRIM_STATUS.LIVE,
+            SCRIM_STATUS.COMPLETED,
+          ],
+        },
+        opponentTeamId: { not: null },
+      },
+      include: {
+        participants: {
+          select: { teamId: true, dotaAccountId: true },
+        },
+      },
+    }),
+  ]);
 
   const skipKey = leagueSyncSkipKey(seasonId);
   let skipList: string[] = [];
@@ -1659,6 +1846,7 @@ export async function syncLeagueGames(
       idStr: string;
       startTime: number;
       winnerTeamId: string | null;
+      details: OpenDotaMatch;
     }[]
   >();
   feed: for (
@@ -1677,16 +1865,26 @@ export async function syncLeagueGames(
     const idsToCheck = [
       ...new Set(batch.map(String).filter((id) => !skip.has(id))),
     ];
-    const recorded = new Set(
-      idsToCheck.length === 0
-        ? []
-        : (
-            await prisma.game.findMany({
-              where: { dotaMatchId: { in: idsToCheck } },
-              select: { dotaMatchId: true },
-            })
-          ).map((game) => game.dotaMatchId),
-    );
+    const recorded = new Set<string>();
+    if (idsToCheck.length > 0) {
+      const [leagueGames, scrimGames, claims] = await Promise.all([
+        prisma.game.findMany({
+          where: { dotaMatchId: { in: idsToCheck } },
+          select: { dotaMatchId: true },
+        }),
+        prisma.scrimGame.findMany({
+          where: { dotaMatchId: { in: idsToCheck } },
+          select: { dotaMatchId: true },
+        }),
+        prisma.dotaMatchClaim.findMany({
+          where: { dotaMatchId: { in: idsToCheck } },
+          select: { dotaMatchId: true },
+        }),
+      ]);
+      for (const row of [...leagueGames, ...scrimGames, ...claims]) {
+        recorded.add(row.dotaMatchId);
+      }
+    }
 
     for (const dotaId of batch) {
       const idStr = String(dotaId);
@@ -1706,6 +1904,12 @@ export async function syncLeagueGames(
         }
         continue; // transient fetch failure — retry later, never skip-listed
       }
+      if (!hasFinalLeagueMatchDetails(od, dotaId)) {
+        // The id feed can lead the parsed match endpoint by a few minutes.
+        // Retry next run instead of permanently classifying a partial row as
+        // unrelated to every roster.
+        continue;
+      }
       await ensureAccounts();
 
       // classifyGame is roster-based and time-blind, and a single round robin
@@ -1717,41 +1921,127 @@ export async function syncLeagueGames(
       const fits: {
         m: (typeof scheduled)[number];
         winnerTeamId: string | null;
+        kickoffMs: number;
       }[] = [];
       for (const m of scheduled) {
         const acc = accountsByMatch.get(m.id);
         if (!acc) continue;
         if (m.games.length >= m.bestOf) continue;
         if (m.status === MATCH_STATUS.COMPLETED) continue;
+        const kickoffMs = m.scheduledAt?.getTime();
+        if (
+          kickoffMs === undefined ||
+          !isWithinLeagueResultWindow(od.start_time, kickoffMs)
+        ) {
+          continue;
+        }
         const cls = classifyGame(
           od,
           { teamId: m.homeTeamId, accountIds: acc.home },
           { teamId: m.awayTeamId, accountIds: acc.away },
           Math.min(3, acc.teamSize),
         );
-        if (cls.ok) fits.push({ m, winnerTeamId: cls.winnerTeamId });
+        if (cls.ok) {
+          fits.push({ m, winnerTeamId: cls.winnerTeamId, kickoffMs });
+        }
       }
+
+      // A scrim may deliberately use the season's Valve league ticket. That
+      // puts it in this official feed, so classify it against booked scrim
+      // lineups too and let the closest scheduled event own the candidate.
+      // Ties fail closed in favour of neither automatic official import.
+      const scrimFits = scheduledScrims.flatMap((scrim) => {
+        if (!scrim.opponentTeamId) return [];
+        if (
+          !isWithinScrimResultWindow(od.start_time, scrim.scheduledAt.getTime())
+        ) {
+          return [];
+        }
+        const host = new Set(
+          scrim.participants
+            .filter((p) => p.teamId === scrim.hostTeamId)
+            .map((p) => p.dotaAccountId),
+        );
+        const away = new Set(
+          scrim.participants
+            .filter((p) => p.teamId === scrim.opponentTeamId)
+            .map((p) => p.dotaAccountId),
+        );
+        const cls = classifyGame(
+          od,
+          { teamId: scrim.hostTeamId, accountIds: host },
+          { teamId: scrim.opponentTeamId, accountIds: away },
+          3,
+        );
+        return cls.ok ? [{ scrim }] : [];
+      });
       if (fits.length === 0) {
+        // A real booked scrim belongs to the scrim importer, but this official
+        // league-ticket scanner has already classified it conclusively. Keep
+        // that id in this scanner's private skip memory so it does not spend
+        // the provider budget again. The scrim scanner/manual import do not
+        // read leagueSyncSkip and remain free to claim the game.
+        if (scrimFits.length > 0) {
+          newlySkipped.push(idStr);
+          skip.add(idStr);
+          continue;
+        }
         newlySkipped.push(idStr);
         continue;
       }
 
       const gameMs = (od.start_time ?? 0) * 1000;
       const best = fits.reduce((a, b) => {
-        const da = a.m.scheduledAt
-          ? Math.abs(gameMs - a.m.scheduledAt.getTime())
-          : Number.MAX_SAFE_INTEGER;
-        const db = b.m.scheduledAt
-          ? Math.abs(gameMs - b.m.scheduledAt.getTime())
-          : Number.MAX_SAFE_INTEGER;
+        const da = Math.abs(gameMs - a.kickoffMs);
+        const db = Math.abs(gameMs - b.kickoffMs);
         return db < da ? b : a;
       });
+      const samePair = (teamA: string, teamB: string | null) =>
+        teamB !== null &&
+        ((teamA === best.m.homeTeamId && teamB === best.m.awayTeamId) ||
+          (teamA === best.m.awayTeamId && teamB === best.m.homeTeamId));
+      const competingKickoffs = eligibleCompetingMeetingKickoffs(
+        od.start_time,
+        {
+          league: scheduled.flatMap((other) =>
+            other.id !== best.m.id &&
+            other.scheduledAt &&
+            samePair(other.homeTeamId, other.awayTeamId)
+              ? [other.scheduledAt.getTime()]
+              : [],
+          ),
+          scrims: scheduledScrims.flatMap((other) =>
+            samePair(other.hostTeamId, other.opponentTeamId)
+              ? [other.scheduledAt.getTime()]
+              : [],
+          ),
+        },
+      );
+      if (!claimsGame(gameMs, best.kickoffMs, competingKickoffs)) {
+        // A historical game can share today's roster. Attribute by the same
+        // meeting-window/nearest-kickoff rules as per-fixture detection, and
+        // fail closed on an exact tie.
+        newlySkipped.push(idStr);
+        skip.add(idStr);
+        continue;
+      }
+      const officialDistance = Math.abs(gameMs - best.kickoffMs);
+      const scrimOwnsCandidate = scrimFits.some(
+        ({ scrim }) =>
+          Math.abs(gameMs - scrim.scheduledAt.getTime()) <= officialDistance,
+      );
+      if (scrimOwnsCandidate) {
+        newlySkipped.push(idStr);
+        skip.add(idStr);
+        continue;
+      }
       const list = candidatesByMatch.get(best.m.id) ?? [];
       list.push({
         id: Number(idStr),
         idStr,
         startTime: od.start_time ?? 0,
         winnerTeamId: best.winnerTeamId,
+        details: od,
       });
       candidatesByMatch.set(best.m.id, list);
     }
@@ -1773,7 +2063,10 @@ export async function syncLeagueGames(
         deadlineReached = true;
         break;
       }
-      const r = await importGameForMatch(matchId, c.idStr, fetchOptions);
+      const r = await importGameForMatch(matchId, c.idStr, {
+        ...fetchOptions,
+        prefetchedLeagueMatch: c.details,
+      });
       if (r.ok) {
         imported++;
       } else if (r.deadlineReached) {

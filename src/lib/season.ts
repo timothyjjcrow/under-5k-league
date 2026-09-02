@@ -2,7 +2,7 @@ import { cache } from "react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import type { Season } from "@prisma/client";
-import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { DRAFT_STATUS, SCRIM_STATUS, SEASON_STATUS } from "./constants";
 import { resolveChampionPresentation } from "./champion-presentation";
 import { stampResultChange } from "./settings";
 
@@ -160,6 +160,16 @@ export async function archiveCompletedSeason(
           data: { isActive: false },
         });
         if (archived.count !== 1) throw new ActiveSeasonChangedError();
+        // Defensive fallback for legacy/manual completions that did not pass
+        // through playoff crown logic. A LIVE practice series remains visible
+        // and finishable from its archived season.
+        await tx.scrim.updateMany({
+          where: {
+            seasonId: season.id,
+            status: { in: [SCRIM_STATUS.OPEN, SCRIM_STATUS.SCHEDULED] },
+          },
+          data: { status: SCRIM_STATUS.CANCELLED },
+        });
         await stampResultChange(tx);
         return { ok: true as const, id: season.id, name: season.name };
       },

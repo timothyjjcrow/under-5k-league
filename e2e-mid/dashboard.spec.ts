@@ -23,6 +23,19 @@ test("dashboard shows the regular-season hero, standings, and a LIVE chip", asyn
   assertNoErrors();
 });
 
+test("signed-out newcomers can find the mid-season standin signup", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/");
+
+  const cta = page.getByRole("link", { name: "Sign in to stand in →" });
+  await expect(cta).toBeVisible();
+  await expect(cta).toHaveAttribute("href", "/login?next=/me");
+
+  assertNoErrors();
+});
+
 // The dashboard is the widest page in the app — standings table, bracket, the
 // This-week grid — and it was the one page with no overflow tripwire at all.
 test("dashboard has no horizontal page overflow on a phone", async ({

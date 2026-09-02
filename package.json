@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:vercel": "node scripts/validate-prod-env.mjs && node scripts/switch-db-provider.mjs postgresql && npm run db:migrate:validate && npm run db:migrate:preflight && node scripts/build-db.mjs && npm run db:migrate:postflight && npx prisma generate && next build",
+    "build:vercel": "node scripts/vercel-build.mjs",
     "start": "next start",
     "lint": "eslint",
     "db:generate": "prisma generate",
@@ -21,6 +21,8 @@
     "db:migrate:validate": "node scripts/migration-safety.mjs && prisma validate",
     "db:migrate:preflight": "node scripts/migration-preflight.mjs",
     "db:migrate:postflight": "node scripts/migration-postflight.mjs",
+    "db:migrate:release": "node scripts/release-migrations.mjs",
+    "db:migrate:failed-resolve": "node scripts/migration-failed-resolve.mjs",
     "db:migrate:rehearse": "node scripts/migration-rehearsal.mjs",
     "db:migrate:baseline-check": "node scripts/migration-baseline-check.mjs",
     "db:migrate:baseline-resolve": "node scripts/migration-baseline-resolve.mjs",

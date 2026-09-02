@@ -16,7 +16,7 @@ function between(startMarker: string, endMarker: string): string {
   return OPERATIONS.slice(start, end);
 }
 
-const OWNERS = between("## Required owners", "## Launch evidence record");
+const OWNERS = between("## Required owners", "## Release evidence record");
 const RUNBOOK = between(
   "## Data correction and retention",
   "## Controlled promotion",

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
+import { DOTA_MATCH_KIND } from "@/lib/constants";
 import { seasonSettingScopeWhere } from "@/lib/settings";
 import { storedDotaAccountId } from "@/lib/dota-account";
 import { serializeSeasonExport } from "@/lib/season-export-response";
@@ -20,9 +21,13 @@ async function readSeasonArchive(
   const [
     registrations,
     teams,
+    teamStaff,
     teamMembers,
     matches,
     games,
+    scrims,
+    scrimParticipants,
+    scrimGames,
     draft,
     bids,
     availability,
@@ -37,6 +42,10 @@ async function readSeasonArchive(
       include: { user: { select: { id: true, steamId: true, name: true } } },
     }),
     tx.team.findMany({ where: { seasonId } }),
+    tx.teamStaff.findMany({
+      where: { team: { seasonId } },
+      orderBy: { id: "asc" },
+    }),
     tx.teamMember.findMany({
       where: { seasonId },
       include: { user: { select: { id: true, steamId: true, name: true } } },
@@ -44,6 +53,20 @@ async function readSeasonArchive(
     tx.match.findMany({ where: { seasonId } }),
     // The box scores are the biggest and least reproducible part of a season.
     tx.game.findMany({ where: { match: { seasonId } } }),
+    tx.scrim.findMany({
+      where: { seasonId },
+      orderBy: { id: "asc" },
+    }),
+    tx.scrimParticipant.findMany({
+      where: { scrim: { seasonId } },
+      orderBy: { id: "asc" },
+    }),
+    // Scrim box scores are intentionally separate from competitive Game rows,
+    // but they are just as unrecoverable and belong in the same audit snapshot.
+    tx.scrimGame.findMany({
+      where: { scrim: { seasonId } },
+      orderBy: { id: "asc" },
+    }),
     tx.draft.findUnique({ where: { seasonId } }),
     tx.bid.findMany({ where: { seasonId } }),
     tx.matchAvailability.findMany({ where: { match: { seasonId } } }),
@@ -62,15 +85,44 @@ async function readSeasonArchive(
   ]);
 
   const matchIds = matches.map((match) => match.id);
-  const settings = await tx.setting.findMany({
-    where: seasonSettingScopeWhere(seasonId, matchIds),
-    orderBy: { key: "asc" },
-  });
+  const scrimIds = scrims.map((scrim) => scrim.id);
+  const exportedDotaMatchIds = [
+    ...games.map((game) => game.dotaMatchId),
+    ...scrimGames.map((game) => game.dotaMatchId),
+  ];
+  const [settings, dotaMatchClaims] = await Promise.all([
+    tx.setting.findMany({
+      where: seasonSettingScopeWhere(seasonId, matchIds),
+      orderBy: { key: "asc" },
+    }),
+    tx.dotaMatchClaim.findMany({
+      where: {
+        OR: [
+          {
+            kind: DOTA_MATCH_KIND.LEAGUE,
+            contextId: { in: matchIds },
+          },
+          {
+            kind: DOTA_MATCH_KIND.SCRIM,
+            contextId: { in: scrimIds },
+          },
+          { dotaMatchId: { in: exportedDotaMatchIds } },
+        ],
+      },
+      orderBy: { dotaMatchId: "asc" },
+    }),
+  ]);
 
   const userIds = new Set<string>();
   for (const row of registrations) userIds.add(row.userId);
   for (const row of teams) userIds.add(row.captainId);
+  for (const row of teamStaff) userIds.add(row.userId);
   for (const row of teamMembers) userIds.add(row.userId);
+  for (const row of scrims) userIds.add(row.createdById);
+  for (const row of scrimParticipants) {
+    if (row.userId) userIds.add(row.userId);
+    if (row.addedById) userIds.add(row.addedById);
+  }
   for (const row of bids) userIds.add(row.userId);
   for (const row of availability) userIds.add(row.userId);
   for (const row of standins) {
@@ -127,11 +179,16 @@ async function readSeasonArchive(
     users: archivedUsers,
     registrations,
     teams,
+    teamStaff,
     teamMembers,
     draft,
     bids,
     matches,
     games,
+    scrims,
+    scrimParticipants,
+    scrimGames,
+    dotaMatchClaims,
     availability,
     standins,
     predictions,
@@ -211,7 +268,7 @@ export async function GET(req: NextRequest) {
   }
 
   const core = {
-    formatVersion: 2,
+    formatVersion: 3,
     artifactPurpose: "AUDIT_ARCHIVE_ONLY",
     restorable: false,
     recoveryWarning:
@@ -221,9 +278,14 @@ export async function GET(req: NextRequest) {
       users: archive.users.length,
       registrations: archive.registrations.length,
       teams: archive.teams.length,
+      teamStaff: archive.teamStaff.length,
       teamMembers: archive.teamMembers.length,
       matches: archive.matches.length,
       games: archive.games.length,
+      scrims: archive.scrims.length,
+      scrimParticipants: archive.scrimParticipants.length,
+      scrimGames: archive.scrimGames.length,
+      dotaMatchClaims: archive.dotaMatchClaims.length,
       predictions: archive.predictions.length,
       fantasyRosters: archive.fantasyRosters.length,
       settings: archive.settings.length,

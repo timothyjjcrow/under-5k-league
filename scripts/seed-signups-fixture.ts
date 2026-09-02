@@ -37,12 +37,13 @@ async function main() {
   // InhouseCreditEntry and AdminAction carry NO foreign key on purpose (a
   // staking record and an audit record outlive the account — see the model
   // comments in schema.prisma) and NewsPost's author is SetNull, so
-  // `user.deleteMany()` cascades none of the three and they have to be named.
+  // `user.deleteMany()` does not clear these rows, so they have to be named.
   // Left out, a reseeded "empty" fixture still shows a Cred board with betting
   // history on it.
   await prisma.inhouseCreditEntry.deleteMany({});
   await prisma.adminAction.deleteMany({});
   await prisma.newsPost.deleteMany({});
+  await prisma.dotaMatchClaim.deleteMany({});
   await prisma.inhouseLobbyPlayer.deleteMany({});
   await prisma.inhouseLobby.deleteMany({});
   await prisma.inhouseQueueEntry.deleteMany({});

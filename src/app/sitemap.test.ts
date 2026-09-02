@@ -21,6 +21,7 @@ describe("public sitemap", () => {
       "/hall-of-fame",
       "/seasons",
       "/inhouse/history",
+      "/scrims",
     ]) {
       expect(urls).toContain(`https://league.example${path}`);
     }

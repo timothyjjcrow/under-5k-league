@@ -33,7 +33,7 @@ export const SETTING_KEYS = {
   // data model permits exactly one active season/draft at a time.
   DRAFT_ROOM_MAINTENANCE_AT: "draftRoomMaintenanceAt",
   // ISO timestamp of the last league-id OpenDota sync (result-sync-service's
-  // atomic global throttle for the /leagues/{id}/matches path).
+  // atomic global throttle for the /leagues/{id}/matchIds path).
   LEAGUE_AUTO_SYNC_AT: "leagueAutoSyncAt",
   // ISO timestamp of the last roster scan on ANY match (global speed bump so
   // concurrent pollers can't each claim a different match in one burst).

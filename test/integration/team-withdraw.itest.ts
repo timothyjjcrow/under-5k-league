@@ -27,7 +27,12 @@ import { createPlayoffBracket } from "@/lib/playoff-service";
 import { prisma } from "@/lib/prisma";
 import { sendDiscordMessage } from "@/lib/discord";
 import { resultAnnouncedKey } from "@/lib/settings";
-import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SCRIM_STATUS,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import {
   generateRegularSchedule,
   makeSeason,
@@ -145,6 +150,37 @@ describe("withdrawTeam", () => {
         proposedTime: new Date(Date.now() + 3600_000),
       },
     });
+    const scrims = await Promise.all([
+      prisma.scrim.create({
+        data: {
+          seasonId: quitter.seasonId,
+          hostTeamId: quitter.id,
+          createdById: quitter.captainId,
+          scheduledAt: new Date(Date.now() + 2 * 3600_000),
+          status: SCRIM_STATUS.OPEN,
+        },
+      }),
+      prisma.scrim.create({
+        data: {
+          seasonId: quitter.seasonId,
+          hostTeamId: quitter.id,
+          opponentTeamId: teams[1].id,
+          createdById: quitter.captainId,
+          scheduledAt: new Date(Date.now() + 3 * 3600_000),
+          status: SCRIM_STATUS.SCHEDULED,
+        },
+      }),
+      prisma.scrim.create({
+        data: {
+          seasonId: quitter.seasonId,
+          hostTeamId: teams[1].id,
+          opponentTeamId: quitter.id,
+          createdById: teams[1].captainId,
+          scheduledAt: new Date(Date.now() - 3600_000),
+          status: SCRIM_STATUS.LIVE,
+        },
+      }),
+    ]);
     mockSend.mockClear();
 
     const res = await withdrawTeam(null, teamFd(quitter));
@@ -209,6 +245,20 @@ describe("withdrawTeam", () => {
       orderBy: { createdAt: "desc" },
     });
     expect(log?.summary).toMatch(/2 remaining fixture\(s\) forfeited/);
+    expect(log?.summary).toMatch(/2 unplayed scrim\(s\) cancelled/);
+    const scrimStatuses = new Map(
+      (
+        await prisma.scrim.findMany({
+          where: { id: { in: scrims.map((scrim) => scrim.id) } },
+          select: { id: true, status: true },
+        })
+      ).map((scrim) => [scrim.id, scrim.status]),
+    );
+    expect(scrims.map((scrim) => scrimStatuses.get(scrim.id))).toEqual([
+      SCRIM_STATUS.CANCELLED,
+      SCRIM_STATUS.CANCELLED,
+      SCRIM_STATUS.LIVE,
+    ]);
   });
 
   it("is REGULAR_SEASON-only, with the right pointer per phase", async () => {

@@ -39,7 +39,12 @@ import {
 import { updateTag } from "next/cache";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
-import { DRAFT_STATUS, MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
+import {
+  DRAFT_STATUS,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SCRIM_STATUS,
+} from "@/lib/constants";
 import { seasonSettingScopeWhere } from "@/lib/settings";
 import { createBackupReceipt } from "@/lib/backup-receipt.mjs";
 import { postgresDatabaseIdentity } from "@/lib/postgres-identity.mjs";
@@ -568,6 +573,29 @@ describe("createSeason", () => {
 
   it("can deliberately archive a completed season into an offseason", async () => {
     const current = await completedSeason("Season Before Break");
+    const [home, away] = await prisma.team.findMany({
+      where: { seasonId: current.id },
+      orderBy: { draftOrder: "asc" },
+    });
+    const scrims = await Promise.all(
+      [
+        SCRIM_STATUS.OPEN,
+        SCRIM_STATUS.SCHEDULED,
+        SCRIM_STATUS.LIVE,
+        SCRIM_STATUS.COMPLETED,
+      ].map((status, index) =>
+        prisma.scrim.create({
+          data: {
+            seasonId: current.id,
+            hostTeamId: home.id,
+            opponentTeamId: status === SCRIM_STATUS.OPEN ? null : away.id,
+            createdById: home.captainId,
+            scheduledAt: new Date(Date.now() + (index + 1) * 3600_000),
+            status,
+          },
+        }),
+      ),
+    );
     const result = await archiveCompletedSeasonAction(
       {},
       fd({ expectedActiveSeasonId: current.id }),
@@ -581,6 +609,20 @@ describe("createSeason", () => {
     expect(
       await prisma.setting.findUnique({ where: { key: "resultChangedAt" } }),
     ).not.toBeNull();
+    const scrimStatuses = new Map(
+      (
+        await prisma.scrim.findMany({
+          where: { id: { in: scrims.map((scrim) => scrim.id) } },
+          select: { id: true, status: true },
+        })
+      ).map((scrim) => [scrim.id, scrim.status]),
+    );
+    expect(scrims.map((scrim) => scrimStatuses.get(scrim.id))).toEqual([
+      SCRIM_STATUS.CANCELLED,
+      SCRIM_STATUS.CANCELLED,
+      SCRIM_STATUS.LIVE,
+      SCRIM_STATUS.COMPLETED,
+    ]);
   });
 });
 

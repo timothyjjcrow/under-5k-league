@@ -15,10 +15,11 @@ export type MatchLike = {
   awayScore: number;
   winnerTeamId: string | null;
   phase: string;
-  /** A ruled/defaulted result (no-show). Points and W-L count normally; the
-   *  game scores are EXCLUDED from gameDiff (and the Elo power rankings) —
-   *  an admin-chosen 2-0 must not out-tiebreak a played one. Optional so
-   *  hand-built rows and pre-column snapshots stay valid. */
+  /** A ruled/defaulted result (no-show or a manually completed game). Its
+   *  recorded score remains the official standings score, including gameDiff;
+   *  the flag lets presentation and performance-only systems distinguish it
+   *  from a fully imported series. Optional so hand-built rows and pre-column
+   *  snapshots stay valid. */
   forfeit?: boolean;
 };
 
@@ -214,15 +215,14 @@ export function computeStandings(
 
     home.played++;
     away.played++;
-    // Forfeit scores are RULED, not played — they carry the series result
-    // (points, W-L below) but never the map counts, or the admin's choice of
-    // default score would silently decide the gameDiff tiebreak.
-    if (!m.forfeit) {
-      home.gameWins += m.homeScore;
-      home.gameLosses += m.awayScore;
-      away.gameWins += m.awayScore;
-      away.gameLosses += m.homeScore;
-    }
+    // The saved score is the official standings result even when one or more
+    // games needed an administrative ruling. Dropping the entire score for a
+    // forfeit also drops games that really were played/imported and can give
+    // identical Bo2 records different differentials.
+    home.gameWins += m.homeScore;
+    home.gameLosses += m.awayScore;
+    away.gameWins += m.awayScore;
+    away.gameLosses += m.homeScore;
 
     if (m.winnerTeamId === m.homeTeamId) {
       home.wins++;
@@ -317,11 +317,10 @@ export function headToHeadRanks(
     if (!inGroup.has(m.homeTeamId) || !inGroup.has(m.awayTeamId)) continue;
     const home = mini.get(m.homeTeamId)!;
     const away = mini.get(m.awayTeamId)!;
-    // Same forfeit rule as the main table: ruled scores never feed a diff.
-    if (!m.forfeit) {
-      home.diff += m.homeScore - m.awayScore;
-      away.diff += m.awayScore - m.homeScore;
-    }
+    // Same rule as the main table: the recorded score is the official result,
+    // including when an admin had to complete it with a ruling.
+    home.diff += m.homeScore - m.awayScore;
+    away.diff += m.awayScore - m.homeScore;
     if (m.winnerTeamId === m.homeTeamId) home.points += 3;
     else if (m.winnerTeamId === m.awayTeamId) away.points += 3;
     else {

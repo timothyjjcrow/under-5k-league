@@ -1,11 +1,19 @@
 import { describe, it, expect } from "vitest";
 import {
+  DETECT_WINDOW_AFTER_MS,
+  DETECT_WINDOW_BEFORE_MS,
   buildPlayers,
   claimsGame,
   classifyGame,
+  eligibleCompetingMeetingKickoffs,
+  isWithinLeagueResultWindow,
   pickSeriesGames,
   sanitizeBenchmarks,
 } from "./match-import";
+import {
+  SCRIM_DETECT_WINDOW_AFTER_MS,
+  SCRIM_DETECT_WINDOW_BEFORE_MS,
+} from "./scrim-window";
 import type { OpenDotaMatch, OpenDotaPlayer } from "./dota";
 
 function player(account_id: number, isRadiant: boolean): OpenDotaPlayer {
@@ -325,5 +333,60 @@ describe("claimsGame", () => {
     expect(claimsGame(sunday + 20 * 60_000, sunday, [earlier, later])).toBe(
       false,
     );
+  });
+});
+
+describe("candidate-specific meeting eligibility", () => {
+  const gameStartMs = Date.UTC(2026, 8, 27, 18, 0);
+  const gameStartSeconds = gameStartMs / 1000;
+
+  it("uses inclusive league boundaries and drops an ineligible closer fixture", () => {
+    expect(
+      isWithinLeagueResultWindow(
+        (gameStartMs - DETECT_WINDOW_BEFORE_MS) / 1000,
+        gameStartMs,
+      ),
+    ).toBe(true);
+    expect(
+      isWithinLeagueResultWindow(
+        (gameStartMs + DETECT_WINDOW_AFTER_MS) / 1000,
+        gameStartMs,
+      ),
+    ).toBe(true);
+    expect(
+      isWithinLeagueResultWindow(
+        (gameStartMs - DETECT_WINDOW_BEFORE_MS - 1000) / 1000,
+        gameStartMs,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps only meetings whose own mode-specific window contains the candidate", () => {
+    const leagueBeforeBoundary = gameStartMs + DETECT_WINDOW_BEFORE_MS;
+    const leagueAfterBoundary = gameStartMs - DETECT_WINDOW_AFTER_MS;
+    const scrimBeforeBoundary = gameStartMs + SCRIM_DETECT_WINDOW_BEFORE_MS;
+    const scrimAfterBoundary = gameStartMs - SCRIM_DETECT_WINDOW_AFTER_MS;
+
+    expect(
+      eligibleCompetingMeetingKickoffs(gameStartSeconds, {
+        league: [
+          leagueBeforeBoundary,
+          leagueBeforeBoundary + 1000,
+          leagueAfterBoundary,
+          leagueAfterBoundary - 1000,
+        ],
+        scrims: [
+          scrimBeforeBoundary,
+          scrimBeforeBoundary + 1000,
+          scrimAfterBoundary,
+          scrimAfterBoundary - 1000,
+        ],
+      }),
+    ).toEqual([
+      leagueBeforeBoundary,
+      leagueAfterBoundary,
+      scrimBeforeBoundary,
+      scrimAfterBoundary,
+    ]);
   });
 });

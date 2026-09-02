@@ -61,6 +61,28 @@ export const MATCH_PHASE = {
   FINAL: "FINAL",
 } as const;
 
+export const TEAM_STAFF_ROLE = {
+  COACH: "COACH",
+} as const;
+export type TeamStaffRole =
+  (typeof TEAM_STAFF_ROLE)[keyof typeof TEAM_STAFF_ROLE];
+
+export const SCRIM_STATUS = {
+  OPEN: "OPEN",
+  SCHEDULED: "SCHEDULED",
+  LIVE: "LIVE",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+} as const;
+export type ScrimStatus = (typeof SCRIM_STATUS)[keyof typeof SCRIM_STATUS];
+
+export const DOTA_MATCH_KIND = {
+  LEAGUE: "LEAGUE",
+  SCRIM: "SCRIM",
+} as const;
+export type DotaMatchKind =
+  (typeof DOTA_MATCH_KIND)[keyof typeof DOTA_MATCH_KIND];
+
 export const ROLE = {
   USER: "USER",
   ADMIN: "ADMIN",
@@ -282,6 +304,12 @@ export const INHOUSE = {
   // instantly re-form around ghosts, and past QUEUE_HEARTBEAT_SECONDS (30),
   // so a present player's very next poll writes the refresh.
   QUEUE_RECONFIRM_SECONDS: 75,
+  // Reset the waiting queue when its membership has not changed for this long.
+  // Presence heartbeats deliberately do NOT refresh this clock: an open tab
+  // can prove a player is still online, but it must not keep one static queue
+  // on the fast poll/automation cadence forever. A join, leave, lobby
+  // formation, or requeue starts a fresh window for everyone still waiting.
+  QUEUE_IDLE_HOURS: 4,
   // A lobby that reaches READY or IN_PROGRESS has no clock — nothing expires
   // it, and no resolver can move it — so an abandoned one holds the single
   // active-lobby slot indefinitely: no new lobby can form, and its own ten
@@ -467,7 +495,7 @@ export const AUTO_SYNC = {
   // can otherwise each claim a DIFFERENT due match in the same instant and
   // burst past OpenDota's per-minute cap on league nights.
   SCAN_GAP_SECONDS: 45,
-  // The league-id path (one /leagues/{id}/matches call) is cheap; its global
+  // The league-id path (one /leagues/{id}/matchIds call) is cheap; its global
   // throttle can be tighter.
   LEAGUE_INTERVAL_SECONDS: 180,
   // Automated league-id runs fetch at most this many unknown game ids per run

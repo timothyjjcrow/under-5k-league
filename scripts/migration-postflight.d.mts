@@ -30,6 +30,8 @@ export interface PostflightTrigger {
   updateColumns: string[];
   argumentCount: number;
   whenExpression: string | null;
+  oldTable: string | null;
+  newTable: string | null;
   enabled: string;
 }
 

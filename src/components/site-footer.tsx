@@ -21,6 +21,9 @@ const PHASE_TONE: Record<
   COMPLETE: "brand",
 };
 
+const FOOTER_LINK_CLASS =
+  "rounded py-1 text-sm leading-6 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
+
 export function SiteFooter({
   seasonName,
   phase,
@@ -46,8 +49,11 @@ export function SiteFooter({
     { href: "/", label: "Home" },
     { href: "/players", label: "Players" },
     { href: "/inhouse", label: "Inhouse" },
+    { href: "/scrims", label: "Scrims" },
   ];
-  if (teamsExist) leagueLinks.push({ href: "/teams", label: "Teams" });
+  if (teamsExist) {
+    leagueLinks.push({ href: "/teams", label: "Teams" });
+  }
   if (phase === "DRAFT") {
     leagueLinks.push({ href: "/draft", label: "Draft" });
     leagueLinks.push({ href: "/schedule", label: "Schedule" });
@@ -79,41 +85,15 @@ export function SiteFooter({
   clubLinks.push({ href: "/features", label: "Features" });
 
   return (
-    <footer className="border-t border-line/70">
-      <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-        {/* Centered logo centerpiece with the link groups flanking it. On
-            phones it stacks logo-first, then the two link groups, all centered. */}
-        <div className="grid grid-cols-1 items-center gap-8 md:grid-cols-[1fr_auto_1fr] md:gap-12">
-          <nav
-            aria-label="Footer — league"
-            className="order-2 flex flex-col items-center gap-2 text-sm md:order-1 md:items-end"
-          >
-            <span className="text-xs font-medium uppercase tracking-wide text-muted">
-              League
-            </span>
-            {leagueLinks.map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className="-my-1 rounded py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-              >
-                {l.label}
-              </Link>
-            ))}
-            {showCalendar ? (
-              <a
-                href="/api/calendar"
-                className="-my-1 rounded py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-              >
-                <span aria-hidden="true">📅</span> Calendar feed (.ics)
-              </a>
-            ) : null}
-          </nav>
-
+    <footer className="bg-bg">
+      <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-12">
+        {/* Keep the emblem prominent, but let the navigation share one clean
+            baseline instead of vertically centering unequal link stacks. */}
+        <div className="grid items-center gap-10 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.45fr)] lg:gap-16">
           <Link
             href="/"
             aria-label="GGD2L — home"
-            className="order-1 flex rounded-lg justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 md:order-2"
+            className="flex justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:justify-start"
           >
             {/* Tight-cropped emblem (shared with the nav) — no baked-in
                 transparent margin, so it reads compact at a smaller height. */}
@@ -123,36 +103,75 @@ export function SiteFooter({
               alt="GGD2L"
               width={520}
               height={427}
-              className="h-24 w-auto md:h-40"
+              className="h-32 w-auto sm:h-40 lg:h-44"
             />
           </Link>
 
-          <nav
-            aria-label="Footer — club"
-            className="order-3 flex flex-col items-center gap-2 text-sm md:items-start"
-          >
-            <span className="text-xs font-medium uppercase tracking-wide text-muted">
-              Club
-            </span>
-            {clubLinks.map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className="-my-1 rounded py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-              >
-                {l.label}
-              </Link>
-            ))}
-          </nav>
+          <div className="grid w-full gap-8 sm:grid-cols-[minmax(0,1.45fr)_minmax(10rem,0.75fr)] sm:gap-10">
+            <nav aria-label="Footer — league" className="min-w-0">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                League
+              </span>
+              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1">
+                {leagueLinks.map((l) => (
+                  <Link
+                    key={l.href}
+                    href={l.href}
+                    className={FOOTER_LINK_CLASS}
+                  >
+                    {l.label}
+                  </Link>
+                ))}
+                {showCalendar ? (
+                  <a
+                    href="/api/calendar"
+                    className={`${FOOTER_LINK_CLASS} inline-flex items-center gap-2 whitespace-nowrap`}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-3.5 w-3.5 shrink-0"
+                    >
+                      <path d="M7 3v3M17 3v3M4.5 9.5h15" />
+                      <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
+                    </svg>
+                    Calendar (.ics)
+                  </a>
+                ) : null}
+              </div>
+            </nav>
+
+            <nav aria-label="Footer — club" className="min-w-0">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Club
+              </span>
+              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-1">
+                {clubLinks.map((l) => (
+                  <Link
+                    key={l.href}
+                    href={l.href}
+                    className={FOOTER_LINK_CLASS}
+                  >
+                    {l.label}
+                  </Link>
+                ))}
+              </div>
+            </nav>
+          </div>
         </div>
 
-        <div className="mt-8 flex flex-col gap-5 border-t border-line/60 pt-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="mt-10 grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
           <div className="flex justify-center sm:justify-start">
             <DiscordButton size="sm" />
           </div>
-          <div className="flex flex-col items-center gap-2 text-xs text-muted sm:items-end">
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-xs text-muted sm:justify-end">
             {seasonName ? (
-              <span className="flex items-center gap-2">
+              <span className="inline-flex max-w-full flex-wrap items-center justify-center gap-2">
                 <span>{seasonName}</span>
                 {phase ? (
                   <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
@@ -161,7 +180,24 @@ export function SiteFooter({
                 ) : null}
               </span>
             ) : null}
+            {seasonName ? (
+              <span aria-hidden="true" className="hidden text-line sm:inline">
+                •
+              </span>
+            ) : null}
             <span>© {year} GGD2L</span>
+            <span aria-hidden="true" className="hidden text-line sm:inline">
+              •
+            </span>
+            <a
+              href="https://buymeacoffee.com/vgedota"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Support the league on Buy Me a Coffee (opens in a new tab)"
+              className="-my-1 inline-flex items-center gap-1 rounded py-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              Support the league <span aria-hidden="true">↗</span>
+            </a>
           </div>
         </div>
       </div>

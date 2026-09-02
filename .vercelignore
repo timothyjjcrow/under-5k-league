@@ -1,0 +1,22 @@
+# Local secrets and environment overrides
+.env*
+!.env.example
+.dev.vars*
+.claude/
+
+# Local databases and production backup artifacts
+backups/
+**/*.db
+**/*.db-journal
+**/*.db-shm
+**/*.db-wal
+
+# Local build and test output
+.next/
+node_modules/
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/
+blob-report/
+.wrangler/

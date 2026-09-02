@@ -152,7 +152,11 @@ export type AutomationGateInputs = {
     updatedAt: Date;
     betsCloseAt: Date | null;
   }>;
-  queue: Array<{ lastSeenAt: Date }>;
+  queue: Array<{
+    joinedAt: Date;
+    lastSeenAt: Date;
+    idleExpiresAt: Date | null;
+  }>;
   unsettledBet: boolean;
   repairableInhouseResult: boolean;
   leagueOutbox: Array<{
@@ -615,8 +619,22 @@ export function computeAutomationGateSnapshot(
   if (!lobby && present.length >= INHOUSE.LOBBY_SIZE) {
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
   }
-  for (const entry of inputs.queue) {
-    const seenAt = dateMs(entry.lastSeenAt, "queue.lastSeenAt");
+  for (const [index, entry] of inputs.queue.entries()) {
+    const seenAt = dateMs(entry.lastSeenAt, `queue[${index}].lastSeenAt`);
+    const joinedAt = dateMs(entry.joinedAt, `queue[${index}].joinedAt`);
+    const storedIdleExpiresAt = optionalDateMs(
+      entry.idleExpiresAt,
+      `queue[${index}].idleExpiresAt`,
+    );
+    // New rows share one persisted deadline. joinedAt is the rollback bridge
+    // for rows written by an older binary during a rolling deployment.
+    addCandidate(
+      candidates,
+      nowMs,
+      (storedIdleExpiresAt ??
+        joinedAt + INHOUSE.QUEUE_IDLE_HOURS * 3_600_000) + 1,
+      "INHOUSE",
+    );
     const awayAt = seenAt + INHOUSE.QUEUE_AWAY_SECONDS * 1_000 + 1;
     const dropAt = seenAt + INHOUSE.QUEUE_DROP_SECONDS * 1_000 + 1;
     addCandidate(
@@ -901,11 +919,20 @@ export function computeAutomationGateSnapshot(
     }
     for (const [week, matches] of regularByWeek) {
       const markerValue = inputs.settings[honorsAnnouncedKey(season.id, week)];
+      // An absent marker is post-commit crash recovery. Retry it briskly for
+      // one hard horizon, then leave old recovery to the hourly safety pass:
+      // unchanged incomplete box scores cannot become ready by polling. An
+      // explicit failed/stale/claim marker remains retryable without this cap.
       if (
         matches.length === 0 ||
         matches.some((match) => match.status !== MATCH_STATUS.COMPLETED) ||
         (markerValue === undefined &&
-          !matches.some((match) => match.completedAt !== null))
+          !matches.some(
+            (match) =>
+              match.completedAt !== null &&
+              dateMs(match.completedAt, "match.completedAt") >=
+                nowMs - AUTOMATION_GATE_HARD_HORIZON_MS,
+          ))
       ) {
         continue;
       }
@@ -1064,7 +1091,11 @@ export async function loadAutomationGateSnapshot(
       },
     }),
     prisma.inhouseQueueEntry.findMany({
-      select: { lastSeenAt: true },
+      select: {
+        joinedAt: true,
+        lastSeenAt: true,
+        idleExpiresAt: true,
+      },
     }),
     prisma.inhouseLobby.findFirst({
       where: {

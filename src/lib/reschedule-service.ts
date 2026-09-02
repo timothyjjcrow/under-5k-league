@@ -11,6 +11,7 @@ import { matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
+import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
 
 export type AcceptedReschedule = {
   homeName: string;
@@ -169,6 +170,17 @@ export async function proposeReschedule(
         // a notification and approval task that cannot change anything.
         if (match.scheduledAt?.getTime() === proposedTime.getTime())
           throw new UserFacingError("That is already this match's kickoff");
+        if (
+          await hasConfirmedScrimConflict(tx, {
+            seasonId: match.seasonId,
+            teamIds: [match.homeTeamId, match.awayTeamId],
+            scheduledAt: proposedTime,
+          })
+        ) {
+          throw new UserFacingError(
+            "One of these teams has a booked scrim within four hours of that time",
+          );
+        }
 
         await tx.rescheduleRequest.updateMany({
           where: { matchId, status: "PENDING" },
@@ -291,6 +303,17 @@ export async function respondReschedule(
         assertSaneProposedTime(request.proposedTime);
         if (match.scheduledAt?.getTime() === request.proposedTime.getTime())
           throw new UserFacingError("That is already this match's kickoff");
+        if (
+          await hasConfirmedScrimConflict(tx, {
+            seasonId: match.seasonId,
+            teamIds: [match.homeTeamId, match.awayTeamId],
+            scheduledAt: request.proposedTime,
+          })
+        ) {
+          throw new UserFacingError(
+            "One of these teams now has a booked scrim within four hours of that time",
+          );
+        }
 
         const accepted = await tx.rescheduleRequest.updateMany({
           where: { id: requestId, status: "PENDING" },

@@ -10,12 +10,15 @@ import {
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
+  ROLE,
+  SCRIM_STATUS,
   SEASON_STATUS,
 } from "@/lib/constants";
 import { steamIdToAccountId } from "@/lib/dota";
 import { runResultSync } from "@/lib/result-sync-service";
 import { nominatePlayer } from "@/lib/draft-service";
 import { importGameForMatch, syncLeagueGames } from "@/lib/match-import";
+import { importScrimGame } from "@/lib/scrim-result-service";
 import { SETTING_KEYS, weekReminderKey } from "@/lib/settings";
 import {
   claimAnnouncementMarker,
@@ -168,6 +171,30 @@ function odGame(
   awayAccts: number[],
   startTimeMs: number,
 ) {
+  const radiantFillers = Array.from(
+    { length: Math.max(0, 5 - homeAccts.length) },
+    (_, i) => ({
+      account_id: null,
+      player_slot: homeAccts.length + i,
+      hero_id: 100 + i,
+      isRadiant: true,
+      kills: 0,
+      deaths: 0,
+      assists: 0,
+    }),
+  );
+  const direFillers = Array.from(
+    { length: Math.max(0, 5 - awayAccts.length) },
+    (_, i) => ({
+      account_id: null,
+      player_slot: 128 + awayAccts.length + i,
+      hero_id: 110 + i,
+      isRadiant: false,
+      kills: 0,
+      deaths: 0,
+      assists: 0,
+    }),
+  );
   return {
     match_id: matchId,
     radiant_win: true,
@@ -194,8 +221,50 @@ function odGame(
         deaths: 5,
         assists: 2,
       })),
+      ...radiantFillers,
+      ...direFillers,
     ],
   };
+}
+
+async function makeBookedScrim(opts: {
+  seasonId: string;
+  hostTeamId: string;
+  awayTeamId: string;
+  createdById: string;
+  scheduledAt: Date;
+  hostAccts: number[];
+  awayAccts: number[];
+}) {
+  return prisma.scrim.create({
+    data: {
+      seasonId: opts.seasonId,
+      hostTeamId: opts.hostTeamId,
+      opponentTeamId: opts.awayTeamId,
+      createdById: opts.createdById,
+      scheduledAt: opts.scheduledAt,
+      bestOf: 1,
+      status: SCRIM_STATUS.SCHEDULED,
+      participants: {
+        create: [
+          ...opts.hostAccts.map((dotaAccountId, index) => ({
+            teamId: opts.hostTeamId,
+            dotaAccountId,
+            displayName: `Scrim host ${index + 1}`,
+            guest: true,
+            addedById: opts.createdById,
+          })),
+          ...opts.awayAccts.map((dotaAccountId, index) => ({
+            teamId: opts.awayTeamId,
+            dotaAccountId,
+            displayName: `Scrim away ${index + 1}`,
+            guest: true,
+            addedById: opts.createdById,
+          })),
+        ],
+      },
+    },
+  });
 }
 
 describe("result sync — league matches (integration)", () => {
@@ -567,17 +636,20 @@ describe("result sync — league matches (integration)", () => {
   });
 
   it("uses the cheap league-id path (globally throttled) when one is set", async () => {
-    const { season, match, homeAccts, awayAccts } = await setupNight({
+    const { season, homeAccts, awayAccts } = await setupNight({
       offsetMs: -2 * HOUR,
     });
-    // A second due fixture keeps the season "due" after the first completes.
+    // A second due fixture between other teams keeps the season "due" after
+    // the first completes without creating an ambiguous same-pair kickoff.
+    const third = await makeTeam(season.id, "Third", 2);
+    const fourth = await makeTeam(season.id, "Fourth", 3);
     await prisma.match.create({
       data: {
         seasonId: season.id,
         week: 2,
         phase: MATCH_PHASE.REGULAR,
-        homeTeamId: match.homeTeamId,
-        awayTeamId: match.awayTeamId,
+        homeTeamId: third.id,
+        awayTeamId: fourth.id,
         scheduledAt: new Date(Date.now() - HOUR),
       },
     });
@@ -601,6 +673,112 @@ describe("result sync — league matches (integration)", () => {
     expect(again.imported).toBe(0);
     expect(again.watch).toBe(true);
     expect(mockLeague).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries league ids whose OpenDota detail row is not final yet", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17175" },
+    });
+    const G = 6660007;
+    const complete = odGame(
+      G,
+      homeAccts,
+      awayAccts,
+      Date.now() - 30 * 60_000,
+    );
+    mockLeague.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue({
+      ...complete,
+      players: complete.players.slice(0, 1),
+    });
+
+    const first = await syncLeagueGames(season.id, { auto: true });
+
+    expect(first).toMatchObject({ imported: 0, scanned: 1 });
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toBeNull();
+
+    mockMatch.mockClear();
+    mockMatch.mockResolvedValue(complete);
+    const retried = await syncLeagueGames(season.id, { auto: true });
+
+    expect(retried.imported).toBe(1);
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
+  });
+
+  it("does not attach an old ticket game outside the fixture window", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: -HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17176" },
+    });
+    const G = 6660008;
+    mockLeague.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue(
+      odGame(G, homeAccts, awayAccts, Date.now() - 10 * 24 * HOUR),
+    );
+
+    const result = await syncLeagueGames(season.id, { auto: true });
+
+    expect(result).toMatchObject({ imported: 0, scanned: 1 });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(G)]) });
+  });
+
+  it("keeps an old game with its completed meeting, not a future rematch", async () => {
+    const { season, home, match, homeAccts, awayAccts } = await setupNight({
+      offsetMs: 24 * HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "17177" },
+    });
+    const oldKickoff = new Date(Date.now() - 24 * HOUR);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 0,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: match.homeTeamId,
+        awayTeamId: match.awayTeamId,
+        bestOf: 1,
+        scheduledAt: oldKickoff,
+        status: MATCH_STATUS.COMPLETED,
+        homeScore: 1,
+        awayScore: 0,
+        winnerTeamId: home.id,
+        completedAt: new Date(),
+      },
+    });
+    const G = 6660009;
+    mockLeague.mockResolvedValue([G]);
+    mockMatch.mockResolvedValue(
+      odGame(G, homeAccts, awayAccts, oldKickoff.getTime()),
+    );
+
+    const result = await syncLeagueGames(season.id, { auto: true });
+
+    expect(result).toMatchObject({ imported: 0, scanned: 1 });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(G)]) });
   });
 
   it("re-reads due fixtures only when this run owns the league-feed claim", async () => {
@@ -955,6 +1133,33 @@ describe("result sync — inhouse (integration)", () => {
     return { lobby, team1, team2 };
   }
 
+  it("clears a four-hour-static waiting queue with no room open", async () => {
+    const user = await makeUser("Static queue");
+    const staleAt = new Date(
+      Date.now() - INHOUSE.QUEUE_IDLE_HOURS * HOUR - 60_000,
+    );
+    const entry = await prisma.inhouseQueueEntry.create({
+      data: {
+        userId: user.id,
+        mmr: 3000,
+        joinedAt: staleAt,
+        // Fresh presence used to keep this row and every observer hot forever.
+        lastSeenAt: new Date(),
+      },
+    });
+    // The production rollback trigger correctly refreshes every actual insert;
+    // backdate afterward to model four hours elapsing without queue activity.
+    await prisma.inhouseQueueEntry.update({
+      where: { id: entry.id },
+      data: { idleExpiresAt: staleAt },
+    });
+
+    const out = await runResultSync();
+
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    expect(out).toMatchObject({ inhouse: false, watch: false });
+  });
+
   it("closes a finished inhouse game from any page view — no room open", async () => {
     const { lobby, team1, team2 } = await setupLobby(
       INHOUSE.DETECT_MIN_MINUTES + 5,
@@ -1224,6 +1429,107 @@ describe("result sync — a claim that needs a staged interleaving", () => {
     // still being worked — the one thing that card exists to rule out.
     expect(m.autoSyncedAt).toBeNull();
     expect(m.autoSyncAttempts).toBe(0);
+  });
+});
+
+describe("syncLeagueGames — booked scrim ownership", () => {
+  it("remembers a scrim-only feed game without blocking manual scrim import", async () => {
+    const { season, home, away } = await setupNight({
+      offsetMs: -5 * HOUR,
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18187" },
+    });
+    const SCRIM_GAME = 6664001;
+    const hostAccts = [770_001, 770_002, 770_003];
+    const awayAccts = [880_001, 880_002, 880_003];
+    const kickoff = new Date(Date.now() - HOUR);
+    const scrim = await makeBookedScrim({
+      seasonId: season.id,
+      hostTeamId: home.id,
+      awayTeamId: away.id,
+      createdById: home.captainId,
+      scheduledAt: kickoff,
+      hostAccts,
+      awayAccts,
+    });
+    const fetched = odGame(
+      SCRIM_GAME,
+      hostAccts,
+      awayAccts,
+      kickoff.getTime(),
+    );
+    mockLeague.mockResolvedValue([SCRIM_GAME]);
+    mockMatch.mockResolvedValue(fetched);
+
+    const first = await syncLeagueGames(season.id, { auto: true });
+
+    expect(first).toMatchObject({ imported: 0, scanned: 1 });
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(SCRIM_GAME)]) });
+    // This is deliberately not the shared admin-removal skip read by the
+    // scrim scanner. The official feed must not hide the game from scrims.
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `importSkip:${season.id}` },
+      }),
+    ).toBeNull();
+
+    mockMatch.mockClear();
+    await syncLeagueGames(season.id, { auto: true });
+    expect(mockMatch).not.toHaveBeenCalled();
+
+    mockMatch.mockResolvedValue(fetched);
+    const imported = await importScrimGame(
+      { id: home.captainId, role: ROLE.USER },
+      scrim.id,
+      String(SCRIM_GAME),
+    );
+    expect(imported).toMatchObject({ ok: true, imported: 1 });
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembers an equidistant game that fits both official and scrim lineups", async () => {
+    const { season, home, away, match, homeAccts, awayAccts } =
+      await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "18188" },
+    });
+    const SCRIM_GAME = 6664002;
+    const kickoff = match.scheduledAt!;
+    await makeBookedScrim({
+      seasonId: season.id,
+      hostTeamId: home.id,
+      awayTeamId: away.id,
+      createdById: home.captainId,
+      scheduledAt: kickoff,
+      hostAccts: homeAccts,
+      awayAccts,
+    });
+    mockLeague.mockResolvedValue([SCRIM_GAME]);
+    mockMatch.mockResolvedValue(
+      odGame(SCRIM_GAME, homeAccts, awayAccts, kickoff.getTime()),
+    );
+
+    const result = await syncLeagueGames(season.id, { auto: true });
+
+    expect(result).toMatchObject({ imported: 0, scanned: 1 });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `leagueSyncSkip:${season.id}` },
+      }),
+    ).toMatchObject({ value: JSON.stringify([String(SCRIM_GAME)]) });
+
+    mockMatch.mockClear();
+    await syncLeagueGames(season.id, { auto: true });
+    expect(mockMatch).not.toHaveBeenCalled();
   });
 });
 

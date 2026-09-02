@@ -14,7 +14,12 @@ import {
   raceN,
   recordMatch,
 } from "./factories";
-import { DRAFT_STATUS, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  DRAFT_STATUS,
+  MATCH_STATUS,
+  SCRIM_STATUS,
+  SEASON_STATUS,
+} from "@/lib/constants";
 
 // RELATIVE to now, never a literal date. This was hard-coded to
 // 2026-08-01T19:00Z and went off like a time bomb the moment the wall clock
@@ -73,6 +78,52 @@ describe("reschedule service (integration)", () => {
     expect((await pendingFor(match.id))?.proposedTime.getTime()).toBe(
       later.getTime(),
     );
+  });
+
+  it("blocks a proposal and acceptance that would collide with a booked scrim", async () => {
+    const { season, home, away, match } = await setupMatch();
+    const practiceOpponent = await makeTeam(season.id, "Practice", 2);
+    const booked = await prisma.scrim.create({
+      data: {
+        seasonId: season.id,
+        hostTeamId: home.id,
+        opponentTeamId: practiceOpponent.id,
+        createdById: home.captainId,
+        scheduledAt: NIGHT,
+        status: SCRIM_STATUS.SCHEDULED,
+      },
+    });
+
+    await expect(
+      proposeReschedule(home.captainId, match.id, NIGHT),
+    ).rejects.toThrow(/booked scrim within four hours/i);
+    expect(await pendingFor(match.id)).toBeNull();
+
+    await prisma.scrim.update({
+      where: { id: booked.id },
+      data: { status: SCRIM_STATUS.CANCELLED },
+    });
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    await prisma.scrim.update({
+      where: { id: booked.id },
+      data: { status: SCRIM_STATUS.SCHEDULED },
+    });
+
+    await expect(
+      respondReschedule(away.captainId, pending!.id, true),
+    ).rejects.toThrow(/now has a booked scrim within four hours/i);
+    expect(
+      (await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
+        .scheduledAt,
+    ).toEqual(ORIGINAL_NIGHT);
+    expect(
+      (
+        await prisma.rescheduleRequest.findUniqueOrThrow({
+          where: { id: pending!.id },
+        })
+      ).status,
+    ).toBe("PENDING");
   });
 
   it("rejects proposals from non-captains and on played matches", async () => {

@@ -435,7 +435,7 @@ has to justify it.
   link/refresh (`updateDotaAccount`/`refreshRank`) and in bulk via admin
   `syncPlayerRanks`. Medals render on players/teams/draft (a captain resource).
 - **In-client league sync**: `Season.dotaLeagueId` + `syncLeagueGames` (fetch
-  `/leagues/{id}/matches`, `classifyGame` each vs. scheduled matches, import).
+  `/leagues/{id}/matchIds`, `classifyGame` each vs. scheduled matches, import).
   Admin `setLeagueId` / `syncLeagueAction`. League registration is done at
   dota2.com/league; games are tagged by hosting private lobbies with the id.
 - **Discord contact**: `User.discordName` (empty string = unset; persists
@@ -2987,20 +2987,51 @@ uses `prisma db push` and has no data-loss override.
   unique individual SteamID64 in `ADMIN_STEAM_IDS`;
   non-HTTPS, path-bearing, trailing-slash, or divergent `APP_URL` and
   `NEXT_PUBLIC_SITE_URL`; and any `ALLOW_DEV_LOGIN` value except unset/`false`.
-  It reports field names, never secret values. Vercel previews deliberately
-  skip the production-only validation, but they must use a separate database
-  if they need live data. There is no production first-user admin bootstrap.
-- **Deployment order is migration-based and fail-closed.** `vercel.json` runs
-  `npm run build:vercel`, which validates production configuration, switches
-  Prisma to PostgreSQL, validates and preflights committed migrations, applies
-  them with `prisma migrate deploy`, performs postflight attestation, generates
-  the client, and then builds Next.js. Migrations must remain additive and
-  compatible with the previously deployed binary because they run before the
-  candidate build is promoted.
-- **There is no production data-loss override.** `PRISMA_ACCEPT_DATA_LOSS`,
-  `BUILD_DB_DRY_RUN`, and disabled migration advisory locks are rejected by the
-  production environment gate. Never substitute `db push` for the reviewed
-  migration pipeline.
+  It reports field names, never secret values. In Preview/development, the
+  release pipeline performs no database gate or migration mutation. A build or
+  running preview that needs data must use a separately scoped non-production
+  database. There is no production first-user admin bootstrap.
+- **The ordinary deployment migration gate is read-only and fails closed on
+  database drift.**
+  `vercel.json` runs `npm run build:vercel`, which validates production
+  configuration, switches Prisma to PostgreSQL, validates the checksum-pinned
+  migration set, generates the client, and runs
+  `scripts/production-schema-check.mjs` for exact read-only migration,
+  Prisma-schema, and native-object attestation before building Next.js. The
+  migration gate cannot apply a pending migration. The subsequent build still
+  receives runtime configuration, so application build code must remain
+  side-effect-free. From a clean ephemeral checkout at the reviewed full
+  `HEAD` SHA, only
+  `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>` may
+  run the guarded preflight → `migrate deploy` → postflight chain, and it
+  requires `VERCEL_ENV=production` and refuses root or `prisma/` `.env` files
+  that Prisma could auto-load after validation. Migrations remain additive and
+  compatible
+  with the previously deployed binary. The wrapper enforces those technical
+  gates; the operator must separately verify exact-SHA CI, approval,
+  backup/restore, and applicable scheduler evidence.
+- **Release work is classified from canonical production, not the PR base.** A
+  trusted classifier blob is extracted from that canonical production commit;
+  the candidate never classifies itself, and a missing trusted blob selects
+  every strict/impact gate. A narrow UI-only lane may skip only PostgreSQL and
+  mutation CI; schema-neutral
+  application releases use standard CI. Schema, migration, release-plumbing,
+  scheduler, unknown-path, and unresolved-delta changes are strict. Some
+  allowlisted docs/tests are neutral companions; sensitive-path tests/docs stay
+  strict, and neutral-only changes do not create a fast lane. UI/app releases
+  need no release-only backup or scheduler pause. Strict always means full CI
+  and review, while `needs_db_release` and `needs_scheduler_pause` select
+  recovery, propagation, and lease-drain procedures. GitHub's event-base use
+  of the classifier is only a conservative job-selection optimization and
+  never substitutes for the canonical production-to-candidate release
+  decision. A Preview/non-production database rehearsal proves runtime behavior
+  but is not promoted; the exact SHA is then built as a staged production
+  candidate whose read-only database gate attests production before that same
+  artifact is promoted.
+- **There is no production data-loss override.** `BUILD_DB_DRY_RUN` is retired;
+  `PRISMA_ACCEPT_DATA_LOSS` and disabled migration advisory locks remain
+  forbidden. Never substitute `db push` or a direct Prisma CLI invocation for
+  the reviewed migration-release wrapper.
 - **`npm run db:backup` publishes private, verifiable artifacts.**
   `scripts/backup-db.mjs` uses the direct URL when available and supplies it to
   `pg_dump` through `PGDATABASE`, never argv. It writes beside the final target
@@ -3184,21 +3215,22 @@ advance → champion), `deleteSeason`'s archived-ness re-assert + rollback, and
 for them: `admin.deleteSeason.beforeTx` and `admin.generateSchedule.beforeTx`.
 `setAvailability` got its first tests at the same time.
 
-## Forfeits, team dropout, double round robin (2026-08-01)
+## Forfeits, team dropout, double round robin (2026-08-01; differential rule corrected 2026-09-01)
 
 The product gaps the audit named. Each is small and each has a rule:
 
 - **`Match.forfeit` — a ruled score, and the flag is what keeps it honest.**
-  Points and W-L count normally; the game scores are EXCLUDED from `gameDiff`
-  (and from `headToHeadRanks`' mini-diff, and from `powerRankings`' per-game
-  Elo — in the LIB, not a caller's filter). Otherwise an admin's choice of
-  default score silently decides the tiebreak and the power rankings. Set by
-  `recordResult`'s checkbox, CLEARED by `reopenMatch` (a reopened ruling must
-  not survive into the next result) and by re-saving with the box unticked.
-  Badged on /schedule ("ff"), the match page, and the admin row; the Discord
-  result message says "by forfeit". `MatchLike.forfeit` and
-  `RankableMatch.forfeit` are OPTIONAL so hand-built rows and older snapshots
-  stay valid.
+  Points, W-L, and the recorded game score all count normally in `gameDiff`
+  and `headToHeadRanks`' mini-diff. The flag can also represent a mixed series
+  with imported games plus a manually completed unticketed game, so excluding
+  the whole score erased played results and gave identical records different
+  differentials. `powerRankings` still skips the aggregate because it cannot
+  distinguish imported performance from awarded games. Set by `recordResult`'s
+  checkbox, CLEARED by `reopenMatch` (a reopened ruling must not survive into
+  the next result) and by re-saving with the box unticked. Badged on /schedule
+  ("ff"), the match page, and the admin row; the Discord result message says
+  "by forfeit". `MatchLike.forfeit` and `RankableMatch.forfeit` are OPTIONAL so
+  hand-built rows and older snapshots stay valid.
 - **`withdrawTeam` / `reinstateTeam` — the team-dropout tool.** REGULAR_SEASON
   only (pre-season the tool is `removeCaptain`, which deletes the empty team;
   a playoff slot needs an explicit per-match ruling, and the error says which).
@@ -3418,4 +3450,4 @@ partial-refill bookings (report-only, captain owns the choice).
   @-mentioned, and `removeGame`/`reopenMatch` both bump the result cursor.
 - Production deploy config (swap SQLite → Postgres, real Steam key).
 - Optional: sync from a Valve `leagueid` (field exists on `Season`) if the
-  league ever gets ticketed — `/leagues/{id}/matches` + `classifyGame`.
+  league ever gets ticketed — `/leagues/{id}/matchIds` + `classifyGame`.

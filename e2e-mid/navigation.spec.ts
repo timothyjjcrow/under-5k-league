@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-const EXPLORE_LINKS = ["Leaders", "Meta", "Fantasy", "Pick'em"] as const;
+const EXPLORE_LINKS = [
+  "Leaders",
+  "Meta",
+  "Fantasy",
+  "Pick'em",
+  "Scrims",
+] as const;
 
 test("league tools live under Explore on desktop and mobile", async ({
   page,

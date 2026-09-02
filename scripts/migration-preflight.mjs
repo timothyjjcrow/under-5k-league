@@ -32,6 +32,8 @@ function preflightSql({ allowUnresolvedBaseline = false } = {}) {
   return `
 DO $$
 DECLARE
+  migration_schema text := current_schema();
+  ownership_gaps text[] := ARRAY[]::text[];
   required_table text;
   missing_tables text[] := ARRAY[]::text[];
   invalid_dota_count bigint;
@@ -41,6 +43,68 @@ DECLARE
   unknown_schema_object_count bigint;
   resolved_baseline_count bigint;
 BEGIN
+  -- Prisma migrations create schema objects and may alter any existing
+  -- application-owned relation or function. Prove those capabilities before
+  -- inspecting application data or migration history so a permissions error
+  -- cannot arrive after the release has begun doing useful work.
+  IF migration_schema IS NULL THEN
+    RAISE EXCEPTION
+      'Migration preflight could not resolve the current schema; configure the database search_path before deploy';
+  END IF;
+  IF NOT has_schema_privilege(current_user, migration_schema, 'CREATE') THEN
+    RAISE EXCEPTION
+      'Migration preflight requires CREATE on the current schema for the configured migration role';
+  END IF;
+
+  SELECT COALESCE(
+    array_agg(capability_gap.object_identity ORDER BY capability_gap.object_identity),
+    ARRAY[]::text[]
+  )
+  INTO ownership_gaps
+  FROM (
+    SELECT format('relation %I.%I', ns.nspname, cls.relname) AS object_identity
+    FROM pg_class AS cls
+    INNER JOIN pg_namespace AS ns ON ns.oid = cls.relnamespace
+    WHERE ns.nspname = migration_schema
+      AND cls.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+      AND NOT pg_has_role(current_user, cls.relowner, 'USAGE')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pg_depend AS dependency
+        WHERE dependency.classid = 'pg_class'::regclass
+          AND dependency.objid = cls.oid
+          AND dependency.objsubid = 0
+          AND dependency.deptype = 'e'
+      )
+
+    UNION ALL
+
+    SELECT format(
+      'function %I.%I(%s)',
+      ns.nspname,
+      proc.proname,
+      pg_get_function_identity_arguments(proc.oid)
+    ) AS object_identity
+    FROM pg_proc AS proc
+    INNER JOIN pg_namespace AS ns ON ns.oid = proc.pronamespace
+    WHERE ns.nspname = migration_schema
+      AND proc.prokind = 'f'
+      AND NOT pg_has_role(current_user, proc.proowner, 'USAGE')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pg_depend AS dependency
+        WHERE dependency.classid = 'pg_proc'::regclass
+          AND dependency.objid = proc.oid
+          AND dependency.objsubid = 0
+          AND dependency.deptype = 'e'
+      )
+  ) AS capability_gap;
+  IF cardinality(ownership_gaps) > 0 THEN
+    RAISE EXCEPTION
+      'Migration preflight requires ownership rights for every existing application relation/function in the current schema; inaccessible objects: %',
+      array_to_string(ownership_gaps, ', ');
+  END IF;
+
   -- A genuinely empty database is the fresh-install path; migrate deploy will
   -- apply baseline and release migrations normally.
   IF to_regclass(format('%I.%I', current_schema(), 'User')) IS NULL

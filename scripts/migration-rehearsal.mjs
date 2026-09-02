@@ -17,6 +17,9 @@ const BASELINE_MIGRATION = "20260804000000_baseline";
 const RELEASE_MIGRATION = "20260804010000_release_readiness";
 const AUTOMATION_MIGRATION = "20260804020000_automation_run_state";
 const TEAM_LOGO_MIGRATION = "20260814000000_team_logo";
+const SCRIMS_MIGRATION = "20260817000000_scrims";
+const INHOUSE_QUEUE_IDLE_MIGRATION =
+  "20260831000000_inhouse_queue_idle_timeout";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -141,6 +144,8 @@ async function rehearseFreshDatabase(url) {
           RELEASE_MIGRATION,
           AUTOMATION_MIGRATION,
           TEAM_LOGO_MIGRATION,
+          SCRIMS_MIGRATION,
+          INHOUSE_QUEUE_IDLE_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -284,7 +289,14 @@ INSERT INTO "User" (
   "id", "steamId", "name", "dotaAccountId", "updatedAt"
 ) VALUES
   ('legacy-user-a', '76561197961465728', 'Legacy A', 1234567890, '2024-08-03T00:00:00Z'),
-  ('legacy-user-b', '76561197961465729', 'Legacy B', NULL, '2024-08-03T00:00:00Z');
+  ('legacy-user-b', '76561197961465729', 'Legacy B', NULL, '2024-08-03T00:00:00Z'),
+  ('legacy-user-c', '76561197961465731', 'Legacy C', NULL, '2024-08-03T00:00:00Z');
+
+INSERT INTO "InhouseQueueEntry" (
+  "id", "userId", "joinedAt", "lastSeenAt"
+) VALUES
+  ('queue-entry', 'legacy-user-b', '2024-08-04T01:02:03Z', CURRENT_TIMESTAMP),
+  ('queue-entry-old', 'legacy-user-c', '2024-08-03T01:02:03Z', CURRENT_TIMESTAMP);
 
 INSERT INTO "Season" ("id", "name", "isActive", "updatedAt")
 VALUES ('legacy-season', 'Legacy Season', true, '2024-08-03T00:00:00Z');
@@ -383,6 +395,8 @@ async function rehearseExistingLegacyDatabase(url) {
           RELEASE_MIGRATION,
           AUTOMATION_MIGRATION,
           TEAM_LOGO_MIGRATION,
+          SCRIMS_MIGRATION,
+          INHOUSE_QUEUE_IDLE_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );
@@ -529,6 +543,96 @@ async function rehearseExistingLegacyDatabase(url) {
       backfills.queuedAt.getTime() === backfills.createdAt.getTime(),
       "historical lobby queue order must backfill from createdAt",
     );
+    const legacyQueue = await client.$queryRawUnsafe(
+      `SELECT "idleExpiresAt" FROM "InhouseQueueEntry"
+       ORDER BY "id"`,
+    );
+    assert(
+      legacyQueue.length === 2 &&
+        legacyQueue.every(
+          (row) =>
+            row.idleExpiresAt.toISOString() === "2024-08-04T05:02:03.000Z",
+        ),
+      "every pre-release waiter must share the latest join's elapsed window",
+    );
+    const oldWriterStartedAt = Date.now();
+    await client.$executeRawUnsafe(
+      `INSERT INTO "InhouseQueueEntry" (
+         "id", "userId", "joinedAt", "lastSeenAt"
+       ) VALUES (
+         'queue-entry-new', 'legacy-user-a', CURRENT_TIMESTAMP,
+         CURRENT_TIMESTAMP
+       )`,
+    );
+    const afterOldInsert = await client.$queryRawUnsafe(
+      `SELECT "idleExpiresAt" FROM "InhouseQueueEntry" ORDER BY "id"`,
+    );
+    const insertDeadline = afterOldInsert[0].idleExpiresAt.getTime();
+    assert(
+      afterOldInsert.length === 3 &&
+        afterOldInsert.every(
+          (row) => row.idleExpiresAt.getTime() === insertDeadline,
+        ) &&
+        insertDeadline > oldWriterStartedAt + 3 * 60 * 60_000,
+      "an old-binary join must refresh one shared deadline during promotion",
+    );
+    await client.$executeRawUnsafe(
+      `UPDATE "InhouseQueueEntry"
+       SET "idleExpiresAt" = '2000-01-01T00:00:00Z'`,
+    );
+    const oldLeaveStartedAt = Date.now();
+    await client.$executeRawUnsafe(
+      `DELETE FROM "InhouseQueueEntry" WHERE "id" = 'queue-entry-new'`,
+    );
+    const afterOldLeave = await client.$queryRawUnsafe(
+      `SELECT "idleExpiresAt" FROM "InhouseQueueEntry" ORDER BY "id"`,
+    );
+    assert(
+      afterOldLeave.length === 2 &&
+        afterOldLeave.every(
+          (row) =>
+            row.idleExpiresAt.getTime() ===
+            afterOldLeave[0].idleExpiresAt.getTime(),
+        ) &&
+        afterOldLeave[0].idleExpiresAt.getTime() >
+          oldLeaveStartedAt + 3 * 60 * 60_000,
+      "an old-binary leave must freshly reset one shared survivor deadline",
+    );
+    await client.$executeRawUnsafe(
+      `UPDATE "InhouseQueueEntry"
+       SET "idleExpiresAt" = statement_timestamp() + INTERVAL '1 hour'`,
+    );
+    const beforeNoOps = await client.$queryRawUnsafe(
+      `SELECT "idleExpiresAt" FROM "InhouseQueueEntry" ORDER BY "id"`,
+    );
+    const stableDeadline = beforeNoOps[0].idleExpiresAt.getTime();
+    assert(
+      beforeNoOps.every(
+        (row) => row.idleExpiresAt.getTime() === stableDeadline,
+      ),
+      "the no-op trigger sentinel must begin shared",
+    );
+    await client.$executeRawUnsafe(
+      `DELETE FROM "InhouseQueueEntry" WHERE "id" = 'missing-queue-entry'`,
+    );
+    await client.$executeRawUnsafe(
+      `INSERT INTO "InhouseQueueEntry" (
+         "id", "userId", "joinedAt", "lastSeenAt"
+       ) VALUES (
+         'duplicate-queue-entry', 'legacy-user-b', CURRENT_TIMESTAMP,
+         CURRENT_TIMESTAMP
+       )
+       ON CONFLICT ("userId") DO UPDATE
+       SET "lastSeenAt" = EXCLUDED."lastSeenAt"`,
+    );
+    const [afterNoOps] = await client.$queryRawUnsafe(
+      `SELECT "idleExpiresAt" FROM "InhouseQueueEntry"
+       WHERE "id" = 'queue-entry'`,
+    );
+    assert(
+      afterNoOps.idleExpiresAt.getTime() === stableDeadline,
+      "zero-row deletes and duplicate joins must not renew queue activity",
+    );
     const championMarkers = await client.$queryRawUnsafe(
       `SELECT "key" FROM "Setting"
        WHERE "key" = 'championAnnounced:legacy-season'`,
@@ -569,14 +673,6 @@ async function rehearseExistingLegacyDatabase(url) {
       "a post-migration correction to a historical result must receive a recovery receipt",
     );
 
-    await client.$executeRawUnsafe(
-      `INSERT INTO "InhouseQueueEntry" (
-         "id", "userId", "joinedAt", "lastSeenAt"
-       ) VALUES (
-         'queue-entry', 'legacy-user-b', '2024-08-04T01:02:03Z',
-         CURRENT_TIMESTAMP
-       )`,
-    );
     await client.$executeRawUnsafe(
       `INSERT INTO "InhouseLobby" ("id", "status", "updatedAt")
        VALUES ('queue-lobby', 'CANCELLED', CURRENT_TIMESTAMP)`,

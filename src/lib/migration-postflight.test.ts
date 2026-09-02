@@ -42,7 +42,7 @@ describe("migration postflight attestation", () => {
     expect(validatePostflightSnapshot(validSnapshot())).toEqual({
       schema: "league_data",
       migrationCount: Object.keys(MIGRATION_SHA256).length,
-      nativeObjectCount: 14,
+      nativeObjectCount: 17,
     });
   });
 
@@ -131,6 +131,18 @@ describe("migration postflight attestation", () => {
     if (!updateTrigger) throw new Error("test fixture trigger missing");
     updateTrigger.updateColumns = ["completedAt"];
     expect(() => validatePostflightSnapshot(wrongUpdateColumn)).toThrow(
+      /trigger definition drift/i,
+    );
+
+    const missingTransitionTable = validSnapshot();
+    const insertTrigger = missingTransitionTable.triggers.find(
+      (trigger) =>
+        trigger.name ===
+        "ld2l_refresh_inhouse_queue_idle_deadline_insert_trigger",
+    );
+    if (!insertTrigger) throw new Error("test fixture trigger missing");
+    insertTrigger.newTable = null;
+    expect(() => validatePostflightSnapshot(missingTransitionTable)).toThrow(
       /trigger definition drift/i,
     );
   });

@@ -151,8 +151,8 @@ export function StandingsTableClient({
       <caption className="caption-bottom border-t border-line/60 px-4 py-3 text-left text-xs leading-relaxed text-muted sm:px-5">
         <span className="font-medium text-fg">Scoring:</span> win 3 · draw 1 ·
         loss 0. <span className="font-medium text-fg">Tiebreaks:</span> game
-        differential · series wins · head-to-head mini-table. Ruled forfeits
-        count for points and record, but not game differential. A “tied” badge
+        differential · series wins · head-to-head mini-table. A forfeit or
+        ruling uses its recorded score for game differential. A “tied” badge
         means every tiebreak is level and the displayed order is only a stable
         fallback. Withdrawn teams keep their results in the table but cannot
         occupy a playoff seed.

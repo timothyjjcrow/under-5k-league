@@ -54,7 +54,9 @@ function navItems(
   if (!teamsExist || phase === "DRAFT") {
     items.push({ href: "/features", label: "Features" });
   }
-  if (teamsExist) items.push({ href: "/teams", label: "Teams" });
+  if (teamsExist) {
+    items.push({ href: "/teams", label: "Teams" });
+  }
   if (myTeamId) items.push({ href: `/teams/${myTeamId}`, label: "My Team" });
   if (phase === "DRAFT") {
     items.push({ href: "/draft", label: "Draft" });
@@ -195,6 +197,9 @@ export function SiteHeader({
 
   const exploreItems: NavItem[] = [
     ...phaseExploreItems(phase),
+    // Scrim archives stay useful between seasons, but this side mode belongs
+    // with the other secondary league tools so the primary bar never scrolls.
+    { href: "/scrims", label: "Scrims" },
     { href: "/news", label: "League news" },
     { href: "/features", label: "Feature tour" },
     { href: "/records", label: "Record book" },
