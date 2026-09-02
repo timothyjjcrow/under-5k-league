@@ -56,19 +56,19 @@ describe("projectPlayoffField", () => {
       played: 1,
       wins: 1,
       points: 3,
-      gameDiff: 0,
+      gameDiff: 2,
     });
     expect(projection.standings.map((row) => row.teamId)).toContain(
       "withdrawn",
     );
     expect(projection.eligibleTeamIds).toEqual([
-      "played-winner",
       "forfeit-winner",
+      "played-winner",
     ]);
     expect(projection.seededTeamIds).not.toContain("withdrawn");
     expect(projection.seedByTeam.has("withdrawn")).toBe(false);
     expect(projection.pairings).toEqual([
-      { home: "played-winner", away: "forfeit-winner" },
+      { home: "forfeit-winner", away: "played-winner" },
     ]);
   });
 

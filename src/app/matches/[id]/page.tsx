@@ -284,7 +284,7 @@ export default async function MatchDetailPage({
                 {match.forfeit ? (
                   <Badge
                     tone="accent"
-                    title="This score was ruled by an admin (no-show / default), not played — it counts for the standings but not the game-diff tiebreak."
+                    title="This score includes an admin ruling (forfeit / default); its recorded score counts in the standings and game-diff tiebreak."
                   >
                     forfeit
                   </Badge>

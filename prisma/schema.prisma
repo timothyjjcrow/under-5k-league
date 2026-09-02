@@ -285,11 +285,11 @@ model Match {
   bestOf           Int       @default(1) // series length; a team clinches at floor(bestOf/2)+1
   winnerTeamId     String?
   bracketSlot      String?
-  // A defaulted/no-show result: the score was RULED, not played. Points and
-  // W-L count normally; game scores are EXCLUDED from the gameDiff tiebreak
-  // and the Elo power rankings (an admin-chosen 2-0 must not outrank a real
-  // one), and surfaces badge it. Set by recordResult's checkbox and by
-  // withdrawTeam; cleared by reopenMatch.
+  // A defaulted/no-show or manually completed result: at least part of the
+  // score was RULED. The recorded score still counts throughout the standings,
+  // including gameDiff, while performance-only Elo skips it and surfaces badge
+  // it. Set by recordResult's checkbox and by withdrawTeam; cleared by
+  // reopenMatch.
   forfeit          Boolean   @default(false)
   // Last automatic OpenDota scan for this match (result-sync-service). Updated
   // via an atomic claim so concurrent pollers can't double-scan — the inhouse

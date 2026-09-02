@@ -3223,10 +3223,9 @@ export async function recordResult(
   const matchId = str(formData, "matchId");
   const homeScore = clampInt(formData, "homeScore", 0, 0, 99);
   const awayScore = clampInt(formData, "awayScore", 0, 0, 99);
-  // A forfeit is a RULED score, and the flag is what keeps the ruling honest
-  // downstream: standings/head-to-head exclude it from gameDiff, the power
-  // rankings skip it, and every surface badges it — an admin-chosen 2-0 no
-  // longer masquerades as a played sweep in the tiebreaks.
+  // A forfeit is a RULED score. Its recorded score remains official for the
+  // standings and head-to-head differential; the flag keeps the ruling visible
+  // and lets performance-only power rankings skip it.
   const forfeit = bool(formData, "forfeit");
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
 
@@ -3562,7 +3561,7 @@ export async function recordResult(
   }
   refresh();
   return {
-    message: `Result saved · ${homeScore}–${awayScore}${forfeit ? " (forfeit — excluded from game-diff tiebreaks)" : ""}`,
+    message: `Result saved · ${homeScore}–${awayScore}${forfeit ? " (forfeit / ruling)" : ""}`,
   };
 }
 
@@ -4253,11 +4252,12 @@ export async function releasePlayer(
  * got seeded into the playoff bracket on its banked points.
  *
  * One action: every unplayed REGULAR fixture is forfeited 0-N to the opponent
- * (forfeit=true, so the ruled scores stay out of the gameDiff tiebreak and the
- * power rankings), open reschedule proposals on them are cancelled, and the
- * team is flagged `withdrawn` — which is what excludes it from playoff
- * seeding (createPlayoffBracket filters the flag; standings could not do that
- * job, since a team that banked points before dying can out-rank the cut).
+ * (forfeit=true, so the official 0-N score counts in standings while the
+ * performance-only power rankings skip it), open reschedule proposals on them
+ * are cancelled, and the team is flagged `withdrawn` — which is what excludes
+ * it from playoff seeding (createPlayoffBracket filters the flag; standings
+ * could not do that job, since a team that banked points before dying can
+ * out-rank the cut).
  * Rosters, results and history are KEPT: the games happened.
  *
  * Recovery: reinstateTeam flips the flag back, and each forfeited fixture is

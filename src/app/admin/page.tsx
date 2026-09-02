@@ -2035,7 +2035,7 @@ function CaptainControls({
                   token={season.name}
                   title="Withdraw this team from the season?"
                   consequences={[
-                    "Every unplayed regular fixture of the selected team is forfeited 0-N to the opponent (marked forfeit, so the ruled scores stay out of the game-diff tiebreaks).",
+                    "Every unplayed regular fixture of the selected team is forfeited 0-N to the opponent; that official score counts in the game-diff tiebreak.",
                     "Open reschedule proposals on those fixtures are cancelled.",
                     "Standins booked on those fixtures — either side's — are stood down with an @-mention.",
                     "The team is excluded from playoff seeding — its played results and roster are kept.",
@@ -2838,9 +2838,9 @@ function MatchResultRow({
               />
             </label>
           </div>
-          {/* Ruled, not played: the flag is what keeps a defaulted 2-0 out of
-            the gameDiff tiebreak and the power rankings, and what badges the
-            result everywhere. Re-saving with the box unchecked un-rules it. */}
+          {/* The recorded score stays official for standings/gameDiff. The flag
+            badges the ruling and keeps it out of performance-only power
+            rankings. Re-saving with the box unchecked un-rules it. */}
           <label className="flex items-center gap-1 text-xs text-muted">
             <input
               type="checkbox"

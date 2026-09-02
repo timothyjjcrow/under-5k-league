@@ -3215,21 +3215,22 @@ advance → champion), `deleteSeason`'s archived-ness re-assert + rollback, and
 for them: `admin.deleteSeason.beforeTx` and `admin.generateSchedule.beforeTx`.
 `setAvailability` got its first tests at the same time.
 
-## Forfeits, team dropout, double round robin (2026-08-01)
+## Forfeits, team dropout, double round robin (2026-08-01; differential rule corrected 2026-09-01)
 
 The product gaps the audit named. Each is small and each has a rule:
 
 - **`Match.forfeit` — a ruled score, and the flag is what keeps it honest.**
-  Points and W-L count normally; the game scores are EXCLUDED from `gameDiff`
-  (and from `headToHeadRanks`' mini-diff, and from `powerRankings`' per-game
-  Elo — in the LIB, not a caller's filter). Otherwise an admin's choice of
-  default score silently decides the tiebreak and the power rankings. Set by
-  `recordResult`'s checkbox, CLEARED by `reopenMatch` (a reopened ruling must
-  not survive into the next result) and by re-saving with the box unticked.
-  Badged on /schedule ("ff"), the match page, and the admin row; the Discord
-  result message says "by forfeit". `MatchLike.forfeit` and
-  `RankableMatch.forfeit` are OPTIONAL so hand-built rows and older snapshots
-  stay valid.
+  Points, W-L, and the recorded game score all count normally in `gameDiff`
+  and `headToHeadRanks`' mini-diff. The flag can also represent a mixed series
+  with imported games plus a manually completed unticketed game, so excluding
+  the whole score erased played results and gave identical records different
+  differentials. `powerRankings` still skips the aggregate because it cannot
+  distinguish imported performance from awarded games. Set by `recordResult`'s
+  checkbox, CLEARED by `reopenMatch` (a reopened ruling must not survive into
+  the next result) and by re-saving with the box unticked. Badged on /schedule
+  ("ff"), the match page, and the admin row; the Discord result message says
+  "by forfeit". `MatchLike.forfeit` and `RankableMatch.forfeit` are OPTIONAL so
+  hand-built rows and older snapshots stay valid.
 - **`withdrawTeam` / `reinstateTeam` — the team-dropout tool.** REGULAR_SEASON
   only (pre-season the tool is `removeCaptain`, which deletes the empty team;
   a playoff slot needs an explicit per-match ruling, and the error says which).

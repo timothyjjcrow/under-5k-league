@@ -21,9 +21,10 @@ export type RankableMatch = {
   awayTeamId: string;
   homeScore: number;
   awayScore: number;
-  /** Ruled/defaulted result — its scores are ADMIN-CHOSEN, not played, so the
-   *  per-game Elo expansion skips it entirely (in the LIB, not a caller's
-   *  filter: every consumer gets the rule). Optional for hand-built rows. */
+  /** A result containing a ruling. The aggregate score can mix imported and
+   *  awarded games, so the performance-only per-game Elo expansion skips the
+   *  series rather than inventing evidence (in the LIB, not a caller filter).
+   *  Optional for hand-built rows. */
   forfeit?: boolean;
 };
 
