@@ -280,9 +280,14 @@ test("profile page renders the searchable hero picker", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: /Signup —/, level: 2 }),
   ).toBeVisible();
+  await page.locator("summary").filter({ hasText: "Optional scouting profile" }).click();
   await expect(
     page.getByRole("button", { name: "+ Add heroes" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "+ Add heroes" }).click();
+  await page.getByPlaceholder("Search heroes…").fill("Axe");
+  await page.getByRole("button", { name: "Axe", exact: true }).click();
+  await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

@@ -566,6 +566,10 @@ export default async function SchedulePage() {
         }
       />
 
+      <nav aria-label="Schedule sections" className="flex flex-wrap gap-3 text-sm">
+        <a href="#fixtures" className="inline-flex min-h-11 items-center text-info hover:underline">Fixtures</a>
+        <a href="#standings" className="inline-flex min-h-11 items-center text-info hover:underline">Standings & analysis</a>
+      </nav>
       <ScheduleCallout
         label={season.matchSchedule}
         description={calloutDescription(season.status)}
@@ -599,7 +603,7 @@ export default async function SchedulePage() {
           </div>
           {viewer?.role === "ADMIN" ? (
             <Link
-              href="/admin#schedule"
+              href="/admin#adm-schedule"
               className="shrink-0 text-xs text-info hover:underline"
             >
               Set times →
@@ -647,7 +651,48 @@ export default async function SchedulePage() {
 
       {postseasonSection}
 
-      <Card>
+      <div id="fixtures" className="scroll-mt-24 space-y-8">
+        <section className="space-y-4">
+          <SectionTitle>Regular season</SectionTitle>
+          {regular.length === 0 ? (
+            (() => {
+              const copy = emptyScheduleCopy(season.status, draft?.status);
+              return (
+                <EmptyState
+                  title={copy.title}
+                  description={copy.description}
+                  action={
+                    viewer?.role === "ADMIN" ? (
+                      <Link
+                        href="/admin#adm-schedule"
+                        className="text-sm text-info hover:underline"
+                      >
+                        Open schedule controls →
+                      </Link>
+                    ) : undefined
+                  }
+                />
+              );
+            })()
+          ) : (
+            <>
+              <ScheduleWeeks
+                weeks={[...weekViews].sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || a.week - b.week)}
+                initialTeamId={[...myTeamIds][0]}
+                teams={[...teams]
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((t) => ({
+                    id: t.id,
+                    name: t.name,
+                    logoUrl: t.logoUrl,
+                  }))}
+              />
+            </>
+          )}
+        </section>
+      </div>
+
+      <Card id="standings" className="scroll-mt-24">
         <CardHeader headingLevel={2} title="Standings" />
         <CardBody className="p-0">
           <StandingsTable
@@ -695,31 +740,7 @@ export default async function SchedulePage() {
         </>
       ) : null}
 
-      <div id="fixtures" className="scroll-mt-20 space-y-8">
-        <section className="space-y-4">
-          <SectionTitle>Regular season</SectionTitle>
-          {regular.length === 0 ? (
-            (() => {
-              const copy = emptyScheduleCopy(season.status, draft?.status);
-              return (
-                <EmptyState
-                  title={copy.title}
-                  description={copy.description}
-                  action={
-                    viewer?.role === "ADMIN" ? (
-                      <Link
-                        href="/admin#schedule"
-                        className="text-sm text-info hover:underline"
-                      >
-                        Open schedule controls →
-                      </Link>
-                    ) : undefined
-                  }
-                />
-              );
-            })()
-          ) : (
-            <>
+
               {teams.length > 1 ? (
                 <SeasonGrid
                   standings={standings}
@@ -728,20 +749,6 @@ export default async function SchedulePage() {
                   matches={matches}
                 />
               ) : null}
-              <ScheduleWeeks
-                weeks={weekViews}
-                teams={[...teams]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((t) => ({
-                    id: t.id,
-                    name: t.name,
-                    logoUrl: t.logoUrl,
-                  }))}
-              />
-            </>
-          )}
-        </section>
-      </div>
     </div>
   );
 }

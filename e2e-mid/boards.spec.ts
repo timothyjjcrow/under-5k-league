@@ -185,7 +185,9 @@ test("league news is deterministic, shareable, and usable on a phone", async ({
   expect(box?.width).toBeGreaterThanOrEqual(44);
   expect(box?.height).toBeGreaterThanOrEqual(44);
   await permalink.click();
-  await expect(page).toHaveURL(/\/news#e2e-mid-news-pinned$/);
+  await expect(page).toHaveURL(/\/news\?post=e2e-mid-news-pinned#e2e-mid-news-pinned$/);
+  await expect(page.getByRole("heading", { name: "Match night reminder", level: 2 })).toBeVisible();
+  await page.getByRole("link", { name: "All announcements", exact: true }).click();
   await expect(
     page.getByRole("link", {
       name: /Media attached to .*Week schedule published.*open animation/i,

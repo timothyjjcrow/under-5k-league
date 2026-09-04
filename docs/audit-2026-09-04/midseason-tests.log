@@ -1,0 +1,222 @@
+
+> under-4-5k-league@0.1.0 test:e2e:mid
+> playwright test --config playwright.midseason.config.ts
+
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": SQLite database "e2e-fixture.db" at "file:/Users/timothycrowley/LD2L2.0/prisma/e2e-fixture.db"
+
+The database is already in sync with the Prisma schema.
+
+┌─────────────────────────────────────────────────────────┐
+│  Update available 5.22.0 -> 8.0.0-rc.13                 │
+│                                                         │
+│  This is a major update - please follow the guide at    │
+│  https://pris.ly/d/major-version-upgrade                │
+│                                                         │
+│  Run the following to update                            │
+│    npm i --save-dev prisma@latest                       │
+│    npm i @prisma/client@latest                          │
+└─────────────────────────────────────────────────────────┘
+Rosters + 12 matches of box scores seeded.
+Viewer candidate: Roshan's Player2 76561197960265746
+Regular-season fixture ready (last week open).
+staged: 1 LIVE match with one valid 5v5 game + 2 tonight; logistics match cmtndrsvz000wc1x451qc59uq; 2 news posts
+
+Running 43 tests using 1 worker
+
+(node:10628) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e-mid/boards.spec.ts:15:5 › leaders renders boards with the show-all toggle (2.1s)
+  ✓   2 [chromium] › e2e-mid/boards.spec.ts:32:5 › homepage league pulse shares the trusted honors and hero state (1.3s)
+  ✓   3 [chromium] › e2e-mid/boards.spec.ts:52:5 › hero meta renders the contested and win-rate boards (1.2s)
+  ✓   4 [chromium] › e2e-mid/boards.spec.ts:70:5 › the record book renders all-time records (986ms)
+  ✓   5 [chromium] › e2e-mid/boards.spec.ts:88:5 › player comparison lists real careers, normalizes invalid links, and exposes table semantics (4.6s)
+  ✓   6 [chromium] › e2e-mid/boards.spec.ts:148:5 › league news is deterministic, shareable, and usable on a phone (1.3s)
+  ✓   7 [chromium] › e2e-mid/boards.spec.ts:199:5 › failed news media degrades to its source link (1.6s)
+  ✓   8 [chromium] › e2e-mid/boards.spec.ts:210:5 › public statistics metadata is route-specific and invalid archives are noindex not-found pages (17.1s)
+  ✓   9 [chromium] › e2e-mid/boards.spec.ts:287:5 › public stat and content pages stay inside a 360px viewport (4.8s)
+  ✓  10 [chromium] › e2e-mid/boards.spec.ts:305:5 › team page renders roster, form, and the what-we-need card (4.0s)
+  ✓  11 [chromium] › e2e-mid/boards.spec.ts:328:5 › teams roster chips do not overlap on a phone (1.9s)
+  ✓  12 [chromium] › e2e-mid/boards.spec.ts:352:5 › leaders has no horizontal page overflow on a phone (1.6s)
+  ✓  13 [chromium] › e2e-mid/boards.spec.ts:364:5 › players page has no horizontal page overflow on a phone (1.2s)
+  ✓  14 [chromium] › e2e-mid/boards.spec.ts:375:5 › a player profile renders career stats and the report card (1.7s)
+  ✓  15 [chromium] › e2e-mid/boards.spec.ts:407:5 › a player profile hero survives a phone (4.9s)
+  ✓  16 [chromium] › e2e-mid/boards.spec.ts:500:7 › /leaders tap targets clear WCAG 2.5.8 (1.7s)
+  ✓  17 [chromium] › e2e-mid/boards.spec.ts:500:7 › /players tap targets clear WCAG 2.5.8 (1.7s)
+  ✓  18 [chromium] › e2e-mid/boards.spec.ts:500:7 › /schedule tap targets clear WCAG 2.5.8 (2.2s)
+  ✓  19 [chromium] › e2e-mid/boards.spec.ts:500:7 › / tap targets clear WCAG 2.5.8 (2.0s)
+  ✘  20 [chromium] › e2e-mid/danger.spec.ts:33:5 › a destructive action cannot be submitted until the name is typed (30.3s)
+(node:11041) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  21 [chromium] › e2e-mid/danger.spec.ts:54:5 › Enter in the token field cannot complete a destructive action (30.2s)
+(node:11157) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  22 [chromium] › e2e-mid/danger.spec.ts:75:5 › cancelling disarms, so reopening starts from a blank field (30.4s)
+(node:11216) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  23 [chromium] › e2e-mid/dashboard.spec.ts:7:5 › dashboard shows the regular-season hero, standings, and a LIVE chip (1.4s)
+  ✓  24 [chromium] › e2e-mid/dashboard.spec.ts:26:5 › signed-out newcomers can find the mid-season standin signup (2.0s)
+  ✓  25 [chromium] › e2e-mid/dashboard.spec.ts:41:5 › dashboard has no horizontal page overflow on a phone (1.3s)
+  ✓  26 [chromium] › e2e-mid/dashboard.spec.ts:52:5 › standings headers sort on click and speak their state via aria-sort (3.5s)
+  ✓  27 [chromium] › e2e-mid/match.spec.ts:7:5 › a completed match page renders the box score with an MVP chip (3.8s)
+  ✓  28 [chromium] › e2e-mid/match.spec.ts:27:5 › an unplayed match page renders the preview with the scouting report (3.6s)
+  ✓  29 [chromium] › e2e-mid/match.spec.ts:47:5 › captains can report an open series and get a clear correction handoff once it is final (13.9s)
+  ✓  30 [chromium] › e2e-mid/navigation.spec.ts:11:5 › league tools live under Explore on desktop and mobile (3.0s)
+  ✓  31 [chromium] › e2e-mid/schedule.spec.ts:24:5 › schedule renders weeks, cards, the LIVE chip, and the calendar link (2.1s)
+  ✓  32 [chromium] › e2e-mid/schedule.spec.ts:45:5 › player check-in and captain reschedule stay synchronized end to end (7.3s)
+  ✓  33 [chromium] › e2e-mid/schedule.spec.ts:102:5 › fully-played past weeks start collapsed and expand on click (1.6s)
+  ✓  34 [chromium] › e2e-mid/schedule.spec.ts:120:5 › the team filter narrows the week rows and All teams restores them (1.6s)
+  ✓  35 [chromium] › e2e-mid/signed-in.spec.ts:15:5 › signed-in newcomers can register as a standin from the dashboard (2.6s)
+  ✓  36 [chromium] › e2e-mid/signed-in.spec.ts:34:5 › fantasy renders standings for a signed-in viewer (league locked) (1.6s)
+  ✓  37 [chromium] › e2e-mid/signed-in.spec.ts:48:5 › pick'em hides open splits and saves a call (3.1s)
+  ✓  38 [chromium] › e2e-mid/signed-in.spec.ts:76:5 › Fantasy and Pick'em fit a narrow phone (3.3s)
+  ✓  39 [chromium] › e2e-mid/signed-in.spec.ts:106:5 › mobile /me identity card fits its card (2.1s)
+  ✓  40 [chromium] › e2e-mid/signed-in.spec.ts:155:5 › mobile schedule has no horizontal page overflow (2.5s)
+  ✘  41 [chromium] › e2e-mid/signed-in.spec.ts:175:5 › mobile admin panel has no horizontal page overflow (15.4s)
+(node:11592) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  42 [chromium] › e2e-mid/signed-in.spec.ts:204:5 › mobile match page has no horizontal page overflow (3.3s)
+  ✘  43 [chromium] › e2e-mid/zz-result-entry.spec.ts:29:5 › admin result entry rejects partial play and supports a reversible no-game ruling (15.5s)
+
+
+  1) [chromium] › e2e-mid/danger.spec.ts:33:5 › a destructive action cannot be submitted until the name is typed 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByText('🏳️ A team has quit the season', { exact: true })
+
+
+      24 |   await page
+      25 |     .getByText("🏳️ A team has quit the season", { exact: true })
+    > 26 |     .click();
+         |      ^
+      27 |   const button = page.getByRole("button", { name: "Withdraw team" });
+      28 |   await expect(button).toBeVisible();
+      29 |   await button.click();
+        at openWithdrawDialog (/Users/timothycrowley/LD2L2.0/e2e-mid/danger.spec.ts:26:6)
+        at /Users/timothycrowley/LD2L2.0/e2e-mid/danger.spec.ts:37:18
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/danger-a-destructive-actio-b9330-ted-until-the-name-is-typed-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/danger-a-destructive-actio-b9330-ted-until-the-name-is-typed-chromium/error-context.md
+
+  2) [chromium] › e2e-mid/danger.spec.ts:54:5 › Enter in the token field cannot complete a destructive action 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByText('🏳️ A team has quit the season', { exact: true })
+
+
+      24 |   await page
+      25 |     .getByText("🏳️ A team has quit the season", { exact: true })
+    > 26 |     .click();
+         |      ^
+      27 |   const button = page.getByRole("button", { name: "Withdraw team" });
+      28 |   await expect(button).toBeVisible();
+      29 |   await button.click();
+        at openWithdrawDialog (/Users/timothycrowley/LD2L2.0/e2e-mid/danger.spec.ts:26:6)
+        at /Users/timothycrowley/LD2L2.0/e2e-mid/danger.spec.ts:58:18
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/danger-Enter-in-the-token--acfcd-mplete-a-destructive-action-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/danger-Enter-in-the-token--acfcd-mplete-a-destructive-action-chromium/error-context.md
+
+  3) [chromium] › e2e-mid/danger.spec.ts:75:5 › cancelling disarms, so reopening starts from a blank field 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByText('🏳️ A team has quit the season', { exact: true })
+
+
+      24 |   await page
+      25 |     .getByText("🏳️ A team has quit the season", { exact: true })
+    > 26 |     .click();
+         |      ^
+      27 |   const button = page.getByRole("button", { name: "Withdraw team" });
+      28 |   await expect(button).toBeVisible();
+      29 |   await button.click();
+        at openWithdrawDialog (/Users/timothycrowley/LD2L2.0/e2e-mid/danger.spec.ts:26:6)
+        at /Users/timothycrowley/LD2L2.0/e2e-mid/danger.spec.ts:81:18
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/danger-cancelling-disarms--b0ac7-g-starts-from-a-blank-field-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/danger-cancelling-disarms--b0ac7-g-starts-from-a-blank-field-chromium/error-context.md
+
+  4) [chromium] › e2e-mid/signed-in.spec.ts:175:5 › mobile admin panel has no horizontal page overflow 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: 'Admin', exact: true })
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 10000ms
+      - waiting for getByRole('heading', { name: 'Admin', exact: true })
+
+
+      190 |   await expect(
+      191 |     page.getByRole("heading", { name: "Admin", exact: true }),
+    > 192 |   ).toBeVisible();
+          |     ^
+      193 |   // The Discord card loads behind its own <Suspense> (it makes several calls
+      194 |   // to Discord, and awaiting them inline blocked the whole page). A streamed
+      195 |   // section that throws renders nothing and leaves the rest of the page
+        at /Users/timothycrowley/LD2L2.0/e2e-mid/signed-in.spec.ts:192:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/signed-in-mobile-admin-panel-has-no-horizontal-page-overflow-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/signed-in-mobile-admin-panel-has-no-horizontal-page-overflow-chromium/error-context.md
+
+  5) [chromium] › e2e-mid/zz-result-entry.spec.ts:29:5 › admin result entry rejects partial play and supports a reversible no-game ruling 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: 'Admin', exact: true })
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 10000ms
+      - waiting for getByRole('heading', { name: 'Admin', exact: true })
+
+
+      36 |   await expect(
+      37 |     page.getByRole("heading", { name: "Admin", exact: true }),
+    > 38 |   ).toBeVisible();
+         |     ^
+      39 |
+      40 |   // stage.ts makes the first open fixture a LIVE 1–0 Bo2 with one imported
+      41 |   // game. Imported scores are read-only unless the admin explicitly records a
+        at /Users/timothycrowley/LD2L2.0/e2e-mid/zz-result-entry.spec.ts:38:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/zz-result-entry-admin-resu-90fe3-a-reversible-no-game-ruling-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/zz-result-entry-admin-resu-90fe3-a-reversible-no-game-ruling-chromium/error-context.md
+
+  5 failed
+    [chromium] › e2e-mid/danger.spec.ts:33:5 › a destructive action cannot be submitted until the name is typed 
+    [chromium] › e2e-mid/danger.spec.ts:54:5 › Enter in the token field cannot complete a destructive action 
+    [chromium] › e2e-mid/danger.spec.ts:75:5 › cancelling disarms, so reopening starts from a blank field 
+    [chromium] › e2e-mid/signed-in.spec.ts:175:5 › mobile admin panel has no horizontal page overflow 
+    [chromium] › e2e-mid/zz-result-entry.spec.ts:29:5 › admin result entry rejects partial play and supports a reversible no-game ruling 
+  38 passed (4.3m)

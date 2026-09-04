@@ -1,0 +1,48 @@
+{
+  "schedule": {
+    "groups": [
+      {
+        "label": "Filter matches by team",
+        "y": 2403.703125
+      }
+    ],
+    "titles": [
+      {
+        "title": "Standings",
+        "y": 498
+      },
+      {
+        "title": "Playoff picture",
+        "y": 1106.28125
+      },
+      {
+        "title": "Run-in",
+        "y": 1529.78125
+      },
+      {
+        "title": "Regular season",
+        "y": 1934.78125
+      }
+    ]
+  },
+  "filterBefore": {
+    "url": "http://localhost:3212/schedule",
+    "pressed": "true"
+  },
+  "filterAfter": {
+    "url": "http://localhost:3212/schedule",
+    "pressed": "false"
+  },
+  "adminJump": {
+    "open": false,
+    "top": 96.125,
+    "summary": "Discord notifications\n\nConfigure league announcements plus the year-round inhouse queue board, alerts, and ping role.\n\n▾"
+  },
+  "invalidScrimScope": {
+    "url": "http://localhost:3212/scrims?season=does-not-exist",
+    "text": "Scrims\n\nSeason 9 (fixture) · Captains post a time, another team claims it, and the result stays entirely outside league standings and records.\n\nYou can browse scrims now. Only a current team captain can post or claim availability.\nOpen availability\n\nOne captain click bo"
+  },
+  "captain/": "Regular season\n🌐\nGame servers:\nUS East\nSeason 9 (fixture)\n\nWeekly round-robin matches are underway.\n\nWeek\n5\nof 5 weeks\n6\nteams competing\n25\ngames on record\nRegister as a standin →\n✓\nSignups\n(done)\n✓\nDraft\n(done)\n3\nSeason\n(current)\n4\nPlayoffs\n5\nChampion\nLeague news\n\nThe latest from the admins\n\nAll news →\n📌 Match night reminder\nAug 1, 1:00 PM\n\nCheck in with your captain before the first lobby.\n\nWeek schedule published\nAug 2, 1:00 PM\n\nThe latest fixtures are ready on the schedule page.\n\n\nMedia attached to “Week schedule published” — open animation\n⚔️\nThe inhouse queue is open\nStart the queue →\nThis week · Week 5\n\nCheck in, scout the enemy, call the winner\n\nFull schedule →\nWEEK 5\nLIVE 1–0\nDS\nDire Straits\n✓ 0/5\nRR\nRadiant Raccoons\n✓ 0/5\nWEEK 5\nFri, Sep 4, 3:56 PM\nWin and they're in\nRR\nRoshan's Revenge\n✓ 0/5\nTC\nThe Couriers of Catastrophe With Very Long Name\n✓ 0/5\nWEEK 5\nFri, Sep 4, 3:56 PM\nWin and they're in\nPP\nPudge Patrol\n✓ 0/5\nTA\nTechies Anonymous\n✓ 0/5\nStandings\nFull schedule →\nScoring: win 3 · draw 1 · loss 0. Tiebreaks: game differential · series wins · head-to-head mini-table. A forfeit or ruling uses its recorded score for game differential. A “tied” badge means every tiebreak is level and the displayed order is only a stable fallback. Withdrawn teams keep their results in the table but cannot occupy a playoff seed. Each qualifying row is announced with its current playoff seed.\n#▲\tTEAM\tW\tD\tL\tPTS\n1\n, current playoff seed 1\n\t\nDS\nDire Straits\n✓\n\t4\t0\t0\t12\n2\n, current playoff seed 2\n\t\nRR\nRadiant Raccoons\n✓\n\t3\t1\t0\t10\n3\n, current playoff seed 3\n\t\nRR\nRoshan's Revenge\nYOU\n\t1\t1\t2\t4\n4\n, current playoff seed 4\n▲1\t\nTA\nTechies Anonymous\n\t1\t1\t2\t4\n\nPLAYOFF CUT\n. ELIGIBLE TEAMS AFTER THIS ROW ARE OUTSIDE THE CURRENT PLAYOFF FIELD.\n\n5\n, outside the current playoff field\n▼1\t\nPP\nPudge Patrol\n\t1\t1\t2\t4\n6\n, outside the current playoff field\n\t\nTC\nThe Couriers of Catastrophe With Very Long Name\n✗\n\t0\t0\t4\t0\nYour team\n\nRoshan's Revenge\n\nL\nD\nL\nW\nRANK\n#3\nof 6\nRECORD\n1–2–1\nPOINTS\n4\n🎯 Win the next series and a playoff spot is locked.\nWEEK 5 · NEXT UP\nvs The Couriers of Catastrophe With Very Long Name\nFri, Sep 4, 3:56 PM\nTeam page →\nRecent results\nW4\nRR\nRadiant Raccoons\nv\nRR\nRoshan's Revenge\n2–0\nW4\nPP\nPudge Patrol\nv\nDS\nDire Straits\n0–2\nW4\nTC\nThe Couriers of Catastrophe With Very Long Name\nv\nTA\nTechies Anonymous\n0–2\nW3\nPP\nPudge Patrol\nv\nRR\nRadiant Raccoons\n1–1\nW3\nRR\nRoshan's Revenge\nv\nTA\nTechies Anonymous\n1–1\nLeague pulse\nLeaders →\n⚠\nSome imported games are omitted from League pulse. Incomplete or invalid 5v5 box scores must be inspected, removed, and re-imported; unknown hero IDs require a hero-catalogue update.\n⏳\nWeek 5 is still in progress; honors publish after the full slate is final.\n⭐\nTechies Player2 · Week 4 PotW · 153.3 pts\n🛡️\nDire Straits · Week 4 team · 2 game wins\nBloodseeker · most picked · 11 picks, 64% wins\n🔮\nPick'em\n2 picks to make — call it\n🧙\nFantasy\nRosters locked — standings\n🥇\nLeaders\nStat boards & weekly honors\n🧪\nHero meta\nWhat the league picks & wins with",
+  "captain/me": "Your profile\nA\nAuditCaptain\nSteam: 76561190000991001\nRefresh from Steam\nView public profile →\nDota / Dotabuff account\n\nYour Steam sign-in verifies the account used for ranks, scouting, and match imports.\n\nWe couldn't derive a Dota account from this Steam identity. Contact a league admin before playing.\nRefresh medal\n\nMedal needs Settings → Options → Advanced → Social → Expose Public Match Data enabled in Dota 2.\n\nDiscord\n\nAdd your Discord so your team and league admins can reach you — it's how the league coordinates.\n\nSave\nBlank clears it. Legacy Name#1234 tags work too.\nSignup — Season 9 (fixture)\n\nPlayer signups are closed, but you can still register as a standin.\n\nRR\nYOUR TEAM\nRoshan's Revenge\nCaptain\nMatch night — Sundays at 6:00 PM PST\nGames run weekly. Make sure you can play before you sign up.\nPublic signup profile\n\nYour participation type, submitted or estimated MMR, medal, preferred roles, favorite heroes, captain interest, goals, and captain note can appear in the public player pool and on your public profile. Do not enter contact details, specific availability, health details, or anything private in free-text fields. Joining asks the league to periodically refresh the public Steam and Dota data needed to run your competition.\n\nDiscord contact is limited to you, league admins, and active league participants.\n\nParticipation\nFull player\nGet drafted onto a team and play every week.\nStandin\nFill in for teams when someone can't play.\n\nFull-player signups are closed. Standins can still register through the draft, regular season and playoffs when teams may need cover.\n\nDota 2 MMR\n\nUnranked or not sure? Leave it blank — captains will see your ranked medal instead, and you can update it later. Used to help balance the draft. Be honest! Your submitted or medal-estimated MMR is public on the player pool and profile. We don't take anyone over 5000 MMR (no Immortals).\n\nPreferred roles\nCarry\n(Pos 1)\nMid\n(Pos 2)\nOfflane\n(Pos 3)\nSoft Support\n(Pos 4)\nHard Support\n(Pos 5)\n\nShown publicly on your player profile and in the player pool.\n\nFavorite heroes\n+ Add heroes\n\nPick the heroes you're known for — shown publicly on your player profile and in the player pool, including during the draft.\n\nWhat you want from the league (public)\n\nShown publicly on your player profile and, when no captain note is present, in the player pool. Don't include contact details or specific availability.\n\nNote for captains / drafters (public)\n\nShown publicly on your player profile and in the player pool, and surfaced again to captains during the draft. Don't put private contact details here.\n\nI'd like to be considered as a team captain\nCaptain volunteering closed when player signups ended.\nJoin the season",
+  "captain/scrims": "Scrims\n\nSeason 9 (fixture) · Captains post a time, another team claims it, and the result stays entirely outside league standings and records.\n\nPost team availability\n\nRoshan's Revenge is available to practice. A captain from another active team can claim the slot.\n\nAvailable date and time\nFormat\nBest of 1\nBest of 2\nBest of 3\nBest of 5\nPost availability\nOpen availability\n\nOne captain click books the matchup. Posting or joining confirms that your side can field a team.\n\nNo open scrim times\n\nA captain can post the first one above.\n\nBooked scrims\n\nUpcoming and in-progress practice series.\n\nRR\nRadiant Raccoons\nVS\nDS\nDire Straits\nBooked\nSat, Sep 5, 12:57 PM\nScrim history\n\nPractice results only — never league results.\n\nNo completed scrims yet\n\nScrim team records\n\nA practice-only table; league standings are unchanged.\n\nNo scrim team records yet\n\nScrim leaders\n\nCalculated only from completed scrim games, including casual guests.\n\nNo scrim stats yet\n\nRoshan's Revenge coaches\n\nCoaches must have signed into the site once. They can manage your side’s casual guest IDs and fetch scrim results, but cannot post, claim, or cancel scrims.\n\nCoach Dota ID, SteamID64, or profile URL\nAdd coach\n\nNo coaches assigned."
+}

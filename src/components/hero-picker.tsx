@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
+import { FormChangeContext } from "@/components/action-form";
 import { HEROES, type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
 import { buttonClasses } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,7 @@ export function HeroPicker({
   defaultValue?: string | null;
   max?: number;
 }) {
+  const markDirty = useContext(FormChangeContext);
   const [selected, setSelected] = useState<Hero[]>(
     () => parseHeroList(defaultValue).matched,
   );
@@ -45,6 +47,7 @@ export function HeroPicker({
   const value = selected.map((h) => h.name).join(", ");
 
   function toggle(hero: Hero) {
+    if (selectedIds.has(hero.id) || !atMax) markDirty();
     setSelected((cur) => {
       if (cur.some((h) => h.id === hero.id)) {
         return cur.filter((h) => h.id !== hero.id);

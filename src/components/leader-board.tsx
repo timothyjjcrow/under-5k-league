@@ -37,11 +37,13 @@ export type LeaderBoardRow = {
 const TOP = 5;
 
 export function LeaderBoard({
+  id,
   title,
   subtitle,
   rows,
   headingLevel = 3,
 }: {
+  id?: string;
   title: string;
   subtitle?: string;
   rows: LeaderBoardRow[];
@@ -57,7 +59,7 @@ export function LeaderBoard({
     !showAll && viewerIdx >= TOP ? rows[viewerIdx] : undefined;
 
   return (
-    <Card>
+    <Card id={id} className="scroll-mt-24">
       <CardHeader
         title={title}
         subtitle={subtitle}

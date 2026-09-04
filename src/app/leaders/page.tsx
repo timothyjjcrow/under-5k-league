@@ -1,3 +1,4 @@
+import { SectionNav } from "@/components/section-nav";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { heroById } from "@/lib/heroes";
@@ -426,6 +427,11 @@ export default async function LeadersPage({
         unusableGames={unusableGames}
         unmappedLines={unmappedLines}
       />
+      <p className="text-sm text-muted">{games.filter((game) => game.lines.length > 0).length} of {gameRows.length} imported games have trusted 5v5 scores. Individual boards use linked players and their displayed minimum sample.</p>
+      <SectionNav label="Leaderboard metrics" items={[
+        ...(reportRows.length ? [{ id: "metric-report", label: "Report card" }] : []),
+        ...boards.map((board) => ({ id: `metric-${board.key}`, label: board.title })),
+      ]} />
       {honorsByWeek.length > 0 ||
       inProgressWeeks.length > 0 ||
       awaitingBoxScoreWeeks.length > 0 ? (
@@ -511,6 +517,7 @@ export default async function LeadersPage({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {reportRows.length > 0 ? (
           <LeaderBoard
+            id="metric-report"
             title="Best report card"
             subtitle={`avg percentile vs the world · min ${rateFloor} graded game${rateFloor > 1 ? "s" : ""}`}
             rows={reportRows}
@@ -541,6 +548,7 @@ export default async function LeadersPage({
           return (
             <LeaderBoard
               key={b.title}
+              id={`metric-${b.key}`}
               title={b.title}
               subtitle={b.subtitle}
               rows={rows}

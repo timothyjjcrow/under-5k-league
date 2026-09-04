@@ -1,4 +1,8 @@
+import { Suspense } from "react";
+import { listPage } from "@/lib/list-page";
 import Link from "next/link";
+import { notFound } from "next/navigation";
+import { singleSearchParam } from "@/lib/search-params";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { singleActiveSeason } from "@/lib/season";
@@ -68,7 +72,7 @@ function TeamMark({
 export default async function ScrimsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ season?: string }>;
+  searchParams: Promise<{ season?: string | string[]; historyPage?: string | string[] }>;
 }) {
   const [query, viewer, seasons] = await Promise.all([
     searchParams,
@@ -87,13 +91,12 @@ export default async function ScrimsPage({
   const activeSeason = singleActiveSeason(
     seasons.filter((candidate) => candidate.isActive),
   );
-  const season =
-    (query.season
-      ? seasons.find((candidate) => candidate.id === query.season)
-      : null) ??
-    activeSeason ??
-    seasons[0] ??
-    null;
+  const seasonParam = singleSearchParam(query.season);
+  if (seasonParam === null) notFound();
+  const season = seasonParam
+    ? seasons.find((candidate) => candidate.id === seasonParam)
+    : activeSeason ?? seasons[0] ?? null;
+  if (seasonParam && !season) notFound();
 
   if (!season) {
     return (
@@ -111,7 +114,7 @@ export default async function ScrimsPage({
   }
 
   const now = new Date();
-  const [teams, scrims, scrimGames] = await Promise.all([
+  const [teams, scrims] = await Promise.all([
     prisma.team.findMany({
       where: { seasonId: season.id },
       orderBy: { name: "asc" },
@@ -122,7 +125,7 @@ export default async function ScrimsPage({
     prisma.scrim.findMany({
       where: {
         seasonId: season.id,
-        status: { not: SCRIM_STATUS.CANCELLED },
+        status: { in: [SCRIM_STATUS.OPEN, SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
         OR: [
           { status: { not: SCRIM_STATUS.OPEN } },
           { status: SCRIM_STATUS.OPEN, scheduledAt: { gte: now } },
@@ -133,26 +136,6 @@ export default async function ScrimsPage({
         hostTeam: true,
         opponentTeam: true,
         winnerTeam: true,
-      },
-    }),
-    prisma.scrimGame.findMany({
-      where: {
-        scrim: { seasonId: season.id, status: SCRIM_STATUS.COMPLETED },
-      },
-      select: {
-        radiantWin: true,
-        players: true,
-        scrim: {
-          select: {
-            participants: {
-              select: {
-                userId: true,
-                dotaAccountId: true,
-                displayName: true,
-              },
-            },
-          },
-        },
       },
     }),
   ]);
@@ -171,101 +154,6 @@ export default async function ScrimsPage({
       scrim.status === SCRIM_STATUS.SCHEDULED ||
       scrim.status === SCRIM_STATUS.LIVE,
   );
-  const completed = scrims
-    .filter((scrim) => scrim.status === SCRIM_STATUS.COMPLETED)
-    .reverse();
-
-  const leaders = new Map<
-    string,
-    {
-      key: string;
-      userId: string | null;
-      name: string;
-      games: number;
-      wins: number;
-      kills: number;
-      deaths: number;
-      assists: number;
-    }
-  >();
-  for (const game of scrimGames) {
-    const names = new Map(
-      game.scrim.participants.map((participant) => [
-        participant.dotaAccountId,
-        participant.displayName,
-      ]),
-    );
-    for (const player of parseGamePlayers(game.players)) {
-      if (player.accountId == null && !player.userId) continue;
-      const key = player.userId
-        ? `user:${player.userId}`
-        : `account:${player.accountId}`;
-      const row = leaders.get(key) ?? {
-        key,
-        userId: player.userId,
-        name:
-          (player.accountId != null ? names.get(player.accountId) : null) ??
-          player.personaname ??
-          "Guest player",
-        games: 0,
-        wins: 0,
-        kills: 0,
-        deaths: 0,
-        assists: 0,
-      };
-      row.games += 1;
-      row.wins += player.isRadiant === game.radiantWin ? 1 : 0;
-      row.kills += player.kills;
-      row.deaths += player.deaths;
-      row.assists += player.assists;
-      leaders.set(key, row);
-    }
-  }
-  const leaderRows = [...leaders.values()]
-    .sort(
-      (a, b) =>
-        b.kills + b.assists - (a.kills + a.assists) ||
-        b.games - a.games ||
-        a.name.localeCompare(b.name),
-    )
-    .slice(0, 8);
-  const teamRecordRows = teams
-    .map((team) => {
-      let seriesWins = 0;
-      let seriesDraws = 0;
-      let seriesLosses = 0;
-      let gameWins = 0;
-      let gameLosses = 0;
-      for (const scrim of completed) {
-        const isHost = scrim.hostTeamId === team.id;
-        const isAway = scrim.opponentTeamId === team.id;
-        if (!isHost && !isAway) continue;
-        const ownScore = isHost ? scrim.hostScore : scrim.awayScore;
-        const otherScore = isHost ? scrim.awayScore : scrim.hostScore;
-        gameWins += ownScore;
-        gameLosses += otherScore;
-        if (ownScore > otherScore) seriesWins += 1;
-        else if (ownScore < otherScore) seriesLosses += 1;
-        else seriesDraws += 1;
-      }
-      return {
-        team,
-        seriesWins,
-        seriesDraws,
-        seriesLosses,
-        gameWins,
-        gameLosses,
-        played: seriesWins + seriesDraws + seriesLosses,
-      };
-    })
-    .filter((row) => row.played > 0)
-    .sort(
-      (a, b) =>
-        b.seriesWins - a.seriesWins ||
-        b.gameWins - b.gameLosses - (a.gameWins - a.gameLosses) ||
-        a.team.name.localeCompare(b.team.name),
-    );
-
   return (
     <div className="space-y-6">
       <PageTitle
@@ -477,99 +365,8 @@ export default async function ScrimsPage({
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <Card id="history">
-          <CardHeader
-            title="Scrim history"
-            subtitle="Practice results only — never league results."
-            headingLevel={2}
-          />
-          <CardBody className="space-y-2">
-            {completed.length === 0 ? (
-              <EmptyState compact title="No completed scrims yet" />
-            ) : (
-              completed.map((scrim) => (
-                <Link
-                  key={scrim.id}
-                  href={`/scrims/${scrim.id}`}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-line/70 px-3 py-2 text-sm transition-colors hover:border-muted/60 hover:no-underline"
-                >
-                  <span className="min-w-0 truncate">
-                    {scrim.hostTeam.name} vs {scrim.opponentTeam?.name}
-                  </span>
-                  <span className="shrink-0 font-mono tabular-nums">
-                    {scrim.hostScore}–{scrim.awayScore}
-                  </span>
-                </Link>
-              ))
-            )}
-          </CardBody>
-        </Card>
-
-        <Card id="team-stats">
-          <CardHeader
-            title="Scrim team records"
-            subtitle="A practice-only table; league standings are unchanged."
-            headingLevel={2}
-          />
-          <CardBody className="space-y-2">
-            {teamRecordRows.length === 0 ? (
-              <EmptyState compact title="No scrim team records yet" />
-            ) : (
-              teamRecordRows.map((row) => (
-                <div
-                  key={row.team.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-line/70 px-3 py-2 text-sm"
-                >
-                  <TeamMark team={row.team} />
-                  <div className="shrink-0 text-right">
-                    <p className="font-mono tabular-nums">
-                      {row.seriesWins}-{row.seriesDraws}-{row.seriesLosses}
-                    </p>
-                    <p className="text-xs text-muted">
-                      games {row.gameWins}–{row.gameLosses}
-                    </p>
-                  </div>
-                </div>
-              ))
-            )}
-          </CardBody>
-        </Card>
-
-        <Card id="stats">
-          <CardHeader
-            title="Scrim leaders"
-            subtitle="Calculated only from completed scrim games, including casual guests."
-            headingLevel={2}
-          />
-          <CardBody className="space-y-2">
-            {leaderRows.length === 0 ? (
-              <EmptyState compact title="No scrim stats yet" />
-            ) : (
-              leaderRows.map((row) => (
-                <div
-                  key={row.key}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-line/70 px-3 py-2 text-sm"
-                >
-                  <div className="min-w-0">
-                    {row.userId ? (
-                      <PlayerLink userId={row.userId}>{row.name}</PlayerLink>
-                    ) : (
-                      <span className="font-medium">{row.name}</span>
-                    )}
-                    <p className="text-xs text-muted">
-                      {row.games}g · {row.wins}w
-                    </p>
-                  </div>
-                  <KDA
-                    kills={row.kills}
-                    deaths={row.deaths}
-                    assists={row.assists}
-                  />
-                </div>
-              ))
-            )}
-          </CardBody>
-        </Card>
+        <Suspense fallback={<p role="status">Loading practice history…</p>}><ScrimHistory seasonId={season.id} page={listPage(query.historyPage)} /></Suspense>
+        <Suspense fallback={<p role="status">Loading all-time practice statistics…</p>}><ScrimStatistics seasonId={season.id} teams={teams} /></Suspense>
       </div>
 
       {myCaptainTeam && seasonOpen ? (
@@ -629,5 +426,276 @@ export default async function ScrimsPage({
         </Card>
       ) : null}
     </div>
+  );
+}
+
+async function ScrimHistory({
+  seasonId,
+  page,
+}: {
+  seasonId: string;
+  page: number;
+}) {
+  const results = await prisma.scrim.findMany({
+    where: { seasonId, status: SCRIM_STATUS.COMPLETED },
+    orderBy: [{ scheduledAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    skip: (page - 1) * 20,
+    take: 21,
+    include: {
+      hostTeam: { select: { name: true } },
+      opponentTeam: { select: { name: true } },
+    },
+  });
+  const completed = results.slice(0, 20);
+  return (
+    <Card id="history">
+      <CardHeader
+        title="Scrim history"
+        subtitle="Practice results only — never league results."
+        headingLevel={2}
+      />
+      <CardBody className="space-y-2">
+        {completed.length === 0 ? (
+          <EmptyState compact title="No completed scrims yet" />
+        ) : (
+          completed.map((scrim) => (
+            <Link
+              key={scrim.id}
+              href={`/scrims/${scrim.id}`}
+              className="flex items-center justify-between gap-3 rounded-lg border border-line/70 px-3 py-2 text-sm transition-colors hover:border-muted/60 hover:no-underline"
+            >
+              <span className="min-w-0 truncate">
+                {scrim.hostTeam.name} vs {scrim.opponentTeam?.name}
+              </span>
+              <span className="shrink-0 font-mono tabular-nums">
+                {scrim.hostScore}–{scrim.awayScore}
+              </span>
+            </Link>
+          ))
+        )}
+        <nav
+          aria-label="Scrim history pages"
+          className="flex flex-wrap gap-3 pt-3 text-sm"
+        >
+          {page > 1 ? (
+            <Link
+              href={`/scrims?${new URLSearchParams({ season: seasonId, historyPage: String(page - 1) })}#history`}
+              className={textLink()}
+            >
+              ← Newer results
+            </Link>
+          ) : null}
+          {results.length > 20 ? (
+            <Link
+              href={`/scrims?${new URLSearchParams({ season: seasonId, historyPage: String(page + 1) })}#history`}
+              className={textLink()}
+            >
+              Older results →
+            </Link>
+          ) : null}
+        </nav>
+      </CardBody>
+    </Card>
+  );
+}
+
+async function ScrimStatistics({
+  seasonId,
+  teams,
+}: {
+  seasonId: string;
+  teams: { id: string; name: string; logoUrl: string | null }[];
+}) {
+  // Statistics retain every completed result regardless of the history page.
+  const [scrimGames, completed] = await Promise.all([
+    prisma.scrimGame.findMany({
+      where: {
+        scrim: { seasonId: seasonId, status: SCRIM_STATUS.COMPLETED },
+      },
+      select: {
+        radiantWin: true,
+        players: true,
+        scrim: {
+          select: {
+            participants: {
+              select: {
+                userId: true,
+                dotaAccountId: true,
+                displayName: true,
+              },
+            },
+          },
+        },
+      },
+    }),
+    prisma.scrim.findMany({
+      where: { seasonId, status: SCRIM_STATUS.COMPLETED },
+      select: {
+        hostTeamId: true,
+        opponentTeamId: true,
+        hostScore: true,
+        awayScore: true,
+      },
+    }),
+  ]);
+  const leaders = new Map<
+    string,
+    {
+      key: string;
+      userId: string | null;
+      name: string;
+      games: number;
+      wins: number;
+      kills: number;
+      deaths: number;
+      assists: number;
+    }
+  >();
+  for (const game of scrimGames) {
+    const names = new Map(
+      game.scrim.participants.map((participant) => [
+        participant.dotaAccountId,
+        participant.displayName,
+      ]),
+    );
+    for (const player of parseGamePlayers(game.players)) {
+      if (player.accountId == null && !player.userId) continue;
+      const key = player.userId
+        ? `user:${player.userId}`
+        : `account:${player.accountId}`;
+      const row = leaders.get(key) ?? {
+        key,
+        userId: player.userId,
+        name:
+          (player.accountId != null ? names.get(player.accountId) : null) ??
+          player.personaname ??
+          "Guest player",
+        games: 0,
+        wins: 0,
+        kills: 0,
+        deaths: 0,
+        assists: 0,
+      };
+      row.games += 1;
+      row.wins += player.isRadiant === game.radiantWin ? 1 : 0;
+      row.kills += player.kills;
+      row.deaths += player.deaths;
+      row.assists += player.assists;
+      leaders.set(key, row);
+    }
+  }
+  const leaderRows = [...leaders.values()]
+    .sort(
+      (a, b) =>
+        b.kills + b.assists - (a.kills + a.assists) ||
+        b.games - a.games ||
+        a.name.localeCompare(b.name),
+    )
+    .slice(0, 8);
+  const teamRecordRows = teams
+    .map((team) => {
+      let seriesWins = 0;
+      let seriesDraws = 0;
+      let seriesLosses = 0;
+      let gameWins = 0;
+      let gameLosses = 0;
+      for (const scrim of completed) {
+        const isHost = scrim.hostTeamId === team.id;
+        const isAway = scrim.opponentTeamId === team.id;
+        if (!isHost && !isAway) continue;
+        const ownScore = isHost ? scrim.hostScore : scrim.awayScore;
+        const otherScore = isHost ? scrim.awayScore : scrim.hostScore;
+        gameWins += ownScore;
+        gameLosses += otherScore;
+        if (ownScore > otherScore) seriesWins += 1;
+        else if (ownScore < otherScore) seriesLosses += 1;
+        else seriesDraws += 1;
+      }
+      return {
+        team,
+        seriesWins,
+        seriesDraws,
+        seriesLosses,
+        gameWins,
+        gameLosses,
+        played: seriesWins + seriesDraws + seriesLosses,
+      };
+    })
+    .filter((row) => row.played > 0)
+    .sort(
+      (a, b) =>
+        b.seriesWins - a.seriesWins ||
+        b.gameWins - b.gameLosses - (a.gameWins - a.gameLosses) ||
+        a.team.name.localeCompare(b.team.name),
+    );
+
+  return (
+    <>
+      <Card id="team-stats">
+        <CardHeader
+          title="Scrim team records"
+          subtitle="A practice-only table; league standings are unchanged."
+          headingLevel={2}
+        />
+        <CardBody className="space-y-2">
+          {teamRecordRows.length === 0 ? (
+            <EmptyState compact title="No scrim team records yet" />
+          ) : (
+            teamRecordRows.map((row) => (
+              <div
+                key={row.team.id}
+                className="flex items-center justify-between gap-3 rounded-lg border border-line/70 px-3 py-2 text-sm"
+              >
+                <TeamMark team={row.team} />
+                <div className="shrink-0 text-right">
+                  <p className="font-mono tabular-nums">
+                    {row.seriesWins}-{row.seriesDraws}-{row.seriesLosses}
+                  </p>
+                  <p className="text-xs text-muted">
+                    games {row.gameWins}–{row.gameLosses}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </CardBody>
+      </Card>
+
+      <Card id="stats">
+        <CardHeader
+          title="Scrim leaders"
+          subtitle="Calculated only from completed scrim games, including casual guests."
+          headingLevel={2}
+        />
+        <CardBody className="space-y-2">
+          {leaderRows.length === 0 ? (
+            <EmptyState compact title="No scrim stats yet" />
+          ) : (
+            leaderRows.map((row) => (
+              <div
+                key={row.key}
+                className="flex items-center justify-between gap-3 rounded-lg border border-line/70 px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  {row.userId ? (
+                    <PlayerLink userId={row.userId}>{row.name}</PlayerLink>
+                  ) : (
+                    <span className="font-medium">{row.name}</span>
+                  )}
+                  <p className="text-xs text-muted">
+                    {row.games}g · {row.wins}w
+                  </p>
+                </div>
+                <KDA
+                  kills={row.kills}
+                  deaths={row.deaths}
+                  assists={row.assists}
+                />
+              </div>
+            ))
+          )}
+        </CardBody>
+      </Card>
+    </>
   );
 }

@@ -114,6 +114,9 @@ test("captains can report an open series and get a clear correction handoff once
       .getByRole("alert")
       .filter({ hasText: "Enter a valid match id or URL" }),
   ).toBeVisible();
+  // The error remains beside the form after the global toast disappears.
+  await expect(page.getByRole("alert").filter({ hasText: "Enter a valid match id or URL" })).toHaveCount(0, { timeout: 8000 });
+  await expect(page.locator("form").filter({ has: matchRef })).toContainText("Enter a valid match id or URL");
   await expect(matchRef).toHaveValue("not-a-match");
   await expect(autoFetch).toBeEnabled();
   await expect(addGame).toBeEnabled();
@@ -121,7 +124,7 @@ test("captains can report an open series and get a clear correction handoff once
 
   // Capture the dynamically staged captain's team from the match itself, then
   // use the team filter to reach a completed fixture for the same captain.
-  // Filtering expands every week, so the first detail link is a played series.
+  // Filtering expands every week; current fixtures come first, past weeks follow.
   const captainTeam = page.locator('#main a[href^="/teams/"]').first();
   const captainTeamName = (await captainTeam.textContent())?.trim();
   expect(captainTeamName).toBeTruthy();
@@ -135,7 +138,7 @@ test("captains can report an open series and get a clear correction handoff once
     .locator("#fixtures")
     .getByRole("link", { name: "details →" });
   await expect(teamMatches).toHaveCount(5);
-  await teamMatches.first().click();
+  await teamMatches.last().click();
 
   await expect(
     page.getByText("Series complete", { exact: true }),

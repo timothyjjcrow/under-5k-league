@@ -1,4 +1,4 @@
-import { Fragment, Suspense, type ReactNode } from "react";
+import { cache, Fragment, Suspense, type ReactNode } from "react";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
@@ -498,14 +498,7 @@ export default async function Home() {
           yet) use fallback={null} so an empty state never flashes a phantom
           skeleton that then collapses — only guaranteed-content sections show a
           placeholder. */}
-      <Suspense fallback={null}>
-        <LeagueNews />
-      </Suspense>
-      <Suspense
-        fallback={<div className="skeleton h-12 rounded-[var(--radius)]" />}
-      >
-        <InhouseStrip />
-      </Suspense>
+      <Suspense fallback={null}><PinnedNotices /></Suspense>
       {season.status === "SIGNUPS" && (
         <Suspense fallback={<CardSkeleton rows={4} />}>
           <SignupsView snapshot={snapshot} loggedIn={!!user} />
@@ -551,6 +544,15 @@ export default async function Home() {
           />
         </Suspense>
       )}
+      <Suspense fallback={null}>
+        <LeagueNews />
+      </Suspense>
+      <Suspense
+        fallback={<div className="skeleton h-12 rounded-[var(--radius)]" />}
+      >
+        <InhouseStrip />
+      </Suspense>
+
     </div>
   );
 }
@@ -598,11 +600,21 @@ function currentRoundLabel(playoff: Match[]): string | null {
 
 // Latest admin announcements — pinned first, capped at three with a link to
 // the full /news archive. Renders nothing when the league has no news.
-async function LeagueNews() {
-  const posts = await prisma.newsPost.findMany({
+const loadHomeNews = cache(() => prisma.newsPost.findMany({
     orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     take: 3,
-  });
+  }));
+
+async function PinnedNotices() {
+  const posts = (await loadHomeNews()).filter((post) => post.pinned);
+  if (!posts.length) return null;
+  return <aside aria-label="Pinned announcements" className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-sm">
+    {posts.map((post) => <Link key={post.id} href={`/news?${new URLSearchParams({ post: post.id })}`} className="block py-2 text-fg hover:text-info">📌 Pinned notice: {post.title} →</Link>)}
+  </aside>;
+}
+
+async function LeagueNews() {
+  const posts = await loadHomeNews();
   if (posts.length === 0) return null;
 
   return (
@@ -627,7 +639,7 @@ async function LeagueNews() {
             <div key={p.id} className="min-w-0">
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <h3 className="min-w-0 truncate text-sm font-semibold">
-                  <Link href={`/news#${p.id}`} className="hover:text-info">
+                  <Link href={`/news?${new URLSearchParams({ post: p.id })}#${p.id}`} className="hover:text-info">
                     {p.pinned ? "📌 " : ""}
                     {p.title}
                   </Link>

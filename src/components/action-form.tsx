@@ -8,7 +8,9 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
+  useState,
 } from "react";
 import { useFormStatus } from "react-dom";
 import { pushToast } from "./toaster";
@@ -23,6 +25,7 @@ export type { ActionResult };
 // Exported so DangerSubmit (a separate client component, rendered inside the
 // same <ActionForm>) can show the same pending state as SubmitButton.
 export const PendingContext = createContext(false);
+export const FormChangeContext = createContext<() => void>(() => {});
 
 /**
  * A <form> bound to a server action that returns an ActionResult. Results are
@@ -44,11 +47,13 @@ export function ActionForm({
   children,
   className,
   hidden,
+  trackChanges = false,
 }: {
   action: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   children: React.ReactNode;
   className?: string;
   hidden?: Record<string, string>;
+  trackChanges?: boolean;
 }) {
   const safeAction = useCallback(
     async (prev: ActionResult, fd: FormData): Promise<ActionResult> => {
@@ -78,6 +83,16 @@ export function ActionForm({
   );
   const [state, formAction, isPending] = useActionState(safeAction, null);
   const formRef = useRef<HTMLFormElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  const errorId = useId();
+  const [dirty, setDirty] = useState(false);
+  const markDirty = useCallback(() => {
+    if (trackChanges) setDirty(true);
+  }, [trackChanges]);
+
+  useEffect(() => {
+    if (state?.error) errorRef.current?.focus();
+  }, [state]);
 
   useEffect(() => {
     if (!state || state.error) return;
@@ -90,6 +105,11 @@ export function ActionForm({
       ref={formRef}
       // Kept as the no-JS / pre-hydration fallback path.
       action={formAction}
+      aria-describedby={state?.error ? errorId : undefined}
+      onChange={(event) => {
+        if (event.target instanceof HTMLElement && event.target.getAttribute("name")) markDirty();
+      }}
+      onReset={trackChanges ? () => setDirty(false) : undefined}
       onSubmit={(e) => {
         e.preventDefault();
         // Capture synchronously (the form may re-render mid-transition) and
@@ -103,12 +123,38 @@ export function ActionForm({
       className={className}
     >
       <PendingContext.Provider value={isPending}>
-        {hidden
-          ? Object.entries(hidden).map(([k, v]) => (
-              <input key={k} type="hidden" name={k} value={v} />
-            ))
-          : null}
-        {children}
+        <FormChangeContext.Provider value={markDirty}>
+          {hidden
+            ? Object.entries(hidden).map(([k, v]) => (
+                <input key={k} type="hidden" name={k} value={v} />
+              ))
+            : null}
+          {children}
+          {state?.error ? (
+            <p
+              ref={errorRef}
+              id={errorId}
+              tabIndex={-1}
+              className="basis-full w-full col-span-full scroll-mt-40 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger focus:outline-none focus:ring-2 focus:ring-danger/50"
+            >
+              {state.error}
+            </p>
+          ) : null}
+          {trackChanges ? (
+            <p
+              role="status"
+              className="basis-full col-span-full text-xs text-muted"
+            >
+              {isPending
+                ? "Saving…"
+                : dirty
+                  ? "Unsaved changes"
+                  : state && !state.error
+                    ? "Saved"
+                    : "Changes are saved when you submit this form."}
+            </p>
+          ) : null}
+        </FormChangeContext.Provider>
       </PendingContext.Provider>
     </form>
   );

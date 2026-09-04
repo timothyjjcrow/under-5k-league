@@ -1,4 +1,7 @@
+import { listPage } from "@/lib/list-page";
+import { matchAttention } from "@/lib/admin-attention";
 import { Suspense } from "react";
+import { SectionNav, SectionReady } from "@/components/section-nav";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -210,7 +213,7 @@ export const metadata = { title: "Admin" };
 // 60s is the Hobby-plan ceiling; the actions themselves stop well before it.
 export const maxDuration = 60;
 
-export default async function AdminPage() {
+export default async function AdminPage({ searchParams }: { searchParams: Promise<{ newsPage?: string | string[] }> }) {
   const user = await getSessionUser();
   if (!user) redirect("/login?next=/admin");
   if (user.role !== "ADMIN") {
@@ -244,16 +247,21 @@ export default async function AdminPage() {
           data.teams.map((team) => team.id),
         )
       : null;
-  const newsPosts = await prisma.newsPost.findMany({
-    include: { author: { select: { name: true } } },
-    orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-  });
   const newSeasonDefaults =
     season ??
     (await prisma.season.findFirst({
       where: { isActive: false },
       orderBy: { createdAt: "desc" },
     }));
+
+  const setupControls = season && data ? <>
+          <AdminAnchor id="adm-season">
+            <SeasonControls season={season} data={data} />
+          </AdminAnchor>
+          <AdminAnchor id="adm-captains">
+            <CaptainControls season={season} data={data} />
+          </AdminAnchor>
+  </> : null;
 
   return (
     <div className="space-y-8">
@@ -266,8 +274,7 @@ export default async function AdminPage() {
         items={[
           ...(season && data
             ? [
-                { id: "adm-season", label: "Phase" },
-                { id: "adm-captains", label: "Captains & draft" },
+                { id: "adm-attention", label: "Needs attention" },
                 { id: "adm-schedule", label: "Schedule & results" },
                 { id: "adm-playoffs", label: "Playoffs" },
                 ...(rosterMovesVisible(season, data)
@@ -277,6 +284,8 @@ export default async function AdminPage() {
                 ...(autoSyncVisible(season)
                   ? [{ id: "adm-sync", label: "Auto-sync" }]
                   : []),
+                { id: "adm-season", label: "Phase" },
+                { id: "adm-captains", label: "Captains & draft" },
                 { id: "adm-league", label: "League id" },
               ]
             : []),
@@ -294,12 +303,8 @@ export default async function AdminPage() {
 
       {season && data ? (
         <>
-          <AdminAnchor id="adm-season">
-            <SeasonControls season={season} data={data} />
-          </AdminAnchor>
-          <AdminAnchor id="adm-captains">
-            <CaptainControls season={season} data={data} />
-          </AdminAnchor>
+          <AdminAttention season={season} data={data} />
+          {season.status === "SIGNUPS" || season.status === "DRAFT" ? setupControls : null}
           <AdminAnchor id="adm-schedule">
             <ScheduleControls season={season} data={data} />
           </AdminAnchor>
@@ -315,6 +320,7 @@ export default async function AdminPage() {
           <AdminAnchor id="adm-sync">
             <AutoSyncHealth season={season} />
           </AdminAnchor>
+          {season.status !== "SIGNUPS" && season.status !== "DRAFT" ? setupControls : null}
           <LeagueControls season={season} />
         </>
       ) : (
@@ -354,13 +360,13 @@ export default async function AdminPage() {
         <InhouseBetting />
       </Suspense>
 
-      <AdminAnchor id="adm-activity">
+      <div>
         <Suspense fallback={<CardSkeleton rows={4} />}>
           <AdminActivity />
         </Suspense>
-      </AdminAnchor>
+      </div>
 
-      <NewsControls posts={newsPosts} />
+      <Suspense fallback={<CardSkeleton rows={4} />}><AdminNews searchParams={searchParams} /></Suspense>
 
       <SecurityControls />
 
@@ -570,10 +576,12 @@ function AdminSection({
   return (
     <details
       id={id}
+      data-section-jump
       open={defaultOpen}
-      className="group scroll-mt-24 rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
+      className="group scroll-mt-40 rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
     >
       <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
+        <SectionReady />
         <div className="min-w-0">
           <h3 className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
             {title}
@@ -605,7 +613,7 @@ function AdminAnchor({
   children: React.ReactNode;
 }) {
   return (
-    <div id={id} className="scroll-mt-24">
+    <div id={id} className="scroll-mt-40">
       {children}
     </div>
   );
@@ -617,25 +625,7 @@ function AdminAnchor({
  * an admin has scrolled — which on match night is the whole point.
  */
 function AdminJump({ items }: { items: { id: string; label: string }[] }) {
-  return (
-    <nav
-      aria-label="Admin sections"
-      className="sticky top-20 z-20 -mx-4 border-b border-line bg-bg/90 px-4 py-2 backdrop-blur sm:mx-0 sm:rounded-[var(--radius)] sm:border sm:px-3"
-    >
-      <ul className="flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {items.map((i) => (
-          <li key={i.id}>
-            <a
-              href={`#${i.id}`}
-              className="inline-block whitespace-nowrap rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:border-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-            >
-              {i.label}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
+  return <SectionNav items={items} label="Admin sections" sticky />;
 }
 
 /**
@@ -764,7 +754,7 @@ async function loadSeasonAdminData(seasonId: string) {
         where: { seasonId },
         orderBy: [{ week: "asc" }, { createdAt: "asc" }],
         include: {
-          games: true,
+          games: { select: { id: true, dotaMatchId: true, winnerTeamId: true, durationSecs: true } },
           availability: { select: { id: true, userId: true, status: true } },
           standins: {
             select: {
@@ -843,6 +833,75 @@ async function loadSeasonAdminData(seasonId: string) {
 
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
 type Season = NonNullable<Awaited<ReturnType<typeof getActiveSeason>>>;
+
+function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
+  const attention = matchAttention(data.matches);
+  const names = new Map(data.teams.map((team) => [team.id, team.name]));
+  return (
+    <Card id="adm-attention" className="scroll-mt-40">
+      <CardHeader
+        headingLevel={2}
+        title={`${season.name} — needs attention`}
+        subtitle={`${PHASE_LABEL[season.status]} · Read-only match-night checklist. Open a match to review its current state.`}
+      />
+      <CardBody className="space-y-4">
+        {attention.length ? (
+          <details open={attention.length <= 5}>
+            <summary className="min-h-11 cursor-pointer text-sm font-medium">
+              {attention.length} match{attention.length === 1 ? "" : "es"} to
+              review — show details
+            </summary>
+            <ul className="space-y-2">
+              {attention.map((item) => {
+                const match = data.matches.find(
+                  (candidate) => candidate.id === item.id,
+                )!;
+                return (
+                  <li
+                    key={item.id}
+                    className="rounded-lg border border-line p-3 text-sm"
+                  >
+                    <Link href={`/matches/${item.id}`} className={textLink()}>
+                      {names.get(match.homeTeamId ?? "") ?? "TBD"} vs{" "}
+                      {names.get(match.awayTeamId ?? "") ?? "TBD"}
+                    </Link>
+                    <p className="mt-1 text-muted">
+                      {item.reasons.join(" · ")}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        ) : (
+          <p className="text-sm text-muted">
+            No missing kickoffs, outstanding reschedules, uncovered declared
+            absences, or long-running results to review.
+          </p>
+        )}
+        <div className="flex flex-wrap gap-3 text-sm">
+          <Link
+            href={`/admin/data-quality?season=${season.id}`}
+            className={buttonClasses("secondary", "sm")}
+          >
+            Inspect imported-game quality →
+          </Link>
+          <Link
+            href="/admin/activity"
+            className={buttonClasses("secondary", "sm")}
+          >
+            Search admin history →
+          </Link>
+        </div>
+        <p className="text-xs text-muted">
+          Use Automation, Auto-sync, and Discord in the section navigation for
+          last-run status, retry timing, and existing recovery controls. This
+          overview does not trigger retries.
+        </p>
+      </CardBody>
+    </Card>
+  );
+}
 
 function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
   const configLocked = !draftSetupOpen(season.status, data.draft?.status);
@@ -5731,7 +5790,8 @@ async function InhouseBetting() {
           <h4 className="mb-2 text-sm font-medium text-muted">
             Pots on the table
           </h4>
-          {rows.length === 0 ? (
+          <Link href="/admin/activity" className={textLink()}>Search and browse all recorded activity →</Link>
+        {rows.length === 0 ? (
             <p className="text-sm text-muted">
               Every pot is settled — nothing is outstanding. A pot appears here
               from the first bet of a game until its Cred is paid out, refunded
@@ -5972,6 +6032,43 @@ function SecurityControls() {
         </div>
       </CardBody>
     </AdminSection>
+  );
+}
+
+async function AdminNews({
+  searchParams,
+}: {
+  searchParams: Promise<{ newsPage?: string | string[] }>;
+}) {
+  const page = listPage((await searchParams).newsPage);
+  const results = await prisma.newsPost.findMany({
+    include: { author: { select: { name: true } } },
+    orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    skip: (page - 1) * 20,
+    take: 21,
+  });
+  return (
+    <div className="space-y-3">
+      <NewsControls posts={results.slice(0, 20)} />
+      <nav aria-label="Admin news pages" className="flex gap-3 text-sm">
+        {page > 1 ? (
+          <Link
+            href={`/admin?newsPage=${page - 1}#adm-news`}
+            className={buttonClasses("secondary", "sm")}
+          >
+            ← Newer posts
+          </Link>
+        ) : null}
+        {results.length > 20 ? (
+          <Link
+            href={`/admin?newsPage=${page + 1}#adm-news`}
+            className={buttonClasses("secondary", "sm")}
+          >
+            Older posts →
+          </Link>
+        ) : null}
+      </nav>
+    </div>
   );
 }
 

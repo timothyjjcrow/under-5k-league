@@ -7,6 +7,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Badge, Card, CardBody, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
@@ -74,11 +75,21 @@ export type WeekView = {
 export function ScheduleWeeks({
   weeks,
   teams,
+  initialTeamId,
 }: {
   weeks: WeekView[];
+  initialTeamId?: string;
   teams: { id: string; name: string; logoUrl?: string | null }[];
 }) {
-  const [filterTeam, setFilterTeam] = useState<string | null>(null);
+  const params = useSearchParams();
+  const requestedTeam = params.get("team");
+  const candidate = requestedTeam === null ? initialTeamId : requestedTeam;
+  const filterTeam = teams.some((team) => team.id === candidate) ? candidate! : null;
+  const setFilterTeam = (team: string | null) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("team", team ?? "all");
+    window.history.pushState(null, "", url.pathname + url.search + url.hash);
+  };
   // Per-week collapsed overrides on top of the default rule (past weeks with
   // every result in start collapsed).
   const [collapsedOverride, setCollapsedOverride] = useState<
@@ -111,7 +122,7 @@ export function ScheduleWeeks({
 
   return (
     <div className="space-y-4">
-      {teams.length > 2 ? (
+      {teams.length > 1 ? (
         <div
           className="flex gap-2 overflow-x-auto pb-1"
           role="group"
@@ -127,7 +138,7 @@ export function ScheduleWeeks({
             <FilterChip
               key={t.id}
               active={filterTeam === t.id}
-              onClick={() => setFilterTeam(filterTeam === t.id ? null : t.id)}
+              onClick={() => setFilterTeam(t.id)}
             >
               <TeamCrest
                 name={t.name}
@@ -170,7 +181,7 @@ export function ScheduleWeeks({
                         [w.week]: !collapsed,
                       }))
                     }
-                    className="flex items-center gap-2 rounded py-1 -my-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+                    className="flex min-h-11 sm:min-h-8 items-center gap-2 rounded py-1 -my-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
                   >
                     <span
                       aria-hidden
@@ -253,7 +264,7 @@ function FilterChip({
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
+        "flex min-h-11 sm:min-h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60",
         active
           ? "border-info/60 bg-info/15 text-fg"

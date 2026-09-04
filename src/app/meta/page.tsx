@@ -1,3 +1,4 @@
+import { HeroMetaExplorer } from "@/components/hero-meta-explorer";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
@@ -382,6 +383,24 @@ export default async function MetaPage({
         unusableGames={unusableGames}
         unknownHeroLines={unknownHeroLines}
         unmappedLines={unmappedLines}
+      />
+
+      <p className="text-sm text-muted">
+        {meta.games} of {games.length} imported games eligible for hero
+        analysis. Complete 5v5 scores and known hero IDs are required.
+      </p>
+      <HeroMetaExplorer
+        rows={meta.rows.map((row) => ({
+          ...row,
+          signatureUserId:
+            row.topPlayer && nameOf.has(row.topPlayer.userId)
+              ? row.topPlayer.userId
+              : null,
+          name: heroById(row.heroId)?.name ?? `Hero #${row.heroId}`,
+          signatureName: row.topPlayer
+            ? (nameOf.get(row.topPlayer.userId) ?? "Former player")
+            : "",
+        }))}
       />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

@@ -1,0 +1,26 @@
+
+> under-4-5k-league@0.1.0 test:e2e:mid
+> playwright test --config playwright.midseason.config.ts --last-failed
+
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": SQLite database "e2e-fixture.db" at "file:/Users/timothycrowley/LD2L2.0/prisma/e2e-fixture.db"
+
+The database is already in sync with the Prisma schema.
+
+Rosters + 12 matches of box scores seeded.
+Viewer candidate: Roshan's Player2 76561197960265746
+Regular-season fixture ready (last week open).
+staged: 1 LIVE match with one valid 5v5 game + 2 tonight; logistics match cmtndybz3000wrujfryvbzb97; 2 news posts
+
+Running 5 tests using 1 worker
+
+(node:12250) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e-mid/danger.spec.ts:33:5 › a destructive action cannot be submitted until the name is typed (8.7s)
+  ✓  2 [chromium] › e2e-mid/danger.spec.ts:54:5 › Enter in the token field cannot complete a destructive action (5.7s)
+  ✓  3 [chromium] › e2e-mid/danger.spec.ts:75:5 › cancelling disarms, so reopening starts from a blank field (8.1s)
+  ✓  4 [chromium] › e2e-mid/signed-in.spec.ts:175:5 › mobile admin panel has no horizontal page overflow (9.3s)
+  ✓  5 [chromium] › e2e-mid/zz-result-entry.spec.ts:29:5 › admin result entry rejects partial play and supports a reversible no-game ruling (13.0s)
+
+  5 passed (1.0m)

@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { prisma } from "@/lib/prisma";
 import type { Metadata } from "next";
 import { getAllGameScores } from "@/lib/cached-queries";
@@ -31,6 +32,13 @@ type CompareSearchParams = {
   b?: string | string[];
 };
 
+const decodedCareerGames = cache(async () =>
+  (await getAllGameScores()).map((game) => ({
+    game,
+    decoded: decodeGamePlayers(game.players),
+  })),
+);
+
 export async function generateMetadata({
   searchParams,
 }: {
@@ -41,8 +49,8 @@ export async function generateMetadata({
   const b = singleSearchParam(query.b);
   if (a && b && a !== b) {
     const participantIds = new Set(
-      (await getAllGameScores()).flatMap((game) =>
-        trustedGamePlayers(decodeGamePlayers(game.players)).flatMap((line) =>
+      (await decodedCareerGames()).flatMap(({ decoded }) =>
+        trustedGamePlayers(decoded).flatMap((line) =>
           line.userId ? [line.userId] : [],
         ),
       ),
@@ -134,11 +142,7 @@ export default async function ComparePage({
   // cached all-time scan once, retain only mapped participants with at least
   // one valid line, and reuse that same representation for both summaries and
   // meetings below.
-  const storedGames = await getAllGameScores();
-  const decodedGames = storedGames.map((game) => ({
-    game,
-    decoded: decodeGamePlayers(game.players),
-  }));
+  const decodedGames = await decodedCareerGames();
   const invalidLines = decodedGames.reduce(
     (total, row) => total + row.decoded.invalidLines,
     0,
