@@ -1,0 +1,134 @@
+[
+  {
+    "name": "home",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "standings",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "weekly-results",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "schedule",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "scoreboards",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "playoff-picture",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "teams",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "rosters",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "leaders",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "archive",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "archive-series",
+    "width": 390,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "home",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "standings",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "weekly-results",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "schedule",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "scoreboards",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "playoff-picture",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "teams",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "rosters",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "leaders",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "archive",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "name": "archive-series",
+    "width": 1440,
+    "overflow": 0,
+    "errors": []
+  }
+]

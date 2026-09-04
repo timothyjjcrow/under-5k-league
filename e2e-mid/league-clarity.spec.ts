@@ -85,7 +85,44 @@ test("schedule keeps analysis discoverable and labels filtered counts for the se
     "0 of 1 series complete",
   );
   await expect(
-    page.getByText(/Standings below still include the whole league/),
+    page.getByText("Team fixtures · League standings below"),
   ).toBeVisible();
+  noErrors();
+});
+
+test("weekly result tiles preserve every series and open the underlying match", async ({
+  page,
+}) => {
+  const noErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto("/");
+  const chart = page.getByRole("table", {
+    name: "Weekly series results",
+    exact: true,
+  });
+  await expect(chart).toBeVisible();
+  const progress = page.getByRole("progressbar", {
+    name: "Regular-season series complete",
+  });
+  const total = Number(await progress.getAttribute("aria-valuemax"));
+  const complete = Number(await progress.getAttribute("aria-valuenow"));
+  const tiles = chart.locator('a[href^="/matches/"]');
+  // Every series appears once for each team; a visual tile never drops a fixture.
+  await expect(tiles).toHaveCount(total * 2);
+  const links = await tiles.evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute("href")),
+  );
+  expect(new Set(links).size).toBe(total);
+  for (const href of new Set(links))
+    expect(links.filter((link) => link === href)).toHaveLength(2);
+  await expect(
+    chart.getByRole("link", { name: /: (Won|Lost|Drew) / }),
+  ).toHaveCount(complete * 2);
+  const result = chart.getByRole("link", { name: /: Won / }).first();
+  const href = await result.getAttribute("href");
+  await result.click();
+  await expect(page).toHaveURL(new RegExp(`${href}$`));
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expectNoHorizontalOverflow(page, "weekly result to match details");
   noErrors();
 });

@@ -537,7 +537,7 @@ export default async function SchedulePage() {
   ) : null;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <PageTitle
         title={
           season.status === "COMPLETE"
@@ -546,7 +546,7 @@ export default async function SchedulePage() {
               ? "Playoffs"
               : "Schedule & Standings"
         }
-        subtitle={`${season.name} · Match times are shown in your local timezone.`}
+        subtitle={`${season.name} · Local kickoff times`}
         action={
           <div className="flex flex-wrap items-center gap-3">
             {currentWeek != null ? (
@@ -560,7 +560,7 @@ export default async function SchedulePage() {
                 className={buttonClasses("secondary", "sm")}
                 title="Download the active season's calendar feed"
               >
-                📅 Calendar feed (.ics)
+                Calendar ↗
               </a>
             ) : null}
           </div>
@@ -569,7 +569,7 @@ export default async function SchedulePage() {
 
       {regular.length > 0 ? (
         <Card>
-          <CardBody>
+          <CardBody className="p-4 sm:p-5">
             <RegularSeasonProgress progress={progress} />
           </CardBody>
         </Card>
@@ -712,10 +712,7 @@ export default async function SchedulePage() {
         </section>
       </div>
 
-      <AnalysisDisclosure
-        title="Match times & calendar help"
-        description="Weekly match night, local kickoff times, and calendar subscriptions."
-      >
+      <AnalysisDisclosure title="Match times & calendar help">
         <ScheduleCallout
           label={season.matchSchedule}
           description={calloutDescription(season.status)}
@@ -736,8 +733,8 @@ export default async function SchedulePage() {
           title="Standings"
           subtitle={
             season.status === "REGULAR_SEASON"
-              ? `${playoffField.bracketSize} playoff places for ${playoffField.eligibleTeamIds.length} eligible teams. Positions can change until the remaining series finish.`
-              : "Regular-season results. The playoff bracket records postseason progress separately."
+              ? `${playoffField.bracketSize} playoff places · ${playoffField.eligibleTeamIds.length} eligible teams`
+              : "Final regular-season table"
           }
         />
         <CardBody className="p-0">
@@ -773,7 +770,7 @@ export default async function SchedulePage() {
         <AnalysisDisclosure
           id="playoff-analysis"
           title="Playoff race & possible matchups"
-          description="See what each team needs and who would meet if the season ended today. These are projections, not the official bracket."
+          description="Projected from today's standings"
         >
           <PlayoffPicture
             standings={playoffField.eligibleStandings}
@@ -792,10 +789,7 @@ export default async function SchedulePage() {
       ) : null}
 
       {teams.length > 1 ? (
-        <AnalysisDisclosure
-          title="Head-to-head results grid"
-          description="Compare every matchup. Read across a team's row to see its result against each opponent."
-        >
+        <AnalysisDisclosure title="Head-to-head results grid">
           <SeasonGrid
             standings={standings}
             teamName={teamName}
@@ -842,7 +836,7 @@ function SeasonGrid({
         aria-label={label}
         title={label}
         className={cn(
-          "block rounded px-1 py-1.5 font-mono text-[11px] tabular-nums transition-colors",
+          "flex min-h-12 min-w-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-transparent px-2 py-2 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
           cell.result === "W" &&
             "bg-success/15 text-success hover:bg-success/25",
           cell.result === "L" && "bg-danger/10 text-danger hover:bg-danger/20",
@@ -850,7 +844,10 @@ function SeasonGrid({
           !cell.played && "text-muted hover:text-info",
         )}
       >
-        {cell.played ? cell.score : `wk ${cell.week}`}
+        <span className="text-[10px] font-semibold uppercase">
+          {cell.played ? cell.result : cell.live ? "Live" : `W${cell.week}`}
+        </span>
+        <span>{cell.played ? cell.score : "vs"}</span>
       </Link>
     );
   };
@@ -864,10 +861,14 @@ function SeasonGrid({
     <Card className="overflow-hidden">
       <CardHeader
         title="Head-to-head results"
-        subtitle="Who's played who — each cell is the row team's result in that meeting"
+        subtitle="Each row shows that team's results"
       />
       <CardBody className="overflow-x-auto p-0">
         <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
+          <caption className="sr-only">
+            W = win, D = draw, L = loss. Scores are from the row team&apos;s
+            perspective.
+          </caption>
           <thead>
             <tr>
               <th className="sticky left-0 z-10 border-b border-line bg-surface px-4 py-2" />
@@ -880,7 +881,7 @@ function SeasonGrid({
                   <Link
                     href={`/teams/${colId}`}
                     title={teamName.get(colId) ?? "?"}
-                    className="inline-flex min-w-6 flex-col items-center gap-0.5 py-1 -my-1"
+                    className="inline-flex min-h-11 min-w-6 flex-col items-center justify-center gap-1 py-1 -my-1"
                   >
                     <TeamCrest
                       name={teamName.get(colId) ?? "?"}
@@ -912,7 +913,7 @@ function SeasonGrid({
                 >
                   <Link
                     href={`/teams/${rowId}`}
-                    className="flex min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
+                    className="flex min-h-11 min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
                   >
                     <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
                       {rankOf.get(rowId)}
@@ -924,7 +925,7 @@ function SeasonGrid({
                       size={20}
                       className="shrink-0 rounded"
                     />
-                    <span className="truncate">
+                    <span className="min-w-0 whitespace-normal text-xs [overflow-wrap:anywhere]">
                       {teamName.get(rowId) ?? "?"}
                     </span>
                   </Link>
@@ -1002,14 +1003,11 @@ function PlayoffPicture({
         // Fate open with nothing left to play — other results (and maybe
         // tiebreakers) decide; the scenario bit below carries the equal-weight
         // outcome share, not a predictive probability.
-        bits.push("done playing — waiting on other results");
+        bits.push("Waiting on other results");
       } else {
-        if (s.winAndIn && s.loseAndOut)
-          bits.push("Win the next series: qualifies. Lose: eliminated.");
-        else if (s.winAndIn)
-          bits.push("A win in the next series secures a playoff place.");
-        else if (s.loseAndOut)
-          bits.push("A loss in the next series ends playoff contention.");
+        if (s.winAndIn && s.loseAndOut) bits.push("Win & in · Lose & out");
+        else if (s.winAndIn) bits.push("Win the next series & qualify");
+        else if (s.loseAndOut) bits.push("Lose the next series & go out");
         if (s.magicNumber != null && s.magicNumber > 0 && !s.winAndIn)
           bits.push(
             `${s.magicNumber} more series win${s.magicNumber === 1 ? "" : "s"} guarantees a playoff place`,
@@ -1029,9 +1027,7 @@ function PlayoffPicture({
       if (bits.length === 0 && !scenarioNote) return null;
       return {
         teamId,
-        note:
-          bits.join(" ") ||
-          "Qualification still depends on remaining results and tiebreaks.",
+        note: bits.join(" ") || "Still in the race",
         scenarioNote,
       };
     })
@@ -1044,19 +1040,23 @@ function PlayoffPicture({
         title="Playoff picture"
         subtitle="First-round matchups if the season ended today"
       />
-      <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {pairings.map((p) => (
+      <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {pairings.map((p, index) => (
           <div
             key={p.home}
-            className="grid grid-cols-1 gap-2 rounded-lg border border-line/70 bg-surface-2/30 px-3 py-3 text-sm"
+            className="relative grid grid-cols-1 overflow-hidden rounded-xl border border-line bg-gradient-to-br from-surface-2/70 to-surface text-sm"
           >
+            <div className="flex items-center justify-between border-b border-line-soft px-4 py-2 text-[10px] uppercase tracking-wider text-muted">
+              <span>Matchup {String(index + 1).padStart(2, "0")}</span>
+              <span className="text-accent">Projected</span>
+            </div>
             <ProjectedSide
               teamId={p.home}
               seed={seedOf.get(p.home)}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}
             />
-            <span className="shrink-0 text-xs text-muted">vs</span>
+            <div aria-hidden className="mx-4 h-px bg-line-soft" />
             <ProjectedSide
               teamId={p.away}
               seed={seedOf.get(p.away)}
@@ -1070,11 +1070,11 @@ function PlayoffPicture({
             <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
               The race{report?.exact ? "" : " (points bounds)"}
             </div>
-            <ul className="space-y-2">
+            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {raceNotes.map((n) => (
                 <li
                   key={n.teamId}
-                  className="flex min-w-0 flex-wrap items-center gap-2 text-sm"
+                  className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-line-soft bg-surface-2/20 p-3 text-sm"
                 >
                   <TeamCrest
                     name={teamName.get(n.teamId) ?? "?"}
@@ -1089,7 +1089,7 @@ function PlayoffPicture({
                   >
                     {teamName.get(n.teamId) ?? "?"}
                   </Link>
-                  <span className="w-full text-sm leading-relaxed text-muted">
+                  <span className="w-full text-xs font-medium text-accent">
                     {n.note}
                   </span>
                   {n.scenarioNote ? (
@@ -1103,11 +1103,6 @@ function PlayoffPicture({
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-xs text-muted">
-              Scenario shares count every remaining win, loss, and draw
-              combination equally; they are not forecasts or betting odds.
-              “Safe” counts a tied cutoff against the team.
-            </p>
           </div>
         ) : null}
       </CardBody>
@@ -1130,17 +1125,18 @@ function ProjectedSide({
   return (
     <Link
       href={`/teams/${teamId}`}
-      className="flex min-w-0 items-start gap-2 hover:text-info"
+      className="flex min-h-16 min-w-0 items-center gap-3 px-4 py-3 hover:bg-surface-2/60 hover:text-info"
     >
-      <span className="w-11 shrink-0 text-xs tabular-nums text-muted">
-        Seed {seed}
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-accent/20 bg-accent/5 font-display text-lg tabular-nums text-accent">
+        <span className="sr-only">Seed </span>
+        {seed}
       </span>
       <TeamCrest
         name={name}
         seed={teamId}
         logoUrl={teamLogoUrl.get(teamId)}
-        size={20}
-        className="shrink-0 rounded"
+        size={28}
+        className="shrink-0 rounded-lg"
       />
       <span className="min-w-0 [overflow-wrap:anywhere]">{name}</span>
     </Link>
@@ -1173,7 +1169,7 @@ function RunIn({
       <CardHeader
         headingLevel={2}
         title="Remaining opponents"
-        subtitle="Who each team still has to play. Rank is the opponent’s current league position, not a difficulty rating."
+        subtitle="Opponents in week order · # = current rank"
       />
       <CardBody className="divide-y divide-line/60 p-0">
         {rows.map((s) => (
@@ -1192,7 +1188,9 @@ function RunIn({
                 size={20}
                 className="shrink-0 rounded"
               />
-              <span className="min-w-0 [overflow-wrap:anywhere]">{teamName.get(s.teamId) ?? "?"}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {teamName.get(s.teamId) ?? "?"}
+              </span>
             </Link>
             <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
               {(remaining.get(s.teamId) ?? []).map((r) => {

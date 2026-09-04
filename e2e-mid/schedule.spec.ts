@@ -48,7 +48,7 @@ test("schedule renders weeks, cards, the LIVE chip, and the calendar link", asyn
   ).toBeVisible();
   // Two calendar links exist (schedule header + footer) — either proves it.
   await expect(
-    page.getByRole("link", { name: /Calendar feed \(\.ics\)/ }).first(),
+    page.getByRole("link", { name: "Calendar ↗", exact: true }),
   ).toHaveAttribute("href", /\/api\/calendar/);
 
   assertNoErrors();

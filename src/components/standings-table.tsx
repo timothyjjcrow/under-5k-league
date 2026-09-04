@@ -174,7 +174,7 @@ export function StandingsTableClient({
         <col className="w-12 sm:w-16" />
       </colgroup>
       <thead>
-        <tr className="border-b border-line text-left text-xs uppercase text-muted">
+        <tr className="border-b border-line bg-surface-2/35 text-left text-[10px] uppercase tracking-wider text-muted">
           {header("rank", "#", "px-3 py-2.5 sm:px-5", "league rank")}
           <th className="px-2 py-2.5 font-medium">Team</th>
           {header("wins", "W", "px-1 py-2.5 text-center sm:px-2", "wins")}
@@ -202,14 +202,14 @@ export function StandingsTableClient({
             <Fragment key={row.teamId}>
               <tr
                 className={cn(
-                  "border-b border-line/50 transition-colors last:border-0 hover:bg-surface-2/40",
+                  "border-b border-line-soft transition-colors last:border-0 hover:bg-surface-2/60",
                   inCut && "bg-success/[0.04]",
                   row.teamId === viewerTeamId && "bg-info/[0.07]",
                 )}
               >
                 <td
                   className={cn(
-                    "px-3 py-2.5 sm:px-5",
+                    "px-3 py-2.5 font-display text-lg tabular-nums sm:px-5",
                     inCut ? "font-medium text-success/80" : "text-muted",
                   )}
                 >
@@ -255,7 +255,7 @@ export function StandingsTableClient({
                 <th scope="row" className="px-2 py-2.5 text-left font-medium">
                   <Link
                     href={`/teams/${row.teamId}`}
-                    className="flex min-w-0 items-center gap-2 py-1 -my-1 hover:text-info"
+                    className="-my-1 flex min-h-11 min-w-0 items-center gap-2 py-1 hover:text-info"
                   >
                     <TeamCrest
                       name={row.name}
@@ -295,11 +295,13 @@ export function StandingsTableClient({
                     ) : null}
                   </Link>
                 </th>
-                <td className="px-1 py-2.5 text-center sm:px-2">{row.wins}</td>
-                <td className="px-1 py-2.5 text-center text-muted sm:px-2">
+                <td className="px-1 py-2.5 text-center font-mono tabular-nums sm:px-2">
+                  {row.wins}
+                </td>
+                <td className="px-1 py-2.5 text-center font-mono tabular-nums text-muted sm:px-2">
                   {row.draws}
                 </td>
-                <td className="px-1 py-2.5 text-center sm:px-2">
+                <td className="px-1 py-2.5 text-center font-mono tabular-nums sm:px-2">
                   {row.losses}
                 </td>
                 <td className="hidden px-1 py-2.5 text-center text-muted sm:table-cell sm:px-2">
@@ -312,8 +314,10 @@ export function StandingsTableClient({
                     </span>
                   </td>
                 ) : null}
-                <td className="px-3 py-2.5 text-right font-semibold sm:px-5">
-                  {row.points}
+                <td className="px-2 py-2.5 text-right font-display text-xl font-semibold tabular-nums sm:px-5">
+                  <span className="inline-block min-w-6 rounded-md bg-info/[0.08] py-1 text-fg">
+                    {row.points}
+                  </span>
                 </td>
               </tr>
               {hasCut && row.playoffSeed === playoffCut ? (
@@ -346,16 +350,50 @@ export function StandingsTableClient({
   if (!overview) return table;
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft px-5 py-3">
-        <p className="text-xs text-muted">
-          Series win: 3 points · draw: 1 · loss: 0
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-4 py-3 sm:px-5">
+        <div
+          role="img"
+          aria-label="Series points: win 3, draw 1, loss 0"
+          className="flex items-center gap-2 text-[11px] tabular-nums text-muted"
+        >
+          <span aria-hidden className="mr-0.5 font-medium text-fg">
+            Points
+          </span>
+          <span aria-hidden>
+            <span className="font-semibold text-success">W</span> 3
+          </span>
+          <span aria-hidden className="text-line">
+            /
+          </span>
+          <span aria-hidden>
+            <span className="font-semibold text-accent">D</span> 1
+          </span>
+          <span aria-hidden className="text-line">
+            /
+          </span>
+          <span aria-hidden>
+            <span className="font-semibold text-danger">L</span> 0
+          </span>
+        </div>
         <button
           type="button"
           aria-pressed={detailed}
           onClick={() => setDetailed((value) => !value)}
-          className="min-h-11 rounded-lg border border-line bg-surface-2 px-3 text-xs font-medium text-fg hover:border-muted focus-visible:outline-2 focus-visible:outline-accent"
+          className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface-2/70 px-3 text-xs font-medium text-fg transition-colors hover:border-info/50 hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent"
         >
+          <svg
+            aria-hidden
+            viewBox="0 0 16 16"
+            fill="none"
+            className="h-3.5 w-3.5 text-info"
+          >
+            <path
+              d="M2 3h12M2 8h12M2 13h12M5 3v10M11 3v10"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+            />
+          </svg>
           {detailed ? "Simple standings" : "Detailed statistics"}
         </button>
       </div>
@@ -366,6 +404,11 @@ export function StandingsTableClient({
           rows={rows}
           viewerTeamId={viewerTeamId}
           playoffCut={playoffCut}
+          showPlayoffCut={
+            playoffCut != null &&
+            playoffCut > 0 &&
+            playoffCut < (eligibleTeams ?? totalTeams ?? rows.length)
+          }
         />
       )}
     </div>
@@ -376,93 +419,318 @@ function StandingsOverview({
   rows,
   viewerTeamId,
   playoffCut,
+  showPlayoffCut,
 }: {
   rows: StandingsRowView[];
   viewerTeamId?: string | null;
   playoffCut?: number;
+  showPlayoffCut: boolean;
 }) {
+  const leadingPoints = Math.max(...rows.map((row) => row.points), 1);
+  const hasForm = rows.some((row) => row.form !== null);
+  const columns = hasForm ? 5 : 4;
+
   return (
     <table
       className="w-full table-fixed text-sm"
       aria-label="League standings overview"
     >
+      <caption className="sr-only">
+        Teams in league order. Each bar shows points relative to the highest
+        points total in this table. W, D and L mean series wins, draws and
+        losses. Recent form reads newest first. A seed is the current playoff
+        position; qualified means a playoff place is secured. Fully tied teams
+        have an arbitrary displayed order. Withdrawn teams retain their results
+        but are excluded from playoff seeding.
+      </caption>
       <colgroup>
-        <col className="w-12" />
+        <col className="w-10 sm:w-14" />
         <col />
-        <col className="w-20 sm:w-24" />
+        <col className="w-0 sm:w-24" />
+        {hasForm ? <col className="w-0 md:w-32" /> : null}
+        <col className="w-14 sm:w-20" />
       </colgroup>
       <thead>
-        <tr className="border-b border-line-soft text-xs text-muted">
-          <th className="px-3 py-3 text-left">Rank</th>
-          <th className="px-3 py-3 text-left">Team & series record</th>
-          <th className="px-3 py-3 text-right">Points</th>
+        <tr className="border-b border-line-soft bg-surface-2/35 text-[10px] uppercase tracking-[0.12em] text-muted">
+          <th className="px-3 py-3 text-left font-medium sm:px-5">
+            <span aria-hidden>#</span>
+            <span className="sr-only">Rank</span>
+          </th>
+          <th className="px-2 py-3 text-left font-medium">Team</th>
+          <th className="hidden px-2 py-3 text-center font-medium sm:table-cell">
+            W · D · L
+          </th>
+          {hasForm ? (
+            <th className="hidden px-2 py-3 text-center font-medium md:table-cell">
+              Last five
+            </th>
+          ) : null}
+          <th className="px-3 py-3 text-right font-medium sm:px-5">Points</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr
-            key={row.teamId}
-            className={cn(
-              "border-b border-line-soft last:border-0",
-              row.teamId === viewerTeamId && "bg-info/10",
-            )}
-          >
-            <td className="px-3 py-4 align-top font-mono text-muted">
-              {row.rank}
-            </td>
-            <th scope="row" className="px-3 py-4 text-left font-normal">
-              <Link
-                href={`/teams/${row.teamId}`}
-                className="flex items-start gap-2 font-semibold hover:text-info"
-              >
-                <TeamCrest
-                  name={row.name}
-                  seed={row.teamId}
-                  logoUrl={row.logoUrl}
-                  size={24}
-                  className="shrink-0 rounded-md"
-                />
-                <span className="min-w-0 [overflow-wrap:anywhere]">
-                  {row.name}
-                  {row.teamId === viewerTeamId ? (
-                    <span className="ml-2 text-xs font-medium text-info">
-                      Your team
-                    </span>
-                  ) : null}
-                </span>
-              </Link>
-              <p className="mt-2 text-xs leading-relaxed text-muted">
-                {row.wins} wins · {row.draws} draws · {row.losses} losses
-              </p>
-              <p
+        {rows.map((row) => {
+          const isViewer = row.teamId === viewerTeamId;
+          const recordLabel = `${row.wins} wins, ${row.draws} draws, ${row.losses} losses`;
+          return (
+            <Fragment key={row.teamId}>
+              <tr
                 className={cn(
-                  "mt-1 text-xs leading-relaxed",
-                  row.clinch === "CLINCHED" ? "text-success" : "text-muted",
+                  "group/standing border-b border-line-soft transition-colors last:border-0 hover:bg-surface-2/55",
+                  isViewer && "bg-info/[0.07]",
                 )}
               >
-                {row.withdrawn
-                  ? "Withdrawn · not eligible for playoffs"
-                  : row.clinch === "CLINCHED"
-                    ? "Playoff place secured"
-                    : row.clinch === "ELIMINATED"
-                      ? "Out of playoff contention"
-                      : playoffCut != null
-                        ? row.playoffSeed != null
-                          ? `Currently in playoff position · seed ${row.playoffSeed}`
-                          : "Currently outside playoff positions"
-                        : null}
-                {row.idDecided
-                  ? " · Fully tied; order is not decided by results"
-                  : null}
-              </p>
-            </th>
-            <td className="px-3 py-4 text-right align-top font-display text-2xl tabular-nums">
-              {row.points}
-            </td>
-          </tr>
-        ))}
+                <td className="px-3 py-3 align-top sm:px-5 sm:py-4">
+                  <span
+                    className={cn(
+                      "block pt-1 font-display text-xl leading-none tabular-nums",
+                      row.rank === 1 ? "text-accent" : "text-muted",
+                    )}
+                  >
+                    {row.rank < 10 ? `0${row.rank}` : row.rank}
+                  </span>
+                  {row.move !== 0 ? (
+                    <span
+                      role="img"
+                      aria-label={`${row.move > 0 ? "up" : "down"} ${Math.abs(row.move)} from last week`}
+                      title={`${row.move > 0 ? "Up" : "Down"} ${Math.abs(row.move)} from last week`}
+                      className={cn(
+                        "mt-2 block whitespace-nowrap text-[9px] font-semibold",
+                        row.move > 0 ? "text-success" : "text-danger",
+                      )}
+                    >
+                      <span aria-hidden>
+                        {row.move > 0 ? "↑" : "↓"}
+                        {Math.abs(row.move)}
+                      </span>
+                    </span>
+                  ) : null}
+                  <span className="sr-only">
+                    {row.playoffSeed != null
+                      ? `, current playoff seed ${row.playoffSeed}`
+                      : ""}
+                  </span>
+                </td>
+                <th
+                  scope="row"
+                  className="px-2 py-3 text-left font-normal sm:py-4"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <TeamCrest
+                      name={row.name}
+                      seed={row.teamId}
+                      logoUrl={row.logoUrl}
+                      size={30}
+                      className="shrink-0 rounded-lg"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        href={`/teams/${row.teamId}`}
+                        className="-my-1 inline-flex min-h-11 items-center py-1 text-sm font-semibold leading-snug transition-colors [overflow-wrap:anywhere] hover:text-info"
+                      >
+                        {row.name}
+                        <span
+                          aria-hidden
+                          className="ml-1 hidden shrink-0 text-info opacity-0 transition-opacity group-hover/standing:opacity-100 sm:inline"
+                        >
+                          ↗
+                        </span>
+                      </Link>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-medium">
+                        <OverviewStatus row={row} playoffCut={playoffCut} />
+                        {isViewer ? (
+                          <span className="text-info">Your team</span>
+                        ) : null}
+                        {row.idDecided ? (
+                          <span
+                            role="img"
+                            aria-label="Fully tied with a neighbouring team — this order is arbitrary"
+                            title="Fully tied — all tiebreaks are level; displayed order is arbitrary"
+                            className="rounded bg-accent/10 px-1.5 py-0.5 text-accent"
+                          >
+                            Tied
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <div
+                      aria-hidden
+                      className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-3/65"
+                    >
+                      <span
+                        className={cn(
+                          "absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-info/65 to-cyan-300",
+                          row.withdrawn && "from-muted/35 to-muted/70",
+                        )}
+                        style={{
+                          width: `${Math.max(0, row.points / leadingPoints) * 100}%`,
+                        }}
+                      />
+                    </div>
+                    <span
+                      role="img"
+                      aria-label={recordLabel}
+                      className="shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums sm:hidden"
+                    >
+                      <span aria-hidden>
+                        <span className="text-success">{row.wins}W</span>
+                        <span className="mx-1 text-muted">{row.draws}D</span>
+                        <span className="text-danger">{row.losses}L</span>
+                      </span>
+                    </span>
+                  </div>
+                </th>
+                <td className="hidden px-2 py-4 text-center sm:table-cell">
+                  <span
+                    role="img"
+                    aria-label={recordLabel}
+                    className="whitespace-nowrap font-mono text-xs tabular-nums"
+                  >
+                    <span aria-hidden>
+                      <span className="text-success">{row.wins}</span>
+                      <span className="mx-1.5 text-muted">{row.draws}</span>
+                      <span className="text-danger">{row.losses}</span>
+                    </span>
+                  </span>
+                  <RecordBar row={row} />
+                </td>
+                {hasForm ? (
+                  <td className="hidden px-2 py-4 md:table-cell">
+                    <span className="flex justify-center">
+                      {row.form?.length ? (
+                        <FormStrip form={row.form.slice(0, 5)} size={4} />
+                      ) : (
+                        <span className="text-xs text-muted">—</span>
+                      )}
+                    </span>
+                  </td>
+                ) : null}
+                <td className="px-3 py-4 text-right sm:px-5">
+                  <span
+                    className={cn(
+                      "font-display text-3xl leading-none tabular-nums",
+                      row.rank === 1 ? "text-accent" : "text-fg",
+                    )}
+                  >
+                    {row.points}
+                  </span>
+                </td>
+              </tr>
+              {showPlayoffCut && row.playoffSeed === playoffCut ? (
+                <tr className="bg-accent/[0.04]">
+                  <td colSpan={columns} className="px-4 py-2 sm:px-5">
+                    <div className="flex items-center gap-3 text-[9px] font-semibold uppercase tracking-[0.15em] text-accent">
+                      <span
+                        aria-hidden
+                        className="h-px flex-1 border-t border-dashed border-accent/35"
+                      />
+                      Playoff cut · {playoffCut} places
+                      <span
+                        aria-hidden
+                        className="h-px flex-1 border-t border-dashed border-accent/35"
+                      />
+                      <span className="sr-only">
+                        . Eligible teams below this line are outside the current
+                        playoff field.
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+            </Fragment>
+          );
+        })}
       </tbody>
     </table>
+  );
+}
+
+function OverviewStatus({
+  row,
+  playoffCut,
+}: {
+  row: StandingsRowView;
+  playoffCut?: number;
+}) {
+  if (row.withdrawn) {
+    return (
+      <span
+        title="Withdrawn — remaining fixtures forfeited; excluded from playoff seeding"
+        className="text-muted"
+      >
+        Withdrawn
+      </span>
+    );
+  }
+  if (row.clinch === "CLINCHED") {
+    return (
+      <span title="Playoff place secured" className="text-success">
+        <span aria-hidden>✓ </span>Qualified
+        {row.playoffSeed != null && row.playoffSeed !== row.rank
+          ? ` · seed ${row.playoffSeed}`
+          : ""}
+      </span>
+    );
+  }
+  if (row.clinch === "ELIMINATED") {
+    return (
+      <span title="Out of playoff contention" className="text-muted">
+        Eliminated
+      </span>
+    );
+  }
+  if (playoffCut != null && row.playoffSeed != null) {
+    return (
+      <span
+        title={`Currently in playoff position — seed ${row.playoffSeed}`}
+        className="text-muted"
+      >
+        Seed {row.playoffSeed}
+      </span>
+    );
+  }
+  if (playoffCut != null) {
+    return (
+      <span title="Currently outside playoff positions" className="text-muted">
+        Outside cut
+      </span>
+    );
+  }
+  return null;
+}
+
+function RecordBar({ row }: { row: StandingsRowView }) {
+  const played = row.wins + row.draws + row.losses;
+  return (
+    <span
+      aria-hidden
+      className="mx-auto mt-2 flex h-1.5 max-w-16 gap-px overflow-hidden rounded-full bg-surface-3/65"
+    >
+      {played > 0 ? (
+        <>
+          {row.wins > 0 ? (
+            <span
+              className="bg-success/80"
+              style={{ width: `${(row.wins / played) * 100}%` }}
+            />
+          ) : null}
+          {row.draws > 0 ? (
+            <span
+              className="bg-accent/80"
+              style={{ width: `${(row.draws / played) * 100}%` }}
+            />
+          ) : null}
+          {row.losses > 0 ? (
+            <span
+              className="bg-danger/65"
+              style={{ width: `${(row.losses / played) * 100}%` }}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </span>
   );
 }
 

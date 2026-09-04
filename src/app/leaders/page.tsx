@@ -521,6 +521,7 @@ export default async function LeadersPage({
             title="Best report card"
             subtitle={`avg percentile vs the world · min ${rateFloor} graded game${rateFloor > 1 ? "s" : ""}`}
             rows={reportRows}
+            scaleMax={1}
             headingLevel={2}
           />
         ) : null}
@@ -552,6 +553,7 @@ export default async function LeadersPage({
               title={b.title}
               subtitle={b.subtitle}
               rows={rows}
+              scaleMax={b.key === "winRate" ? 100 : undefined}
               headingLevel={2}
             />
           );

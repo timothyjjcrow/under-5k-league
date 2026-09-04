@@ -13,7 +13,11 @@ test("a completed match page renders the box score with an MVP chip", async ({
   // Past completed weeks start collapsed — expand the first (#main scope:
   // the header hamburger also has aria-expanded) and open its first match.
   await page.locator('#main button[aria-expanded="false"]').first().click();
-  await page.getByRole("link", { name: "details →" }).first().click();
+  await page
+    .getByRole("article", { name: / · Final$/ })
+    .first()
+    .getByRole("link", { name: "details →" })
+    .click();
 
   await expect(page).toHaveURL(/\/matches\//);
   await expect(page.getByText("series").first()).toBeVisible();
@@ -31,11 +35,11 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   await page.goto("/schedule");
 
   // The staged LIVE row already has a recorded game and correctly renders its
-  // box score. Select a SCHEDULED row by its kickoff <time> so this check keeps
+  // box score. Select an Upcoming card by its visible state so this check keeps
   // exercising the pre-game scouting state regardless of within-week order.
-  const scheduledDetails = page.locator(
-    '#fixtures div:has(> a[href^="/matches/"]):has(time) > a[href^="/matches/"]',
-  );
+  const scheduledDetails = page
+    .getByRole("article", { name: / · Upcoming$/ })
+    .getByRole("link", { name: "details →" });
   await expect(scheduledDetails.first()).toBeVisible();
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
@@ -115,8 +119,14 @@ test("captains can report an open series and get a clear correction handoff once
       .filter({ hasText: "Enter a valid match id or URL" }),
   ).toBeVisible();
   // The error remains beside the form after the global toast disappears.
-  await expect(page.getByRole("alert").filter({ hasText: "Enter a valid match id or URL" })).toHaveCount(0, { timeout: 8000 });
-  await expect(page.locator("form").filter({ has: matchRef })).toContainText("Enter a valid match id or URL");
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Enter a valid match id or URL" }),
+  ).toHaveCount(0, { timeout: 8000 });
+  await expect(page.locator("form").filter({ has: matchRef })).toContainText(
+    "Enter a valid match id or URL",
+  );
   await expect(matchRef).toHaveValue("not-a-match");
   await expect(autoFetch).toBeEnabled();
   await expect(addGame).toBeEnabled();

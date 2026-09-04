@@ -26,6 +26,16 @@ test("leaders renders boards with the show-all toggle", async ({ page }) => {
     page.getByRole("heading", { name: "Weekly honors", level: 2 }),
   ).toBeVisible();
   await expect(page.getByText(/is still in progress/i)).toBeVisible();
+  // A 55th-percentile player should fill about 55% of the scale, even when
+  // they lead this league. Relative-to-leader scaling would incorrectly fill it.
+  const reportLeader = page.locator("#metric-report li").first();
+  const percentile = Number.parseFloat(
+    await reportLeader.locator(".font-display").innerText(),
+  );
+  const fill = await reportLeader
+    .locator(".bar-fill")
+    .evaluate((bar) => Number.parseFloat((bar as HTMLElement).style.width));
+  expect(fill).toBeCloseTo(percentile, 0);
   assertNoErrors();
 });
 

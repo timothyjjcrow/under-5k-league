@@ -1,5 +1,6 @@
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { RegularSeasonProgress } from "@/components/league-progress";
+import { LeagueResultsMap } from "@/components/league-results-map";
 import { leagueProgress } from "@/lib/league-progress";
 import { cache, Fragment, Suspense, type ReactNode } from "react";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
@@ -873,6 +874,7 @@ function Hero({
   rail?: ReactNode;
 }) {
   const live = active ?? (!!phase && phase !== "COMPLETE");
+  const leagueDashboard = phase === "REGULAR_SEASON";
   const control =
     aside ?? (action ? <HeroActions>{action}</HeroActions> : null);
   return (
@@ -901,16 +903,23 @@ function Hero({
       <div
         className={cn(
           "relative grid gap-6 p-5 sm:p-8",
-          control
-            ? "lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-center lg:gap-10"
-            : "text-center",
+          leagueDashboard
+            ? "grid-cols-1 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-center lg:gap-x-12"
+            : control
+              ? "lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-center lg:gap-10"
+              : "text-center",
         )}
       >
-        <div className={cn("min-w-0", control ? "" : "mx-auto max-w-2xl")}>
+        <div
+          className={cn(
+            "min-w-0",
+            control || leagueDashboard ? "" : "mx-auto max-w-2xl",
+          )}
+        >
           <div
             className={cn(
               "flex flex-wrap items-center gap-2",
-              control ? "" : "justify-center",
+              control || leagueDashboard ? "" : "justify-center",
             )}
           >
             {phase ? (
@@ -938,8 +947,15 @@ function Hero({
           <h1 className="mt-3 font-display text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl">
             {title}
           </h1>
-          <p className="mt-2 max-w-xl text-muted sm:text-lg">{subtitle}</p>
-          {meta ? (
+          {!leagueDashboard ? (
+            <p className="mt-2 max-w-xl text-muted sm:text-lg">{subtitle}</p>
+          ) : null}
+          {leagueDashboard && action ? (
+            <div className="mt-5 flex flex-wrap gap-2 [&>a]:min-h-11 [&>a]:px-4 [&>a]:py-2 [&>a]:text-sm">
+              {action}
+            </div>
+          ) : null}
+          {meta && !leagueDashboard ? (
             <div
               className={cn(
                 "mt-5 flex flex-wrap items-center gap-x-6 gap-y-2",
@@ -950,7 +966,14 @@ function Hero({
             </div>
           ) : null}
         </div>
-        {control ? <div className="min-w-0">{control}</div> : null}
+        {leagueDashboard ? (
+          <div className="min-w-0">{meta}</div>
+        ) : control ? (
+          <div className="min-w-0">{control}</div>
+        ) : null}
+        {leagueDashboard && aside ? (
+          <div className="min-w-0 lg:col-span-2">{aside}</div>
+        ) : null}
       </div>
       {/* The season stepper used to be its own full-width band restating the
           phase badge two rows above it. As the hero's footer rail it costs no
@@ -2012,13 +2035,12 @@ async function SeasonView({
             <CardHeader
               headingLevel={2}
               title="Standings"
-              subtitle="Current league order · series results earn points"
               action={
                 <Link
                   href="/schedule#standings"
                   className={textLink("text-sm")}
                 >
-                  Standings & playoff race →
+                  Full standings →
                 </Link>
               }
             />
@@ -2069,24 +2091,52 @@ async function SeasonView({
                         value={`#${myRank}`}
                         hint={`of ${teams.length} teams`}
                       />
-                      <Stat label="League points" value={String(myRow.points)} />
+                      <Stat
+                        label="League points"
+                        value={String(myRow.points)}
+                      />
                     </div>
-                    <p className="text-sm text-muted">
-                      {myRow.wins} wins · {myRow.draws} draws · {myRow.losses}{" "}
-                      losses
-                    </p>
+                    <div
+                      className="grid grid-cols-3 gap-2 text-center"
+                      aria-label={`${myRow.wins} wins, ${myRow.draws} draws, ${myRow.losses} losses`}
+                    >
+                      {[
+                        {
+                          label: "Wins",
+                          value: myRow.wins,
+                          tone: "text-success border-success/20 bg-success/5",
+                        },
+                        {
+                          label: "Draws",
+                          value: myRow.draws,
+                          tone: "text-accent border-accent/20 bg-accent/5",
+                        },
+                        {
+                          label: "Losses",
+                          value: myRow.losses,
+                          tone: "text-danger border-danger/20 bg-danger/5",
+                        },
+                      ].map((stat) => (
+                        <div
+                          key={stat.label}
+                          className={cn("rounded-lg border py-2", stat.tone)}
+                        >
+                          <div className="font-display text-2xl tabular-nums">
+                            {stat.value}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-wider">
+                            {stat.label}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                     {(teamForm.get(myTeam.id)?.length ?? 0) > 0 ? (
-                      <details className="text-xs text-muted">
-                        <summary className="cursor-pointer py-1">
-                          Recent series form
-                        </summary>
-                        <div className="mt-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                        <span>Recent form</span>
+                        <div title="Newest first · W = win, D = draw, L = loss">
                           <FormStrip form={teamForm.get(myTeam.id)!} />
                         </div>
-                        <p className="mt-2">
-                          Newest first · W = win, D = draw, L = loss
-                        </p>
-                      </details>
+                      </div>
                     ) : null}
                   </div>
                 ) : null}
@@ -2153,113 +2203,135 @@ async function SeasonView({
         ) : null}
       </div>
 
-      {/* Band two. auto-fit rather than a fixed column count: League pulse
-          renders nothing until the league has games, and Upcoming/Recent each
-          disappear at the ends of a season — a fixed lg:grid-cols-3 would leave
-          a visible hole every time one of them opted out. auto-fit collapses
-          the empty track instead, so two cards share the width and three split
-          it, with no conditional spans to keep in sync. */}
-      <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
-        {upcoming.length > 0 ? (
-          <Card className="min-w-0">
-            <CardHeader
-              headingLevel={2}
-              title="Coming up"
-              subtitle="After this week's slate"
-            />
-            <CardBody className="p-0">
-              <ul className="divide-y divide-line/60">
-                {upcoming.map((m) => (
-                  <li key={m.id}>
-                    <Link
-                      href={`/matches/${m.id}`}
-                      className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
-                    >
-                      <div className="text-xs uppercase text-muted">
-                        {matchPhaseLabel(m.phase, m.week)}
-                        {m.scheduledAt ? (
-                          <>
-                            {" · "}
-                            <LocalTime
-                              ts={m.scheduledAt.getTime()}
-                              variant="full"
-                              initial={fmtWhen(m.scheduledAt) ?? ""}
-                            />
-                          </>
-                        ) : null}
-                      </div>
-                      <div className="mt-1 font-medium leading-relaxed [overflow-wrap:anywhere]">
-                        {teamName.get(m.homeTeamId) ?? "?"}{" "}
-                        <span className="font-normal text-muted">vs</span>{" "}
-                        {teamName.get(m.awayTeamId) ?? "?"}
-                      </div>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </CardBody>
-          </Card>
-        ) : null}
-
-        {recentResults.length > 0 ? (
-          <Card className="min-w-0">
-            <CardHeader headingLevel={2} title="Recent results" />
-            <CardBody className="p-0">
-              <ul className="divide-y divide-line/60">
-                {recentResults.map((m) => (
-                  <li key={m.id}>
-                    <Link
-                      href={`/matches/${m.id}`}
-                      className="block space-y-2 px-5 py-4 text-sm hover:bg-surface-2/40"
-                    >
-                      <p className="text-xs text-muted">
-                        {matchPhaseLabel(m.phase, m.week)} ·{" "}
-                        {m.forfeit ? "Forfeit result" : "Final result"}
-                      </p>
-                      {[
-                        { id: m.homeTeamId, score: m.homeScore },
-                        { id: m.awayTeamId, score: m.awayScore },
-                      ].map((side) => (
-                        <div key={side.id} className="flex items-start gap-2">
-                          <TeamCrest
-                            name={teamName.get(side.id) ?? "?"}
-                            seed={side.id}
-                            logoUrl={teamLogoUrl.get(side.id)}
-                            size={22}
-                            className="shrink-0 rounded"
-                          />
-                          <span
-                            className={cn(
-                              "min-w-0 flex-1 [overflow-wrap:anywhere]",
-                              m.winnerTeamId === side.id && "font-semibold",
-                            )}
-                          >
-                            {teamName.get(side.id) ?? "?"}
-                          </span>
-                          <span className="font-mono font-semibold tabular-nums">
-                            {side.score}
-                          </span>
+      {/* The weekly map carries the season history; compact scoreboards sit
+          beside it on wide screens and follow it on phones. */}
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-3">
+        <div
+          className={cn(
+            "min-w-0",
+            upcoming.length || recentResults.length
+              ? "xl:col-span-2"
+              : "xl:col-span-3",
+          )}
+        >
+          <LeagueResultsMap
+            standings={standings}
+            matches={matches}
+            teamName={teamName}
+            teamLogoUrl={teamLogoUrl}
+          />
+        </div>
+        <div className="min-w-0 space-y-4">
+          {upcoming.length > 0 ? (
+            <Card className="min-w-0">
+              <CardHeader
+                headingLevel={2}
+                title="Coming up"
+                subtitle="After this week's slate"
+              />
+              <CardBody className="p-0">
+                <ul className="divide-y divide-line/60">
+                  {upcoming.map((m) => (
+                    <li key={m.id}>
+                      <Link
+                        href={`/matches/${m.id}`}
+                        className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
+                      >
+                        <div className="text-xs uppercase text-muted">
+                          {matchPhaseLabel(m.phase, m.week)}
+                          {m.scheduledAt ? (
+                            <>
+                              {" · "}
+                              <LocalTime
+                                ts={m.scheduledAt.getTime()}
+                                variant="full"
+                                initial={fmtWhen(m.scheduledAt) ?? ""}
+                              />
+                            </>
+                          ) : null}
                         </div>
-                      ))}
-                      <p className="text-xs text-muted">
-                        {m.winnerTeamId
-                          ? `${teamName.get(m.winnerTeamId) ?? "Winning team"} won the series`
-                          : "Series drawn"}{" "}
-                        · Match details →
-                      </p>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </CardBody>
-          </Card>
-        ) : null}
+                        <div className="mt-1 font-medium leading-relaxed [overflow-wrap:anywhere]">
+                          {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                          <span className="font-normal text-muted">vs</span>{" "}
+                          {teamName.get(m.awayTeamId) ?? "?"}
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {recentResults.length > 0 ? (
+            <Card className="min-w-0">
+              <CardHeader headingLevel={2} title="Recent results" />
+              <CardBody className="p-0">
+                <ul className="divide-y divide-line/60">
+                  {recentResults.map((m) => (
+                    <li key={m.id}>
+                      <Link
+                        href={`/matches/${m.id}`}
+                        className="block space-y-1.5 px-4 py-3 text-sm transition-colors hover:bg-surface-2/60"
+                      >
+                        <p className="text-xs text-muted">
+                          {matchPhaseLabel(m.phase, m.week)} ·{" "}
+                          {m.forfeit ? "Forfeit" : "Final"}
+                        </p>
+                        {[
+                          { id: m.homeTeamId, score: m.homeScore },
+                          { id: m.awayTeamId, score: m.awayScore },
+                        ].map((side) => (
+                          <div
+                            key={side.id}
+                            className="flex items-center gap-2"
+                          >
+                            <TeamCrest
+                              name={teamName.get(side.id) ?? "?"}
+                              seed={side.id}
+                              logoUrl={teamLogoUrl.get(side.id)}
+                              size={22}
+                              className="shrink-0 rounded"
+                            />
+                            <span
+                              className={cn(
+                                "min-w-0 flex-1 [overflow-wrap:anywhere]",
+                                m.winnerTeamId === side.id
+                                  ? "font-semibold"
+                                  : "text-muted",
+                              )}
+                            >
+                              {teamName.get(side.id) ?? "?"}
+                            </span>
+                            <span
+                              className={cn(
+                                "grid h-7 w-8 shrink-0 place-items-center rounded font-display text-lg tabular-nums",
+                                m.winnerTeamId === side.id
+                                  ? "bg-success/15 text-success"
+                                  : "bg-surface-2 text-muted",
+                              )}
+                            >
+                              {side.score}
+                            </span>
+                          </div>
+                        ))}
+                        <p className="sr-only">
+                          {m.winnerTeamId
+                            ? `${teamName.get(m.winnerTeamId) ?? "Winning team"} won the series`
+                            : "Series drawn"}{" "}
+                          · Match details →
+                        </p>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </CardBody>
+            </Card>
+          ) : null}
+        </div>
       </div>
 
-      <AnalysisDisclosure
-        title="Player & hero highlights"
-        description="Weekly awards, popular heroes, and links to the full statistics."
-      >
+      <AnalysisDisclosure title="Player & hero highlights">
         <Suspense fallback={null}>
           <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
         </Suspense>
@@ -2365,7 +2437,6 @@ async function ThisWeek({
       <CardHeader
         headingLevel={2}
         title={title}
-        subtitle="Open a match to check in, view its kickoff, or follow the result."
         action={
           <Link href="/schedule#fixtures" className={textLink("text-sm")}>
             Full schedule →
@@ -2375,16 +2446,19 @@ async function ThisWeek({
       {/* auto-fit, not sm:grid-cols-2: a league plays an ODD number of matches
           per week whenever it has a bye, and a fixed two-up left a permanently
           empty cell next to the last fixture. */}
-      <CardBody className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))]">
+      <CardBody className="grid gap-3 p-3 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))] sm:p-4">
         {focus.map((m) => {
           return (
             <Link
               key={m.id}
               href={`/matches/${m.id}`}
-              className="block min-w-0 rounded-lg border border-line bg-surface-2/30 p-3 text-sm transition-colors hover:border-muted/60"
+              className={cn(
+                "group/match relative flex min-w-0 flex-col overflow-hidden rounded-xl border bg-gradient-to-br from-surface-2/70 to-surface p-4 text-sm transition-colors hover:border-info/60",
+                m.status === "LIVE" ? "border-danger/45" : "border-line",
+              )}
             >
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-                <span className="uppercase">
+              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-muted">
+                <span className="uppercase tracking-wider">
                   {matchPhaseLabel(m.phase, m.week)}
                 </span>
                 {m.status === "LIVE" ? (
@@ -2397,9 +2471,7 @@ async function ThisWeek({
                       <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
                       <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-danger" />
                     </span>
-                    <span aria-hidden>
-                      LIVE {m.homeScore}–{m.awayScore}
-                    </span>
+                    <span aria-hidden>LIVE</span>
                   </span>
                 ) : m.scheduledAt ? (
                   <LocalTime
@@ -2411,7 +2483,7 @@ async function ThisWeek({
                   <span>Kickoff time not set</span>
                 )}
               </div>
-              <div className="mt-3 space-y-3">
+              <div className="my-4 flex-1 space-y-3">
                 {[m.homeTeamId, m.awayTeamId].map((teamId) => {
                   const c = checkins(m.id, teamId);
                   return (
@@ -2423,11 +2495,11 @@ async function ThisWeek({
                         name={teamName.get(teamId) ?? "?"}
                         seed={teamId}
                         logoUrl={teamLogoUrl.get(teamId)}
-                        size={18}
-                        className="shrink-0 rounded"
+                        size={34}
+                        className="shrink-0 rounded-lg"
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="font-medium [overflow-wrap:anywhere]">
+                        <p className="font-semibold leading-snug [overflow-wrap:anywhere]">
                           {teamName.get(teamId) ?? "?"}
                         </p>
                         {(() => {
@@ -2436,11 +2508,11 @@ async function ThisWeek({
                             return null;
                           const note =
                             scenario.winAndIn && scenario.loseAndOut
-                              ? "Win: qualifies · Loss: eliminated"
+                              ? "Win & in · Lose & out"
                               : scenario.winAndIn
-                                ? "A win secures a playoff place"
+                                ? "Win & in"
                                 : scenario.loseAndOut
-                                  ? "A loss ends playoff contention"
+                                  ? "Lose & out"
                                   : null;
                           return note ? (
                             <p className="mt-1 text-xs leading-relaxed text-accent">
@@ -2471,17 +2543,47 @@ async function ThisWeek({
                               : `${c.confirmed} of ${c.size} checked in`
                           }
                         >
-                          <span aria-hidden>
-                            {c.confirmed}/{c.size} checked in
+                          <span
+                            aria-hidden
+                            className="flex flex-col items-end gap-1"
+                          >
+                            <span className="flex gap-0.5">
+                              {Array.from(
+                                { length: Math.min(c.size, 10) },
+                                (_, index) => (
+                                  <i
+                                    key={index}
+                                    className={cn(
+                                      "h-1.5 w-1.5 rounded-full",
+                                      index < c.confirmed
+                                        ? "bg-success"
+                                        : "bg-line",
+                                    )}
+                                  />
+                                ),
+                              )}
+                            </span>
+                            <span>
+                              {c.confirmed}/{c.size}
+                            </span>
                           </span>
+                        </span>
+                      ) : null}
+                      {m.status === "LIVE" ? (
+                        <span
+                          aria-hidden
+                          className="ml-1 font-display text-3xl tabular-nums text-fg"
+                        >
+                          {teamId === m.homeTeamId ? m.homeScore : m.awayScore}
                         </span>
                       ) : null}
                     </div>
                   );
                 })}
               </div>
-              <p className="mt-3 border-t border-line-soft pt-2 text-xs text-info">
-                Match details & check-in →
+              <p className="flex items-center justify-between border-t border-line-soft pt-3 text-xs text-muted group-hover/match:text-info">
+                <span>Match details & check-in</span>
+                <span aria-hidden>↗</span>
               </p>
             </Link>
           );
@@ -2894,6 +2996,7 @@ async function CompleteView({
             />
             <CardBody className="p-0">
               <StandingsTable
+                overview
                 standings={standings}
                 teamName={teamName}
                 teamLogoUrl={teamLogoUrl}
@@ -2938,6 +3041,12 @@ async function CompleteView({
           </Card>
         </div>
       </div>
+      <LeagueResultsMap
+        standings={standings}
+        matches={matches}
+        teamName={teamName}
+        teamLogoUrl={teamLogoUrl}
+      />
     </div>
   );
 }

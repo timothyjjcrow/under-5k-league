@@ -7,6 +7,9 @@ import { computeStandings } from "@/lib/standings";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { StandingsTable } from "@/components/standings-table-server";
+import { LeagueResultsMap } from "@/components/league-results-map";
+import { LocalTime } from "@/components/local-time";
+import { formatMatchTime } from "@/lib/match-time";
 import {
   Avatar,
   Badge,
@@ -43,42 +46,105 @@ export async function generateMetadata({
 function ResultRow({
   match: m,
   teamName,
+  teamLogoUrl,
 }: {
   match: Match;
   teamName: Map<string, string>;
+  teamLogoUrl: Map<string, string | null>;
 }) {
   const done = m.status === "COMPLETED";
-  const homeWin = m.winnerTeamId === m.homeTeamId;
-  const awayWin = m.winnerTeamId === m.awayTeamId;
+  const live = m.status === "LIVE";
+  const label = done
+    ? m.forfeit
+      ? "Forfeit"
+      : "Final"
+    : live
+      ? "Live"
+      : m.scheduledAt
+        ? "Scheduled"
+        : "Time TBD";
+  const matchLabel = `View ${teamName.get(m.homeTeamId) ?? "unknown home team"} vs ${teamName.get(m.awayTeamId) ?? "unknown away team"}: ${done || live ? `${live ? "live, " : ""}${m.homeScore} to ${m.awayScore}${m.forfeit ? " by forfeit" : ""}` : m.scheduledAt ? "scheduled" : "kickoff not set"}`;
   return (
-    <div className="flex items-center gap-2 px-4 py-2 text-sm sm:gap-3 sm:px-5">
-      <div className="min-w-0 flex-1 truncate text-right">
-        <Link
-          href={`/teams/${m.homeTeamId}`}
+    <div className="min-w-0 px-3 py-3 sm:px-4">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[10px] text-muted">
+        <span
+          role={live ? "img" : undefined}
+          aria-label={
+            live ? `Live — series at ${m.homeScore}–${m.awayScore}` : undefined
+          }
+          title={
+            done && m.forfeit
+              ? "Forfeit — this score was ruled, not played"
+              : undefined
+          }
           className={cn(
-            "hover:text-info",
-            done && (homeWin ? "font-semibold" : "text-muted"),
+            "inline-flex items-center gap-1.5 font-semibold uppercase tracking-wider",
+            done ? "text-success" : live ? "text-danger" : "text-accent",
           )}
         >
-          {teamName.get(m.homeTeamId) ?? "?"}
-        </Link>
+          <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+          {label}
+        </span>
+        {m.scheduledAt ? (
+          <LocalTime
+            ts={m.scheduledAt.getTime()}
+            variant="short"
+            initial={formatMatchTime(m.scheduledAt, "short")}
+          />
+        ) : null}
       </div>
-      <Link
-        href={`/matches/${m.id}`}
-        aria-label={`View ${teamName.get(m.homeTeamId) ?? "unknown home team"} vs ${teamName.get(m.awayTeamId) ?? "unknown away team"}: ${done ? `${m.homeScore} to ${m.awayScore}` : "not played"}`}
-        className="shrink-0 rounded-md bg-surface-2 px-2 py-0.5 font-mono text-xs tabular-nums transition-colors hover:bg-surface-2/80 hover:text-info"
-      >
-        {done ? `${m.homeScore} – ${m.awayScore}` : "not played"}
-      </Link>
-      <div className="min-w-0 flex-1 truncate">
+      {[
+        { id: m.homeTeamId, score: m.homeScore },
+        { id: m.awayTeamId, score: m.awayScore },
+      ].map((side) => {
+        const winner = done && m.winnerTeamId === side.id;
+        const name = teamName.get(side.id) ?? "?";
+        return (
+          <div
+            key={side.id}
+            className={cn(
+              "flex min-w-0 items-center gap-2.5 rounded-md px-1.5",
+              winner && "bg-success/[0.06]",
+            )}
+          >
+            <TeamCrest
+              name={name}
+              seed={side.id}
+              logoUrl={teamLogoUrl.get(side.id)}
+              size={24}
+              className="rounded-md"
+            />
+            <Link
+              href={`/teams/${side.id}`}
+              className={cn(
+                "flex min-h-11 min-w-0 flex-1 items-center py-2 text-sm [overflow-wrap:anywhere] hover:text-info",
+                done
+                  ? winner
+                    ? "font-semibold text-fg"
+                    : "text-muted"
+                  : "font-medium text-fg",
+              )}
+            >
+              {name}
+            </Link>
+            <span
+              className={cn(
+                "w-7 shrink-0 text-center font-display text-xl tabular-nums",
+                live ? "text-danger" : winner ? "text-fg" : "text-muted",
+              )}
+            >
+              {done || live ? side.score : "—"}
+            </span>
+          </div>
+        );
+      })}
+      <div className="flex justify-end px-1">
         <Link
-          href={`/teams/${m.awayTeamId}`}
-          className={cn(
-            "hover:text-info",
-            done && (awayWin ? "font-semibold" : "text-muted"),
-          )}
+          href={`/matches/${m.id}`}
+          aria-label={matchLabel}
+          className="inline-flex min-h-11 items-center text-xs font-medium text-info hover:underline"
         >
-          {teamName.get(m.awayTeamId) ?? "?"}
+          Match details ↗
         </Link>
       </div>
     </div>
@@ -110,9 +176,7 @@ export default async function SeasonArchivePage({
   if (!season) notFound();
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
-  const teamLogoUrl = new Map(
-    season.teams.map((t) => [t.id, t.logoUrl]),
-  );
+  const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
   const standings = computeStandings(
     season.teams.map((t) => t.id),
     season.matches,
@@ -246,6 +310,7 @@ export default async function SeasonArchivePage({
           />
           <CardBody className="p-0">
             <StandingsTable
+              overview
               standings={standings}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}
@@ -280,20 +345,69 @@ export default async function SeasonArchivePage({
       {weeks.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Regular season results</SectionTitle>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {weeks.map((week) => (
-              <Card key={week}>
-                <CardHeader title={`Week ${week}`} />
-                <CardBody className="divide-y divide-line/60 p-0">
-                  {regular
-                    .filter((m) => m.week === week)
-                    .map((m) => (
-                      <ResultRow key={m.id} match={m} teamName={teamName} />
-                    ))}
-                </CardBody>
-              </Card>
-            ))}
-          </div>
+          <LeagueResultsMap
+            standings={standings}
+            matches={regular}
+            teamName={teamName}
+            teamLogoUrl={teamLogoUrl}
+          />
+          <details className="group rounded-xl border border-line-soft bg-surface">
+            <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden sm:px-5">
+              <span>
+                All series by week{" "}
+                <span className="ml-2 font-mono text-xs font-normal tabular-nums text-muted">
+                  {regular.length}
+                </span>
+              </span>
+              <svg
+                aria-hidden
+                viewBox="0 0 16 16"
+                fill="none"
+                className="h-4 w-4 shrink-0 text-muted transition-transform group-open:rotate-180"
+              >
+                <path
+                  d="m4 6 4 4 4-4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </summary>
+            <div className="grid grid-cols-1 items-start gap-4 border-t border-line-soft p-3 sm:p-4 lg:grid-cols-2">
+              {weeks.map((week) => {
+                const matches = regular.filter((m) => m.week === week);
+                const completed = matches.filter(
+                  (m) => m.status === "COMPLETED",
+                ).length;
+                return (
+                  <Card key={week} className="min-w-0 overflow-hidden">
+                    <CardHeader
+                      title={`Week ${week}`}
+                      action={
+                        <span className="text-xs text-muted">
+                          <span className="font-mono tabular-nums text-fg">
+                            {completed}/{matches.length}
+                          </span>{" "}
+                          final
+                        </span>
+                      }
+                    />
+                    <CardBody className="divide-y divide-line-soft p-0">
+                      {matches.map((m) => (
+                        <ResultRow
+                          key={m.id}
+                          match={m}
+                          teamName={teamName}
+                          teamLogoUrl={teamLogoUrl}
+                        />
+                      ))}
+                    </CardBody>
+                  </Card>
+                );
+              })}
+            </div>
+          </details>
         </section>
       ) : null}
 
@@ -307,7 +421,7 @@ export default async function SeasonArchivePage({
                   title={
                     <Link
                       href={`/teams/${t.id}`}
-                      className="flex min-w-0 items-center gap-2 hover:text-info"
+                      className="flex min-h-11 min-w-0 flex-wrap items-center gap-2 hover:text-info"
                     >
                       <TeamCrest
                         name={t.name}
@@ -316,7 +430,9 @@ export default async function SeasonArchivePage({
                         size={24}
                         className="rounded-md"
                       />
-                      <span className="truncate">{t.name}</span>
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        {t.name}
+                      </span>
                       {t.id === championPresentation.championTeamId ? (
                         <span>🏆</span>
                       ) : null}
@@ -329,9 +445,9 @@ export default async function SeasonArchivePage({
                   {t.members.map((m) => (
                     <div
                       key={m.id}
-                      className="flex min-w-0 items-center justify-between gap-2 text-sm"
+                      className="flex min-w-0 items-center justify-between gap-3 rounded-lg px-1.5 text-sm hover:bg-surface-2/40"
                     >
-                      <span className="flex min-w-0 items-center gap-2">
+                      <span className="flex min-w-0 flex-wrap items-center gap-2">
                         <Avatar
                           name={m.user.name}
                           src={m.user.avatar}
@@ -339,7 +455,7 @@ export default async function SeasonArchivePage({
                         />
                         <PlayerLink
                           userId={m.userId}
-                          className="min-w-0 truncate"
+                          className="inline-flex min-h-11 min-w-0 items-center [overflow-wrap:anywhere]"
                         >
                           {m.user.name}
                         </PlayerLink>
