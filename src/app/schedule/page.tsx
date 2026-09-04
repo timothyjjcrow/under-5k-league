@@ -544,19 +544,16 @@ export default async function SchedulePage() {
         }
         subtitle={season.name}
         action={
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {currentWeek != null ? (
-              <a
-                href="#this-week"
-                className="py-1 -my-1 text-xs text-muted hover:text-info"
-              >
+              <a href="#this-week" className={buttonClasses("secondary", "sm")}>
                 This week ↓
               </a>
             ) : null}
             {matches.some((m) => m.scheduledAt) ? (
               <a
                 href="/api/calendar"
-                className="py-1 -my-1 text-xs text-muted hover:text-info"
+                className={buttonClasses("secondary", "sm")}
                 title="Download the active season's calendar feed"
               >
                 📅 Calendar feed (.ics)
@@ -566,9 +563,22 @@ export default async function SchedulePage() {
         }
       />
 
-      <nav aria-label="Schedule sections" className="flex flex-wrap gap-3 text-sm">
-        <a href="#fixtures" className="inline-flex min-h-11 items-center text-info hover:underline">Fixtures</a>
-        <a href="#standings" className="inline-flex min-h-11 items-center text-info hover:underline">Standings & analysis</a>
+      <nav
+        aria-label="Schedule sections"
+        className="flex flex-wrap gap-2 rounded-xl border border-line bg-surface p-2 text-sm"
+      >
+        <a
+          href="#fixtures"
+          className="inline-flex min-h-11 items-center rounded-lg px-3 font-medium text-muted hover:bg-surface-2 hover:text-fg"
+        >
+          Fixtures
+        </a>
+        <a
+          href="#standings"
+          className="inline-flex min-h-11 items-center rounded-lg px-3 font-medium text-muted hover:bg-surface-2 hover:text-fg"
+        >
+          Standings & analysis
+        </a>
       </nav>
       <ScheduleCallout
         label={season.matchSchedule}
@@ -628,9 +638,7 @@ export default async function SchedulePage() {
         <ChampionBanner
           teamId={championPresentation.championTeamId}
           teamName={champion}
-          teamLogoUrl={teamLogoUrl.get(
-            championPresentation.championTeamId,
-          )}
+          teamLogoUrl={teamLogoUrl.get(championPresentation.championTeamId)}
           seasonName={season.name}
         />
       ) : null}
@@ -677,7 +685,11 @@ export default async function SchedulePage() {
           ) : (
             <>
               <ScheduleWeeks
-                weeks={[...weekViews].sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || a.week - b.week)}
+                weeks={[...weekViews].sort(
+                  (a, b) =>
+                    Number(b.isCurrent) - Number(a.isCurrent) ||
+                    a.week - b.week,
+                )}
                 initialTeamId={[...myTeamIds][0]}
                 teams={[...teams]
                   .sort((a, b) => a.name.localeCompare(b.name))
@@ -740,15 +752,14 @@ export default async function SchedulePage() {
         </>
       ) : null}
 
-
-              {teams.length > 1 ? (
-                <SeasonGrid
-                  standings={standings}
-                  teamName={teamName}
-                  teamLogoUrl={teamLogoUrl}
-                  matches={matches}
-                />
-              ) : null}
+      {teams.length > 1 ? (
+        <SeasonGrid
+          standings={standings}
+          teamName={teamName}
+          teamLogoUrl={teamLogoUrl}
+          matches={matches}
+        />
+      ) : null}
     </div>
   );
 }

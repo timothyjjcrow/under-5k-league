@@ -119,11 +119,11 @@ export function SectionNav({
     <nav
       aria-label={label}
       className={cn(
-        "rounded-xl border border-line bg-bg/95 px-3 py-2",
+        "rounded-xl border border-line bg-bg/95 px-2 py-2",
         sticky && "sticky top-20 z-20 backdrop-blur",
       )}
     >
-      <ul className="flex gap-2 overflow-x-auto pb-1">
+      <ul className="flex gap-1 overflow-x-auto pb-1">
         {items.map((item) => (
           <li key={item.id}>
             <a
@@ -133,7 +133,7 @@ export function SectionNav({
                 "inline-flex min-h-11 items-center whitespace-nowrap rounded-lg border px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
                 active === item.id
                   ? "border-accent/60 bg-accent/10 text-fg"
-                  : "border-line text-muted hover:text-fg",
+                  : "border-transparent text-muted hover:bg-surface-2 hover:text-fg",
               )}
               onClick={(event) => {
                 if (!document.getElementById(item.id)) return;

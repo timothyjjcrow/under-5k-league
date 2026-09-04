@@ -19,9 +19,7 @@ test("league tools live under Explore on desktop and mobile", async ({
     "/api/auth/dev?name=Navigation%20Stress%20Tester&steamId=76561190000991001&admin=1&redirect=/pickem",
   );
 
-  const desktopPrimary = page.locator(
-    'header > div nav[aria-label="Primary"]',
-  );
+  const desktopPrimary = page.locator('header > div nav[aria-label="Primary"]');
   await expect(desktopPrimary).toBeVisible();
   await expect(
     desktopPrimary.getByRole("link", { name: "My Team", exact: true }),
@@ -51,6 +49,15 @@ test("league tools live under Explore on desktop and mobile", async ({
     ).toBeVisible();
   }
 
+  for (const group of ["Play", "Statistics", "League"]) {
+    await expect(
+      desktopExplore.getByText(group, { exact: true }),
+    ).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+  await expect(desktopExplore).toHaveCount(0);
+  await expect(desktopExploreButton).toBeFocused();
+
   await page.setViewportSize({ width: 375, height: 812 });
   await page.getByRole("button", { name: "Open menu" }).click();
   const mobileMenu = page.locator("#mobile-nav");
@@ -71,4 +78,10 @@ test("league tools live under Explore on desktop and mobile", async ({
       mobileExplore.getByRole("link", { name: label, exact: true }),
     ).toBeVisible();
   }
+  await mobileExplore.getByRole("link", { name: "Meta", exact: true }).click();
+  await expect(page).toHaveURL(/\/meta$/);
+  await expect(
+    page.getByRole("heading", { name: "Hero meta", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#mobile-nav")).toHaveCount(0);
 });

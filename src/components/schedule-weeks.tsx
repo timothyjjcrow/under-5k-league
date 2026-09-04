@@ -311,13 +311,13 @@ function RsvpBadge({ side }: { side: RsvpSide }) {
 function MatchRow({ match: m }: { match: MatchView }) {
   return (
     <div className="transition-colors hover:bg-surface-2/30">
-      <div className="flex items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-5">
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-2 text-sm">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 py-3 sm:flex sm:gap-3 sm:px-5">
+        <div className="col-start-1 row-start-1 flex min-w-0 flex-1 flex-row-reverse items-center justify-end gap-2 text-sm sm:flex-row">
           {m.rsvp ? <RsvpBadge side={m.rsvp.home} /> : null}
           <Link
             href={`/teams/${m.homeTeamId}`}
             className={cn(
-              "truncate py-1 -my-1 hover:text-info",
+              "min-w-0 py-1 -my-1 [overflow-wrap:anywhere] hover:text-info sm:truncate",
               m.done && (m.homeWin ? "font-semibold text-fg" : "text-muted"),
             )}
           >
@@ -331,7 +331,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
             className="rounded-lg"
           />
         </div>
-        <div className="shrink-0 text-center">
+        <div className="col-start-2 row-span-2 row-start-1 shrink-0 text-center">
           {m.done ? (
             <span
               className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm tabular-nums"
@@ -397,7 +397,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
             </span>
           )}
         </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
+        <div className="col-start-1 row-start-2 flex min-w-0 flex-1 items-center gap-2 text-sm">
           <TeamCrest
             name={m.awayName}
             seed={m.awayTeamId}
@@ -408,7 +408,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           <Link
             href={`/teams/${m.awayTeamId}`}
             className={cn(
-              "truncate py-1 -my-1 hover:text-info",
+              "min-w-0 py-1 -my-1 [overflow-wrap:anywhere] hover:text-info sm:truncate",
               m.done && (m.awayWin ? "font-semibold text-fg" : "text-muted"),
             )}
           >
@@ -426,7 +426,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
         ) : null}
         <Link
           href={`/matches/${m.id}`}
-          className="shrink-0 py-1 -my-1 text-xs text-muted hover:text-info"
+          className="col-span-2 inline-flex min-h-10 shrink-0 items-center justify-end border-t border-line-soft text-xs font-medium text-info hover:underline sm:min-h-0 sm:border-0 sm:py-1"
         >
           details →
         </Link>

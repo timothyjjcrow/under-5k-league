@@ -315,27 +315,14 @@ export function SiteHeader({
             <nav
               id="desktop-explore-nav"
               aria-label="Explore"
-              className="absolute right-0 top-full z-40 mt-2 w-52 rounded-xl border border-line/80 bg-bg/95 p-2 shadow-xl backdrop-blur"
+              className="absolute right-0 top-full z-40 mt-3 max-h-[70vh] w-[34rem] overflow-y-auto rounded-xl border border-line bg-surface p-4 shadow-xl shadow-black/30"
             >
-              {exploreItems.map((item) => {
-                const active = isActive(pathname, item.href, myTeamHref);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    aria-current={active ? "page" : undefined}
-                    onClick={() => setDesktopExploreOpen(false)}
-                    className={cn(
-                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
-                      active
-                        ? "bg-accent/15 text-fg"
-                        : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                    )}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
+              <ExploreLinks
+                items={exploreItems}
+                pathname={pathname}
+                myTeamHref={myTeamHref}
+                onNavigate={() => setDesktopExploreOpen(false)}
+              />
             </nav>
           ) : null}
         </div>
@@ -468,26 +455,14 @@ export function SiteHeader({
                   id="mobile-explore-nav"
                   role="group"
                   aria-label="Explore"
-                  className="mt-1 space-y-1 border-l border-line/80 pl-2"
+                  className="mt-2 rounded-xl border border-line-soft bg-surface p-3"
                 >
-                  {mobileExploreItems.map((item) => {
-                    const active = isActive(pathname, item.href, myTeamHref);
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        aria-current={active ? "page" : undefined}
-                        className={cn(
-                          "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                          active
-                            ? "bg-accent/15 text-fg"
-                            : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                        )}
-                      >
-                        {item.label}
-                      </Link>
-                    );
-                  })}
+                  <ExploreLinks
+                    items={mobileExploreItems}
+                    pathname={pathname}
+                    myTeamHref={myTeamHref}
+                    onNavigate={() => setOpen(false)}
+                  />
                 </div>
               ) : null}
             </div>
@@ -587,5 +562,67 @@ function CloseIcon() {
       <line x1="6" y1="6" x2="18" y2="18" />
       <line x1="18" y1="6" x2="6" y2="18" />
     </svg>
+  );
+}
+
+// Group the existing destinations without changing their season gates or URLs.
+const EXPLORE_GROUPS = [
+  { label: "Play", paths: ["/scrims", "/fantasy", "/pickem"] },
+  {
+    label: "Statistics",
+    paths: ["/leaders", "/meta", "/players/compare", "/records"],
+  },
+  {
+    label: "League",
+    paths: ["/news", "/features", "/hall-of-fame", "/seasons"],
+  },
+];
+
+function ExploreLinks({
+  items,
+  pathname,
+  myTeamHref,
+  onNavigate,
+}: {
+  items: NavItem[];
+  pathname: string;
+  myTeamHref: string | null;
+  onNavigate: () => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {EXPLORE_GROUPS.map((group) => {
+        const links = group.paths.flatMap((path) =>
+          items.filter((item) => item.href === path),
+        );
+        if (!links.length) return null;
+        return (
+          <div key={group.label}>
+            <p className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-muted">
+              {group.label}
+            </p>
+            {links.map((item) => {
+              const active = isActive(pathname, item.href, myTeamHref);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  onClick={onNavigate}
+                  className={cn(
+                    "flex min-h-11 items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+                    active
+                      ? "bg-accent/15 text-fg"
+                      : "text-muted hover:bg-surface-2 hover:text-fg",
+                  )}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
   );
 }

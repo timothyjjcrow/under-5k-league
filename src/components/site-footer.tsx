@@ -85,7 +85,7 @@ export function SiteFooter({
   clubLinks.push({ href: "/features", label: "Features" });
 
   return (
-    <footer className="bg-bg">
+    <footer className="mt-8 border-t border-line-soft bg-bg">
       <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-12">
         {/* Keep the emblem prominent, but let the navigation share one clean
             baseline instead of vertically centering unequal link stacks. */}

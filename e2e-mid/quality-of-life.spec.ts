@@ -22,7 +22,9 @@ test("admin diagnostic routes protect history and game details", async ({
   await expect(
     page.locator('meta[name="robots"][content="noindex"]').first(),
   ).toBeAttached();
-  await expect(page.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Page not found", exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Filter activity" }),
   ).toHaveCount(0);
@@ -30,7 +32,9 @@ test("admin diagnostic routes protect history and game details", async ({
   await expect(
     page.locator('meta[name="robots"][content="noindex"]').first(),
   ).toBeAttached();
-  await expect(page.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Page not found", exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Imported-game quality" }),
   ).toHaveCount(0);
@@ -42,6 +46,17 @@ test("schedule selection survives reload and back navigation on a phone", async 
   const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/schedule");
+  const longName = page
+    .locator("#fixtures")
+    .getByRole("link", {
+      name: "The Couriers of Catastrophe With Very Long Name",
+      exact: true,
+    })
+    .first();
+  await expect(longName).toBeVisible();
+  expect(
+    await longName.evaluate((link) => link.scrollWidth <= link.clientWidth + 1),
+  ).toBe(true);
   const team = page.getByRole("button", { name: "Dire Straits", exact: true });
   await team.click();
   await expect(page).toHaveURL(/team=/);
@@ -258,6 +273,14 @@ test("scrim history pages preserve full team records and invalid season links fa
     await page.getByRole("link", { name: "Older results →" }).click();
     await expect(page.locator('#history a[href^="/scrims/"]')).toHaveCount(2);
     await expect(page.locator("#team-stats")).toContainText("22-0-0");
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/scrims/${ids[0]}`);
+      await expect(page.getByRole("heading", { level: 1 })).toContainText(
+        teams[0].name,
+      );
+      await expectNoHorizontalOverflow(page, `scrim details at ${width}px`);
+    }
     for (const query of [
       "season=missing",
       `season=${seasonId}&season=missing`,
@@ -266,7 +289,9 @@ test("scrim history pages preserve full team records and invalid season links fa
       await expect(
         page.locator('meta[name="robots"][content="noindex"]').first(),
       ).toBeAttached();
-      await expect(page.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: "Page not found", exact: true }),
+      ).toBeVisible();
     }
   } finally {
     await db.scrim.deleteMany({ where: { id: { in: ids } } });

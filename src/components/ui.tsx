@@ -18,7 +18,7 @@ export type ButtonVariant =
 export type ButtonSize = "sm" | "md" | "lg";
 
 const baseBtn =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-50";
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary: "bg-brand text-brand-fg hover:bg-brand/90",
@@ -67,15 +67,14 @@ export function Button({
 // ---------- Card ----------
 
 const cardTones = {
-  /** Byte-for-byte what every existing call site already renders. */
-  default: "border-line bg-surface/80 shadow-sm",
+  default: "border-line bg-surface shadow-sm shadow-black/10",
   /**
    * The one card on a page that the viewer is meant to act on. Used sparingly —
    * if two cards on a screen are `feature`, neither is.
    */
-  feature: "border-accent/35 bg-surface-3/70 shadow-lg shadow-black/25",
+  feature: "border-accent/40 bg-surface-3 shadow-sm shadow-black/15",
   /** Context that should recede: archives, reference copy, empty-ish sections. */
-  quiet: "border-line/60 bg-surface/40",
+  quiet: "border-line-soft bg-surface/50",
 } as const;
 
 export function Card({
@@ -90,10 +89,11 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-[var(--radius)] border backdrop-blur",
+        // Positioning keeps scrolling table descendants contained without blur.
+        "relative rounded-[var(--radius)] border",
         cardTones[tone],
         interactive &&
-          "transition duration-200 hover:-translate-y-0.5 hover:border-muted/60 hover:shadow-lg hover:shadow-black/30 motion-reduce:transform-none motion-reduce:transition-none",
+          "transition-colors duration-150 hover:border-muted/60 hover:bg-surface-2/50 focus-within:border-accent/60 motion-reduce:transition-none",
         className,
       )}
       {...props}
@@ -125,16 +125,16 @@ export function CardHeader({
     // column and broke it mid-word: "Schedul / e & / results".
     <div
       className={cn(
-        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-line px-5 py-4",
+        "flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-line-soft px-5 py-4",
         className,
       )}
     >
       <div className="min-w-0 flex-1 basis-48">
-        <Heading className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
+        <Heading className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
           {title}
         </Heading>
         {subtitle ? (
-          <p className="mt-1.5 text-sm text-muted [overflow-wrap:anywhere]">
+          <p className="mt-1.5 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
             {subtitle}
           </p>
         ) : null}
@@ -707,7 +707,7 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-dashed border-line bg-surface-2/20 text-center",
+        "flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-line-soft bg-surface/50 text-center",
         compact ? "gap-2 px-5 py-6" : "px-6 py-12",
       )}
     >
@@ -722,7 +722,7 @@ export function EmptyState({
       <div>
         <p
           className={cn(
-            "font-display font-semibold text-fg",
+            "font-semibold text-fg",
             compact ? "text-sm" : "text-base",
           )}
         >
@@ -816,8 +816,8 @@ export function Stat({
   size?: "md" | "lg";
 }) {
   return (
-    <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
+    <div className="rounded-lg border border-line-soft bg-surface-2/30 px-4 py-3">
+      <div className="text-xs font-medium text-muted">{label}</div>
       <div
         className={cn(
           "mt-1 font-display font-bold tabular-nums text-fg",
@@ -872,9 +872,7 @@ export function StatCell({
 }) {
   return (
     <div className="min-w-0">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
-        {label}
-      </div>
+      <div className="text-xs font-medium text-muted">{label}</div>
       <div
         className={cn(
           "mt-0.5 flex items-baseline gap-1.5 font-display text-lg font-semibold tabular-nums leading-none",
@@ -908,21 +906,29 @@ export function PageTitle({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="font-display text-3xl font-bold text-fg sm:text-4xl">
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 border-b border-line-soft pb-5">
+      <div className="min-w-0 flex-1 basis-64">
+        <h1 className="font-display text-3xl font-semibold leading-tight tracking-tight text-fg [overflow-wrap:anywhere] sm:text-4xl">
           {title}
         </h1>
-        {subtitle ? <p className="mt-1 text-muted">{subtitle}</p> : null}
+        {subtitle ? (
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted sm:text-base">
+            {subtitle}
+          </p>
+        ) : null}
       </div>
-      {action}
+      {action ? (
+        <div className="flex max-w-full flex-wrap items-center gap-2">
+          {action}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 // ---------- Section title ----------
 
-/** A page-section heading in the display font with an accent tick marker. */
+/** A readable section heading with a small brand marker. */
 export function SectionTitle({
   children,
   aside,
@@ -935,7 +941,7 @@ export function SectionTitle({
   return (
     <h2
       className={cn(
-        "flex items-center gap-2.5 font-display text-lg font-semibold",
+        "flex flex-wrap items-center gap-x-2.5 gap-y-1 text-lg font-semibold leading-snug",
         className,
       )}
     >
@@ -1260,8 +1266,8 @@ export function SteamSafetyNote({ className }: { className?: string }) {
         Steam verifies your <b className="font-medium text-fg">SteamID64</b>.
         This creates or updates your league profile with your public name,
         avatar, and profile link; we derive your Dota account and use OpenDota
-        for your medal and public match activity. You sign in on Steam&apos;s own
-        site, so we never receive your Steam password or email.
+        for your medal and public match activity. You sign in on Steam&apos;s
+        own site, so we never receive your Steam password or email.
       </p>
     </div>
   );

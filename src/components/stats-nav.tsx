@@ -24,7 +24,7 @@ export function StatsNav({
 
   return (
     <nav aria-label="Statistics" className="mb-6">
-      <div className="flex flex-wrap gap-1 rounded-xl border border-line/70 bg-surface/60 p-1">
+      <div className="grid grid-cols-2 gap-1 rounded-xl border border-line bg-surface p-1 sm:flex sm:flex-wrap">
         {items.map((item) => (
           <Link
             key={item.key}
@@ -33,7 +33,7 @@ export function StatsNav({
             className={cn(
               "inline-flex min-h-11 flex-1 items-center justify-center rounded-lg px-3 py-2 text-center text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:min-h-10 sm:flex-none",
               item.key === active
-                ? "bg-accent/15 text-fg"
+                ? "bg-surface-3 text-fg shadow-sm ring-1 ring-inset ring-accent/50"
                 : "text-muted hover:bg-surface-2/70 hover:text-fg",
             )}
           >
@@ -102,7 +102,7 @@ export function StatsDataNotice({
     unmappedLines > 0 ||
     invalidGameMetrics > 0;
   return (
-    <div className="mb-6 rounded-xl border border-warning/35 bg-warning/10 px-4 py-3 text-sm text-fg">
+    <div className="mb-6 rounded-xl border border-accent/35 bg-accent/10 px-4 py-3 text-sm text-fg">
       <p className="font-medium">Some stored game data needs attention.</p>
       <p className="mt-0.5 text-xs text-muted">
         Valid results are still shown. {details}.{" "}

@@ -9,13 +9,13 @@
      through), and letting one card on a page read as louder without inventing
      a new border colour. */
   --color-surface-3: #212d44;
-  --color-line: #26324c;
+  --color-line: #303d54;
   /* A quieter hairline for rules INSIDE a dense table or list. `--color-line`
      at full strength draws a box around every row; this reads as a rule. Was
      hand-written as `divide-line/60` in half a dozen places. */
-  --color-line-soft: #1e2840;
+  --color-line-soft: #222e42;
   --color-fg: #e8edf5;
-  --color-muted: #8b98af;
+  --color-muted: #a2aec2;
   /* White text clears WCAG AA at normal button sizes (4.58:1). */
   --color-brand: #dc3434;
   --color-brand-fg: #ffffff;
@@ -367,5 +367,31 @@ a {
   select,
   textarea {
     font-size: 1rem;
+  }
+}
+
+/* Shared interaction baseline. Utility classes still own component layout. */
+@layer base {
+  :where(a, button, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+  }
+  :where(input, textarea)::placeholder {
+    color: var(--color-muted);
+    opacity: 0.8;
+  }
+  :where(button, summary, select):not(:disabled) { cursor: pointer; }
+  :where(input, select, textarea):disabled { cursor: not-allowed; }
+  :where(tbody tr):hover, :where(tbody tr):focus-within {
+    background-color: color-mix(in srgb, var(--color-info) 5%, transparent);
+  }
+  :where(th) { line-height: 1.5; }
+}
+
+/* Keep standalone native fields comfortable to use on touch screens, including
+   dense admin forms. Hidden controls and custom pickers retain their geometry. */
+@media (max-width: 639px) {
+  :where(input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=image]), select) {
+    min-height: 44px;
   }
 }
