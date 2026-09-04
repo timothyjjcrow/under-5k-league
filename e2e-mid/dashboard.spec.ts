@@ -55,9 +55,10 @@ test("standings headers sort on click and speak their state via aria-sort", asyn
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/");
 
-  const ptsButton = page
-    .getByRole("button", { name: /^Pts/i })
-    .first();
+  await page
+    .getByRole("button", { name: "Detailed statistics", exact: true })
+    .click();
+  const ptsButton = page.getByRole("button", { name: /^Pts/i }).first();
   await expect(ptsButton).toBeVisible();
   const th = page.locator("th", { has: ptsButton }).first();
 

@@ -34,6 +34,10 @@ test("homepage league pulse shares the trusted honors and hero state", async ({
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/");
+  await page
+    .locator("summary")
+    .filter({ hasText: "Player & hero highlights" })
+    .click();
   const pulse = page.getByRole("heading", {
     name: "League pulse",
     level: 2,
@@ -115,7 +119,9 @@ test("player comparison lists real careers, normalizes invalid links, and expose
   await page.goto(`/players/compare?a=${ids[0]}&b=${ids[0]}`);
   await expect(page.getByText("That's the same player twice")).toBeVisible();
   await page.goto(`/players/compare?a=${ids[0]}`);
-  await expect(page.getByText("Pick two players", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Pick two players", { exact: true }),
+  ).toBeVisible();
 
   await page.goto(`/players/compare?a=not-a-player&b=${ids[1]}`);
   await expect(
@@ -185,9 +191,15 @@ test("league news is deterministic, shareable, and usable on a phone", async ({
   expect(box?.width).toBeGreaterThanOrEqual(44);
   expect(box?.height).toBeGreaterThanOrEqual(44);
   await permalink.click();
-  await expect(page).toHaveURL(/\/news\?post=e2e-mid-news-pinned#e2e-mid-news-pinned$/);
-  await expect(page.getByRole("heading", { name: "Match night reminder", level: 2 })).toBeVisible();
-  await page.getByRole("link", { name: "All announcements", exact: true }).click();
+  await expect(page).toHaveURL(
+    /\/news\?post=e2e-mid-news-pinned#e2e-mid-news-pinned$/,
+  );
+  await expect(
+    page.getByRole("heading", { name: "Match night reminder", level: 2 }),
+  ).toBeVisible();
+  await page
+    .getByRole("link", { name: "All announcements", exact: true })
+    .click();
   await expect(
     page.getByRole("link", {
       name: /Media attached to .*Week schedule published.*open animation/i,
@@ -242,13 +254,7 @@ test("public statistics metadata is route-specific and invalid archives are noin
   // archive lookup. Next 16 therefore documents this as a 200 response with a
   // not-found UI and an injected noindex directive. Preserve the shared page
   // loading experience and verify the complete browser-visible contract.
-  for (const path of [
-    "/leaders",
-    "/meta",
-    "/recap",
-    "/fantasy",
-    "/pickem",
-  ]) {
+  for (const path of ["/leaders", "/meta", "/recap", "/fantasy", "/pickem"]) {
     for (const query of [
       "season=definitely-missing",
       "season=one&season=two",

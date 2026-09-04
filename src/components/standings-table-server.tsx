@@ -25,6 +25,7 @@ export function StandingsTable({
   withdrawnIds,
   playoffSeedByTeam,
   eligibleTeams,
+  overview = false,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -47,6 +48,8 @@ export function StandingsTable({
   playoffSeedByTeam?: Map<string, number>;
   /** Number of non-withdrawn teams competing for playoff places. */
   eligibleTeams?: number;
+  /** Start with readable records; full sortable statistics remain available. */
+  overview?: boolean;
 }) {
   // "Everyone makes the bracket" must be judged against the whole league,
   // not the (possibly sliced) rows this table happens to show.
@@ -76,6 +79,7 @@ export function StandingsTable({
   return (
     <StandingsTableClient
       rows={rows}
+      overview={overview}
       playoffCut={playoffCut}
       viewerTeamId={viewerTeamId}
       totalTeams={fieldSize}

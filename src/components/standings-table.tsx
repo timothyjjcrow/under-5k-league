@@ -55,6 +55,7 @@ export function StandingsTableClient({
   viewerTeamId,
   totalTeams,
   eligibleTeams,
+  overview = false,
 }: {
   rows: StandingsRowView[];
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
@@ -69,9 +70,11 @@ export function StandingsTableClient({
   totalTeams?: number;
   /** Non-withdrawn teams competing for the playoff places. */
   eligibleTeams?: number;
+  overview?: boolean;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [desc, setDesc] = useState(false);
+  const [detailed, setDetailed] = useState(false);
 
   if (rows.length === 0) {
     return (
@@ -142,7 +145,7 @@ export function StandingsTableClient({
     </th>
   );
 
-  return (
+  const table = (
     // table-fixed + explicit column widths via <colgroup>: the Team column
     // absorbs whatever is left and truncates, so long names can't widen the
     // page. Widths MUST live on <col> — fixed layout still hands display:none
@@ -337,6 +340,127 @@ export function StandingsTableClient({
             </Fragment>
           );
         })}
+      </tbody>
+    </table>
+  );
+  if (!overview) return table;
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft px-5 py-3">
+        <p className="text-xs text-muted">
+          Series win: 3 points · draw: 1 · loss: 0
+        </p>
+        <button
+          type="button"
+          aria-pressed={detailed}
+          onClick={() => setDetailed((value) => !value)}
+          className="min-h-11 rounded-lg border border-line bg-surface-2 px-3 text-xs font-medium text-fg hover:border-muted focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {detailed ? "Simple standings" : "Detailed statistics"}
+        </button>
+      </div>
+      {detailed ? (
+        table
+      ) : (
+        <StandingsOverview
+          rows={rows}
+          viewerTeamId={viewerTeamId}
+          playoffCut={playoffCut}
+        />
+      )}
+    </div>
+  );
+}
+
+function StandingsOverview({
+  rows,
+  viewerTeamId,
+  playoffCut,
+}: {
+  rows: StandingsRowView[];
+  viewerTeamId?: string | null;
+  playoffCut?: number;
+}) {
+  return (
+    <table
+      className="w-full table-fixed text-sm"
+      aria-label="League standings overview"
+    >
+      <colgroup>
+        <col className="w-12" />
+        <col />
+        <col className="w-20 sm:w-24" />
+      </colgroup>
+      <thead>
+        <tr className="border-b border-line-soft text-xs text-muted">
+          <th className="px-3 py-3 text-left">Rank</th>
+          <th className="px-3 py-3 text-left">Team & series record</th>
+          <th className="px-3 py-3 text-right">Points</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr
+            key={row.teamId}
+            className={cn(
+              "border-b border-line-soft last:border-0",
+              row.teamId === viewerTeamId && "bg-info/10",
+            )}
+          >
+            <td className="px-3 py-4 align-top font-mono text-muted">
+              {row.rank}
+            </td>
+            <th scope="row" className="px-3 py-4 text-left font-normal">
+              <Link
+                href={`/teams/${row.teamId}`}
+                className="flex items-start gap-2 font-semibold hover:text-info"
+              >
+                <TeamCrest
+                  name={row.name}
+                  seed={row.teamId}
+                  logoUrl={row.logoUrl}
+                  size={24}
+                  className="shrink-0 rounded-md"
+                />
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  {row.name}
+                  {row.teamId === viewerTeamId ? (
+                    <span className="ml-2 text-xs font-medium text-info">
+                      Your team
+                    </span>
+                  ) : null}
+                </span>
+              </Link>
+              <p className="mt-2 text-xs leading-relaxed text-muted">
+                {row.wins} wins · {row.draws} draws · {row.losses} losses
+              </p>
+              <p
+                className={cn(
+                  "mt-1 text-xs leading-relaxed",
+                  row.clinch === "CLINCHED" ? "text-success" : "text-muted",
+                )}
+              >
+                {row.withdrawn
+                  ? "Withdrawn · not eligible for playoffs"
+                  : row.clinch === "CLINCHED"
+                    ? "Playoff place secured"
+                    : row.clinch === "ELIMINATED"
+                      ? "Out of playoff contention"
+                      : playoffCut != null
+                        ? row.playoffSeed != null
+                          ? `Currently in playoff position · seed ${row.playoffSeed}`
+                          : "Currently outside playoff positions"
+                        : null}
+                {row.idDecided
+                  ? " · Fully tied; order is not decided by results"
+                  : null}
+              </p>
+            </th>
+            <td className="px-3 py-4 text-right align-top font-display text-2xl tabular-nums">
+              {row.points}
+            </td>
+          </tr>
+        ))}
       </tbody>
     </table>
   );

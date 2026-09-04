@@ -31,9 +31,21 @@ test("schedule renders weeks, cards, the LIVE chip, and the calendar link", asyn
   await expect(
     page.getByRole("img", { name: /Live — series at 1–0/ }).first(),
   ).toBeVisible();
+  await page
+    .locator("summary")
+    .filter({ hasText: "Playoff race & possible matchups" })
+    .click();
   await expect(page.getByText("Playoff picture")).toBeVisible();
-  await expect(page.getByText("Run-in")).toBeVisible();
-  await expect(page.getByText("Season grid")).toBeVisible();
+  await expect(
+    page.getByText("Remaining opponents", { exact: true }),
+  ).toBeVisible();
+  await page
+    .locator("summary")
+    .filter({ hasText: "Head-to-head results grid" })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Head-to-head results", exact: true }),
+  ).toBeVisible();
   // Two calendar links exist (schedule header + footer) — either proves it.
   await expect(
     page.getByRole("link", { name: /Calendar feed \(\.ics\)/ }).first(),
@@ -132,11 +144,12 @@ test("the team filter narrows the week rows and All teams restores them", async 
   const allRows = await page.getByRole("link", { name: "details →" }).count();
   expect(allRows).toBeGreaterThan(0);
 
-  // The chip strip sits next to "All teams" — click the first real team chip.
+  // The labeled selector exposes every team without sideways scrolling.
   const allTeams = page.getByRole("button", { name: "All teams" });
+  await page
+    .getByRole("combobox", { name: "Show matches for" })
+    .selectOption({ index: 1 });
   await expect(allTeams).toBeVisible();
-  const chip = allTeams.locator("xpath=following-sibling::button[1]");
-  await chip.click();
   // Filtering force-expands collapsed weeks, so the count isn't simply
   // smaller — but in the fixture's 6-team single round robin every team
   // plays exactly once a week: 5 rows, one per week.

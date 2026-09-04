@@ -57,19 +57,20 @@ test("schedule selection survives reload and back navigation on a phone", async 
   expect(
     await longName.evaluate((link) => link.scrollWidth <= link.clientWidth + 1),
   ).toBe(true);
-  const team = page.getByRole("button", { name: "Dire Straits", exact: true });
-  await team.click();
+  const team = page.getByRole("combobox", { name: "Show matches for" });
+  await team.selectOption({ label: "Dire Straits" });
+  const selectedTeam = await team.inputValue();
   await expect(page).toHaveURL(/team=/);
   const filteredUrl = page.url();
   await page.reload();
-  await expect(team).toHaveAttribute("aria-pressed", "true");
-  await team.click();
-  await expect(team).toHaveAttribute("aria-pressed", "true");
+  await expect(team).toHaveValue(selectedTeam);
+  await team.selectOption({ label: "Dire Straits" });
+  await expect(team).toHaveValue(selectedTeam);
   await page.getByRole("button", { name: "All teams", exact: true }).click();
   await expect(page).toHaveURL(/team=all/);
   await page.goBack();
   await expect(page).toHaveURL(filteredUrl);
-  await expect(team).toHaveAttribute("aria-pressed", "true");
+  await expect(team).toHaveValue(selectedTeam);
   expect((await team.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   expect(
     await page

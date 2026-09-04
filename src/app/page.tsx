@@ -1,3 +1,6 @@
+import { AnalysisDisclosure } from "@/components/analysis-disclosure";
+import { RegularSeasonProgress } from "@/components/league-progress";
+import { leagueProgress } from "@/lib/league-progress";
 import { cache, Fragment, Suspense, type ReactNode } from "react";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
@@ -12,15 +15,10 @@ import {
 } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
-import {
-  matchStakes,
-  stakesHeadline,
-  type ScenarioReport,
-} from "@/lib/scenarios";
+import { type ScenarioReport } from "@/lib/scenarios";
 import {
   bracketRounds,
   byKickoff,
-  matchPhaseAbbrev,
   matchPhaseLabel,
   focusSlate,
   isRelevantOpenMatch,
@@ -81,7 +79,6 @@ import {
 } from "@/lib/constants";
 import { predictionOpen } from "@/lib/pickem";
 import { HeroVideo } from "@/components/hero-video";
-import { CountUp } from "@/components/count-up";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { StandingsTable } from "@/components/standings-table-server";
 import { LocalTime } from "@/components/local-time";
@@ -301,7 +298,7 @@ export default async function Home() {
     : [[] as Match[], 0];
   const championPresentation = resolveChampionPresentation(season, matches);
 
-  // Live, animated figures surfaced right in the hero for a sense of momentum.
+  // Stable phase facts: league counts should be readable from the first paint.
   let heroMeta: ReactNode = null;
   if (season.status === "SIGNUPS") {
     const { playerCount, capacity } = snapshot;
@@ -365,31 +362,11 @@ export default async function Home() {
       />
     );
   } else if (season.status === "REGULAR_SEASON") {
-    const regular = matches.filter((m) => m.phase === "REGULAR");
-    const totalWeeks = regular.reduce((max, m) => Math.max(max, m.week), 0);
-    const openWeeks = regular
-      .filter((m) => m.status !== "COMPLETED")
-      .map((m) => m.week);
-    const currentWeek = openWeeks.length ? Math.min(...openWeeks) : totalWeeks;
+    // This async server page takes one time snapshot for its progress labels.
+    // eslint-disable-next-line react-hooks/purity
+    const progressNow = Date.now();
     heroMeta = (
-      <>
-        {totalWeeks > 0 ? (
-          <HeroStat
-            value={currentWeek}
-            label={`of ${totalWeeks} week${totalWeeks === 1 ? "" : "s"}`}
-            prefix="Week"
-          />
-        ) : null}
-        <HeroStat
-          value={snapshot.teams.length}
-          label={
-            snapshot.teams.length === 1 ? "team competing" : "teams competing"
-          }
-        />
-        {gamesOnRecord > 0 ? (
-          <HeroStat value={gamesOnRecord} label="games on record" />
-        ) : null}
-      </>
+      <RegularSeasonProgress progress={leagueProgress(matches, progressNow)} />
     );
   } else if (season.status === "PLAYOFFS") {
     const playoff = matches.filter((m) => m.phase !== "REGULAR");
@@ -498,7 +475,9 @@ export default async function Home() {
           yet) use fallback={null} so an empty state never flashes a phantom
           skeleton that then collapses — only guaranteed-content sections show a
           placeholder. */}
-      <Suspense fallback={null}><PinnedNotices /></Suspense>
+      <Suspense fallback={null}>
+        <PinnedNotices />
+      </Suspense>
       {season.status === "SIGNUPS" && (
         <Suspense fallback={<CardSkeleton rows={4} />}>
           <SignupsView snapshot={snapshot} loggedIn={!!user} />
@@ -552,7 +531,6 @@ export default async function Home() {
       >
         <InhouseStrip />
       </Suspense>
-
     </div>
   );
 }
@@ -573,10 +551,11 @@ function SeasonViewSkeleton() {
         </div>
       </div>
       <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
-        {Array.from({ length: 3 }).map((_, i) => (
+        {Array.from({ length: 2 }).map((_, i) => (
           <CardSkeleton key={i} rows={3} className="min-w-0" />
         ))}
       </div>
+      <div className="skeleton h-20 rounded-xl" />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
@@ -600,17 +579,32 @@ function currentRoundLabel(playoff: Match[]): string | null {
 
 // Latest admin announcements — pinned first, capped at three with a link to
 // the full /news archive. Renders nothing when the league has no news.
-const loadHomeNews = cache(() => prisma.newsPost.findMany({
+const loadHomeNews = cache(() =>
+  prisma.newsPost.findMany({
     orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     take: 3,
-  }));
+  }),
+);
 
 async function PinnedNotices() {
   const posts = (await loadHomeNews()).filter((post) => post.pinned);
   if (!posts.length) return null;
-  return <aside aria-label="Pinned announcements" className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-sm">
-    {posts.map((post) => <Link key={post.id} href={`/news?${new URLSearchParams({ post: post.id })}`} className="block py-2 text-fg hover:text-info">📌 Pinned notice: {post.title} →</Link>)}
-  </aside>;
+  return (
+    <aside
+      aria-label="Pinned announcements"
+      className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-sm"
+    >
+      {posts.map((post) => (
+        <Link
+          key={post.id}
+          href={`/news?${new URLSearchParams({ post: post.id })}`}
+          className="block py-2 text-fg hover:text-info"
+        >
+          📌 Pinned notice: {post.title} →
+        </Link>
+      ))}
+    </aside>
+  );
 }
 
 async function LeagueNews() {
@@ -639,7 +633,10 @@ async function LeagueNews() {
             <div key={p.id} className="min-w-0">
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <h3 className="min-w-0 truncate text-sm font-semibold">
-                  <Link href={`/news?${new URLSearchParams({ post: p.id })}#${p.id}`} className="hover:text-info">
+                  <Link
+                    href={`/news?${new URLSearchParams({ post: p.id })}#${p.id}`}
+                    className="hover:text-info"
+                  >
                     {p.pinned ? "📌 " : ""}
                     {p.title}
                   </Link>
@@ -832,7 +829,7 @@ function HeroStat({
           tone === "accent" ? "text-accent" : "text-fg",
         )}
       >
-        <CountUp value={value} />
+        {value}
       </span>
       <span className="text-sm text-muted">{label}</span>
     </span>
@@ -891,7 +888,7 @@ function Hero({
           them into a shorter box makes them read MORE, not less. */}
       <div
         aria-hidden
-        className="hero-grid pointer-events-none absolute inset-0 opacity-60"
+        className="hero-grid pointer-events-none absolute inset-0 opacity-20"
       />
       <div
         aria-hidden
@@ -938,7 +935,7 @@ function Hero({
               </span>
             </span>
           </div>
-          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
+          <h1 className="mt-3 font-display text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl">
             {title}
           </h1>
           <p className="mt-2 max-w-xl text-muted sm:text-lg">{subtitle}</p>
@@ -1890,8 +1887,7 @@ async function SeasonView({
           where: { userId, matchId: { in: openPickemIds } },
         })
       : 0;
-  const fantasyLocked =
-    season.fantasyLockedAt != null || gamesOnRecord > 0;
+  const fantasyLocked = season.fantasyLockedAt != null || gamesOnRecord > 0;
   const picksMissing = pickemOpen - picksMade;
 
   // The side-game band renders BELOW the table now. It used to sit above both
@@ -1984,7 +1980,7 @@ async function SeasonView({
         </Card>
       ) : null}
 
-      <Suspense fallback={null}>
+      <Suspense fallback={slateIds.size > 0 ? <CardSkeleton rows={3} /> : null}>
         <ThisWeek
           season={season}
           matches={matches}
@@ -2016,25 +2012,20 @@ async function SeasonView({
             <CardHeader
               headingLevel={2}
               title="Standings"
+              subtitle="Current league order · series results earn points"
               action={
-                <Link href="/schedule#fixtures" className={textLink("text-sm")}>
-                  Full schedule →
+                <Link
+                  href="/schedule#standings"
+                  className={textLink("text-sm")}
+                >
+                  Standings & playoff race →
                 </Link>
               }
             />
             <CardBody className="p-0">
               <StandingsTable
-                standings={standings.slice(
-                  0,
-                  Math.max(
-                    8,
-                    standings.findIndex(
-                      (row) =>
-                        playoffField.seedByTeam.get(row.teamId) ===
-                        playoffField.bracketSize,
-                    ) + 1,
-                  ),
-                )}
+                overview
+                standings={standings}
                 totalTeams={standings.length}
                 eligibleTeams={playoffField.eligibleTeamIds.length}
                 teamName={teamName}
@@ -2068,28 +2059,35 @@ async function SeasonView({
                 headingLevel={2}
                 title="Your team"
                 subtitle={myTeam.name}
-                action={
-                  myRow && (teamForm.get(myTeam.id)?.length ?? 0) > 0 ? (
-                    <FormStrip form={teamForm.get(myTeam.id)!} />
-                  ) : undefined
-                }
               />
               <CardBody className="space-y-3">
                 {myRow && myRow.played > 0 ? (
-                  <div className="grid grid-cols-3 gap-2">
-                    <Stat
-                      label="Rank"
-                      value={`#${myRank}`}
-                      hint={`of ${teams.length}`}
-                    />
-                    <Stat
-                      label="Record"
-                      size="md"
-                      value={`${myRow.wins}–${myRow.losses}${
-                        myRow.draws > 0 ? `–${myRow.draws}` : ""
-                      }`}
-                    />
-                    <Stat label="Points" value={myRow.points} />
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Stat
+                        label="League rank"
+                        value={`#${myRank}`}
+                        hint={`of ${teams.length} teams`}
+                      />
+                      <Stat label="League points" value={String(myRow.points)} />
+                    </div>
+                    <p className="text-sm text-muted">
+                      {myRow.wins} wins · {myRow.draws} draws · {myRow.losses}{" "}
+                      losses
+                    </p>
+                    {(teamForm.get(myTeam.id)?.length ?? 0) > 0 ? (
+                      <details className="text-xs text-muted">
+                        <summary className="cursor-pointer py-1">
+                          Recent series form
+                        </summary>
+                        <div className="mt-2">
+                          <FormStrip form={teamForm.get(myTeam.id)!} />
+                        </div>
+                        <p className="mt-2">
+                          Newest first · W = win, D = draw, L = loss
+                        </p>
+                      </details>
+                    ) : null}
                   </div>
                 ) : null}
                 {/* The stake line and the next fixture are ONE block, not two
@@ -2190,7 +2188,7 @@ async function SeasonView({
                           </>
                         ) : null}
                       </div>
-                      <div className="mt-0.5 truncate font-medium">
+                      <div className="mt-1 font-medium leading-relaxed [overflow-wrap:anywhere]">
                         {teamName.get(m.homeTeamId) ?? "?"}{" "}
                         <span className="font-normal text-muted">vs</span>{" "}
                         {teamName.get(m.awayTeamId) ?? "?"}
@@ -2212,54 +2210,43 @@ async function SeasonView({
                   <li key={m.id}>
                     <Link
                       href={`/matches/${m.id}`}
-                      className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-surface-2/40"
+                      className="block space-y-2 px-5 py-4 text-sm hover:bg-surface-2/40"
                     >
-                      <span
-                        className="w-7 shrink-0 font-mono text-[10px] uppercase tabular-nums text-muted"
-                        title={matchPhaseLabel(m.phase, m.week)}
-                      >
-                        {matchPhaseAbbrev(m.phase, m.week)}
-                      </span>
-                      <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                        <TeamCrest
-                          name={teamName.get(m.homeTeamId) ?? "?"}
-                          seed={m.homeTeamId}
-                          logoUrl={teamLogoUrl.get(m.homeTeamId)}
-                          size={16}
-                          className="rounded"
-                        />
-                        <span
-                          className={cn(
-                            "min-w-0 flex-1 truncate",
-                            m.winnerTeamId === m.homeTeamId
-                              ? "font-semibold"
-                              : "text-muted",
-                          )}
-                        >
-                          {teamName.get(m.homeTeamId) ?? "?"}
-                        </span>
-                        <span className="shrink-0 text-xs text-muted">v</span>
-                        <TeamCrest
-                          name={teamName.get(m.awayTeamId) ?? "?"}
-                          seed={m.awayTeamId}
-                          logoUrl={teamLogoUrl.get(m.awayTeamId)}
-                          size={16}
-                          className="rounded"
-                        />
-                        <span
-                          className={cn(
-                            "min-w-0 flex-1 truncate",
-                            m.winnerTeamId === m.awayTeamId
-                              ? "font-semibold"
-                              : "text-muted",
-                          )}
-                        >
-                          {teamName.get(m.awayTeamId) ?? "?"}
-                        </span>
-                      </span>
-                      <span className="shrink-0 font-mono text-xs tabular-nums">
-                        {m.homeScore}–{m.awayScore}
-                      </span>
+                      <p className="text-xs text-muted">
+                        {matchPhaseLabel(m.phase, m.week)} ·{" "}
+                        {m.forfeit ? "Forfeit result" : "Final result"}
+                      </p>
+                      {[
+                        { id: m.homeTeamId, score: m.homeScore },
+                        { id: m.awayTeamId, score: m.awayScore },
+                      ].map((side) => (
+                        <div key={side.id} className="flex items-start gap-2">
+                          <TeamCrest
+                            name={teamName.get(side.id) ?? "?"}
+                            seed={side.id}
+                            logoUrl={teamLogoUrl.get(side.id)}
+                            size={22}
+                            className="shrink-0 rounded"
+                          />
+                          <span
+                            className={cn(
+                              "min-w-0 flex-1 [overflow-wrap:anywhere]",
+                              m.winnerTeamId === side.id && "font-semibold",
+                            )}
+                          >
+                            {teamName.get(side.id) ?? "?"}
+                          </span>
+                          <span className="font-mono font-semibold tabular-nums">
+                            {side.score}
+                          </span>
+                        </div>
+                      ))}
+                      <p className="text-xs text-muted">
+                        {m.winnerTeamId
+                          ? `${teamName.get(m.winnerTeamId) ?? "Winning team"} won the series`
+                          : "Series drawn"}{" "}
+                        · Match details →
+                      </p>
                     </Link>
                   </li>
                 ))}
@@ -2267,12 +2254,16 @@ async function SeasonView({
             </CardBody>
           </Card>
         ) : null}
+      </div>
 
+      <AnalysisDisclosure
+        title="Player & hero highlights"
+        description="Weekly awards, popular heroes, and links to the full statistics."
+      >
         <Suspense fallback={null}>
           <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
         </Suspense>
-      </div>
-
+      </AnalysisDisclosure>
       {sideGames}
     </div>
   );
@@ -2295,7 +2286,7 @@ function stakeOneLiner(s: {
   if (s.winAndIn) return "🎯 Win the next series and a playoff spot is locked.";
   if (s.loseAndOut) return "⚠️ Lose the next series and the playoffs are gone.";
   if (s.magicNumber != null && s.magicNumber > 0)
-    return `🔢 Magic number ${s.magicNumber} — that many wins locks a spot.`;
+    return `${s.magicNumber} more series win${s.magicNumber === 1 ? "" : "s"} guarantees a playoff place.`;
   return null;
 }
 
@@ -2374,7 +2365,7 @@ async function ThisWeek({
       <CardHeader
         headingLevel={2}
         title={title}
-        subtitle="Check in, scout the enemy, call the winner"
+        subtitle="Open a match to check in, view its kickoff, or follow the result."
         action={
           <Link href="/schedule#fixtures" className={textLink("text-sm")}>
             Full schedule →
@@ -2386,16 +2377,6 @@ async function ThisWeek({
           empty cell next to the last fixture. */}
       <CardBody className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))]">
         {focus.map((m) => {
-          const headline = report
-            ? stakesHeadline(
-                matchStakes(m.id, m.homeTeamId, m.awayTeamId, report),
-              )
-            : null;
-          // The full "Everything on the line…" label wraps into a mangled
-          // pill at phone widths — chip context gets the short form.
-          const stakes = headline?.startsWith("Everything on the line")
-            ? "Win and in, lose and out"
-            : headline;
           return (
             <Link
               key={m.id}
@@ -2426,14 +2407,11 @@ async function ThisWeek({
                     variant="full"
                     initial={fmtWhen(m.scheduledAt) ?? ""}
                   />
-                ) : null}
-                {stakes ? (
-                  <Badge tone="accent" className="ml-auto rounded-md text-left">
-                    {stakes}
-                  </Badge>
-                ) : null}
+                ) : (
+                  <span>Kickoff time not set</span>
+                )}
               </div>
-              <div className="mt-2 space-y-1">
+              <div className="mt-3 space-y-3">
                 {[m.homeTeamId, m.awayTeamId].map((teamId) => {
                   const c = checkins(m.id, teamId);
                   return (
@@ -2448,9 +2426,29 @@ async function ThisWeek({
                         size={18}
                         className="shrink-0 rounded"
                       />
-                      <span className="min-w-0 flex-1 truncate font-medium">
-                        {teamName.get(teamId) ?? "?"}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium [overflow-wrap:anywhere]">
+                          {teamName.get(teamId) ?? "?"}
+                        </p>
+                        {(() => {
+                          const scenario = report?.teams.get(teamId);
+                          if (scenario?.nextMatchId !== m.id || scenario.status)
+                            return null;
+                          const note =
+                            scenario.winAndIn && scenario.loseAndOut
+                              ? "Win: qualifies · Loss: eliminated"
+                              : scenario.winAndIn
+                                ? "A win secures a playoff place"
+                                : scenario.loseAndOut
+                                  ? "A loss ends playoff contention"
+                                  : null;
+                          return note ? (
+                            <p className="mt-1 text-xs leading-relaxed text-accent">
+                              {note}
+                            </p>
+                          ) : null;
+                        })()}
+                      </div>
                       {c ? (
                         <span
                           role="img"
@@ -2474,7 +2472,7 @@ async function ThisWeek({
                           }
                         >
                           <span aria-hidden>
-                            ✓ {c.confirmed}/{c.size}
+                            {c.confirmed}/{c.size} checked in
                           </span>
                         </span>
                       ) : null}
@@ -2482,6 +2480,9 @@ async function ThisWeek({
                   );
                 })}
               </div>
+              <p className="mt-3 border-t border-line-soft pt-2 text-xs text-info">
+                Match details & check-in →
+              </p>
             </Link>
           );
         })}
@@ -2605,7 +2606,7 @@ async function LeaguePulse({
       />
       <CardBody className="space-y-3 text-sm">
         {hasDataIssue ? (
-          <div className="flex min-w-0 items-start gap-2 text-warning">
+          <div className="flex min-w-0 items-start gap-2 text-accent">
             <span aria-hidden className="shrink-0">
               ⚠
             </span>
@@ -2644,12 +2645,13 @@ async function LeaguePulse({
             <span aria-hidden className="shrink-0">
               ⭐
             </span>
-            <span className="min-w-0 flex-1 truncate">
+            <span className="min-w-0 flex-1 leading-relaxed">
               <PlayerLink userId={potw.id} className="font-medium">
                 {potw.name}
               </PlayerLink>{" "}
               <span className="text-muted">
-                · Week {latestWeek} PotW · {honors.player.points} pts
+                · Week {latestWeek} Player of the Week · {honors.player.points}{" "}
+                pts
               </span>
             </span>
           </div>
@@ -2659,7 +2661,7 @@ async function LeaguePulse({
             <span aria-hidden className="shrink-0">
               🛡️
             </span>
-            <span className="min-w-0 flex-1 truncate">
+            <span className="min-w-0 flex-1 leading-relaxed">
               <Link
                 href={`/teams/${honors.team.teamId}`}
                 className="font-medium hover:text-info"
@@ -2684,7 +2686,7 @@ async function LeaguePulse({
                 className="h-[22px] w-[22px] shrink-0 rounded-md border border-line/70 bg-surface-2"
               />
             )}
-            <span className="min-w-0 flex-1 truncate">
+            <span className="min-w-0 flex-1 leading-relaxed">
               <Link href="/meta" className="font-medium hover:text-info">
                 {topHero?.name ?? `Hero #${topPick.heroId}`}
               </Link>{" "}

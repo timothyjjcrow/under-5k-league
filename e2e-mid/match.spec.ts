@@ -130,8 +130,8 @@ test("captains can report an open series and get a clear correction handoff once
   expect(captainTeamName).toBeTruthy();
   await page.goto("/schedule");
   await page
-    .getByRole("button", { name: captainTeamName!, exact: true })
-    .click();
+    .getByRole("combobox", { name: "Show matches for" })
+    .selectOption({ label: captainTeamName! });
   // Scope out the separate "Your next match" check-in banner, which carries
   // its own details link above the five filtered regular-season rows.
   const teamMatches = page

@@ -32,6 +32,7 @@ export type MatchView = {
   done: boolean;
   /** Ruled/defaulted result — the score was never played; badge it. */
   forfeit: boolean;
+  awaitingResult?: boolean;
   /** Series in progress — some games imported, not decided (auto-sync makes
    *  "Bo3 at 1–0" a common minutes-fresh state worth showing live). */
   live: boolean;
@@ -84,7 +85,9 @@ export function ScheduleWeeks({
   const params = useSearchParams();
   const requestedTeam = params.get("team");
   const candidate = requestedTeam === null ? initialTeamId : requestedTeam;
-  const filterTeam = teams.some((team) => team.id === candidate) ? candidate! : null;
+  const filterTeam = teams.some((team) => team.id === candidate)
+    ? candidate!
+    : null;
   const setFilterTeam = (team: string | null) => {
     const url = new URL(window.location.href);
     url.searchParams.set("team", team ?? "all");
@@ -123,39 +126,53 @@ export function ScheduleWeeks({
   return (
     <div className="space-y-4">
       {teams.length > 1 ? (
-        <div
-          className="flex gap-2 overflow-x-auto pb-1"
-          role="group"
-          aria-label="Filter matches by team"
-        >
-          <FilterChip
-            active={filterTeam === null}
-            onClick={() => setFilterTeam(null)}
-          >
-            All teams
-          </FilterChip>
-          {teams.map((t) => (
-            <FilterChip
-              key={t.id}
-              active={filterTeam === t.id}
-              onClick={() => setFilterTeam(t.id)}
-            >
-              <TeamCrest
-                name={t.name}
-                seed={t.id}
-                logoUrl={t.logoUrl}
-                size={16}
-                className="shrink-0 rounded"
-              />
-              <span className="max-w-[9rem] truncate">{t.name}</span>
-            </FilterChip>
-          ))}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="min-w-0 flex-1 basis-56 text-sm font-medium">
+              Show matches for
+              <select
+                value={filterTeam ?? "all"}
+                onChange={(event) =>
+                  setFilterTeam(
+                    event.target.value === "all" ? null : event.target.value,
+                  )
+                }
+                className="mt-2 block min-h-11 w-full rounded-lg border border-line bg-surface-2 px-3 text-sm"
+              >
+                <option value="all">All teams</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {filterTeam ? (
+              <button
+                type="button"
+                onClick={() => setFilterTeam(null)}
+                aria-pressed={!filterTeam}
+                className="min-h-11 rounded-lg border border-line px-4 text-sm text-muted hover:bg-surface-2 hover:text-fg"
+              >
+                All teams
+              </button>
+            ) : null}
+          </div>
+          <p className="text-xs leading-relaxed text-muted">
+            {filterTeam
+              ? "Showing one team's fixtures. Standings below still include the whole league."
+              : "Choose a team, or expand a completed week to review results."}
+          </p>
         </div>
       ) : null}
 
       <div className="space-y-5">
         {visibleWeeks.map((w) => {
-          const incomplete = w.completed < w.total;
+          const completed = filterTeam
+            ? w.matches.filter((match) => match.done).length
+            : w.completed;
+          const total = filterTeam ? w.matches.length : w.total;
+          const incomplete = completed < total;
           // A team filter means the reader is scanning one team's season —
           // collapsing weeks would just hide what they asked for.
           const collapsed = filterTeam
@@ -170,7 +187,7 @@ export function ScheduleWeeks({
               id={w.isCurrent ? "this-week" : undefined}
               className={w.isCurrent ? "scroll-mt-20" : undefined}
             >
-              <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-muted">
+              <h3 className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-medium text-muted">
                 {canToggle ? (
                   <button
                     type="button"
@@ -201,7 +218,7 @@ export function ScheduleWeeks({
                     {w.label ?? `Week ${w.week}`}
                   </span>
                 )}
-                {w.nightTs != null && w.nightInitial ? (
+                {!filterTeam && w.nightTs != null && w.nightInitial ? (
                   <LocalTime
                     ts={w.nightTs}
                     variant="date"
@@ -214,7 +231,9 @@ export function ScheduleWeeks({
                   <Badge tone="accent">Results overdue</Badge>
                 ) : null}
                 <span className={incomplete ? "text-accent" : "text-success"}>
-                  {w.completed}/{w.total} results in
+                  {total
+                    ? `${completed} of ${total} series complete`
+                    : "No fixture · bye week"}
                 </span>
               </h3>
               {collapsed ? null : (
@@ -246,33 +265,6 @@ export function ScheduleWeeks({
         })}
       </div>
     </div>
-  );
-}
-
-function FilterChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        "flex min-h-11 sm:min-h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60",
-        active
-          ? "border-info/60 bg-info/15 text-fg"
-          : "border-line text-muted hover:border-muted/60 hover:text-fg",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -332,6 +324,17 @@ function MatchRow({ match: m }: { match: MatchView }) {
           />
         </div>
         <div className="col-start-2 row-span-2 row-start-1 shrink-0 text-center">
+          <p className="mb-1 text-[11px] font-medium text-muted">
+            {m.done
+              ? m.forfeit
+                ? "Forfeit result"
+                : "Final score"
+              : m.live
+                ? "Live score"
+                : m.awaitingResult
+                  ? "Awaiting result"
+                  : "Kickoff"}
+          </p>
           {m.done ? (
             <span
               className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm tabular-nums"
