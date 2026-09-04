@@ -148,9 +148,13 @@ export function SiteHeader({
   const [open, setOpen] = useState(false);
   const [desktopExploreOpen, setDesktopExploreOpen] = useState(false);
   const [mobileExploreOpen, setMobileExploreOpen] = useState(false);
+  const [mobilePanel, setMobilePanel] = useState<"menu" | "explore">("menu");
   const buttonRef = useRef<HTMLButtonElement>(null);
   const exploreButtonRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
+  const discoveryRef = useRef<HTMLElement>(null);
+  const dockExploreRef = useRef<HTMLButtonElement>(null);
 
   // Close the mobile menu whenever the route changes (e.g. a link was tapped).
   // Adjusted DURING RENDER rather than in an effect: React's documented way to
@@ -171,7 +175,11 @@ export function SiteHeader({
     if (!open && !desktopExploreOpen) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        const returnTo = open ? buttonRef.current : exploreButtonRef.current;
+        const returnTo = open
+          ? mobilePanel === "explore"
+            ? dockExploreRef.current
+            : buttonRef.current
+          : exploreButtonRef.current;
         setOpen(false);
         setDesktopExploreOpen(false);
         setMobileExploreOpen(false);
@@ -179,7 +187,12 @@ export function SiteHeader({
       }
     }
     function onPointerDown(e: PointerEvent) {
-      if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
+      if (
+        headerRef.current &&
+        !headerRef.current.contains(e.target as Node) &&
+        !dockRef.current?.contains(e.target as Node) &&
+        !discoveryRef.current?.contains(e.target as Node)
+      ) {
         setOpen(false);
         setDesktopExploreOpen(false);
         setMobileExploreOpen(false);
@@ -191,7 +204,7 @@ export function SiteHeader({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open, desktopExploreOpen]);
+  }, [open, desktopExploreOpen, mobilePanel]);
 
   const adminActive = pathname.startsWith("/admin");
 
@@ -217,314 +230,474 @@ export function SiteHeader({
   const exploreActive = exploreItems.some((item) =>
     isActive(pathname, item.href, myTeamHref),
   );
+  const hasTeams = items.some((item) => item.href === "/teams");
+  const dockItems = [
+    { href: "/", label: "Home", icon: "home" as const },
+    phase === "DRAFT"
+      ? { href: "/draft", label: "Draft", icon: "matches" as const }
+      : items.some((item) => item.href === "/schedule")
+        ? { href: "/schedule", label: "Matches", icon: "matches" as const }
+        : { href: "/inhouse", label: "Inhouse", icon: "matches" as const },
+    {
+      href: myTeamHref ?? (hasTeams ? "/teams" : "/players"),
+      label: myTeamHref ? "My Team" : hasTeams ? "Teams" : "Players",
+      icon: "team" as const,
+    },
+  ];
 
   return (
-    <header
-      ref={headerRef}
-      className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur"
-    >
-      <div className="mx-auto flex h-20 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
-        <Link
-          href="/"
-          aria-label="GGD2L — home"
-          className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-        >
-          {/* Tight-cropped emblem (glow/margins trimmed) sized to nearly fill
+    <>
+      <header
+        ref={headerRef}
+        className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur"
+      >
+        <div className="mx-auto flex h-20 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
+          <Link
+            href="/"
+            aria-label="GGD2L — home"
+            className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          >
+            {/* Tight-cropped emblem (glow/margins trimmed) sized to nearly fill
               the bar so there's minimal top/bottom padding. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/brand/ggd2l-logo-nav.png"
-            alt="GGD2L"
-            width={520}
-            height={427}
-            className="h-[76px] w-auto"
-          />
-        </Link>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/ggd2l-logo-nav.png"
+              alt="GGD2L"
+              width={520}
+              height={427}
+              className="h-[76px] w-auto"
+            />
+          </Link>
 
-        {/* Internal pages need league context without making users scroll to
+          {/* Internal pages need league context without making users scroll to
             the footer or open the phone menu. Keep it inside the existing
             80px header (draft-room sticky offsets depend on that height) and
             hide it only on the narrowest screens, where the menu still carries
             the same name + phase. */}
-        {pathname !== "/" && seasonName && phase ? (
-          <Link
-            href="/"
-            aria-label={`League status: ${seasonName} — ${PHASE_LABEL[phase] ?? phase}`}
-            className="hidden shrink-0 items-center gap-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:flex"
-            title={`${seasonName} · ${PHASE_LABEL[phase] ?? phase}`}
-          >
-            <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
-              {PHASE_LABEL[phase] ?? phase}
-            </Badge>
-            <span className="hidden max-w-28 truncate text-xs text-muted 2xl:inline">
-              {seasonName}
-            </span>
-          </Link>
-        ) : null}
-
-        {/* Inline nav — only when there's room (xl+). Below that it collapses
-            into the menu button so links never get cut off. "Home" is omitted
-            inline (the logo is the home link) and the list scrolls rather than
-            overlapping the account cluster if space still runs out. */}
-        <nav
-          aria-label="Primary"
-          className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:flex"
-        >
-          {items
-            .filter((item) => item.href !== "/")
-            .map((item) => {
-              const active = isActive(pathname, item.href, myTeamHref);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
-                    active
-                      ? "bg-accent/15 text-fg"
-                      : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                  )}
-                >
-                  {item.label}
-                </Link>
-              );
-            })}
-        </nav>
-
-        {/* Pushes the account cluster to the right when the inline nav is hidden. */}
-        <div className="flex-1 xl:hidden" />
-
-        {/* Evergreen club/discovery pages stay reachable on wide screens too.
-            The phone menu already exposes these below the phase navigation. */}
-        <div className="relative hidden xl:block">
-          <button
-            ref={exploreButtonRef}
-            type="button"
-            aria-expanded={desktopExploreOpen}
-            aria-controls="desktop-explore-nav"
-            onClick={() => setDesktopExploreOpen((value) => !value)}
-            className={cn(
-              "rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
-              exploreActive ? "bg-accent/15 text-fg" : "text-muted",
-            )}
-          >
-            Explore <span aria-hidden>{desktopExploreOpen ? "↑" : "↓"}</span>
-          </button>
-          {desktopExploreOpen ? (
-            <nav
-              id="desktop-explore-nav"
-              aria-label="Explore"
-              className="absolute right-0 top-full z-40 mt-3 max-h-[70vh] w-[34rem] overflow-y-auto rounded-xl border border-line bg-surface p-4 shadow-xl shadow-black/30"
-            >
-              <ExploreLinks
-                items={exploreItems}
-                pathname={pathname}
-                myTeamHref={myTeamHref}
-                onNavigate={() => setDesktopExploreOpen(false)}
-              />
-            </nav>
-          ) : null}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-          {/* Season phase/name lives on the home hero + footer, not here — it
-              kept the nav from fitting once the league adds its links. */}
-          {user ? (
-            <>
-              {user.role === "ADMIN" ? (
-                <Link
-                  href="/admin"
-                  aria-current={adminActive ? "page" : undefined}
-                  className={cn(
-                    "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 xl:block",
-                    adminActive
-                      ? "bg-surface-2 text-accent"
-                      : "text-accent/80 hover:text-accent",
-                  )}
-                >
-                  Admin
-                </Link>
-              ) : null}
-              <Link
-                href="/me"
-                // Below xl the name is hidden and this is an unlabeled 30px
-                // pill — give assistive tech its destination.
-                aria-label={`My profile — ${user.name}`}
-                className="flex min-h-11 items-center gap-2 rounded-full border border-line py-1 pl-1 pr-1 text-sm hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 xl:pr-3"
-              >
-                <Avatar name={user.name} src={user.avatar} size={28} />
-                <span className="hidden max-w-[8rem] truncate xl:block">
-                  {user.name}
-                </span>
-              </Link>
-              <form
-                action="/api/auth/logout"
-                method="POST"
-                className="hidden xl:inline"
-              >
-                <button
-                  type="submit"
-                  className="rounded text-sm text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-                  title="Log out"
-                >
-                  Logout
-                </button>
-              </form>
-            </>
-          ) : pathname !== "/login" ? (
+          {pathname !== "/" && seasonName && phase ? (
             <Link
-              // Carry the current page through sign-in — landing back on the
-              // dashboard after every login was a pointless extra hop.
-              href={
-                pathname && pathname !== "/"
-                  ? `/login?next=${encodeURIComponent(pathname)}`
-                  : "/login"
-              }
-              className="inline-flex min-h-11 items-center rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 sm:px-4"
+              href="/"
+              aria-label={`League status: ${seasonName} — ${PHASE_LABEL[phase] ?? phase}`}
+              className="hidden shrink-0 items-center gap-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:flex"
+              title={`${seasonName} · ${PHASE_LABEL[phase] ?? phase}`}
             >
-              Sign in
+              <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+                {PHASE_LABEL[phase] ?? phase}
+              </Badge>
+              <span className="hidden max-w-28 truncate text-xs text-muted 2xl:inline">
+                {seasonName}
+              </span>
             </Link>
           ) : null}
 
-          {/* Menu toggle — only below xl, where the inline nav is hidden. */}
-          <button
-            ref={buttonRef}
-            type="button"
-            onClick={() => {
-              const next = !open;
-              setOpen(next);
-              if (!next) setMobileExploreOpen(false);
-            }}
-            aria-label={open ? "Close menu" : "Open menu"}
-            aria-expanded={open}
-            aria-controls="mobile-nav"
-            className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9 sm:w-9 xl:hidden"
+          {/* Inline nav — only when there's room (xl+). Below that it collapses
+            into the menu button so links never get cut off. "Home" is omitted
+            inline (the logo is the home link) and the list scrolls rather than
+            overlapping the account cluster if space still runs out. */}
+          <nav
+            aria-label="Primary"
+            className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:flex"
           >
-            {open ? <CloseIcon /> : <MenuIcon />}
-          </button>
-        </div>
-      </div>
+            {items
+              .filter((item) => item.href !== "/")
+              .map((item) => {
+                const active = isActive(pathname, item.href, myTeamHref);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                      active
+                        ? "bg-accent/15 text-fg"
+                        : "text-muted hover:bg-surface-2/60 hover:text-fg",
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+          </nav>
 
-      {/* Mobile dropdown: holds every nav link + account actions so nothing is
-          ever clipped. Overlays content (absolute) to avoid a layout jump. */}
-      {open ? (
-        <nav
-          id="mobile-nav"
-          aria-label="Primary"
-          className="absolute inset-x-0 top-full max-h-[70vh] overflow-y-auto overscroll-contain border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur xl:hidden"
-        >
-          <div className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
-            {items.map((item) => {
-              const active = isActive(pathname, item.href, myTeamHref);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                    active
-                      ? "bg-accent/15 text-fg"
-                      : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                  )}
-                >
-                  {item.label}
-                </Link>
-              );
-            })}
+          {/* Pushes the account cluster to the right when the inline nav is hidden. */}
+          <div className="flex-1 xl:hidden" />
 
-            {/* Explore is a disclosure on phones too; the four dense league
-                tools no longer expand the primary menu unless requested. */}
-            <div className="mt-1 border-t border-line/80 pt-2">
-              <button
-                type="button"
-                aria-expanded={mobileExploreOpen}
-                aria-controls="mobile-explore-nav"
-                onClick={() => setMobileExploreOpen((value) => !value)}
-                className={cn(
-                  "flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                  exploreActive ? "bg-accent/15 text-fg" : "text-muted",
-                )}
+          {/* Evergreen club/discovery pages stay reachable on wide screens too.
+            The phone menu already exposes these below the phase navigation. */}
+          <div className="relative hidden xl:block">
+            <button
+              ref={exploreButtonRef}
+              type="button"
+              aria-expanded={desktopExploreOpen}
+              aria-controls="desktop-explore-nav"
+              onClick={() => setDesktopExploreOpen((value) => !value)}
+              className={cn(
+                "rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                exploreActive ? "bg-accent/15 text-fg" : "text-muted",
+              )}
+            >
+              Explore <span aria-hidden>{desktopExploreOpen ? "↑" : "↓"}</span>
+            </button>
+            {desktopExploreOpen ? (
+              <nav
+                id="desktop-explore-nav"
+                aria-label="Explore"
+                className="absolute right-0 top-full z-40 mt-3 max-h-[70vh] w-[34rem] overflow-y-auto rounded-xl border border-line bg-surface p-4 shadow-xl shadow-black/30"
               >
-                Explore
-                <span aria-hidden>{mobileExploreOpen ? "↑" : "↓"}</span>
-              </button>
-              {mobileExploreOpen ? (
-                <div
-                  id="mobile-explore-nav"
-                  role="group"
-                  aria-label="Explore"
-                  className="mt-2 rounded-xl border border-line-soft bg-surface p-3"
-                >
-                  <ExploreLinks
-                    items={mobileExploreItems}
-                    pathname={pathname}
-                    myTeamHref={myTeamHref}
-                    onNavigate={() => setOpen(false)}
-                  />
-                </div>
-              ) : null}
-            </div>
+                <ExploreLinks
+                  items={exploreItems}
+                  pathname={pathname}
+                  myTeamHref={myTeamHref}
+                  onNavigate={() => setDesktopExploreOpen(false)}
+                />
+              </nav>
+            ) : null}
+          </div>
 
-            {(user?.role === "ADMIN" || user || seasonName) && (
-              <div className="mt-1 space-y-1 border-t border-line/80 pt-2">
-                {user?.role === "ADMIN" ? (
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            {/* Season phase/name lives on the home hero + footer, not here — it
+              kept the nav from fitting once the league adds its links. */}
+            {user ? (
+              <>
+                {user.role === "ADMIN" ? (
                   <Link
                     href="/admin"
                     aria-current={adminActive ? "page" : undefined}
                     className={cn(
-                      "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
+                      "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 xl:block",
                       adminActive
                         ? "bg-surface-2 text-accent"
-                        : "text-accent/80 hover:bg-surface-2/60 hover:text-accent",
+                        : "text-accent/80 hover:text-accent",
                     )}
                   >
                     Admin
                   </Link>
                 ) : null}
-                {user ? (
+                <Link
+                  href="/me"
+                  // Below xl the name is hidden and this is an unlabeled 30px
+                  // pill — give assistive tech its destination.
+                  aria-label={`My profile — ${user.name}`}
+                  className="flex min-h-11 items-center gap-2 rounded-full border border-line py-1 pl-1 pr-1 text-sm hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 xl:pr-3"
+                >
+                  <Avatar name={user.name} src={user.avatar} size={28} />
+                  <span className="hidden max-w-[8rem] truncate xl:block">
+                    {user.name}
+                  </span>
+                </Link>
+                <form
+                  action="/api/auth/logout"
+                  method="POST"
+                  className="hidden xl:inline"
+                >
+                  <button
+                    type="submit"
+                    className="rounded text-sm text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                    title="Log out"
+                  >
+                    Logout
+                  </button>
+                </form>
+              </>
+            ) : pathname !== "/login" ? (
+              <Link
+                // Carry the current page through sign-in — landing back on the
+                // dashboard after every login was a pointless extra hop.
+                href={
+                  pathname && pathname !== "/"
+                    ? `/login?next=${encodeURIComponent(pathname)}`
+                    : "/login"
+                }
+                className="inline-flex min-h-11 items-center rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 sm:px-4"
+              >
+                Sign in
+              </Link>
+            ) : null}
+
+            {/* Menu toggle — only below xl, where the inline nav is hidden. */}
+            <button
+              ref={buttonRef}
+              type="button"
+              onClick={() => {
+                const next = !open || mobilePanel !== "menu";
+                setMobilePanel("menu");
+                setOpen(next);
+                if (!next) setMobileExploreOpen(false);
+              }}
+              aria-label={
+                open && mobilePanel === "menu" ? "Close menu" : "Open menu"
+              }
+              aria-expanded={open && mobilePanel === "menu"}
+              aria-controls="mobile-nav"
+              className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9 sm:w-9 xl:hidden"
+            >
+              {open && mobilePanel === "menu" ? <CloseIcon /> : <MenuIcon />}
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile dropdown: holds every nav link + account actions so nothing is
+          ever clipped. Overlays content (absolute) to avoid a layout jump. */}
+        {open && mobilePanel === "menu" ? (
+          <nav
+            id="mobile-nav"
+            aria-label="Primary"
+            className="absolute inset-x-0 top-full max-h-[min(70vh,calc(100dvh-5rem-var(--mobile-dock-height)-0.5rem))] overflow-y-auto overscroll-contain border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur xl:hidden"
+          >
+            <div className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
+              {items.map((item) => {
+                const active = isActive(pathname, item.href, myTeamHref);
+                return (
                   <Link
-                    href="/me"
-                    aria-current={
-                      isActive(pathname, "/me", null) ? "page" : undefined
-                    }
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
                     className={cn(
                       "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                      isActive(pathname, "/me", null)
+                      active
                         ? "bg-accent/15 text-fg"
                         : "text-muted hover:bg-surface-2/60 hover:text-fg",
                     )}
                   >
-                    My profile
+                    {item.label}
                   </Link>
-                ) : null}
-                {user ? (
-                  <form action="/api/auth/logout" method="POST">
-                    <button
-                      type="submit"
-                      className="block w-full rounded-lg px-3 py-3 text-left text-sm font-medium text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5"
-                    >
-                      Log out
-                    </button>
-                  </form>
-                ) : null}
-                {seasonName ? (
-                  <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted">
-                    {phase ? (
-                      <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
-                        {PHASE_LABEL[phase] ?? phase}
-                      </Badge>
-                    ) : null}
-                    <span>{seasonName}</span>
+                );
+              })}
+
+              {/* Explore is a disclosure on phones too; the four dense league
+                tools no longer expand the primary menu unless requested. */}
+              <div className="mt-1 border-t border-line/80 pt-2">
+                <button
+                  type="button"
+                  aria-expanded={mobileExploreOpen}
+                  aria-controls="mobile-explore-nav"
+                  onClick={() => setMobileExploreOpen((value) => !value)}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
+                    exploreActive ? "bg-accent/15 text-fg" : "text-muted",
+                  )}
+                >
+                  Explore
+                  <span aria-hidden>{mobileExploreOpen ? "↑" : "↓"}</span>
+                </button>
+                {mobileExploreOpen ? (
+                  <div
+                    id="mobile-explore-nav"
+                    role="group"
+                    aria-label="Explore"
+                    className="mt-2 rounded-xl border border-line-soft bg-surface p-3"
+                  >
+                    <ExploreLinks
+                      items={mobileExploreItems}
+                      pathname={pathname}
+                      myTeamHref={myTeamHref}
+                      onNavigate={() => setOpen(false)}
+                    />
                   </div>
                 ) : null}
               </div>
+
+              {(user?.role === "ADMIN" || user || seasonName) && (
+                <div className="mt-1 space-y-1 border-t border-line/80 pt-2">
+                  {user?.role === "ADMIN" ? (
+                    <Link
+                      href="/admin"
+                      aria-current={adminActive ? "page" : undefined}
+                      className={cn(
+                        "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
+                        adminActive
+                          ? "bg-surface-2 text-accent"
+                          : "text-accent/80 hover:bg-surface-2/60 hover:text-accent",
+                      )}
+                    >
+                      Admin
+                    </Link>
+                  ) : null}
+                  {user ? (
+                    <Link
+                      href="/me"
+                      aria-current={
+                        isActive(pathname, "/me", null) ? "page" : undefined
+                      }
+                      className={cn(
+                        "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
+                        isActive(pathname, "/me", null)
+                          ? "bg-accent/15 text-fg"
+                          : "text-muted hover:bg-surface-2/60 hover:text-fg",
+                      )}
+                    >
+                      My profile
+                    </Link>
+                  ) : null}
+                  {user ? (
+                    <form action="/api/auth/logout" method="POST">
+                      <button
+                        type="submit"
+                        className="block w-full rounded-lg px-3 py-3 text-left text-sm font-medium text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5"
+                      >
+                        Log out
+                      </button>
+                    </form>
+                  ) : null}
+                  {seasonName ? (
+                    <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted">
+                      {phase ? (
+                        <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+                          {PHASE_LABEL[phase] ?? phase}
+                        </Badge>
+                      ) : null}
+                      <span>{seasonName}</span>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          </nav>
+        ) : null}
+      </header>
+      <nav
+        ref={dockRef}
+        aria-label="Quick navigation"
+        className="mobile-dock fixed inset-x-0 bottom-0 z-40 border-t border-line bg-bg/95 px-3 pt-1.5 shadow-[0_-8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl xl:hidden"
+      >
+        <div className="mx-auto grid max-w-lg grid-cols-4 gap-1">
+          {dockItems.map((item) => {
+            const active =
+              isActive(pathname, item.href, myTeamHref) ||
+              (item.href === "/schedule" && pathname.startsWith("/matches/"));
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                onClick={() => setOpen(false)}
+                className={cn(
+                  "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                  active
+                    ? "bg-accent/10 text-accent"
+                    : "text-muted hover:bg-surface-2 hover:text-fg",
+                )}
+              >
+                <DockIcon name={item.icon} />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+          <button
+            ref={dockExploreRef}
+            type="button"
+            aria-label="Explore league"
+            aria-expanded={open && mobilePanel === "explore"}
+            aria-controls="mobile-discovery"
+            onClick={() => {
+              setOpen(!(open && mobilePanel === "explore"));
+              setMobilePanel("explore");
+            }}
+            className={cn(
+              "flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              exploreActive || (open && mobilePanel === "explore")
+                ? "bg-accent/10 text-accent"
+                : "text-muted hover:bg-surface-2 hover:text-fg",
             )}
+          >
+            <DockIcon name="explore" />
+            <span>Explore</span>
+          </button>
+        </div>
+      </nav>
+      {open && mobilePanel === "explore" ? (
+        <nav
+          ref={discoveryRef}
+          id="mobile-discovery"
+          aria-label="Explore league"
+          className="mobile-discovery fixed inset-x-3 z-40 mx-auto max-h-[calc(100dvh-11rem)] max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-3 shadow-2xl shadow-black/50 xl:hidden"
+        >
+          <div className="mb-2 flex items-center justify-between border-b border-line-soft pb-2 pl-3">
+            <span className="font-display text-lg font-semibold">
+              Explore the league
+            </span>
+            <button
+              type="button"
+              aria-label="Close explore"
+              onClick={() => {
+                setOpen(false);
+                dockExploreRef.current?.focus();
+              }}
+              className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg"
+            >
+              <CloseIcon />
+            </button>
           </div>
+          <div className="mb-3 grid grid-cols-3 gap-1 border-b border-line-soft pb-3">
+            {items
+              .filter((item) => !["/", myTeamHref].includes(item.href))
+              .map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setOpen(false)}
+                  aria-current={
+                    isActive(pathname, item.href, myTeamHref)
+                      ? "page"
+                      : undefined
+                  }
+                  className="flex min-h-11 items-center justify-center rounded-lg bg-surface-2/60 px-2 text-center text-xs font-medium hover:bg-surface-3"
+                >
+                  {item.label}
+                </Link>
+              ))}
+          </div>
+          <ExploreLinks
+            items={mobileExploreItems}
+            pathname={pathname}
+            myTeamHref={myTeamHref}
+            onNavigate={() => setOpen(false)}
+            compact
+          />
         </nav>
       ) : null}
-    </header>
+    </>
+  );
+}
+
+function DockIcon({ name }: { name: "home" | "matches" | "team" | "explore" }) {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {name === "home" ? (
+        <>
+          <path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z" />
+        </>
+      ) : null}
+      {name === "matches" ? (
+        <>
+          <rect x="3" y="5" width="18" height="16" rx="3" />
+          <path d="M7 3v4M17 3v4M3 10h18m-14 5 2 2 4-4M16 15h1" />
+        </>
+      ) : null}
+      {name === "team" ? (
+        <>
+          <circle cx="9" cy="8" r="3" />
+          <path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4v3" />
+        </>
+      ) : null}
+      {name === "explore" ? (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m16 8-2 6-6 2 2-6Z" />
+        </>
+      ) : null}
+    </svg>
   );
 }
 
@@ -583,43 +756,63 @@ function ExploreLinks({
   pathname,
   myTeamHref,
   onNavigate,
+  compact = false,
 }: {
   items: NavItem[];
   pathname: string;
   myTeamHref: string | null;
   onNavigate: () => void;
+  compact?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <div
+      className={cn(
+        "grid gap-4",
+        compact ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-3",
+      )}
+    >
       {EXPLORE_GROUPS.map((group) => {
         const links = group.paths.flatMap((path) =>
           items.filter((item) => item.href === path),
         );
         if (!links.length) return null;
         return (
-          <div key={group.label}>
+          <div
+            key={group.label}
+            className={cn(
+              compact && group.label === "League" && "col-span-2 sm:col-span-1",
+            )}
+          >
             <p className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-muted">
               {group.label}
             </p>
-            {links.map((item) => {
-              const active = isActive(pathname, item.href, myTeamHref);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  onClick={onNavigate}
-                  className={cn(
-                    "flex min-h-11 items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
-                    active
-                      ? "bg-accent/15 text-fg"
-                      : "text-muted hover:bg-surface-2 hover:text-fg",
-                  )}
-                >
-                  {item.label}
-                </Link>
-              );
-            })}
+            <div
+              className={cn(
+                compact &&
+                  group.label === "League" &&
+                  "grid grid-cols-3 gap-1 sm:grid-cols-1",
+              )}
+            >
+              {links.map((item) => {
+                const active = isActive(pathname, item.href, myTeamHref);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    onClick={onNavigate}
+                    className={cn(
+                      "flex min-h-11 items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+                      active
+                        ? "bg-accent/15 text-fg"
+                        : "text-muted hover:bg-surface-2 hover:text-fg",
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         );
       })}

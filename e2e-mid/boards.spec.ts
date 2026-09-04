@@ -331,7 +331,9 @@ test("team page renders roster, form, and the what-we-need card", async ({
   await page.locator('#main a[href^="/teams/"]').first().click();
   await expect(page).toHaveURL(/\/teams\/.+/);
   await expect(page.getByText("Roster").first()).toBeVisible();
-  await expect(page.getByText("Head-to-head")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Head-to-head", exact: true }),
+  ).toBeVisible();
   await expectNoHorizontalOverflow(page, "/teams/[id]");
   assertNoErrors();
 });

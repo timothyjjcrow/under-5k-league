@@ -14,6 +14,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Toaster } from "@/components/toaster";
 import { ResultSyncPing } from "@/components/result-sync-ping";
+import { NavigationContextTracker } from "@/components/context-back-link";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
@@ -104,6 +105,7 @@ export default async function RootLayout({
           hasHistory={hasHistory}
         />
         <Toaster />
+        <NavigationContextTracker />
         {/* Observe worker progress so parked pages refresh after results land. */}
         <ResultSyncPing initialCursor={resultCursorAtRender} />
       </body>

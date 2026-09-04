@@ -1,0 +1,191 @@
+[
+  {
+    "name": "home",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "schedule",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "match-center",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "box-score",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "team-overview",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "team-roster",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "player-overview",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "player-history",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "leaders",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "explore",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "setup",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "participation",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "captain-match",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "lineups",
+    "width": 390,
+    "viewport": 390,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "home",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "schedule",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "match-center",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "box-score",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "team-overview",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "team-roster",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "player-overview",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "player-history",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "leaders",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "setup",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "participation",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "captain-match",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  },
+  {
+    "name": "lineups",
+    "width": 1440,
+    "viewport": 1440,
+    "errors": [],
+    "hydration": []
+  }
+]

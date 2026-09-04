@@ -1,4 +1,8 @@
 import Link from "next/link";
+import { ContextBackLink } from "@/components/context-back-link";
+import { SectionNav } from "@/components/section-nav";
+import { ProfileMatchSpotlight } from "@/components/profile-match-spotlight";
+import { profileMatch } from "@/lib/profile-match";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -14,7 +18,7 @@ import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { computeStandings } from "@/lib/standings";
-import { matchPhaseAbbrev, matchPhaseLabel } from "@/lib/schedule";
+import { matchPhaseLabel } from "@/lib/schedule";
 import { getSessionUser } from "@/lib/auth";
 import { DiscordTag } from "@/components/discord-tag";
 import {
@@ -606,13 +610,54 @@ export default async function PlayerProfilePage({
       }
     : null;
 
+  const teamSpotlight = team
+    ? profileMatch(
+        seasonMatches.filter(
+          (match) =>
+            match.homeTeamId === team.id || match.awayTeamId === team.id,
+        ),
+        nowMs,
+        season?.status !== "COMPLETE",
+      )
+    : null;
+  const featuredMatch = teamSpotlight ?? latestLeagueGame?.game.match ?? null;
+  const featuredTeams = teamSpotlight
+    ? seasonTeams
+    : latestLeagueGame
+      ? [
+          latestLeagueGame.game.match.homeTeam,
+          latestLeagueGame.game.match.awayTeam,
+        ]
+      : [];
+  const profileVisible =
+    activityVisible ||
+    signupSnapshotVisible ||
+    heroCardVisible ||
+    heldRecords.length > 0 ||
+    connectionsVisible;
+  const careerVisible =
+    badges.length > 0 ||
+    careerRows.length > 0 ||
+    coverSeasons.length > 0 ||
+    !!recentInhouse;
+  const sectionItems = [
+    { id: "player-overview", label: "Overview" },
+    { id: "player-matches", label: "Matches" },
+    ...(hasPerf || reportCard.graded > 0
+      ? [{ id: "player-performance", label: "Performance" }]
+      : []),
+    ...(heroCardVisible ? [{ id: "player-heroes", label: "Heroes" }] : []),
+    ...(profileVisible ? [{ id: "player-about", label: "About" }] : []),
+    ...(careerVisible ? [{ id: "player-career", label: "Career" }] : []),
+  ];
+
   return (
     <div className="space-y-6">
       <div>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <Link href="/players" className={textLink("text-sm")}>
+          <ContextBackLink href="/players" className={textLink("text-sm")}>
             ← All players
-          </Link>
+          </ContextBackLink>
           <Link
             href={`/players/compare?a=${user.id}`}
             className={textLink("text-sm")}
@@ -812,42 +857,79 @@ export default async function PlayerProfilePage({
         </div>
       </div>
 
-      {tiles.games > 0 ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat
-            label={hasSeasonGames ? "Record" : "Career record"}
-            value={`${tiles.wins}–${tiles.losses}`}
-            hint={
-              hasSeasonGames && careerSummary.games > seasonSummary.games
-                ? `${tiles.winRate}% · career ${careerSummary.wins}–${careerSummary.losses}`
-                : `${tiles.winRate}% win rate`
-            }
-          />
-          <Stat label="Games" value={tiles.games} hint={streakLabel} />
-          <Stat
-            label="Avg KDA"
-            value={`${tiles.avgKills}/${tiles.avgDeaths}/${tiles.avgAssists}`}
-            hint={`${tiles.kda} ratio`}
-          />
-          {team ? (
-            <Stat
-              label="Team rank"
-              value={teamRank > 0 ? `#${teamRank}` : "—"}
-              hint={
-                teamRow
-                  ? `${teamRow.wins}–${teamRow.losses} · ${teamRow.points} pts`
-                  : undefined
-              }
-            />
-          ) : (
-            <Stat
-              label="Hero pool"
-              value={careerSummary.topHeroes.length}
-              hint="heroes played"
-            />
-          )}
+      <SectionNav items={sectionItems} label="Player sections" sticky />
+
+      <section
+        id="player-overview"
+        aria-label="Player overview"
+        className="scroll-mt-40 space-y-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-display text-xl font-semibold">
+            {hasSeasonGames ? "Season form" : "Career form"}
+          </h2>
+          <span className="text-xs text-muted">
+            {hasSeasonGames ? season?.name : "All league seasons"}
+          </span>
         </div>
-      ) : null}
+        <div
+          className={cn(
+            "grid grid-cols-1 gap-4",
+            featuredMatch && tiles.games > 0 && "lg:grid-cols-2",
+          )}
+        >
+          {tiles.games > 0 ? (
+            <div className="grid min-w-0 grid-cols-2 gap-3">
+              <Stat
+                label={hasSeasonGames ? "Record" : "Career record"}
+                value={`${tiles.wins}–${tiles.losses}`}
+                hint={
+                  hasSeasonGames && careerSummary.games > seasonSummary.games
+                    ? `${tiles.winRate}% · career ${careerSummary.wins}–${careerSummary.losses}`
+                    : `${tiles.winRate}% win rate`
+                }
+              />
+              <Stat label="Games" value={tiles.games} hint={streakLabel} />
+              <Stat
+                label="Avg KDA"
+                value={`${tiles.avgKills}/${tiles.avgDeaths}/${tiles.avgAssists}`}
+                hint={`${tiles.kda} ratio`}
+              />
+              {team ? (
+                <Stat
+                  label="Team rank"
+                  value={teamRank > 0 ? `#${teamRank}` : "—"}
+                  hint={
+                    teamRow
+                      ? `${teamRow.wins}–${teamRow.losses} · ${teamRow.points} pts`
+                      : undefined
+                  }
+                />
+              ) : (
+                <Stat
+                  label="Hero pool"
+                  value={careerSummary.topHeroes.length}
+                  hint="heroes played"
+                />
+              )}
+            </div>
+          ) : null}
+
+          {featuredMatch ? (
+            <ProfileMatchSpotlight
+              match={featuredMatch}
+              teams={featuredTeams}
+              nowMs={nowMs}
+              teamContext={!!teamSpotlight}
+            />
+          ) : null}
+          {tiles.games === 0 && !featuredMatch ? (
+            <div className="rounded-xl border border-dashed border-line bg-surface/50 p-5 text-sm text-muted">
+              League form starts with their first recorded game.
+            </div>
+          ) : null}
+        </div>
+      </section>
 
       {/* ---------- How they play ---------- */}
       {/* Bands: an h2 SectionTitle over an auto-fit grid. auto-fit, NEVER
@@ -855,7 +937,7 @@ export default async function PlayerProfilePage({
           every width — the dashboard rule): every card here is conditional,
           so an absent one must collapse its track instead of leaving a hole. */}
       {hasPerf || reportCard.graded > 0 ? (
-        <section className="space-y-3">
+        <section id="player-performance" className="scroll-mt-40 space-y-3">
           <SectionTitle>How they play</SectionTitle>
           <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
             {hasPerf ? (
@@ -1049,7 +1131,7 @@ export default async function PlayerProfilePage({
       heroCardVisible ||
       heldRecords.length > 0 ||
       connectionsVisible ? (
-        <section className="space-y-3">
+        <section id="player-about" className="scroll-mt-40 space-y-3">
           <SectionTitle>Player profile</SectionTitle>
           <div className="grid gap-6 lg:grid-cols-2">
             {activityVisible || signupSnapshotVisible ? (
@@ -1180,8 +1262,9 @@ export default async function PlayerProfilePage({
 
             {heroCardVisible ? (
               <Card
+                id="player-heroes"
                 className={cn(
-                  "min-w-0",
+                  "min-w-0 scroll-mt-40",
                   activityVisible && signupSnapshotVisible && "lg:col-span-2",
                 )}
               >
@@ -1299,63 +1382,69 @@ export default async function PlayerProfilePage({
         </section>
       ) : null}
 
-      {badges.length > 0 ? (
-        <Card>
-          <CardHeader
-            title="Achievements"
-            subtitle="Earned across every season's imported games"
-          />
-          <CardBody className="flex flex-wrap gap-2">
-            {badges.map((b) => (
-              <span
-                key={b.key}
-                title={b.desc}
-                className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 px-3 py-1 text-sm"
-              >
-                <span aria-hidden>{b.emoji}</span>
-                {b.label}
-                {b.count > 1 ? (
-                  <span className="font-mono text-xs tabular-nums text-muted">
-                    ×{b.count}
+      {careerVisible ? (
+        <section
+          id="player-career"
+          aria-label="Player career"
+          className="scroll-mt-40 space-y-4"
+        >
+          {badges.length > 0 ? (
+            <Card>
+              <CardHeader
+                title="Achievements"
+                subtitle="Earned across every season's imported games"
+              />
+              <CardBody className="flex flex-wrap gap-2">
+                {badges.map((b) => (
+                  <span
+                    key={b.key}
+                    title={b.desc}
+                    className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 px-3 py-1 text-sm"
+                  >
+                    <span aria-hidden>{b.emoji}</span>
+                    {b.label}
+                    {b.count > 1 ? (
+                      <span className="font-mono text-xs tabular-nums text-muted">
+                        ×{b.count}
+                      </span>
+                    ) : null}
                   </span>
-                ) : null}
-              </span>
-            ))}
-          </CardBody>
-        </Card>
-      ) : null}
+                ))}
+              </CardBody>
+            </Card>
+          ) : null}
 
-      {careerRows.length > 0 || coverSeasons.length > 0 ? (
-        <Card>
-          <CardHeader
-            title="Seasons"
-            subtitle={
-              careerRows.length > 0
-                ? `${careerRows.length} season${careerRows.length === 1 ? "" : "s"} played${titles > 0 ? ` · ${titles} title${titles === 1 ? "" : "s"} 🏆` : ""}`
-                : // A standin-only career is still a career — this card used
-                  // to not render at all for the people who kept match nights
-                  // running.
-                  "Stood in when teams needed cover"
-            }
-          />
-          <CardBody className="divide-y divide-line/60 p-0">
-            {careerRows.map(({ membership: m, tally, champion }) => (
-              <div
-                key={m.id}
-                // gap-y-2 for the TAP_SAFE rule below: at gap-y-1 (4px) the two
-                // links' grown hit boxes would overlap when this row wraps.
-                className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
-              >
-                <Link
-                  href={`/seasons/${m.team.seasonId}`}
-                  className={cn(
-                    "w-24 shrink-0 text-muted hover:text-info",
-                    TAP_SAFE,
-                  )}
-                >
-                  {m.team.season.name}
-                </Link>
-                {/* Two unrelated fixes on one element, both measured.
+          {careerRows.length > 0 || coverSeasons.length > 0 ? (
+            <Card>
+              <CardHeader
+                title="Seasons"
+                subtitle={
+                  careerRows.length > 0
+                    ? `${careerRows.length} season${careerRows.length === 1 ? "" : "s"} played${titles > 0 ? ` · ${titles} title${titles === 1 ? "" : "s"} 🏆` : ""}`
+                    : // A standin-only career is still a career — this card used
+                      // to not render at all for the people who kept match nights
+                      // running.
+                      "Stood in when teams needed cover"
+                }
+              />
+              <CardBody className="divide-y divide-line/60 p-0">
+                {careerRows.map(({ membership: m, tally, champion }) => (
+                  <div
+                    key={m.id}
+                    // gap-y-2 for the TAP_SAFE rule below: at gap-y-1 (4px) the two
+                    // links' grown hit boxes would overlap when this row wraps.
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
+                  >
+                    <Link
+                      href={`/seasons/${m.team.seasonId}`}
+                      className={cn(
+                        "w-24 shrink-0 text-muted hover:text-info",
+                        TAP_SAFE,
+                      )}
+                    >
+                      {m.team.season.name}
+                    </Link>
+                    {/* Two unrelated fixes on one element, both measured.
 
                     basis-40 below sm — the same collapse as the hero, in its
                     other flavour. This is the `min-w-0 flex-1` child, and its
@@ -1375,70 +1464,75 @@ export default async function PlayerProfilePage({
                     floor, with two targets inside 24px of it. Being `flex` and
                     not inline, the spec's in-a-run-of-text exemption does not
                     cover it either. */}
-                <Link
-                  href={`/teams/${m.teamId}`}
-                  className={cn(
-                    "flex min-w-0 flex-1 basis-40 items-center gap-2 hover:text-info sm:basis-auto",
-                    TAP_SAFE,
-                  )}
-                >
-                  <TeamCrest
-                    name={m.team.name}
-                    seed={m.teamId}
-                    logoUrl={m.team.logoUrl}
-                    size={22}
-                    className="shrink-0 rounded-md"
-                  />
-                  <span className="truncate font-medium">{m.team.name}</span>
-                  {champion ? <span title="Champion">🏆</span> : null}
-                </Link>
-                <span className="shrink-0 text-xs text-muted">
-                  {m.isCaptain ? (
-                    <Badge tone="accent">Captain</Badge>
-                  ) : (
-                    `$${m.price}`
-                  )}
-                </span>
-                <span className="shrink-0 font-mono text-xs tabular-nums">
-                  {tally.W}–{tally.L}
-                  {tally.D > 0 ? `–${tally.D}` : ""}
-                </span>
-              </div>
-            ))}
-            {coverSeasons.map((s) => (
-              <div
-                key={`cover-${s.seasonId}`}
-                className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
-              >
-                <Link
-                  href={`/seasons/${s.seasonId}`}
-                  className={cn(
-                    "w-24 shrink-0 text-muted hover:text-info",
-                    TAP_SAFE,
-                  )}
-                >
-                  {s.name}
-                </Link>
-                <span className="min-w-0 flex-1 text-muted">
-                  🧩 Stood in — {s.count} match{s.count === 1 ? "" : "es"}{" "}
-                  covered
-                </span>
-              </div>
-            ))}
-          </CardBody>
-        </Card>
+                    <Link
+                      href={`/teams/${m.teamId}`}
+                      className={cn(
+                        "flex min-w-0 flex-1 basis-40 items-center gap-2 hover:text-info sm:basis-auto",
+                        TAP_SAFE,
+                      )}
+                    >
+                      <TeamCrest
+                        name={m.team.name}
+                        seed={m.teamId}
+                        logoUrl={m.team.logoUrl}
+                        size={22}
+                        className="shrink-0 rounded-md"
+                      />
+                      <span className="truncate font-medium">
+                        {m.team.name}
+                      </span>
+                      {champion ? <span title="Champion">🏆</span> : null}
+                    </Link>
+                    <span className="shrink-0 text-xs text-muted">
+                      {m.isCaptain ? (
+                        <Badge tone="accent">Captain</Badge>
+                      ) : (
+                        `$${m.price}`
+                      )}
+                    </span>
+                    <span className="shrink-0 font-mono text-xs tabular-nums">
+                      {tally.W}–{tally.L}
+                      {tally.D > 0 ? `–${tally.D}` : ""}
+                    </span>
+                  </div>
+                ))}
+                {coverSeasons.map((s) => (
+                  <div
+                    key={`cover-${s.seasonId}`}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
+                  >
+                    <Link
+                      href={`/seasons/${s.seasonId}`}
+                      className={cn(
+                        "w-24 shrink-0 text-muted hover:text-info",
+                        TAP_SAFE,
+                      )}
+                    >
+                      {s.name}
+                    </Link>
+                    <span className="min-w-0 flex-1 text-muted">
+                      🧩 Stood in — {s.count} match{s.count === 1 ? "" : "es"}{" "}
+                      covered
+                    </span>
+                  </div>
+                ))}
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {/* Inhouse career — only stream for players with a completed game. */}
+          {recentInhouse ? (
+            <Suspense fallback={<CardSkeleton rows={3} />}>
+              <InhouseCareerCard userId={user.id} />
+            </Suspense>
+          ) : null}
+        </section>
       ) : null}
 
-      {/* Inhouse career — only stream for players with a completed game. */}
-      {recentInhouse ? (
-        <Suspense fallback={<CardSkeleton rows={3} />}>
-          <InhouseCareerCard userId={user.id} />
-        </Suspense>
-      ) : null}
-
-      <Card>
+      <Card id="player-matches" className="scroll-mt-40 overflow-hidden">
         <CardHeader
           title="Match history"
+          headingLevel={2}
           subtitle={
             gameRows.length > 0
               ? selectedHistoryGroup
@@ -1457,7 +1551,7 @@ export default async function PlayerProfilePage({
                 {multiSeasonHistory ? (
                   <form
                     method="get"
-                    action={`/players/${id}`}
+                    action={`/players/${id}#player-matches`}
                     className="flex items-center gap-2"
                   >
                     <label>
@@ -1538,27 +1632,15 @@ export default async function PlayerProfilePage({
                               {won ? "W" : "L"}
                             </Badge>
                             {hero ? <HeroIcon hero={hero} size={26} /> : null}
-                            {/* Phones: two-line clamp + the compact phase
-                                abbrev — a long opponent name (the fixture
-                                stress-seeds a 47-char one) beside the two
-                                rigid siblings (W/L badge, KDA) left a
-                                single-line truncate rendering ~35% of itself
-                                at 360px, right on the e2e-mid collapse
-                                tripwire's line, with Linux/Android font
-                                metrics deciding pass or fail. From sm up this
-                                is byte-identical to the old single-line row. */}
-                            <span className="min-w-0 flex-1 line-clamp-2 sm:line-clamp-none sm:truncate">
-                              <span className="text-muted">vs </span>
-                              <span className="font-medium">
+                            <span className="min-w-0 flex-1">
+                              <span className="block font-medium leading-snug [overflow-wrap:anywhere]">
+                                <span className="font-normal text-muted">
+                                  vs{" "}
+                                </span>
                                 {opponentName}
                               </span>
-                              <span className="ml-2 text-xs uppercase text-muted sm:hidden">
-                                {matchPhaseAbbrev(
-                                  game.match.phase,
-                                  game.match.week,
-                                )}
-                              </span>
-                              <span className="ml-2 hidden text-xs uppercase text-muted sm:inline">
+                              <span className="mt-1 block text-xs text-muted">
+                                {hero?.name ?? `Hero ${stat.heroId}`} ·{" "}
                                 {matchPhaseLabel(
                                   game.match.phase,
                                   game.match.week,

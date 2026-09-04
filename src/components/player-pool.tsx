@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { SAVE_LIST_CONTEXT_EVENT } from "@/lib/navigation-context";
 import {
   Avatar,
   Badge,
@@ -118,7 +119,7 @@ export function PlayerPool({
   // search box would otherwise fire once per keystroke. Defaults are omitted
   // so an unfiltered pool has a clean /players URL.
   useEffect(() => {
-    const t = setTimeout(() => {
+    const syncFilters = () => {
       const sp = new URLSearchParams();
       if (query) sp.set("q", query);
       if (role) sp.set("pos", role);
@@ -126,14 +127,22 @@ export function PlayerPool({
       if (captainOnly) sp.set("cap", "1");
       if (status !== "all") sp.set("status", status);
       const qs = sp.toString();
-      const next = qs
-        ? `${window.location.pathname}?${qs}`
-        : window.location.pathname;
-      if (next !== window.location.pathname + window.location.search) {
+      const next =
+        (qs ? `${window.location.pathname}?${qs}` : window.location.pathname) +
+        window.location.hash;
+      if (
+        next !==
+        window.location.pathname + window.location.search + window.location.hash
+      ) {
         window.history.replaceState(null, "", next);
       }
-    }, 250);
-    return () => clearTimeout(t);
+    };
+    const t = setTimeout(syncFilters, 250);
+    window.addEventListener(SAVE_LIST_CONTEXT_EVENT, syncFilters);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener(SAVE_LIST_CONTEXT_EVENT, syncFilters);
+    };
   }, [query, role, sort, captainOnly, status]);
 
   // The draft-status filter only makes sense once someone's been drafted

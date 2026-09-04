@@ -151,8 +151,11 @@ test("profile saves optional details with clear dirty state", async ({
   );
   await expect(page.getByRole("heading", { name: "Your setup" })).toBeVisible();
   const optional = page
-    .locator("details")
-    .filter({ hasText: "Optional scouting profile" });
+    .locator("details:has(> summary)")
+    .filter({
+      has: page.locator("summary", { hasText: /^Optional scouting profile$/ }),
+    })
+    .last();
   await optional.locator("summary").click();
   await page
     .getByLabel("What you want from the league (public)")
@@ -170,6 +173,16 @@ test("profile saves optional details with clear dirty state", async ({
   ).toBeVisible();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.reload();
+  // Returning players see their current participation without the full form.
+  const savedSignup = page.locator("#signup-details");
+  await expect(savedSignup).not.toHaveAttribute("open", "");
+  await expect(
+    page.getByRole("button", { name: "Update signup" }),
+  ).toBeHidden();
+  await savedSignup.locator(":scope > summary").click();
+  await expect(
+    page.getByRole("button", { name: "Update signup" }),
+  ).toBeVisible();
   await optional.locator("summary").click();
   await expect(
     page.getByLabel("What you want from the league (public)"),

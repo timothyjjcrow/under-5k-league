@@ -40,6 +40,30 @@
 
 :root {
   color-scheme: dark;
+  --mobile-dock-height: 0px;
+}
+
+/* Keep content, focused fields and feedback clear of the phone navigation.
+   The existing 80px top bar and all draft/admin sticky offsets stay intact. */
+@media (width < 80rem) {
+  :root {
+    --mobile-dock-height: calc(4.25rem + env(safe-area-inset-bottom, 0px));
+  }
+  body {
+    padding-bottom: var(--mobile-dock-height);
+  }
+  html {
+    scroll-padding-bottom: calc(var(--mobile-dock-height) + 1rem);
+  }
+}
+.mobile-dock {
+  padding-bottom: calc(0.375rem + env(safe-area-inset-bottom, 0px));
+}
+.mobile-discovery {
+  bottom: calc(var(--mobile-dock-height) + 0.5rem);
+}
+.league-toasts {
+  bottom: calc(var(--mobile-dock-height) + 1rem);
 }
 
 body {
@@ -380,18 +404,30 @@ a {
     color: var(--color-muted);
     opacity: 0.8;
   }
-  :where(button, summary, select):not(:disabled) { cursor: pointer; }
-  :where(input, select, textarea):disabled { cursor: not-allowed; }
-  :where(tbody tr):hover, :where(tbody tr):focus-within {
+  :where(button, summary, select):not(:disabled) {
+    cursor: pointer;
+  }
+  :where(input, select, textarea):disabled {
+    cursor: not-allowed;
+  }
+  :where(tbody tr):hover,
+  :where(tbody tr):focus-within {
     background-color: color-mix(in srgb, var(--color-info) 5%, transparent);
   }
-  :where(th) { line-height: 1.5; }
+  :where(th) {
+    line-height: 1.5;
+  }
 }
 
 /* Keep standalone native fields comfortable to use on touch screens, including
    dense admin forms. Hidden controls and custom pickers retain their geometry. */
 @media (max-width: 639px) {
-  :where(input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=image]), select) {
+  :where(
+    input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not(
+        [type="range"]
+      ):not([type="color"]):not([type="file"]):not([type="image"]),
+    select
+  ) {
     min-height: 44px;
   }
 }

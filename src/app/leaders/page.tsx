@@ -175,9 +175,7 @@ export default async function LeadersPage({
   const awaitingBoxScoreWeeks = honorReadiness.filter(
     (row) => row.state === HONOR_WEEK_STATE.AWAITING_BOX_SCORES,
   );
-  const noPerformanceWeeks = honorReadiness.filter(
-    isNoPerformanceHonorWeek,
-  );
+  const noPerformanceWeeks = honorReadiness.filter(isNoPerformanceHonorWeek);
 
   // Accumulate each mapped player's per-game lines across the whole season —
   // and the raw stored lines too, which carry the benchmark percentiles the
@@ -245,9 +243,9 @@ export default async function LeadersPage({
               ? `Week ${awaitingBoxScoreWeeks[0].week} is final, but weekly honors and public stats are waiting for complete, valid 5v5 box scores.`
               : noPerformanceWeeks.length > 0
                 ? `Week ${noPerformanceWeeks[0].week} is final with no played games, so there are no performance honors or player statistics for that week.`
-              : games.length > 0
-                ? "Games are imported, but no complete player box score is mapped to league accounts. An administrator should inspect the match, remove the bad import, verify Steam links, and import it again."
-                : "Leaderboards fill in once match games are imported."
+                : games.length > 0
+                  ? "Games are imported, but no complete player box score is mapped to league accounts. An administrator should inspect the match, remove the bad import, verify Steam links, and import it again."
+                  : "Leaderboards fill in once match games are imported."
           }
         />
       </div>
@@ -397,7 +395,7 @@ export default async function LeadersPage({
     <div className="space-y-6">
       <PageTitle
         title="Leaders"
-        subtitle={`${season.name}${season.isActive ? "" : " · archived"} · from ${games.length} imported game${games.length === 1 ? "" : "s"}`}
+        subtitle={`${season.name}${season.isActive ? "" : " · archived"}`}
         action={
           <div className="flex flex-wrap gap-2">
             {!season.isActive ? (
@@ -427,92 +425,47 @@ export default async function LeadersPage({
         unusableGames={unusableGames}
         unmappedLines={unmappedLines}
       />
-      <p className="text-sm text-muted">{games.filter((game) => game.lines.length > 0).length} of {gameRows.length} imported games have trusted 5v5 scores. Individual boards use linked players and their displayed minimum sample.</p>
-      <SectionNav label="Leaderboard metrics" items={[
-        ...(reportRows.length ? [{ id: "metric-report", label: "Report card" }] : []),
-        ...boards.map((board) => ({ id: `metric-${board.key}`, label: board.title })),
-      ]} />
-      {honorsByWeek.length > 0 ||
-      inProgressWeeks.length > 0 ||
-      awaitingBoxScoreWeeks.length > 0 ? (
-        <Card>
-          <CardHeader
-            headingLevel={2}
-            title="Weekly honors"
-            subtitle="Official after every regular match is final and every played series has a complete attributed 5v5 box score"
-          />
-          <CardBody className="divide-y divide-line/60 p-0">
-            {inProgressWeeks.length > 0 ? (
-              <p className="px-5 py-3 text-sm text-muted">
-                Week {inProgressWeeks[0].week} is still in progress. Its honors
-                will appear after the full slate is final.
-              </p>
-            ) : null}
-            {awaitingBoxScoreWeeks.length > 0 ? (
-              <p className="px-5 py-3 text-sm text-muted">
-                Week {awaitingBoxScoreWeeks[0].week} is final, but honors are
-                waiting for complete, valid 5v5 box scores from every played
-                series.
-              </p>
-            ) : null}
-            {honorsByWeek.map(({ week, honors }) =>
-              !honors.player && !honors.team ? (
-                <p key={week} className="px-5 py-3 text-sm text-muted">
-                  Week {week} is final with no played games, so no performance
-                  honors were awarded.
-                </p>
-              ) : (
-                <div
-                  key={week}
-                  className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-sm"
-                >
-                <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
-                  Week {week}
-                </span>
-                {honors.player ? (
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span aria-hidden>⭐</span>
-                    {userMap.has(honors.player.userId) ? (
-                      <PlayerLink
-                        userId={honors.player.userId}
-                        className="font-medium"
-                      >
-                        {userMap.get(honors.player.userId)!.name}
-                      </PlayerLink>
-                    ) : (
-                      <span className="font-medium text-muted">
-                        Former player
-                      </span>
-                    )}
-                    <span className="text-xs text-muted">
-                      {honors.player.points} pts
-                      {honors.player.heroId != null
-                        ? ` · ${heroById(honors.player.heroId)?.name ?? `Hero #${honors.player.heroId}`}`
-                        : ""}
-                    </span>
-                  </span>
-                ) : null}
-                {honors.team ? (
-                  <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
-                    <span aria-hidden>🛡️</span>
-                    <Link
-                      href={`/teams/${honors.team.teamId}`}
-                      className="py-1 -my-1 font-medium hover:text-info"
-                    >
-                      {teamNameOf.get(honors.team.teamId) ?? "?"}
-                    </Link>
-                    <span className="text-xs text-muted">
-                      {honors.team.gameWins} game win
-                      {honors.team.gameWins === 1 ? "" : "s"}
-                    </span>
-                  </span>
-                ) : null}
-                </div>
-              ),
-            )}
-          </CardBody>
-        </Card>
-      ) : null}
+      <dl className="grid grid-cols-3 divide-x divide-line rounded-xl border border-line bg-surface/60 py-4">
+        <div className="flex min-w-0 flex-col px-3 text-center sm:px-5">
+          <dt className="order-2 mt-1 text-xs text-muted">Trusted 5v5 games</dt>
+          <dd className="font-display text-2xl font-semibold tabular-nums text-cyan-300 sm:text-3xl">
+            {games.filter((game) => game.lines.length > 0).length}
+            <span className="ml-1 text-sm text-muted">/ {gameRows.length}</span>
+          </dd>
+        </div>
+        <div className="flex min-w-0 flex-col px-3 text-center sm:px-5">
+          <dt className="order-2 mt-1 text-xs text-muted">Players with stats</dt>
+          <dd className="font-display text-2xl font-semibold tabular-nums sm:text-3xl">
+            {entries.length}
+          </dd>
+        </div>
+        <div className="flex min-w-0 flex-col px-3 text-center sm:px-5">
+          <dt className="order-2 mt-1 text-xs text-muted">
+            Rate-board minimum
+          </dt>
+          <dd className="font-display text-2xl font-semibold tabular-nums sm:text-3xl">
+            {rateFloor}
+            <span className="ml-1 text-sm font-normal text-muted">games</span>
+          </dd>
+        </div>
+      </dl>
+      <SectionNav
+        label="Leaderboard metrics"
+        items={[
+          ...(reportRows.length
+            ? [{ id: "metric-report", label: "Report card" }]
+            : []),
+          ...boards.map((board) => ({
+            id: `metric-${board.key}`,
+            label: board.title,
+          })),
+          ...(honorsByWeek.length > 0 ||
+          inProgressWeeks.length > 0 ||
+          awaitingBoxScoreWeeks.length > 0
+            ? [{ id: "weekly-honors", label: "Weekly honors" }]
+            : []),
+        ]}
+      />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {reportRows.length > 0 ? (
@@ -559,6 +512,99 @@ export default async function LeadersPage({
           );
         })}
       </div>
+
+      {honorsByWeek.length > 0 ||
+      inProgressWeeks.length > 0 ||
+      awaitingBoxScoreWeeks.length > 0 ? (
+        <Card id="weekly-honors" className="scroll-mt-24">
+          <CardHeader
+            headingLevel={2}
+            title="Weekly honors"
+            subtitle="Regular-season awards"
+            action={
+              <details className="max-w-sm text-sm">
+                <summary className="flex min-h-11 cursor-pointer items-center text-muted hover:text-fg">
+                  How honors unlock
+                </summary>
+                <p className="pb-2 text-xs leading-relaxed text-muted">
+                  Official after every regular match is final and every played
+                  series has a complete attributed 5v5 box score.
+                </p>
+              </details>
+            }
+          />
+          <CardBody className="divide-y divide-line/60 p-0">
+            {inProgressWeeks.length > 0 ? (
+              <p className="px-5 py-3 text-sm text-muted">
+                Week {inProgressWeeks[0].week} is still in progress. Its honors
+                will appear after the full slate is final.
+              </p>
+            ) : null}
+            {awaitingBoxScoreWeeks.length > 0 ? (
+              <p className="px-5 py-3 text-sm text-muted">
+                Week {awaitingBoxScoreWeeks[0].week} is final, but honors are
+                waiting for complete, valid 5v5 box scores from every played
+                series.
+              </p>
+            ) : null}
+            {honorsByWeek.map(({ week, honors }) =>
+              !honors.player && !honors.team ? (
+                <p key={week} className="px-5 py-3 text-sm text-muted">
+                  Week {week} is final with no played games, so no performance
+                  honors were awarded.
+                </p>
+              ) : (
+                <div
+                  key={week}
+                  className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-sm"
+                >
+                  <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
+                    Week {week}
+                  </span>
+                  {honors.player ? (
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span aria-hidden>⭐</span>
+                      {userMap.has(honors.player.userId) ? (
+                        <PlayerLink
+                          userId={honors.player.userId}
+                          className="font-medium"
+                        >
+                          {userMap.get(honors.player.userId)!.name}
+                        </PlayerLink>
+                      ) : (
+                        <span className="font-medium text-muted">
+                          Former player
+                        </span>
+                      )}
+                      <span className="text-xs text-muted">
+                        {honors.player.points} pts
+                        {honors.player.heroId != null
+                          ? ` · ${heroById(honors.player.heroId)?.name ?? `Hero #${honors.player.heroId}`}`
+                          : ""}
+                      </span>
+                    </span>
+                  ) : null}
+                  {honors.team ? (
+                    <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
+                      <span aria-hidden>🛡️</span>
+                      <Link
+                        href={`/teams/${honors.team.teamId}`}
+                        className="py-1 -my-1 font-medium hover:text-info"
+                      >
+                        {teamNameOf.get(honors.team.teamId) ?? "?"}
+                      </Link>
+                      <span className="text-xs text-muted">
+                        {honors.team.gameWins} game win
+                        {honors.team.gameWins === 1 ? "" : "s"}
+                      </span>
+                    </span>
+                  ) : null}
+                </div>
+              ),
+            )}
+          </CardBody>
+        </Card>
+      ) : null}
     </div>
   );
 }

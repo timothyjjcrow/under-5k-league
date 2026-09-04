@@ -54,6 +54,7 @@ import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
+import { SavedSignupForm } from "@/components/saved-signup-form";
 import {
   Avatar,
   Badge,
@@ -212,17 +213,126 @@ export default async function MePage({
     ? draftReadiness(reg, season?.draftRevision ?? 0)
     : DRAFT_READINESS.AWAITING;
 
+  const needsDraftConfirmation = !!(
+    season?.draftAt &&
+    draftConfirmationOpen &&
+    isRegistered &&
+    reg?.type === REGISTRATION_TYPE.PLAYER &&
+    myDraftReadiness !== DRAFT_READINESS.READY
+  );
+  const canJoin =
+    !!season &&
+    !isRegistered &&
+    !registrationRemoved &&
+    !seasonRegistrationClosed;
+  const nextSetupStep = needsDraftConfirmation
+    ? { href: "#profile-signup", label: "Review draft commitment" }
+    : canJoin
+      ? {
+          href: "#profile-signup",
+          label: signupsOpen ? "Join the season" : "Register as a standin",
+        }
+      : dbUser?.fhUnavailable === true
+        ? { href: "#profile-dota", label: "Fix match visibility" }
+        : !dbUser?.discordId && !dbUser?.discordName
+          ? { href: "#profile-discord", label: "Add Discord" }
+          : { href: "#profile-signup", label: "Your season" };
+  const setupSteps = [
+    {
+      href: "#profile-signup",
+      label: "Season participation",
+      complete: isRegistered && !needsDraftConfirmation,
+      attention: canJoin || needsDraftConfirmation || registrationRemoved,
+      status: registrationRemoved
+        ? "Admin review required"
+        : needsDraftConfirmation
+          ? "Draft confirmation needed"
+          : isRegistered
+            ? reg?.type === "STANDIN"
+              ? "Registered · standin"
+              : "Registered · player"
+            : seasonRegistrationClosed
+              ? "Season complete"
+              : season
+                ? "Not registered"
+                : "No active season",
+    },
+    {
+      href: "#profile-discord",
+      label: "Discord",
+      complete: false,
+      attention: !dbUser?.discordId && !dbUser?.discordName,
+      status: dbUser?.discordId
+        ? "Linked · review server access below"
+        : dbUser?.discordName
+          ? "Handle saved · link to verify"
+          : "Add or link your handle",
+    },
+    {
+      href: "#profile-dota",
+      label: "Dota match data",
+      complete: dbUser?.fhUnavailable === false,
+      attention: dbUser?.fhUnavailable === true,
+      status:
+        dbUser?.fhUnavailable === false
+          ? "Public match data"
+          : dbUser?.fhUnavailable === true
+            ? "Private · imports need access"
+            : "Review visibility",
+    },
+    {
+      href: "#profile-identity",
+      label: "Steam identity",
+      complete: true,
+      attention: false,
+      status: "Verified with Steam",
+    },
+  ];
+
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <PageTitle title="Your profile" />
       <Card>
-        <CardHeader headingLevel={2} title="Your setup" subtitle="Review these details before match night. Scouting questions are optional." />
+        <CardHeader
+          headingLevel={2}
+          title="Your setup"
+          action={
+            <a
+              href={nextSetupStep.href}
+              className={buttonClasses("secondary", "sm")}
+            >
+              {nextSetupStep.label} →
+            </a>
+          }
+        />
         <CardBody>
-          <ul className="grid gap-2 sm:grid-cols-2 text-sm">
-            <li><a href="#profile-identity" className={textLink()}>Steam identity — verified ✓</a></li>
-            <li><a href="#profile-dota" className={textLink()}>Dota match data — {dbUser?.fhUnavailable === false ? "public ✓" : "review visibility"}</a></li>
-            <li><a href="#profile-discord" className={textLink()}>Discord — {dbUser?.discordId ? "linked; check reachability below" : "add or link your handle"}</a></li>
-            <li><a href="#profile-signup" className={textLink()}>Season participation — {isRegistered ? "registered ✓" : season ? "review signup" : "no active season"}</a></li>
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {setupSteps.map((step) => (
+              <li key={step.href} className="min-w-0">
+                <a
+                  href={step.href}
+                  className={`flex min-h-16 items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors hover:bg-surface-2 ${step.attention ? "border-accent/35 bg-accent/5" : "border-line bg-surface-2/30"}`}
+                >
+                  <span
+                    aria-hidden
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm ${step.complete ? "border-success/35 bg-success/10 text-success" : step.attention ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-muted"}`}
+                  >
+                    {step.complete ? "✓" : step.attention ? "!" : "·"}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">
+                      {step.label}
+                    </span>
+                    <span className="block text-xs text-muted">
+                      {step.status}
+                    </span>
+                  </span>
+                  <span aria-hidden className="text-muted">
+                    ↗
+                  </span>
+                </a>
+              </li>
+            ))}
           </ul>
         </CardBody>
       </Card>
@@ -603,6 +713,7 @@ export default async function MePage({
                     </span>
                   </div>
                 ) : null}
+                <SavedSignupForm saved={isRegistered}>
                 <ActionForm action={saveRegistration} trackChanges className="space-y-5">
                   <div className="rounded-lg border border-accent/35 bg-accent/10 p-3 text-sm">
                     <h3 className="font-medium text-fg">
@@ -844,6 +955,7 @@ export default async function MePage({
                     </SubmitButton>
                   </div>
                 </ActionForm>
+                </SavedSignupForm>
 
                 {isRegistered ? (
                   <div className="mt-4 border-t border-line pt-4">

@@ -18,6 +18,8 @@ import { roleShort } from "@/lib/roles";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
+import { ContextBackLink } from "@/components/context-back-link";
+import { SectionNav } from "@/components/section-nav";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
 import { matchNightRoster } from "@/lib/availability";
@@ -192,14 +194,42 @@ export default async function MatchDetailPage({
           groupPlayoffRounds(postseason).totalRounds,
         )
       : matchPhaseLabel(match.phase, match.week);
+  const viewer = await getSessionUser();
+  const isCaptain =
+    !!viewer &&
+    (match.homeTeam.captainId === viewer.id ||
+      match.awayTeam.captainId === viewer.id);
+  const showCaptainTools = isCaptain && match.season.isActive;
+  const hasSeriesScore =
+    match.status === "COMPLETED" ||
+    match.status === "LIVE" ||
+    games.length > 0 ||
+    match.homeScore + match.awayScore > 0;
+  const hasPreview = games.length === 0 && match.status !== "COMPLETED";
+  const resultPending =
+    match.status !== "COMPLETED" &&
+    match.scheduledAt != null &&
+    match.scheduledAt.getTime() < renderedAt;
+  const sectionItems = [
+    ...(hasPreview
+      ? [
+          { id: "match-games", label: "Match night" },
+          { id: "match-matchup", label: "Lineups" },
+          { id: "match-scouting", label: "Scouting" },
+        ]
+      : [{ id: "match-games", label: "Games" }]),
+    ...(showCaptainTools
+      ? [{ id: "match-tools", label: "Captain tools" }]
+      : []),
+  ];
 
   return (
     <div className="space-y-6">
       <PageTitle
-        title={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
-        subtitle={postseasonLabel}
+        title="Match center"
+        subtitle={`${match.season.name} · ${postseasonLabel}`}
         action={
-          <Link
+          <ContextBackLink
             href={
               match.season.isActive
                 ? match.phase === "REGULAR"
@@ -214,7 +244,7 @@ export default async function MatchDetailPage({
                 ? "← Schedule"
                 : "← Playoff bracket"
               : "← Season archive"}
-          </Link>
+          </ContextBackLink>
         }
       />
 
@@ -238,43 +268,12 @@ export default async function MatchDetailPage({
             backgroundColor: `hsl(${teamHue(match.awayTeamId)} 70% 50% / 0.24)`,
           }}
         />
-        <CardBody className="relative space-y-3 py-7">
-          <div className="flex items-center gap-3 sm:gap-6">
-            <TeamSide
-              name={match.homeTeam.name}
-              teamId={match.homeTeamId}
-              logoUrl={match.homeTeam.logoUrl}
-              score={match.homeScore}
-              win={match.winnerTeamId === match.homeTeamId}
-            />
-            <span className="shrink-0 text-[10px] font-medium uppercase tracking-widest text-muted">
-              series
-            </span>
-            <TeamSide
-              name={match.awayTeam.name}
-              teamId={match.awayTeamId}
-              logoUrl={match.awayTeam.logoUrl}
-              score={match.awayScore}
-              win={match.winnerTeamId === match.awayTeamId}
-              right
-            />
-          </div>
-          {/* The basics for everyone — CheckinBanner's time renders only for
-              participants, so spectators need kickoff/format/status here. */}
-          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-muted">
-            {match.scheduledAt ? (
-              <LocalTime
-                ts={match.scheduledAt.getTime()}
-                variant="full"
-                initial={formatMatchTime(match.scheduledAt, "full")}
-              />
-            ) : (
-              <span>time TBD</span>
-            )}
+        <CardBody className="relative space-y-6 px-3 py-6 sm:px-6 sm:py-8">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <Badge>Bo{match.bestOf}</Badge>
             {match.status === "COMPLETED" ? (
               <>
-                <Badge>Series complete</Badge>
+                <Badge tone="success">Series complete</Badge>
                 {match.phase === "FINAL" &&
                 match.id === championPresentation.authoritativeFinalId &&
                 match.winnerTeamId === championPresentation.championTeamId ? (
@@ -291,11 +290,140 @@ export default async function MatchDetailPage({
                 ) : null}
               </>
             ) : match.status === "LIVE" || games.length > 0 ? (
-              <Badge tone="accent">LIVE</Badge>
+              <Badge tone="danger">LIVE</Badge>
+            ) : resultPending ? (
+              <Badge tone="accent">Awaiting result</Badge>
+            ) : (
+              <Badge tone="info">
+                {match.scheduledAt ? "Upcoming" : "Time TBD"}
+              </Badge>
+            )}
+          </div>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-8">
+            <TeamSide
+              name={match.homeTeam.name}
+              teamId={match.homeTeamId}
+              logoUrl={match.homeTeam.logoUrl}
+              win={match.winnerTeamId === match.homeTeamId}
+            />
+            <div className="text-center">
+              <div
+                role="img"
+                aria-label={
+                  hasSeriesScore
+                    ? `${match.homeTeam.name} ${match.homeScore}, ${match.awayTeam.name} ${match.awayScore}`
+                    : "Series score not recorded"
+                }
+                className="flex items-center justify-center gap-2 font-display text-4xl font-bold tabular-nums tracking-tight sm:gap-4 sm:text-7xl"
+              >
+                {hasSeriesScore ? (
+                  <>
+                    <span
+                      className={
+                        match.winnerTeamId === match.homeTeamId
+                          ? "text-accent"
+                          : "text-fg"
+                      }
+                    >
+                      {match.homeScore}
+                    </span>
+                    <span
+                      aria-hidden
+                      className="text-xl font-normal text-muted/50 sm:text-3xl"
+                    >
+                      –
+                    </span>
+                    <span
+                      className={
+                        match.winnerTeamId === match.awayTeamId
+                          ? "text-accent"
+                          : "text-fg"
+                      }
+                    >
+                      {match.awayScore}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-2xl font-medium text-muted sm:text-4xl">
+                    VS
+                  </span>
+                )}
+              </div>
+              <span className="mt-2 block text-[10px] font-medium uppercase tracking-[0.2em] text-muted">
+                series
+              </span>
+            </div>
+            <TeamSide
+              name={match.awayTeam.name}
+              teamId={match.awayTeamId}
+              logoUrl={match.awayTeam.logoUrl}
+              win={match.winnerTeamId === match.awayTeamId}
+            />
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-3 border-t border-line/60 pt-4 text-center text-sm text-muted">
+            {match.scheduledAt ? (
+              <LocalTime
+                ts={match.scheduledAt.getTime()}
+                variant="full"
+                initial={formatMatchTime(match.scheduledAt, "full")}
+              />
+            ) : (
+              <span>Kickoff time TBD</span>
+            )}
+            {showCaptainTools ? (
+              <a href="#match-tools" className={buttonClasses("primary", "sm")}>
+                {match.status === "COMPLETED"
+                  ? "Result correction ↓"
+                  : !matchResultsOpen(match.season.status, match.phase)
+                    ? "Captain tools ↓"
+                    : match.status === "LIVE" || games.length > 0
+                      ? "Record next game ↓"
+                      : "Set up & report ↓"}
+              </a>
             ) : null}
           </div>
         </CardBody>
+        {games.length > 0 ? (
+          <div className="relative flex flex-wrap justify-center gap-2 border-t border-line bg-bg/30 px-3 py-3">
+            {games.map((game, index) => {
+              const winner =
+                game.winnerTeamId === match.homeTeamId
+                  ? match.homeTeam
+                  : game.winnerTeamId === match.awayTeamId
+                    ? match.awayTeam
+                    : null;
+              return (
+                <a
+                  key={game.id}
+                  href={`#game-${game.id}`}
+                  className="flex min-h-11 max-w-full items-center gap-2 rounded-lg border border-line bg-surface/80 px-3 py-2 text-xs transition-colors hover:border-muted hover:bg-surface-2"
+                >
+                  <span className="shrink-0 font-semibold">
+                    Game {index + 1}
+                  </span>
+                  {winner ? (
+                    <>
+                      <TeamCrest
+                        name={winner.name}
+                        seed={winner.id}
+                        logoUrl={winner.logoUrl}
+                        size={20}
+                      />
+                      <span className="min-w-0 text-muted [overflow-wrap:anywhere]">
+                        {winner.name} won
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-muted">Box score →</span>
+                  )}
+                </a>
+              );
+            })}
+          </div>
+        ) : null}
       </Card>
+
+      <SectionNav items={sectionItems} label="Match sections" sticky />
 
       {!match.season.isActive ? (
         <div className="rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm text-muted">
@@ -313,121 +441,162 @@ export default async function MatchDetailPage({
         </div>
       ) : null}
 
-      {/* The section mirrors the write-time logistics gate. A LIVE or locked
-          season can still expose decline/withdraw cleanup for a stranded
-          proposal, but it can never offer a retime. */}
-      {match.status !== "COMPLETED" ? (
+      {/* Pending time changes stay visible to spectators. Captain controls
+          live together below the match, with a primary jump in the scoreboard. */}
+      {!showCaptainTools && match.status !== "COMPLETED" ? (
         <RescheduleSection match={match} />
       ) : null}
 
-      {/* Captains report their own results (OpenDota import) — league night
-          doesn't wait for an admin. Stays up while a Bo3/Bo5 is mid-series. */}
-      <ReportResultSection match={match} renderedAt={renderedAt} />
-
-      {/* Captains line up their own standin cover — the OUT-ping → DM-the-admin
-          relay is gone. Admin's panel keeps the any-team override. */}
-      {match.status !== "COMPLETED" ? <StandinSection match={match} /> : null}
-
-      {games.length === 0 && match.status !== "COMPLETED" ? (
-        <Suspense fallback={<CardSkeleton rows={5} />}>
-          {/* Rosters, scouting (scans all seasons' box scores) and the stakes
+      <section
+        id="match-games"
+        className="scroll-mt-40 space-y-6"
+        aria-label={hasPreview ? "Match preview" : "Match games"}
+      >
+        {games.length === 0 && match.status !== "COMPLETED" ? (
+          <Suspense fallback={<CardSkeleton rows={5} />}>
+            {/* Rosters, scouting (scans all seasons' box scores) and the stakes
               banner stream in so the header + check-in paint immediately. */}
-          <MatchPreview match={match} />
-        </Suspense>
-      ) : games.length === 0 ? (
-        <EmptyState
-          title={
-            match.forfeit
-              ? "Series awarded by forfeit"
-              : "Final score entered manually"
-          }
-          description={
-            match.forfeit
-              ? "This is an administrative ruling; no Dota game was recorded for this series."
-              : "The final result is official, but detailed OpenDota box-score data is unavailable."
-          }
-        />
-      ) : (
-        games.map((g, i) => {
-          const radiant = g.parsed.filter((p) => p.isRadiant);
-          const dire = g.parsed.filter((p) => !p.isRadiant);
-          const winnerName = g.winnerTeamId
-            ? teamName.get(g.winnerTeamId)
-            : null;
-          const radiantName = g.radiantTeamId
-            ? (teamName.get(g.radiantTeamId) ?? "Radiant")
-            : "Radiant";
-          const direName = g.direTeamId
-            ? (teamName.get(g.direTeamId) ?? "Dire")
-            : "Dire";
-          const maxNet = Math.max(1, ...g.parsed.map((p) => p.netWorth ?? 0));
-          const mvpId = gameMvp(g.parsed, g.radiantWin);
-          const radiantNet = radiant.reduce((s, p) => s + (p.netWorth ?? 0), 0);
-          const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
-          return (
-            <Card key={g.id}>
-              <CardHeader
-                title={`Game ${i + 1}`}
-                // 0s / 0-0 means the header stats never got reported — showing
-                // "0m 0s · 0-0 kills" reads as a real (absurd) game.
-                subtitle={
-                  [
-                    g.durationSecs > 0
-                      ? `${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s`
-                      : null,
-                    g.radiantScore + g.direScore > 0
-                      ? `${g.radiantScore}-${g.direScore} kills`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || undefined
-                }
-                action={
-                  <div className="flex items-center gap-2">
-                    {winnerName ? (
-                      <Badge tone="success">{winnerName} won</Badge>
-                    ) : null}
-                    <a
-                      href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={textLink("text-xs")}
-                    >
-                      OpenDota ↗
-                    </a>
-                  </div>
-                }
-              />
-              <CardBody className="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2">
-                <NetWorthAdvantage
-                  radiantName={radiantName}
-                  direName={direName}
-                  radiantNet={radiantNet}
-                  direNet={direNet}
+            <MatchPreview match={match} />
+          </Suspense>
+        ) : games.length === 0 ? (
+          <EmptyState
+            title={
+              match.forfeit
+                ? "Series awarded by forfeit"
+                : "Final score entered manually"
+            }
+            description={
+              match.forfeit
+                ? "This is an administrative ruling; no Dota game was recorded for this series."
+                : "The final result is official, but detailed OpenDota box-score data is unavailable."
+            }
+          />
+        ) : (
+          games.map((g, i) => {
+            const radiant = g.parsed.filter((p) => p.isRadiant);
+            const dire = g.parsed.filter((p) => !p.isRadiant);
+            const winnerName = g.winnerTeamId
+              ? teamName.get(g.winnerTeamId)
+              : null;
+            const radiantName = g.radiantTeamId
+              ? (teamName.get(g.radiantTeamId) ?? "Radiant")
+              : "Radiant";
+            const direName = g.direTeamId
+              ? (teamName.get(g.direTeamId) ?? "Dire")
+              : "Dire";
+            const maxNet = Math.max(1, ...g.parsed.map((p) => p.netWorth ?? 0));
+            const mvpId = gameMvp(g.parsed, g.radiantWin);
+            const radiantNet = radiant.reduce(
+              (s, p) => s + (p.netWorth ?? 0),
+              0,
+            );
+            const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
+            return (
+              <Card
+                key={g.id}
+                id={`game-${g.id}`}
+                className="scroll-mt-40 overflow-hidden"
+              >
+                <CardHeader
+                  title={`Game ${i + 1}`}
+                  // 0s / 0-0 means the header stats never got reported — showing
+                  // "0m 0s · 0-0 kills" reads as a real (absurd) game.
+                  subtitle={
+                    [
+                      g.durationSecs > 0
+                        ? `${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s`
+                        : null,
+                      g.radiantScore + g.direScore > 0
+                        ? `${g.radiantScore}-${g.direScore} kills`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
+                  }
+                  action={
+                    <div className="flex items-center gap-2">
+                      {winnerName ? (
+                        <Badge tone="success">{winnerName} won</Badge>
+                      ) : null}
+                      <a
+                        href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={textLink("text-xs")}
+                      >
+                        OpenDota ↗
+                      </a>
+                    </div>
+                  }
                 />
-                <SidePlayers
-                  label={radiantName}
-                  win={g.radiantWin}
-                  mvpId={mvpId}
-                  players={radiant}
-                  userName={userName}
-                  userAvatar={userAvatar}
-                  maxNet={maxNet}
-                />
-                <SidePlayers
-                  label={direName}
-                  win={!g.radiantWin}
-                  mvpId={mvpId}
-                  players={dire}
-                  userName={userName}
-                  userAvatar={userAvatar}
-                  maxNet={maxNet}
-                />
-              </CardBody>
-            </Card>
-          );
-        })
-      )}
+                <CardBody className="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2">
+                  <NetWorthAdvantage
+                    radiantName={radiantName}
+                    direName={direName}
+                    radiantNet={radiantNet}
+                    direNet={direNet}
+                  />
+                  <SidePlayers
+                    label={radiantName}
+                    win={g.radiantWin}
+                    mvpId={mvpId}
+                    players={radiant}
+                    userName={userName}
+                    userAvatar={userAvatar}
+                    maxNet={maxNet}
+                  />
+                  <SidePlayers
+                    label={direName}
+                    win={!g.radiantWin}
+                    mvpId={mvpId}
+                    players={dire}
+                    userName={userName}
+                    userAvatar={userAvatar}
+                    maxNet={maxNet}
+                  />
+                </CardBody>
+              </Card>
+            );
+          })
+        )}
+      </section>
+
+      {showCaptainTools ? (
+        <section
+          id="match-tools"
+          className="scroll-mt-40 space-y-4"
+          aria-labelledby="match-tools-title"
+        >
+          <div className="flex items-center gap-3 border-t border-line pt-6">
+            <span
+              aria-hidden
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent"
+            >
+              ◇
+            </span>
+            <h2
+              id="match-tools-title"
+              className="font-display text-2xl font-semibold"
+            >
+              Captain tools
+            </h2>
+            <Badge className="ml-auto">Your match</Badge>
+          </div>
+          {/* These components keep their own write-time capability gates,
+              including read-only correction and stranded-proposal cleanup. */}
+          <ReportResultSection match={match} renderedAt={renderedAt} />
+          {match.status !== "COMPLETED" ? (
+            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+              <div className="min-w-0">
+                <RescheduleSection match={match} />
+              </div>
+              <div className="min-w-0">
+                <StandinSection match={match} />
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -578,9 +747,10 @@ async function MatchPreview({
 
       <StakesBanner match={match} seasonMatches={seasonMatches} />
 
-      <Card>
+      <Card id="match-matchup" className="scroll-mt-40 overflow-hidden">
         <CardHeader
           title="Matchup"
+          headingLevel={2}
           subtitle={
             h2hRow && h2hRow.wins + h2hRow.losses + h2hRow.draws > 0
               ? `Prior meetings: ${
@@ -608,7 +778,9 @@ async function MatchPreview({
                     size={24}
                     className="rounded-md"
                   />
-                  <span className="truncate">{s.name}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">
+                    {s.name}
+                  </span>
                 </Link>
                 {s.form.length > 0 ? <FormStrip form={s.form} /> : null}
               </div>
@@ -709,11 +881,6 @@ async function MatchPreview({
           })),
         }))}
       />
-
-      <p className="text-center text-xs text-muted">
-        The box score appears here once the match is played and imported from
-        Dota (OpenDota).
-      </p>
     </div>
   );
 }
@@ -878,13 +1045,12 @@ async function ScoutingReport({
     };
   });
 
-  if (dossiers.every((d) => d.empty)) return null;
-
   return (
-    <Card>
+    <Card id="match-scouting" className="scroll-mt-40 overflow-hidden">
       <CardHeader
         title="Scouting report"
-        subtitle="Know your enemy — comfort heroes, ban targets, and pace from every game on record."
+        headingLevel={2}
+        subtitle="All recorded league games"
       />
       <CardBody className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {dossiers.map((d) => (
@@ -900,7 +1066,7 @@ async function ScoutingReport({
                 size={22}
                 className="rounded-md"
               />
-              <span className="truncate font-display text-base font-semibold">
+              <span className="min-w-0 font-display text-base font-semibold [overflow-wrap:anywhere]">
                 {d.name}
               </span>
             </div>
@@ -1054,54 +1220,42 @@ function TeamSide({
   name,
   teamId,
   logoUrl,
-  score,
   win,
-  right,
 }: {
   name: string;
   teamId: string;
   logoUrl: string | null;
-  score: number;
   win: boolean;
-  right?: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        "flex min-w-0 flex-1 items-center gap-3",
-        right && "flex-row-reverse",
-      )}
-    >
-      <TeamCrest
-        name={name}
-        seed={teamId}
-        logoUrl={logoUrl}
-        size={44}
-      />
+    <div className="flex min-w-0 flex-col items-center gap-3 self-stretch text-center">
+      <div
+        className={cn(
+          "rounded-2xl border p-2 shadow-lg shadow-black/15",
+          win ? "border-accent/40 bg-accent/5" : "border-line/60 bg-surface/60",
+        )}
+      >
+        <TeamCrest
+          name={name}
+          seed={teamId}
+          logoUrl={logoUrl}
+          size={64}
+          imageFit="cover"
+          className="rounded-xl"
+        />
+      </div>
       <Link
         href={`/teams/${teamId}`}
-        className={cn(
-          "min-w-0 flex-1 truncate font-display text-lg font-semibold hover:text-info",
-          right && "text-right",
-          win ? "text-fg" : "text-muted",
-        )}
+        className="min-h-11 max-w-full content-center font-display text-base font-semibold leading-tight text-fg [overflow-wrap:anywhere] hover:text-info sm:text-2xl"
       >
         {name}
       </Link>
-      <span
-        className={cn(
-          "shrink-0 font-display text-4xl font-bold tabular-nums",
-          win ? "text-fg" : "text-muted",
-        )}
-      >
-        {score}
-      </span>
     </div>
   );
 }
 
-// The team net-worth split — Dota's signature "who's ahead" summary as a
-// single bar (Radiant green / Dire red) with the current gold lead.
+// The recorded team net-worth split from this game's box score, with an
+// explicit gold lead. These totals are not a live net-worth timeline.
 function NetWorthAdvantage({
   radiantName,
   direName,
@@ -1119,34 +1273,55 @@ function NetWorthAdvantage({
   const lead = radiantNet - direNet;
   const leaderName = lead > 0 ? radiantName : direName;
   return (
-    <div className="md:col-span-2">
-      <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
-        <span className="flex min-w-0 items-center gap-1.5 font-medium text-emerald-300">
-          <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
-          <span className="truncate">{radiantName}</span>
-          <span className="font-mono text-muted">
-            {formatNetWorth(radiantNet)}
-          </span>
-        </span>
-        <span className="shrink-0 text-muted">
-          {lead === 0
-            ? "Even net worth"
-            : `${leaderName} +${formatNetWorth(Math.abs(lead))}`}
-        </span>
-        <span className="flex min-w-0 items-center justify-end gap-1.5 font-medium text-rose-300">
-          <span className="font-mono text-muted">
-            {formatNetWorth(direNet)}
-          </span>
-          <span className="truncate">{direName}</span>
-          <span className="h-2 w-2 shrink-0 rounded-full bg-rose-400" />
+    <div className="min-w-0 rounded-xl border border-line bg-bg/35 p-4 md:col-span-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="font-medium text-muted">Recorded net worth</span>
+        <span className="min-w-0 text-fg [overflow-wrap:anywhere]">
+          {lead === 0 ? (
+            "Even"
+          ) : (
+            <>
+              {leaderName}{" "}
+              <strong className="font-mono text-accent">
+                +{formatNetWorth(Math.abs(lead))}
+              </strong>
+            </>
+          )}
         </span>
       </div>
-      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-surface-2">
-        <div
-          className="bg-emerald-500/70 transition-all"
-          style={{ width: `${radPct}%` }}
+      <div className="mb-3 grid grid-cols-2 gap-4">
+        <div className="flex min-w-0 flex-col">
+          <p className="text-xs text-emerald-300 [overflow-wrap:anywhere]">
+            {radiantName}
+          </p>
+          <p className="mt-auto pt-1 font-display text-2xl font-semibold tabular-nums">
+            {formatNetWorth(radiantNet)}
+          </p>
+        </div>
+        <div className="flex min-w-0 flex-col text-right">
+          <p className="text-xs text-rose-300 [overflow-wrap:anywhere]">
+            {direName}
+          </p>
+          <p className="mt-auto pt-1 font-display text-2xl font-semibold tabular-nums">
+            {formatNetWorth(direNet)}
+          </p>
+        </div>
+      </div>
+      <div
+        role="img"
+        aria-label={`${radiantName}: ${radiantNet.toLocaleString()} gold. ${direName}: ${direNet.toLocaleString()} gold.`}
+        className="relative flex h-3 w-full overflow-hidden rounded-full bg-surface-2"
+      >
+        <div className="bg-emerald-400/80" style={{ width: `${radPct}%` }} />
+        <div className="flex-1 bg-rose-400/80" />
+        <span
+          aria-hidden
+          className="absolute inset-y-0 left-1/2 w-px bg-bg/70"
         />
-        <div className="flex-1 bg-rose-500/70" />
+      </div>
+      <div className="mt-2 flex justify-between text-[10px] uppercase tracking-wider text-muted">
+        <span>Radiant</span>
+        <span>Dire</span>
       </div>
     </div>
   );
@@ -1180,13 +1355,13 @@ function SidePlayers({
   return (
     <div
       className={cn(
-        "rounded-lg border p-3",
+        "min-w-0 rounded-xl border p-3",
         win ? "border-success/40 bg-success/5" : "border-line",
       )}
     >
-      <div className="mb-2.5 flex items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-3">
         <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-display text-base font-semibold">
+          <span className="min-w-0 font-display text-base font-semibold [overflow-wrap:anywhere]">
             {label}
           </span>
           {win ? (
@@ -1220,30 +1395,34 @@ function SidePlayers({
               key={idx}
               className="rounded-md px-1.5 py-1.5 transition-colors hover:bg-surface-2/50"
             >
-              <div className="flex items-center gap-2.5">
+              <div className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2">
                 {hero ? (
                   <HeroIcon hero={hero} size={30} />
                 ) : (
-                  <span className="h-[30px] w-[30px] shrink-0 rounded-md border border-line/70 bg-surface-2" />
+                  <span className="text-xs text-muted">#{p.heroId}</span>
                 )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-1.5">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
                     {p.userId ? (
-                      <Avatar
-                        name={displayName}
-                        src={userAvatar.get(p.userId) ?? null}
-                        size={18}
-                      />
+                      <span className="hidden sm:inline-flex">
+                        <Avatar
+                          name={displayName}
+                          src={userAvatar.get(p.userId) ?? null}
+                          size={18}
+                        />
+                      </span>
                     ) : null}
                     {p.userId ? (
                       <PlayerLink
                         userId={p.userId}
-                        className="truncate text-sm"
+                        className="min-w-0 text-sm [overflow-wrap:anywhere]"
                       >
                         {displayName}
                       </PlayerLink>
                     ) : (
-                      <span className="truncate text-sm">{displayName}</span>
+                      <span className="min-w-0 text-sm [overflow-wrap:anywhere]">
+                        {displayName}
+                      </span>
                     )}
                     {p.userId && p.userId === mvpId ? (
                       <Badge tone="accent" title="Best line of the game">
@@ -1251,42 +1430,46 @@ function SidePlayers({
                       </Badge>
                     ) : null}
                   </div>
-                  <div className="truncate text-[11px] text-muted">
+                  <div className="text-[11px] text-muted [overflow-wrap:anywhere]">
                     {heroName}
                   </div>
                 </div>
-                <div className="shrink-0 text-right">
-                  <KDA
-                    kills={p.kills}
-                    deaths={p.deaths}
-                    assists={p.assists}
-                    className="block text-xs"
-                  />
-                  {hasGpm || hasLh ? (
-                    <div className="text-[11px] tabular-nums text-muted">
-                      {[
-                        hasGpm ? `${p.gpm ?? "—"} gpm` : null,
-                        hasLh ? `${p.lastHits ?? "—"} lh` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </div>
+                <KDA
+                  kills={p.kills}
+                  deaths={p.deaths}
+                  assists={p.assists}
+                  className="shrink-0 text-right text-xs"
+                />
+              </div>
+              {hasNet || hasGpm || hasLh ? (
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-10 text-[11px] tabular-nums text-muted">
+                  {hasGpm ? (
+                    <span title="Gold per minute">{p.gpm ?? "—"} gpm</span>
+                  ) : null}
+                  {hasLh ? (
+                    <span title="Last hits">{p.lastHits ?? "—"} lh</span>
+                  ) : null}
+                  {hasNet ? (
+                    <span
+                      className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2"
+                      title="Net worth at game end"
+                    >
+                      <span
+                        aria-hidden
+                        className="h-1.5 w-full max-w-24 overflow-hidden rounded-full bg-surface-2"
+                      >
+                        <span
+                          className="block h-full rounded-full bg-accent/80"
+                          style={{ width: `${nwPct}%` }}
+                        />
+                      </span>
+                      <span className="shrink-0 font-mono text-accent">
+                        {formatNetWorth(p.netWorth)}
+                      </span>
+                    </span>
                   ) : null}
                 </div>
-                {hasNet ? (
-                  <div className="w-14 shrink-0 text-right">
-                    <div className="font-mono text-xs tabular-nums text-accent">
-                      {formatNetWorth(p.netWorth)}
-                    </div>
-                    <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-2">
-                      <div
-                        className="h-full rounded-full bg-accent/80"
-                        style={{ width: `${nwPct}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+              ) : null}
               <ReportCardStrip line={p} />
             </li>
           );

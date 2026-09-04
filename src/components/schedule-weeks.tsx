@@ -5,7 +5,7 @@
 // The server page serializes everything (dates preformatted so hydration
 // never disagrees on locale); this component only filters and toggles.
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
@@ -95,9 +95,27 @@ export function ScheduleWeeks({
   };
   // Per-week collapsed overrides on top of the default rule (past weeks with
   // every result in start collapsed).
-  const [collapsedOverride, setCollapsedOverride] = useState<
-    Record<number, boolean>
-  >({});
+  // Separate regular weeks from playoff rounds; both can appear on this page.
+  // URL state also restores opened past weeks after visiting a match.
+  const weekParam = weeks.some((week) => week.label) ? "rounds" : "weeks";
+  const collapsedOverride: Record<number, boolean> = {};
+  for (const value of (params.get(weekParam) ?? "").split(",")) {
+    if (!/^-?[1-9]\d*$/.test(value)) continue;
+    const week = Math.abs(Number(value));
+    if (weeks.some((entry) => entry.week === week))
+      collapsedOverride[week] = Number(value) < 0;
+  }
+  const setWeekCollapsed = (week: number, collapsed: boolean) => {
+    const overrides = { ...collapsedOverride, [week]: collapsed };
+    const url = new URL(window.location.href);
+    url.searchParams.set(
+      weekParam,
+      Object.entries(overrides)
+        .map(([number, closed]) => `${closed ? "-" : ""}${number}`)
+        .join(","),
+    );
+    window.history.pushState(null, "", url.pathname + url.search + url.hash);
+  };
 
   const currentWeek = weeks.find((w) => w.isCurrent)?.week;
   const defaultCollapsed = (w: WeekView) =>
@@ -230,12 +248,7 @@ export function ScheduleWeeks({
                         type="button"
                         aria-label={w.label ?? `Week ${w.week}`}
                         aria-expanded={!collapsed}
-                        onClick={() =>
-                          setCollapsedOverride((prev) => ({
-                            ...prev,
-                            [w.week]: !collapsed,
-                          }))
-                        }
+                        onClick={() => setWeekCollapsed(w.week, !collapsed)}
                         className="flex min-h-11 items-center gap-2 rounded text-base font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
                       >
                         <span>{w.label ?? `Week ${w.week}`}</span>

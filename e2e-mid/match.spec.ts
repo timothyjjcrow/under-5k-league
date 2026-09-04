@@ -8,6 +8,7 @@ test("a completed match page renders the box score with an MVP chip", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/schedule");
 
   // Past completed weeks start collapsed — expand the first (#main scope:
@@ -24,6 +25,19 @@ test("a completed match page renders the box score with an MVP chip", async ({
   // Box scores are div grids (no <table>): the MVP chip on the crowned line
   // and at least one hero portrait prove the score rendered.
   await expect(page.getByText("MVP").first()).toBeVisible();
+  // A game in the scoreboard is a real jump to its box score, so a long
+  // series remains browsable without scrolling past every earlier lobby.
+  const firstGame = page.getByRole("link", { name: /^Game 1 / }).first();
+  const gameTarget = await firstGame.getAttribute("href");
+  expect(gameTarget).toMatch(/^#game-/);
+  await firstGame.click();
+  await expect(page.locator(gameTarget!)).toBeInViewport();
+  await expect(
+    page
+      .locator(gameTarget!)
+      .getByRole("heading", { name: "Game 1", exact: true }),
+  ).toBeInViewport();
+  await expectNoHorizontalOverflow(page, "mobile match center box score");
 
   assertNoErrors();
 });
@@ -32,6 +46,7 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/schedule");
 
   // The staged LIVE row already has a recorded game and correctly renders its
@@ -44,6 +59,27 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
   await expect(page.getByText("Scouting report")).toBeVisible();
+  const matchSections = page.getByRole("navigation", {
+    name: "Match sections",
+  });
+  await matchSections
+    .getByRole("link", { name: "Scouting", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#match-scouting$/);
+  await expect(
+    page.getByRole("heading", { name: "Scouting report" }),
+  ).toBeFocused();
+  await matchSections
+    .getByRole("link", { name: "Lineups", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#match-matchup$/);
+  await expect(
+    page.getByRole("heading", { name: "Matchup", exact: true }),
+  ).toBeFocused();
+  await expect(
+    page.getByRole("heading", { name: "Captain tools", exact: true }),
+  ).toHaveCount(0);
+  await expectNoHorizontalOverflow(page, "mobile match center preview");
 
   assertNoErrors();
 });
@@ -71,6 +107,16 @@ test("captains can report an open series and get a clear correction handoff once
   expect(openHref).toMatch(/^\/matches\//);
 
   await page.goto(openHref!);
+  const captainJump = page.getByRole("link", { name: "Set up & report ↓" });
+  await expect(captainJump).toBeInViewport();
+  await expect(
+    page.locator("#match-games").getByRole("button", { name: "✓ I'm in" }),
+  ).toBeVisible();
+  await captainJump.click();
+  await expect(page).toHaveURL(/#match-tools$/);
+  await expect(
+    page.getByRole("heading", { name: "Captain tools", exact: true }),
+  ).toBeInViewport();
   await expect(
     page.getByRole("heading", { name: "Official lobby checklist" }),
   ).toBeVisible();

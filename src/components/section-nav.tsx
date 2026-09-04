@@ -30,8 +30,15 @@ function revealSection(id: string, focus: boolean) {
     const tabIndex = heading.getAttribute("tabindex");
     heading.tabIndex = -1;
     heading.focus({ preventScroll: true });
-    if (tabIndex === null) heading.removeAttribute("tabindex");
-    else heading.setAttribute("tabindex", tabIndex);
+    // Removing tabindex while a non-interactive heading is focused blurs it
+    // immediately in Chromium. Keep the programmatic target until focus moves.
+    if (tabIndex === null) {
+      heading.addEventListener(
+        "blur",
+        () => heading.removeAttribute("tabindex"),
+        { once: true },
+      );
+    } else heading.setAttribute("tabindex", tabIndex);
   }
   target.scrollIntoView({ behavior: "instant", block: "start" });
   return true;
@@ -123,7 +130,7 @@ export function SectionNav({
         sticky && "sticky top-20 z-20 backdrop-blur",
       )}
     >
-      <ul className="flex gap-1 overflow-x-auto pb-1">
+      <ul className="flex gap-1 overflow-x-auto pb-1 pr-4 [mask-image:linear-gradient(to_right,black_calc(100%_-_1rem),transparent)]">
         {items.map((item) => (
           <li key={item.id}>
             <a
@@ -139,7 +146,8 @@ export function SectionNav({
                 if (!document.getElementById(item.id)) return;
                 event.preventDefault();
                 history.pushState(null, "", `#${item.id}`);
-                if (revealSection(item.id, true)) resolvedHash.current = item.id;
+                if (revealSection(item.id, true))
+                  resolvedHash.current = item.id;
                 setActive(item.id);
               }}
             >
