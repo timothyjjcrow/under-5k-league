@@ -237,21 +237,20 @@ export const INHOUSE = {
   LOBBY_NAME: "GGD2L Inhouse",
   LOBBY_PASSWORD: "ggd2l",
   LOBBY_TICKET: "Under 5K In-House League",
-  // Inhouse room client poll cadence (ms). The room polls fast while the
-  // viewer has skin in the game — in a lobby (ready check / vote / draft /
-  // live) or waiting in the queue, where seconds matter — and idle-slow when
-  // just spectating a page that updates lazily. The fast rate is the room's
-  // `pollMs` prop (default 1500).
+  // Keep the fast room rate for ready checks, captain votes, picks and bets.
+  // Waiting rosters and games in progress need fewer database round trips.
+  POLL_QUEUE_MS: 5000,
+  POLL_GAME_MS: 10000,
   POLL_IDLE_MS: 10000,
   // Hidden-tab keepalive (ms). A hidden tab with NO stake (not queued, not in a
   // lobby) doesn't fetch at all — the sitewide /api/sync ping keeps lobbies
   // advancing, and it re-syncs on refocus. But a hidden tab that's IN THE QUEUE
-  // (or a lobby) keeps a slow keepalive so its presence heartbeat holds the
-  // spot and a forming ready check's chime/title still reaches it. It must also
+  // (or a lobby) keeps a slow keepalive so ready-check chimes/title can reach
+  // it. Membership does not depend on these browser timers. It must also
   // be shorter than BOTH action windows: a lobby can form just after a queued
   // player's poll, and a long keepalive could otherwise consume the entire
   // 45s accept window (and skip the 25s captain vote altogether). 10s leaves time
-  // to notice and act while remaining comfortably inside the 90s away cutoff.
+  // to notice and act when the browser allows background execution.
   POLL_KEEPALIVE_MS: 10000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
   // Generous vs. the client's ~10s: web players may be in another tab — the
@@ -278,32 +277,13 @@ export const INHOUSE = {
   // can't drain the shared OpenDota budget the league's result sync needs.
   DETECT_MANUAL_GAP_SECONDS: 20,
   DETECT_INTERVAL_MAX_SECONDS: 1800,
-  // Queue presence: a spot is held by keeping /inhouse open — each state poll
-  // refreshes the entry's lastSeenAt heartbeat, throttled to one write per
-  // interval so ten 1.5s pollers don't produce a constant write stream.
+  // Heartbeats describe availability; they never own queue membership. A
+  // browser may suspend a hidden tab for minutes or hours without a leave.
   QUEUE_HEARTBEAT_SECONDS: 30,
-  // Seen longer ago than this = "away": still listed, but doesn't count toward
-  // forming a lobby or the public queue count. Generous because Chrome
-  // throttles hidden tabs' timers toward once a minute.
-  QUEUE_AWAY_SECONDS: 90,
-  // Silent past this = dropped from the queue entirely (ghost cleanup).
-  QUEUE_DROP_SECONDS: 180,
-  // After an admin cancels a lobby its players are re-queued with a backdated
-  // heartbeat: anyone still polling re-confirms within this window; the ghosts
-  // that likely caused the cancel never do, so the same lobby can't instantly
-  // re-form around them.
-  //
-  // MUST comfortably exceed POLL_KEEPALIVE_MS, and this is the binding case:
-  // during a live game all ten tabs are HIDDEN (everyone is in the Dota
-  // client), so they re-confirm on the keepalive — which Chrome can still clamp
-  // toward once a minute. The admin's own fast poll can run maybeFormLobby's
-  // prune BEFORE a player's clamped keepalive lands, so this window must leave
-  // room or "Lobby cancelled — players re-queued" silently empties the queue.
-  // 75s leaves room for the clamp; it still
-  // backdates past QUEUE_AWAY_SECONDS (90), so a cancelled lobby can't
-  // instantly re-form around ghosts, and past QUEUE_HEARTBEAT_SECONDS (30),
-  // so a present player's very next poll writes the refresh.
-  QUEUE_RECONFIRM_SECONDS: 75,
+  // Keep a queued player available across tab switches and browser sleep.
+  // Beyond four hours unseen they still retain membership while other queue
+  // activity continues, but must return before joining a ready check.
+  QUEUE_AWAY_SECONDS: 4 * 60 * 60,
   // Reset the waiting queue when its membership has not changed for this long.
   // Presence heartbeats deliberately do NOT refresh this clock: an open tab
   // can prove a player is still online, but it must not keep one static queue

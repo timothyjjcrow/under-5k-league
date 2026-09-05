@@ -40,25 +40,48 @@ export function usePersistedFlag(
   key: string,
   defaultOn = true,
 ): [boolean, (next: boolean) => void] {
-  const subscribe = useCallback((onChange: () => void) => {
-    const relay = (e: StorageEvent) => {
-      if (e.key === key || e.key === null) onChange();
-    };
-    window.addEventListener("storage", relay);
-    LOCAL_LISTENERS.add(onChange);
-    return () => {
-      window.removeEventListener("storage", relay);
-      LOCAL_LISTENERS.delete(onChange);
-    };
-  }, [key]);
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const relay = (e: StorageEvent) => {
+        if (e.key === key || e.key === null) {
+          if (e.key === null) VOLATILE_FLAGS.clear();
+          else VOLATILE_FLAGS.delete(key);
+          onChange();
+        }
+      };
+      window.addEventListener("storage", relay);
+      LOCAL_LISTENERS.add(onChange);
+      return () => {
+        window.removeEventListener("storage", relay);
+        LOCAL_LISTENERS.delete(onChange);
+      };
+    },
+    [key],
+  );
   const value = useSyncExternalStore(
     subscribe,
-    () => localStorage.getItem(key) !== (defaultOn ? "off" : "on"),
+    () => {
+      const fallback = VOLATILE_FLAGS.get(key);
+      if (fallback !== undefined) return fallback;
+      try {
+        const stored = localStorage.getItem(key);
+        return stored === "on" ? true : stored === "off" ? false : defaultOn;
+      } catch {
+        return defaultOn;
+      }
+    },
     () => defaultOn, // SSR + first paint: no storage to read yet
   );
   const set = useCallback(
     (next: boolean) => {
-      localStorage.setItem(key, next ? "on" : "off");
+      try {
+        localStorage.setItem(key, next ? "on" : "off");
+        VOLATILE_FLAGS.delete(key);
+      } catch {
+        // Storage-blocked and quota-full browsers still need a working mute
+        // button. Keep this page's choice until storage can persist it again.
+        VOLATILE_FLAGS.set(key, next);
+      }
       // `storage` only fires in OTHER tabs, so nudge this one ourselves.
       for (const l of LOCAL_LISTENERS) l();
     },
@@ -67,6 +90,7 @@ export function usePersistedFlag(
   return [value, set];
 }
 const LOCAL_LISTENERS = new Set<() => void>();
+const VOLATILE_FLAGS = new Map<string, boolean>();
 
 function useClientNow(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -113,7 +137,11 @@ export function usePollHealth(threshold = ROOM_POLL_FAIL_THRESHOLD) {
   const [disconnected, setDisconnected] = useState(false);
   const step = useCallback(
     (outcome: "ok" | "fail") => {
-      healthRef.current = pollHealthAfter(healthRef.current, outcome, threshold);
+      healthRef.current = pollHealthAfter(
+        healthRef.current,
+        outcome,
+        threshold,
+      );
       // Same-value setState bails out of re-rendering, so this is a no-op on
       // every poll that doesn't cross the line.
       setDisconnected(healthRef.current.disconnected);

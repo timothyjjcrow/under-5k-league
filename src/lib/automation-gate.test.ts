@@ -149,7 +149,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 5,
+      version: 6,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -243,7 +243,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 5,
+      version: 6,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -515,7 +515,7 @@ describe("computeAutomationGateSnapshot", () => {
       NOW,
     );
 
-    // Presence alone would wake at the 90s away boundary. The joinedAt
+    // Presence alone would wake at the four-hour away boundary. The joinedAt
     // fallback instead wakes now so a pre-deploy 13-hour queue is cleared.
     expect(snapshot).toMatchObject({
       nextWakeAtMs: NOW,
@@ -550,6 +550,61 @@ describe("computeAutomationGateSnapshot", () => {
       nextWakeAtMs: idleExpiresAt + 1,
       reason: "INHOUSE",
     });
+  });
+
+  it("keeps a background queue off the old three-minute cleanup cadence", () => {
+    const lastSeenAt = NOW - 15 * 60_000;
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({ queue: [queued({ lastSeenAt: new Date(lastSeenAt) })] }),
+      NOW,
+    );
+
+    expect(INHOUSE.QUEUE_AWAY_SECONDS).toBe(4 * 60 * 60);
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: lastSeenAt + 4 * 3_600_000 + 1,
+      reason: "INHOUSE",
+      hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
+    });
+    expect(automationGateDecisionFromSnapshot(snapshot, NOW + 1).run).toBe(false);
+  });
+
+  it("does not repeatedly wake for retained, backdated requeue players", () => {
+    const idleExpiresAt = NOW + 30 * 60_000;
+    const queue = Array.from({ length: INHOUSE.LOBBY_SIZE }, () =>
+      queued({
+        lastSeenAt: new Date(NOW - INHOUSE.QUEUE_AWAY_SECONDS * 1_000 - 1_000),
+        idleExpiresAt: new Date(idleExpiresAt),
+      }),
+    );
+    const snapshot = computeAutomationGateSnapshot(inputs({ queue }), NOW);
+
+    // A full backdated roster is retained but cannot immediately re-form.
+    // Its only remaining work is the shared queue reset, not a past presence
+    // deadline that pins the worker on every request.
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: idleExpiresAt + 1,
+      reason: "INHOUSE",
+    });
+    expect(automationGateDecisionFromSnapshot(snapshot, NOW + 1).run).toBe(false);
+  });
+
+  it("wakes once for an upcoming away transition, then waits for queue expiry", () => {
+    const awayAt = NOW + 30_000;
+    const idleExpiresAt = NOW + 30 * 60_000;
+    const queue = [
+      queued({
+        lastSeenAt: new Date(awayAt - INHOUSE.QUEUE_AWAY_SECONDS * 1_000),
+        idleExpiresAt: new Date(idleExpiresAt),
+      }),
+    ];
+
+    expect(computeAutomationGateSnapshot(inputs({ queue }), NOW)).toMatchObject({
+      nextWakeAtMs: awayAt + 1,
+      reason: "INHOUSE",
+    });
+    expect(
+      computeAutomationGateSnapshot(inputs({ queue }), awayAt + 1),
+    ).toMatchObject({ nextWakeAtMs: idleExpiresAt + 1, reason: "INHOUSE" });
   });
 
   it("keeps an in-progress betting close ahead of result detection", () => {
@@ -1094,13 +1149,22 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 5,
+      version: 6,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,
       reason: "LEAGUE",
       runnerHealthy: true,
     });
+    await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
+  });
+
+  it("rejects a cached snapshot from the previous queue-timeout policy", async () => {
+    cacheMocks.cached.mockResolvedValueOnce({
+      ...computeAutomationGateSnapshot(inputs(), NOW),
+      version: 5,
+    });
+
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
   });
 

@@ -16,6 +16,7 @@ import { databaseNow } from "./database-time";
 import { heroById } from "./heroes";
 import { prisma } from "./prisma";
 import { stampResultChange } from "./settings";
+import { discordMutationsAllowed } from "./discord-mutation-policy";
 
 /** Stable values persisted in Prisma's String fields (SQLite has no enums). */
 export const INHOUSE_ANNOUNCEMENT_KIND = {
@@ -473,6 +474,19 @@ async function cancelIfEligible(event: Candidate, now: Date): Promise<boolean> {
 export async function deliverInhouseAnnouncements(
   options: InhouseAnnouncementDeliveryOptions = {},
 ): Promise<InhouseAnnouncementDelivery> {
+  // Match the board and league outbox: an intentional preview send block is
+  // not a transport failure. Leave copied event leases, attempts and retry
+  // timestamps untouched while still reporting that pending work exists.
+  if (!discordMutationsAllowed()) {
+    const pending = await prisma.inhouseAnnouncement.findFirst({
+      where: {
+        ...(options.lobbyId ? { lobbyId: options.lobbyId } : {}),
+        status: { in: nonTerminal },
+      },
+      select: { id: true },
+    });
+    return { attempted: 0, delivered: 0, pending: pending !== null };
+  }
   // Outbox availability is database-stamped; using the same clock prevents a
   // fresh event being skipped when the application host is slightly behind.
   const now = options.now ?? (await databaseNow());

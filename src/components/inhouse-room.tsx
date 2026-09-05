@@ -49,6 +49,7 @@ import {
 import {
   INHOUSE,
   INHOUSE_BETS,
+  DISCORD_INVITE_URL,
   INHOUSE_SCAN_ACTIONS,
   INHOUSE_SCAN_ACTION_TIMEOUT_MS,
   ROOM_ACTION_TIMEOUT_MS,
@@ -103,6 +104,48 @@ function sideMeta(isRadiant: boolean) {
       };
 }
 
+const ROOM_STAGES = [
+  { status: null, label: "Queue" },
+  { status: "READY_CHECK", label: "Accept" },
+  { status: "CAPTAIN_VOTE", label: "Captains" },
+  { status: "DRAFTING", label: "Draft" },
+  { status: "READY", label: "Set up" },
+  { status: "IN_PROGRESS", label: "Play" },
+] as const;
+
+/** A shared orientation strip, with no new state machine or extra polling. */
+function RoomStages({ lobby }: { lobby: InhouseState["lobby"] }) {
+  const current = ROOM_STAGES.findIndex(
+    (stage) => stage.status === (lobby?.status ?? null),
+  );
+  return (
+    <ol
+      aria-label="Inhouse progress"
+      className="grid grid-cols-6 gap-1 sm:gap-2"
+    >
+      {ROOM_STAGES.map((stage, i) => (
+        <li
+          key={stage.label}
+          aria-current={i === current ? "step" : undefined}
+          className={cn(
+            "min-w-0 border-t-2 pt-2.5 text-center text-[10px] font-medium sm:text-xs",
+            i === current
+              ? "border-accent text-accent"
+              : i < current
+                ? "border-success/60 text-muted"
+                : "border-line text-muted",
+          )}
+        >
+          <span className="mr-1 hidden tabular-nums sm:inline" aria-hidden>
+            {i < current ? "✓" : String(i + 1).padStart(2, "0")}
+          </span>
+          {stage.label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function InhouseRoom({
   pollMs = 1500,
   defaultMmr = 0,
@@ -144,8 +187,8 @@ export function InhouseRoom({
   const bumpPollRef = useRef<(() => void) | null>(null);
   // Does the viewer currently have a stake (queued or in a lobby)? Read by the
   // poll loop to decide whether a HIDDEN tab keepalive-polls (hold the spot) or
-  // fully pauses. Kept current by the effect below so the closure always sees
-  // the latest, without re-subscribing the loop on every state change.
+  // fully pauses. Updated only by accepted snapshots so failed or stale
+  // responses cannot forget a spot or slow an active deadline.
   const hasStakeRef = useRef(false);
   // One-tap join from a Discord ping (?join=1). Fires at most ONCE per page
   // load — queue membership has teeth (a filled lobby drags you into a 45s
@@ -167,7 +210,12 @@ export function InhouseRoom({
   );
 
   useEffect(() => {
-    const dismissed = localStorage.getItem("inhouseDismissedResult");
+    let dismissed: string | null = null;
+    try {
+      dismissed = localStorage.getItem("inhouseDismissedResult");
+    } catch {
+      // Optional preferences must never prevent the live room from loading.
+    }
     // Deferred a tick: setting state synchronously inside an effect cascades a
     // render, and this only has to beat the first result banner.
     if (dismissed) {
@@ -218,27 +266,26 @@ export function InhouseRoom({
   // back-pressure; a cold page receiving only 429s still needs to leave its
   // otherwise-endless Loading state.
   const hasLoadedRef = useRef(false);
+  const latestStateRef = useRef<InhouseState | null>(null);
+  const serverOffsetRef = useRef(0);
 
   const apply = useCallback((s: InhouseState, seq: number) => {
     const { accept, next } = acceptSequence(seqRef.current, seq);
     seqRef.current = next;
     if (!accept) return false; // lost the response race — stale
     hasLoadedRef.current = true;
-    setOffsetMs((prev) => nextClockOffset(prev, s.now, Date.now()));
+    latestStateRef.current = s;
+    hasStakeRef.current = s.me.inLobby || s.me.inQueue;
+    const receivedAt = Date.now();
+    serverOffsetRef.current = s.now - receivedAt;
+    setOffsetMs((prev) => nextClockOffset(prev, s.now, receivedAt));
     setState(s);
     return true;
   }, []);
 
-  // Keep the poll loop's "has stake" flag current for its hidden-tab decision.
-  useEffect(() => {
-    // The viewer's OWN stake — `!!state.lobby` is true for every spectator
-    // too, so a public lobby kept every open tab on the fast path.
-    hasStakeRef.current = !!state?.me.inLobby || !!state?.me.inQueue;
-  }, [state]);
-
   // Adaptive, visibility-aware poll loop (self-scheduling setTimeout, not a
-  // fixed setInterval): FAST while the viewer is in a lobby or the queue,
-  // IDLE-slow when just spectating. While the tab is HIDDEN: a viewer with a
+  // fixed setInterval): FAST for timed ready/vote/draft stages, slower while
+  // waiting or playing, and IDLE-slow when just spectating. While the tab is HIDDEN: a viewer with a
   // stake (queued or in a lobby) keeps a slow KEEPALIVE so their presence
   // heartbeat holds the spot and a forming ready check's chime/title still
   // reaches them; a hidden spectator doesn't fetch at all (authenticated room
@@ -283,6 +330,10 @@ export function InhouseRoom({
         offline: browserOffline,
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
+        lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
+        bettingOpen:
+          (latestStateRef.current?.lobby?.pot?.closesAt ?? 0) >
+          Date.now() + serverOffsetRef.current,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
         // for everyone — fetch once rather than skipping forever (a tab that is
         // HIDDEN at load would otherwise never learn it had a stake).
@@ -372,7 +423,12 @@ export function InhouseRoom({
         inhousePollCadence({
           offline: navigator.onLine === false,
           hidden: document.visibilityState === "hidden",
-          hasStake: !!next && (next.me.inLobby || next.me.inQueue),
+          // Keep the latest ACCEPTED state through a failed or stale poll.
+          hasStake: hasStakeRef.current,
+          lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
+          bettingOpen:
+            (latestStateRef.current?.lobby?.pot?.closesAt ?? 0) >
+            Date.now() + serverOffsetRef.current,
           rateLimited,
           reached: !!next,
           failureCount: consecutiveFailures,
@@ -531,7 +587,8 @@ export function InhouseRoom({
           ),
         });
         const data = (await res.json().catch(() => null)) as
-          (InhouseState & { error?: string }) | null;
+          | (InhouseState & { error?: string })
+          | null;
         // Toast, not an inline banner — same reasoning as the draft room:
         // pick-race rejections land while the captain is scrolled into the
         // pool, where a top-of-room banner is invisible and went stale.
@@ -562,6 +619,9 @@ export function InhouseRoom({
         }
         apply(data, seq);
         setSelected(null);
+        // A void keeps lobby=null before and after the action, so the lobby
+        // transition effect cannot refresh the server-rendered ladder/results.
+        if (body.action === "void") router.refresh();
         // Re-lock the poll cadence now — joining an idle page must not keep
         // idle-polling until a stale 10s timer expires.
         bumpPollRef.current?.();
@@ -581,7 +641,7 @@ export function InhouseRoom({
         setPending(false);
       }
     },
-    [apply, connectionUnavailable, connectivity],
+    [apply, connectionUnavailable, connectivity, router],
   );
 
   // ?join=1 — the one-tap join a Discord ping links to. Waits for the first
@@ -705,8 +765,34 @@ export function InhouseRoom({
       : null;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-end">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
+          <span
+            aria-hidden
+            className={cn(
+              "h-2 w-2 shrink-0 rounded-full",
+              disconnected || connectionUnavailable
+                ? "bg-danger"
+                : "bg-success",
+            )}
+          />
+          <span>
+            {disconnected || connectionUnavailable
+              ? "Reconnecting"
+              : "Live room"}
+          </span>
+          {lobby ? (
+            <span className="font-mono text-[11px]">
+              #{inhouseLobbyCode(lobby.id)}
+            </span>
+          ) : null}
+          {me.inLobby ? (
+            <Badge tone="accent">Your lobby</Badge>
+          ) : me.inQueue ? (
+            <Badge tone="success">You’re queued</Badge>
+          ) : null}
+        </div>
         <button
           type="button"
           onClick={toggleSound}
@@ -716,12 +802,14 @@ export function InhouseRoom({
               ? "Notification sound on — click to mute"
               : "Notifications muted — click to enable a bell"
           }
-          className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
           {soundOn ? "Sound on" : "Muted"}
         </button>
       </div>
+
+      <RoomStages lobby={lobby} />
 
       {connectionUnavailable ? (
         <div
@@ -831,7 +919,11 @@ export function InhouseRoom({
                 setDismissedResults((s) => new Set(s).add(id));
                 // The banner only ever shows the newest result, so one id is
                 // all the persistence a reload needs.
-                localStorage.setItem("inhouseDismissedResult", id);
+                try {
+                  localStorage.setItem("inhouseDismissedResult", id);
+                } catch {
+                  // The in-memory dismissal still holds for this page visit.
+                }
               }}
               aria-label="Dismiss result banner"
               className={buttonClasses("secondary", "sm")}
@@ -879,6 +971,7 @@ export function InhouseRoom({
         />
       ) : lobby.status === "READY_CHECK" ? (
         <ReadyCheckView
+          key={lobby.id}
           lobby={lobby}
           me={me}
           offset={offset}
@@ -887,6 +980,7 @@ export function InhouseRoom({
         />
       ) : lobby.status === "CAPTAIN_VOTE" ? (
         <VoteView
+          key={lobby.id}
           lobby={lobby}
           me={me}
           offset={offset}
@@ -895,6 +989,7 @@ export function InhouseRoom({
         />
       ) : lobby.status === "DRAFTING" ? (
         <DraftView
+          key={lobby.id}
           state={state}
           me={me}
           lobby={lobby}
@@ -906,6 +1001,7 @@ export function InhouseRoom({
         />
       ) : lobby.status === "READY" ? (
         <ReadyView
+          key={lobby.id}
           lobby={lobby}
           me={me}
           offset={offset}
@@ -915,6 +1011,7 @@ export function InhouseRoom({
         />
       ) : (
         <InProgressView
+          key={lobby.id}
           lobby={lobby}
           me={me}
           offset={offset}
@@ -1312,7 +1409,14 @@ function QueueControls({
 
       {/* Stays visible after joining — it's the explanation for why the listed
           MMR can differ from what was typed. */}
-      {mmrHint ? <p className="mt-3 text-xs text-muted">{mmrHint}</p> : null}
+      {mmrHint ? (
+        <details className="mt-3 text-center text-xs text-muted">
+          <summary className="inline-flex min-h-8 cursor-pointer items-center rounded px-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+            How your MMR is set
+          </summary>
+          <p className="mt-1 text-left leading-relaxed">{mmrHint}</p>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -1397,165 +1501,254 @@ function QueueView({
   const queueAvg = knownMmrs.length >= 2 ? avgKnownMmr(knownMmrs) : 0;
   const { slots, overflow } = queueSlots(queue, lobbySize);
 
+  const myPosition = present.findIndex((q) => q.userId === me.userId) + 1;
+
   return (
-    <div className="space-y-4">
-      <div className="overflow-hidden rounded-[var(--radius)] border border-accent/30 bg-gradient-to-b from-surface-3/70 to-surface/40 shadow-lg shadow-black/25">
-        <div className="px-5 py-6 text-center sm:px-6">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-accent/90">
-            {nextGame ? "Next-game queue" : "Inhouse queue"}
-          </h2>
-          <div className="mt-1.5 font-display text-6xl font-bold leading-none tabular-nums">
-            {present.length}
-            <span className="text-muted"> / {lobbySize}</span>
-          </div>
-          <div className="mt-2 text-sm text-muted">
-            {nextGame
-              ? needed > 0
-                ? `${needed} more ${needed === 1 ? "player" : "players"} for a full next-game lobby`
-                : "Queue full — ready check waits for the current lobby to close"
-              : needed > 0
-                ? `${needed} more ${needed === 1 ? "player" : "players"} to fire up a game`
-                : "Lobby full — starting the ready check…"}
-            {queueAvg > 0 ? (
-              <span className="tabular-nums"> · avg {queueAvg} MMR</span>
+    <div className="space-y-3">
+      <section
+        aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
+        className="overflow-hidden rounded-2xl border border-accent/25 bg-surface/90 shadow-xl shadow-black/10"
+      >
+        <div className="grid lg:grid-cols-[0.85fr_1.35fr]">
+          <div className="relative overflow-hidden border-b border-line bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] p-5 lg:border-b-0 lg:border-r lg:p-6">
+            <div className="flex items-center gap-5 lg:flex-col lg:gap-3 lg:text-center">
+              <div className="relative grid h-32 w-32 shrink-0 place-items-center lg:h-40 lg:w-40">
+                <svg
+                  viewBox="0 0 120 120"
+                  aria-hidden
+                  className="absolute inset-0 h-full w-full -rotate-90"
+                >
+                  <circle
+                    cx="60"
+                    cy="60"
+                    r="51"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="5"
+                    className="text-line"
+                  />
+                  <circle
+                    cx="60"
+                    cy="60"
+                    r="51"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="5"
+                    pathLength="100"
+                    strokeDasharray={`${pct} 100`}
+                    strokeLinecap={pct > 0 ? "round" : "butt"}
+                    className="text-accent transition-[stroke-dasharray] duration-500 motion-reduce:transition-none"
+                  />
+                </svg>
+                <div
+                  role="progressbar"
+                  aria-label={
+                    nextGame
+                      ? "Next-game queue progress"
+                      : "Inhouse queue progress"
+                  }
+                  aria-valuemin={0}
+                  aria-valuemax={lobbySize}
+                  aria-valuenow={Math.min(present.length, lobbySize)}
+                  aria-valuetext={`${present.length} players queued; ${needed} more needed`}
+                  className="text-center"
+                >
+                  <span className="block font-display text-4xl font-bold leading-none tabular-nums lg:text-5xl">
+                    {present.length}
+                  </span>
+                  <span className="mt-1 block text-[11px] text-muted">
+                    of {lobbySize} players
+                  </span>
+                </div>
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+                  {nextGame ? "Up next" : "Pick-up Dota"}
+                </p>
+                <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">
+                  {nextGame ? "Next-game queue" : "Inhouse queue"}
+                </h2>
+                <p className="mt-1.5 text-sm text-muted">
+                  {needed > 0
+                    ? `${needed} more ${needed === 1 ? "player" : "players"} to play`
+                    : nextGame
+                      ? "Full · waiting for this game to finish"
+                      : "Full · starting the ready check…"}
+                </p>
+                {queueAvg > 0 ? (
+                  <p className="mt-2 text-xs tabular-nums text-muted">
+                    {queueAvg.toLocaleString()} average MMR
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <div className="mt-5">
+              <QueueControls
+                me={me}
+                pending={pending}
+                mmr={mmr}
+                setMmr={setMmr}
+                mmrHint={mmrHint}
+                act={act}
+                nextGame={nextGame}
+              />
+            </div>
+            {me.inQueue ? (
+              <p
+                role="status"
+                className="mt-3 text-center text-xs text-success"
+              >
+                {myPosition > 0
+                  ? `You’re #${myPosition} in line`
+                  : "Your spot is saved"}
+                {nextGame ? " · next game" : " · listen for the ready check"}
+              </p>
             ) : null}
           </div>
 
-          <div className="mx-auto mt-4 h-2 w-full max-w-md overflow-hidden rounded-full bg-surface-2">
-            <div
-              role="progressbar"
-              aria-label={
-                nextGame ? "Next-game queue progress" : "Inhouse queue progress"
-              }
-              aria-valuemin={0}
-              aria-valuemax={lobbySize}
-              aria-valuenow={Math.min(present.length, lobbySize)}
-              className="h-full rounded-full bg-brand transition-all duration-500"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-
-          <div className="mt-5">
-            <QueueControls
-              me={me}
-              pending={pending}
-              mmr={mmr}
-              setMmr={setMmr}
-              mmrHint={mmrHint}
-              act={act}
-              nextGame={nextGame}
-            />
-          </div>
-
-          <p className="mt-3 text-xs text-muted">
-            {nextGame
-              ? "Keep this page open to hold your next-game spot. Your ready check starts only after the current lobby closes."
-              : "Keep this page open to hold your spot — players who close it are marked away and dropped from the queue after a few minutes."}
-          </p>
-        </div>
-
-        <div className="border-t border-line bg-surface/40 px-3 py-3 sm:px-4">
-          {/* All lobby slots — filled players + open placeholders, so the
-              lobby visibly fills up as people queue. Present players claim the
-              slots first (see queueSlots): the headline count, `needed` and
-              lobby formation all ignore away entries, so letting one hold a
-              visible slot made this grid contradict the number above it.
-
-              The trailing open rows ARE the call to action (the same reasoning
-              as the pinned Discord board), so they stay — but at 56px each an
-              empty queue rendered 560px of identical dashes, which is the state
-              ~95% of visits land on. Same ten rows, half the height. */}
-          <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {slots.map((q, i) => {
-              if (!q) {
-                return (
-                  <li
-                    key={`open-${i}`}
-                    className="flex items-center gap-2.5 rounded-lg border border-dashed border-line/50 px-2.5 py-1.5"
-                  >
-                    <span className="w-5 shrink-0 text-center text-xs tabular-nums text-muted">
-                      {i + 1}
-                    </span>
-                    <span className="text-sm text-muted">Open slot</span>
-                  </li>
-                );
-              }
-              const isMe = q.userId === me.userId;
-              return (
-                <li
-                  key={q.userId}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5",
-                    isMe
-                      ? "border-accent/50 bg-accent/10"
-                      : "border-line bg-surface-2/40",
-                    q.away && "opacity-60",
-                  )}
-                >
-                  <span className="w-5 shrink-0 text-center text-xs text-muted tabular-nums">
-                    {i + 1}
-                  </span>
-                  <Avatar name={q.name} src={q.avatar} size={26} />
-                  <PlayerLink
-                    userId={q.userId}
-                    className="min-w-0 truncate text-sm font-medium"
-                  >
-                    {q.name}
-                  </PlayerLink>
-                  {q.away ? (
-                    <span
-                      className="shrink-0 rounded-full border border-line px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted"
-                      aria-label={`${q.name} looks away — they won't count toward forming a lobby until they return`}
-                      title="No heartbeat from this player recently — they won't count toward forming a lobby until they return"
+          <div className="min-w-0 p-4 sm:p-5">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">Who’s playing</h3>
+              <span className="text-xs text-muted">
+                {nextGame ? (
+                  "Ready check after this game"
+                ) : (
+                  <>First {lobbySize} in → ready check</>
+                )}
+              </span>
+            </div>
+            <ul className="grid grid-cols-2 gap-2">
+              {slots.map((q, i) => {
+                if (!q) {
+                  return (
+                    <li
+                      key={`open-${i}`}
+                      className="flex min-h-16 items-center gap-2 rounded-xl border border-dashed border-line/70 px-3 py-2"
                     >
-                      away
-                    </span>
-                  ) : null}
-                  <span className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted">
-                    <RankBadge rankTier={q.rankTier} />
-                    {q.mmr > 0 ? (
-                      <span className="tabular-nums">{q.mmr}</span>
-                    ) : null}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-
-          {/* Players beyond the ten slots (queued while a lobby was live, or
-              an overflow crowd) — never silently hidden. */}
-          {overflow.length > 0 ? (
-            <div className="mt-3 border-t border-line/60 pt-3">
-              <div className="mb-1.5 text-xs text-muted">
-                In line for the next game · {overflow.length}
-              </div>
-              <ul className="flex flex-wrap gap-2">
-                {overflow.map((q) => (
+                      <span
+                        aria-hidden
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-dashed border-line text-sm text-muted"
+                      >
+                        +
+                      </span>
+                      <span className="min-w-0 text-xs text-muted">
+                        Open slot
+                        <span className="ml-1 tabular-nums">{i + 1}</span>
+                      </span>
+                    </li>
+                  );
+                }
+                const isMe = q.userId === me.userId;
+                return (
                   <li
                     key={q.userId}
                     className={cn(
-                      "flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 py-1 pl-1 pr-2.5 text-xs",
+                      "flex min-h-16 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors",
+                      isMe
+                        ? "border-accent/50 bg-accent/10"
+                        : "border-line bg-surface-2/50",
                       q.away && "opacity-60",
                     )}
                   >
-                    <Avatar name={q.name} src={q.avatar} size={20} />
-                    <span className="max-w-[8rem] truncate">{q.name}</span>
-                    {q.away ? <span className="text-muted">away</span> : null}
+                    <Avatar name={q.name} src={q.avatar} size={30} />
+                    <div className="min-w-0 flex-1">
+                      <PlayerLink
+                        userId={q.userId}
+                        className="block truncate text-xs font-semibold sm:text-sm"
+                      >
+                        {q.name}
+                      </PlayerLink>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] text-muted">
+                        <span className="tabular-nums">#{i + 1}</span>
+                        {isMe ? <span className="text-accent">You</span> : null}
+                        {q.mmr > 0 ? (
+                          <span className="tabular-nums">
+                            {q.mmr.toLocaleString()} MMR
+                          </span>
+                        ) : null}
+                        {q.away ? (
+                          <span title="This player will rejoin lobby formation when they return">
+                            away
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+                    <span className="hidden xl:block">
+                      <RankBadge rankTier={q.rankTier} />
+                    </span>
                   </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
+                );
+              })}
+            </ul>
+            {overflow.length > 0 ? (
+              <div className="mt-3 border-t border-line/60 pt-3">
+                <div className="mb-2 text-xs text-muted">
+                  Also queued · {overflow.length}
+                </div>
+                <ul className="flex flex-wrap gap-2">
+                  {overflow.map((q) => (
+                    <li
+                      key={q.userId}
+                      className={cn(
+                        "flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 py-1 pl-1 pr-2.5 text-xs",
+                        q.away && "opacity-60",
+                      )}
+                    >
+                      <Avatar name={q.name} src={q.avatar} size={20} />
+                      <PlayerLink
+                        userId={q.userId}
+                        className="max-w-32 truncate"
+                      >
+                        {q.name}
+                      </PlayerLink>
+                      {q.away ? <span className="text-muted">away</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
         </div>
-      </div>
-
-      <p className="text-center text-xs text-muted">
-        How it works: {lobbySize} players queue → everyone accepts the match →
-        vote how captains are chosen (elect them, highest MMR, or best record) →
-        captains snake-draft <span className="text-success">Radiant</span> &{" "}
-        <span className="text-danger">Dire</span> (1, then 2 at a time) → anyone
-        hosts a private lobby in Dota 2 and the result records itself.
+      </section>
+      <p className="px-1 text-center text-xs text-muted">
+        Tab switching keeps your spot · queue clears after{" "}
+        {INHOUSE.QUEUE_IDLE_HOURS}h without lobby activity
       </p>
+      <details className="group rounded-xl border border-line bg-surface/60">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
+          <span>
+            New to inhouse?{" "}
+            <span className="font-medium text-fg">The game plan</span>
+          </span>
+          <span
+            aria-hidden
+            className="transition-transform group-open:rotate-180"
+          >
+            ⌄
+          </span>
+        </summary>
+        <ol className="grid gap-4 border-t border-line p-4 text-xs text-muted sm:grid-cols-2 lg:grid-cols-4">
+          <li>
+            <strong className="mb-1 block text-fg">01 · Queue & accept</strong>
+            {lobbySize} players fill the room. Accept within{" "}
+            {INHOUSE.ACCEPT_SECONDS}s or lose your spot.
+          </li>
+          <li>
+            <strong className="mb-1 block text-fg">02 · Choose captains</strong>
+            Elect players, use highest MMR, or pick by inhouse record.
+          </li>
+          <li>
+            <strong className="mb-1 block text-fg">03 · Draft your side</strong>
+            Captains pick Radiant and Dire in a snake draft: one pick, then
+            pairs.
+          </li>
+          <li>
+            <strong className="mb-1 block text-fg">04 · Play & climb</strong>
+            Host the Dota lobby, join your team in Discord, and let results
+            update your Elo.
+          </li>
+        </ol>
+      </details>
     </div>
   );
 }
@@ -1619,35 +1812,51 @@ function ReadyCheckView({
 
       <div
         ref={bannerRef}
-        className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-4"
+        className="rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-surface to-surface px-5 py-5 sm:p-6"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold">
-              {me.canAccept
-                ? "🎮 Match found — accept to play!"
-                : "🎮 A match is filling up"}
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+              Ready check
+            </p>
+            <h2 className="font-display text-2xl font-semibold">
+              {me.canAccept ? "Match found. You in?" : "A match is filling up"}
             </h2>
-            <div className="text-xs text-muted">
+            <p className="mt-2 text-sm text-muted">
               {check.acceptedCount}/{check.total} accepted
               {waitingOn > 0
-                ? ` · waiting on ${waitingOn} ${waitingOn === 1 ? "player" : "players"}`
-                : ""}
+                ? ` · waiting on ${waitingOn}`
+                : " · everyone’s ready"}
+            </p>
+            <p className="mt-1 text-xs text-muted">
               {me.canAccept
-                ? " · accept before the timer or you'll lose your spot"
+                ? me.hasAccepted
+                  ? "Your spot is confirmed."
+                  : "Accept before the timer ends to keep your spot."
                 : me.inQueue
-                  ? " · you're queued for the next game — this lobby closes first"
-                  : me.isLoggedIn
-                    ? " · you're spectating — join the next-game queue above"
-                    : " · you're spectating — sign in above to queue for the next game"}
-            </div>
+                  ? "You’re in line for the next game."
+                  : "Spectating · join the next-game queue above."}
+            </p>
           </div>
           <SecondsClock
+            prominent
             endsAtMs={lobby.acceptEndsAt}
             offsetMs={offset}
             urgentAt={10}
             label={(s) => `${s} seconds left to accept`}
           />
+        </div>
+
+        <div aria-hidden className="mt-4 flex gap-1.5">
+          {Array.from({ length: check.total }, (_, i) => (
+            <span
+              key={i}
+              className={cn(
+                "h-2 flex-1 rounded-full transition-colors",
+                i < check.acceptedCount ? "bg-success" : "bg-line",
+              )}
+            />
+          ))}
         </div>
 
         {me.canAccept ? (
@@ -1660,7 +1869,10 @@ function ReadyCheckView({
               <button
                 disabled={pending}
                 onClick={() => act({ action: "accept" })}
-                className={cn(buttonClasses("accent", "lg"), "px-10 font-bold")}
+                className={cn(
+                  buttonClasses("accent", "lg"),
+                  "min-h-14 w-full font-bold sm:w-auto sm:px-12",
+                )}
               >
                 ACCEPT MATCH
               </button>
@@ -1687,19 +1899,21 @@ function ReadyCheckView({
       </div>
 
       {/* Who's in — pending players sort first (they're the holdup). */}
-      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <ul className="grid grid-cols-2 gap-2">
         {check.players.map((p) => (
           <li
             key={p.userId}
             className={cn(
-              "flex items-center gap-3 rounded-lg border px-3 py-2",
+              "flex min-w-0 items-center gap-2 rounded-xl border px-2.5 py-3",
               p.accepted
                 ? "border-success/40 bg-success/5"
                 : "border-line bg-surface-2/40",
             )}
           >
             <Avatar name={p.name} src={p.avatar} size={28} />
-            <span className="min-w-0 flex-1 truncate text-sm">{p.name}</span>
+            <span className="min-w-0 flex-1 truncate text-xs font-medium sm:text-sm">
+              {p.name}
+            </span>
             {p.accepted ? (
               <span
                 role="img"
@@ -1738,6 +1952,7 @@ function VoteView({
   act: (body: Record<string, unknown>) => void;
 }) {
   const vote = lobby.vote;
+  const candidatesRef = useRef<HTMLDivElement>(null);
   // The 25s vote clock must stay visible while a player scrolls the nominate
   // list — same compact-bar treatment as the draft's pick clock.
   const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
@@ -1789,11 +2004,14 @@ function VoteView({
 
       <div
         ref={bannerRef}
-        className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/10 to-surface px-5 py-5"
       >
         <div>
-          <h2 className="text-sm font-semibold">
-            🗳️ How should captains be picked?
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+            Captain vote
+          </p>
+          <h2 className="font-display text-2xl font-semibold">
+            Choose your captains
           </h2>
           <div className="text-xs text-muted">
             {vote.votedCount}/{vote.voterCount} voted · lobby decides by
@@ -1801,6 +2019,7 @@ function VoteView({
           </div>
         </div>
         <SecondsClock
+          prominent
           endsAtMs={lobby.voteEndsAt}
           offsetMs={offset}
           urgentAt={5}
@@ -1815,12 +2034,17 @@ function VoteView({
           tally={vote.methodTallies.VOTE}
           total={vote.voterCount}
           selected={myMethod === "VOTE"}
-          disabled={!me.canVote}
-          onClick={() =>
-            // Electing means naming a player — point at the list instead of
-            // silently ignoring the tap.
-            pushToast("info", "Tap a player below to nominate them as captain")
-          }
+          disabled={!me.canVote || pending}
+          onClick={() => {
+            candidatesRef.current?.focus({ preventScroll: true });
+            candidatesRef.current?.scrollIntoView({
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                .matches
+                ? "instant"
+                : "smooth",
+              block: "center",
+            });
+          }}
           preview={hasNominations ? byVotes.slice(0, 2) : []}
           previewEmpty="Tap players below to nominate"
         />
@@ -1847,7 +2071,12 @@ function VoteView({
         />
       </div>
 
-      <div className="rounded-[var(--radius)] border border-line bg-surface/80">
+      <div
+        ref={candidatesRef}
+        tabIndex={-1}
+        aria-label="Captain nominations"
+        className="scroll-mt-36 rounded-2xl border border-line bg-surface/80 outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+      >
         <div className="flex items-center justify-between border-b border-line px-4 py-3 text-sm">
           <span className="font-semibold">Nominate a captain</span>
           <span className="text-xs text-muted">
@@ -1934,9 +2163,10 @@ function MethodCard({
     <button
       type="button"
       disabled={disabled}
+      aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        "flex flex-col gap-2 rounded-[var(--radius)] border bg-surface/80 p-4 text-left transition-colors",
+        "flex min-w-0 flex-col gap-2 rounded-2xl border bg-surface/80 p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
         selected ? "border-accent bg-accent/10" : "border-line",
         !disabled && onClick ? "hover:border-accent/50" : "",
         disabled && !selected ? "opacity-90" : "",
@@ -1955,7 +2185,9 @@ function MethodCard({
             style={{ width: `${pct}%` }}
           />
         </div>
-        <span className="text-xs tabular-nums text-muted">{tally}</span>
+        <span className="text-xs tabular-nums text-muted">
+          {tally}/{total}
+        </span>
       </div>
 
       <div className="min-h-[1.75rem] pt-1">
@@ -2072,7 +2304,7 @@ function DraftView({
       <div
         ref={bannerRef}
         className={cn(
-          "flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border bg-surface/80 px-5 py-3",
+          "flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-surface/90 px-5 py-4",
           onClockSide?.ring ?? "border-line",
         )}
       >
@@ -2091,17 +2323,13 @@ function DraftView({
           </span>
         </h2>
         <div className="flex items-center gap-3">
-          {balanceLabel ? (
-            <span className="hidden text-xs text-muted sm:inline">
-              ⚖️ {balanceLabel}
-            </span>
-          ) : null}
           {me.isOnClock ? (
             <Badge tone="accent">Your pick</Badge>
           ) : (
             <span className="text-xs text-muted">Drafting…</span>
           )}
           <SecondsClock
+            prominent
             endsAtMs={lobby.pickEndsAt}
             offsetMs={offset}
             urgentAt={10}
@@ -2110,10 +2338,31 @@ function DraftView({
         </div>
       </div>
 
-      <p className="-mt-3 text-center text-xs text-muted">
-        Snake draft — the first captain picks once, then picks come in pairs, so
-        neither side gets the better player at every tier.
-      </p>
+      <div className="rounded-xl border border-line bg-surface/60 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+          <span>Snake draft · 1 pick, then pairs</span>
+          <span className="tabular-nums">
+            {picksMade}/{totalPicks} drafted
+          </span>
+        </div>
+        <div
+          aria-label={`${picksMade} of ${totalPicks} players drafted`}
+          className="mt-2 flex gap-1.5"
+        >
+          {Array.from({ length: totalPicks }, (_, i) => (
+            <span
+              key={i}
+              className={cn(
+                "h-1.5 flex-1 rounded-full",
+                i < picksMade ? "bg-accent" : "bg-line",
+              )}
+            />
+          ))}
+        </div>
+        {balanceLabel ? (
+          <p className="mt-2 text-center text-xs text-muted">{balanceLabel}</p>
+        ) : null}
+      </div>
 
       {me.isAdmin && !me.isOnClock ? (
         <p
@@ -2326,11 +2575,15 @@ function ReadyView({
   return (
     <div className="space-y-5">
       <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-6 py-5 text-center">
-        <div className="text-2xl">🎮</div>
-        <h2 className="mt-1 text-lg font-semibold">Teams are set!</h2>
-        <p className="mx-auto mt-1 max-w-md text-sm text-muted">
-          Create the Dota lobby with the name, password, and league ticket
-          below. Once all ten players are in, start the game here.
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+          Draft complete
+        </p>
+        <h2 className="mt-1 font-display text-3xl font-semibold">
+          Teams are set!
+        </h2>
+        <p className="mx-auto mt-2 max-w-md text-sm text-muted">
+          Join the Dota lobby and your team’s voice channel. Start here once
+          everyone is in.
         </p>
         {me.canStart ? (
           <button
@@ -2651,14 +2904,14 @@ function PotPanel({
         ref={bannerRef}
         aria-label="Betting pot"
         className={cn(
-          "rounded-[var(--radius)] border bg-surface/80 p-4 sm:p-5",
+          "rounded-2xl border bg-surface/90 p-4 sm:p-5",
           canBet ? "border-accent/40" : "border-line",
         )}
       >
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold">💰 The pot</span>
+              <h3 className="text-base font-semibold">The pot</h3>
               {tier ? <Badge tone="accent">{tier}</Badge> : null}
             </div>
             <div className="mt-0.5 text-xs text-muted">
@@ -2722,9 +2975,12 @@ function PotPanel({
                       You
                     </Badge>
                   ) : null}
-                  <span className="ml-auto shrink-0 text-sm font-bold tabular-nums">
+                </div>
+                <div className="mt-2">
+                  <span className="font-display text-3xl font-bold tabular-nums">
                     {pool}
                   </span>
+                  <span className="ml-1 text-xs text-muted">Cred</span>
                 </div>
 
                 {/* Purely visual, so it carries its own name: solid = covered
@@ -2751,7 +3007,12 @@ function PotPanel({
                   </div>
                 </div>
 
-                <ul className="mt-2 space-y-1">
+                <div className="mt-1.5 flex flex-wrap justify-between gap-1 text-[10px] tabular-nums text-muted">
+                  <span>{live} covered</span>
+                  <span>{pool - live} unmatched</span>
+                </div>
+
+                <ul className="mt-3 space-y-1">
                   {slips.map((s) => (
                     <li
                       key={s.userId}
@@ -2943,11 +3204,13 @@ function SecondsClock({
   offsetMs,
   urgentAt,
   label,
+  prominent = false,
 }: {
   endsAtMs: number | null;
   offsetMs: number;
   urgentAt: number;
   label: (seconds: number) => string;
+  prominent?: boolean;
 }) {
   const seconds = useSecondsLeft(endsAtMs, offsetMs);
   return (
@@ -2955,7 +3218,10 @@ function SecondsClock({
       role="timer"
       aria-label={label(seconds)}
       className={cn(
-        "font-mono text-xl font-bold tabular-nums",
+        "shrink-0 font-mono font-bold tabular-nums",
+        prominent
+          ? "rounded-xl border border-current/20 bg-bg/40 px-4 py-3 text-3xl sm:text-4xl"
+          : "text-xl",
         seconds <= urgentAt ? "text-danger" : "text-accent",
       )}
     >
@@ -3022,7 +3288,7 @@ function InProgressView({
   return (
     <div className="space-y-5">
       <div className="rounded-[var(--radius)] border border-info/40 bg-info/10 px-6 py-5 text-center">
-        <h2 className="flex items-center justify-center gap-2 text-lg font-semibold">
+        <h2 className="flex flex-wrap items-center justify-center gap-3 font-display text-2xl font-semibold sm:text-3xl">
           <span className="relative flex h-2.5 w-2.5">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-info/70 motion-reduce:animate-none" />
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-info" />
@@ -3047,40 +3313,54 @@ function InProgressView({
               >
                 {pending ? "Fetching from OpenDota…" : "Auto-detect result"}
               </button>
-              <p className="mx-auto mt-1.5 max-w-sm text-xs text-muted">
-                Finds your game on OpenDota and pulls the full box score.{" "}
+              <p className="mx-auto mt-2 max-w-sm text-xs text-muted">
                 {scanLive
-                  ? `Background auto-scan is live too — it re-checks every few minutes (needs the ${INHOUSE.LOBBY_TICKET} ticket and players' “Expose Public Match Data” on).`
-                  : `Background auto-scan kicks in ${detectMinMinutes} minutes into the game.`}
+                  ? "Auto-scan is running · results appear after the game ends."
+                  : `Auto-scan starts ${detectMinMinutes} minutes in.`}
               </p>
             </div>
-            <div className="flex flex-wrap items-center justify-center gap-2 border-t border-info/20 pt-3">
-              <label htmlFor="inhouse-match-id" className="text-xs text-muted">
-                or paste the match ID:
-              </label>
-              <input
-                id="inhouse-match-id"
-                type="text"
-                inputMode="numeric"
-                enterKeyHint="done"
-                autoComplete="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                value={matchId}
-                onChange={(e) => setMatchId(e.target.value)}
-                placeholder="e.g. 7891234567"
-                className="h-9 w-44 rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-              />
-              <button
-                disabled={pending || !matchId.trim()}
-                onClick={() =>
-                  act({ action: "record", matchId: matchId.trim() })
-                }
-                className={buttonClasses("secondary", "sm")}
+            <details className="mx-auto max-w-lg border-t border-info/20 pt-2 text-left">
+              <summary className="cursor-pointer rounded py-2 text-center text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+                Have a match ID? Record it manually
+              </summary>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!pending && matchId.trim())
+                    void act({ action: "record", matchId: matchId.trim() });
+                }}
+                className="mt-2 flex flex-wrap items-end justify-center gap-2"
               >
-                Record
-              </button>
-            </div>
+                <div className="min-w-0 flex-1">
+                  <label
+                    htmlFor="inhouse-match-id"
+                    className="mb-1 block text-xs text-muted"
+                  >
+                    Dota match ID
+                  </label>
+                  <input
+                    id="inhouse-match-id"
+                    type="text"
+                    inputMode="numeric"
+                    enterKeyHint="done"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={matchId}
+                    onChange={(e) => setMatchId(e.target.value)}
+                    placeholder="e.g. 7891234567"
+                    className="h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={pending || !matchId.trim()}
+                  className={buttonClasses("secondary", "md", "min-h-11")}
+                >
+                  Record
+                </button>
+              </form>
+            </details>
           </div>
         ) : (
           <p className="mt-3 text-sm text-muted">
@@ -3132,7 +3412,7 @@ function CopyChip({ value, label }: { value: string; label: string }) {
         }
       }}
       title={`Copy ${label}`}
-      className="inline-flex items-center gap-1.5 rounded-md border border-line bg-surface-2/60 px-2 py-1 font-mono text-sm font-semibold text-fg transition-colors hover:border-accent/60"
+      className="inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-lg border border-line bg-surface-2/60 px-3 py-2 font-mono text-sm font-semibold text-fg transition-colors hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
     >
       {value}
       <span aria-hidden className="text-xs text-muted">
@@ -3160,70 +3440,82 @@ function GameSetupCard({
     team === 1 ? INHOUSE.VOICE_TEAM_1 : INHOUSE.VOICE_TEAM_2;
 
   return (
-    <div className="rounded-[var(--radius)] border border-line bg-surface/80 p-5">
-      <div className="mb-3 text-sm font-semibold">🕹️ How to play this game</div>
-
-      {/* Step 1 — host the Dota lobby */}
-      <div className="flex gap-3">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
-          1
-        </span>
-        <div className="min-w-0 text-sm">
-          <div className="font-medium">Create the custom lobby</div>
-          <p className="mt-1 text-muted">
-            In Dota 2: <strong>Play → Custom Lobbies → Create Lobby</strong>.
-            One player hosts it with these exact details:
+    <section
+      aria-label="Game setup"
+      className="overflow-hidden rounded-2xl border border-line bg-surface/90"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4">
+        <h3 className="text-sm font-semibold">How to play this game</h3>
+        <a
+          href={DISCORD_INVITE_URL}
+          target="_blank"
+          rel="noreferrer"
+          className={textLink("inline-flex min-h-8 items-center text-xs")}
+        >
+          League Discord ↗
+        </a>
+      </div>
+      <div className="grid gap-0 lg:grid-cols-3">
+        <div className="min-w-0 border-b border-line p-5 lg:border-b-0 lg:border-r">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent">
+            01 · Dota lobby
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <span className="flex items-center gap-2">
-              <span className="text-xs text-muted">Lobby name</span>
-              <CopyChip value={INHOUSE.LOBBY_NAME} label="lobby name" />
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="text-xs text-muted">Password</span>
-              <CopyChip value={INHOUSE.LOBBY_PASSWORD} label="password" />
-            </span>
-          </div>
-          <p className="mt-2 text-xs text-muted">
-            Everyone else: open <strong>Custom Lobbies</strong>, find{" "}
-            <span className="font-mono text-fg">{INHOUSE.LOBBY_NAME}</span> in
-            the list (or ask the host to invite you) and join with the password.
+          <h4 className="text-sm font-semibold">Create or join</h4>
+          <p className="mt-1 text-xs text-muted">
+            Dota 2 → Play → Custom Lobbies
+          </p>
+          <dl className="mt-4 space-y-3">
+            <div>
+              <dt className="mb-1 text-[11px] text-muted">Lobby name</dt>
+              <dd>
+                <CopyChip value={INHOUSE.LOBBY_NAME} label="lobby name" />
+              </dd>
+            </div>
+            <div>
+              <dt className="mb-1 text-[11px] text-muted">Password</dt>
+              <dd>
+                <CopyChip value={INHOUSE.LOBBY_PASSWORD} label="password" />
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-3 text-xs text-muted">
+            Any player can host. Everyone else joins the lobby or asks the host
+            for an invite.
           </p>
         </div>
-      </div>
-
-      {/* Step 2 — select the ticket that makes the game visible to OpenDota. */}
-      <div className="mt-4 flex gap-3">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
-          2
-        </span>
-        <div className="min-w-0 text-sm">
-          <div className="font-medium">Set the required league ticket</div>
-          <p className="mt-1 text-muted">
-            In <strong>Lobby Settings</strong>, set the league/ticket to{" "}
-            <CopyChip value={INHOUSE.LOBBY_TICKET} label="league ticket" />.
+        <div className="min-w-0 border-b border-line bg-accent/5 p-5 lg:border-b-0 lg:border-r">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent">
+            02 · Match tracking
           </p>
-          <p className="mt-2 text-xs font-medium text-danger">
+          <h4 className="text-sm font-semibold">Set the league ticket</h4>
+          <p className="mt-1 text-xs text-muted">
+            Host → Lobby Settings → League
+          </p>
+          <div className="mt-4">
+            <CopyChip value={INHOUSE.LOBBY_TICKET} label="league ticket" />
+          </div>
+          <p className="mt-3 text-xs text-muted">
             Required: without this ticket, the game will not appear on OpenDota
             and cannot be recorded on the site.
           </p>
+          <a
+            href="#opendota-setup"
+            className={textLink(
+              "mt-3 inline-flex min-h-8 items-center text-xs",
+            )}
+          >
+            Check your match-data setup ↓
+          </a>
         </div>
-      </div>
-
-      {/* Step 3 — join your team's voice channel */}
-      <div className="mt-4 flex gap-3">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
-          3
-        </span>
-        <div className="min-w-0 text-sm">
-          <div className="font-medium">
-            Join your team&apos;s voice channel in Discord
-          </div>
-          <p className="mt-1 text-muted">
-            Talk to your team during the game — hop into the voice channel for
-            your side.
+        <div className="min-w-0 p-5">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent">
+            03 · Team voice
           </p>
-          <ul className="mt-2 space-y-1.5">
+          <h4 className="text-sm font-semibold">Meet in Discord</h4>
+          <p className="mt-1 text-xs text-muted">
+            Join your side’s voice channel.
+          </p>
+          <ul className="mt-4 space-y-2">
             {lobby.teams.map((t) => {
               const meta = sideMeta(t.isRadiant);
               const mine = me.myTeam === t.team;
@@ -3231,32 +3523,33 @@ function GameSetupCard({
                 <li
                   key={t.team}
                   className={cn(
-                    "flex flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5",
-                    mine ? meta.ring : "border-line",
-                    mine ? meta.chip : "bg-surface-2/40",
+                    "rounded-xl border px-3 py-2.5",
+                    mine ? meta.chip : "border-line bg-surface-2/40",
                   )}
                 >
-                  <span
-                    aria-hidden
-                    className={cn("h-2 w-2 rounded-full", meta.dot)}
-                  />
-                  <span className="font-medium">{meta.name}</span>
-                  <span className="text-xs text-muted">→</span>
-                  <span className="font-mono text-sm">
-                    🔊 {voiceByTeam(t.team)}
+                  <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                    <span
+                      className={cn(
+                        "font-semibold",
+                        t.isRadiant ? "text-success" : "text-danger",
+                      )}
+                    >
+                      {meta.name}
+                    </span>
+                    {mine ? (
+                      <span className="font-medium">Your team</span>
+                    ) : null}
+                  </div>
+                  <span className="block break-words text-sm text-fg">
+                    {voiceByTeam(t.team)}
                   </span>
-                  {mine ? (
-                    <Badge tone={meta.badge} className="ml-auto">
-                      Your team — join here
-                    </Badge>
-                  ) : null}
                 </li>
               );
             })}
           </ul>
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 

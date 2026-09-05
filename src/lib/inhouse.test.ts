@@ -11,7 +11,6 @@ import {
   nextPickTeam,
   orderCaptains,
   playersNeeded,
-  queueDropCutoff,
   queuePresence,
   queuePresentCutoff,
   queueSlots,
@@ -640,7 +639,14 @@ describe("queue presence (heartbeat math)", () => {
     );
   });
 
-  it("cutoffs mirror the presence/drop windows for SQL filters", () => {
+  it("keeps a background tab available for the full four-hour window", () => {
+    for (const age of [180, 10 * 60, 60 * 60, 4 * 60 * 60 - 1]) {
+      expect(queuePresence(secsAgo(age), now)).toBe("present");
+    }
+    expect(INHOUSE.QUEUE_AWAY_SECONDS).toBe(4 * 60 * 60);
+  });
+
+  it("the SQL availability cutoff agrees with the display", () => {
     // Seen exactly at the present cutoff → counts as present.
     expect(
       queuePresence(queuePresentCutoff(now).getTime(), now),
@@ -648,41 +654,17 @@ describe("queue presence (heartbeat math)", () => {
     expect(queuePresentCutoff(now).getTime()).toBe(
       secsAgo(INHOUSE.QUEUE_AWAY_SECONDS),
     );
-    expect(queueDropCutoff(now).getTime()).toBe(
-      secsAgo(INHOUSE.QUEUE_DROP_SECONDS),
-    );
-    // The drop window must be wider than the away window: entries go "away"
-    // (stop counting) before they're removed outright.
-    expect(INHOUSE.QUEUE_DROP_SECONDS).toBeGreaterThan(
-      INHOUSE.QUEUE_AWAY_SECONDS,
-    );
   });
 
-  it("requeued players are away (no instant ghost lobby) but not dropped", () => {
+  it("cancelled-lobby players need a fresh heartbeat before re-forming", () => {
     const seen = requeueLastSeenAt(now).getTime();
     // Doesn't count toward re-forming a lobby…
     expect(queuePresence(seen, now)).toBe("away");
-    // …isn't pruned before their next poll can re-confirm them…
-    expect(seen).toBeGreaterThan(queueDropCutoff(now).getTime());
-    // …with the full reconfirm window of slack…
-    expect(seen - queueDropCutoff(now).getTime()).toBe(
-      INHOUSE.QUEUE_RECONFIRM_SECONDS * 1000,
-    );
-    // …and is stale enough that the throttled heartbeat fires immediately.
+    // The next poll can re-confirm immediately, even if the browser resumes
+    // long after cancellation. Membership has its own shared idle deadline.
     expect(now - seen).toBeGreaterThan(INHOUSE.QUEUE_HEARTBEAT_SECONDS * 1000);
   });
 
-  it("leaves enough slack for a HIDDEN tab's keepalive to re-confirm", () => {
-    // The binding case for this window is a live game: all ten tabs are
-    // hidden (everyone is in the Dota client), so they re-confirm on
-    // POLL_KEEPALIVE_MS — which Chrome clamps toward once a minute for
-    // background timers. At 45s of slack the admin's own 1.5s poll ran the
-    // prune before a single keepalive landed, so "Lobby cancelled — players
-    // re-queued" silently emptied the queue and nobody was left polling to
-    // notice. The margin must cover the clamp, not just the nominal period.
-    const slack = requeueLastSeenAt(now).getTime() - queueDropCutoff(now).getTime();
-    expect(slack).toBeGreaterThan(INHOUSE.POLL_KEEPALIVE_MS * 1.5);
-  });
 });
 
 describe("detectIntervalSeconds", () => {

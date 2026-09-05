@@ -743,6 +743,29 @@ describe("inhouse — finding + recording the game from player IDs", () => {
     ).toEqual(previousDetectedAt);
   });
 
+  it("keeps room refreshes off OpenDota while the worker can still scan the due game", async () => {
+    const admin = sessionFor(await makeUser("AdminLightweightPoll", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: { startedAt: new Date(Date.now() - 10 * 60_000), detectedAt: null },
+    });
+    mockRecent.mockClear();
+    const state = await getInhouseState(admin, {
+      runMaintenance: true,
+      syncBoard: false,
+      detectResults: false,
+    });
+    expect(state.lobby?.status).toBe(INHOUSE_STATUS.IN_PROGRESS);
+    expect(mockRecent).not.toHaveBeenCalled();
+    expect((await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    })).detectedAt).toBeNull();
+
+    await maybeAutoDetectResult();
+    expect(mockRecent).toHaveBeenCalled();
+  });
+
   it("does not rewind a newer detection cursor when an older worker aborts", async () => {
     const admin = sessionFor(await makeUser("AdminAbortDetectRace", "ADMIN"));
     const { lobby } = await runToInProgress(admin);
@@ -1149,13 +1172,38 @@ describe("inhouse — queue presence", () => {
     ).toBe(1);
   });
 
-  it("entries silent past the drop window are pruned on the next poll", async () => {
+  it.each([3 * 60 + 5, 30 * 60, 4 * 60 * 60 - 1])(
+    "keeps a suspended tab queued and available after %s seconds without a heartbeat",
+    async (seconds) => {
     const players = await enqueue(3, () => 3000);
-    await backdate(players[1].user.id, INHOUSE.QUEUE_DROP_SECONDS + 5);
+    await backdate(players[1].user.id, seconds);
+    const before = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: players[1].user.id },
+    });
 
     const state = await getInhouseState(players[0].session);
-    expect(state.queue.map((q) => q.userId)).not.toContain(players[1].user.id);
-    expect(await prisma.inhouseQueueEntry.count()).toBe(2);
+    expect(state.queue.find((q) => q.userId === players[1].user.id)?.away).toBe(false);
+    expect(state.needed).toBe(INHOUSE.LOBBY_SIZE - 3);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(3);
+    const after = await prisma.inhouseQueueEntry.findUniqueOrThrow({
+      where: { userId: players[1].user.id },
+    });
+    expect(after.joinedAt).toEqual(before.joinedAt);
+    expect(after.idleExpiresAt).toEqual(before.idleExpiresAt);
+    },
+  );
+
+  it("forms a ready check with queued players whose browser tabs slept", async () => {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+    for (const p of players) await backdate(p.user.id, 30 * 60);
+    const newcomer = await makeUser("Tenth after tab suspension");
+    expect((await joinQueue(sessionFor(newcomer), 3000)).ok).toBe(true);
+    const lobby = await prisma.inhouseLobby.findFirstOrThrow({
+      where: { status: INHOUSE_STATUS.READY_CHECK },
+      include: { players: true },
+    });
+    expect(lobby.players).toHaveLength(INHOUSE.LOBBY_SIZE);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
   });
 
   it("throttles the heartbeat to one write per interval", async () => {
@@ -1302,6 +1350,26 @@ describe("inhouse — queue presence", () => {
     expect((await getInhouseState(players[0].session)).me.inQueue).toBe(true);
   });
 
+  it("clears the idle waiting queue without removing players from an active game", async () => {
+    const admin = sessionFor(await makeUser("AdminQueueReset", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const waiting = await makeUser("Waiting for next game");
+    await joinQueue(sessionFor(waiting), 3000);
+    await prisma.inhouseQueueEntry.updateMany({
+      data: { idleExpiresAt: new Date(Date.now() - 1) },
+    });
+
+    await maybeFormLobby();
+
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    expect((await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    })).status).toBe(INHOUSE_STATUS.IN_PROGRESS);
+    expect(await prisma.inhouseLobbyPlayer.count({
+      where: { lobbyId: lobby.id },
+    })).toBe(INHOUSE.LOBBY_SIZE);
+  });
+
   it("does not let a post-expiry leave rescue the old queue", async () => {
     const players = await enqueue(2, () => 3000);
     await prisma.inhouseQueueEntry.updateMany({
@@ -1429,18 +1497,18 @@ describe("inhouse — queue presence", () => {
     ).toBe(0);
   });
 
-  it("a cancelled lobby's ghosts drop out instead of re-forming it", async () => {
+  it("retains a cancelled lobby's unseen players without re-forming around them", async () => {
     const admin = sessionFor(await makeUser("AdminPresence", "ADMIN"));
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     expect((await cancelLobby(admin)).ok).toBe(true);
 
-    // Nine re-confirm by polling; the tenth is a ghost — their backdated
-    // requeue heartbeat never refreshes and ages past the drop window.
+    // Nine re-confirm; the tenth stays reserved without triggering another
+    // ready check or being removed by a bystander's poll.
     for (const p of players.slice(1)) await getInhouseState(p.session);
-    await backdate(players[0].user.id, INHOUSE.QUEUE_DROP_SECONDS + 5);
+    await backdate(players[0].user.id, INHOUSE.QUEUE_AWAY_SECONDS + 5);
 
     await getInhouseState(admin);
-    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE - 1);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
     expect(
       await prisma.inhouseLobby.count({
         where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
@@ -1569,13 +1637,11 @@ describe("inhouse — ready check", () => {
       // …and their MMR snapshot survived the round-trip.
       expect(q.mmr).toBe(3000 + i * 100);
     }
-    // …while the still-pending player re-queued BACKDATED but INSIDE the drop
-    // window: away (won't re-form) yet not pruned, so their own next poll can
-    // re-confirm them (the cancelLobby pattern).
+    // The still-pending player keeps a backdated, reserved spot. Their next
+    // poll can re-confirm without racing a short background-tab cutoff.
     const pending = byId.get(players[9].user.id)!;
     const age = now - pending.lastSeenAt.getTime();
     expect(age).toBeGreaterThan(INHOUSE.QUEUE_AWAY_SECONDS * 1000);
-    expect(age).toBeLessThan(INHOUSE.QUEUE_DROP_SECONDS * 1000);
     // Their own poll re-confirms them (heartbeat refreshes → present).
     await getInhouseState(players[9].session);
     const reconfirmed = await prisma.inhouseQueueEntry.findUniqueOrThrow({

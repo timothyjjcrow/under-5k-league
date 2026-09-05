@@ -12,7 +12,6 @@ import {
   nextPickTeam,
   orderCaptains,
   playersNeeded,
-  queueDropCutoff,
   queuePresence,
   queuePresentCutoff,
   requeueLastSeenAt,
@@ -200,45 +199,11 @@ export async function maybeFormLobby(): Promise<boolean> {
     formed = await prisma.$transaction(
       async (tx) => {
         const now = Date.now();
-        // One bounded cleanup query owns both kinds of stale waiter:
-        // - presence went silent (closed tab), or
-        // - the WHOLE waiting roster has been unchanged for four hours.
-        //
-        // idleExpiresAt is shared and refreshed across every current row when
-        // membership changes, so the second predicate clears the whole static
-        // queue at once. SERIALIZABLE makes a racing join linearizable: a
-        // join-first refresh prevents this delete (or forces a safe retry),
-        // while a reset-first commit leaves the later new row untouched.
-        const stale = await tx.inhouseQueueEntry.findMany({
-          where: {
-            OR: [
-              { lastSeenAt: { lt: queueDropCutoff(now) } },
-              ...expiredQueuePredicates(now),
-            ],
-          },
-          select: {
-            joinedAt: true,
-            lastSeenAt: true,
-            idleExpiresAt: true,
-          },
-        });
-        if (stale.length > 0) {
-          const idleExpired = stale.some((entry) =>
-            entry.idleExpiresAt
-              ? entry.idleExpiresAt.getTime() < now
-              : entry.joinedAt.getTime() +
-                    INHOUSE.QUEUE_IDLE_HOURS * 3_600_000 <
-                  now,
-          );
-          const removed = await tx.inhouseQueueEntry.deleteMany({
-            where: idleExpired
-              ? undefined
-              : { lastSeenAt: { lt: queueDropCutoff(now) } },
-          });
-          // A ghost disappearing is also a composition change. If this was the
-          // four-hour reset there are no rows left and this is a cheap no-op.
-          if (removed.count > 0) await refreshQueueIdleDeadline(tx, now);
-        }
+        // Only the shared four-hour activity clock clears the waiting queue.
+        // Missing heartbeats can mean a suspended browser tab, not a leave.
+        // SERIALIZABLE preserves the existing join-versus-reset ordering;
+        // active lobby membership lives in a separate table and is untouched.
+        await expireStaticQueue(tx, now);
 
         const active = await tx.inhouseLobby.findFirst({
           where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
@@ -1186,8 +1151,8 @@ async function claimQueuePingThrottle(nowMs: number): Promise<boolean> {
 }
 
 /**
- * Holding a queue spot means keeping /inhouse open: every state poll refreshes
- * the viewer's own heartbeat. Throttled — the conditional update only writes
+ * Refresh availability without renewing the shared idle deadline or requiring
+ * a browser tab to stay foregrounded. The conditional update only writes
  * once per QUEUE_HEARTBEAT_SECONDS, so pollers don't hammer the DB.
  */
 async function touchQueueHeartbeat(viewerId: string): Promise<void> {
@@ -1883,7 +1848,15 @@ export async function maybeAutoDetectResult(
   const now = Date.now();
   const lobby = await prisma.inhouseLobby.findFirst({
     where: { status: INHOUSE_STATUS.IN_PROGRESS },
-    include: { players: { include: { user: true } } },
+    // Most maintenance passes find a fresh game or an existing cooldown. Read
+    // only its clocks first; neither case needs the ten player/user records or
+    // any of the lobby's stored result JSON.
+    select: {
+      id: true,
+      createdAt: true,
+      startedAt: true,
+      detectedAt: true,
+    },
   });
   if (!lobby || !lobby.startedAt) return finish(false);
   if (now - lobby.startedAt.getTime() < INHOUSE.DETECT_MIN_MINUTES * 60_000) {
@@ -1896,6 +1869,7 @@ export async function maybeAutoDetectResult(
   // nobody cancels decays to one scan per DETECT_INTERVAL_MAX_SECONDS.
   const interval = detectIntervalSeconds(now - lobby.startedAt.getTime());
   const cutoff = new Date(now - interval * 1000);
+  if (lobby.detectedAt && lobby.detectedAt >= cutoff) return finish(false);
   const claim = await prisma.inhouseLobby.updateMany({
     where: {
       id: lobby.id,
@@ -1906,8 +1880,33 @@ export async function maybeAutoDetectResult(
   });
   if (claim.count === 0) return finish(false);
 
+  // Only the claim winner needs a roster. Re-check the exact live claim while
+  // loading it so a cancellation or successor scan that already committed
+  // cannot spend provider requests. Keep both Dota identity columns for the
+  // rollback-safe override chain, plus the Steam fallback and display name.
+  const players = await prisma.inhouseLobbyPlayer.findMany({
+    where: {
+      lobbyId: lobby.id,
+      lobby: {
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        detectedAt: new Date(now),
+      },
+    },
+    select: {
+      userId: true,
+      team: true,
+      user: {
+        select: {
+          name: true,
+          dotaAccountIdV2: true,
+          legacyDotaAccountId: true,
+          steamId: true,
+        },
+      },
+    },
+  });
   const { result: found, deadlineReached } = await findInhouseGame(
-    lobby.players,
+    players,
     Math.floor(lobby.createdAt.getTime() / 1000),
     fetchOptions,
   );
@@ -2376,7 +2375,13 @@ export async function getInhouseState(
   {
     runMaintenance = true,
     syncBoard = true,
-  }: { runMaintenance?: boolean; syncBoard?: boolean } = {},
+    detectResults = true,
+  }: {
+    runMaintenance?: boolean;
+    syncBoard?: boolean;
+    /** Room HTTP polls use the leased worker for automatic OpenDota scans. */
+    detectResults?: boolean;
+  } = {},
 ) {
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
@@ -2399,7 +2404,7 @@ export async function getInhouseState(
     await resolveReadyCheck();
     await resolveCaptainVote();
     await resolveStalledPick();
-    await maybeAutoDetectResult();
+    if (detectResults) await maybeAutoDetectResult();
   }
 
   const [queue, lobbyRow] = await Promise.all([
@@ -2694,8 +2699,19 @@ export async function getInhouseState(
         players: { some: { userId: viewer.id } },
       },
       orderBy: [{ completedAt: "desc" }, { id: "desc" }],
-      include: {
-        players: true,
+      select: {
+        id: true,
+        winnerTeam: true,
+        radiantTeam: true,
+        radiantScore: true,
+        direScore: true,
+        eloDeltas: true,
+        betDeltas: true,
+        betSettlement: true,
+        players: {
+          where: { userId: viewer.id },
+          select: { userId: true, team: true },
+        },
         bets: {
           where: { userId: viewer.id, confirmedAt: { not: null } },
           select: { id: true },
@@ -2764,8 +2780,8 @@ export async function getInhouseState(
     cred = acct?.balance ?? INHOUSE_BETS.START_BALANCE;
   }
 
-  // "Away" entries (heartbeat gone quiet — tab closed or backgrounded hard)
-  // keep their spot for a grace window but don't count toward the ten.
+  // Long-unseen or freshly requeued players retain their position while
+  // waiting to reconfirm. Ordinary background tabs keep counting for hours.
   const presentEntries = queue.filter(
     (q) => queuePresence(q.lastSeenAt.getTime(), now) === "present",
   );

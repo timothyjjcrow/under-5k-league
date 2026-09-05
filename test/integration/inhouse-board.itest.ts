@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { INHOUSE } from "@/lib/constants";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { SETTING_KEYS, getSetting, setSetting } from "@/lib/settings";
 import {
@@ -148,6 +149,82 @@ describe("inhouse board — stable last-game chronology", () => {
     expect(stats.lastLobbyId).toBe(newer.id);
     expect(stats.lastEndedAtMs).toBe(now - 20 * 60_000);
     expect(stats.lastWinnerSide).toBe("Dire");
+  });
+});
+
+describe("inhouse board — shared stats reads", () => {
+  it("shares a cold history scan across simultaneous room and board loads", async () => {
+    const scan = vi.spyOn(prisma.inhouseLobby, "findMany");
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 12 }, () => loadBoardStats()),
+      );
+      expect(scan).toHaveBeenCalledTimes(1);
+      expect(results.every((result) => result === results[0])).toBe(true);
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
+  it("retries after a failed shared read instead of caching the rejection", async () => {
+    const scan = vi.spyOn(prisma.inhouseLobby, "findMany");
+    scan.mockRejectedValueOnce(new Error("test database read failed"));
+    try {
+      const results = await Promise.allSettled([
+        loadBoardStats(),
+        loadBoardStats(),
+      ]);
+      expect(results.map((result) => result.status)).toEqual([
+        "rejected",
+        "rejected",
+      ]);
+      await expect(loadBoardStats()).resolves.toMatchObject({ lobbiesPlayed: 0 });
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
+  it("does not let an older in-flight read overwrite a fresh scheduler check", async () => {
+    await createInhouseBoard();
+    const raw = await boardRow();
+    resetBoardStatsCache();
+    const now = Date.now();
+    const originalScan = prisma.inhouseLobby.findMany.bind(prisma.inhouseLobby);
+    let release!: () => void;
+    let started!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const scanStarted = new Promise<void>((resolve) => { started = resolve; });
+    const scan = vi.spyOn(prisma.inhouseLobby, "findMany");
+    scan.mockImplementationOnce((async (args) => {
+      const rows = await originalScan(args);
+      started();
+      await held;
+      return rows;
+    }) as typeof originalScan);
+    const oldRead = loadBoardStats(now);
+    try {
+      await scanStarted;
+      await prisma.inhouseLobby.create({
+        data: {
+          status: "COMPLETED",
+          completedAt: new Date(now + 500),
+          winnerTeam: 1,
+          radiantTeam: 1,
+        },
+      });
+      await expect(inhouseBoardNeedsSync(raw, now + 1_000)).resolves.toBe(true);
+      release();
+      await oldRead;
+      await expect(loadBoardStats(now + 2_000)).resolves.toMatchObject({
+        lobbiesPlayed: 1,
+      });
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+      await oldRead;
+      scan.mockRestore();
+    }
   });
 });
 
@@ -580,6 +657,41 @@ describe("inhouse board — the throttle", () => {
 });
 
 describe("inhouse board — failure handling", () => {
+  it("backs off transient failures and restores the normal cadence after recovery", async () => {
+    await enqueue(3);
+    await createInhouseBoard();
+    await enqueue(1, "late");
+    mockPatch.mockResolvedValue("failed");
+    await syncInhouseBoard();
+    expect(mockPatch).toHaveBeenCalledTimes(1);
+
+    // The old fixed floor would hit Discord again at 10s. One failure doubles
+    // that window without losing the pending render.
+    await setSetting(
+      SETTING_KEYS.INHOUSE_BOARD_AT,
+      new Date(Date.now() - 15_000).toISOString(),
+    );
+    await syncInhouseBoard();
+    expect(mockPatch).toHaveBeenCalledTimes(1);
+
+    await setSetting(
+      SETTING_KEYS.INHOUSE_BOARD_AT,
+      new Date(Date.now() - 21_000).toISOString(),
+    );
+    mockPatch.mockResolvedValue("ok");
+    await syncInhouseBoard();
+    expect(mockPatch).toHaveBeenCalledTimes(2);
+    expect((await getInhouseBoardStatus()).failures).toBe(0);
+
+    await enqueue(1, "afterRecovery");
+    await setSetting(
+      SETTING_KEYS.INHOUSE_BOARD_AT,
+      new Date(Date.now() - 11_000).toISOString(),
+    );
+    await syncInhouseBoard();
+    expect(mockPatch).toHaveBeenCalledTimes(3);
+  });
+
   it("turns itself off when the message is gone, and never re-posts", async () => {
     await enqueue(3);
     await createInhouseBoard();
@@ -955,7 +1067,7 @@ describe("inhouse board — wiring into the sitewide sync", () => {
       data: {
         userId: u.id,
         mmr: 3000,
-        lastSeenAt: new Date(Date.now() - 10 * 60_000),
+        lastSeenAt: new Date(Date.now() - (INHOUSE.QUEUE_AWAY_SECONDS + 1) * 1000),
       },
     });
     expect((await runResultSync()).watch).toBe(false);

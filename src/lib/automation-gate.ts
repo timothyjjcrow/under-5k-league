@@ -636,13 +636,14 @@ export function computeAutomationGateSnapshot(
       "INHOUSE",
     );
     const awayAt = seenAt + INHOUSE.QUEUE_AWAY_SECONDS * 1_000 + 1;
-    const dropAt = seenAt + INHOUSE.QUEUE_DROP_SECONDS * 1_000 + 1;
-    addCandidate(
-      candidates,
-      nowMs,
-      nowMs < awayAt ? awayAt : nowMs < dropAt ? dropAt : nowMs,
-      "INHOUSE",
-    );
+    // Presence is display/formation eligibility, not a removal deadline. A
+    // background tab retains its queue membership until the shared idle clock
+    // expires. Wake once for a FUTURE away transition so the board can update;
+    // an already-away player (including a backdated admin requeue) must not
+    // keep the scheduler immediately due on every pass.
+    if (nowMs < awayAt) {
+      addCandidate(candidates, nowMs, awayAt, "INHOUSE");
+    }
   }
 
   if (lobby) {

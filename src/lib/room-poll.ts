@@ -1,4 +1,4 @@
-import { DRAFT_ROOM, INHOUSE, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
+import { DRAFT_ROOM, INHOUSE, INHOUSE_STATUS, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
 
 /**
  * The poll cadence for both live rooms.
@@ -135,17 +135,41 @@ export function roomPollCadence(
 }
 
 /**
- * The inhouse room's binding. Its "active" IS the viewer's membership: five
- * people watching a 45-minute game were each firing 40 req/min because a lobby
- * existed, while anyone IN the queue must stay fast — a filling queue is
- * exactly when responsiveness decides whether a game happens.
+ * Membership controls background updates; the phase controls foreground speed.
+ * Only ready checks, captain votes, draft picks and betting need the fast rate.
  */
 export function inhousePollCadence(
-  o: Omit<RoomPollInput, "active"> & { activeMs: number; idleMs?: number },
+  o: Omit<RoomPollInput, "active"> & {
+    activeMs: number;
+    idleMs?: number;
+    /** Undefined preserves the cold-start rate before the first snapshot. */
+    lobbyStatus?: string | null;
+    /**
+     * The shared pot is still open, including after Start. Use the pot's clock,
+     * not whether this viewer can still bet: a placed wager still needs live
+     * coverage updates. Omitted/false preserves the ordinary game cadence.
+     * Spectators and hidden tabs retain their existing slower rates.
+     */
+    bettingOpen?: boolean;
+  },
 ): RoomPollCadence {
   const idleMs = o.idleMs ?? INHOUSE.POLL_IDLE_MS;
+  const timedPhase =
+    o.lobbyStatus === undefined ||
+    [
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CAPTAIN_VOTE,
+      INHOUSE_STATUS.DRAFTING,
+      INHOUSE_STATUS.READY,
+    ].some((status) => status === o.lobbyStatus) ||
+    (o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS && o.bettingOpen === true);
+  const activeMs = timedPhase
+    ? o.activeMs
+    : o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS
+      ? INHOUSE.POLL_GAME_MS
+      : INHOUSE.POLL_QUEUE_MS;
   return roomPollCadence(o, {
-    activeMs: o.activeMs,
+    activeMs,
     idleMs,
     keepaliveMs: INHOUSE.POLL_KEEPALIVE_MS,
     // The inhouse route has no separate back-off rate; its idle rate is

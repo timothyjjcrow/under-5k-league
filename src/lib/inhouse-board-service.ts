@@ -20,10 +20,10 @@ import {
 import { gameMvp } from "./achievements";
 import { heroById } from "./heroes";
 import {
-  rankInhouse,
-  summarizeInhouse,
-  type FinishedLobby,
-} from "./inhouse-stats";
+  loadInhouseLadderSummary,
+  resetInhouseLadderCache,
+  type InhouseLadderSummary,
+} from "./inhouse-ladder";
 import {
   claimThrottle,
   getSetting,
@@ -101,7 +101,10 @@ function parseState(raw: string | null): BoardState | null {
         messageId: v.messageId,
         digest: v.digest,
         lastOkAt: typeof v.lastOkAt === "string" ? v.lastOkAt : undefined,
-        failures: typeof v.failures === "number" ? v.failures : 0,
+        failures:
+          typeof v.failures === "number" && Number.isFinite(v.failures)
+            ? Math.max(0, Math.floor(v.failures))
+            : 0,
       };
     }
   } catch {
@@ -365,19 +368,36 @@ export function lobbyView(
 // Only the EMPTY render uses these, and that render is ~95% of polls, so the
 // read is memoised in-process on a TTL (the session-epoch.ts pattern) rather
 // than run per poll. The ladder in particular must scan ALL completed lobbies
-// because Elo accumulates over full history. 60s of staleness is invisible
-// here: every figure is either all-time or a finished result, and the board
-// repaints on the live→empty transition anyway.
+// because Elo accumulates over full history. The shared summary changes
+// immediately with the result cursor; the TTL bounds edits made outside the
+// normal result/void writers, such as a player updating their display name.
 const STATS_TTL_MS = 60_000;
-let statsCache: { at: number; value: BoardStats } | null = null;
+let statsCache: {
+  at: number;
+  summary: InhouseLadderSummary;
+  value: BoardStats;
+} | null = null;
+let statsInFlight: {
+  summary: InhouseLadderSummary;
+  promise: Promise<BoardStats>;
+} | null = null;
+let statsGeneration = 0;
 
 export async function loadBoardStats(
   nowMs: number = Date.now(),
 ): Promise<BoardStats> {
-  if (statsCache && nowMs - statsCache.at < STATS_TTL_MS)
+  const summary = await loadInhouseLadderSummary(nowMs);
+  if (
+    statsCache &&
+    statsCache.summary === summary &&
+    nowMs >= statsCache.at &&
+    nowMs - statsCache.at < STATS_TTL_MS
+  )
     return statsCache.value;
-
-  return loadFreshBoardStats(nowMs);
+  // The room, page and board can all miss the cache together. Share the work,
+  // not just its eventual result: a cold burst needs one full-history scan.
+  if (statsInFlight?.summary === summary) return statsInFlight.promise;
+  return loadFreshBoardStats(nowMs, summary);
 }
 
 /**
@@ -390,47 +410,52 @@ export async function loadBoardStats(
  *
  * A fresh read replaces the cache as well as bypassing it. If the probe finds
  * work, syncInhouseBoard can reuse the exact stats it just proved were current
- * instead of immediately repeating the three history queries.
+ * instead of immediately repeating the history queries.
  */
-async function loadFreshBoardStats(nowMs: number): Promise<BoardStats> {
-  const [last, lobbiesPlayed, ladderRows] = await Promise.all([
-    prisma.inhouseLobby.findFirst({
-      where: { status: INHOUSE_STATUS.COMPLETED },
-      // Formation order is stable under later settlement/refund retries. Only
-      // one lobby can be active, so the newest formed completed lobby is also
-      // the latest game in this rolling mode.
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      select: {
-        id: true,
-        winnerTeam: true,
-        radiantTeam: true,
-        radiantScore: true,
-        direScore: true,
-        matchStartTime: true,
-        startedAt: true,
-        createdAt: true,
-        completedAt: true,
-        durationSecs: true,
-        boxScore: true,
-      },
-    }),
-    prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.COMPLETED } }),
-    prisma.inhouseLobby.findMany({
-      where: { status: INHOUSE_STATUS.COMPLETED },
-      select: {
-        id: true,
-        winnerTeam: true,
-        createdAt: true,
-        players: {
-          select: {
-            userId: true,
-            team: true,
-            user: { select: { name: true } },
-          },
-        },
-      },
-    }),
-  ]);
+async function loadFreshBoardStats(
+  nowMs: number,
+  summary?: InhouseLadderSummary,
+): Promise<BoardStats> {
+  // A scheduler preflight bypasses even an older in-flight history read. The
+  // summary identity also keys this cache, and only the latest board query may
+  // warm it, so an earlier read cannot serve as the current summary's stats.
+  const generation = ++statsGeneration;
+  const freshSummary =
+    summary ?? await loadInhouseLadderSummary(nowMs, { fresh: true });
+  const pending = readBoardStats(freshSummary);
+  statsInFlight = { summary: freshSummary, promise: pending };
+  try {
+    const value = await pending;
+    if (generation === statsGeneration) {
+      statsCache = { at: nowMs, summary: freshSummary, value };
+    }
+    return value;
+  } finally {
+    if (statsInFlight?.promise === pending) statsInFlight = null;
+  }
+}
+
+async function readBoardStats(summary: InhouseLadderSummary): Promise<BoardStats> {
+  const last = await prisma.inhouseLobby.findFirst({
+    where: { status: INHOUSE_STATUS.COMPLETED },
+    // Formation order is stable under later settlement/refund retries. Only
+    // one lobby can be active, so the newest formed completed lobby is also
+    // the latest game in this rolling mode.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      winnerTeam: true,
+      radiantTeam: true,
+      radiantScore: true,
+      direScore: true,
+      matchStartTime: true,
+      startedAt: true,
+      createdAt: true,
+      completedAt: true,
+      durationSecs: true,
+      boxScore: true,
+    },
+  });
 
   let mvpName: string | null = null;
   let mvpHero: string | null = null;
@@ -457,19 +482,8 @@ async function loadFreshBoardStats(nowMs: number): Promise<BoardStats> {
     }
   }
 
-  const finished: FinishedLobby[] = ladderRows.map((l) => ({
-    id: l.id,
-    winnerTeam: l.winnerTeam,
-    createdAt: l.createdAt,
-    players: l.players.map((p) => ({
-      userId: p.userId,
-      name: p.user.name,
-      avatar: null,
-      team: p.team,
-    })),
-  }));
   // rankInhouse drops provisionals — never crown someone with <5 games.
-  const top = rankInhouse(summarizeInhouse(finished)).ranked[0] ?? null;
+  const top = summary.ladder.ranked[0] ?? null;
 
   const value: BoardStats = {
     lastLobbyId: last?.id ?? null,
@@ -485,17 +499,21 @@ async function loadFreshBoardStats(nowMs: number): Promise<BoardStats> {
     lastDireScore: last?.direScore ?? null,
     mvpName,
     mvpHero,
-    lobbiesPlayed,
+    // The Elo scan already contains every completed lobby; a separate COUNT
+    // asks the database for the same total and can observe a different commit.
+    lobbiesPlayed: summary.completedCount,
     ladderName: top?.name ?? null,
     ladderRating: top ? Math.round(top.rating) : null,
   };
-  statsCache = { at: nowMs, value };
   return value;
 }
 
 /** Test seam — the TTL cache is module state. */
 export function resetBoardStatsCache(): void {
   statsCache = null;
+  statsInFlight = null;
+  statsGeneration += 1;
+  resetInhouseLadderCache();
 }
 
 /** Stats are loaded ONLY for the empty render, so an active queue never pays
@@ -596,7 +614,12 @@ export async function syncInhouseBoard(
   if (
     !(await claimThrottle(
       SETTING_KEYS.INHOUSE_BOARD_AT,
-      INHOUSE.BOARD_MIN_SECONDS,
+      // A transient outage should not cause every active room to hammer the
+      // same failing webhook. Retry from 20s up to 5m, then reset on success.
+      Math.min(
+        300,
+        INHOUSE.BOARD_MIN_SECONDS * 2 ** Math.min(state.failures ?? 0, 5),
+      ),
       snap.nowMs,
     ))
   ) {

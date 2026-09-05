@@ -1,30 +1,76 @@
-// The FULL inhouse ladder (rating / rank / W-L per user), memoised in-process.
+// The FULL inhouse ladder (rating / rank / W-L per user), shared by the room,
+// Discord board and player lists, memoised in-process.
 //
 // The ladder must scan ALL completed lobbies with no take window — Elo is
 // path-dependent from game 1 (the rule stated at every existing call site).
-// That scan is too heavy to run per /players view, so this borrows the
-// loadBoardStats memo shape (inhouse-board-service.ts): module-level
-// {at, value} singleton, 60s TTL, a nowMs param so tests can drive the clock,
-// and a reset seam. Deliberately NOT unstable_cache — the "games" tag is
-// league-import semantics and nothing busts it when an inhouse completes, so
-// that cache would serve the wrong staleness contract. 60s is the pinned
-// Discord board's already-accepted staleness for exactly this data.
+// A cheap result cursor read invalidates completed/voided games immediately;
+// the 60s TTL bounds out-of-band changes such as player names. Shared promises
+// collapse concurrent cold reads. Scheduler preflight can explicitly bypass
+// both the cache and older in-flight work before deciding the worker may sleep.
 import { prisma } from "./prisma";
 import { INHOUSE_STATUS } from "./constants";
 import {
   rankInhouse,
   summarizeInhouse,
   toFinishedLobby,
+  type InhouseRecord,
   type RankedInhouse,
 } from "./inhouse-stats";
+import { getSetting, SETTING_KEYS } from "./settings";
 
 const LADDER_TTL_MS = 60_000;
-let cache: { at: number; value: RankedInhouse } | null = null;
+export type InhouseLadderSummary = {
+  records: InhouseRecord[];
+  ladder: RankedInhouse;
+  completedCount: number;
+};
+let cache: {
+  at: number;
+  cursor: string | null;
+  value: InhouseLadderSummary;
+} | null = null;
+let inFlight: {
+  cursor: string | null;
+  promise: Promise<InhouseLadderSummary>;
+} | null = null;
+let generation = 0;
 
 export async function loadInhouseLadder(
   nowMs: number = Date.now(),
 ): Promise<RankedInhouse> {
-  if (cache && nowMs - cache.at < LADDER_TTL_MS) return cache.value;
+  return (await loadInhouseLadderSummary(nowMs)).ladder;
+}
+
+export async function loadInhouseLadderSummary(
+  nowMs: number = Date.now(),
+  options: { fresh?: boolean } = {},
+): Promise<InhouseLadderSummary> {
+  const cursor = await getSetting(SETTING_KEYS.RESULT_CHANGED_AT);
+  if (!options.fresh) {
+    if (
+      cache &&
+      cache.cursor === cursor &&
+      nowMs >= cache.at &&
+      nowMs - cache.at < LADDER_TTL_MS
+    ) {
+      return cache.value;
+    }
+    if (inFlight?.cursor === cursor) return inFlight.promise;
+  }
+
+  const readGeneration = ++generation;
+  const promise = readSummary();
+  inFlight = { cursor, promise };
+  try {
+    const value = await promise;
+    if (readGeneration === generation) cache = { at: nowMs, cursor, value };
+    return value;
+  } finally {
+    if (inFlight?.promise === promise) inFlight = null;
+  }
+}
+
+async function readSummary(): Promise<InhouseLadderSummary> {
   const rows = await prisma.inhouseLobby.findMany({
     where: { status: INHOUSE_STATUS.COMPLETED },
     select: {
@@ -40,12 +86,13 @@ export async function loadInhouseLadder(
       },
     },
   });
-  const value = rankInhouse(summarizeInhouse(rows.map(toFinishedLobby)));
-  cache = { at: nowMs, value };
-  return value;
+  const records = summarizeInhouse(rows.map(toFinishedLobby));
+  return { records, ladder: rankInhouse(records), completedCount: rows.length };
 }
 
 /** Test seam — the memo otherwise leaks state across integration tests. */
 export function resetInhouseLadderCache(): void {
   cache = null;
+  inFlight = null;
+  generation += 1;
 }

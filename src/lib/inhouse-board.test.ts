@@ -149,7 +149,7 @@ describe("empty state — the 95% surface", () => {
       }),
     );
     expect(embed.fields ?? []).toHaveLength(0);
-    expect(embed.description).toContain("Somebody has to host the first one");
+    expect(embed.description).toContain("Start the first inhouse");
     expect(embed.description).not.toContain("lobbies played");
   });
 
@@ -451,6 +451,39 @@ describe("digest — the cost model", () => {
       snap({ stats: stats({ lastLobbyId: "lob2", lobbiesPlayed: 129 }) }),
     ).digest;
     expect(a).not.toBe(b);
+  });
+
+  it.each([
+    { lastEndedAtMs: T0 },
+    { lastWinnerSide: "Radiant" },
+    { lastRadiantScore: 25 },
+    { lastDireScore: 35 },
+    { mvpName: "Ame" },
+    { mvpHero: "Invoker" },
+    { ladderRating: 1300 },
+  ])("repaints corrected stats on the same last result: %j", (corrected) => {
+    const original = renderBoard(snap({ stats: stats() }));
+    const revised = renderBoard(snap({ stats: stats(corrected) }));
+    expect(revised.embed).not.toEqual(original.embed);
+    expect(revised.digest).not.toBe(original.digest);
+  });
+
+  it("repaints a pending player's changed name before they accept", () => {
+    const original = renderBoard(
+      snap({ lobby: lobby({ pendingNames: ["old name"] }) }),
+    );
+    const revised = renderBoard(
+      snap({ lobby: lobby({ pendingNames: ["new name"] }) }),
+    );
+    expect(revised.digest).not.toBe(original.digest);
+  });
+
+  it("repaints links when the canonical site moves", () => {
+    const original = renderBoard(snap({ presentNames: names(5) }));
+    const revised = renderBoard(
+      snap({ presentNames: names(5), siteUrl: "https://new.ggd2l.test" }),
+    );
+    expect(revised.digest).not.toBe(original.digest);
   });
 
   it("repaints when a NEW ready check opens at the same accepted count", () => {

@@ -96,6 +96,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         await getInhouseState(user, {
           runMaintenance,
+          // The authenticated worker owns automatic result scans. A room
+          // refresh must not wait on a chain of OpenDota requests; manual
+          // detect/record controls keep their existing explicit paths.
+          detectResults: false,
           // The same fleet-wide winner repaints Discord. A losing poll remains a
           // personalized DB read and never multiplies provider traffic.
           syncBoard: runMaintenance,

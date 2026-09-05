@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { approxRankTierFromMmr } from "../src/lib/rank";
+import { requeueLastSeenAt } from "../src/lib/inhouse";
 import { assertLocalDatabase } from "../scripts/assert-local-db.mjs";
 
 const prisma = new PrismaClient();
@@ -158,7 +159,7 @@ async function main() {
   // Independent of the league — puts a partial queue on /inhouse out of the box.
   // Heartbeats are seeded ALREADY-AWAY: the rows render (dimmed, "away" chip)
   // so the page looks alive, but they can never be pulled into a REAL lobby —
-  // without this, four humans queueing within 90s of a fresh seed would form
+  // without this, four humans queueing after a fresh seed would form
   // a lobby around six ghosts. (Also keeps the e2e's lobby formation clean.)
   let joined = Date.now() - 6 * 60_000;
   for (const p of playerSeeds.slice(0, 6)) {
@@ -167,7 +168,7 @@ async function main() {
         userId: p.id,
         mmr: p.mmr,
         joinedAt: new Date(joined),
-        lastSeenAt: new Date(Date.now() - 100_000),
+        lastSeenAt: requeueLastSeenAt(Date.now()),
       },
     });
     joined += 60_000;

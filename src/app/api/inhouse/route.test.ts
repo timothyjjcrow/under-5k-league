@@ -142,6 +142,7 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.claimThrottle).not.toHaveBeenCalled();
     expect(mocks.getInhouseState).toHaveBeenCalledWith(null, {
       runMaintenance: false,
+      detectResults: false,
       syncBoard: false,
     });
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
@@ -232,7 +233,7 @@ describe("POST /api/inhouse request boundary", () => {
       syncBoard: false,
     });
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v5", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
       expire: 0,
     });
   });
@@ -244,7 +245,7 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v5", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
       expire: 0,
     });
   });
@@ -255,7 +256,7 @@ describe("POST /api/inhouse request boundary", () => {
     await expect(POST(request({ action: "leave" }))).rejects.toThrow(
       "read failed",
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v5", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
       expire: 0,
     });
   });
@@ -271,9 +272,10 @@ describe("POST /api/inhouse request boundary", () => {
     );
     expect(mocks.getInhouseState).toHaveBeenCalledWith(user, {
       runMaintenance: true,
+      detectResults: false,
       syncBoard: true,
     });
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v5", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
       expire: 0,
     });
   });
@@ -286,6 +288,7 @@ describe("POST /api/inhouse request boundary", () => {
     expect(response.status).toBe(200);
     expect(mocks.getInhouseState).toHaveBeenCalledWith(user, {
       runMaintenance: false,
+      detectResults: false,
       syncBoard: false,
     });
     expect(mocks.revalidateTag).not.toHaveBeenCalled();

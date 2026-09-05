@@ -5,6 +5,8 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 
 // The inhouse's full browser lifecycle: queue → ready check (accept) →
 // captain vote → live draft → ready → in progress — one real page (the
@@ -56,6 +58,22 @@ async function horizontalOverflow(page: Page): Promise<number> {
   );
 }
 
+/** Optional review artifacts; keep CI's timed ready checks free of capture work. */
+async function captureRoom(page: Page, stage: string) {
+  const directory = process.env.INHOUSE_UI_CAPTURE_DIR;
+  if (!directory) return;
+  await mkdir(directory, { recursive: true });
+  const viewport = page.viewportSize();
+  for (const width of [375, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await page.getByRole("region", { name: "Live inhouse room" }).screenshot({
+      path: path.join(directory, `${stage}-${width}.png`),
+    });
+  }
+  if (viewport) await page.setViewportSize(viewport);
+}
+
 test("queue join/leave works and the page fits a phone", async ({ page }) => {
   const errors = trackPageErrors(page);
   await page.setViewportSize({ width: 375, height: 812 });
@@ -64,19 +82,25 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
   );
 
   // Queue view with the seeded demo entries visible but away (dimmed chips).
-  await expect(page.getByText(/INHOUSE QUEUE/i)).toBeVisible();
-  await expect(page.getByText(/0\s*\/\s*10/).first()).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Inhouse queue", exact: true }),
+  ).toBeVisible();
+  const progress = page.getByRole("progressbar", {
+    name: "Inhouse queue progress",
+  });
+  await expect(progress).toHaveAttribute("aria-valuenow", "0");
 
   await page.getByLabel("MMR").fill("4500");
   await page.getByRole("button", { name: /Join queue/ }).click();
-  await expect(page.getByText(/1\s*\/\s*10/).first()).toBeVisible();
+  await expect(progress).toHaveAttribute("aria-valuenow", "1");
   await expect(page.getByRole("button", { name: /Leave queue/ })).toBeVisible();
+  await captureRoom(page, "queue");
 
   // The whole page must fit the phone — no horizontal page scroll.
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
 
   await page.getByRole("button", { name: /Leave queue/ }).click();
-  await expect(page.getByText(/0\s*\/\s*10/).first()).toBeVisible();
+  await expect(progress).toHaveAttribute("aria-valuenow", "0");
 
   expect(errors).toEqual([]);
 });
@@ -87,6 +111,14 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
 }) => {
   test.setTimeout(180_000);
   const errors = trackPageErrors(page);
+  let statePolls = 0;
+  page.on("request", (request) => {
+    if (
+      request.url().endsWith("/api/inhouse") &&
+      request.postData()?.includes('"action":"state"')
+    )
+      statePolls += 1;
+  });
   page.on("dialog", (d) => d.accept()); // the Start-game confirm
 
   // Nine API players queue up (MMRs below the observer's, so the observer
@@ -107,7 +139,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await page.getByRole("button", { name: /Join queue/ }).click();
 
   // Ready check opens — the observer accepts through the real UI…
-  await expect(page.getByText("Match found — accept to play!")).toBeVisible();
+  await expect(page.getByText("Match found. You in?")).toBeVisible();
   await expect(page.getByRole("timer")).toBeVisible();
 
   // A signed-out spectator sees the separate next-game path and is never told
@@ -120,12 +152,13 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     spectatorPage.getByRole("heading", { name: "Queue for the next game" }),
   ).toBeVisible();
   await expect(
-    spectatorPage.getByText(/you're spectating — sign in above/i),
+    spectatorPage.getByText("Spectating · join the next-game queue above."),
   ).toBeVisible();
   await expect(spectatorPage.getByText(/you're next in line/i)).toHaveCount(0);
 
   await page.getByRole("button", { name: "ACCEPT MATCH" }).click();
   await expect(page.getByText(/Accepted — waiting/)).toBeVisible();
+  await captureRoom(page, "ready-check");
 
   // …and the nine API accepts flip the lobby into the captain vote.
   for (const ctx of players) {
@@ -134,8 +167,9 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   }
 
   // Captain vote opens, clock ticking.
-  await expect(page.getByText("How should captains be picked?")).toBeVisible();
+  await expect(page.getByText("Choose your captains")).toBeVisible();
   await expect(page.getByRole("timer")).toBeVisible();
+  await captureRoom(page, "captain-vote");
 
   // Observer votes through the UI; the nine API votes resolve it early.
   await page.getByRole("button", { name: /Highest MMR/ }).click();
@@ -161,6 +195,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
 
   // Now it's the observer's turn — pick through the real UI.
   await expect(page.getByText("Your pick").first()).toBeVisible();
+  await captureRoom(page, "draft");
   await page
     .getByRole("button", { name: /^Select .* to draft$/ })
     .first()
@@ -219,7 +254,9 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     "Under 5K In-House League",
   );
   await expect(
-    page.getByText(/without this ticket, the game will not appear on OpenDota/i),
+    page.getByText(
+      /without this ticket, the game will not appear on OpenDota/i,
+    ),
   ).toBeVisible();
   await expect(page.getByText(/inhouse team [12]/).first()).toBeVisible();
 
@@ -243,6 +280,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Betting into an empty pool must SAY it is not live — the whole design
   // rests on nobody discovering that after the fact.
   await expect(page.getByText(/It needs a taker/)).toBeVisible();
+  await captureRoom(page, "setup");
 
   // The pot panel is the widest thing added to this room — two side-by-side
   // pool bars, a slip list with player names, and a chip row — and the room's
@@ -279,6 +317,13 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   ).toBeVisible();
   await expect(page.getByText("Radiant").first()).toBeVisible();
   await expect(page.getByText("Dire").first()).toBeVisible();
+  // Starting early must keep the pot live for its original 45-second window,
+  // including prompt coverage updates for a player who already placed a bet.
+  const pollsWhenStarted = statePolls;
+  await expect
+    .poll(() => statePolls, { timeout: 6_000 })
+    .toBeGreaterThanOrEqual(pollsWhenStarted + 2);
+  await captureRoom(page, "in-progress");
 
   // A normal bystander can still line up while this game is live. Signed-out
   // visitors get a sign-in path; after signing in they can join, see an honest
@@ -302,9 +347,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     spectatorPage.getByRole("heading", { name: "Next-game queue" }),
   ).toBeVisible();
   await expect(
-    spectatorPage.getByText(
-      /ready check starts only after the current lobby closes/i,
-    ),
+    spectatorPage.getByText("Ready check after this game"),
   ).toBeVisible();
   await expect(
     spectatorPage.getByRole("progressbar", {
@@ -399,7 +442,9 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await confirmBtn.click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   // The slot is free again: the room falls back to the queue view.
-  await expect(page.getByText(/INHOUSE QUEUE/i)).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Inhouse queue", exact: true }),
+  ).toBeVisible();
   // …and the server agrees there is no active lobby holding it.
   const after = await act(admin, { action: "state" });
   expect(after.json.lobby).toBeNull();

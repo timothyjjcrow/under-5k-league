@@ -368,10 +368,8 @@ export function readyCheckEndedToast(o: {
 }
 
 // ---- Queue presence (heartbeat math) ----------------------------------------
-// A queue spot is held by keeping /inhouse open: every state poll refreshes the
-// entry's lastSeenAt (see touchQueueHeartbeat in inhouse-service.ts). These pure
-// helpers classify entries by heartbeat age so the service, the queue UI, and
-// the dashboard count all agree on who is actually here.
+// Membership survives suspended/background tabs. These helpers classify
+// availability only; the shared four-hour idle deadline owns queue cleanup.
 
 export type QueuePresence = "present" | "away";
 
@@ -389,23 +387,14 @@ export function queuePresentCutoff(nowMs: number): Date {
   return new Date(nowMs - INHOUSE.QUEUE_AWAY_SECONDS * 1000);
 }
 
-/** SQL cutoff: entries seen before this Date are dropped from the queue. */
-export function queueDropCutoff(nowMs: number): Date {
-  return new Date(nowMs - INHOUSE.QUEUE_DROP_SECONDS * 1000);
-}
-
 /**
  * lastSeenAt for players re-queued by a cancelled lobby: stale enough that
  * they DON'T count toward re-forming (no ghost lobby seconds after a cancel),
  * past the heartbeat throttle so a present player's very next poll re-confirms
- * them, yet inside the drop window so nobody is pruned before they get the
- * chance (QUEUE_RECONFIRM_SECONDS of slack).
+ * them. A delayed background poll cannot delete this reserved queue spot.
  */
 export function requeueLastSeenAt(nowMs: number): Date {
-  return new Date(
-    nowMs -
-      (INHOUSE.QUEUE_DROP_SECONDS - INHOUSE.QUEUE_RECONFIRM_SECONDS) * 1000,
-  );
+  return new Date(queuePresentCutoff(nowMs).getTime() - 1000);
 }
 
 /**

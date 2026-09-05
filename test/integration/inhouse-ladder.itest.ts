@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 import { INHOUSE_STATUS } from "@/lib/constants";
 import {
   loadInhouseLadder,
+  loadInhouseLadderSummary,
   resetInhouseLadderCache,
 } from "@/lib/inhouse-ladder";
 import {
@@ -13,6 +14,8 @@ import {
   toFinishedLobby,
 } from "@/lib/inhouse-stats";
 import { makeUser } from "./factories";
+import { loadBoardStats, resetBoardStatsCache } from "@/lib/inhouse-board-service";
+import { SETTING_KEYS, setSetting } from "@/lib/settings";
 
 // Ten users, teams 1/2 by index parity; winnerTeam decides each lobby.
 async function seedLobby(
@@ -39,6 +42,7 @@ async function seedLobby(
 describe("loadInhouseLadder — the memoised full-history ladder", () => {
   beforeEach(async () => {
     resetInhouseLadderCache();
+    resetBoardStatsCache();
     await prisma.inhouseLobbyPlayer.deleteMany({});
     await prisma.inhouseLobby.deleteMany({});
   });
@@ -115,5 +119,48 @@ describe("loadInhouseLadder — the memoised full-history ladder", () => {
     resetInhouseLadderCache();
     const reread = await loadInhouseLadder(t0 + 61_500);
     expect(reread).toEqual(fresh);
+  });
+
+  it("shares one full-history scan between page, board and player-list readers", async () => {
+    const scan = vi.spyOn(prisma.inhouseLobby, "findMany");
+    try {
+      const [summary, board, ladder] = await Promise.all([
+        loadInhouseLadderSummary(),
+        loadBoardStats(),
+        loadInhouseLadder(),
+      ]);
+      expect(scan).toHaveBeenCalledTimes(1);
+      expect(board.lobbiesPlayed).toBe(summary.completedCount);
+      expect(ladder).toBe(summary.ladder);
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
+  it("invalidates both the page ladder and board immediately on result and void cursors", async () => {
+    const one = await makeUser("Cursor One");
+    const two = await makeUser("Cursor Two");
+    const now = Date.now();
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, "before-result");
+    const empty = await loadInhouseLadderSummary(now);
+    await loadBoardStats(now);
+    expect(empty.completedCount).toBe(0);
+
+    const completed = await seedLobby([one.id, two.id], 1, new Date(now - 60_000));
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, "after-result");
+    const result = await loadInhouseLadderSummary(now + 1_000);
+    expect(result.completedCount).toBe(1);
+    expect(result.records).toHaveLength(2);
+    await expect(loadBoardStats(now + 1_000)).resolves.toMatchObject({ lobbiesPlayed: 1 });
+
+    await prisma.inhouseLobby.update({
+      where: { id: completed.id },
+      data: { status: INHOUSE_STATUS.CANCELLED },
+    });
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, "after-void");
+    const voided = await loadInhouseLadderSummary(now + 2_000);
+    expect(voided.completedCount).toBe(0);
+    expect(voided.records).toHaveLength(0);
+    await expect(loadBoardStats(now + 2_000)).resolves.toMatchObject({ lobbiesPlayed: 0 });
   });
 });

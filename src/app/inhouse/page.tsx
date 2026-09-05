@@ -11,19 +11,20 @@ import {
   PROVISIONAL_GAMES,
   rankInhouse,
   summarizeInhouse,
-  toFinishedLobby,
-  type FinishedLobby,
 } from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
 import { gameMvp } from "@/lib/achievements";
 import { formatMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
+import { loadInhouseLadderSummary } from "@/lib/inhouse-ladder";
 import { credProfitBoard } from "@/lib/inhouse-bet-service";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
+import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { HeroVideo } from "@/components/hero-video";
 import { LocalTime } from "@/components/local-time";
+import { SectionNav } from "@/components/section-nav";
 import {
   Avatar,
   Badge,
@@ -33,8 +34,6 @@ import {
   CardSkeleton,
   EmptyState,
   FormStrip,
-  HeroIcon,
-  KDA,
   PageTitle,
   PlayerLink,
   SectionTitle,
@@ -42,7 +41,7 @@ import {
   StatStrip,
   textLink,
 } from "@/components/ui";
-import { cn, formatNetWorth } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export const metadata = {
   title: "Inhouse",
@@ -104,11 +103,30 @@ export default async function InhousePage() {
       <div className="space-y-8">
         <PageTitle
           title="Inhouse"
-          subtitle="Pick-up games, drafted live. Queue up, get captained, and play — no season required."
-          action={<Badge tone="accent">Casual mode</Badge>}
+          subtitle="Queue together. Draft your sides. Play for the ladder."
+          action={
+            <Link href="/inhouse/history" className={textLink("text-sm")}>
+              Match history ↗
+            </Link>
+          }
         />
 
-        <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} mmrHint={mmrHint} />
+        <SectionNav
+          label="Inhouse sections"
+          items={[
+            { id: "live-room", label: "Live room" },
+            { id: "inhouse-ladder", label: "Ladder" },
+            { id: "recent-inhouse", label: "Results" },
+            { id: "opendota-setup", label: "Setup help" },
+          ]}
+        />
+        <section
+          id="live-room"
+          className="scroll-mt-28"
+          aria-label="Live inhouse room"
+        >
+          <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} mmrHint={mmrHint} />
+        </section>
 
         {/* The room above paints immediately; the history-scanning sections
             stream in behind it (CLAUDE.md in-page streaming convention).
@@ -121,17 +139,35 @@ export default async function InhousePage() {
         <Suspense fallback={null}>
           <SceneStats />
         </Suspense>
-        <Suspense fallback={<CardSkeleton rows={6} />}>
-          <LadderCard meId={user?.id ?? null} />
-        </Suspense>
-        <Suspense fallback={<CardSkeleton rows={5} />}>
-          <RecentResults />
-        </Suspense>
+        <section
+          id="inhouse-ladder"
+          className="scroll-mt-28"
+          aria-label="Inhouse ladder"
+        >
+          <Suspense fallback={<CardSkeleton rows={6} />}>
+            <LadderCard meId={user?.id ?? null} />
+          </Suspense>
+        </section>
+        <section
+          id="recent-inhouse"
+          className="scroll-mt-28"
+          aria-label="Recent inhouse results"
+        >
+          <Suspense fallback={<CardSkeleton rows={5} />}>
+            <RecentResults />
+          </Suspense>
+        </section>
 
         {/* Open ONLY for the cohort it is about: a player OpenDota reports as
             having public match data switched off. Folding it shut for everyone
             would have hidden it from exactly the people who need it. */}
-        <OpenDotaGuide open={dbUser?.fhUnavailable ?? false} />
+        <section
+          id="opendota-setup"
+          className="scroll-mt-28"
+          aria-label="Inhouse setup help"
+        >
+          <OpenDotaGuide open={dbUser?.fhUnavailable ?? false} />
+        </section>
       </div>
     </>
   );
@@ -213,6 +249,7 @@ async function RecentResults() {
       radiantScore: true,
       direScore: true,
       boxScore: true,
+      eloDeltas: true,
       matchStartTime: true,
       startedAt: true,
       createdAt: true,
@@ -224,7 +261,27 @@ async function RecentResults() {
     .map((l) => ({ lobby: l, players: parseInhouseBox(l.boxScore) }))
     .filter((r) => r.players.length > 0)
     .slice(0, 4);
-  if (results.length === 0) return null;
+  if (results.length === 0) {
+    return (
+      <Card>
+        <CardHeader
+          headingLevel={2}
+          title="Recent results"
+          action={
+            <Link href="/inhouse/history" className={textLink("text-sm")}>
+              All results →
+            </Link>
+          }
+        />
+        <CardBody>
+          <EmptyState
+            title="The next game’s story starts here"
+            description="Completed games bring scores, MVPs, and player stats to this space."
+          />
+        </CardBody>
+      </Card>
+    );
+  }
 
   const avatarIds = [
     ...new Set(
@@ -244,9 +301,7 @@ async function RecentResults() {
   return (
     <div className="space-y-3">
       <div className="flex items-baseline justify-between gap-3">
-        <SectionTitle aside="· newest game in full, the rest one tap away">
-          Recent results
-        </SectionTitle>
+        <SectionTitle>Recent results</SectionTitle>
         <Link href="/inhouse/history" className={textLink("shrink-0 text-sm")}>
           All results →
         </Link>
@@ -276,10 +331,11 @@ async function RecentResults() {
             </span>
           </summary>
           <div className="border-t border-line">
-            <GameResultCard
+            <InhouseBoxScore
               lobby={r.lobby}
               players={r.players}
               avatarMap={avatarMap}
+              eloDeltas={r.lobby.eloDeltas}
             />
           </div>
         </details>
@@ -416,36 +472,13 @@ function credBoard(
 // The full-history Elo ladder (no take window — Elo accumulates over ALL
 // games, per CLAUDE.md).
 async function LadderCard({ meId }: { meId: string | null }) {
-  // Both scans run in parallel inside this card's existing <Suspense>, so the
-  // profit roll-up adds no wall-clock time of its own: it is one indexed
-  // groupBy against a ledger that grows ~25 rows a game, next to the
-  // full-history lobby scan that already dominates this boundary. It does NOT
-  // get its own Suspense — a Cred column that streams in after the rows it
-  // belongs to would reflow the table under the reader's cursor.
-  const [ladderLobbies, credNet] = await Promise.all([
-    prisma.inhouseLobby.findMany({
-      where: { status: INHOUSE_STATUS.COMPLETED },
-      select: {
-        id: true,
-        winnerTeam: true,
-        createdAt: true,
-        players: {
-          select: {
-            userId: true,
-            team: true,
-            user: { select: { name: true, avatar: true } },
-          },
-        },
-      },
-    }),
-    // NET PROFIT, never balance and never volume: constants.ts explains why in
-    // the INHOUSE_CRED_PROFIT_REASONS block — a board that ranked balance would
-    // rank the bankruptcy floor, and one that ranked stakes would rank turning
-    // up. This ranks what you took off other players.
+  // Shares the complete-history snapshot with the Discord board and room;
+  // the ledger aggregate stays parallel and retains its independent meaning.
+  const [summary, credNet] = await Promise.all([
+    loadInhouseLadderSummary(),
     credProfitBoard(),
   ]);
-  const finished: FinishedLobby[] = ladderLobbies.map(toFinishedLobby);
-  const leaderboard = summarizeInhouse(finished);
+  const leaderboard = summary.records;
   const cred = credBoard(leaderboard, credNet);
 
   return (
@@ -453,21 +486,107 @@ async function LadderCard({ meId }: { meId: string | null }) {
     // its width into the page scroll area (CLAUDE.md mobile rule).
     <Card className="overflow-hidden">
       <CardHeader
+        headingLevel={2}
         title="Inhouse ladder"
-        // The subtitle names the Cred column only once that column exists —
-        // the admin-copy-guard rule generalised: copy that names something the
-        // reader can't see sends them hunting for it.
-        subtitle={
-          cred.hasBets
-            ? "Two ladders, one card. Elo is skill — everyone starts at 1000, wins against stronger lobbies pay more. Cred is nerve — net profit from betting on yourself, so it ranks what you took off other players, never what you were handed."
-            : "Personal Elo across completed inhouse games — everyone starts at 1000, wins against stronger lobbies pay more"
+        subtitle={`${leaderboard.length} players · ${rankInhouse(leaderboard).ranked.length} ranked`}
+        action={
+          <Badge tone="accent">{summary.completedCount} games played</Badge>
         }
       />
       <CardBody className="p-0">
         <YourStanding rows={leaderboard} meId={meId} cred={cred} />
+        <LadderLeaders rows={leaderboard} />
         <Leaderboard rows={leaderboard} meId={meId} cred={cred} />
+        <details className="border-t border-line px-4 py-2 text-xs text-muted sm:px-5">
+          <summary className="inline-flex min-h-10 cursor-pointer items-center rounded hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+            How {cred.hasBets ? "Elo & Cred" : "Elo"} work
+          </summary>
+          <p className="max-w-3xl pb-3 leading-relaxed">
+            Elo starts at 1000. Beating stronger opponents earns more; your rank
+            appears after {PROVISIONAL_GAMES} games.
+            {cred.hasBets
+              ? " Cred tracks net profit from betting on your own games. Its rank is separate from Elo and excludes starting balances and grants."
+              : ""}
+          </p>
+        </details>
       </CardBody>
     </Card>
+  );
+}
+
+/** Established leaders only: a provisional first win never becomes a podium. */
+function LadderLeaders({
+  rows,
+}: {
+  rows: ReturnType<typeof summarizeInhouse>;
+}) {
+  const leaders = rankInhouse(rows).ranked.slice(0, 3);
+  if (leaders.length === 0) return null;
+  return (
+    <ol
+      aria-label="Ladder leaders"
+      className="grid grid-cols-2 gap-3 border-b border-line p-4 sm:grid-cols-3 sm:p-5"
+    >
+      {leaders.map((player, i) => (
+        <li
+          key={player.userId}
+          className={cn(
+            "min-w-0 rounded-xl border p-3 sm:p-4",
+            i === 0
+              ? "col-span-2 border-accent/35 bg-gradient-to-br from-accent/10 to-surface sm:col-span-1"
+              : "border-line bg-surface-2/35",
+          )}
+        >
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <span
+              className={cn(
+                "text-[10px] font-semibold uppercase tracking-wider",
+                i === 0 ? "text-accent" : "text-muted",
+              )}
+            >
+              {i === 0 ? "League leader" : `Rank ${i + 1}`}
+            </span>
+            <span className="font-mono text-xs text-muted">0{i + 1}</span>
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <Avatar name={player.name} src={player.avatar} size={30} />
+            <PlayerLink
+              userId={player.userId}
+              className="min-w-0 truncate text-sm font-semibold"
+            >
+              {player.name}
+            </PlayerLink>
+          </div>
+          <div className="mt-3 flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <span className="font-display text-3xl font-bold tabular-nums">
+                {player.rating}
+              </span>
+              <span className="ml-1 text-[10px] text-muted">Elo</span>
+            </div>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums",
+                player.lastChange > 0
+                  ? "bg-success/10 text-success"
+                  : player.lastChange < 0
+                    ? "bg-danger/10 text-danger"
+                    : "bg-surface-2 text-muted",
+              )}
+            >
+              {player.lastChange > 0 ? "+" : ""}
+              {player.lastChange} last game
+            </span>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3">
+            <span className="text-xs tabular-nums text-muted">
+              {player.wins}W · {player.losses}L
+            </span>
+            <FormStrip form={player.form} size={4} />
+          </div>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -531,8 +650,7 @@ function OpenDotaGuide({ open }: { open: boolean }) {
               Make your games auto-detect
             </h3>
             <p className="mt-0.5 text-sm text-muted">
-              Inhouse results are pulled from OpenDota — here&apos;s how to be
-              findable.
+              Public match data, your account, and the league ticket.
             </p>
           </div>
         </div>
@@ -564,8 +682,8 @@ function OpenDotaGuide({ open }: { open: boolean }) {
             <GuideStep n={3} />
             <span>
               When teams lock, the host must select the{" "}
-              <b>{INHOUSE.LOBBY_TICKET}</b> ticket in Lobby Settings. Without it,
-              the private game will not appear on OpenDota.
+              <b>{INHOUSE.LOBBY_TICKET}</b> ticket in Lobby Settings. Without
+              it, the private game will not appear on OpenDota.
             </span>
           </li>
           <li className="flex gap-3">
@@ -597,259 +715,6 @@ function GuideStep({ n }: { n: number }) {
 }
 
 // ---------- Box-score result card ----------
-
-function GameResultCard({
-  lobby,
-  players,
-  avatarMap,
-}: {
-  lobby: {
-    id: string;
-    winnerTeam: number | null;
-    radiantTeam: number;
-    dotaMatchId: string | null;
-    durationSecs: number | null;
-    radiantScore: number | null;
-    direScore: number | null;
-    createdAt: Date;
-  };
-  players: BoxPlayer[];
-  avatarMap: Map<string, string | null>;
-}) {
-  const radiantWin =
-    lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
-  const radiant = players.filter((p) => p.isRadiant);
-  const dire = players.filter((p) => !p.isRadiant);
-  // Best line of the game — same tested MVP math the league box scores use.
-  const mvpId = gameMvp(players, radiantWin);
-  const dur = lobby.durationSecs ?? 0;
-  const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
-  const maxNet = Math.max(1, ...players.map((p) => p.netWorth ?? 0));
-  const radiantNet = radiant.reduce((s, p) => s + (p.netWorth ?? 0), 0);
-  const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
-
-  return (
-    // No <Card> here: the scoreline, winner, MVP, duration and time all live in
-    // the <details> summary above, and the <details> carries the border. A card
-    // inside it would double the frame and repeat the header.
-    <div className="grid grid-cols-1 gap-x-4 gap-y-4 p-4 sm:p-5 md:grid-cols-2">
-      <InhouseNetWorthBar radiantNet={radiantNet} direNet={direNet} />
-      <SideBox
-        label="Radiant"
-        win={radiantWin}
-        players={radiant}
-        avatarMap={avatarMap}
-        maxNet={maxNet}
-        mvpId={mvpId}
-      />
-      <SideBox
-        label="Dire"
-        win={!radiantWin}
-        players={dire}
-        avatarMap={avatarMap}
-        maxNet={maxNet}
-        mvpId={mvpId}
-      />
-      <div className="flex items-center justify-end gap-3 text-xs text-muted md:col-span-2">
-        <span className="tabular-nums">Duration {durStr}</span>
-        {lobby.dotaMatchId ? (
-          <a
-            href={`https://www.opendota.com/matches/${lobby.dotaMatchId}`}
-            target="_blank"
-            rel="noreferrer"
-            className={textLink()}
-          >
-            Full match on OpenDota ↗
-          </a>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-// Radiant (green) vs Dire (red) net-worth split — the "who's ahead" summary.
-function InhouseNetWorthBar({
-  radiantNet,
-  direNet,
-}: {
-  radiantNet: number;
-  direNet: number;
-}) {
-  const total = radiantNet + direNet;
-  if (total <= 0) return null;
-  const radPct = Math.round((radiantNet / total) * 100);
-  const lead = radiantNet - direNet;
-  return (
-    <div className="md:col-span-2">
-      <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
-        <span className="flex items-center gap-1.5 font-medium text-success">
-          <span className="h-2 w-2 rounded-full bg-success" />
-          Radiant
-          <span className="font-mono text-muted">
-            {formatNetWorth(radiantNet)}
-          </span>
-        </span>
-        <span className="shrink-0 text-muted">
-          {lead === 0
-            ? "Even net worth"
-            : `${lead > 0 ? "Radiant" : "Dire"} +${formatNetWorth(Math.abs(lead))}`}
-        </span>
-        <span className="flex items-center gap-1.5 font-medium text-danger">
-          <span className="font-mono text-muted">
-            {formatNetWorth(direNet)}
-          </span>
-          Dire
-          <span className="h-2 w-2 rounded-full bg-danger" />
-        </span>
-      </div>
-      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-surface-2">
-        <div
-          className="bg-success/70 transition-all"
-          style={{ width: `${radPct}%` }}
-        />
-        <div className="flex-1 bg-danger/70" />
-      </div>
-    </div>
-  );
-}
-
-function SideBox({
-  label,
-  win,
-  players,
-  avatarMap,
-  maxNet,
-  mvpId,
-}: {
-  label: string;
-  win: boolean;
-  players: BoxPlayer[];
-  avatarMap: Map<string, string | null>;
-  maxNet: number;
-  mvpId: string | null;
-}) {
-  const isRadiant = label === "Radiant";
-  const hasNet = players.some((p) => p.netWorth != null);
-  const hasGpm = players.some((p) => p.gpm != null);
-  const hasLh = players.some((p) => p.lastHits != null);
-  // Sort by farm so the gold bars descend, like Dota's post-game screen.
-  const ordered = [...players].sort(
-    (a, b) => (b.netWorth ?? 0) - (a.netWorth ?? 0) || b.kills - a.kills,
-  );
-  return (
-    <div
-      className={cn(
-        "rounded-lg border p-3",
-        win
-          ? isRadiant
-            ? "border-success/40 bg-success/5"
-            : "border-danger/40 bg-danger/5"
-          : "border-line",
-      )}
-    >
-      <div className="mb-2 flex items-center justify-between">
-        <span className="flex items-center gap-2 text-sm font-semibold">
-          <span
-            className={cn(
-              "h-2.5 w-2.5 rounded-full",
-              isRadiant ? "bg-success" : "bg-danger",
-            )}
-          />
-          {label}
-        </span>
-        <Badge tone={win ? "success" : "neutral"}>{win ? "Win" : "Loss"}</Badge>
-      </div>
-      <ul className="space-y-0.5">
-        {ordered.map((p, i) => {
-          const hero = heroById(p.heroId);
-          const nwPct =
-            p.netWorth != null ? Math.round((p.netWorth / maxNet) * 100) : 0;
-          return (
-            <li
-              key={i}
-              className="rounded-md px-1.5 py-1.5 transition-colors hover:bg-surface-2/50"
-            >
-              <div className="flex items-center gap-2.5">
-                {hero ? (
-                  <HeroIcon hero={hero} size={30} />
-                ) : (
-                  <span className="h-[30px] w-[30px] shrink-0 rounded-md border border-line/70 bg-surface-2" />
-                )}
-                <div className="min-w-0 flex-1">
-                  {p.userId ? (
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <Avatar
-                        name={p.name ?? "?"}
-                        src={avatarMap.get(p.userId) ?? null}
-                        size={18}
-                      />
-                      <PlayerLink
-                        userId={p.userId}
-                        className="truncate text-sm"
-                      >
-                        {p.name ?? "Unknown"}
-                      </PlayerLink>
-                      {p.userId === mvpId ? (
-                        <span
-                          role="img"
-                          aria-label="Match MVP"
-                          title="Match MVP — best line of the game"
-                          className="shrink-0 text-xs"
-                        >
-                          🏅
-                        </span>
-                      ) : null}
-                    </span>
-                  ) : (
-                    <span className="truncate text-sm text-muted">
-                      {p.name ?? "Unknown"}
-                    </span>
-                  )}
-                  {hero ? (
-                    <div className="truncate text-[11px] text-muted">
-                      {hero.name}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="shrink-0 text-right">
-                  <KDA
-                    kills={p.kills}
-                    deaths={p.deaths}
-                    assists={p.assists}
-                    className="block text-xs"
-                  />
-                  {hasGpm || hasLh ? (
-                    <div className="text-[11px] tabular-nums text-muted">
-                      {[
-                        hasGpm ? `${p.gpm ?? "—"} gpm` : null,
-                        hasLh ? `${p.lastHits ?? "—"} lh` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </div>
-                  ) : null}
-                </div>
-                {hasNet ? (
-                  <div className="w-14 shrink-0 text-right">
-                    <div className="font-mono text-xs tabular-nums text-accent">
-                      {formatNetWorth(p.netWorth)}
-                    </div>
-                    <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-2">
-                      <div
-                        className="h-full rounded-full bg-accent/80"
-                        style={{ width: `${nwPct}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
 
 // The signed-in player's ladder line at a glance, pinned above the table.
 function YourStanding({
@@ -998,6 +863,11 @@ function Leaderboard({
         width unless its <col> is w-0 until the breakpoint that shows it. Without
         this the nine mostly-1-character columns starved the Player name. */}
       <table className="w-full table-fixed text-sm">
+        <caption className="sr-only">
+          Inhouse player ratings, records, recent form
+          {showCred ? ", and net Cred profit" : ""}. Provisional players are
+          listed without a rank.
+        </caption>
         <colgroup>
           <col className="w-11" />
           <col />

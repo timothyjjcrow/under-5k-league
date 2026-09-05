@@ -240,6 +240,17 @@ function lobbyPhase(status: string): "check" | "picking" | "live" | null {
 const RAIL = "5v5 · captains draft · rated on the GGD2L ladder";
 
 export function renderBoard(s: BoardSnapshot): BoardRender {
+  const rendered = renderBoardContent(s);
+  return {
+    ...rendered,
+    // Version static copy as well as semantic state: deploying an improved
+    // board must repaint an otherwise quiet channel. Canonical links and lobby
+    // size are rendered in every phase and must also invalidate an old post.
+    digest: JSON.stringify(["board-v2", s.siteUrl, s.lobbySize, rendered.digest]),
+  };
+}
+
+function renderBoardContent(s: BoardSnapshot): BoardRender {
   const url = `${s.siteUrl}/inhouse`;
   // Every explicit "take a slot" CTA deep-links into the queue, so a tap from
   // a phone is one action instead of four. The TITLE and author deliberately
@@ -305,6 +316,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
           lobby.playerCount,
           lobby.acceptEndsAtMs ?? "",
           rosterKey(lobby.acceptedNames),
+          rosterKey(lobby.pendingNames),
           present,
           rosterKey(s.presentNames),
         ].join("|"),
@@ -352,6 +364,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
         digest: [
           "picking",
           lobby.status,
+          lobby.playerCount,
           present,
           rosterKey(s.presentNames),
         ].join("|"),
@@ -407,6 +420,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
     return {
       digest: [
         "live",
+        lobby.playerCount,
         lobby.startedAtMs ?? "",
         lobby.potCred ?? "",
         present,
@@ -475,8 +489,8 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
     const played = st && st.lobbiesPlayed > 0 ? ` · ${st.lobbiesPlayed} lobbies played` : "";
     const body =
       st && st.lobbiesPlayed > 0
-        ? "Nobody wants to be the first name on an empty board — but this is the only message in the channel, and it repaints the second you join."
-        : "No inhouse has been played here yet. Somebody has to host the first one.";
+        ? "Your next 5v5 starts here. Ten players, then accept and draft."
+        : "Start the first inhouse. Ten players, then accept and draft.";
     return {
       // No "updated <t:R>" on this state ON PURPOSE: its digest barely moves,
       // so after a quiet weekend it would read "updated 3 days ago" — the
@@ -487,8 +501,15 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
         s.pingOptIn ? "ping" : "-",
         s.awayCount,
         st?.lastLobbyId ?? "",
+        st?.lastEndedAtMs ?? "",
+        st?.lastWinnerSide ?? "",
+        st?.lastRadiantScore ?? "",
+        st?.lastDireScore ?? "",
+        st?.mvpName ?? "",
+        st?.mvpHero ?? "",
         st?.lobbiesPlayed ?? 0,
         st?.ladderName ?? "",
+        st?.ladderRating ?? "",
       ].join("|"),
       embed: {
         title: `Find Match — ${s.lobbySize} slots open`,
@@ -576,12 +597,14 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
           value:
             slotList(s.presentNames, s.lobbySize) +
             (s.awayCount > 0
-              ? `\n-# ${s.awayCount} away — a tab that goes quiet for 90 seconds stops holding its slot.`
+              ? `\n-# ${s.awayCount} away — open the inhouse page to rejoin the ready queue.`
               : ""),
           inline: false,
         },
       ],
-      footer: { text: "Your slot is held while the queue page is open in a tab." },
+      footer: {
+        text: "Switch tabs freely. The queue clears after four hours without lobby activity.",
+      },
     },
   };
 }

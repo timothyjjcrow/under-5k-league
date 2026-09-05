@@ -108,7 +108,7 @@ describe("GET /api/cron/automation", () => {
     mocks.getAutomationGateDecision.mockResolvedValue({
       run: false,
       snapshot: {
-        version: 5,
+        version: 6,
         computedAtMs: Date.now(),
         nextWakeAtMs,
         hardWakeAtMs: nextWakeAtMs + 60_000,
@@ -164,7 +164,7 @@ describe("GET /api/cron/automation", () => {
     mocks.getAutomationGateDecision.mockResolvedValue({
       run: true,
       snapshot: {
-        version: 5,
+        version: 6,
         computedAtMs: now - 60_000,
         nextWakeAtMs: now - 60_000,
         hardWakeAtMs: now + 60_000,
@@ -185,7 +185,7 @@ describe("GET /api/cron/automation", () => {
     mocks.getAutomationGateDecision.mockResolvedValue({
       run: true,
       snapshot: {
-        version: 5,
+        version: 6,
         computedAtMs: now - 120_000,
         nextWakeAtMs: now - 120_000,
         hardWakeAtMs: now - 1,
