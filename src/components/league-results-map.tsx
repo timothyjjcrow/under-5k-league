@@ -12,11 +12,13 @@ export function LeagueResultsMap({
   matches,
   teamName,
   teamLogoUrl,
+  className,
 }: {
   standings: TeamStanding[];
   matches: ResultMatch[];
   teamName: Map<string, string>;
   teamLogoUrl: Map<string, string | null>;
+  className?: string;
 }) {
   const regular = matches.filter((match) => match.phase === "REGULAR");
   const weeks = [...new Set(regular.map((match) => match.week))].sort(
@@ -31,7 +33,7 @@ export function LeagueResultsMap({
     }
   }
   return (
-    <Card className="min-w-0 overflow-hidden">
+    <Card className={cn("flex min-w-0 flex-col overflow-hidden", className)}>
       <CardHeader
         headingLevel={2}
         title="The season, week by week"
@@ -56,7 +58,7 @@ export function LeagueResultsMap({
         }
       />
       <CardBody
-        className="overflow-x-auto p-0"
+        className="flex-1 overflow-x-auto p-0"
         tabIndex={0}
         aria-label="Weekly series results; scroll for more weeks"
       >

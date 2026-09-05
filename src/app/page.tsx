@@ -2203,9 +2203,9 @@ async function SeasonView({
         ) : null}
       </div>
 
-      {/* The weekly map carries the season history; compact scoreboards sit
-          beside it on wide screens and follow it on phones. */}
-      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-3">
+      {/* The map sets the desktop row height. Size containment keeps the
+          sidebar's lists from stretching the row; only the lists scroll. */}
+      <div className="grid grid-cols-1 items-stretch gap-6 xl:grid-cols-3">
         <div
           className={cn(
             "min-w-0",
@@ -2215,21 +2215,31 @@ async function SeasonView({
           )}
         >
           <LeagueResultsMap
+            className="h-full"
             standings={standings}
             matches={matches}
             teamName={teamName}
             teamLogoUrl={teamLogoUrl}
           />
         </div>
-        <div className="min-w-0 space-y-4">
+        <div className={cn(
+            "flex min-w-0 flex-col gap-4 xl:min-h-[26rem] xl:[contain:size]",
+            !upcoming.length && !recentResults.length && "hidden",
+          )}>
           {upcoming.length > 0 ? (
-            <Card className="min-w-0">
+            <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden xl:flex-1">
               <CardHeader
+                className="shrink-0 px-4 py-3"
                 headingLevel={2}
                 title="Coming up"
                 subtitle="After this week's slate"
               />
-              <CardBody className="p-0">
+              <CardBody
+                className="min-h-0 max-h-60 overflow-y-auto overscroll-y-contain p-0 focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent xl:max-h-none xl:flex-1"
+                tabIndex={0}
+                role="region"
+                aria-label="Upcoming matches; scroll for more"
+              >
                 <ul className="divide-y divide-line/60">
                   {upcoming.map((m) => (
                     <li key={m.id}>
@@ -2260,13 +2270,30 @@ async function SeasonView({
                   ))}
                 </ul>
               </CardBody>
+              <Link
+                href="/schedule#fixtures"
+                className={textLink(
+                  "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
+                )}
+              >
+                Full schedule →
+              </Link>
             </Card>
           ) : null}
 
           {recentResults.length > 0 ? (
-            <Card className="min-w-0">
-              <CardHeader headingLevel={2} title="Recent results" />
-              <CardBody className="p-0">
+            <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden xl:flex-[1.4]">
+              <CardHeader
+                className="shrink-0 px-4 py-3"
+                headingLevel={2}
+                title="Recent results"
+              />
+              <CardBody
+                className="min-h-0 max-h-80 overflow-y-auto overscroll-y-contain p-0 focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent xl:max-h-none xl:flex-1"
+                tabIndex={0}
+                role="region"
+                aria-label="Recent results; scroll for more"
+              >
                 <ul className="divide-y divide-line/60">
                   {recentResults.map((m) => (
                     <li key={m.id}>
@@ -2326,6 +2353,14 @@ async function SeasonView({
                   ))}
                 </ul>
               </CardBody>
+              <Link
+                href="/schedule#fixtures"
+                className={textLink(
+                  "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
+                )}
+              >
+                All results →
+              </Link>
             </Card>
           ) : null}
         </div>
