@@ -34,6 +34,8 @@ export function ChaseCopy({ reach }: { reach: DiscordReachFunnel }) {
       <button
         type="button"
         className={buttonClasses("secondary", "sm")}
+        disabled={!DISCORD_INVITE_URL && Boolean(reach.guild?.missing)}
+        title={!DISCORD_INVITE_URL && reach.guild?.missing ? "Configure this league's Discord invite before copying the join message." : undefined}
         onClick={async () => {
           const text = discordChaseMessage(reach, {
             inviteUrl: DISCORD_INVITE_URL,

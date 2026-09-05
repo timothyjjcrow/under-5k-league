@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "./league-config";
 import { INHOUSE_STATUS } from "./constants";
 import { escapeDiscordText } from "./discord-escape";
 import { potTier, tierLabel } from "./inhouse-bets";
@@ -237,7 +238,7 @@ function lobbyPhase(status: string): "check" | "picking" | "live" | null {
   return null;
 }
 
-const RAIL = "5v5 · captains draft · rated on the GGD2L ladder";
+const RAIL = `5v5 · captains draft · rated on the ${LEAGUE_CONFIG.name} ladder`;
 
 export function renderBoard(s: BoardSnapshot): BoardRender {
   const rendered = renderBoardContent(s);
@@ -258,7 +259,7 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
   // auto-enqueueing someone who tapped a title would be a nasty surprise.
   const joinUrl = `${url}?join=1`;
   const author = {
-    name: "GGD2L Inhouse Matchmaking",
+    name: `${LEAGUE_CONFIG.name} Inhouse Matchmaking`,
     icon_url: `${s.siteUrl}${AUTHOR_ICON}`,
     url,
   };

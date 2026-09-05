@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { SectionNav } from "@/components/section-nav";
 import Link from "next/link";
 import type { Metadata } from "next";
@@ -53,7 +54,7 @@ export async function generateMetadata({
   if (!seasonId) {
     return shareMetadata(
       "Leaders",
-      "GGD2L season leaders, weekly honors, career benchmarks, and player performance boards.",
+      `${LEAGUE_CONFIG.name} season leaders, weekly honors, career benchmarks, and player performance boards.`,
       "/leaders",
     );
   }
@@ -65,7 +66,7 @@ export async function generateMetadata({
   if (season.isActive) {
     return shareMetadata(
       "Leaders",
-      "GGD2L season leaders, weekly honors, career benchmarks, and player performance boards.",
+      `${LEAGUE_CONFIG.name} season leaders, weekly honors, career benchmarks, and player performance boards.`,
       "/leaders",
     );
   }

@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { Badge, DiscordButton } from "@/components/ui";
 import { scheduleDestinationLabel } from "@/lib/season-copy";
@@ -92,19 +93,24 @@ export function SiteFooter({
         <div className="grid items-center gap-10 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.45fr)] lg:gap-16">
           <Link
             href="/"
-            aria-label="GGD2L — home"
-            className="flex justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:justify-start"
+            aria-label={`${LEAGUE_CONFIG.name} — home`}
+            className="flex items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:justify-start"
           >
             {/* Tight-cropped emblem (shared with the nav) — no baked-in
                 transparent margin, so it reads compact at a smaller height. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/ggd2l-logo-nav.png"
-              alt="GGD2L"
+              alt={LEAGUE_CONFIG.name}
               width={520}
               height={427}
               className="h-32 w-auto sm:h-40 lg:h-44"
             />
+            {LEAGUE_CONFIG.region === "eu" ? (
+              <span className="ml-3 rounded border border-accent/40 px-2 py-1 text-xs font-semibold uppercase tracking-widest text-accent">
+                Europe
+              </span>
+            ) : null}
           </Link>
 
           <div className="grid w-full gap-8 sm:grid-cols-[minmax(0,1.45fr)_minmax(10rem,0.75fr)] sm:gap-10">
@@ -185,7 +191,7 @@ export function SiteFooter({
                 •
               </span>
             ) : null}
-            <span>© {year} GGD2L</span>
+            <span>© {year} {LEAGUE_CONFIG.name}</span>
             <span aria-hidden="true" className="hidden text-line sm:inline">
               •
             </span>

@@ -6,6 +6,8 @@
 import { postgresDatabaseIdentity } from "../src/lib/postgres-identity.mjs";
 import { normalizeDiscordWebhookUrl } from "../src/lib/discord-webhook.mjs";
 import { productionEnvironmentRequired } from "./vercel-environment.mjs";
+import { pathToFileURL } from "node:url";
+import { validateLeagueDeploymentEnv } from "./league-deployment-env.mjs";
 
 // Individual Steam accounts are universe/type/instance base 76561197960265728
 // plus an unsigned 32-bit account id. A 17-digit shape check alone accepts
@@ -94,7 +96,7 @@ function placeholderSecret(value) {
 }
 
 export function validateProductionEnv(env) {
-  const errors = [];
+  const errors = validateLeagueDeploymentEnv(env);
 
   if (env.BUILD_DB_DRY_RUN !== undefined) {
     errors.push("BUILD_DB_DRY_RUN is retired and must be unset in production");
@@ -278,7 +280,7 @@ export function validateProductionEnv(env) {
   return errors;
 }
 
-try {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {
   if (!productionEnvironmentRequired(process.env)) {
     console.log(
       `validate-prod-env: VERCEL_ENV=${process.env.VERCEL_ENV ?? "(unset)"} — production validation skipped`,

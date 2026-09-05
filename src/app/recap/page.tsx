@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -41,7 +42,7 @@ export async function generateMetadata({
   if (!seasonId) {
     return shareMetadata(
       "Season Recap",
-      "Awards, superlatives, and the story of the season in GGD2L.",
+      `Awards, superlatives, and the story of the season in ${LEAGUE_CONFIG.name}.`,
       "/recap",
     );
   }
@@ -53,7 +54,7 @@ export async function generateMetadata({
   if (season.isActive) {
     return shareMetadata(
       "Season Recap",
-      "Awards, superlatives, and the story of the season in GGD2L.",
+      `Awards, superlatives, and the story of the season in ${LEAGUE_CONFIG.name}.`,
       "/recap",
     );
   }

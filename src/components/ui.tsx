@@ -1201,6 +1201,7 @@ export function DiscordButton({
   size?: ButtonSize;
   className?: string;
 }) {
+  if (!DISCORD_INVITE_URL) return null;
   return (
     <a
       href={DISCORD_INVITE_URL}

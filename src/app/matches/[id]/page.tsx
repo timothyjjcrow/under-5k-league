@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { Suspense } from "react";
 import { fetchAllGamesForScouting } from "@/lib/cached-queries";
 import {
@@ -116,7 +117,7 @@ export async function generateMetadata({
   // notFound() in metadata runs before the shell streams → real 404 status.
   if (!match) notFound();
   const title = `${match.homeTeam.name} vs ${match.awayTeam.name}`;
-  return shareMetadata(title, `${title} — box score and results in GGD2L.`);
+  return shareMetadata(title, `${title} — box score and results in ${LEAGUE_CONFIG.name}.`);
 }
 
 export default async function MatchDetailPage({

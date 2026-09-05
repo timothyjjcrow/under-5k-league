@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -48,7 +49,7 @@ export async function generateMetadata({
   const generic = () =>
     shareMetadata(
       "Fantasy",
-      "Build a salary-capped fantasy five from the drafted league and score from real GGD2L games.",
+      `Build a salary-capped fantasy five from the drafted league and score from real ${LEAGUE_CONFIG.name} games.`,
       "/fantasy",
     );
   if (!seasonId) return generic();

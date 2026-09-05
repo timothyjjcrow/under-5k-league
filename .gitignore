@@ -35,6 +35,7 @@ yarn-error.log*
 # env files (secrets — NEVER commit). Keep the example.
 .env*
 !.env.example
+!.env.europe.example
 
 # vercel
 .vercel

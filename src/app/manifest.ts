@@ -1,11 +1,12 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import type { MetadataRoute } from "next";
 
 // Web app manifest — makes the site installable (add-to-home-screen), which
 // matters for the mobile-majority audience. Icons reuse the existing app icons.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "GGD2L",
-    short_name: "GGD2L",
+    name: LEAGUE_CONFIG.name,
+    short_name: LEAGUE_CONFIG.name,
     description:
       "An amateur Dota 2 league built around a soft 4.5K MMR limit — sign in with Steam, join the season, get drafted, and compete.",
     start_url: "/",

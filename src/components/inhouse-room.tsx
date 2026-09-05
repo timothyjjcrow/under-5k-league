@@ -3447,14 +3447,16 @@ function GameSetupCard({
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4">
         <h3 className="text-sm font-semibold">How to play this game</h3>
-        <a
-          href={DISCORD_INVITE_URL}
-          target="_blank"
-          rel="noreferrer"
-          className={textLink("inline-flex min-h-8 items-center text-xs")}
-        >
-          League Discord ↗
-        </a>
+        {DISCORD_INVITE_URL ? (
+          <a
+            href={DISCORD_INVITE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className={textLink("inline-flex min-h-8 items-center text-xs")}
+          >
+            League Discord ↗
+          </a>
+        ) : null}
       </div>
       <div className="p-5">
         <DotaLobbyControls key={lobby.id} kind="inhouse" id={lobby.id} />
@@ -3500,11 +3502,16 @@ function GameSetupCard({
             Host → Lobby Settings → League
           </p>
           <div className="mt-4">
-            <CopyChip value={INHOUSE.LOBBY_TICKET} label="league ticket" />
+            {INHOUSE.LOBBY_TICKET_CONFIGURED ? (
+              <CopyChip value={INHOUSE.LOBBY_TICKET} label="league ticket" />
+            ) : (
+              <p className="text-xs text-muted">{INHOUSE.LOBBY_TICKET}</p>
+            )}
           </div>
           <p className="mt-3 text-xs text-muted">
-            Required: without this ticket, the game will not appear on OpenDota
-            and cannot be recorded on the site.
+            {INHOUSE.LOBBY_TICKET_CONFIGURED
+              ? "Required: without this ticket, the game will not appear on OpenDota and cannot be recorded on the site."
+              : "The league administrators will provide the European ticket before tracked inhouse games begin."}
           </p>
           <a
             href="#opendota-setup"

@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { listPage } from "@/lib/list-page";
@@ -19,7 +20,7 @@ import {
 
 export const metadata = shareMetadata(
   "League news",
-  "Official GGD2L announcements, league updates, and administrator notices.",
+  `Official ${LEAGUE_CONFIG.name} announcements, league updates, and administrator notices.`,
   "/news",
 );
 

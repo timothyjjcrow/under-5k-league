@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { HeroMetaExplorer } from "@/components/hero-meta-explorer";
 import Link from "next/link";
 import type { Metadata } from "next";
@@ -43,7 +44,7 @@ export async function generateMetadata({
   if (!seasonId) {
     return shareMetadata(
       "Hero meta",
-      "The heroes GGD2L players pick, win with, and make their signatures each season.",
+      `The heroes ${LEAGUE_CONFIG.name} players pick, win with, and make their signatures each season.`,
       "/meta",
     );
   }
@@ -55,7 +56,7 @@ export async function generateMetadata({
   if (season.isActive) {
     return shareMetadata(
       "Hero meta",
-      "The heroes GGD2L players pick, win with, and make their signatures each season.",
+      `The heroes ${LEAGUE_CONFIG.name} players pick, win with, and make their signatures each season.`,
       "/meta",
     );
   }

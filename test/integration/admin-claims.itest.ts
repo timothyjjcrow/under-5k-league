@@ -24,6 +24,8 @@ import {
 } from "@/app/actions/admin";
 import { proposeReschedule, respondReschedule } from "@/lib/reschedule-service";
 import { MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { matchNightForWeek } from "@/lib/schedule";
 import type { ActionResult } from "@/lib/action-result";
 import {
   generateRegularSchedule,
@@ -84,6 +86,35 @@ async function seasonWithMatches() {
 // ---------------------------------------------------------------------------
 
 describe("admin schedule writes only touch the rows they claim to", () => {
+  it.each([true, false])("cascades a daylight-saving week move and keeps the playoff anchor (existing anchor: %s)", async (hasAnchor) => {
+    const { season } = await seasonWithMatches();
+    const dates = ["2026-03-15T19:00:00Z", "2026-03-22T19:00:00Z", "2026-03-29T18:00:00Z"];
+    for (const [index, value] of dates.entries()) {
+      await prisma.match.updateMany({
+        where: { seasonId: season.id, week: index + 1 },
+        data: { scheduledAt: new Date(value) },
+      });
+    }
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { firstMatchNight: hasAnchor ? new Date(dates[0]) : null },
+    });
+    const night = new Date("2026-03-29T18:00:00Z");
+    const result = await setWeekNight({}, fd({
+      expectedActiveSeasonId: season.id, week: "2", cascade: "on",
+      night: night.toISOString(), nightTs: String(night.getTime()),
+    }));
+    expect(result).not.toHaveProperty("error");
+    const later = await prisma.match.findFirstOrThrow({ where: { seasonId: season.id, week: 3 } });
+    expect(later.scheduledAt?.toISOString()).toBe(LEAGUE_CONFIG.region === "eu"
+      ? "2026-04-05T18:00:00.000Z" : "2026-04-05T17:00:00.000Z");
+    const updated = await prisma.season.findUniqueOrThrow({ where: { id: season.id } });
+    expect(updated.firstMatchNight?.toISOString()).toBe(LEAGUE_CONFIG.region === "eu"
+      ? "2026-03-22T19:00:00.000Z" : "2026-03-22T18:00:00.000Z");
+    expect(matchNightForWeek(updated.firstMatchNight!, 4).toISOString())
+      .toBe("2026-04-12T18:00:00.000Z");
+  });
+
   it("setWeekNight leaves a COMPLETED match on the night it was played", async () => {
     const { season, matches } = await seasonWithMatches();
     const week = matches[0].week;

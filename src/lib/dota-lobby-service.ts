@@ -11,6 +11,7 @@ import {
 } from "./dota-account";
 import { accountIdToSteamId64 } from "./dota";
 import { UserFacingError } from "./user-facing-error";
+import { LEAGUE_CONFIG } from "./league-config";
 import {
   parseLobbyLeagueId,
   type DotaLobbySpec,
@@ -165,7 +166,7 @@ export async function resolveDotaLobby(
       password: INHOUSE.LOBBY_PASSWORD,
       leagueId,
       gameMode: 2,
-      serverRegion: 2,
+      serverRegion: LEAGUE_CONFIG.gameServerRegionId,
       radiant: team(lobby.radiantTeam),
       dire: team(lobby.radiantTeam === 1 ? 2 : 1),
       radiantName: `Team ${lobby.radiantTeam}`,
@@ -219,14 +220,14 @@ export async function resolveDotaLobby(
     const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
     spec = {
       key,
-      name: `${`LD2L ${match.homeTeam.name} vs ${match.awayTeam.name}`.slice(0, 90)} G${game} ${id.slice(-8)}`,
+      name: `${`${LEAGUE_CONFIG.region === "us" ? "LD2L" : LEAGUE_CONFIG.name} ${match.homeTeam.name} vs ${match.awayTeam.name}`.slice(0, 90)} G${game} ${id.slice(-8)}`,
       password: createHmac("sha256", secret)
         .update(key)
         .digest("hex")
         .slice(0, 12),
       leagueId,
       gameMode: 2,
-      serverRegion: 2,
+      serverRegion: LEAGUE_CONFIG.gameServerRegionId,
       radiant: roster(match.homeTeam),
       dire: roster(match.awayTeam),
       radiantName: match.homeTeam.name,

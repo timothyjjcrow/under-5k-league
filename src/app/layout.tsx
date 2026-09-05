@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import type { Metadata, Viewport } from "next";
 import { Oswald } from "next/font/google";
 import "./globals.css";
@@ -29,20 +30,20 @@ const DESCRIPTION =
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "GGD2L",
-    template: "%s · GGD2L",
+    default: LEAGUE_CONFIG.name,
+    template: `%s · ${LEAGUE_CONFIG.name}`,
   },
   description: DESCRIPTION,
-  applicationName: "GGD2L",
+  applicationName: LEAGUE_CONFIG.name,
   openGraph: {
-    title: "GGD2L",
+    title: LEAGUE_CONFIG.name,
     description: DESCRIPTION,
-    siteName: "GGD2L",
+    siteName: LEAGUE_CONFIG.name,
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "GGD2L",
+    title: LEAGUE_CONFIG.name,
     description: DESCRIPTION,
   },
 };

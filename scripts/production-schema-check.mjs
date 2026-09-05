@@ -1,5 +1,6 @@
 import { inspectPostflightDatabase } from "./migration-postflight.mjs";
 import { productionEnvironmentRequired } from "./vercel-environment.mjs";
+import { executeInstanceSql, instanceIdentitySql } from "./instance-database.mjs";
 
 async function run() {
   if (!productionEnvironmentRequired(process.env)) {
@@ -11,6 +12,7 @@ async function run() {
 
   const { schema, migrationCount, nativeObjectCount } =
     await inspectPostflightDatabase();
+  executeInstanceSql(instanceIdentitySql(process.env));
   console.log(
     `Production schema attestation passed in schema ${schema}: ${migrationCount} migrations and ${nativeObjectCount} native objects verified.`,
   );

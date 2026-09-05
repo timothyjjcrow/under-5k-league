@@ -11,7 +11,9 @@ import { LobbyController, BotError } from "./controller.mjs";
 import { readSteamAuth, writeSteamAuth } from "./auth-store.mjs";
 import { RelayClient, relayConnection } from "./relay-client.mjs";
 import { runWithProcessLock } from "./process-lock.mjs";
+import { gameServerRegion } from "./region.mjs";
 
+const serverRegion = gameServerRegion(process.env.DOTA_GAME_SERVER_REGION);
 const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
 if (secret.length < 32 || secret.length > 512 || /\s/.test(secret))
   throw new Error(
@@ -45,6 +47,7 @@ function send(id, type, data = {}) {
   );
 }
 const controller = new LobbyController({
+  serverRegion,
   file: resolve(stateDir, "lobbies.json"),
   transport: {
     steamId: () => user.steamID?.getSteamID64(),
@@ -86,6 +89,7 @@ function control(request) {
         lobbyId: controller.lobby?.lobbyId ?? null,
         gameMode: controller.lobby?.gameMode ?? null,
         serverRegion: controller.lobby?.serverRegion ?? null,
+        configuredServerRegion: serverRegion,
         leagueId: controller.lobby?.leagueid ?? null,
       },
     };

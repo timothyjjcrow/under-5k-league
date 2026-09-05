@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { buttonClasses } from "@/components/ui";
 
@@ -17,7 +18,7 @@ export default function NotFound() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/brand/ggd2l-logo.png"
-            alt="GGD2L"
+            alt={LEAGUE_CONFIG.name}
             width={768}
             height={512}
             className="animate-hero-float h-20 w-auto"

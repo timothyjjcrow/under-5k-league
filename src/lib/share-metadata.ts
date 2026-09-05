@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "./league-config";
 import type { Metadata } from "next";
 
 /**
@@ -20,7 +21,7 @@ export function shareMetadata(
     openGraph: {
       title,
       description,
-      siteName: "GGD2L",
+      siteName: LEAGUE_CONFIG.name,
       type: "website",
       images: ["/opengraph-image.png"],
       ...(pathname ? { url: pathname } : {}),

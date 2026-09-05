@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -48,7 +49,7 @@ export async function generateMetadata({
   const generic = () =>
     shareMetadata(
       "Pick'em",
-      "Call every GGD2L match before kickoff and climb the season's oracle board.",
+      `Call every ${LEAGUE_CONFIG.name} match before kickoff and climb the season's oracle board.`,
       "/pickem",
     );
   if (!seasonId) return generic();

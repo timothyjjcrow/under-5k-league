@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync, closeSync, constants, existsSync, fchmodSync, fstatSync,
-  lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync,
+  lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync,
   unlinkSync, writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -11,6 +11,33 @@ import { parseEnv } from "node:util";
 
 export const LABEL = "com.ggd2l.dota-lobby-bot";
 const workerDir = dirname(fileURLToPath(import.meta.url));
+const USAGE = "Usage: node macos-service.mjs install [--keep-awake] [--instance eu] | status|stop|start|uninstall [--instance eu]";
+
+export function serviceInstance(instance) {
+  if (instance !== undefined && !/^[a-z][a-z0-9-]{0,31}$/.test(instance))
+    throw new Error("Use a short lowercase service instance name, such as eu.");
+  return {
+    label: instance ? `${LABEL}.${instance}` : LABEL,
+    envFile: instance ? `.env.${instance}` : ".env",
+  };
+}
+
+export function serviceArguments(args) {
+  const [command, ...options] = args;
+  let instance;
+  let keepAwake = false;
+  for (let i = 0; i < options.length; i += 1) {
+    if (options[i] === "--instance" && instance === undefined && options[i + 1])
+      instance = options[++i];
+    else if (options[i] === "--keep-awake" && !keepAwake && command === "install")
+      keepAwake = true;
+    else throw new Error(USAGE);
+  }
+  serviceInstance(instance);
+  if (!["install", "status", "stop", "start", "uninstall"].includes(command))
+    throw new Error(USAGE);
+  return { command, instance, keepAwake };
+}
 
 function xml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -19,14 +46,14 @@ function xml(value) {
 }
 
 /** Paths only: credentials remain in the private .env and Steam session files. */
-export function renderLaunchAgent({ nodePath, directory, envPath, logDir, keepAwake = false }) {
+export function renderLaunchAgent({ nodePath, directory, envPath, logDir, label = LABEL, keepAwake = false }) {
   const argumentsList = [nodePath, `--env-file=${envPath}`, resolve(directory, "server.mjs")];
   if (keepAwake) argumentsList.unshift("/usr/bin/caffeinate", "-i");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>${LABEL}</string>
+  <key>Label</key><string>${xml(label)}</string>
   <key>ProgramArguments</key>
   <array>
 ${argumentsList.map((argument) => `    <string>${xml(argument)}</string>`).join("\n")}
@@ -67,16 +94,45 @@ function privateFile(file, flags) {
   }
 }
 
-function settings() {
-  const envPath = resolve(workerDir, ".env");
-  if (!existsSync(envPath)) throw new Error("Create ops/dota-lobby-bot/.env before installing the Mac service.");
-  const descriptor = privateFile(envPath, constants.O_RDONLY);
-  let configuration;
-  try { configuration = parseEnv(readFileSync(descriptor, "utf8")); }
+function readConfiguration(file) {
+  const descriptor = privateFile(file, constants.O_RDONLY);
+  try { return parseEnv(readFileSync(descriptor, "utf8")); }
   finally { closeSync(descriptor); }
+}
+
+export function assertInstanceIsolation(configuration, peers, directory = workerDir) {
+  const statePath = (value) => {
+    const path = resolve(directory, value || "./state");
+    return existsSync(path) ? realpathSync(path) : path;
+  };
+  const stateDir = statePath(configuration.DOTA_BOT_STATE_DIR);
+  const port = Number(configuration.PORT || 8090);
+  for (const peer of peers) {
+    if (stateDir === statePath(peer.DOTA_BOT_STATE_DIR))
+      throw new Error("Bot instances must use separate DOTA_BOT_STATE_DIR values. This directory is already configured for another bot.");
+    if (port === Number(peer.PORT || 8090))
+      throw new Error("Bot instances must use separate PORT values. This port is already configured for another bot.");
+  }
+}
+
+function settings(instance) {
+  const { label, envFile } = serviceInstance(instance);
+  const envPath = resolve(workerDir, envFile);
+  if (!existsSync(envPath)) throw new Error(`Create ops/dota-lobby-bot/${envFile} before installing the Mac service.`);
+  const configuration = readConfiguration(envPath);
   const stateDir = resolve(workerDir, configuration.DOTA_BOT_STATE_DIR || "./state");
+  if (instance && (!configuration.DOTA_BOT_STATE_DIR || stateDir === resolve(workerDir, "state")))
+    throw new Error("A named bot instance requires its own DOTA_BOT_STATE_DIR, such as ./state/eu.");
+  if (instance && (!/^\d+$/.test(configuration.PORT ?? "") || Number(configuration.PORT) === 8090 || Number(configuration.PORT) < 1 || Number(configuration.PORT) > 65535))
+    throw new Error("A named bot instance requires its own valid PORT, such as 8091.");
+  // Compare the actual peer settings too: the US worker may already use a
+  // customized state path or port. Values stay private and never enter errors.
+  const peers = readdirSync(workerDir)
+    .filter((file) => file !== envFile && file !== ".env.example" && /^\.env(?:\.[a-z][a-z0-9-]{0,31})?$/.test(file))
+    .map((file) => readConfiguration(resolve(workerDir, file)));
+  assertInstanceIsolation(configuration, peers);
   return {
-    nodePath: realpathSync(process.execPath), directory: workerDir, envPath,
+    nodePath: realpathSync(process.execPath), directory: workerDir, envPath, label,
     stateDir, logDir: resolve(stateDir, "logs"),
   };
 }
@@ -124,22 +180,19 @@ function assertNoWorkerLock(stateDir) {
 }
 
 export function main(args = process.argv.slice(2)) {
-  const [command, ...options] = args;
-  if (command === "--help" || command === "help") {
-    console.log("Usage: node macos-service.mjs install [--keep-awake] | status | stop | start | uninstall");
+  if (args[0] === "--help" || args[0] === "help") {
+    console.log(USAGE);
     console.log("Runs at Mac user login without ChatGPT or a terminal. --keep-awake prevents idle system sleep while the bot runs; it does not keep a closed or shut-down Mac online.");
     return;
   }
-  if (!["install", "status", "stop", "start", "uninstall"].includes(command) ||
-      options.length > 1 || options.some((option) => option !== "--keep-awake") ||
-      (options.length && command !== "install"))
-    throw new Error("Usage: node macos-service.mjs install [--keep-awake] | status | stop | start | uninstall");
+  const { command, instance, keepAwake } = serviceArguments(args);
   if (process.platform !== "darwin") throw new Error("This service helper only supports macOS.");
   if (process.getuid() === 0) throw new Error("Run this helper as your logged-in Mac user, without sudo.");
   const domain = `gui/${process.getuid()}`;
-  const service = `${domain}/${LABEL}`;
+  const { label } = serviceInstance(instance);
+  const service = `${domain}/${label}`;
   const launchAgentsDir = resolve(homedir(), "Library/LaunchAgents");
-  const plistPath = resolve(launchAgentsDir, `${LABEL}.plist`);
+  const plistPath = resolve(launchAgentsDir, `${label}.plist`);
   if (command === "status") return describeService(service, plistPath);
 
   if (command === "stop" || command === "uninstall") {
@@ -161,7 +214,7 @@ export function main(args = process.argv.slice(2)) {
   if (command === "start" && !existsSync(plistPath))
     throw new Error("The Mac service is not installed. Run install first.");
 
-  const configuration = settings();
+  const configuration = settings(instance);
   assertNoWorkerLock(configuration.stateDir);
   privateDirectory(configuration.stateDir);
   privateDirectory(configuration.logDir);
@@ -172,7 +225,7 @@ export function main(args = process.argv.slice(2)) {
     mkdirSync(launchAgentsDir, { recursive: true });
     const temporary = `${plistPath}.${process.pid}.tmp`;
     try {
-      writeFileSync(temporary, renderLaunchAgent({ ...configuration, keepAwake: options.includes("--keep-awake") }), { flag: "wx", mode: 0o600 });
+      writeFileSync(temporary, renderLaunchAgent({ ...configuration, keepAwake }), { flag: "wx", mode: 0o600 });
       execFileSync("/usr/bin/plutil", ["-lint", temporary], { stdio: "pipe" });
       renameSync(temporary, plistPath);
     } finally {
@@ -183,7 +236,7 @@ export function main(args = process.argv.slice(2)) {
   launchctl(["bootstrap", domain, plistPath]);
   console.log("Mac bot service loaded. It will run at user login and can continue after ChatGPT closes.");
   console.log(`Private logs: ${configuration.logDir}`);
-  if (options.includes("--keep-awake")) console.log("Idle system sleep prevention enabled while the bot runs. Keep the Mac powered and its lid open.");
+  if (keepAwake) console.log("Idle system sleep prevention enabled while the bot runs. Keep the Mac powered and its lid open.");
   describeService(service, plistPath);
 }
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -254,7 +256,7 @@ export function SiteHeader({
         <div className="mx-auto flex h-20 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
           <Link
             href="/"
-            aria-label="GGD2L — home"
+            aria-label={`${LEAGUE_CONFIG.name} — home`}
             className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
             {/* Tight-cropped emblem (glow/margins trimmed) sized to nearly fill
@@ -262,11 +264,16 @@ export function SiteHeader({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/ggd2l-logo-nav.png"
-              alt="GGD2L"
+              alt={LEAGUE_CONFIG.name}
               width={520}
               height={427}
               className="h-[76px] w-auto"
             />
+            {LEAGUE_CONFIG.region === "eu" ? (
+              <span className="ml-2 rounded border border-accent/40 px-1.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-accent">
+                Europe
+              </span>
+            ) : null}
           </Link>
 
           {/* Internal pages need league context without making users scroll to

@@ -2,15 +2,75 @@
 // Pure + testable.
 
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { LEAGUE_CONFIG } from "./league-config";
 
 export type Pairing = { home: string; away: string };
 
-/** Week N's match night: week 1 = the first night, each later week +7 days. */
-export function matchNightForWeek(firstNight: Date, week: number): Date {
-  return new Date(firstNight.getTime() + (week - 1) * 7 * 24 * 60 * 60 * 1000);
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// Existing US seasons were generated in UTC intervals. Preserve their anchors
+// and future playoff dates; new EU seasons follow the configured local clock.
+const SCHEDULE_TIME_ZONE = LEAGUE_CONFIG.region === "eu" ? LEAGUE_CONFIG.timeZone : null;
+
+function wallTime(date: Date, formatter: Intl.DateTimeFormat): number {
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date).map(({ type, value }) => [type, value]),
+  );
+  return Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour), Number(parts.minute), Number(parts.second),
+    date.getUTCMilliseconds(),
+  );
 }
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+function timeFormatter(timeZone: string) {
+  return new Intl.DateTimeFormat("en-US-u-ca-gregory", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
+}
+
+function dateAtWallTime(target: number, formatter: Intl.DateTimeFormat): Date {
+  const offsets = new Set<number>();
+  // Sample both sides of a possible clock change, including half-hour changes.
+  for (const hours of [-36, 0, 36]) {
+    const sample = new Date(target + hours * 3_600_000);
+    offsets.add(wallTime(sample, formatter) - sample.getTime());
+  }
+  const candidates = [...offsets].map((offset) => new Date(target - offset));
+  const exact = candidates.filter((date) => wallTime(date, formatter) === target);
+  // A repeated local time chooses the earlier occurrence. A skipped local time
+  // moves forward by the clock change, matching calendar scheduling semantics.
+  if (exact.length) return new Date(Math.min(...exact.map((date) => date.getTime())));
+  const after = candidates.filter((date) => wallTime(date, formatter) > target);
+  return new Date(Math.min(...after.map((date) => date.getTime())));
+}
+
+/** Week N's match night, preserving the local clock across daylight saving. */
+export function matchNightForWeek(
+  firstNight: Date,
+  week: number,
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): Date {
+  if (!timeZone || week === 1)
+    return new Date(firstNight.getTime() + (week - 1) * WEEK_MS);
+  const formatter = timeFormatter(timeZone);
+  const target = wallTime(firstNight, formatter) + (week - 1) * WEEK_MS;
+  return dateAtWallTime(target, formatter);
+}
+
+/** Apply a league-night move to other fixtures, retaining local-clock offsets. */
+export function shiftMatchNight(
+  date: Date,
+  previousNight: Date,
+  nextNight: Date,
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): Date {
+  if (!timeZone)
+    return new Date(date.getTime() + nextNight.getTime() - previousNight.getTime());
+  const formatter = timeFormatter(timeZone);
+  const delta = wallTime(nextNight, formatter) - wallTime(previousNight, formatter);
+  return dateAtWallTime(wallTime(date, formatter) + delta, formatter);
+}
 
 /**
  * The league night for `week`, rolled forward if that date has already passed.
@@ -29,11 +89,18 @@ export function upcomingMatchNight(
   firstNight: Date,
   week: number,
   nowMs: number,
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
 ): Date {
-  const t = matchNightForWeek(firstNight, week);
-  if (t.getTime() > nowMs) return t;
-  const weeksBehind = Math.ceil((nowMs - t.getTime()) / WEEK_MS);
-  return new Date(t.getTime() + weeksBehind * WEEK_MS);
+  const t = matchNightForWeek(firstNight, week, timeZone);
+  if (t.getTime() >= nowMs) return t;
+  let nextWeek = week + Math.max(0, Math.floor((nowMs - t.getTime()) / WEEK_MS));
+  let next = matchNightForWeek(firstNight, nextWeek, timeZone);
+  // UTC estimates can be an hour either side of a daylight-saving boundary.
+  while (next.getTime() < nowMs) {
+    nextWeek += 1;
+    next = matchNightForWeek(firstNight, nextWeek, timeZone);
+  }
+  return next;
 }
 
 /**

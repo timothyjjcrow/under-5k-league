@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -127,7 +128,7 @@ export async function generateMetadata({
   ].filter((highlight): highlight is string => highlight !== null);
   return shareMetadata(
     `${user.name} · Player`,
-    `${user.name}'s player profile${highlights.length > 0 ? ` · ${highlights.join(" · ")}` : ""} — match history in GGD2L.`,
+    `${user.name}'s player profile${highlights.length > 0 ? ` · ${highlights.join(" · ")}` : ""} — match history in ${LEAGUE_CONFIG.name}.`,
   );
 }
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DotaLobbyView, LobbyAction, LobbyKind } from "@/lib/dota-lobby";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { buttonClasses } from "./ui";
 
 const labels = {
@@ -84,7 +85,7 @@ export function DotaLobbyControls({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">Steam lobby bot</h3>
-        <span className="text-xs text-muted">Captains Mode · US East</span>
+        <span className="text-xs text-muted">Captains Mode · {LEAGUE_CONFIG.gameServerRegion}</span>
       </div>
       {view?.enabled === false ? (
         <p className="text-sm text-muted">

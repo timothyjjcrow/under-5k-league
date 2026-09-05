@@ -1,4 +1,5 @@
 import { deploymentCookieName } from "./cookie-policy";
+import { LEAGUE_CONFIG } from "./league-config";
 
 // Central place for the string-union "enums" (SQLite has no native enums) and
 // tunable league defaults. Keeping these here makes the state machine explicit.
@@ -234,9 +235,10 @@ export const INHOUSE = {
   // Fixed custom-lobby details. The league ticket is operationally required:
   // without it Valve does not publish the private game to OpenDota, so the
   // existing player-account result scan has nothing to discover.
-  LOBBY_NAME: "GGD2L Inhouse",
+  LOBBY_NAME: `${LEAGUE_CONFIG.name} Inhouse`,
   LOBBY_PASSWORD: "ggd2l",
-  LOBBY_TICKET: "Under 5K In-House League",
+  LOBBY_TICKET: LEAGUE_CONFIG.inhouseLeagueName,
+  LOBBY_TICKET_CONFIGURED: LEAGUE_CONFIG.inhouseLeagueConfigured,
   // Keep the fast room rate for ready checks, captain votes, picks and bets.
   // Waiting rosters and games in progress need fewer database round trips.
   POLL_QUEUE_MS: 5000,
@@ -495,22 +497,16 @@ export const LEGACY_SESSION_COOKIE = "ld2l_session";
 export const SESSION_COOKIE = deploymentCookieName(LEGACY_SESSION_COOKIE);
 
 // Community — the league's Discord invite.
-export const DISCORD_INVITE_URL = "https://discord.gg/H7PJ4VxUGh";
+export const DISCORD_INVITE_URL = LEAGUE_CONFIG.discordInviteUrl;
 
 // Weekly match slot — surfaced before signup so players know the commitment.
-// Change here to adjust it league-wide (can become a per-season setting later).
-export const MATCH_SCHEDULE = {
-  day: "Sundays",
-  time: "6:00 PM",
-  timezone: "PST",
-  /** Full human label shown wherever the match time appears. */
-  label: "Sundays at 6:00 PM PST",
-} as const;
+// Set public deployment configuration to adjust it league-wide. Seasons can
+// override the displayed label independently from this regional default.
+export const MATCH_SCHEDULE = LEAGUE_CONFIG.matchSchedule;
 
 // Dota 2 matchmaking region every league game is hosted on. Surfaced on the
-// home page so players know where they'll be playing. Change here to adjust it
-// league-wide.
-export const GAME_SERVER_REGION = "US East" as const;
+// home page so players know where they'll be playing.
+export const GAME_SERVER_REGION = LEAGUE_CONFIG.gameServerRegion;
 
 // MMR policy. 4.5K is a SOFT limit, not a hard cap: players above it can still
 // sign up, but they're reviewed before the draft (`Season.maxMmr` is that

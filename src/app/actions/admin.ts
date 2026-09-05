@@ -35,6 +35,7 @@ import {
 import {
   roundRobin,
   matchNightForWeek,
+  shiftMatchNight,
   slotRound,
   hasLaterBracketRound,
 } from "@/lib/schedule";
@@ -5513,7 +5514,7 @@ export async function setWeekNight(
           .map((match) => ({ match, scheduledAt: night }));
         const laterMoves = laterMatches.map((match) => ({
           match,
-          scheduledAt: new Date(match.scheduledAt!.getTime() + delta),
+          scheduledAt: shiftMatchNight(match.scheduledAt!, new Date(current!), night),
         }));
         const moves = [...currentMoves, ...laterMoves];
 
@@ -5558,13 +5559,12 @@ export async function setWeekNight(
         // the moved league rhythm. If generation had no first night, derive the
         // missing week-1 anchor from the newly scheduled week.
         let firstMatchNight = currentSeason.firstMatchNight;
-        const weekMs = 7 * 24 * 60 * 60 * 1000;
         if (week === 1) {
           firstMatchNight = night;
         } else if (firstMatchNight && delta !== 0) {
-          firstMatchNight = new Date(firstMatchNight.getTime() + delta);
+          firstMatchNight = shiftMatchNight(firstMatchNight, new Date(current!), night);
         } else if (!firstMatchNight) {
-          firstMatchNight = new Date(night.getTime() - (week - 1) * weekMs);
+          firstMatchNight = matchNightForWeek(night, 2 - week);
         }
         if (
           firstMatchNight?.getTime() !==

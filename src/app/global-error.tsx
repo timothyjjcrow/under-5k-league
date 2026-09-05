@@ -1,5 +1,7 @@
 "use client";
 
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+
 import { useEffect } from "react";
 
 /**
@@ -37,7 +39,7 @@ export default function GlobalError({
             'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
         }}
       >
-        <title>Unable to load GGD2L</title>
+        <title>Unable to load {LEAGUE_CONFIG.name}</title>
         <main
           style={{
             width: "100%",
@@ -54,7 +56,7 @@ export default function GlobalError({
             ⚠️
           </div>
           <h1 style={{ margin: "12px 0 0", fontSize: "28px" }}>
-            GGD2L couldn&apos;t load
+            {LEAGUE_CONFIG.name} couldn&apos;t load
           </h1>
           <p style={{ margin: "12px 0 0", color: "#aab5c8", lineHeight: 1.5 }}>
             The league data may be temporarily unavailable. Try again; if the

@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { cache } from "react";
 import { prisma } from "@/lib/prisma";
 import type { Metadata } from "next";
@@ -58,7 +59,7 @@ export async function generateMetadata({
     if (!participantIds.has(a) || !participantIds.has(b)) {
       return shareMetadata(
         "Compare players",
-        "Compare two GGD2L players across every imported league game, including careers, heroes, and shared results.",
+        `Compare two ${LEAGUE_CONFIG.name} players across every imported league game, including careers, heroes, and shared results.`,
         "/players/compare",
       );
     }
@@ -71,14 +72,14 @@ export async function generateMetadata({
       const title = `${names.get(a)} vs ${names.get(b)}`;
       return shareMetadata(
         title,
-        `${title} — all-time GGD2L careers, heroes, and head-to-head results.`,
+        `${title} — all-time ${LEAGUE_CONFIG.name} careers, heroes, and head-to-head results.`,
         `/players/compare?${new URLSearchParams({ a, b })}`,
       );
     }
   }
   return shareMetadata(
     "Compare players",
-    "Compare two GGD2L players across every imported league game, including careers, heroes, and shared results.",
+    `Compare two ${LEAGUE_CONFIG.name} players across every imported league game, including careers, heroes, and shared results.`,
     "/players/compare",
   );
 }

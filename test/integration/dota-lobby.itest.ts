@@ -14,6 +14,7 @@ import {
   callLobbyBot,
 } from "@/lib/dota-lobby-service";
 import { parseLobbyLeagueId } from "@/lib/dota-lobby";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getSessionUser } from "@/lib/auth";
 import { POST } from "@/app/api/dota-lobby/route";
 vi.mock("@/lib/auth", () => ({ getSessionUser: vi.fn() }));
@@ -83,7 +84,7 @@ describe("Dota lobby authorization and settings", () => {
       expect(fetch).not.toHaveBeenCalled();
     },
   );
-  it("uses the season ticket, Captains Mode, US East, stable credentials, and a new key for game two", async () => {
+  it("uses the season ticket, Captains Mode, configured region, stable credentials, and a new key for game two", async () => {
     const { home, away, match } = await fixture();
     const first = await resolveDotaLobby(
       asSession(home.user),
@@ -96,7 +97,7 @@ describe("Dota lobby authorization and settings", () => {
       spec: {
         leagueId: 12345,
         gameMode: 2,
-        serverRegion: 2,
+        serverRegion: LEAGUE_CONFIG.gameServerRegionId,
         radiant: [home.user.steamId],
         dire: [away.user.steamId],
       },
@@ -202,7 +203,7 @@ describe("Dota lobby authorization and settings", () => {
       spec: {
         leagueId: 54321,
         gameMode: 2,
-        serverRegion: 2,
+        serverRegion: LEAGUE_CONFIG.gameServerRegionId,
         radiant: [player.steamId],
         dire: [captain.steamId],
       },

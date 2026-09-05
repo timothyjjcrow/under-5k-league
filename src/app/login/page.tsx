@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -69,13 +70,13 @@ export default async function LoginPage({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/ggd2l-logo.png"
-              alt="GGD2L — amateur Dota 2 league"
+              alt={`${LEAGUE_CONFIG.name} — amateur Dota 2 league`}
               width={768}
               height={512}
               className="mx-auto w-44 max-w-full sm:w-52"
             />
             <h1 className="mt-3 font-display text-2xl font-semibold text-fg">
-              Sign in to GGD2L
+              Sign in to {LEAGUE_CONFIG.name}
             </h1>
             <p className="mt-4 text-sm text-muted">
               {intro}

@@ -39,7 +39,7 @@ const snapshot = (overrides = {}) => ({
   allMembers: ids.map((id, i) => ({ id, team: i < 5 ? 0 : 1 })),
   ...overrides,
 });
-function setup(t) {
+function setup(t, configuration = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ld2l-bot-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const calls = [];
@@ -51,7 +51,7 @@ function setup(t) {
     removeBotFromTeam: () => calls.push("kick"),
   };
   let now = 100;
-  const options = { file: join(dir, "state.json"), transport, now: () => now };
+  const options = { file: join(dir, "state.json"), transport, now: () => now, ...configuration };
   const controller = new LobbyController(options);
   controller.online = true;
   // Equivalent to a full GC welcome confirming an empty account cache.
@@ -65,6 +65,30 @@ function setup(t) {
     },
   };
 }
+test("US and EU bots accept only their configured server region", (t) => {
+  const eu = { ...spec, serverRegion: 3 };
+  assert.equal(validSpec(eu), false);
+  assert.equal(validSpec(eu, 3), true);
+  assert.equal(validSpec(spec, 3), false);
+  const { controller: c, calls } = setup(t, { serverRegion: 3 });
+  assert.throws(() => c.request("create", spec), /INVALID/);
+  assert.deepEqual(calls, []);
+  assert.equal(c.request("create", eu).state, "creating");
+  c.snapshot(snapshot({ serverRegion: 3 }));
+  assert.equal(c.status(eu.key).state, "ready");
+  assert.equal(c.request("start", eu).state, "starting");
+  assert.deepEqual(calls, ["create", "start"]);
+});
+
+test("an EU bot cannot start a lobby moved to the US region", (t) => {
+  const { controller: c, calls } = setup(t, { serverRegion: 3 });
+  const eu = { ...spec, serverRegion: 3 };
+  c.request("create", eu);
+  c.snapshot(snapshot({ serverRegion: 2 }));
+  assert.equal(c.status(eu.key).state, "blocked");
+  assert.throws(() => c.request("start", eu), /STATE/);
+  assert.deepEqual(calls, ["create"]);
+});
 test("an online session needs confirmed lobby absence before creating", (t) => {
   const { calls, options } = setup(t);
   const c = new LobbyController(options);

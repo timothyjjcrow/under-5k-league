@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -69,7 +70,7 @@ export async function generateMetadata({
   if (!team) notFound();
   return shareMetadata(
     team.name,
-    `${team.name} — roster, results, and stats in GGD2L.`,
+    `${team.name} — roster, results, and stats in ${LEAGUE_CONFIG.name}.`,
   );
 }
 

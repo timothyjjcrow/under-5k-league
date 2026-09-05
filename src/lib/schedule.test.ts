@@ -16,6 +16,7 @@ import {
   bracketSkeleton,
   groupPlayoffRounds,
   matchNightForWeek,
+  shiftMatchNight,
   upcomingMatchNight,
 } from "./schedule";
 
@@ -29,6 +30,41 @@ describe("matchNightForWeek", () => {
   it("adds exactly 7 days per week", () => {
     const w3 = matchNightForWeek(first, 3);
     expect(w3.getTime() - first.getTime()).toBe(14 * 24 * 3600 * 1000);
+  });
+
+  it("keeps the existing US fixed intervals across daylight saving", () => {
+    const first = new Date("2026-10-25T18:00:00-07:00");
+    expect(matchNightForWeek(first, 2, null).toISOString()).toBe("2026-11-02T01:00:00.000Z");
+  });
+
+  it.each([
+    ["2026-03-22T20:00:00+01:00", "2026-03-29T18:00:00.000Z", 167],
+    ["2026-10-18T20:00:00+02:00", "2026-10-25T19:00:00.000Z", 169],
+  ])("keeps the European match night at 20:00 from %s", (start, expected, hours) => {
+    const first = new Date(start);
+    const second = matchNightForWeek(first, 2, "Europe/Berlin");
+    expect(second.toISOString()).toBe(expected);
+    expect(second.getTime() - first.getTime()).toBe(Number(hours) * 3_600_000);
+    expect(matchNightForWeek(second, 0, "Europe/Berlin")).toEqual(first);
+  });
+
+  it("handles skipped and repeated local times deterministically", () => {
+    expect(matchNightForWeek(new Date("2026-03-22T02:30:00+01:00"), 2, "Europe/Berlin").toISOString())
+      .toBe("2026-03-29T01:30:00.000Z");
+    expect(matchNightForWeek(new Date("2026-10-18T02:30:00+02:00"), 2, "Europe/Berlin").toISOString())
+      .toBe("2026-10-25T00:30:00.000Z");
+  });
+});
+
+describe("shiftMatchNight", () => {
+  it("cascades a one-week European delay without moving the evening clock", () => {
+    const previous = new Date("2026-03-22T20:00:00+01:00");
+    const next = new Date("2026-03-29T20:00:00+02:00");
+    const outlier = new Date("2026-04-06T21:30:00+02:00");
+    expect(shiftMatchNight(outlier, previous, next, "Europe/Berlin").toISOString())
+      .toBe("2026-04-13T19:30:00.000Z");
+    expect(shiftMatchNight(outlier, previous, next, null).toISOString())
+      .toBe("2026-04-13T18:30:00.000Z");
   });
 });
 
@@ -64,6 +100,23 @@ describe("upcomingMatchNight", () => {
     for (let w = 1; w <= 12; w++) {
       expect(upcomingMatchNight(first, w, now).getTime()).toBeGreaterThan(now);
     }
+  });
+
+  it("rolls late European playoff rounds forward across both clock changes", () => {
+    expect(upcomingMatchNight(
+      new Date("2026-03-15T20:00:00+01:00"), 2,
+      new Date("2026-03-29T19:30:00+02:00").getTime(), "Europe/Berlin",
+    ).toISOString()).toBe("2026-03-29T18:00:00.000Z");
+    expect(upcomingMatchNight(
+      new Date("2026-10-11T20:00:00+02:00"), 2,
+      new Date("2026-10-25T19:30:00+01:00").getTime(), "Europe/Berlin",
+    ).toISOString()).toBe("2026-10-25T19:00:00.000Z");
+  });
+
+  it("keeps a playoff kickoff that is due exactly now", () => {
+    const first = new Date("2026-10-18T20:00:00+02:00");
+    const now = new Date("2026-10-25T20:00:00+01:00").getTime();
+    expect(upcomingMatchNight(first, 2, now, "Europe/Berlin").getTime()).toBe(now);
   });
 });
 

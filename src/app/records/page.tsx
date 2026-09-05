@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
@@ -25,7 +26,7 @@ import { shareMetadata } from "@/lib/share-metadata";
 
 export const metadata = shareMetadata(
   "Record book",
-  "GGD2L's all-time single-game player and match records across every retained season.",
+  `${LEAGUE_CONFIG.name}'s all-time single-game player and match records across every retained season.`,
   "/records",
 );
 

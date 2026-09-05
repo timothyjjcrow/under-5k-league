@@ -7,7 +7,7 @@ export class BotError extends Error {
   }
 }
 
-export function validSpec(s) {
+export function validSpec(s, serverRegion = 2) {
   const ids = [...(s?.radiant ?? []), ...(s?.dire ?? [])];
   return (
     typeof s?.key === "string" &&
@@ -22,7 +22,8 @@ export function validSpec(s) {
     s.leagueId > 0 &&
     s.leagueId <= 0xffffffff &&
     s.gameMode === 2 &&
-    s.serverRegion === 2 &&
+    [2, 3].includes(serverRegion) &&
+    s.serverRegion === serverRegion &&
     Array.isArray(s.radiant) &&
     Array.isArray(s.dire) &&
     s.radiant.length <= 10 &&
@@ -82,10 +83,12 @@ function safeToLeave(lobby, job) {
  * Reconcile only the unique name/password on the account's actual GC snapshot.
  */
 export class LobbyController {
-  constructor({ file, transport, now = Date.now }) {
+  constructor({ file, transport, now = Date.now, serverRegion = 2 }) {
+    if (![2, 3].includes(serverRegion)) throw new Error("Unsupported bot server region");
     this.file = file;
     this.transport = transport;
     this.now = now;
+    this.serverRegion = serverRegion;
     this.lobby = null;
     this.online = false;
     this.absenceConfirmed = false;
@@ -122,7 +125,7 @@ export class LobbyController {
     };
   }
   request(action, spec) {
-    if (!validSpec(spec)) throw new BotError("INVALID");
+    if (!validSpec(spec, this.serverRegion)) throw new BotError("INVALID");
     if (action === "status") return this.status(spec.key);
     if (!this.online) throw new BotError("OFFLINE");
     let job = this.data.jobs[spec.key];
