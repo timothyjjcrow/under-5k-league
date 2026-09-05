@@ -41,7 +41,7 @@ describe("provider cooldown safety", () => {
   });
 
   it("fails closed without logging a secret-bearing database exception", async () => {
-    mocks.updateMany.mockRejectedValue(
+    mocks.executeRaw.mockRejectedValue(
       new Error("postgresql://user:super-secret@internal-db/league"),
     );
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -59,7 +59,22 @@ describe("provider cooldown safety", () => {
       "[provider-cooldown] claim unavailable (open-dota-profile)",
     );
     expect(JSON.stringify(log.mock.calls)).not.toContain("super-secret");
-    expect(mocks.executeRaw).not.toHaveBeenCalled();
+    expect(mocks.executeRaw).toHaveBeenCalledTimes(1);
+    expect(mocks.updateMany).not.toHaveBeenCalled();
     log.mockRestore();
+  });
+
+  it.each([
+    [1, "claimed"],
+    [0, "cooldown"],
+  ] as const)("resolves a %i-row claim with one database call", async (count, result) => {
+    mocks.executeRaw.mockResolvedValue(count);
+
+    await expect(
+      claimProviderCooldown("open-dota-profile", "user-1", 123456, 1_700_000_000_000),
+    ).resolves.toBe(result);
+
+    expect(mocks.executeRaw).toHaveBeenCalledTimes(1);
+    expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 });

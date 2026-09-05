@@ -268,7 +268,7 @@ export function seasonSettingScopeWhere(
  * Atomic global throttle (Setting-row claim). ISO timestamps compare
  * lexicographically, so the conditional update below is a valid "only if
  * stale" claim: exactly one caller wins per interval, across every serverless
- * instance, with no lock and no cron. Returns true to the winner only.
+ * instance, without a process-local lock or cron. Returns true to the winner only.
  *
  * Lives here rather than beside its first caller because unrelated subsystems
  * now need it (result sync, announcement retries, room maintenance, provider
@@ -283,29 +283,23 @@ export async function claimThrottle(
   const value = new Date(nowMs).toISOString();
   const staleBefore = new Date(nowMs - intervalSeconds * 1000).toISOString();
 
-  // Try the STALE-CLAIM update first. The row exists on every call but the
-  // first, so leading with `create` meant a caught-and-ignored P2002 on
-  // essentially every hot caller. Before the production log policy was
-  // hardened, Prisma emitted that caught conflict directly, burying useful
-  // diagnostics under expected-path noise.
-  const updated = await prisma.setting.updateMany({
-    where: { key, value: { lt: staleBefore } },
-    data: { value },
-  });
-  if (updated.count > 0) return true;
-
-  // Zero rows means either "exists but still fresh" (not our claim) or "row
-  // isn't there yet" (first ever call). Claim that first row with the same
-  // conflict-skipping primitive used by bootstrap: both supported databases
-  // implement this standard form, and a losing first-call race stays an
-  // ordinary zero-row result instead of making Prisma print a caught P2002 as
-  // an application error.
-  const created = await prisma.$executeRaw`
+  // One statement handles initial creation and stale claims on both SQLite
+  // and Postgres. Most callers lose to an existing fresh claim: the indexed
+  // NOT EXISTS read skips the insert before conflict handling, avoiding both
+  // the old second query and Postgres's row lock for a rejected DO UPDATE.
+  // A concurrent first/stale claim can still pass that read; the conditional
+  // conflict update is the atomic final guard that elects exactly one winner.
+  const claimed = await prisma.$executeRaw`
     INSERT INTO "Setting" ("key", "value")
-    VALUES (${key}, ${value})
-    ON CONFLICT ("key") DO NOTHING
+    SELECT ${key}, ${value}
+    WHERE NOT EXISTS (
+      SELECT 1 FROM "Setting"
+      WHERE "key" = ${key} AND "value" >= ${staleBefore}
+    )
+    ON CONFLICT ("key") DO UPDATE SET "value" = excluded."value"
+    WHERE "Setting"."value" < ${staleBefore}
   `;
-  return created > 0;
+  return claimed > 0;
 }
 
 /**
