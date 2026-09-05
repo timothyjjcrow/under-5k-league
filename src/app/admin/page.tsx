@@ -295,6 +295,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           { id: "adm-discord", label: "Discord" },
           { id: "adm-bets", label: "Betting" },
           { id: "adm-activity", label: "Activity" },
+          { id: "adm-traffic", label: "Traffic" },
           { id: "adm-news", label: "News" },
           { id: "adm-security", label: "Security" },
           { id: "adm-new-season", label: "Season handoff" },
@@ -369,6 +370,34 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       <Suspense fallback={<CardSkeleton rows={4} />}><AdminNews searchParams={searchParams} /></Suspense>
 
       <SecurityControls />
+
+      <AdminSection
+        id="adm-traffic"
+        title="Website traffic"
+        subtitle="Visitors, page views, popular pages, and referral sources."
+      >
+        <CardBody className="space-y-3 text-sm text-muted">
+          <p>
+            Open Web Analytics and select the last 30 days to review public-page
+            traffic. Collection begins after analytics is enabled and the tracker
+            is deployed; earlier visits cannot be reconstructed.
+          </p>
+          <p>
+            Admin, account, and sign-in pages are excluded. Background game-room
+            updates are not page views. Use page views when estimating advertising
+            revenue, and allow a full month for a useful baseline.
+          </p>
+          <a
+            href="https://vercel.com/timothyjjcrows-projects/under-4.5k-league/analytics"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonClasses("secondary")}
+          >
+            Open Vercel Web Analytics ↗
+          </a>
+          <p className="text-xs">Requires access to the league’s Vercel project.</p>
+        </CardBody>
+      </AdminSection>
 
       <AdminSection
         id="adm-new-season"

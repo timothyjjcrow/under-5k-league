@@ -15,6 +15,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { Toaster } from "@/components/toaster";
 import { ResultSyncPing } from "@/components/result-sync-ping";
 import { NavigationContextTracker } from "@/components/context-back-link";
+import { SiteAnalytics } from "@/components/site-analytics";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
@@ -108,6 +109,8 @@ export default async function RootLayout({
         <NavigationContextTracker />
         {/* Observe worker progress so parked pages refresh after results land. */}
         <ResultSyncPing initialCursor={resultCursorAtRender} />
+        {/* The SDK counts navigation, not room polling or server refreshes. */}
+        {process.env.VERCEL_ENV === "production" ? <SiteAnalytics /> : null}
       </body>
     </html>
   );

@@ -342,6 +342,44 @@ e2e/                    # Playwright tests
 
 ## Deployment (Vercel + Neon)
 
+### Website traffic
+
+Public-page traffic uses `@vercel/analytics/next` from the root layout, only
+when `VERCEL_ENV=production`. Local development and preview deployments do not
+collect traffic. The SDK records initial visits and client navigation, not the
+inhouse polling requests or `router.refresh()` updates. Admin, API, login,
+logout, and account (`/me`) paths are excluded; page URL queries and fragments
+are removed before reporting. No player identifiers are attached as custom
+events or properties.
+
+One-time activation: a project owner must enable **Web Analytics** for
+`under-4.5k-league` in Vercel, then deploy this integration using the ordinary
+release process below. The CLI also supports interactive activation:
+
+```sh
+npx vercel project web-analytics enable under-4.5k-league --scope timothyjjcrows-projects
+```
+
+Open **Admin → Traffic → Open Vercel Web Analytics** (Vercel project access is
+required). Review page views, visitors, top pages, countries, and referrers over
+30 days. Historical untracked visits cannot be backfilled. Ad blockers can
+undercount visitors; server/API request totals are not page views.
+
+For a read-only daily report with an authenticated Vercel CLI:
+
+```sh
+npx vercel metrics vercel.analytics_pageview.count --since 30d --granularity 1d --project under-4.5k-league --prod --scope timothyjjcrows-projects --format json
+```
+
+On September 5, 2026, the production query returned no recorded page views in
+the preceding 30 days; this is not evidence of zero visitors. Hobby includes
+50,000 analytics events per month shared across the team and a one-month
+reporting window; no paid analytics add-on is needed. Check
+[current analytics limits](https://vercel.com/docs/analytics/limits-and-pricing)
+before changing plans. Export a monthly report if longer history is needed.
+
+### Hosting and release setup
+
 Local dev stays on SQLite; production runs on Postgres via a build-time provider
 swap (`scripts/switch-db-provider.mjs`, wired up in `vercel.json`) — you don't
 change any code. The draft uses HTTP polling (no websockets), so it runs fine on
