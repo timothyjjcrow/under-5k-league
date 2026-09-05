@@ -5,6 +5,8 @@
 // keys. That predicate IS the concurrency guard: strip it and the claim becomes
 // a blind write, which is this codebase's dominant bug class (see CLAUDE.md's
 // "Concurrency: the two rules").
+// claimThrottle expresses the same guard in a conditional SQL upsert; its
+// narrow companion scanner keeps that existing claim in this same ratchet.
 //
 // The problem it solves: those guards are almost invisible to the test suite.
 // SQLite serializes writers, so most races cannot even be produced there, and a
@@ -46,6 +48,7 @@ import {
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { assertPostgresTestUrl } from "./test-db-safety.mjs";
+import { discoverThrottleSqlClaims } from "./mutation-sql-claims.mjs";
 
 const BASELINE = "test/mutation-baseline.json";
 
@@ -475,7 +478,7 @@ function enclosingFn(src, offset) {
  */
 function discoverFile(file) {
   const src = readFileSync(file, "utf8");
-  const found = [];
+  const found = discoverThrottleSqlClaims(file, src);
   const seen = new Map();
   let from = 0;
   for (;;) {

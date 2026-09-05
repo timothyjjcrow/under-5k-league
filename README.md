@@ -974,6 +974,15 @@ failed, degraded, expired-lease, or database-unavailable state. The automation
 body exposes only a bounded status enum; detailed failure/backlog state remains
 in Admin. Also alert on non-2xx `/api/cron/automation` responses.
 
+Choose readiness-monitor intervals deliberately: every `/api/health/ready`
+request executes `SELECT 1`, so checks at or below Neon's five-minute idle
+timeout can prevent scale-to-zero. `/api/health/live` does no database work;
+`/api/health/automation` reuses the cached gate while automation is sleeping.
+Keep the real readiness check for database failure detection and deployment
+verification; reducing its frequency trades slower detection for more idle
+time. See [the database efficiency review](docs/DATABASE-EFFICIENCY-2026-09-05.md)
+for the observed usage of both deployments and the remaining cost levers.
+
 Do **not** point a monitor at `/api/sync` to run maintenance. It is a public,
 read-only cursor/watch snapshot used by visible browser tabs; it never imports
 games, advances phases, sends Discord messages, or drains an outbox. The
