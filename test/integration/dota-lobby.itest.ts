@@ -325,6 +325,28 @@ describe("Dota lobby authorization and settings", () => {
         .status,
     ).toBe("CANCELLED");
   });
+  it.each(["COMPLETED", "CANCELLED"])(
+    "does not resurrect a game changed to %s while the bot response is pending",
+    async (status) => {
+      const user = await makeUser("Captain");
+      const lobby = await prisma.inhouseLobby.create({
+        data: {
+          status: "READY",
+          players: { create: { userId: user.id, team: 1, isCaptain: true } },
+        },
+      });
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => {
+        // The route has read READY, but the game ends before Steam replies.
+        await prisma.inhouseLobby.update({ where: { id: lobby.id }, data: { status } });
+        return Response.json({ state: "started" });
+      }));
+      const response = await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
+      expect(response.status).toBe(200);
+      expect(await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .toMatchObject({ status, startedAt: null });
+    },
+  );
   it.each(["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "COMPLETED", "CANCELLED"])(
     "prevents in-house create and start while the game is %s",
     async (status) => {
@@ -380,7 +402,7 @@ describe("Dota lobby authorization and settings", () => {
     expect((await POST(request({ kind: "inhouse", id: old.id, action: "release" }))).status).toBe(400);
     expect(fetch).toHaveBeenCalledTimes(3);
   });
-  it("fails closed if legacy data contains two active in-house games", async () => {
+  it("rejects duplicate active in-house games in PostgreSQL or legacy data", async () => {
     const user = await makeUser("Captain");
     const lobby = await prisma.inhouseLobby.create({
       data: {
@@ -388,6 +410,12 @@ describe("Dota lobby authorization and settings", () => {
         players: { create: { userId: user.id, team: 1, isCaptain: true } },
       },
     });
+    if (process.env.PG_TEST_URL) {
+      // PostgreSQL's partial unique index prevents the legacy state itself.
+      await expect(prisma.inhouseLobby.create({ data: { status: "READY_CHECK" } }))
+        .rejects.toMatchObject({ code: "P2002" });
+      return;
+    }
     await prisma.inhouseLobby.create({ data: { status: "READY_CHECK" } });
     vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
     const fetch = vi.fn();

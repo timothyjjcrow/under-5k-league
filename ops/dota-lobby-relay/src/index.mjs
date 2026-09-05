@@ -47,7 +47,7 @@ async function readJson(request) {
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 
-export default {
+const worker = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.search || !["/connect", "/lobby", "/health"].includes(url.pathname)) return failed("INVALID", 404);
@@ -72,6 +72,8 @@ export default {
     } catch { return failed(); }
   },
 };
+
+export default worker;
 
 /** The bot connects outbound; no inbound port or tunnel is needed on its host.
  * Idle sockets hibernate. Requests exist only in memory for at most ten seconds;
