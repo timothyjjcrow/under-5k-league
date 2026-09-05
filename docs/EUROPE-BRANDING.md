@@ -1,10 +1,12 @@
 # GGD2L Europe branding
 
-The Europe deployment uses `public/brand/ggd2l-europe-logo.png`, a 1254 × 1254 PNG. Its midnight background matches the website's `#0b0f17` background. The existing US assets are preserved.
+The Europe deployment uses `public/brand/ggd2l-europe-logo.png`, a 1254 × 1254 PNG. CSS lightening blends its midnight background into the site's dark surfaces. The existing US assets are preserved.
 
 `LEAGUE_CONFIG.branding` selects the regional logo for the header, footer, sign-in and error pages, app icons, social previews, and Discord queue-board author icon. The former Next.js metadata image files live in `public/` at their original URLs so file-convention metadata cannot override the regional selection.
 
 The same Europe image is used for the Discord server icon, bot avatar, and announcement/queue/alert webhook avatars.
+
+The September 5 branding release is on `codex/europe-logo-release` at `becc9c4`, based on the previously live Europe commit `7bed06e`. It includes the logo and background blending, without the separately prepared database efficiency changes. The development branch also contains both branding commits. Validation: TypeScript, scoped ESLint, 69 existing configuration/metadata/queue-board tests, production build, readiness check, live website logo and metadata inspection, and Discord icon/avatar verification.
 
 ## Image generation provenance
 
