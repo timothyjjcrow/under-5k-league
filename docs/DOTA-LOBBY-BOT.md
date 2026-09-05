@@ -189,3 +189,24 @@ For live acceptance: create an in-house lobby, verify Captains Mode/US East/tick
 Live verification on September 4, 2026: Steam Guard sign-in succeeded; the Mac LaunchAgent connected to Steam, Dota and the deployed Cloudflare relay. Through the authenticated HTTPS relay, the bot created Dota lobby `30007027938516500`; the GC confirmed Captains Mode (2), US East (2), and league 20004. The bot released that test lobby and returned to available. Authenticated control returned HTTP 200 and unauthenticated control returned HTTP 401. No players were invited and no game was launched. A complete ten-player start and result import still require a real in-house game.
 
 The Vercel production deployment `dpl_EkWgUF7sQm5xJihbZAa1VVa8SsKT` was built from commit `a218bfa` and promoted to `https://ggd2l.vercel.app`. Its build and production schema attestation passed without database changes. The signed-in admin browser on `/inhouse` displayed **Bot online** and the connected Steam account; the manual connection check used the live site API and relay. Anonymous recovery requests returned HTTP 401. Final focused verification passed 40 site/API integration tests, 33 worker tests and 12 relay tests, plus TypeScript and scoped ESLint.
+
+Shared-worker activation on September 5, 2026: the existing relay was deployed
+as version `1445c2cb-19a4-4852-9d09-09e2c027c8b0`, retaining its encrypted
+secrets. At 09:34:52 UTC the bot was verified online with no active key or Dota
+lobby immediately before stopping the existing LaunchAgent. Its private
+configuration was backed up outside the repository and only
+`DOTA_GAME_SERVER_REGIONS="2,3"` was added; its Steam session, existing state,
+relay and service identity were retained. After the same service restarted,
+authenticated health returned online for Steam account `76561198148555134`.
+At 09:36:45 UTC both US and namespaced EU read-only status probes returned
+HTTP 200/idle, an EU key with the US region was rejected, and the bot still
+had no active lobby. These probes did not create, launch or select a ticket
+in Dota. Europe still requires its ticket configuration/permission and a real
+game rehearsal. No US Vercel deployment was performed during this activation.
+
+The private backup includes rollback instructions. To return the worker to
+US-only operation, first disconnect Europe's bot controls and confirm the
+shared bot is idle. Stop the existing service, restore the original private
+environment file with mode 0600, then start the same service. Keep its current
+namespace-compatible relay and saved Steam/lobby state; do not start a second
+instance or delete lock files.

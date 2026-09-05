@@ -247,7 +247,15 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
     // Version static copy as well as semantic state: deploying an improved
     // board must repaint an otherwise quiet channel. Canonical links and lobby
     // size are rendered in every phase and must also invalidate an old post.
-    digest: JSON.stringify(["board-v2", s.siteUrl, s.lobbySize, rendered.digest]),
+    digest: JSON.stringify([
+      "board-v3",
+      LEAGUE_CONFIG.name,
+      LEAGUE_CONFIG.inhouseLeagueName,
+      LEAGUE_CONFIG.inhouseLeagueConfigured,
+      s.siteUrl,
+      s.lobbySize,
+      rendered.digest,
+    ]),
   };
 }
 
@@ -533,7 +541,9 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
         ].join("\n"),
         fields,
         footer: {
-          text: "Private lobby — use the Under 5K In-House League ticket. Results import from player match histories.",
+          text: LEAGUE_CONFIG.inhouseLeagueConfigured
+            ? `Private lobby — use the ${LEAGUE_CONFIG.inhouseLeagueName} ticket. Results import from player match histories.`
+            : "The league administrators will provide the European ticket before tracked inhouse games begin.",
         },
       },
     };

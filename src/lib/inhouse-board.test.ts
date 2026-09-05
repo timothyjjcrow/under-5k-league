@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { INHOUSE_STATUS } from "./constants";
 import {
   boardStateLabel,
@@ -102,6 +102,36 @@ describe("the board carries no emoji", () => {
     expect(renderBoard(snap()).embed.footer.text).toBe(
       "Private lobby — use the Under 5K In-House League ticket. Results import from player match histories.",
     );
+  });
+});
+
+describe("regional ticket instructions", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("keeps Europe pending without directing hosts to the US ticket", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LEAGUE_REGION", "eu");
+    vi.stubEnv("NEXT_PUBLIC_APP_NAME", "GGD2L Europe");
+    vi.stubEnv("NEXT_PUBLIC_INHOUSE_LEAGUE_NAME", "");
+    vi.resetModules();
+    const european = await import("./inhouse-board");
+    const pending = european.renderBoard(snap());
+    expect(pending.embed.footer.text).toBe(
+      "The league administrators will provide the European ticket before tracked inhouse games begin.",
+    );
+    expect(JSON.stringify(pending.embed)).not.toContain("Under 5K In-House League");
+    expect(pending.embed.author.name).toBe("GGD2L Europe Inhouse Matchmaking");
+
+    vi.stubEnv("NEXT_PUBLIC_INHOUSE_LEAGUE_NAME", "GGD2L European Inhouse");
+    vi.resetModules();
+    const configured = (await import("./inhouse-board")).renderBoard(snap());
+    expect(configured.embed.footer.text).toBe(
+      "Private lobby — use the GGD2L European Inhouse ticket. Results import from player match histories.",
+    );
+    // Quiet queues still need to repaint when the deployed ticket is supplied.
+    expect(configured.digest).not.toBe(pending.digest);
   });
 });
 
