@@ -35,16 +35,22 @@ export const metadata: Metadata = {
   },
   description: DESCRIPTION,
   applicationName: LEAGUE_CONFIG.name,
+  icons: {
+    icon: LEAGUE_CONFIG.branding.icon,
+    apple: LEAGUE_CONFIG.branding.appleIcon,
+  },
   openGraph: {
     title: LEAGUE_CONFIG.name,
     description: DESCRIPTION,
     siteName: LEAGUE_CONFIG.name,
     type: "website",
+    images: [LEAGUE_CONFIG.branding.openGraphImage],
   },
   twitter: {
     card: "summary_large_image",
     title: LEAGUE_CONFIG.name,
     description: DESCRIPTION,
+    images: [LEAGUE_CONFIG.branding.twitterImage],
   },
 };
 

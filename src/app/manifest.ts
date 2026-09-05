@@ -13,7 +13,9 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     background_color: "#0b0f17",
     theme_color: "#0b0f17",
-    icons: [
+    icons: LEAGUE_CONFIG.region === "eu" ? [
+      { src: LEAGUE_CONFIG.branding.icon, type: "image/png", sizes: "1254x1254" },
+    ] : [
       { src: "/icon.svg", type: "image/svg+xml", sizes: "any" },
       { src: "/apple-icon.png", type: "image/png", sizes: "512x512" },
     ],

@@ -96,21 +96,15 @@ export function SiteFooter({
             aria-label={`${LEAGUE_CONFIG.name} — home`}
             className="flex items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:justify-start"
           >
-            {/* Tight-cropped emblem (shared with the nav) — no baked-in
-                transparent margin, so it reads compact at a smaller height. */}
+            {/* Use the same regional emblem as the header. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/brand/ggd2l-logo-nav.png"
+              src={LEAGUE_CONFIG.branding.navLogo}
               alt={LEAGUE_CONFIG.name}
-              width={520}
-              height={427}
+              width={LEAGUE_CONFIG.branding.navWidth}
+              height={LEAGUE_CONFIG.branding.navHeight}
               className="h-32 w-auto sm:h-40 lg:h-44"
             />
-            {LEAGUE_CONFIG.region === "eu" ? (
-              <span className="ml-3 rounded border border-accent/40 px-2 py-1 text-xs font-semibold uppercase tracking-widest text-accent">
-                Europe
-              </span>
-            ) : null}
           </Link>
 
           <div className="grid w-full gap-8 sm:grid-cols-[minmax(0,1.45fr)_minmax(10rem,0.75fr)] sm:gap-10">

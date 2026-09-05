@@ -259,21 +259,15 @@ export function SiteHeader({
             aria-label={`${LEAGUE_CONFIG.name} — home`}
             className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
-            {/* Tight-cropped emblem (glow/margins trimmed) sized to nearly fill
-              the bar so there's minimal top/bottom padding. */}
+            {/* Regional emblem sized to fit the existing header height. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/brand/ggd2l-logo-nav.png"
+              src={LEAGUE_CONFIG.branding.navLogo}
               alt={LEAGUE_CONFIG.name}
-              width={520}
-              height={427}
+              width={LEAGUE_CONFIG.branding.navWidth}
+              height={LEAGUE_CONFIG.branding.navHeight}
               className="h-[76px] w-auto"
             />
-            {LEAGUE_CONFIG.region === "eu" ? (
-              <span className="ml-2 rounded border border-accent/40 px-1.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-accent">
-                Europe
-              </span>
-            ) : null}
           </Link>
 
           {/* Internal pages need league context without making users scroll to

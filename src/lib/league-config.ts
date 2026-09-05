@@ -44,6 +44,18 @@ export function createLeagueConfig(env: LeagueEnvironment) {
   return {
     region,
     name,
+    branding: {
+      logo: europe ? "/brand/ggd2l-europe-logo.png" : "/brand/ggd2l-logo.png",
+      logoWidth: europe ? 1254 : 768,
+      logoHeight: europe ? 1254 : 512,
+      navLogo: europe ? "/brand/ggd2l-europe-logo.png" : "/brand/ggd2l-logo-nav.png",
+      navWidth: europe ? 1254 : 520,
+      navHeight: europe ? 1254 : 427,
+      icon: europe ? "/brand/ggd2l-europe-logo.png" : "/icon.svg",
+      appleIcon: europe ? "/brand/ggd2l-europe-logo.png" : "/apple-icon.png",
+      openGraphImage: europe ? "/brand/ggd2l-europe-logo.png" : "/opengraph-image.png",
+      twitterImage: europe ? "/brand/ggd2l-europe-logo.png" : "/twitter-image.png",
+    },
     timeZone,
     discordInviteUrl,
     inhouseLeagueName,
