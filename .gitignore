@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+/ops/dota-lobby-bot/node_modules/
+/ops/dota-lobby-bot/state/
 /.pnp
 .pnp.*
 .yarn/*

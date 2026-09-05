@@ -57,6 +57,7 @@ import {
 } from "@/lib/constants";
 import { playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
+import { DotaLobbyControls } from "@/components/dota-lobby-controls";
 
 type LobbyTeam = NonNullable<InhouseState["lobby"]>["teams"][number];
 type Player = LobbyTeam["players"][number];
@@ -2625,7 +2626,7 @@ function ReadyView({
         />
       ) : null}
 
-      {me.inLobby ? <GameSetupCard lobby={lobby} me={me} /> : null}
+      {me.inLobby || me.isAdmin ? <GameSetupCard lobby={lobby} me={me} /> : null}
 
       <MatchupGrid lobby={lobby} />
     </div>
@@ -3389,7 +3390,7 @@ function InProgressView({
         />
       ) : null}
 
-      {me.inLobby ? <GameSetupCard lobby={lobby} me={me} /> : null}
+      {me.inLobby || me.isAdmin ? <GameSetupCard lobby={lobby} me={me} /> : null}
 
       <MatchupGrid lobby={lobby} />
     </div>
@@ -3455,6 +3456,13 @@ function GameSetupCard({
           League Discord ↗
         </a>
       </div>
+      <div className="p-5">
+        <DotaLobbyControls key={lobby.id} kind="inhouse" id={lobby.id} />
+      </div>
+      <p className="px-5 text-xs text-muted">
+        Manual setup below is available if you are hosting without the bot.
+        For a bot lobby, use the name and password above.
+      </p>
       <div className="grid gap-0 lg:grid-cols-3">
         <div className="min-w-0 border-b border-line p-5 lg:border-b-0 lg:border-r">
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent">

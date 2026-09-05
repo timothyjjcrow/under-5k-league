@@ -1,0 +1,29 @@
+syntax = "proto2";
+// Wire-compatible subset of SteamDatabase/Protobufs dota2/
+// dota_gcmessages_client_match_management.proto, inspected 2026-09-04.
+// Dota2User supplies the GC handshake and full shared-object decoders, but
+// its published package omits these client lobby request encoders.
+message LobbyDetails {
+  optional uint64 lobby_id = 1;
+  optional string game_name = 2;
+  optional uint32 server_region = 4;
+  optional uint32 game_mode = 5;
+  optional uint32 cm_pick = 6;
+  optional bool allow_cheats = 10;
+  optional bool fill_with_bots = 11;
+  optional bool allow_spectating = 13;
+  optional string pass_key = 15;
+  optional uint32 leagueid = 16;
+  optional uint32 series_type = 20;
+  optional bool allchat = 23;
+  optional uint32 dota_tv_delay = 24;
+  optional uint32 visibility = 33;
+  optional uint32 pause_setting = 42;
+}
+message CreateLobby {
+  optional string search_key = 1;
+  optional string pass_key = 5;
+  optional LobbyDetails lobby_details = 7;
+}
+message KickFromTeam { optional uint32 account_id = 1; }
+message Empty {}

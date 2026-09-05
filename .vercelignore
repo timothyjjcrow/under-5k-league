@@ -20,3 +20,7 @@ test-results/
 playwright-report/
 blob-report/
 .wrangler/
+
+# Independently hosted services; never upload Steam sessions to the website.
+ops/dota-lobby-bot/
+ops/dota-lobby-relay/

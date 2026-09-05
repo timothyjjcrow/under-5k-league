@@ -1,0 +1,22 @@
+[Unit]
+Description=LD2L Steam Dota lobby bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ld2l-bot
+WorkingDirectory=/srv/ld2l/ops/dota-lobby-bot
+EnvironmentFile=/etc/ld2l-dota-bot.env
+ExecStart=/usr/bin/node server.mjs
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ld2l-dota-bot
+
+[Install]
+WantedBy=multi-user.target

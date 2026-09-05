@@ -24,6 +24,11 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
 - **Live auction draft** — captains take turns nominating players and bidding,
   with a shared countdown clock, budget/roster constraints, and auto-resolution.
 - **Round-robin schedule**, standings, weekly results entry.
+- **Steam lobby bot** — captains can create the active in-house Dota lobby
+  with Captains Mode, US East, and the in-house ticket, then start after roster
+  verification. Uses a dedicated Steam account and a small background worker;
+  no Dota download is needed. Season hosting is disabled by default. See
+  [setup and operation](docs/DOTA-LOBBY-BOT.md).
 - **Real Dota match data** — after teams play, fetch the actual games from
   OpenDota (auto-detect from rosters, or paste a match id/URL). Winners and
   series scores are recorded automatically, with full box scores (heroes, KDA)

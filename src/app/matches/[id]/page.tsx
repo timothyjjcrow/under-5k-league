@@ -53,6 +53,8 @@ import {
 } from "@/app/actions/standins";
 import { MatchImportControls } from "@/components/match-import-controls";
 import { LeagueLobbyChecklist } from "@/components/league-lobby-checklist";
+import { DotaLobbyControls } from "@/components/dota-lobby-controls";
+import { lobbyBotKindEnabled } from "@/lib/dota-lobby-service";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   cardAverage,
@@ -1569,7 +1571,32 @@ async function ReportResultSection({
     !!viewer &&
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
-  if (!isCaptain) return null;
+  if (!isCaptain) {
+    if (
+      !lobbyBotKindEnabled("season") ||
+      !viewer ||
+      !match.season.isActive ||
+      match.status === "COMPLETED" ||
+      !matchResultsOpen(match.season.status, match.phase)
+    ) return null;
+    const participant = viewer.role === "ADMIN" || await prisma.match.count({
+      where: {
+        id: match.id,
+        OR: [
+          { homeTeam: { members: { some: { userId: viewer.id } } } },
+          { awayTeam: { members: { some: { userId: viewer.id } } } },
+          { standins: { some: { standinUserId: viewer.id } } },
+        ],
+      },
+    });
+    return participant ? (
+      <DotaLobbyControls
+        key={`${match.id}:${match.homeScore}:${match.awayScore}`}
+        kind="season"
+        id={match.id}
+      />
+    ) : null;
+  }
   if (!match.season.isActive) return null;
   if (match.status === "COMPLETED") {
     return (
@@ -1613,6 +1640,13 @@ async function ReportResultSection({
         : `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. Player-account recovery protects the result if an old or incorrect ticket is used.`;
   return (
     <div className="space-y-6">
+      {lobbyBotKindEnabled("season") ? (
+        <DotaLobbyControls
+          key={`${match.id}:${match.homeScore}:${match.awayScore}`}
+          kind="season"
+          id={match.id}
+        />
+      ) : null}
       {match.season.dotaLeagueId ? (
         <LeagueLobbyChecklist
           leagueId={match.season.dotaLeagueId}

@@ -22,6 +22,7 @@ import { credProfitBoard } from "@/lib/inhouse-bet-service";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
+import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
 import { HeroVideo } from "@/components/hero-video";
 import { LocalTime } from "@/components/local-time";
 import { SectionNav } from "@/components/section-nav";
@@ -126,6 +127,7 @@ export default async function InhousePage() {
           aria-label="Live inhouse room"
         >
           <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} mmrHint={mmrHint} />
+          {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
         </section>
 
         {/* The room above paints immediately; the history-scanning sections

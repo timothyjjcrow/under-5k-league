@@ -1,0 +1,30 @@
+{
+  "dependencies": {
+    "dota2-user": "2.1.1",
+    "protobufjs": "8.8.0",
+    "qrcode": "1.5.4",
+    "steam-session": "1.9.4",
+    "steam-user": "5.3.0",
+    "ws": "8.21.3"
+  },
+  "name": "ld2l-dota-lobby-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "test": "node --test *.test.mjs",
+    "login": "node --env-file-if-exists=.env login.mjs"
+  },
+  "overrides": {
+    "steam-appticket": {
+      "protobufjs": "7.6.6"
+    },
+    "steam-user": {
+      "adm-zip": "0.6.0"
+    }
+  }
+}
