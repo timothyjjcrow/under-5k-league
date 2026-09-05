@@ -7,14 +7,19 @@ seasons, drafts, matches, records, inhouses and credits are separate.
 
 The live site is [GGD2L Europe](https://ggd2l-europe.vercel.app). Season 1 is open
 for signups with **match night to be announced**, no draft date and no first
-match date. The approved lobby-hosting plan shares the existing US Dota worker,
-Steam account and relay, with explicit US/EU region support; see the activation
-sequence below. Do not install a second Steam session for this shared setup.
+match date. Europe now connects to the existing US Dota worker, Steam account
+and relay with explicit US/EU region support. Ticket IDs remain unset pending
+the event date range and Valve registration. Do not install a second Steam
+session for this shared setup.
 
 ## Deployment status — 5 September 2026
 
-The initial Europe deployment uses commit `ea310cc`. The following was checked
-at 09:24–09:27 UTC; shared-bot changes were still being prepared at that point.
+The current canonical deployment is `dpl_Dt3DDP2mCa3kZSiMV1abiYar6AQL`, built
+from commit `7bed06e` and promoted to the Europe origin, with the final board
+copy update. The runtime region was reverified as `fra1`, and the promoted
+site's readiness probe returned HTTP 200. The initial public
+checks below were performed at 09:24–09:27 UTC; final Discord, board and backup
+verification was completed by 09:45 UTC.
 
 | Component | Current setup |
 | --- | --- |
@@ -22,9 +27,11 @@ at 09:24–09:27 UTC; shared-bot changes were still being prepared at that point
 | Database | Dedicated Neon project `ggd2l-europe-db`, Frankfurt (`eu-central-1`), PostgreSQL 18; reviewed migrations and empty-instance bootstrap completed |
 | Season | `GGD2L Europe Season 1`, active `SIGNUPS`, zero registrations and matches; match night and draft date unset |
 | Identity | Database markers are `deploymentRegion=eu` and the Europe site origin; timezone is `Europe/Berlin` |
-| Discord | Guild `1545717985342267435`; [Europe invite](https://discord.gg/tJH7eKJxFE); app `1545719497472741466`; bot installation/permissions and announcement-channel setup remain to complete |
+| Discord | Guild `1545717985342267435` with the GGD2L server logo applied; [Europe invite](https://discord.gg/tJH7eKJxFE); app `1545719497472741466`; bot installed, owner OAuth linking passed, live ping-role add/remove passed, channel webhooks verified |
 | Scheduler | Independent `ggd2l-europe-automation-scheduler`, every minute; deployed version `5212a585-4860-41b6-b6aa-3631d6c7a0f8` |
-| Dota | Shared existing US worker/account/relay approved; shared-region code, rollout and Europe ticket verification remain to complete. The separately deployed EU relay is unused by this plan |
+| Queue board | Posted and pinned in the Europe board channel with 0/10 players; the `inhouseBoard` setting is persisted |
+| Dota | Shared existing US worker/account/relay active, Europe app credentials connected; Europe ticket IDs and real game rehearsal remain pending. The separately deployed EU relay is unused |
+| Backup | Fresh PostgreSQL 18 full SQL backup, checksum and signed Europe database receipt verified at `2026-09-05T09:45:14.945Z`; private files retained outside the repository |
 
 Read-only checks returned HTTP 200 with `cache-control: no-store` from
 [`/api/health/live`](https://ggd2l-europe.vercel.app/api/health/live),
@@ -43,10 +50,11 @@ without advancing the database's `lastSuccessAt`: the idle gate has a maximum
 60-minute hard wake. Use the public automation probe and scheduler invocation
 outcomes together when checking an otherwise quiet league.
 
-Remaining launch work is the Discord installation, role/channel/webhook checks,
-the safe shared-bot rollout and Europe ticket test, and verification of the
-independent Europe backup/restore receipts. Organizers can announce the match
-night and draft later; neither has been invented for this setup.
+Remaining game-hosting work is to select the Europe event date range, register
+and configure its league tickets, grant the shared Steam bot ticket access,
+and rehearse a ticketed Europe game through result import. The website,
+Discord integration and scheduler are operating. Match night and draft remain
+unannounced; no dates or Europe ticket IDs have been invented.
 
 ## Project and configuration
 
@@ -119,25 +127,36 @@ target before rebuilding; the mismatch guard otherwise blocks the build.
 
 ## Discord
 
-The Europe server and application now exist. Complete installation and
-permissions for that bot in guild `1545717985342267435`, then configure:
+The Europe bot is installed in guild `1545717985342267435`. The OAuth redirect
+is `https://ggd2l-europe.vercel.app/api/auth/discord/callback`; a live owner
+account completed linking successfully. The invite is
+`https://discord.gg/tJH7eKJxFE`.
 
-- OAuth application and bot, with redirect
-  `https://ggd2l-europe.vercel.app/api/auth/discord/callback`;
-- league announcements webhook, inhouse queue board webhook, optional separate
-  inhouse alerts webhook, and opt-in inhouse role;
-- invite URL in `NEXT_PUBLIC_DISCORD_INVITE_URL`.
+| Purpose | Europe channel or role |
+| --- | --- |
+| League announcements | Channel `1545717986479046741` |
+| Live inhouse queue board | Channel `1545717986969649234` |
+| Inhouse rally, match and result alerts | Channel `1545717986969649235` |
+| Opt-in Inhouse Ping | Role `1545727046645317632`, position 1 |
 
-The invite is already `https://discord.gg/tJH7eKJxFE`. At the verification above,
-the private configuration referenced the correct Europe guild/application,
-while incoming webhooks and database webhook overrides were unset. The bot's
-Discord installation approval was still pending; do not treat the presence of
-OAuth credentials as proof that guild joining, role assignment or delivery works.
+The final bot role has only Manage Roles and Create Invite permissions
+(`268435457`), at position 2 above Inhouse Ping. Live role assignment and
+removal were tested. A subsequent read-only membership check confirmed the
+owner is linked, is a full guild member and has the ping role **off**. This
+opt-in is read from Discord role membership, not mirrored into a database
+boolean.
+
+All three webhook destinations were verified in the Europe server. The live
+queue board was posted and pinned with 0/10 queued players and its database
+setting is present. The GGD2L server logo was applied and the guild icon was
+verified. Copied channel topics have been corrected to use the Europe site.
+Webhook URLs, tokens and OAuth secrets are private environment configuration;
+only public channel/role identifiers are recorded here.
 
 `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and `DISCORD_BOT_TOKEN` /
 `DISCORD_GUILD_ID` are paired settings. The OAuth app and bot should refer to the
-same Discord application. Leave both values of each optional pair empty until
-ready. Verify joining/linking and role assignment with a real Europe account.
+same Discord application. When provisioning a replacement, set each pair
+together and repeat the real linking/role checks.
 
 ## Unattended season maintenance
 
@@ -176,12 +195,21 @@ unqualified US `scheduler:deploy` or `scheduler:pause` commands for Europe.
 ## Dota lobby automation
 
 The user approved sharing the existing US relay, persistent Dota worker and
-Steam account. Both sites will use that relay's origin and the same app-to-bot
+Steam account. Both sites now use that relay's origin and the same app-to-bot
 secret; database/session/Discord/scheduler secrets remain separate. There is
 **one shared active lobby**: a request from either league receives `BUSY` while
 the other owns the worker. This does not merge any league data or seasons.
 
-Shared operation requires the updated relay protocol, worker and app code:
+The shared relay is deployed as version
+`1445c2cb-19a4-4852-9d09-09e2c027c8b0`. The existing idle Mac service was safely
+restarted with `DOTA_GAME_SERVER_REGIONS="2,3"`, retaining the original Steam
+account `76561198148555134`, saved state and relay credentials. At 09:36:45 UTC,
+health was online with no active lobby; US East and namespaced Europe West
+read-only status requests both returned HTTP 200/idle, while an EU key with
+the US region was rejected. Those checks created no lobby and selected no ticket.
+
+The relay/worker/app activation is complete. Preserve this order for future
+shared-protocol upgrades, then perform step 5 once Europe tickets exist:
 
 1. Deploy the updated existing relay protocol before enabling shared requests.
 2. Finish/release any active lobby before restarting the existing worker.
@@ -206,9 +234,38 @@ Europe still needs its inhouse ticket and each season's ticket configured where
 required. Sharing a Steam account does not grant that account permission to a
 new ticket. Set `NEXT_PUBLIC_INHOUSE_LEAGUE_NAME` to the ticket's actual name
 only after it is available; until then the site shows a neutral Europe ticket
-placeholder. Keep `DOTA_SEASON_LOBBY_BOT_ENABLED=false` until the flow is verified.
+placeholder. `DOTA_INHOUSE_LEAGUE_ID` and the Europe season's `dotaLeagueId`
+remain unset. `DOTA_SEASON_LOBBY_BOT_ENABLED=false` remains in force until the
+flow is verified. Connection health is ready, but the bot intentionally refuses
+to host without a configured numeric league ticket.
 See [DOTA-LOBBY-BOT.md](DOTA-LOBBY-BOT.md) and
 [DOTA-BOT-HOSTING.md](DOTA-BOT-HOSTING.md) for the full worker/relay procedure.
+
+### Register the Europe league tickets when dates are decided
+
+The ticket date range is still pending organizer input. Valve's
+[league creation form](https://www.dota2.com/league/0/overview) requires a league
+name, tier, associated region, website, description and start/end dates. Its
+[league portal](https://www.dota2.com/league/0/list) supports community Amateur
+leagues with low or no prize pools, so professional-event status is unnecessary.
+
+To preserve separate season and inhouse feeds, register the corresponding
+Europe entries using the Europe site and region. Upload the league images and
+publish the application. Valve's published
+[ticket FAQ](https://help.steampowered.com/en/faqs/view/072E-47E8-B513-6E4E) says
+to submit at least **15 days before** an event, publish at least **7 days
+before**, and expect acceptance/rejection email in the preceding week. These
+are published lead-time requirements, not a guarantee of actual processing time.
+The same FAQ explains adding the shared bot's Steam Community profile through
+the league's Admin tab. Review Valve's applicable
+[tournament-license process](https://store.steampowered.com/tourney) as organizer.
+
+Once granted, configure the real Europe numeric IDs and grant the shared bot
+league-administrator access. Do not copy US season `20001` or inhouse `20004`
+into Europe: those identify the US external feeds. Until then, signups and
+draft functionality remain available; manual hosting and match-ID/roster
+imports can be used where the game data is available, while full automated
+ticketed hosting remains pending.
 
 ## Europe recovery configuration
 
@@ -220,9 +277,24 @@ the existing backup/verification commands, with a separate Europe backup folder.
 The Neon database runs PostgreSQL 18. On this Mac, prepend
 `/opt/homebrew/opt/postgresql@18/bin` to the command's `PATH` so `pg_dump` and
 `pg_restore` use the compatible client; an older Homebrew client can reject the
-server version. Record a verified backup and restore-rehearsal receipt using
-[PRODUCTION-OPERATIONS.md](PRODUCTION-OPERATIONS.md) before considering recovery
-complete. No backup or restore was performed by the read-only checks above.
+server version.
+
+After queue-board creation, the existing `db:backup` and `db:backup:verify`
+scripts created and verified the 67,303-byte full SQL artifact
+`backup-2026-09-05T09-44-54-426-57404.sql`. It and its checksum, metadata and
+signed receipt are stored under `~/.config/ggd2l-europe/backups`, with directory
+mode 0700 and artifact mode 0600. Creation completed at
+`2026-09-05T09:45:14.901Z`; verification completed at
+`2026-09-05T09:45:14.945Z`.
+
+SHA-256 verification passed, and the receipt's signature, timestamp and exact
+Europe database identity were independently validated without printing the
+receipt or credentials. `latest-verification.json` records the private
+verification summary. Receipts expire for destructive-action authorization
+after 24 hours; generate and verify a fresh backup before such an operation.
+This was a read-only production snapshot with local artifact writes, not a
+restore rehearsal. Use [PRODUCTION-OPERATIONS.md](PRODUCTION-OPERATIONS.md) for
+the separate disposable-target restore procedure when needed.
 
 ## Verification before announcing
 
