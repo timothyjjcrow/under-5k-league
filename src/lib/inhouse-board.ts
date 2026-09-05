@@ -151,7 +151,7 @@ const NAME_MAX = 32;
 /** Names listed in a next-game list before collapsing the tail. */
 const NAMES_SHOWN = 12;
 
-const AUTHOR_ICON = "/brand/ggd2l-logo.png";
+const AUTHOR_ICON = LEAGUE_CONFIG.branding.logo;
 
 /**
  * Board-flavoured escaping: the shared escape, plus the board's fixed-width
@@ -249,6 +249,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
     // size are rendered in every phase and must also invalidate an old post.
     digest: JSON.stringify([
       "board-v3",
+      AUTHOR_ICON,
       LEAGUE_CONFIG.name,
       LEAGUE_CONFIG.inhouseLeagueName,
       LEAGUE_CONFIG.inhouseLeagueConfigured,

@@ -5,8 +5,7 @@ import type { Metadata } from "next";
  * Per-page share metadata. Next.js *replaces* (does not deep-merge) the
  * `openGraph`/`twitter` objects when a route redefines them, so overriding the
  * title/description would otherwise drop the site's share image + card. This
- * re-includes them (from the app/opengraph-image.png + app/twitter-image.png
- * file conventions) so social previews keep the image while showing the
+ * re-includes the deployment's regional brand images so previews keep the image while showing the
  * entity-specific title/description.
  */
 export function shareMetadata(
@@ -23,14 +22,14 @@ export function shareMetadata(
       description,
       siteName: LEAGUE_CONFIG.name,
       type: "website",
-      images: ["/opengraph-image.png"],
+      images: [LEAGUE_CONFIG.branding.openGraphImage],
       ...(pathname ? { url: pathname } : {}),
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: ["/twitter-image.png"],
+      images: [LEAGUE_CONFIG.branding.twitterImage],
     },
   };
 }

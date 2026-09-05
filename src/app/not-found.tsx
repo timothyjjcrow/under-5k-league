@@ -17,10 +17,10 @@ export default function NotFound() {
         <div className="relative flex flex-col items-center gap-4 px-6 py-12 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/brand/ggd2l-logo.png"
+            src={LEAGUE_CONFIG.branding.logo}
             alt={LEAGUE_CONFIG.name}
-            width={768}
-            height={512}
+            width={LEAGUE_CONFIG.branding.logoWidth}
+            height={LEAGUE_CONFIG.branding.logoHeight}
             className="animate-hero-float h-20 w-auto"
           />
           <div>

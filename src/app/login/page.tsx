@@ -69,10 +69,10 @@ export default async function LoginPage({
           <div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/brand/ggd2l-logo.png"
+              src={LEAGUE_CONFIG.branding.logo}
               alt={`${LEAGUE_CONFIG.name} — amateur Dota 2 league`}
-              width={768}
-              height={512}
+              width={LEAGUE_CONFIG.branding.logoWidth}
+              height={LEAGUE_CONFIG.branding.logoHeight}
               className="mx-auto w-44 max-w-full sm:w-52"
             />
             <h1 className="mt-3 font-display text-2xl font-semibold text-fg">
