@@ -7,11 +7,18 @@ export class BotError extends Error {
   }
 }
 
+function validRegions(regions) {
+  return Array.isArray(regions) && regions.length >= 1 && regions.length <= 2 &&
+    regions.every((region) => [2, 3].includes(region)) && new Set(regions).size === regions.length;
+}
+
 export function validSpec(s, serverRegion = 2) {
+  const regions = Array.isArray(serverRegion) ? serverRegion : [serverRegion];
   const ids = [...(s?.radiant ?? []), ...(s?.dire ?? [])];
+  const europeanKey = typeof s?.key === "string" && s.key.startsWith("eu:");
   return (
     typeof s?.key === "string" &&
-    /^(season|inhouse):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/.test(s.key) &&
+    /^(?:eu:)?(season|inhouse):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/.test(s.key) &&
     typeof s.name === "string" &&
     s.name.length > 0 &&
     s.name.length <= 128 &&
@@ -22,8 +29,12 @@ export function validSpec(s, serverRegion = 2) {
     s.leagueId > 0 &&
     s.leagueId <= 0xffffffff &&
     s.gameMode === 2 &&
-    [2, 3].includes(serverRegion) &&
-    s.serverRegion === serverRegion &&
+    validRegions(regions) &&
+    regions.includes(s.serverRegion) &&
+    // Shared workers reserve legacy keys for the US. EU always carries its
+    // namespace, so equal IDs in the two databases cannot claim the same job.
+    (!europeanKey || s.serverRegion === 3) &&
+    (regions.length === 1 || s.serverRegion === (europeanKey ? 3 : 2)) &&
     Array.isArray(s.radiant) &&
     Array.isArray(s.dire) &&
     s.radiant.length <= 10 &&
@@ -83,12 +94,12 @@ function safeToLeave(lobby, job) {
  * Reconcile only the unique name/password on the account's actual GC snapshot.
  */
 export class LobbyController {
-  constructor({ file, transport, now = Date.now, serverRegion = 2 }) {
-    if (![2, 3].includes(serverRegion)) throw new Error("Unsupported bot server region");
+  constructor({ file, transport, now = Date.now, serverRegion = 2, serverRegions = [serverRegion] }) {
+    if (!validRegions(serverRegions)) throw new Error("Unsupported bot server regions");
     this.file = file;
     this.transport = transport;
     this.now = now;
-    this.serverRegion = serverRegion;
+    this.serverRegions = Object.freeze([...serverRegions]);
     this.lobby = null;
     this.online = false;
     this.absenceConfirmed = false;
@@ -125,7 +136,7 @@ export class LobbyController {
     };
   }
   request(action, spec) {
-    if (!validSpec(spec, this.serverRegion)) throw new BotError("INVALID");
+    if (!validSpec(spec, this.serverRegions)) throw new BotError("INVALID");
     if (action === "status") return this.status(spec.key);
     if (!this.online) throw new BotError("OFFLINE");
     let job = this.data.jobs[spec.key];

@@ -18,6 +18,7 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getSessionUser } from "@/lib/auth";
 import { POST } from "@/app/api/dota-lobby/route";
 vi.mock("@/lib/auth", () => ({ getSessionUser: vi.fn() }));
+const keyPrefix = LEAGUE_CONFIG.region === "eu" ? "eu:" : "";
 
 beforeEach(() => {
   vi.stubEnv("DOTA_LOBBY_BOT_URL", "http://127.0.0.1:8090");
@@ -95,6 +96,7 @@ describe("Dota lobby authorization and settings", () => {
       playable: true,
       canControl: true,
       spec: {
+        key: `${keyPrefix}season:${match.id}:1`,
         leagueId: 12345,
         gameMode: 2,
         serverRegion: LEAGUE_CONFIG.gameServerRegionId,
@@ -117,7 +119,7 @@ describe("Dota lobby authorization and settings", () => {
       "season",
       match.id,
     );
-    expect(second.spec.key).toBe(`season:${match.id}:2`);
+    expect(second.spec.key).toBe(`${keyPrefix}season:${match.id}:2`);
     expect(second.spec.password).not.toBe(first.spec.password);
     expect(second.spec.leagueId).toBe(12345);
   });
@@ -201,6 +203,7 @@ describe("Dota lobby authorization and settings", () => {
       canControl: true,
       playable: true,
       spec: {
+        key: `${keyPrefix}inhouse:${lobby.id}:1`,
         leagueId: 54321,
         gameMode: 2,
         serverRegion: LEAGUE_CONFIG.gameServerRegionId,
@@ -269,6 +272,7 @@ describe("Dota lobby authorization and settings", () => {
             kind: "season",
             id: match.id,
             action: "create",
+            key: "other-region-cannot-be-selected-by-the-client",
             leagueId: 99,
             gameMode: 1,
           }),
@@ -276,7 +280,19 @@ describe("Dota lobby authorization and settings", () => {
       ).status,
     ).toBe(200);
     const sent = JSON.parse(fetch.mock.calls[0][1].body);
-    expect(sent.spec).toMatchObject({ leagueId: 12345, gameMode: 2 });
+    expect(sent.spec).toMatchObject({ key: `${keyPrefix}season:${match.id}:1`, leagueId: 12345, gameMode: 2 });
+  });
+  it("rejects another region's job key before sending any worker action", async () => {
+    const { match, home } = await fixture();
+    const { spec } = await resolveDotaLobby(asSession(home.user), "season", match.id);
+    const otherPrefix = LEAGUE_CONFIG.region === "eu" ? "" : "eu:";
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    for (const action of [undefined, "create", "start", "release"] as const) {
+      await expect(callLobbyBot({ ...spec, key: `${otherPrefix}season:${match.id}:1` }, action))
+        .rejects.toThrow("does not belong to this league");
+    }
+    expect(fetch).not.toHaveBeenCalled();
   });
   it("rejects closed fixtures and malformed actions before calling the worker", async () => {
     const { match, home } = await fixture();
@@ -396,7 +412,7 @@ describe("Dota lobby authorization and settings", () => {
     expect((await POST(request({ kind: "inhouse", id: old.id, action: "release" }))).status).toBe(200);
     expect(JSON.parse(fetch.mock.calls.at(-1)![1].body)).toMatchObject({
       action: "release",
-      spec: { key: `inhouse:${old.id}:1` },
+      spec: { key: `${keyPrefix}inhouse:${old.id}:1` },
     });
     const outsider = await makeUser("Outsider");
     vi.mocked(getSessionUser).mockResolvedValue(asSession(outsider));

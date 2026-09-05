@@ -90,13 +90,31 @@ test("health and active responses retain only their explicit schemas", async (t)
     body: JSON.stringify({ action: "health" }),
   });
   const command = await bot.nextRequest();
-  const health = { online: true, steamId: "76561198000000001", activeKey: null, lobbyId: null, gameMode: null, serverRegion: null, leagueId: null };
+  const health = { online: true, steamId: "76561198000000001", activeKey: "eu:inhouse:fixture:1", lobbyId: null, gameMode: null, serverRegion: 3, leagueId: 54321 };
   bot.ws.send(JSON.stringify({ id: command.id, status: 200, body: health }));
   await assertResponse(await pending, 200, health);
   const activePending = post({ action: "active" });
   const active = await bot.nextRequest();
-  bot.ws.send(JSON.stringify({ id: active.id, status: 200, body: { key: "inhouse:fixture:1" } }));
-  await assertResponse(await activePending, 200, { key: "inhouse:fixture:1" });
+  bot.ws.send(JSON.stringify({ id: active.id, status: 200, body: { key: "eu:inhouse:fixture:1" } }));
+  await assertResponse(await activePending, 200, { key: "eu:inhouse:fixture:1" });
+});
+
+test("one shared relay keeps US and EU requests distinct when database IDs match", async (t) => {
+  const { post, connect } = await fixture(t);
+  const bot = await connect();
+  const us = { action: "status", spec: { key: "inhouse:same-id:1", serverRegion: 2, leagueId: 12345 } };
+  const eu = { action: "status", spec: { key: "eu:inhouse:same-id:1", serverRegion: 3, leagueId: 54321 } };
+  const usPending = post(us);
+  const euPending = post(eu);
+  const commands = [await bot.nextRequest(), await bot.nextRequest()];
+  assert.notEqual(commands[0].id, commands[1].id);
+  assert.deepEqual(commands.map((command) => command.request).sort((a, b) => a.spec.serverRegion - b.spec.serverRegion), [us, eu]);
+  // Responses may return in the opposite order; each original HTTP caller
+  // must receive only its own command's response.
+  for (const command of commands.reverse())
+    bot.ws.send(JSON.stringify({ id: command.id, status: 200, body: { state: "ready", lobbyId: command.request.spec.serverRegion === 3 ? "33333" : "22222" } }));
+  await assertResponse(await usPending, 200, { state: "ready", lobbyId: "22222" });
+  await assertResponse(await euPending, 200, { state: "ready", lobbyId: "33333" });
 });
 
 test("malformed bot reply fails closed and never leaks extra fields", async (t) => {
@@ -196,4 +214,6 @@ test("health validation rejects missing identity fields and unsafe response cont
   assert.equal(validReply({ id, status: 200, body: { online: true } }, "health"), false);
   assert.equal(validReply({ id, status: 409, body: { code: "AUTH", input: {} } }, "status"), false);
   assert.equal(validReply({ id, status: 200, body: { state: "ready", lobbyId: "not-an-id" } }, "status"), false);
+  for (const key of ["asia:inhouse:fixture:1", "eu:us:inhouse:fixture:1", "EU:season:fixture:1"])
+    assert.equal(validReply({ id, status: 200, body: { key } }, "active"), false);
 });

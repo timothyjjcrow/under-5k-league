@@ -29,6 +29,20 @@ function playingSteamId(user: DotaAccountIdentity) {
   return accountIdToSteamId64(account);
 }
 
+function regionalLobbyKey(kind: LobbyKind, id: string, game: number) {
+  // Keep all existing US jobs addressable while Europe shares the same worker.
+  return `${LEAGUE_CONFIG.region === "eu" ? "eu:" : ""}${kind}:${id}:${game}`;
+}
+
+function ownLobbyKey(key: string) {
+  const match = /^(eu:)?(season|inhouse):([a-zA-Z0-9_-]{1,128}):([1-9]\d?)$/.exec(key);
+  if (!match || (match[1] ? "eu" : "us") !== LEAGUE_CONFIG.region) return null;
+  const kind = match[2] as LobbyKind;
+  const game = Number(match[4]);
+  if (kind === "inhouse" && game !== 1) return null;
+  return { kind, id: match[3], game };
+}
+
 /** The single bot is reserved for in-house games unless explicitly opted in. */
 export function lobbyBotKindEnabled(kind: LobbyKind) {
   return kind === "inhouse" || process.env.DOTA_SEASON_LOBBY_BOT_ENABLED === "true";
@@ -101,10 +115,10 @@ export async function recoverableInhouseBotLobby(viewer: SessionUser) {
       id: null,
     };
     if (body.activeKey === null) return health;
-    const match = /^inhouse:([a-zA-Z0-9_-]{1,128}):1$/.exec(body.activeKey);
-    if (!match) return health;
+    const key = ownLobbyKey(body.activeKey);
+    if (key?.kind !== "inhouse") return health;
     const lobby = await prisma.inhouseLobby.findFirst({
-      where: { id: match[1], status: { in: ["COMPLETED", "CANCELLED"] } },
+      where: { id: key.id, status: { in: ["COMPLETED", "CANCELLED"] } },
       select: { id: true },
     });
     return { ...health, id: lobby?.id ?? null };
@@ -161,7 +175,7 @@ export async function resolveDotaLobby(
         .filter((p) => p.team === n)
         .map((p) => playingSteamId(p.user));
     spec = {
-      key: `inhouse:${id}:1`,
+      key: regionalLobbyKey("inhouse", id, 1),
       name: `${INHOUSE.LOBBY_NAME} ${id.slice(-8)}`,
       password: INHOUSE.LOBBY_PASSWORD,
       leagueId,
@@ -216,7 +230,7 @@ export async function resolveDotaLobby(
     };
     const game = match.homeScore + match.awayScore + 1;
     if (game > match.bestOf) playable = false;
-    const key = `season:${id}:${game}`;
+    const key = regionalLobbyKey("season", id, game);
     const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
     spec = {
       key,
@@ -241,7 +255,10 @@ export async function callLobbyBot(
   spec: DotaLobbySpec,
   action?: LobbyAction,
 ): Promise<DotaLobbyStatus> {
-  if (spec.key.startsWith("season:") && !lobbyBotKindEnabled("season"))
+  const key = ownLobbyKey(spec.key);
+  if (!key)
+    throw new UserFacingError("This lobby does not belong to this league.");
+  if (key.kind === "season" && !lobbyBotKindEnabled("season"))
     throw new UserFacingError("The lobby bot is currently enabled for in-house games only.");
   const connection = lobbyBotConnection();
   if (!connection)

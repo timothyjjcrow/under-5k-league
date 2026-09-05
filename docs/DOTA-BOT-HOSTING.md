@@ -4,6 +4,12 @@ Prices checked September 4, 2026, in USD before tax, optional backups and overag
 
 The current setup runs one bot on this Mac and connects it to the site through the Cloudflare relay. It hosts the current active in-house game, with Captains Mode, US East and league ticket 20004. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
 
+The approved Europe plan can share this same worker and relay, with one lobby
+at a time across both leagues. Set `DOTA_GAME_SERVER_REGIONS="2,3"` only after
+deploying the namespace-aware relay and worker changes; Europe's requests then
+use Europe West and its own ticket. Keep a single process and the existing
+Steam state. See [shared setup and activation order](DOTA-LOBBY-BOT.md#sharing-the-existing-bot-between-us-and-europe).
+
 ## Recommendation
 
 Use the Mac for the first sessions. For dependable access when this Mac is asleep, traveling, or offline, move the same worker to a **$6/month DigitalOcean Basic VM with 1 GiB RAM**. The website and relay configuration can stay the same. Do not buy a second gaming computer for this bot.

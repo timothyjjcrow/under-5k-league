@@ -10,7 +10,7 @@ test("bot health passes the relay whitelist before login and with a live regiona
     const offline = lobbyHealth(controller);
     assert.equal(validReply({ id: randomUUID(), status: 200, body: offline }, "health"), true);
     controller.online = true;
-    controller.data.active = "inhouse:eu-fixture:1";
+    controller.data.active = region === 3 ? "eu:inhouse:fixture:1" : "inhouse:fixture:1";
     controller.lobby = { lobbyId: "12345", gameMode: 2, serverRegion: region, leagueid: 12345 };
     const online = lobbyHealth(controller, "76561198000000001");
     assert.equal(online.serverRegion, region);

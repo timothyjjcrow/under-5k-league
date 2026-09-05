@@ -47,9 +47,26 @@ For local development, put the two relay secrets in an ignored `.dev.vars` file
 and run `npm run dev`. Keep the test credentials in the tests separate from all
 real credentials.
 
+## Sharing the existing relay between US and Europe
+
+Both approved league sites can use this one relay and its existing site secret
+to reach the same bot process. The relay retains one connected worker and
+correlates each HTTP request with a fresh UUID; simultaneous requests return
+only to their original caller. The worker retains one active lobby claim
+across both leagues, so the second league receives `BUSY` until departure.
+
+EU job keys carry `eu:` before the existing kind/id/game key; US keys remain
+unchanged. Health and active responses accept either key form. The shared bot
+must explicitly set `DOTA_GAME_SERVER_REGIONS="2,3"` and validates region 3
+for EU keys and region 2 for US keys. Each app supplies its own league ticket.
+Both apps' server-side controls restrict mutations and recovery to their own
+keys. Deploy the updated existing relay with `npm run deploy`, then follow the
+[worker activation order](../../docs/DOTA-LOBBY-BOT.md#sharing-the-existing-bot-between-us-and-europe).
+
 ## Independent Europe relay
 
-The Europe configuration creates `ggd2l-europe-dota-lobby-relay`. Its Durable
+As an alternative to sharing, the Europe configuration creates
+`ggd2l-europe-dota-lobby-relay`. Its Durable
 Object namespace and encrypted secrets belong to that separate Worker, even
 though it uses the same source code and the same local object name `inhouse`.
 Use these commands from this directory for Europe:
@@ -65,8 +82,8 @@ For an initial deployment with a private secrets file, use
 `npm run deploy:europe -- --secrets-file /private/path/europe-secrets.json`.
 The secret requirements and private-file handling above also apply. Use fresh
 Europe secrets and the resulting Europe HTTPS origin in the Europe website
-and worker only. The unqualified `deploy` and `check` scripts target the US
-relay. A connected Europe worker requires its own Steam account and state;
+and worker only. The unqualified `deploy` and `check` scripts target the
+existing US/shared relay. This alternative Europe worker requires its own Steam account and state;
 see [Europe setup](../../docs/EUROPE-SETUP.md#dota-lobby-automation).
 
 ## Protocol

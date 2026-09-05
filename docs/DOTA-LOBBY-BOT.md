@@ -1,6 +1,6 @@
 # Steam / Dota lobby bot
 
-The current rollout is **one bot for the current active in-house game**, using **Captains Mode (2)** and **US East (2)**. Captains/admins create and start the lobby from the in-house room; participants can see credentials and status. Draft completion alone does not create or launch a Dota lobby. Season support is implemented but its UI and API stay disabled unless the server explicitly sets `DOTA_SEASON_LOBBY_BOT_ENABLED="true"`.
+The default rollout is **one bot for the current active in-house game**, using **Captains Mode (2)** and **US East (2)**. The same bot can also serve Europe West (3) through the explicit shared-region setup below; it still hosts only one lobby at a time across both leagues. Captains/admins create and start the lobby from the in-house room; participants can see credentials and status. Draft completion alone does not create or launch a Dota lobby. Season support is implemented but its UI and API stay disabled unless the server explicitly sets `DOTA_SEASON_LOBBY_BOT_ENABLED="true"`.
 
 ## Architecture and research
 
@@ -87,6 +87,57 @@ DOTA_SEASON_LOBBY_BOT_ENABLED="false"
 
 Do not put `STEAM_BOT_USERNAME` or `STEAM_BOT_PASSWORD` in Vercel. Local web development can use `http://127.0.0.1:8090`; production requires HTTPS. Restart/redeploy the app after setting its environment. No database migration is needed.
 
+## Sharing the existing bot between US and Europe
+
+The approved shared setup keeps the existing Steam account, worker process,
+private state directory, LaunchAgent and relay. Both web projects use the
+existing relay's `DOTA_LOBBY_BOT_URL` and its matching `DOTA_LOBBY_BOT_SECRET`.
+Set this explicit allowlist in the existing worker's private configuration:
+
+```dotenv
+DOTA_GAME_SERVER_REGIONS="2,3"
+```
+
+This overrides the singular `DOTA_GAME_SERVER_REGION` when present. Omitting
+it preserves the existing single-region setting, defaulting to US East (2).
+Only region IDs 2 and 3 are supported; malformed, duplicate or unknown entries
+stop startup before Steam login. Do not start the separate `.env.eu` worker
+or a second process with this Steam account.
+
+The EU app generates `eu:inhouse:<id>:1` and `eu:season:<id>:<game>` keys.
+US keys remain `inhouse:<id>:1` and `season:<id>:<game>`, preserving its existing
+active jobs and history. In shared mode the worker accepts EU keys only with
+region 3 and US keys only with region 2. Equal record IDs in the independent
+databases therefore cannot select or release the other league's job. The
+single durable active claim returns `BUSY` to either league while the other
+owns a lobby, including during creation, reconnection and departure.
+
+Each request retains its own app-selected ticket, region and roster. The bot
+checks the actual lobby against both the original ticket/region and the
+current request before launch. A shared Steam account needs permission for
+each league's ticket: configure Europe's own numeric `DOTA_INHOUSE_LEAGUE_ID`,
+ticket name and any season `dotaLeagueId` separately. Sharing the account
+does not obtain or grant access to a Europe ticket.
+
+Activation order:
+
+1. Deploy the updated **existing** relay, using `npm run deploy` from
+   `ops/dota-lobby-relay`; the protocol update preserves US keys and adds EU
+   keys. The separate `deploy:europe` relay is unused for this shared path.
+2. Finish/release any active bot lobby. Stop the existing service, deploy its
+   reviewed worker code, add the allowlist, and start the same service with
+   its existing state and credentials. Do not delete its saved job history.
+3. Deploy the app namespace changes and point Europe at the shared relay.
+   Keep season bot controls disabled until their own rehearsal is complete.
+4. Verify US and EU create/release in sequence with their correct tickets and
+   regions. While one owns the bot, verify the other receives `BUSY`. Complete
+   a real game/result-import rehearsal before announcing automated hosting.
+
+Relay requests receive fresh random correlation IDs. The worker only reuses
+a cached result for an identical request; a conflicting request with the same
+correlation ID fails without running another command or returning the earlier
+request's result. There is no automatic queue or preemption between leagues.
+
 ## Mac background service
 
 After sign-in, stop any foreground worker and run from `ops/dota-lobby-bot`:
@@ -102,7 +153,7 @@ Use `node macos-service.mjs stop` before signing in again or moving the bot to a
 
 ## Match-night flow
 
-1. In-house controls appear once teams are drafted; either in-house captain or an admin clicks **Create Dota lobby**. Only the current active in-house game can create/start a lobby. The bot applies the in-house ticket, Captains Mode, US East, a password, no cheats, no AI players, and a two-minute DotaTV delay. Each game has a unique name suffix.
+1. In-house controls appear once teams are drafted; either in-house captain or an admin clicks **Create Dota lobby**. Only the current active in-house game can create/start a lobby. The bot applies that league's in-house ticket, Captains Mode, its configured server region, a password, no cheats, no AI players, and a two-minute DotaTV delay. Each game has a unique name suffix.
 2. Players join through Dota's Custom Lobbies browser using the bot panel's name/password. The bot does not send Steam invitations. Season home team plays Radiant and away team Dire; in-house sides follow the draft's existing Radiant assignment. The panel shows both sides.
 3. When Dota confirms the configured settings, the panel shows **Lobby ready**. The bot removes itself from a playing slot. **Start game with bot** verifies five current roster members on each assigned side, including approved stand-ins and linked Dota account overrides. It does not auto-launch when the tenth player joins.
 4. Once the GC reports the game running, the in-house page advances to In Progress on its next bot-status check. Existing wager closing times are preserved. Existing OpenDota result import remains authoritative for results; the bot does not invent a result from lobby state.

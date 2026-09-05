@@ -89,6 +89,49 @@ test("an EU bot cannot start a lobby moved to the US region", (t) => {
   assert.throws(() => c.request("start", eu), /STATE/);
   assert.deepEqual(calls, ["create"]);
 });
+
+test("shared bot binds each namespace to its region and retains one global lobby claim", (t) => {
+  const eu = { ...spec, key: `eu:${spec.key}`, name: "GGD2L Europe fixture", leagueId: 54321, serverRegion: 3 };
+  const { controller: c, calls, options } = setup(t, { serverRegions: [2, 3] });
+  assert.equal(validSpec(eu, [2, 3]), true);
+  for (const invalid of [{ ...eu, serverRegion: 2 }, { ...spec, serverRegion: 3 },
+    { ...eu, serverRegion: 1 }, { ...eu, key: `other:${spec.key}` }])
+    assert.throws(() => c.request("create", invalid), /INVALID/);
+  c.request("create", spec);
+  assert.deepEqual(c.request("status", eu), { state: "idle" });
+  assert.throws(() => c.request("create", eu), /BUSY/);
+  assert.throws(() => c.request("release", eu), /STATE/);
+  assert.throws(() => c.request("start", eu), /STATE/);
+  // Equal database IDs remain separate even after a worker restart.
+  const resumed = new LobbyController(options);
+  resumed.online = true;
+  resumed.snapshot(snapshot());
+  assert.throws(() => resumed.request("create", eu), /BUSY/);
+  resumed.request("release", spec);
+  assert.throws(() => resumed.request("create", eu), /BUSY/);
+  resumed.departed();
+  resumed.request("create", eu);
+  assert.equal(resumed.data.jobs[eu.key].spec.leagueId, 54321);
+  assert.equal(resumed.data.jobs[spec.key].spec.leagueId, 12345);
+  resumed.snapshot(snapshot({ gameName: eu.name, leagueid: eu.leagueId, serverRegion: 3 }));
+  assert.equal(resumed.request("status", eu).state, "ready");
+  assert.throws(() => resumed.request("start", { ...eu, leagueId: 12345 }), /SETTINGS/);
+  assert.throws(() => resumed.request("release", spec), /STATE/);
+  assert.throws(() => resumed.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
+  resumed.request("start", eu);
+  assert.deepEqual(calls, ["create", "leave", "create", "start"]);
+});
+
+test("shared worker constructor rejects unknown, duplicate, empty, or mutable allowlists", (t) => {
+  const { options } = setup(t);
+  for (const serverRegions of [[], [2, 2], [1, 2, 3], ["2"], "2,3"])
+    assert.throws(() => new LobbyController({ ...options, serverRegions }), /Unsupported/);
+  const serverRegions = [2, 3];
+  const controller = new LobbyController({ ...options, serverRegions });
+  serverRegions.push(1);
+  assert.deepEqual(controller.serverRegions, [2, 3]);
+  assert.ok(Object.isFrozen(controller.serverRegions));
+});
 test("an online session needs confirmed lobby absence before creating", (t) => {
   const { calls, options } = setup(t);
   const c = new LobbyController(options);

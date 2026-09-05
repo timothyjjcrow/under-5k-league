@@ -3,7 +3,7 @@ export const REQUEST_TIMEOUT_MS = 10_000;
 export const LEASE_MS = 90_000;
 export const MAX_PENDING = 64;
 export const INSTANCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const KEY_PATTERN = /^(season|inhouse):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/;
+const KEY_PATTERN = /^(?:eu:)?(season|inhouse):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/;
 const STATES = new Set(["idle", "creating", "ready", "starting", "started", "blocked", "released"]);
 const ERROR_CODES = new Set(["AUTH", "INVALID", "OFFLINE", "BUSY", "STATE", "ROSTER", "SETTINGS"]);
 

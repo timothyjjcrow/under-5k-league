@@ -6,8 +6,10 @@ import { recoverableInhouseBotLobby } from "@/lib/dota-lobby-service";
 import { POST } from "@/app/api/dota-lobby/recovery/route";
 import { POST as lobbyPost } from "@/app/api/dota-lobby/route";
 import { makeUser, sessionFor } from "./factories";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 
 vi.mock("@/lib/auth", () => ({ getSessionUser: vi.fn() }));
+const keyPrefix = LEAGUE_CONFIG.region === "eu" ? "eu:" : "";
 
 beforeEach(() => {
   vi.stubEnv("DOTA_LOBBY_BOT_URL", "http://127.0.0.1:8090");
@@ -78,7 +80,7 @@ describe("closed in-house bot recovery", () => {
     async (status) => {
       await admin();
       const lobby = await prisma.inhouseLobby.create({ data: { status } });
-      const fetch = vi.fn().mockResolvedValue(Response.json(health(`inhouse:${lobby.id}:1`)));
+      const fetch = vi.fn().mockResolvedValue(Response.json(health(`${keyPrefix}inhouse:${lobby.id}:1`)));
       vi.stubGlobal("fetch", fetch);
       const response = await POST(request({ id: "client-cannot-select-a-room", action: "release" }));
       expect(response.status).toBe(200);
@@ -103,12 +105,23 @@ describe("closed in-house bot recovery", () => {
     "does not expose an out-of-scope worker key: %s",
     async (key) => {
       await admin();
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(health(key))));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(health(key === null ? null : `${keyPrefix}${key}`))));
       expect(await (await POST(request())).json()).toEqual({
         enabled: true, online: true, steamId: botSteamId, id: null,
       });
     },
   );
+
+  it("never offers recovery for another region's job even when its ID exists locally", async () => {
+    await admin();
+    const lobby = await prisma.inhouseLobby.create({ data: { status: "CANCELLED" } });
+    const otherPrefix = LEAGUE_CONFIG.region === "eu" ? "" : "eu:";
+    const otherKey = `${otherPrefix}inhouse:${lobby.id}:1`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(health(otherKey))));
+    expect(await (await POST(request())).json()).toEqual({
+      enabled: true, online: true, steamId: botSteamId, id: null,
+    });
+  });
 
   it("reports a disconnected relay as offline and recovers on the next successful check", async () => {
     await admin();
@@ -127,7 +140,7 @@ describe("closed in-house bot recovery", () => {
   it("preserves scoped closed-room recovery while the worker is reconnecting to Dota", async () => {
     await admin();
     const lobby = await prisma.inhouseLobby.create({ data: { status: "CANCELLED" } });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(health(`inhouse:${lobby.id}:1`, false))));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(health(`${keyPrefix}inhouse:${lobby.id}:1`, false))));
     expect(await (await POST(request())).json()).toEqual({
       enabled: true, online: false, steamId: botSteamId, id: lobby.id,
     });
@@ -148,7 +161,7 @@ describe("closed in-house bot recovery", () => {
     const released = await lobbyPost(request({ kind: "inhouse", id: lobby.id, action: "release" }));
     expect(released.status).toBe(200);
     expect(JSON.parse(fetch.mock.calls.at(-1)![1].body)).toMatchObject({
-      action: "release", spec: { key: `inhouse:${lobby.id}:1` },
+      action: "release", spec: { key: `${keyPrefix}inhouse:${lobby.id}:1` },
     });
     expect(fetch).toHaveBeenCalledTimes(2);
   });

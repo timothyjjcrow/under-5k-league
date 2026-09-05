@@ -66,12 +66,20 @@ export class RelayClient {
           typeof packet.request !== "object" || Array.isArray(packet.request)) return;
       for (const [id, reply] of this.seen) if (reply.expiresAt <= this.now()) this.seen.delete(id);
       let reply = this.seen.get(packet.id);
+      const requestIdentity = JSON.stringify(packet.request);
+      // Only identical retries can reuse a result. A conflicting ID must not
+      // return another league's reply or execute a second lobby command.
+      if (reply && reply.requestIdentity !== requestIdentity) {
+        if (socket.readyState === WebSocket.OPEN)
+          socket.send(JSON.stringify({ id: packet.id, status: 400, body: { code: "INVALID" } }));
+        return;
+      }
       if (!reply) {
         if (this.seen.size >= 1024) return socket.close(1008, "Too many requests");
         let result;
         try { result = this.handle(packet.request); }
         catch { result = { status: 400, body: { code: "INVALID" } }; }
-        reply = { expiresAt: packet.expiresAt, message: JSON.stringify({ id: packet.id, ...result }) };
+        reply = { expiresAt: packet.expiresAt, requestIdentity, message: JSON.stringify({ id: packet.id, ...result }) };
         this.seen.set(packet.id, reply);
       }
       if (socket.readyState === WebSocket.OPEN && packet.expiresAt > this.now()) socket.send(reply.message);

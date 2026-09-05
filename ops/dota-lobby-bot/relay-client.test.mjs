@@ -51,6 +51,22 @@ test("authenticated outbound relay handles a command once even if its ID is dupl
   result = receive(socket); socket.send(JSON.stringify(command)); await result;
   assert.equal(calls, 1);
 });
+
+test("a duplicate relay ID cannot execute or disclose a different league's request", async (t) => {
+  const calls = [];
+  const { socket } = await connected(t, (request) => {
+    calls.push(request.spec.key);
+    return { status: 200, body: { state: "ready", lobbyId: "12345" } };
+  });
+  const original = packet({ action: "create", spec: { key: "inhouse:same-id:1" } });
+  let reply = receive(socket); socket.send(JSON.stringify(original)); await reply;
+  const conflicting = { ...original, request: { action: "create", spec: { key: "eu:inhouse:same-id:1" } } };
+  reply = receive(socket); socket.send(JSON.stringify(conflicting));
+  assert.deepEqual(await reply, { id: original.id, status: 400, body: { code: "INVALID" } });
+  reply = receive(socket); socket.send(JSON.stringify(original));
+  assert.deepEqual((await reply).body, { state: "ready", lobbyId: "12345" });
+  assert.deepEqual(calls, ["inhouse:same-id:1"]);
+});
 test("expired and excessively future commands are ignored before touching the controller", async (t) => {
   const actions = [];
   const { socket } = await connected(t, (r) => { actions.push(r.action); return { status: 200, body: { state: "idle" } }; });
