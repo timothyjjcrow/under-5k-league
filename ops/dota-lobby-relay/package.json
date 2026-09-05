@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:europe": "wrangler deploy --config wrangler.europe.jsonc",
     "test": "node --test test/*.test.mjs",
-    "check": "wrangler deploy --dry-run"
+    "check": "wrangler deploy --dry-run",
+    "check:europe": "wrangler deploy --dry-run --config wrangler.europe.jsonc"
   },
   "devDependencies": {
     "miniflare": "5.20260730.0-alpha",

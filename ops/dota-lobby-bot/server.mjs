@@ -12,6 +12,7 @@ import { readSteamAuth, writeSteamAuth } from "./auth-store.mjs";
 import { RelayClient, relayConnection } from "./relay-client.mjs";
 import { runWithProcessLock } from "./process-lock.mjs";
 import { gameServerRegion } from "./region.mjs";
+import { lobbyHealth } from "./health.mjs";
 
 const serverRegion = gameServerRegion(process.env.DOTA_GAME_SERVER_REGION);
 const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
@@ -82,16 +83,7 @@ function control(request) {
     if (action === "active") return { status: 200, body: { key: controller.data.active ?? null } };
     if (action === "health") return {
       status: 200,
-      body: {
-        online: controller.online,
-        steamId: user.steamID?.getSteamID64() ?? null,
-        activeKey: controller.data.active ?? null,
-        lobbyId: controller.lobby?.lobbyId ?? null,
-        gameMode: controller.lobby?.gameMode ?? null,
-        serverRegion: controller.lobby?.serverRegion ?? null,
-        configuredServerRegion: serverRegion,
-        leagueId: controller.lobby?.leagueid ?? null,
-      },
+      body: lobbyHealth(controller, user.steamID?.getSteamID64()),
     };
     return { status: 200, body: controller.request(action, spec) };
   } catch (error) {

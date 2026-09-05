@@ -128,8 +128,39 @@ The web app's `DOTA_LOBBY_BOT_URL` and `DOTA_LOBBY_BOT_SECRET` point only to tha
 relay. Do not copy the US worker's Steam session or point both regions at one
 active Dota account.
 
+From `ops/dota-lobby-relay`, provision only the Europe relay:
+
+```bash
+npm ci
+npm test
+npm run check:europe
+npx wrangler secret put DOTA_LOBBY_BOT_SECRET --config wrangler.europe.jsonc
+npx wrangler secret put DOTA_RELAY_WORKER_SECRET --config wrangler.europe.jsonc
+npm run deploy:europe
+```
+
+The Worker is named `ggd2l-europe-dota-lobby-relay`, with its own Durable Object
+namespace. Generate two independent Europe secrets; the lobby secret is shared
+only with the Europe website and bot, while the relay-worker secret belongs
+only to this relay and bot. Use the HTTPS origin reported by this deployment
+for both the Europe website's `DOTA_LOBBY_BOT_URL` and the Europe worker's
+`DOTA_LOBBY_RELAY_URL`. Do not use the relay's unqualified `deploy` command,
+which targets the US Worker. For first-deploy private-secret-file handling,
+see [relay deployment](../ops/dota-lobby-relay/README.md#independent-europe-relay).
+
 For the macOS worker, use `ops/dota-lobby-bot/.env.eu`,
 `DOTA_BOT_STATE_DIR=./state/eu`, and `PORT=8091`. From the worker directory:
+
+```bash
+cp -n .env.europe.example .env.eu
+chmod 600 .env.eu
+```
+
+Fill the empty Europe relay origin and both secrets in this private file before
+starting. The template already selects Europe West (`3`) and separate local
+state/port. It contains no Steam session or credentials. If the US worker has
+customized its port or state path, choose unused values; the service helper
+checks the peer configurations. Then sign in and install the EU service:
 
 ```bash
 node --env-file=.env.eu login.mjs

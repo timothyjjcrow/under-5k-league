@@ -47,6 +47,28 @@ For local development, put the two relay secrets in an ignored `.dev.vars` file
 and run `npm run dev`. Keep the test credentials in the tests separate from all
 real credentials.
 
+## Independent Europe relay
+
+The Europe configuration creates `ggd2l-europe-dota-lobby-relay`. Its Durable
+Object namespace and encrypted secrets belong to that separate Worker, even
+though it uses the same source code and the same local object name `inhouse`.
+Use these commands from this directory for Europe:
+
+```sh
+npm run check:europe
+npx wrangler secret put DOTA_LOBBY_BOT_SECRET --config wrangler.europe.jsonc
+npx wrangler secret put DOTA_RELAY_WORKER_SECRET --config wrangler.europe.jsonc
+npm run deploy:europe
+```
+
+For an initial deployment with a private secrets file, use
+`npm run deploy:europe -- --secrets-file /private/path/europe-secrets.json`.
+The secret requirements and private-file handling above also apply. Use fresh
+Europe secrets and the resulting Europe HTTPS origin in the Europe website
+and worker only. The unqualified `deploy` and `check` scripts target the US
+relay. A connected Europe worker requires its own Steam account and state;
+see [Europe setup](../../docs/EUROPE-SETUP.md#dota-lobby-automation).
+
 ## Protocol
 
 The website sends `POST /lobby` with `Content-Type: application/json` and
