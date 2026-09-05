@@ -29,12 +29,10 @@ import {
   CHAMPION_ANNOUNCED_PREFIX,
   championAnnouncedKey,
   honorsAnnouncedKey,
-  honorsAnnouncedPrefix,
   RESULT_ANNOUNCED_PREFIX,
   resultAnnouncedKey,
   SETTING_KEYS,
   weekReminderKey,
-  weekReminderPrefix,
 } from "./settings";
 import {
   AUTOMATION_GATE_CACHE_KEY,
@@ -1023,14 +1021,28 @@ export async function loadAutomationGateSnapshot(
   ]);
   invariant(seasons.length <= 1, "multiple active seasons");
   const season = seasons[0] ?? null;
-  const markerScopes = season
-    ? [
-        { key: { startsWith: weekReminderPrefix(season.id) } },
-        { key: { in: season.matches.map((match) => resultAnnouncedKey(match.id)) } },
-        { key: championAnnouncedKey(season.id) },
-        { key: { startsWith: honorsAnnouncedPrefix(season.id) } },
-      ]
-    : [];
+  // Only these exact per-season markers can affect the calculator. Old
+  // rescheduled kickoff markers and unrelated honors weeks are immutable
+  // history, so fetching their entire prefixes grows work without changing
+  // any deadline. Global failed/claimed result and champion recovery remains
+  // below, including markers whose match or season was deleted.
+  const markerKeys = new Set<string>();
+  if (season) {
+    markerKeys.add(championAnnouncedKey(season.id));
+    for (const match of season.matches) {
+      if (match.status === MATCH_STATUS.COMPLETED) {
+        markerKeys.add(resultAnnouncedKey(match.id));
+      }
+      if (match.status === MATCH_STATUS.SCHEDULED && match.scheduledAt) {
+        markerKeys.add(
+          weekReminderKey(season.id, match.week, match.scheduledAt.getTime()),
+        );
+      }
+      if (match.phase === MATCH_PHASE.REGULAR) {
+        markerKeys.add(honorsAnnouncedKey(season.id, match.week));
+      }
+    }
+  }
   const [
     settingRows,
     activeLobbies,
@@ -1052,10 +1064,10 @@ export async function loadAutomationGateSnapshot(
                 SETTING_KEYS.ANNOUNCE_RETRY_AT,
                 SETTING_KEYS.INHOUSE_BOARD,
                 SETTING_KEYS.INHOUSE_BOARD_AT,
+                ...markerKeys,
               ],
             },
           },
-          ...markerScopes,
           {
             key: { startsWith: RESULT_ANNOUNCED_PREFIX },
             value: { startsWith: ANNOUNCE_FAILED_PREFIX },
