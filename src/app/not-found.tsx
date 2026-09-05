@@ -18,6 +18,7 @@ export default function NotFound() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={LEAGUE_CONFIG.branding.logo}
+            style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
             alt={LEAGUE_CONFIG.name}
             width={LEAGUE_CONFIG.branding.logoWidth}
             height={LEAGUE_CONFIG.branding.logoHeight}

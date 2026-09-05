@@ -263,6 +263,7 @@ export function SiteHeader({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={LEAGUE_CONFIG.branding.navLogo}
+              style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
               alt={LEAGUE_CONFIG.name}
               width={LEAGUE_CONFIG.branding.navWidth}
               height={LEAGUE_CONFIG.branding.navHeight}

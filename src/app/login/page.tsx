@@ -70,6 +70,7 @@ export default async function LoginPage({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={LEAGUE_CONFIG.branding.logo}
+              style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
               alt={`${LEAGUE_CONFIG.name} — amateur Dota 2 league`}
               width={LEAGUE_CONFIG.branding.logoWidth}
               height={LEAGUE_CONFIG.branding.logoHeight}
