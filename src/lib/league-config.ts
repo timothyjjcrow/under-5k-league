@@ -45,6 +45,7 @@ export function createLeagueConfig(env: LeagueEnvironment) {
     region,
     name,
     branding: {
+      blendMode: europe ? "lighten" : "normal",
       logo: europe ? "/brand/ggd2l-europe-logo.png" : "/brand/ggd2l-logo.png",
       logoWidth: europe ? 1254 : 768,
       logoHeight: europe ? 1254 : 512,
