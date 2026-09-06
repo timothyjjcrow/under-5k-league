@@ -11,6 +11,7 @@ import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
+import type { playoffPathLines } from "@/components/playoff-outlook";
 
 export type RsvpSide = {
   confirmed: number;
@@ -29,6 +30,10 @@ export type MatchView = {
   awayLogoUrl?: string | null;
   homeScore: number;
   awayScore: number;
+  playoffPaths?: {
+    home: ReturnType<typeof playoffPathLines>;
+    away: ReturnType<typeof playoffPathLines>;
+  };
   done: boolean;
   /** Ruled/defaulted result — the score was never played; badge it. */
   forfeit: boolean;
@@ -478,6 +483,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
       score: m.homeScore,
       winner: m.homeWin,
       rsvp: m.rsvp?.home,
+      paths: m.playoffPaths?.home,
     },
     {
       id: m.awayTeamId,
@@ -486,6 +492,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
       score: m.awayScore,
       winner: m.awayWin,
       rsvp: m.rsvp?.away,
+      paths: m.playoffPaths?.away,
     },
   ];
   return (
@@ -535,7 +542,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           <div
             key={side.id}
             className={cn(
-              "flex min-w-0 items-center gap-2.5 rounded-lg border border-transparent px-1.5",
+              "flex min-w-0 items-start gap-2.5 rounded-lg border border-transparent px-1.5 py-1",
               m.done && side.winner && "border-success/10 bg-success/[0.05]",
             )}
           >
@@ -546,10 +553,11 @@ function MatchRow({ match: m }: { match: MatchView }) {
               size={28}
               className="rounded-lg"
             />
-            <Link
+            <div className="min-w-0 flex-1">
+              <Link
               href={`/teams/${side.id}`}
               className={cn(
-                "flex min-h-11 min-w-0 flex-1 items-center py-2 text-sm [overflow-wrap:anywhere] hover:text-info",
+                "flex min-h-11 min-w-0 items-center py-2 text-sm [overflow-wrap:anywhere] hover:text-info",
                 m.done
                   ? side.winner
                     ? "font-semibold text-fg"
@@ -559,6 +567,17 @@ function MatchRow({ match: m }: { match: MatchView }) {
             >
               {side.name}
             </Link>
+              {side.paths && side.paths.length > 0 ? (
+                <dl className="space-y-1 pb-2 text-[11px] leading-relaxed">
+                  {side.paths.map((path) => (
+                    <div key={path.key} className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-1.5">
+                      <dt className="font-medium text-accent">{path.label}</dt>
+                      <dd className="text-muted [overflow-wrap:anywhere]">{path.description}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
             {side.rsvp ? <RsvpBadge side={side.rsvp} /> : null}
             <span
               className={cn(
@@ -579,6 +598,12 @@ function MatchRow({ match: m }: { match: MatchView }) {
           </div>
         ))}
       </div>
+      {m.playoffPaths && (m.playoffPaths.home.length > 0 || m.playoffPaths.away.length > 0) ? (
+        <p className="px-4 pb-2 text-[10px] text-muted sm:px-5">
+          Counts show result combinations, not odds. Assumes normally completed series;
+          administrative rulings or score corrections can change outcomes.
+        </p>
+      ) : null}
       <div className="mt-auto flex flex-wrap items-center gap-x-2 border-t border-line-soft px-4 sm:px-5">
         <span
           className="mr-auto text-[11px] text-muted"

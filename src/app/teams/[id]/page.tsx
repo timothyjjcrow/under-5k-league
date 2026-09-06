@@ -1,4 +1,5 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { PlayoffOutlook, playoffStatusLine } from "@/components/playoff-outlook";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -206,6 +207,7 @@ export default async function TeamPage({
           playoffField.eligibleStandings,
           allMatches,
           playoffField.eligibleTeamIds.length,
+          playoffField,
         )
       : null;
   const myScenario = team.withdrawn
@@ -797,139 +799,30 @@ export default async function TeamPage({
           aria-label="Playoff outlook"
           className="scroll-mt-40"
         >
-          <WhatWeNeed scenario={myScenario} cut={stakesReport.cut} />
+          <WhatWeNeed scenario={myScenario} teamNames={teamName} />
         </section>
       ) : null}
     </div>
   );
 }
 
-/**
- * "What we need": the team's live playoff scenario from the exact engine —
- * win-and-in / lose-and-out, magic number, equal-weight scenario shares, and
- * the possible finishing range. Regular season only; conservative on ties.
- */
+/** A team's authoritative playoff status and remaining feasible result paths. */
 function WhatWeNeed({
   scenario,
-  cut,
+  teamNames,
 }: {
   scenario: TeamScenario;
-  cut: number;
+  teamNames: Map<string, string>;
 }) {
-  const s = scenario;
-  const scenarioShare =
-    s.exact && s.madeCount != null && s.leafCount
-      ? Math.round((s.madeCount / s.leafCount) * 100)
-      : null;
-
-  const facts: { icon: string; text: string }[] = [];
-  const nothingLeft = s.nextMatchId === null;
-  if (s.status === null) {
-    if (nothingLeft) {
-      // Fate open with nothing left to play: the rest of the league (and
-      // possibly the tiebreakers) decides — the scenario line below still
-      // carries the equal-weight result share, so don't editorialize beyond it.
-      facts.push({
-        icon: "⏳",
-        text: "Their matches are done — the rest of the league decides it from here.",
-      });
-    } else {
-      if (s.winAndIn && s.loseAndOut) {
-        facts.push({
-          icon: "⚡",
-          text: "Win the next series and they're in — lose it and they're out.",
-        });
-      } else if (s.winAndIn) {
-        facts.push({
-          icon: "🎯",
-          text: "Win the next series and a playoff spot is locked, whatever else happens.",
-        });
-      } else if (s.loseAndOut) {
-        facts.push({
-          icon: "⚠️",
-          text: "Lose the next series and the playoffs are gone, whatever else happens.",
-        });
-      }
-      // The magic number comes from the conservative bounds layer, which
-      // can't see head-to-head — when the exact engine already proved
-      // win-next-and-in, a bounds "can't lock it alone" line would flatly
-      // contradict it. Same guard as the schedule page's race notes.
-      if (!s.winAndIn) {
-        if (s.magicNumber != null && s.magicNumber > 0) {
-          facts.push({
-            icon: "🔢",
-            text: `Magic number ${s.magicNumber}: that many more series wins guarantee a top-${cut} finish.`,
-          });
-        } else if (s.magicNumber == null) {
-          facts.push({
-            icon: "🤝",
-            text: "Winning out alone can't lock it — they'll need results elsewhere too.",
-          });
-        }
-      }
-      if (s.eliminationLosses != null && s.eliminationLosses > 0) {
-        facts.push({
-          icon: "🧮",
-          text: `${s.eliminationLosses} more series ${s.eliminationLosses === 1 ? "loss" : "losses"} would guarantee missing the cut.`,
-        });
-      }
-    }
-    if (s.exact && s.madeCount != null && s.leafCount) {
-      if (s.madeCount > 0) {
-        // Guard on madeCount, not the rounded percent — 1 leaf in 243 is a
-        // real points-only path, not "no scenario".
-        facts.push({
-          icon: "📊",
-          text: `Safely top-${cut} in ${scenarioShare && scenarioShare > 0 ? `${scenarioShare}%` : "<1%"} of ${s.leafCount.toLocaleString()} equal-weight result combinations. This is not a forecast; ties count against them.`,
-        });
-      } else {
-        facts.push({
-          icon: "🎲",
-          text: "No remaining result locks it on points alone — they'd need tiebreakers to fall right.",
-        });
-      }
-    }
-  }
-  facts.push({
-    icon: "📈",
-    text:
-      s.bestRank === s.worstRank
-        ? `Locked into finishing #${s.bestRank}.`
-        : `Could still finish anywhere from #${s.bestRank} to #${s.worstRank}.`,
-  });
-
-  const title =
-    s.status === "CLINCHED"
-      ? "✓ Playoff spot locked"
-      : s.status === "ELIMINATED"
-        ? "Out of the playoff race"
-        : "What we need";
-  const subtitle =
-    s.status === "CLINCHED"
-      ? "Now it's about seeding"
-      : s.status === "ELIMINATED"
-        ? "Playing for pride — and next season"
-        : `The road to a top-${cut} finish${s.exact ? "" : " (points bounds — race too big to enumerate)"}`;
-
   return (
-    <Card
-      className={cn(
-        s.status === "CLINCHED" && "border-success/30",
-        s.status === null && "border-accent/30",
-      )}
-    >
-      <CardHeader title={title} subtitle={subtitle} headingLevel={2} />
+    <Card className={scenario.status === "CLINCHED" ? "border-success/30" : "border-accent/30"}>
+      <CardHeader
+        title="Playoff outlook"
+        subtitle={playoffStatusLine(scenario)}
+        headingLevel={2}
+      />
       <CardBody>
-        <ul className="space-y-1.5 text-sm">
-          {facts.map((f) => (
-            <li key={f.text} className="flex items-start gap-2">
-              <span aria-hidden className="shrink-0">
-                {f.icon}
-              </span>
-              <span className="min-w-0">{f.text}</span>
-            </li>
-          ))}
-        </ul>
+        <PlayoffOutlook scenario={scenario} teamNames={teamNames} />
       </CardBody>
     </Card>
   );

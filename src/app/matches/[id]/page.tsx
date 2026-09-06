@@ -1,4 +1,5 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { PlayoffOutlook } from "@/components/playoff-outlook";
 import { Suspense } from "react";
 import { fetchAllGamesForScouting } from "@/lib/cached-queries";
 import {
@@ -79,7 +80,6 @@ import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
 import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { parseTiebreakerStage } from "@/lib/tiebreaker-format";
-import { matchStakes, stakesHeadline } from "@/lib/scenarios";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   Avatar,
@@ -939,27 +939,23 @@ async function StakesBanner({
 
   const teams = await prisma.team.findMany({
     where: { seasonId: match.seasonId },
-    select: { id: true, withdrawn: true },
+    select: { id: true, name: true, withdrawn: true },
   });
   const playoffField = projectPlayoffField(teams, seasonMatches);
   const report = seasonScenarioReport(
     playoffField.eligibleStandings,
     seasonMatches,
     playoffField.eligibleTeamIds.length,
+    playoffField,
   );
   if (!report) return null;
 
-  const stakes = matchStakes(
-    match.id,
-    match.homeTeamId,
-    match.awayTeamId,
-    report,
-  );
-  const headline = stakesHeadline(stakes);
-  const decided = stakes.some(
-    (s) => report.teams.get(s.teamId)?.status != null,
-  );
-  if (!headline && !decided) return null;
+  const sides = [match.homeTeamId, match.awayTeamId].flatMap((teamId) => {
+    const scenario = report.teams.get(teamId);
+    return scenario ? [{ teamId, scenario }] : [];
+  });
+  if (!sides.some(({ scenario }) => scenario.paths || scenario.status || scenario.outlook)) return null;
+  const teamNames = new Map(teams.map((team) => [team.id, team.name]));
 
   const nameOf = new Map([
     [match.homeTeamId, match.homeTeam.name],
@@ -973,16 +969,16 @@ async function StakesBanner({
     <Card className="border-accent/30">
       <CardHeader
         title="Tonight's stakes"
-        subtitle={headline ?? "The playoff picture is taking shape"}
+        subtitle="How each feasible result changes playoff qualification"
       />
       <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {stakes.map((s) => {
+        {sides.map((s) => {
           const status = report.teams.get(s.teamId)?.status ?? null;
           return (
             <div
               key={s.teamId}
               className={cn(
-                "flex min-w-0 items-center gap-2.5 rounded-lg border px-3 py-2 text-sm",
+                "flex min-w-0 items-start gap-2.5 rounded-lg border px-3 py-2 text-sm",
                 status === "CLINCHED"
                   ? "border-success/30 bg-success/5"
                   : status === "ELIMINATED"
@@ -997,12 +993,12 @@ async function StakesBanner({
                 size={22}
                 className="shrink-0 rounded-md"
               />
-              <span className="min-w-0">
-                <span className="block truncate font-medium">
+              <div className="min-w-0 flex-1">
+                <p className="mb-2 font-medium">
                   {nameOf.get(s.teamId) ?? "?"}
-                </span>
-                <span className="block text-xs text-muted">{s.label}</span>
-              </span>
+                </p>
+                <PlayoffOutlook scenario={s.scenario} teamNames={teamNames} matchId={match.id} />
+              </div>
             </div>
           );
         })}

@@ -1,3 +1,4 @@
+import { PlayoffOutlook, playoffStatusLine } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { RegularSeasonProgress } from "@/components/league-progress";
 import { LeagueResultsMap } from "@/components/league-results-map";
@@ -12,7 +13,6 @@ import { prisma } from "@/lib/prisma";
 import {
   computeStandings,
   standingsMovement,
-  type ClinchStatus,
 } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
@@ -1833,6 +1833,7 @@ async function SeasonView({
           playoffField.eligibleStandings,
           matches,
           playoffField.eligibleTeamIds.length,
+          playoffField,
         )
       : null;
 
@@ -1846,7 +1847,7 @@ async function SeasonView({
     ? standings.findIndex((s) => s.teamId === myTeam.id) + 1
     : 0;
   const myScenario = myTeam ? (report?.teams.get(myTeam.id) ?? null) : null;
-  const myStakeLine = myScenario ? stakeOneLiner(myScenario) : null;
+  const myStakeLine = myScenario ? playoffStatusLine(myScenario) : null;
   // "Next up" must be the SAME match the stake line's "next series" is about
   // (the engine orders by kickoff when times exist) — falling back to
   // chronological order, like the MyNextMatch banner above.
@@ -1966,6 +1967,7 @@ async function SeasonView({
           regular-season standings drop below as context. */}
       {season.status === "REGULAR_SEASON" ? (
         <TiebreakerNotice
+          report={report}
           projection={playoffField}
           teams={teams}
           regularComplete={regularSeasonStatus(matches).allComplete}
@@ -2078,6 +2080,7 @@ async function SeasonView({
                 playoffSeedByTeam={playoffField.seedByTeam}
                 unresolvedPlayoffTeamIds={playoffField.seedingDeadHeatTeamIds}
                 clinch={clinchFromReport(report)}
+            playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
                 viewerTeamId={myTeam?.id}
                 movement={standingsMovement(
                   teams.map((t) => t.id),
@@ -2174,7 +2177,9 @@ async function SeasonView({
                     )}
                   >
                     {myStakeLine ? (
-                      <div className="mb-2">{myStakeLine}</div>
+                      <div className="mb-2">
+                        <PlayoffOutlook scenario={myScenario!} teamNames={teamName} matchId={myNextMatch.id} compact />
+                      </div>
                     ) : null}
                     <div className="text-xs uppercase text-muted">
                       {matchPhaseLabel(myNextMatch.phase, myNextMatch.week)} ·
@@ -2201,7 +2206,7 @@ async function SeasonView({
                 ) : myStakeLine ? (
                   // Done playing, but the table can still decide something.
                   <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
-                    {myStakeLine}
+                    <PlayoffOutlook scenario={myScenario!} teamNames={teamName} />
                   </div>
                 ) : (
                   <p className="text-sm text-muted">No upcoming matches.</p>
@@ -2391,27 +2396,6 @@ async function SeasonView({
   );
 }
 
-/** One line of drama for the your-team card, from the scenario engine. */
-function stakeOneLiner(s: {
-  status: ClinchStatus;
-  winAndIn: boolean;
-  loseAndOut: boolean;
-  magicNumber: number | null;
-  nextMatchId: string | null;
-}): string | null {
-  if (s.status === "CLINCHED")
-    return "✓ Playoff spot locked — play for seeding.";
-  if (s.status === "ELIMINATED") return "Out of the race — play for pride.";
-  if (s.nextMatchId === null) return null; // done playing; the table decides
-  if (s.winAndIn && s.loseAndOut)
-    return "⚡ Everything on the line: win the next series and you're in — lose it and you're out.";
-  if (s.winAndIn) return "🎯 Win the next series and a playoff spot is locked.";
-  if (s.loseAndOut) return "⚠️ Lose the next series and the playoffs are gone.";
-  if (s.magicNumber != null && s.magicNumber > 0)
-    return `${s.magicNumber} more series win${s.magicNumber === 1 ? "" : "s"} guarantees a playoff place.`;
-  return null;
-}
-
 /**
  * The matches everyone cares about right now — this week's slate during the
  * regular season, the open round during playoffs — with per-team check-in
@@ -2554,21 +2538,12 @@ async function ThisWeek({
                         </p>
                         {(() => {
                           const scenario = report?.teams.get(teamId);
-                          if (scenario?.nextMatchId !== m.id || scenario.status)
-                            return null;
-                          const note =
-                            scenario.winAndIn && scenario.loseAndOut
-                              ? "Win & in · Lose & out"
-                              : scenario.winAndIn
-                                ? "Win & in"
-                                : scenario.loseAndOut
-                                  ? "Lose & out"
-                                  : null;
-                          return note ? (
-                            <p className="mt-1 text-xs leading-relaxed text-accent">
-                              {note}
-                            </p>
-                          ) : null;
+                          if (!scenario || scenario.nextMatchId !== m.id) return null;
+                          return (
+                            <div className="mt-1">
+                              <PlayoffOutlook scenario={scenario} teamNames={teamName} matchId={m.id} compact />
+                            </div>
+                          );
                         })()}
                       </div>
                       {c ? (

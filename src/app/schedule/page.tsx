@@ -1,3 +1,4 @@
+import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { RegularSeasonProgress } from "@/components/league-progress";
 import { leagueProgress } from "@/lib/league-progress";
@@ -335,6 +336,7 @@ export default async function SchedulePage() {
           playoffField.eligibleStandings,
           matches,
           playoffField.eligibleTeamIds.length,
+          playoffField,
         )
       : null;
 
@@ -386,6 +388,12 @@ export default async function SchedulePage() {
       awayLogoUrl: teamLogoUrl.get(m.awayTeamId) ?? null,
       homeScore: m.homeScore,
       awayScore: m.awayScore,
+      playoffPaths: m.phase === "REGULAR" && m.status !== "COMPLETED"
+        ? {
+            home: playoffPathLines(stakesReport?.teams.get(m.homeTeamId), m.id),
+            away: playoffPathLines(stakesReport?.teams.get(m.awayTeamId), m.id),
+          }
+        : undefined,
       done: m.status === "COMPLETED",
       awaitingResult:
         m.status === "SCHEDULED" &&
@@ -699,6 +707,7 @@ export default async function SchedulePage() {
           <SectionTitle>Tiebreaker week</SectionTitle>
           {season.status === "REGULAR_SEASON" ? (
             <TiebreakerNotice
+          report={stakesReport}
               projection={playoffField}
               teams={teams}
               regularComplete={status.allComplete}
@@ -814,6 +823,7 @@ export default async function SchedulePage() {
             playoffSeedByTeam={playoffField.seedByTeam}
             unresolvedPlayoffTeamIds={playoffField.seedingDeadHeatTeamIds}
             clinch={clinchFromReport(stakesReport)}
+            playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
             viewerTeamId={[...myTeamIds][0]}
             movement={standingsMovement(
               teams.map((t) => t.id),
@@ -1055,51 +1065,21 @@ function PlayoffPicture({
   const order = standings.map((s) => s.teamId);
   const size = pickBracketSize(order.length);
   const seedOf = new Map(order.slice(0, size).map((id, i) => [id, i + 1]));
+  const pendingTeamIds = report?.forecast?.basis === "final"
+    ? unresolvedTeamIds.filter((id) => {
+        const outlook = report.teams.get(id)?.outlook;
+        return !outlook || outlook.qualificationTiebreaker > 0 || outlook.seedingTiebreaker > 0;
+      })
+    : unresolvedTeamIds;
   const pairings =
-    unresolvedTeamIds.length > 0 || tiebreakerError
+    pendingTeamIds.length > 0 || tiebreakerError
       ? []
       : playoffFirstRound(order, size);
 
-  // One line per team whose fate is still open — what tonight/this week means.
-  const raceNotes = order
-    .map((teamId) => {
-      const s = report?.teams.get(teamId);
-      if (!s || s.status !== null) return null;
-      const bits: string[] = [];
-      let scenarioNote: string | null = null;
-      if (s.nextMatchId === null) {
-        // Fate open with nothing left to play — other results (and maybe
-        // tiebreakers) decide; the scenario bit below carries the equal-weight
-        // outcome share, not a predictive probability.
-        bits.push("Waiting on other results");
-      } else {
-        if (s.winAndIn && s.loseAndOut) bits.push("Win & in · Lose & out");
-        else if (s.winAndIn) bits.push("Win the next series & qualify");
-        else if (s.loseAndOut) bits.push("Lose the next series & go out");
-        if (s.magicNumber != null && s.magicNumber > 0 && !s.winAndIn)
-          bits.push(
-            `${s.magicNumber} more series win${s.magicNumber === 1 ? "" : "s"} guarantees a playoff place`,
-          );
-      }
-      if (s.exact && s.madeCount != null && s.leafCount) {
-        if (s.madeCount > 0) {
-          // Guard on madeCount, not the rounded percent — a sub-0.5% path is
-          // still a real points-only path, not "no scenario".
-          const pct = Math.round((s.madeCount / s.leafCount) * 100);
-          scenarioNote = `Guaranteed a place in ${pct > 0 ? `${pct}%` : "<1%"} of equally weighted remaining result combinations. This is not a prediction of how likely they are to qualify.`;
-        } else {
-          // Never safe on points alone ≠ doomed — ties could still save them.
-          bits.push("Needs a favorable tiebreak to qualify.");
-        }
-      }
-      if (bits.length === 0 && !scenarioNote) return null;
-      return {
-        teamId,
-        note: bits.join(" ") || "Still in the race",
-        scenarioNote,
-      };
-    })
-    .filter((n): n is NonNullable<typeof n> => n !== null);
+  const raceNotes = order.flatMap((teamId) => {
+    const scenario = report?.teams.get(teamId);
+    return scenario ? [{ teamId, scenario }] : [];
+  });
 
   return (
     <Card>
@@ -1115,13 +1095,13 @@ function PlayoffPicture({
             matchups can be confirmed.
           </p>
         ) : null}
-        {unresolvedTeamIds.length > 0 ? (
+        {pendingTeamIds.length > 0 ? (
           <p className="text-sm text-muted sm:col-span-2">
             Playoff matchups are provisional:{" "}
-            {unresolvedTeamIds.map((id) => teamName.get(id) ?? id).join(", ")}{" "}
-            are tied. If the normal standings tiebreaks remain equal after the
-            regular season, a tiebreaker week settles
-            qualification and seeding.
+            {pendingTeamIds.map((id) => teamName.get(id) ?? id).join(", ")}{" "}
+            {report?.forecast?.basis === "final"
+              ? "still need tiebreaker results before playoff order can be confirmed. The tracker below shows which places are already secured."
+              : "are tied. If the normal standings tiebreaks remain equal after the regular season, a tiebreaker week settles qualification and seeding."}
           </p>
         ) : null}
         {pairings.map((p, index) => (
@@ -1151,7 +1131,7 @@ function PlayoffPicture({
         {raceNotes.length > 0 ? (
           <div className="sm:col-span-2">
             <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
-              The race{report?.exact ? "" : " (points bounds)"}
+              Playoff tracker{report?.forecast ? "" : " (conservative points bounds)"}
             </div>
             <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {raceNotes.map((n) => (
@@ -1172,17 +1152,9 @@ function PlayoffPicture({
                   >
                     {teamName.get(n.teamId) ?? "?"}
                   </Link>
-                  <span className="w-full text-xs font-medium text-accent">
-                    {n.note}
-                  </span>
-                  {n.scenarioNote ? (
-                    <details className="w-full text-xs text-muted">
-                      <summary className="min-h-8 cursor-pointer py-1 text-info">
-                        Result-combination breakdown
-                      </summary>
-                      <p className="mt-1 leading-relaxed">{n.scenarioNote}</p>
-                    </details>
-                  ) : null}
+                  <div className="w-full">
+                    <PlayoffOutlook scenario={n.scenario} teamNames={teamName} />
+                  </div>
                 </li>
               ))}
             </ul>

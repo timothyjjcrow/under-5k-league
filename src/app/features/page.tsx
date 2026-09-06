@@ -194,7 +194,7 @@ const SECTIONS: Section[] = [
       {
         icon: "🎯",
         title: "The scenario engine",
-        desc: '"Win and you\'re in." Magic numbers, elimination math, and transparent scenario shares across every possible remaining outcome — not predictive odds.',
+        desc: 'Win, draw or loss: see direct qualification, tiebreaker paths and elimination using feasible scores and official standings rules. Result combinations are not predictive odds.',
         href: "/schedule",
         gate: "REGULAR_ONLY",
       },
@@ -828,7 +828,7 @@ function ShowcaseStakes({
   return (
     <ShowcaseFrame
       title="The math of match night"
-      caption="An exact scenario engine turns the run-in into stakes everyone can feel."
+      caption="Track feasible results, playoff places and the tiebreakers that settle them."
       href="/schedule"
       availability={availability}
     >
@@ -836,12 +836,12 @@ function ShowcaseStakes({
         Tonight&apos;s stakes
       </div>
       <div className="mt-0.5 text-sm font-medium">
-        Everything on the line: win and in, lose and out
+        Win, draw or loss: see the playoff outcome
       </div>
       <div className="mt-2 space-y-1.5">
         {[
-          { name: "Pudge Patrol", note: "Win and they're in" },
-          { name: "Techies Anonymous", note: "Lose and they're out" },
+          { name: "Pudge Patrol", note: "Win: qualify · Draw: qualification tiebreaker" },
+          { name: "Techies Anonymous", note: "Qualified · Seeding tiebreaker required" },
         ].map((t) => (
           <div
             key={t.name}

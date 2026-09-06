@@ -36,6 +36,25 @@ do not need extra matches. Withdrawn teams cannot participate.
   records, or regular-week honors. They appear in season performance statistics
   like other league games.
 
+## Player-facing playoff tracker
+
+Home, Schedule, match pages and team pages use the same playoff projection.
+Near the end of the regular season, the tracker shows what a win, draw or loss
+in the team's next series can mean after points, game differential, series wins
+and head-to-head rules have been applied. Recorded live game scores remove
+outcomes that can no longer happen.
+
+The tracker distinguishes direct qualification, a tiebreaker for a playoff
+place, qualification with an unresolved seed, and elimination. Multiple possible
+outcomes are counts of feasible score combinations, not predictions or odds.
+Detailed forecasts assume normally completed series; administrative rulings or
+score corrections can change them. Larger remaining schedules retain conservative
+qualification guarantees instead of enumerating an unbounded set of scores.
+
+Once regular results and tiebreakers are final, the actual resolved order replaces
+the forecast. A team already guaranteed a place keeps its qualified status while
+a seeding-only tiebreaker is pending. Both league deployments use these same rules.
+
 ## Admin workflow
 
 1. Finish and review all regular-season results.
