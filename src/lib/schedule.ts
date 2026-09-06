@@ -168,13 +168,15 @@ export function roundName(roundIndex: number, totalRounds: number): string {
 export function matchPhaseLabel(phase: string, week: number): string {
   if (phase === MATCH_PHASE.FINAL) return "Grand final";
   if (phase === MATCH_PHASE.PLAYOFF) return "Playoffs";
+  if (phase === MATCH_PHASE.TIEBREAKER) return `Tiebreaker week ${week}`;
   return `Week ${week}`;
 }
 
-/** Compact chip form of matchPhaseLabel: "GF" | "PO" | "W3". */
+/** Compact chip form of matchPhaseLabel: "GF" | "PO" | "TB" | "W3". */
 export function matchPhaseAbbrev(phase: string, week: number): string {
   if (phase === MATCH_PHASE.FINAL) return "GF";
   if (phase === MATCH_PHASE.PLAYOFF) return "PO";
+  if (phase === MATCH_PHASE.TIEBREAKER) return "TB";
   return `W${week}`;
 }
 
@@ -382,8 +384,8 @@ export function isRelevantOpenMatch(match: SlateMatch, nowMs: number): boolean {
 
 /**
  * The slate the dashboard leads with: during PLAYOFFS every open bracket
- * match, otherwise the EARLIEST week that still has an unplayed regular
- * fixture — plus the heading that describes it.
+ * match, otherwise the EARLIEST week that still has an unplayed regular or
+ * tiebreaker fixture — plus the heading that describes it.
  *
  * Shared rather than computed twice, and that sharing is the point. The
  * dashboard used to derive this inside its This-week card while the Upcoming
@@ -401,15 +403,22 @@ export function focusSlate<T extends SlateMatch>(
   const open = matches.filter((m) => isRelevantOpenMatch(m, nowMs));
   if (seasonStatus === "PLAYOFFS") {
     return {
-      slate: open.filter((m) => m.phase !== MATCH_PHASE.REGULAR),
+      slate: open.filter(
+        (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+      ),
       title: "The round in progress",
     };
   }
-  const openRegular = open.filter((m) => m.phase === MATCH_PHASE.REGULAR);
+  const openRegular = open.filter(
+    (m) => m.phase === MATCH_PHASE.REGULAR || m.phase === MATCH_PHASE.TIEBREAKER,
+  );
   if (openRegular.length === 0) return { slate: [], title: "This week" };
   const week = Math.min(...openRegular.map((m) => m.week));
+  const slate = openRegular.filter((m) => m.week === week);
   return {
-    slate: openRegular.filter((m) => m.week === week),
-    title: `This week · Week ${week}`,
+    slate,
+    title: slate.some((m) => m.phase === MATCH_PHASE.TIEBREAKER)
+      ? `Tiebreaker week · Week ${week}`
+      : `This week · Week ${week}`,
   };
 }

@@ -43,7 +43,7 @@ export function resolveChampionPresentation(
   matches: ChampionMatch[],
 ): ChampionPresentation {
   const postseason = matches.filter(
-    (match) => match.phase !== MATCH_PHASE.REGULAR,
+    (match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL,
   );
   const hasPostseason = postseason.length > 0;
 

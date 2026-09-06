@@ -149,6 +149,10 @@ export function playoffGamesArchiveKey(seasonId: string): string {
   return `playoffGamesArchive:${seasonId}`;
 }
 
+export function tiebreakerGamesArchiveKey(seasonId: string): string {
+  return `tiebreakerGamesArchive:${seasonId}`;
+}
+
 /** League-feed ids fetched but not imported — never refetched (JSON array). */
 export function leagueSyncSkipKey(seasonId: string): string {
   return `leagueSyncSkip:${seasonId}`;
@@ -243,6 +247,8 @@ export function seasonSettingScopeWhere(
     { key: { startsWith: weekReminderPrefix(seasonId) } },
     { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
     { key: playoffGamesArchiveKey(seasonId) },
+    { key: tiebreakerGamesArchiveKey(seasonId) },
+    { key: { startsWith: `tiebreakerDraw:${seasonId}:` } },
     { key: leagueSyncSkipKey(seasonId) },
     { key: `importSkip:${seasonId}` },
     { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },

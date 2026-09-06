@@ -12,6 +12,23 @@ const match = (
 ): SlateMatch => ({ id, status, week, scheduledAt, phase: "REGULAR" });
 
 describe("league progress presentation", () => {
+  it("tracks the tiebreaker week separately from the completed regular season", () => {
+    expect(leagueProgress([
+      match("regular", "COMPLETED", 5, new Date(now)),
+      { ...match("tb-done", "COMPLETED", 6, new Date(now)), phase: "TIEBREAKER" },
+      { ...match("tb-open", "SCHEDULED", 6, new Date(now + 3600_000)), phase: "TIEBREAKER" },
+    ], now)).toMatchObject({
+      total: 1,
+      completed: 1,
+      totalWeeks: 5,
+      focusWeek: null,
+      tiebreakerTotal: 2,
+      tiebreakerCompleted: 1,
+      tiebreakerPending: 1,
+      tiebreakerFocusWeek: 6,
+    });
+  });
+
   it("distinguishes future fixtures, live series, missing times, and overdue results", () => {
     const old = new Date(now - (AUTO_SYNC.WINDOW_HOURS + 1) * 3600_000);
     const result = leagueProgress(

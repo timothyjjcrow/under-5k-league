@@ -147,6 +147,7 @@ async function archivedSeasonWithHistory() {
       { key: `weekReminder:${season.id}:1:123`, value: "sent" },
       { key: `playoffRoundBuilt:${season.id}:2`, value: "done" },
       { key: `playoffGamesArchive:${season.id}`, value: "[]" },
+      { key: `tiebreakerGamesArchive:${season.id}`, value: "[]" },
       { key: `importSkip:${season.id}`, value: "[]" },
       { key: `leagueSyncSkip:${season.id}`, value: "[]" },
       { key: `resultAnnounced:${match.id}`, value: "sent" },

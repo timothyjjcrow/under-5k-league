@@ -283,6 +283,7 @@ describe("result sync — league matches (integration)", () => {
         "LEAGUE_BUDGET_EXHAUSTED",
         "INHOUSE_BUDGET_EXHAUSTED",
         "DRAFT_BUDGET_EXHAUSTED",
+        "TIEBREAKER_BUDGET_EXHAUSTED",
         "PLAYOFF_BUDGET_EXHAUSTED",
         "REMINDER_BUDGET_EXHAUSTED",
         "NOTIFICATIONS_BUDGET_EXHAUSTED",

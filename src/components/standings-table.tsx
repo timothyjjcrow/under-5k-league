@@ -30,6 +30,10 @@ export type StandingsRowView = {
   move: number;
   /** Order vs. a neighbour fell to the team-id fallback — a dead heat. */
   idDecided: boolean;
+  /** The extra tiebreaker week settled this team's playoff order. */
+  tiebreakerResolved?: boolean;
+  /** Qualification or seed order is pending a required tiebreaker. */
+  tiebreakerPending?: boolean;
   /** Quit mid-season — remaining fixtures forfeited, out of seeding. */
   withdrawn: boolean;
   /** One-based playoff seed, or null when below the cut / ineligible. */
@@ -157,7 +161,9 @@ export function StandingsTableClient({
         differential · series wins · head-to-head mini-table. A forfeit or
         ruling uses its recorded score for game differential. A “tied” badge
         means every tiebreak is level and the displayed order is only a stable
-        fallback. Withdrawn teams keep their results in the table but cannot
+        fallback until tiebreaker matches settle qualification and seeding.
+        A “TB resolved” badge marks that result; regular-season points stay unchanged.
+        Withdrawn teams keep their results in the table but cannot
         occupy a playoff seed.
         {hasSeedProjection
           ? " Each qualifying row is announced with its current playoff seed."
@@ -197,7 +203,7 @@ export function StandingsTableClient({
       </thead>
       <tbody>
         {sorted.map((row) => {
-          const inCut = hasCut && row.playoffSeed != null;
+          const inCut = hasCut && !row.tiebreakerPending && row.playoffSeed != null;
           return (
             <Fragment key={row.teamId}>
               <tr
@@ -217,14 +223,16 @@ export function StandingsTableClient({
                     {row.rank}
                     {hasSeedProjection ? (
                       <span className="sr-only">
-                        {row.playoffSeed != null
+                        {row.tiebreakerPending
+                          ? ", playoff qualification or seeding pending a tiebreaker match"
+                          : row.playoffSeed != null
                           ? `, current playoff seed ${row.playoffSeed}`
                           : row.withdrawn
                             ? ", withdrawn and excluded from playoff seeding"
                             : ", outside the current playoff field"}
                       </span>
                     ) : null}
-                    {row.playoffSeed != null && row.playoffSeed !== row.rank ? (
+                    {!row.tiebreakerPending && row.playoffSeed != null && row.playoffSeed !== row.rank ? (
                       <span
                         aria-hidden
                         title={`Current playoff seed ${row.playoffSeed}`}
@@ -272,7 +280,7 @@ export function StandingsTableClient({
                     ) : null}
                     {/* Marks only mean something when a team can miss the
                         bracket — with everyone qualifying they'd all be ✓. */}
-                    <ClinchMark status={row.clinch} />
+                    <ClinchMark status={row.tiebreakerPending ? null : row.clinch} />
                     {row.withdrawn ? (
                       <span
                         role="img"
@@ -283,14 +291,29 @@ export function StandingsTableClient({
                         withdrew
                       </span>
                     ) : null}
-                    {row.idDecided ? (
+                    {row.tiebreakerPending ? (
+                      <span
+                        title="A tiebreaker match must settle playoff qualification or seeding after the regular season"
+                        className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-semibold text-accent"
+                      >
+                        Tiebreaker pending
+                      </span>
+                    ) : row.idDecided ? (
                       <span
                         role="img"
-                        aria-label="Fully tied with a neighbouring team — this order is arbitrary"
-                        title="Fully tied — points, game diff, series wins and head-to-head all level with a neighbouring team; this order is arbitrary"
+                        aria-label="Fully tied with a neighbouring team — displayed order is provisional"
+                        title="Points, game diff, series wins and head-to-head are level; ties affecting playoffs require tiebreaker matches after the regular season"
                         className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent"
                       >
                         tied
+                      </span>
+                    ) : null}
+                    {row.tiebreakerResolved ? (
+                      <span
+                        title="Playoff order settled by tiebreaker results"
+                        className="shrink-0 rounded bg-info/10 px-1 py-0.5 text-[10px] font-semibold text-info"
+                      >
+                        TB resolved
                       </span>
                     ) : null}
                   </Link>
@@ -320,7 +343,7 @@ export function StandingsTableClient({
                   </span>
                 </td>
               </tr>
-              {hasCut && row.playoffSeed === playoffCut ? (
+              {hasCut && !row.tiebreakerPending && row.playoffSeed === playoffCut ? (
                 <tr className="bg-success/[0.03]">
                   <td colSpan={cols} className="px-5 py-1">
                     <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-success/80">
@@ -440,7 +463,9 @@ function StandingsOverview({
         points total in this table. W, D and L mean series wins, draws and
         losses. Recent form reads newest first. A seed is the current playoff
         position; qualified means a playoff place is secured. Fully tied teams
-        have an arbitrary displayed order. Withdrawn teams retain their results
+        have a provisional displayed order until required tiebreakers are played.
+        TB resolved means extra tiebreaker results settled playoff order.
+        Withdrawn teams retain their results
         but are excluded from playoff seeding.
       </caption>
       <colgroup>
@@ -506,7 +531,9 @@ function StandingsOverview({
                     </span>
                   ) : null}
                   <span className="sr-only">
-                    {row.playoffSeed != null
+                    {row.tiebreakerPending
+                      ? ", playoff qualification or seeding pending a tiebreaker match"
+                      : row.playoffSeed != null
                       ? `, current playoff seed ${row.playoffSeed}`
                       : ""}
                   </span>
@@ -541,14 +568,22 @@ function StandingsOverview({
                         {isViewer ? (
                           <span className="text-info">Your team</span>
                         ) : null}
-                        {row.idDecided ? (
+                        {row.idDecided && !row.tiebreakerPending ? (
                           <span
                             role="img"
-                            aria-label="Fully tied with a neighbouring team — this order is arbitrary"
-                            title="Fully tied — all tiebreaks are level; displayed order is arbitrary"
+                            aria-label="Fully tied with a neighbouring team — displayed order is provisional"
+                            title="All standings tiebreaks are level; ties affecting playoffs require tiebreaker matches after the regular season"
                             className="rounded bg-accent/10 px-1.5 py-0.5 text-accent"
                           >
                             Tied
+                          </span>
+                        ) : null}
+                        {row.tiebreakerResolved ? (
+                          <span
+                            title="Playoff order settled by tiebreaker results"
+                            className="rounded bg-info/10 px-1.5 py-0.5 text-info"
+                          >
+                            TB resolved
                           </span>
                         ) : null}
                       </div>
@@ -618,7 +653,7 @@ function StandingsOverview({
                   </span>
                 </td>
               </tr>
-              {showPlayoffCut && row.playoffSeed === playoffCut ? (
+              {showPlayoffCut && !row.tiebreakerPending && row.playoffSeed === playoffCut ? (
                 <tr className="bg-accent/[0.04]">
                   <td colSpan={columns} className="px-4 py-2 sm:px-5">
                     <div className="flex items-center gap-3 text-[9px] font-semibold uppercase tracking-[0.15em] text-accent">
@@ -661,6 +696,16 @@ function OverviewStatus({
         className="text-muted"
       >
         Withdrawn
+      </span>
+    );
+  }
+  if (row.tiebreakerPending) {
+    return (
+      <span
+        title="A tiebreaker match must settle playoff qualification or seeding after the regular season"
+        className="rounded bg-accent/10 px-1.5 py-0.5 text-accent"
+      >
+        Tiebreaker pending
       </span>
     );
   }

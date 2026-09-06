@@ -7,7 +7,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
-import { matchLogisticsOpen } from "./league-lifecycle";
+import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
@@ -18,6 +18,7 @@ export type AcceptedReschedule = {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   newTime: Date;
   /** The captain who PROPOSED it — they asked and have been waiting. */
   notifyUserId: string | null;
@@ -42,6 +43,7 @@ export type ProposedReschedule = {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   proposedTime: Date;
   /**
    * The captain who owes an answer (the OTHER one). A proposal is a question
@@ -57,6 +59,7 @@ export type DeclinedReschedule = {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   /** The time that was refused — named so a channel that has seen several
    *  proposals go by can tell WHICH one this closes. */
   proposedTime: Date;
@@ -194,7 +197,8 @@ export async function proposeReschedule(
           homeName: match.homeTeam.name,
           awayName: match.awayTeam.name,
           week: match.week,
-          isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+          isPlayoff: isPlayoffPhase(match.phase),
+          isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
           proposedTime,
           // The proposer is one of the two captains (asserted above), so the
           // counterpart is simply the other one.
@@ -258,7 +262,8 @@ export async function respondReschedule(
             homeName: match.homeTeam.name,
             awayName: match.awayTeam.name,
             week: match.week,
-            isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+            isPlayoff: isPlayoffPhase(match.phase),
+            isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
             proposedTime: request.proposedTime,
             notifyUserId: request.proposedById,
           };
@@ -363,7 +368,8 @@ export async function respondReschedule(
           homeName: match.homeTeam.name,
           awayName: match.awayTeam.name,
           week: match.week,
-          isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+          isPlayoff: isPlayoffPhase(match.phase),
+          isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
           newTime: request.proposedTime,
           notifyUserId: request.proposedById,
           clearedRsvps: cleared.count,
@@ -401,6 +407,7 @@ export async function respondReschedule(
     awayName: outcome.awayName,
     week: outcome.week,
     isPlayoff: outcome.isPlayoff,
+    isTiebreaker: outcome.isTiebreaker,
     newTime: outcome.newTime,
     notifyUserId: outcome.notifyUserId,
     clearedRsvps: outcome.clearedRsvps,

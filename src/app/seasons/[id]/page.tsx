@@ -3,7 +3,7 @@ import { ChampionBanner } from "@/components/champion-banner";
 import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { computeStandings } from "@/lib/standings";
+import { projectPlayoffField } from "@/lib/playoff-field";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { StandingsTable } from "@/components/standings-table-server";
@@ -177,12 +177,12 @@ export default async function SeasonArchivePage({
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
-  const standings = computeStandings(
-    season.teams.map((t) => t.id),
-    season.matches,
-  );
+  const standings = projectPlayoffField(season.teams, season.matches).standings;
   const regular = season.matches.filter((m) => m.phase === "REGULAR");
-  const playoff = season.matches.filter((m) => m.phase !== "REGULAR");
+  const tiebreakers = season.matches.filter((m) => m.phase === "TIEBREAKER");
+  const playoff = season.matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
   const championPresentation = resolveChampionPresentation(
     season,
     season.matches,
@@ -339,6 +339,34 @@ export default async function SeasonArchivePage({
               />
             </CardBody>
           </Card>
+        </section>
+      ) : null}
+
+      {tiebreakers.length > 0 ? (
+        <section className="space-y-4">
+          <SectionTitle>Tiebreaker results</SectionTitle>
+          <p className="text-sm text-muted">
+            Best-of-three series used to settle playoff qualification and seed order.
+          </p>
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+            {[...new Set(tiebreakers.map((match) => match.week))]
+              .sort((a, b) => a - b)
+              .map((week) => (
+                <Card key={week} className="min-w-0 overflow-hidden">
+                  <CardHeader title={`Tiebreaker week ${week}`} />
+                  <CardBody className="divide-y divide-line-soft p-0">
+                    {tiebreakers.filter((match) => match.week === week).map((match) => (
+                      <ResultRow
+                        key={match.id}
+                        match={match}
+                        teamName={teamName}
+                        teamLogoUrl={teamLogoUrl}
+                      />
+                    ))}
+                  </CardBody>
+                </Card>
+              ))}
+          </div>
         </section>
       ) : null}
 

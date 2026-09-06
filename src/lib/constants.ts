@@ -57,6 +57,7 @@ export const MATCH_STATUS = {
 
 export const MATCH_PHASE = {
   REGULAR: "REGULAR",
+  TIEBREAKER: "TIEBREAKER",
   PLAYOFF: "PLAYOFF",
   FINAL: "FINAL",
 } as const;

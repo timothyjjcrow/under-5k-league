@@ -11,7 +11,7 @@ import { playerOutMessage, sendDiscordMessage } from "@/lib/discord";
 import { mentionUsers } from "@/lib/discord-mentions";
 import { claimThrottle } from "@/lib/settings";
 import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
-import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { isPlayoffPhase, matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import type { ActionResult } from "@/lib/action-result";
 import { singleActiveSeason } from "@/lib/season";
 import {
@@ -215,7 +215,8 @@ export async function setAvailability(
           homeName: match.homeTeam.name,
           awayName: match.awayTeam.name,
           week: match.week,
-          isPlayoff: match.phase !== "REGULAR",
+          isPlayoff: isPlayoffPhase(match.phase),
+          isTiebreaker: match.phase === "TIEBREAKER",
           whenMs: match.scheduledAt?.getTime() ?? null,
           // Deep link — the mentioned captain lands on the page that holds the
           // Standins card, not on the front door.

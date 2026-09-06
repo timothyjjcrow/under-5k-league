@@ -47,8 +47,8 @@ describe("postseason UI lifecycle guards", () => {
   it("keeps team withdrawal and reinstatement visibly regular-season-only", () => {
     const admin = read("src/app/admin/page.tsx");
 
-    expect(admin).toContain(
-      "const teamWithdrawalLocked = teamWithdrawalLockedReason(season.status)",
+    expect(admin).toMatch(
+      /const teamWithdrawalLocked\s*=\s*teamWithdrawalLockedReason\(season\.status\)/,
     );
     expect(admin).toContain("Team withdrawal locked:");
     expect(admin).toContain("Reinstatement locked:");

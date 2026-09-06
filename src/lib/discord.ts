@@ -185,11 +185,14 @@ export function matchResultMessage(m: {
   awayScore: number;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   /** Ruled/defaulted result — say so, or the channel reads a no-show as a
    *  played sweep. Optional so every existing call site is unchanged. */
   forfeit?: boolean;
 }): string {
-  const label = m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
+  const label = m.isTiebreaker
+    ? `Tiebreaker week ${m.week}`
+    : m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
   const home = name(m.homeName);
   const away = name(m.awayName);
   const winner =
@@ -479,13 +482,16 @@ export function playerOutMessage(m: {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
   /** Deep link target — the match page holds the Standins card the message
    *  is pointing the captain at. Optional so hand-built calls stay valid. */
   matchId?: string;
 }): string {
-  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
@@ -503,12 +509,15 @@ export function standinAssignedMessage(m: {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
   /** Deep link target — the match page holds the check-in banner. */
   matchId?: string;
 }): string {
-  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const standin = name(m.standinName);
@@ -531,8 +540,11 @@ export function standinRemovedMessage(m: {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
 }): string {
-  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   return `🧩 **${name(m.standinName)}** is no longer standing in for **${name(m.teamName)}** (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) — stand down.`;
 }
 
@@ -541,10 +553,13 @@ export function rescheduleProposedMessage(m: {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   proposerName: string;
   whenMs: number;
 }): string {
-  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
 }
 
@@ -559,10 +574,13 @@ export function rescheduleDeclinedMessage(m: {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   declinerName: string;
   whenMs: number;
 }): string {
-  const label = m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
   return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.`;
 }
 
@@ -590,6 +608,7 @@ export type WeekReminderFixture = {
 export type WeekReminderInput = {
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   fixtures: WeekReminderFixture[];
 };
 
@@ -666,7 +685,9 @@ export function weekReminderAnnouncement(
   m: WeekReminderInput,
 ): WeekReminderAnnouncement {
   const site = resolveSiteUrl();
-  const label = m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
+  const label = m.isTiebreaker
+    ? `Tiebreaker week ${m.week} matches`
+    : m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
   const footer = "RSVP on your match page so captains can plan standins early.";
   const lines = [`⏰ **${label} coming up — check in!**`];
   const includedMentions: string[] = [];
@@ -769,6 +790,7 @@ export function rescheduleMessage(m: {
   awayName: string;
   week: number;
   isPlayoff: boolean;
+  isTiebreaker?: boolean;
   /** Epoch ms of the agreed time — rendered via Discord's native timestamp
    *  markup so every reader sees it in their own timezone (a server-formatted
    *  string would be UTC wall-time in prod, wrong hour and often wrong day). */
@@ -776,7 +798,9 @@ export function rescheduleMessage(m: {
   /** RSVPs the retime invalidated — the rosters have to hear about this. */
   clearedRsvps?: number;
 }): string {
-  const label = m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
+  const label = m.isTiebreaker
+    ? `Tiebreaker week ${m.week}`
+    : m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
   const t = `<t:${Math.floor(m.whenMs / 1000)}:F>`;
   // Retiming clears every check-in (an old answer about a night nobody is
   // playing). Saying so is the only notice the roster gets — the site shows

@@ -24,6 +24,7 @@ export function StandingsTable({
   totalTeams,
   withdrawnIds,
   playoffSeedByTeam,
+  unresolvedPlayoffTeamIds = [],
   eligibleTeams,
   overview = false,
 }: {
@@ -46,6 +47,8 @@ export function StandingsTable({
   withdrawnIds?: Set<string>;
   /** Canonical eligible seed map from projectPlayoffField. */
   playoffSeedByTeam?: Map<string, number>;
+  /** Teams whose qualification or seed still needs an extra tiebreaker. */
+  unresolvedPlayoffTeamIds?: string[];
   /** Number of non-withdrawn teams competing for playoff places. */
   eligibleTeams?: number;
   /** Start with readable records; full sortable statistics remain available. */
@@ -59,6 +62,7 @@ export function StandingsTable({
     standings.filter((row) => !withdrawnIds?.has(row.teamId)).length;
   const cutIsReal =
     playoffCut != null && playoffCut > 0 && playoffCut < eligibleFieldSize;
+  const pendingTeamIds = new Set(unresolvedPlayoffTeamIds);
   const rows: StandingsRowView[] = standings.map((s, i) => ({
     teamId: s.teamId,
     name: teamName.get(s.teamId) ?? "—",
@@ -70,11 +74,17 @@ export function StandingsTable({
     gameDiff: s.gameDiff,
     points: s.points,
     form: formByTeam ? (formByTeam.get(s.teamId) ?? []) : null,
-    clinch: cutIsReal ? (clinch?.get(s.teamId) ?? null) : null,
+    clinch: cutIsReal && !pendingTeamIds.has(s.teamId)
+      ? (clinch?.get(s.teamId) ?? null)
+      : null,
     move: movement?.get(s.teamId) ?? 0,
     idDecided: s.idDecided ?? false,
+    tiebreakerResolved: s.tiebreakerResolved ?? false,
+    tiebreakerPending: pendingTeamIds.has(s.teamId) && !withdrawnIds?.has(s.teamId),
     withdrawn: withdrawnIds?.has(s.teamId) ?? false,
-    playoffSeed: playoffSeedByTeam?.get(s.teamId) ?? null,
+    playoffSeed: pendingTeamIds.has(s.teamId)
+      ? null
+      : playoffSeedByTeam?.get(s.teamId) ?? null,
   }));
   return (
     <StandingsTableClient

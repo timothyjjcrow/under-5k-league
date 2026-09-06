@@ -28,7 +28,7 @@ export default async function SeasonsPage() {
       include: {
         teams: { select: { id: true, name: true, logoUrl: true } },
         matches: {
-          where: { phase: { not: "REGULAR" } },
+          where: { phase: { in: ["PLAYOFF", "FINAL"] } },
           select: {
             id: true,
             phase: true,

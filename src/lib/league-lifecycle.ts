@@ -5,6 +5,13 @@ import {
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
+import type { Prisma } from "@prisma/client";
+import { hasLaterTiebreakerStage } from "./tiebreaker-format";
+
+/** Tiebreaker fixtures precede the seeded playoff bracket. */
+export function isPlayoffPhase(matchPhase: string): boolean {
+  return matchPhase === MATCH_PHASE.PLAYOFF || matchPhase === MATCH_PHASE.FINAL;
+}
 
 /**
  * Can a roster-dependent, post-auction feature write yet?
@@ -100,8 +107,50 @@ export function matchResultsOpen(
 ): boolean {
   return (
     (seasonStatus === SEASON_STATUS.REGULAR_SEASON &&
-      matchPhase === MATCH_PHASE.REGULAR) ||
+      (matchPhase === MATCH_PHASE.REGULAR ||
+        matchPhase === MATCH_PHASE.TIEBREAKER)) ||
     (seasonStatus === SEASON_STATUS.PLAYOFFS &&
-      matchPhase !== MATCH_PHASE.REGULAR)
+      isPlayoffPhase(matchPhase))
   );
+}
+
+/** Read inside the mutation transaction so scheduling and corrections conflict. */
+export async function tiebreakerInputsLockReason(
+  db: Pick<Prisma.TransactionClient, "match">,
+  seasonId: string,
+): Promise<string | null> {
+  const tiebreaker = await db.match.findFirst({
+    where: { seasonId, phase: MATCH_PHASE.TIEBREAKER },
+    select: { id: true },
+  });
+  return tiebreaker
+    ? "Reset the tiebreaker week before changing regular-season results or team eligibility."
+    : null;
+}
+
+/** Protect the standings and winners already used to schedule subsequent work. */
+export async function matchResultLockReason(
+  db: Pick<Prisma.TransactionClient, "match">,
+  match: { seasonId: string; phase: string; week: number; bracketSlot?: string | null },
+): Promise<string | null> {
+  if (match.phase === MATCH_PHASE.REGULAR) {
+    return tiebreakerInputsLockReason(db, match.seasonId);
+  }
+  if (match.phase !== MATCH_PHASE.TIEBREAKER) return null;
+  const dependents = await db.match.findMany({
+    where: {
+      seasonId: match.seasonId,
+      OR: [
+        { phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] } },
+        { phase: MATCH_PHASE.TIEBREAKER, week: { gte: match.week } },
+      ],
+    },
+    select: { phase: true, week: true, bracketSlot: true },
+  });
+  if (dependents.some((dependent) => isPlayoffPhase(dependent.phase))) {
+    return "The playoffs are already seeded. Return to the regular season before correcting tiebreaker results.";
+  }
+  return hasLaterTiebreakerStage(match, dependents)
+    ? "A later tiebreaker round or game is already scheduled. Reset the tiebreaker week before correcting an earlier result."
+    : null;
 }

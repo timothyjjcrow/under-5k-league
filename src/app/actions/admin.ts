@@ -39,7 +39,12 @@ import {
   hasLaterBracketRound,
 } from "@/lib/schedule";
 import { playedSeriesFinalError, seriesScoreError } from "@/lib/standings";
-import { matchResultsOpen } from "@/lib/league-lifecycle";
+import {
+  isPlayoffPhase,
+  matchResultLockReason,
+  matchResultsOpen,
+  tiebreakerInputsLockReason,
+} from "@/lib/league-lifecycle";
 import { parseSeatTarget, pendingCoverWhere } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
@@ -62,6 +67,7 @@ import {
   advancePlayoffBracket,
   returnToRegularSeason,
 } from "@/lib/playoff-service";
+import { advanceTiebreakerWeek } from "@/lib/tiebreaker-service";
 import { actionErrorMessage } from "@/lib/user-facing-error";
 import {
   regularSeasonStatus,
@@ -192,6 +198,8 @@ async function claimTeamWithdrawalSeason(
   tx: Prisma.TransactionClient,
   seasonId: string,
 ): Promise<boolean> {
+  const tiebreakerLock = await tiebreakerInputsLockReason(tx, seasonId);
+  if (tiebreakerLock) throw new ResultWriteError(tiebreakerLock);
   const claimed = await tx.season.updateMany({
     where: {
       id: seasonId,
@@ -797,7 +805,7 @@ export async function setSeasonPhase(
       prisma.match.findMany({
         where: {
           seasonId: season.id,
-          phase: { not: MATCH_PHASE.REGULAR },
+          phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
         },
         select: { phase: true, bracketSlot: true },
       }),
@@ -847,7 +855,7 @@ export async function setSeasonPhase(
           tx.match.findMany({
             where: {
               seasonId: season.id,
-              phase: { not: MATCH_PHASE.REGULAR },
+              phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
             },
             select: { phase: true, bracketSlot: true },
           }),
@@ -3074,7 +3082,10 @@ export async function startPlayoffs(
   // Announce the fresh first-round pairings.
   const [bracket, teams] = await Promise.all([
     prisma.match.findMany({
-      where: { seasonId: season.id, phase: { not: MATCH_PHASE.REGULAR } },
+      where: {
+        seasonId: season.id,
+        phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+      },
       orderBy: { bracketSlot: "asc" },
     }),
     prisma.team.findMany({ where: { seasonId: season.id } }),
@@ -3316,9 +3327,13 @@ export async function recordResult(
           throw new ResultWriteError(
             match.phase === MATCH_PHASE.REGULAR
               ? "Regular-season results can only change during the active Regular season phase. Move the season back before correcting this result, then reseed the playoffs."
-              : "Playoff results can only change while the active season is in Playoffs.",
+              : match.phase === MATCH_PHASE.TIEBREAKER
+                ? "Tiebreaker results can only change before playoffs during the active Regular season phase."
+                : "Playoff results can only change while the active season is in Playoffs.",
           );
         }
+        const resultLock = await matchResultLockReason(tx, match);
+        if (resultLock) throw new ResultWriteError(resultLock);
         if (
           match.status !== snapshot.status ||
           match.homeScore !== snapshot.homeScore ||
@@ -3362,7 +3377,12 @@ export async function recordResult(
           }
         }
 
-        if (match.phase !== MATCH_PHASE.REGULAR) {
+        if (match.phase === MATCH_PHASE.TIEBREAKER && homeScore === awayScore) {
+          throw new ResultWriteError(
+            "A tiebreaker series cannot end in a draw — record the decider or forfeit winner.",
+          );
+        }
+        if (isPlayoffPhase(match.phase)) {
           if (homeScore === awayScore) {
             throw new ResultWriteError(
               "A playoff series can't end in a draw — record the forfeit/decider winner",
@@ -3371,7 +3391,7 @@ export async function recordResult(
           const playoffs = await tx.match.findMany({
             where: {
               seasonId: match.seasonId,
-              phase: { not: MATCH_PHASE.REGULAR },
+              phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
             },
             select: { bracketSlot: true },
           });
@@ -3546,22 +3566,33 @@ export async function recordResult(
         homeName: outcome.homeName,
         awayName: outcome.awayName,
         week: outcome.week,
-        isPlayoff: outcome.phase !== MATCH_PHASE.REGULAR,
+        isPlayoff: isPlayoffPhase(outcome.phase),
+        isTiebreaker: outcome.phase === MATCH_PHASE.TIEBREAKER,
       }),
       mentionsOf([booking.standin.discordId]),
     );
   }
 
   // Playoff results auto-advance the bracket (and crown the champion at the end).
-  if (outcome.phase !== MATCH_PHASE.REGULAR) {
+  let tiebreakerPending = false;
+  if (isPlayoffPhase(outcome.phase)) {
     await advancePlayoffBracket(outcome.seasonId);
-  } else {
+  } else if (outcome.phase === MATCH_PHASE.TIEBREAKER) {
+    try {
+      await advanceTiebreakerWeek(outcome.seasonId);
+    } catch {
+      // The score is committed. Automatic sync retries the next same-week
+      // game, so never report the saved result as a failed write.
+      tiebreakerPending = true;
+      console.error("[admin] tiebreaker advancement deferred (TIEBREAKER_ADVANCE_FAILED)");
+    }
+  } else if (outcome.phase === MATCH_PHASE.REGULAR) {
     // Manual results can also close out a week — send its honors (idempotent).
     await maybeAnnounceWeekHonors(outcome.seasonId, outcome.week);
   }
   refresh();
   return {
-    message: `Result saved · ${homeScore}–${awayScore}${forfeit ? " (forfeit / ruling)" : ""}`,
+    message: `Result saved · ${homeScore}–${awayScore}${forfeit ? " (forfeit / ruling)" : ""}${tiebreakerPending ? ". The next tiebreaker game is pending automatic retry; reload the schedule before playing." : ""}`,
   };
 }
 
@@ -3925,7 +3956,8 @@ export async function signFreeAgent(
         homeName: a.match.homeTeam.name,
         awayName: a.match.awayTeam.name,
         week: a.match.week,
-        isPlayoff: a.match.phase !== MATCH_PHASE.REGULAR,
+        isPlayoff: isPlayoffPhase(a.match.phase),
+        isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4210,7 +4242,8 @@ export async function releasePlayer(
         homeName: a.match.homeTeam.name,
         awayName: a.match.awayTeam.name,
         week: a.match.week,
-        isPlayoff: a.match.phase !== MATCH_PHASE.REGULAR,
+        isPlayoff: isPlayoffPhase(a.match.phase),
+        isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4456,6 +4489,7 @@ export async function withdrawTeam(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
+    if (error instanceof ResultWriteError) return { error: error.message };
     if (error instanceof CaptainStateChangedError) {
       return { error: "Unknown team" };
     }
@@ -4515,7 +4549,8 @@ export async function withdrawTeam(
         homeName: a.match.homeTeam.name,
         awayName: a.match.awayTeam.name,
         week: a.match.week,
-        isPlayoff: a.match.phase !== MATCH_PHASE.REGULAR,
+        isPlayoff: isPlayoffPhase(a.match.phase),
+        isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4597,6 +4632,7 @@ export async function reinstateTeam(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
+    if (error instanceof ResultWriteError) return { error: error.message };
     if (error instanceof CaptainStateChangedError) {
       return { error: "Unknown team" };
     }
@@ -4835,7 +4871,7 @@ export async function reopenMatch(
           (match.season.championTeamId === match.homeTeamId ||
             match.season.championTeamId === match.awayTeamId);
         if (
-          match.phase !== MATCH_PHASE.REGULAR &&
+          isPlayoffPhase(match.phase) &&
           match.season.status === SEASON_STATUS.COMPLETE &&
           !crownedFinalCorrection
         ) {
@@ -4850,9 +4886,13 @@ export async function reopenMatch(
           throw new ResultWriteError(
             match.phase === MATCH_PHASE.REGULAR
               ? "Regular-season results can only change during the active Regular season phase."
-              : "Playoff results can only change while the active season is in Playoffs.",
+              : match.phase === MATCH_PHASE.TIEBREAKER
+                ? "Tiebreaker results can only change before playoffs during the active Regular season phase."
+                : "Playoff results can only change while the active season is in Playoffs.",
           );
         }
+        const resultLock = await matchResultLockReason(tx, match);
+        if (resultLock) throw new ResultWriteError(resultLock);
         if (match.status !== MATCH_STATUS.COMPLETED) {
           throw new ResultWriteError("That match isn't marked final");
         }
@@ -4865,11 +4905,11 @@ export async function reopenMatch(
         // Bracket advancement and this correction must share one Serializable
         // snapshot. Otherwise a later round can appear after the guard but
         // before the reopen, stranding the old winner downstream.
-        if (match.phase !== MATCH_PHASE.REGULAR) {
+        if (isPlayoffPhase(match.phase)) {
           const playoffs = await tx.match.findMany({
             where: {
               seasonId: match.seasonId,
-              phase: { not: MATCH_PHASE.REGULAR },
+              phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
             },
             select: { id: true, bracketSlot: true },
           });
@@ -5052,9 +5092,14 @@ export async function removeGame(
       error:
         game.match.phase === MATCH_PHASE.REGULAR
           ? "Regular-season results can only change during the active Regular season phase."
-          : "Playoff results can only change while the active season is in Playoffs.",
+          : game.match.phase === MATCH_PHASE.TIEBREAKER
+            ? "Tiebreaker results can only change before playoffs during the active Regular season phase."
+            : "Playoff results can only change while the active season is in Playoffs.",
     };
   }
+
+  const resultLock = await matchResultLockReason(prisma, game.match);
+  if (resultLock) return { error: resultLock };
 
   // Remember the removal BEFORE deleting the row. Both importers decide
   // "already recorded" from the Game rows themselves, so without this the next
@@ -5128,17 +5173,19 @@ export async function removeGame(
             "The league phase changed — reload before correcting this result.",
           );
         }
+        const resultLock = await matchResultLockReason(tx, match);
+        if (resultLock) throw new ResultWriteError(resultLock);
         // Once a decided playoff series has advanced, changing its source
         // games would strand the old winner downstream. Read descendants and
         // delete the game in the same Serializable snapshot as advancement.
         if (
-          match.phase !== MATCH_PHASE.REGULAR &&
+          isPlayoffPhase(match.phase) &&
           match.status === MATCH_STATUS.COMPLETED
         ) {
           const playoffs = await tx.match.findMany({
             where: {
               seasonId: match.seasonId,
-              phase: { not: MATCH_PHASE.REGULAR },
+              phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
             },
             select: { id: true, bracketSlot: true },
           });
@@ -5322,7 +5369,7 @@ export async function removeGame(
       }),
     );
     if (
-      corrected.phase !== MATCH_PHASE.REGULAR &&
+      isPlayoffPhase(corrected.phase) &&
       corrected.projection.winnerTeamId
     ) {
       if (corrected.uncrownedFinal) {
@@ -5360,6 +5407,10 @@ export async function removeGame(
           advancePlayoffBracket(corrected.seasonId),
         );
       }
+    } else if (corrected.phase === MATCH_PHASE.TIEBREAKER) {
+      await runFollowUp("tiebreaker advancement", () =>
+        advanceTiebreakerWeek(corrected.seasonId),
+      );
     } else if (corrected.phase === MATCH_PHASE.REGULAR) {
       await runFollowUp("weekly-honors reconciliation", () =>
         maybeAnnounceWeekHonors(corrected.seasonId, corrected.week),

@@ -112,6 +112,37 @@ function odGame(
 }
 
 describe("match-report service (integration)", () => {
+  it("imports both wins of a BO3 tiebreaker before playoffs, then locks its history", async () => {
+    const { season, home, away, match, homeAccts, awayAccts } = await setupMatch();
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { phase: MATCH_PHASE.TIEBREAKER, bestOf: 3, bracketSlot: "TB:test:1" },
+    });
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValueOnce(
+      odGame(5550101, homeAccts, awayAccts),
+    );
+    expect((await reportImportGame(home.captainId, match.id, "5550101")).ok).toBe(true);
+    expect(await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
+      .toMatchObject({ status: "LIVE", homeScore: 1, awayScore: 0 });
+
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValueOnce(
+      odGame(5550102, homeAccts, awayAccts, CAPTAIN_GAME_START + 3600),
+    );
+    expect((await reportImportGame(away.captainId, match.id, "5550102")).ok).toBe(true);
+    expect(await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
+      .toMatchObject({ status: "COMPLETED", homeScore: 2, winnerTeamId: home.id });
+    expect(await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
+      .toMatchObject({ status: SEASON_STATUS.REGULAR_SEASON, championTeamId: null });
+    expect(await prisma.match.count({
+      where: { seasonId: season.id, phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] } },
+    })).toBe(0);
+
+    await prisma.season.update({ where: { id: season.id }, data: { status: SEASON_STATUS.PLAYOFFS } });
+    await expect(reportImportGame(home.captainId, match.id, "5550103"))
+      .rejects.toThrow(/Results are locked/);
+    expect(vi.mocked(fetchOpenDotaMatch)).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects non-captains and never touches the match", async () => {
     const { match } = await setupMatch();
     const rando = await makeUser("ReportRando");

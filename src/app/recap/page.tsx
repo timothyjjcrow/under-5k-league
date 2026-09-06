@@ -127,7 +127,9 @@ export default async function RecapPage({
   const teamName = new Map(teams.map((team) => [team.id, team.name]));
   const teamLogoUrl = new Map(teams.map((team) => [team.id, team.logoUrl]));
   const championPresentation = resolveChampionPresentation(season, matches);
-  const playoffMatches = matches.filter((match) => match.phase !== "REGULAR");
+  const playoffMatches = matches.filter(
+    (match) => match.phase === "PLAYOFF" || match.phase === "FINAL",
+  );
   const bracketRounds = buildBracketRounds(
     playoffMatches,
     teamName,

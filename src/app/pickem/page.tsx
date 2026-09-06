@@ -339,7 +339,9 @@ export default async function PickemPage({
                                     <Badge tone="accent" className="ml-2">
                                       {m.phase === "FINAL"
                                         ? "Final"
-                                        : "Playoff"}
+                                        : m.phase === "TIEBREAKER"
+                                          ? "Tiebreaker"
+                                          : "Playoff"}
                                     </Badge>
                                   ) : null}
                                 </span>
