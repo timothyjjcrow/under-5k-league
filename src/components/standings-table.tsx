@@ -34,6 +34,8 @@ export type StandingsRowView = {
   tiebreakerResolved?: boolean;
   /** Qualification or seed order is pending a required tiebreaker. */
   tiebreakerPending?: boolean;
+  /** The tied group is wholly inside the playoff cut; only its order is open. */
+  seedingTiebreakerPending?: boolean;
   /** Quit mid-season — remaining fixtures forfeited, out of seeding. */
   withdrawn: boolean;
   /** One-based playoff seed, or null when below the cut / ineligible. */
@@ -280,7 +282,7 @@ export function StandingsTableClient({
                     ) : null}
                     {/* Marks only mean something when a team can miss the
                         bracket — with everyone qualifying they'd all be ✓. */}
-                    <ClinchMark status={row.tiebreakerPending ? null : row.clinch} />
+                    <ClinchMark status={row.clinch} />
                     {row.withdrawn ? (
                       <span
                         role="img"
@@ -293,10 +295,10 @@ export function StandingsTableClient({
                     ) : null}
                     {row.tiebreakerPending ? (
                       <span
-                        title="A tiebreaker match must settle playoff qualification or seeding after the regular season"
+                        title={row.seedingTiebreakerPending ? "Playoff seed order needs a tiebreaker" : "A tiebreaker match must settle playoff qualification after the regular season"}
                         className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-semibold text-accent"
                       >
-                        Tiebreaker pending
+                        {row.seedingTiebreakerPending ? "Seeding tiebreaker" : "Tiebreaker pending"}
                       </span>
                     ) : row.idDecided ? (
                       <span
@@ -700,12 +702,19 @@ function OverviewStatus({
     );
   }
   if (row.tiebreakerPending) {
+    if (row.seedingTiebreakerPending && row.clinch === "CLINCHED") {
+      return (
+        <span title="Playoff place secured; tiebreaker decides seed order" className="text-success">
+          <span aria-hidden>✓ </span>Qualified · seeding tiebreaker
+        </span>
+      );
+    }
     return (
       <span
-        title="A tiebreaker match must settle playoff qualification or seeding after the regular season"
+        title={row.seedingTiebreakerPending ? "Playoff seed order needs a tiebreaker" : "A tiebreaker match must settle playoff qualification after the regular season"}
         className="rounded bg-accent/10 px-1.5 py-0.5 text-accent"
       >
-        Tiebreaker pending
+        {row.seedingTiebreakerPending ? "Seeding tiebreaker" : "Tiebreaker pending"}
       </span>
     );
   }

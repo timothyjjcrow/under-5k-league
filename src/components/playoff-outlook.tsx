@@ -1,0 +1,114 @@
+import type { ScenarioOutlook, TeamScenario } from "@/lib/scenarios";
+
+/** Counts are feasible result combinations, never estimated probabilities. */
+export function outlookSummary(outlook: ScenarioOutlook): string {
+  const { total, qualified, qualificationTiebreaker, eliminated, seedingTiebreaker } = outlook;
+  if (qualified === total) {
+    if (seedingTiebreaker === total)
+      return "Qualified for playoffs; seeding tiebreaker required.";
+    if (seedingTiebreaker > 0)
+      return "Qualified for playoffs; a seeding tiebreaker remains possible.";
+    return "Qualified for playoffs.";
+  }
+  if (qualificationTiebreaker === total) return "Qualification tiebreaker required.";
+  if (eliminated === total) return "Eliminated from playoffs.";
+  const outcomes: string[] = [];
+  if (qualified > 0) outcomes.push(`qualify in ${qualified} of ${total}`);
+  if (qualificationTiebreaker > 0)
+    outcomes.push(`qualification tiebreaker in ${qualificationTiebreaker} of ${total}`);
+  if (eliminated > 0) outcomes.push(`eliminated in ${eliminated} of ${total}`);
+  return `${outcomes.join("; ")}.`;
+}
+
+export function playoffStatusLine(scenario: TeamScenario): string {
+  if (scenario.outlook) return outlookSummary(scenario.outlook);
+  if (scenario.status === "CLINCHED") return "Qualified for playoffs.";
+  if (scenario.status === "ELIMINATED") return "Eliminated from playoffs.";
+  if (scenario.nextMatchId === null)
+    return "Regular matches complete; qualification is not yet settled.";
+  if (scenario.winAndIn) return "Win the next series to secure a playoff place.";
+  if (scenario.loseAndOut) return "A loss in the next series eliminates this team.";
+  return "Playoff qualification is still open.";
+}
+
+export function playoffPathLines(scenario: TeamScenario | undefined, matchId?: string) {
+  if (!scenario?.paths || (matchId && scenario.nextMatchId !== matchId)) return [];
+  return (["win", "draw", "loss"] as const).flatMap((outcome) => {
+    const result = scenario.paths?.[outcome];
+    return result ? [{
+      key: outcome,
+      label: outcome === "win" ? "Win" : outcome === "draw" ? "Draw" : "Loss",
+      description: outlookSummary(result),
+    }] : [];
+  });
+}
+
+export function PlayoffOutlook({
+  scenario,
+  teamNames,
+  matchId,
+  showPaths = true,
+  compact = false,
+}: {
+  scenario: TeamScenario;
+  teamNames?: Map<string, string>;
+  /** Only attach conditional paths to the fixture they actually describe. */
+  matchId?: string;
+  showPaths?: boolean;
+  compact?: boolean;
+}) {
+  const paths = showPaths ? playoffPathLines(scenario, matchId) : [];
+  const outlook = scenario.outlook;
+  const tiedGroups = outlook?.qualificationTies ?? [];
+  const mayNeedQualificationTiebreaker = (outlook?.qualificationTiebreaker ?? 0) > 0 ||
+    Object.values(scenario.paths ?? {}).some((path) => path && path.qualificationTiebreaker > 0);
+  return (
+    <div
+      data-testid="playoff-outlook"
+      data-team-id={scenario.teamId}
+      className="min-w-0 space-y-2 text-xs leading-relaxed [overflow-wrap:anywhere]"
+    >
+      <p className="font-medium text-fg">{playoffStatusLine(scenario)}</p>
+      {paths.length > 0 ? (
+        <dl className="space-y-1.5">
+          {paths.map((path) => (
+            <div key={path.key} className="grid grid-cols-[3rem_minmax(0,1fr)] gap-2">
+              <dt className="font-semibold text-accent">{path.label}</dt>
+              <dd className="text-muted">{path.description}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {!compact && tiedGroups.length > 0 ? (
+        <ul className="space-y-1 text-muted">
+          {tiedGroups.map((group) => (
+            <li key={`${group.teamIds.join(":")}:${group.spots}`}>
+              {outlook?.qualificationTiebreaker === outlook?.total ? "Tiebreaker" : "Possible tiebreaker"}: {group.teamIds.map((id) => teamNames?.get(id) ?? id).join(", ")}{" "}
+              for {group.spots} playoff place{group.spots === 1 ? "" : "s"}.
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {!compact && outlook ? (
+        <p className="text-muted">
+          {outlook.bestRank === outlook.worstRank
+            ? `Playoff order: #${outlook.bestRank}.`
+            : `Possible playoff order: #${outlook.bestRank}–#${outlook.worstRank}.`}
+        </p>
+      ) : null}
+      {mayNeedQualificationTiebreaker ? (
+        <p className="text-[11px] text-muted">
+          Tiebreakers: two teams play BO3; three teams play BO1 double
+          elimination, four or five games in one extra week.
+        </p>
+      ) : null}
+      {paths.length > 0 || (outlook && outlook.total > 1) ? (
+        <p className="text-[11px] text-muted">
+          Counts are result combinations, not qualification odds. Assumes
+          normally completed series; administrative rulings or score corrections
+          can change outcomes.
+        </p>
+      ) : null}
+    </div>
+  );
+}
