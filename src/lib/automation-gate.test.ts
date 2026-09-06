@@ -772,6 +772,34 @@ describe("computeAutomationGateSnapshot", () => {
     });
   });
 
+  it("wakes for a missing same-week BO1 stage even without remaining scheduled matches or Discord", () => {
+    const slot = (stage: number) => `TBD:${"a".repeat(64)}:1:${"b".repeat(64)}:${stage}:0`;
+    const fixtures = [1, 2, 3].map((stage) => match({
+      id: `tb-${stage}`, phase: "TIEBREAKER", week: 8,
+      bracketSlot: slot(stage), scheduledAt: null,
+      status: "COMPLETED", winnerTeamId: "home",
+    }));
+    const snapshot = (matches: AutomationGateMatch[], status = "REGULAR_SEASON") =>
+      computeAutomationGateSnapshot(inputs({ seasons: [season({ status, matches })] }), NOW);
+
+    expect(snapshot(fixtures)).toMatchObject({ nextWakeAtMs: NOW, reason: "TIEBREAKER_REPAIR" });
+    const game4 = match({
+      id: "tb-4", phase: "TIEBREAKER", week: 8, bracketSlot: slot(4), scheduledAt: null,
+      status: "COMPLETED", winnerTeamId: "home",
+    });
+    // An undefeated game-4 winner ends the bracket, so recovery stays idle.
+    expect(snapshot([...fixtures, game4]).reason).toBeNull();
+    // The other finalist winning needs exactly one reset, including after a
+    // process crash between saving that win and creating its fixture.
+    expect(snapshot([...fixtures, { ...game4, winnerTeamId: "away" }]))
+      .toMatchObject({ nextWakeAtMs: NOW, reason: "TIEBREAKER_REPAIR" });
+    const game5 = { ...game4, id: "tb-5", bracketSlot: slot(5) };
+    expect(snapshot([...fixtures, { ...game4, winnerTeamId: "away" }, game5]).reason).toBeNull();
+    expect(snapshot(fixtures, "PLAYOFFS").reason).toBeNull();
+    expect(snapshot([{ ...fixtures[0], bracketSlot: "TB:legacy:1" }]).reason).toBeNull();
+    expect(snapshot([{ ...fixtures[0], status: "SCHEDULED", winnerTeamId: null }]).reason).toBeNull();
+  });
+
   it("stops missing-honors recovery after one hour without parking real retries", () => {
     const completed = match({
       status: "COMPLETED",

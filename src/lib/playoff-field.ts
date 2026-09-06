@@ -4,6 +4,7 @@ import {
   type MatchLike,
   type TeamStanding,
 } from "./standings";
+import { resolveTiebreakers, tiebreakerBasis, type TiebreakerState } from "./tiebreakers";
 
 export type PlayoffFieldProjection = {
   /** The public table: every team and every completed regular-season result. */
@@ -22,6 +23,7 @@ export type PlayoffFieldProjection = {
   pairings: Pairing[];
   /** Every team in an unresolved tie that can alter qualification or seeding. */
   seedingDeadHeatTeamIds: string[];
+  tiebreakers: TiebreakerState;
 };
 
 /**
@@ -35,19 +37,26 @@ export function projectPlayoffField(
   teams: { id: string; withdrawn?: boolean }[],
   matches: MatchLike[],
 ): PlayoffFieldProjection {
-  const standings = computeStandings(
+  let standings = computeStandings(
     teams.map((team) => team.id),
     matches,
   );
   const withdrawnIds = new Set(
     teams.filter((team) => team.withdrawn).map((team) => team.id),
   );
-  const eligibleStandings = standings.filter(
+  let eligibleStandings = standings.filter(
     (row) => !withdrawnIds.has(row.teamId),
   );
-  const eligibleTeamIds = eligibleStandings.map((row) => row.teamId);
   const bracketSize =
-    eligibleTeamIds.length < 2 ? 0 : pickBracketSize(eligibleTeamIds.length);
+    eligibleStandings.length < 2 ? 0 : pickBracketSize(eligibleStandings.length);
+  const resolution = resolveTiebreakers(
+    eligibleStandings, matches, bracketSize, tiebreakerBasis(teams, matches),
+  );
+  eligibleStandings = resolution.standings;
+  let eligibleIndex = 0;
+  standings = standings.map((row) => withdrawnIds.has(row.teamId)
+    ? row : eligibleStandings[eligibleIndex++]);
+  const eligibleTeamIds = eligibleStandings.map((row) => row.teamId);
   const seededTeamIds = eligibleTeamIds.slice(0, bracketSize);
   const seedByTeam = new Map(
     seededTeamIds.map((teamId, index) => [teamId, index + 1]),
@@ -82,5 +91,6 @@ export function projectPlayoffField(
     seedByTeam,
     pairings,
     seedingDeadHeatTeamIds,
+    tiebreakers: resolution.state,
   };
 }

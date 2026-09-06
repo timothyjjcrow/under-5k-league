@@ -88,6 +88,11 @@ import {
   setDraftSettings,
 } from "@/app/actions/admin";
 import { runMaintenanceNow } from "@/app/actions/automation";
+import {
+  scheduleTiebreakerWeek,
+  resetTiebreakerWeek,
+} from "@/app/actions/tiebreakers";
+import { hasLaterTiebreakerStage, parseTiebreakerStage } from "@/lib/tiebreaker-format";
 import { cancelReschedule } from "@/app/actions/reschedule";
 import { adjustCredAction } from "@/app/actions/inhouse-bets";
 import {
@@ -105,6 +110,7 @@ import {
   HONORS_ANNOUNCED_PREFIX,
   leagueSyncSkipKey,
   playoffGamesArchiveKey,
+  tiebreakerGamesArchiveKey,
   SETTING_KEYS,
 } from "@/lib/settings";
 import { adminNextStep } from "@/lib/admin-next-step";
@@ -820,7 +826,10 @@ async function loadSeasonAdminData(seasonId: string) {
   // createPlayoffBracket so the postseason can be re-imported by hand — without
   // them the ids were simply gone, which is what made "recreate the bracket"
   // (the only correction path past an advanced round) irreversible.
-  const playoffArchive = await getSetting(playoffGamesArchiveKey(seasonId));
+  const [playoffArchive, tiebreakerArchive] = await Promise.all([
+    getSetting(playoffGamesArchiveKey(seasonId)),
+    getSetting(tiebreakerGamesArchiveKey(seasonId)),
+  ]);
   // What a schedule REGENERATE would destroy. These rows hang off a fixture id
   // and cascade with it, and none of them is archived anywhere — so the confirm
   // has to be able to state them BEFORE the click, not just the toast after.
@@ -855,6 +864,7 @@ async function loadSeasonAdminData(seasonId: string) {
     assignments,
     outRsvps,
     playoffArchive: parsePlayoffArchive(playoffArchive),
+    tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
     collateral: { rsvps, picks, covers, proposals },
     unlinkedDiscord,
   };
@@ -936,7 +946,9 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
   const configLocked = !draftSetupOpen(season.status, data.draft?.status);
   const cap = capacityInfo(season, data.players.length);
   const regular = data.matches.filter((m) => m.phase === "REGULAR");
-  const playoff = data.matches.filter((m) => m.phase !== "REGULAR");
+  const playoff = data.matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
   const championPresentation = resolveChampionPresentation(
     season,
     data.matches,
@@ -951,6 +963,11 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
     scheduledRegularCount: regular.filter((m) => m.scheduledAt).length,
     pendingRegularResults: regular.filter((m) => m.status !== "COMPLETED")
       .length,
+    pendingTiebreakerResults: data.matches.filter(
+      (m) => m.phase === "TIEBREAKER" && m.status !== "COMPLETED",
+    ).length,
+    unresolvedPlayoffTieCount: projectPlayoffField(data.teams, data.matches)
+      .seedingDeadHeatTeamIds.length,
     playoffMatchCount: playoff.length,
     unfinishedPlayoffCount: playoff.filter((m) => m.status !== "COMPLETED")
       .length,
@@ -1299,7 +1316,11 @@ function CaptainControls({
   const draftLive = data.draft?.status === "IN_PROGRESS";
   const setupOpen = draftSetupOpen(season.status, data.draft?.status);
   const transferOpen = captainTransferOpen(season.status, data.draft?.status);
-  const teamWithdrawalLocked = teamWithdrawalLockedReason(season.status);
+  const teamWithdrawalLocked =
+    teamWithdrawalLockedReason(season.status) ??
+    (data.matches.some((m) => m.phase === "TIEBREAKER")
+      ? "Reset the tiebreaker week before changing team eligibility."
+      : null);
   const captainUserIds = new Set(data.teams.map((t) => t.captainId));
   const nonCaptains = data.players.filter((p) => !captainUserIds.has(p.userId));
   // Real STANDIN registrations, for the moderation list below (data.standins
@@ -2060,8 +2081,7 @@ function CaptainControls({
               uses the same idiom). Mid-season only — pre-season the tool is
               removeCaptain, and a playoff slot needs an explicit per-match
               ruling, which the action's errors say. */}
-          {season.status === "REGULAR_SEASON" &&
-          data.teams.some((t) => !t.withdrawn) ? (
+          {!teamWithdrawalLocked && data.teams.some((t) => !t.withdrawn) ? (
             <details className="mt-3 rounded-lg border border-line px-3 py-2">
               <summary className="cursor-pointer text-xs text-muted hover:text-fg">
                 🏳️ A team has quit the season
@@ -2460,6 +2480,10 @@ function ScheduleControls({
 }) {
   const status = regularSeasonStatus(data.matches);
   const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
+  const tiebreakerMatches = data.matches.filter(
+    (m) => m.phase === "TIEBREAKER",
+  );
+  const playoffField = projectPlayoffField(data.teams, data.matches);
   const collateral = data.collateral;
   const draftStatus = data.draft?.status ?? null;
   const scheduleEditingOpen = postAuctionWorkOpen(season.status, draftStatus);
@@ -2607,7 +2631,10 @@ function ScheduleControls({
                     ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores below.`
                     : season.status === SEASON_STATUS.COMPLETE
                       ? `✓ Season complete — all ${status.total} regular-season results recorded.`
-                      : `✓ All ${status.total} results in — ready to start the playoffs.`}
+                      : playoffField.seedingDeadHeatTeamIds.length > 0 ||
+                          playoffField.tiebreakers.error
+                        ? `All ${status.total} regular-season results in — resolve the playoff tiebreakers in the Playoffs controls below.`
+                        : `✓ All ${status.total} results in — ready to start the playoffs.`}
               </div>
             ) : null}
             <p className="text-xs text-muted">
@@ -2711,7 +2738,9 @@ function ScheduleControls({
                         seasonStatus={season.status}
                         draftStatus={data.draft?.status ?? null}
                         championTeamId={season.championTeamId}
-                        correctionBlockedByLaterRound={false}
+                        correctionBlockedByLaterRound={
+                          tiebreakerMatches.length > 0
+                        }
                         isSoleLatestPlayoffSeries={false}
                         label={
                           <Link
@@ -2727,11 +2756,59 @@ function ScheduleControls({
                 </details>
               );
             })}
+            {[...new Set(tiebreakerMatches.map((m) => m.week))].map((week) => {
+              const weekMatches = tiebreakerMatches.filter(
+                (m) => m.week === week,
+              );
+              const pending = weekMatches.filter(
+                (m) => m.status !== "COMPLETED",
+              ).length;
+              return (
+                <details
+                  key={`tb${week}`}
+                  open={pending > 0}
+                  className="rounded-lg border border-accent/40"
+                >
+                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                    Tiebreaker week · Week {week} · {weekMatches.every((match) => match.bestOf === 1) ? "Best of 1" : weekMatches.every((match) => match.bestOf === 3) ? "Best of 3" : "Best of 1 / Best of 3"}
+                    <span className="ml-2 text-xs font-normal text-muted">
+                      {weekMatches.length - pending}/{weekMatches.length}{" "}
+                      entered
+                    </span>
+                  </summary>
+                  <div className="space-y-2 px-3 pb-3">
+                    {weekMatches.map((m) => (
+                      <MatchResultRow
+                        key={m.id}
+                        m={m}
+                        teams={data.teams}
+                        expectedActiveSeasonId={season.id}
+                        seasonStatus={season.status}
+                        draftStatus={data.draft?.status ?? null}
+                        championTeamId={season.championTeamId}
+                        correctionBlockedByLaterRound={hasLaterTiebreakerStage(m, tiebreakerMatches)}
+                        isSoleLatestPlayoffSeries={false}
+                        label={
+                          <Link
+                            href={`/matches/${m.id}`}
+                            className={textLink("shrink-0 text-xs")}
+                          >
+                            TB · {parseTiebreakerStage(m.bracketSlot) ? `Game ${parseTiebreakerStage(m.bracketSlot)!.stage}` : `Wk ${m.week}`} · BO{m.bestOf}
+                          </Link>
+                        }
+                      />
+                    ))}
+                  </div>
+                </details>
+              );
+            })}
             {/* Playoffs in their own section, labeled by round so the admin
                 entering a bracket-advancing result can tell the final from a
                 semifinal. */}
             {(() => {
-              const playoff = data.matches.filter((m) => m.phase !== "REGULAR");
+              const playoff = data.matches.filter(
+                (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+              );
               if (playoff.length === 0) return null;
               const { totalRounds } = groupPlayoffRounds(playoff);
               const pending = playoff.filter(
@@ -2863,21 +2940,26 @@ function MatchResultRow({
           ) : null}
           <span className="w-full text-xs text-muted">
             {correctionBlockedByLaterRound
-              ? "This series already advanced a later playoff round. It is read-only because changing its winner would strand downstream teams; use Reset playoffs to reseed the full bracket before correcting it."
+              ? m.phase === MATCH_PHASE.REGULAR ||
+                m.phase === MATCH_PHASE.TIEBREAKER
+                ? "Tiebreaker fixtures depend on this result. Use Reset tiebreaker week in the Playoffs controls before correcting it."
+                : "This series already advanced a later playoff round. It is read-only because changing its winner would strand downstream teams; use Reset playoffs to reseed the full bracket before correcting it."
               : !resultOpen
-                ? m.phase === MATCH_PHASE.REGULAR
-                  ? "Regular-season results are read-only outside the active Regular season phase. Move the phase back and reseed before correcting one."
-                  : crownedGrandFinal
-                    ? "This result crowned the champion. Use the grand-final correction below to retract the title and reopen only this series."
-                    : conflictingChampionFinal
-                      ? "The stored champion conflicts with this completed final. Use the correction below to retract the inconsistent title and reconcile only this series."
-                      : unresolvedCompletedFinal
-                        ? championTeamId == null
-                          ? "This completed grand final has no authoritative champion. Move the season back to Playoffs with the phase control, then reconcile this result; title-retraction controls stay hidden because no title exists."
-                          : !championIsFinalParticipant
-                            ? "The recorded champion is not a participant in this completed grand final. Use the dedicated playoff recovery controls to restore a consistent bracket and title; targeted title-retraction controls stay hidden because this final cannot safely retract that team."
-                            : "The bracket does not have one sole authoritative latest final. Use the dedicated playoff recovery controls to restore a single consistent final before targeted title correction is available."
-                        : "Playoff results are read-only unless the active season is in Playoffs."
+                ? m.phase === MATCH_PHASE.TIEBREAKER
+                  ? "Tiebreaker results are read-only once playoffs begin. Return to Regular season before correcting one."
+                  : m.phase === MATCH_PHASE.REGULAR
+                    ? "Regular-season results are read-only outside the active Regular season phase. Move the phase back and reseed before correcting one."
+                    : crownedGrandFinal
+                      ? "This result crowned the champion. Use the grand-final correction below to retract the title and reopen only this series."
+                      : conflictingChampionFinal
+                        ? "The stored champion conflicts with this completed final. Use the correction below to retract the inconsistent title and reconcile only this series."
+                        : unresolvedCompletedFinal
+                          ? championTeamId == null
+                            ? "This completed grand final has no authoritative champion. Move the season back to Playoffs with the phase control, then reconcile this result; title-retraction controls stay hidden because no title exists."
+                            : !championIsFinalParticipant
+                              ? "The recorded champion is not a participant in this completed grand final. Use the dedicated playoff recovery controls to restore a consistent bracket and title; targeted title-retraction controls stay hidden because this final cannot safely retract that team."
+                              : "The bracket does not have one sole authoritative latest final. Use the dedicated playoff recovery controls to restore a single consistent final before targeted title correction is available."
+                          : "Playoff results are read-only unless the active season is in Playoffs."
                 : `Score derived from ${m.games.length} imported game${m.games.length === 1 ? "" : "s"}. Remove the incorrect game below; the series recomputes automatically.`}
           </span>
         </div>
@@ -2961,7 +3043,11 @@ function MatchResultRow({
              lies about its own effect is worse than none. Name the fixture,
              point at the boxes, and state what "final" costs. */
             confirm={`Record the score in the boxes as the FINAL result for ${home?.name ?? "home"} v ${away?.name ?? "away"}?\n\nCheck the two score boxes first. A played series must reach its real finish; use the forfeit / ruling box only when an admin is ending it early. Marking a match final stops automatic result import for it${
-              m.phase !== "REGULAR" ? " and advances the playoff bracket" : ""
+              m.phase === "PLAYOFF" || m.phase === "FINAL"
+                ? " and advances the playoff bracket"
+                : m.phase === "TIEBREAKER" && parseTiebreakerStage(m.bracketSlot)
+                  ? " and creates the next tiebreaker game when needed; this result locks once that dependent game exists"
+                : ""
             }, and "Reopen for import" only undoes it while no games are attached.`}
           >
             {m.games.length > 0 ? "Save ruling" : "Save as final"}
@@ -3129,7 +3215,9 @@ function PlayoffControls({
   season: Season;
   data: AdminData;
 }) {
-  const playoffMatches = data.matches.filter((m) => m.phase !== "REGULAR");
+  const playoffMatches = data.matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
   const championPresentation = resolveChampionPresentation(
     season,
     data.matches,
@@ -3137,20 +3225,31 @@ function PlayoffControls({
   const playoffField = projectPlayoffField(data.teams, data.matches);
   const bracketSize = playoffField.bracketSize;
   const status = regularSeasonStatus(data.matches);
-  // A fully-tied pair (points, game diff, series wins AND head-to-head all
-  // level) is ordered by nothing but the team-id fallback — deterministic,
-  // but a coin flip. When such a pair touches the seeded slice, the seeding
-  // (possibly WHO makes the bracket) is arbitrary, and the admin should hear
-  // it BEFORE the click, not from a captain afterwards. The only levers today
-  // are correcting a result or accepting the flip; the confirm says so.
   const teamNameById = new Map(data.teams.map((t) => [t.id, t.name]));
-  const coinFlipSeeding = playoffField.seedingDeadHeatTeamIds.map(
+  const tiebreakerMatches = data.matches.filter(
+    (m) => m.phase === "TIEBREAKER",
+  );
+  const tiebreakerGameCount = tiebreakerMatches.reduce(
+    (count, m) => count + m.games.length,
+    0,
+  );
+  const unresolvedTeams = playoffField.seedingDeadHeatTeamIds.map(
     (teamId) => teamNameById.get(teamId) ?? teamId,
   );
-  const coinFlipNote =
-    coinFlipSeeding.length > 0
-      ? `Dead heat in the seeding: ${coinFlipSeeding.join(" and ")} are fully tied (points, game diff, series wins, head-to-head) — their order is arbitrary. Correct a result first, or accept the coin flip.`
-      : null;
+  const tiebreakerLockedReason =
+    playoffField.tiebreakers.error ??
+    (unresolvedTeams.length > 0
+      ? playoffField.tiebreakers.pending
+        ? "Complete every scheduled tiebreaker series before starting playoffs."
+        : "Schedule the tiebreaker week to settle playoff qualification and seeding."
+      : null);
+  const scheduleTiebreakersOpen =
+    season.status === SEASON_STATUS.REGULAR_SEASON &&
+    status.allComplete &&
+    playoffMatches.length === 0 &&
+    playoffField.tiebreakers.needsMatches &&
+    !playoffField.tiebreakers.pending &&
+    !playoffField.tiebreakers.error;
   const champion = championPresentation.championTeamId
     ? data.teams.find((t) => t.id === championPresentation.championTeamId)
     : null;
@@ -3185,7 +3284,7 @@ function PlayoffControls({
           ? `${status.pending} regular-season result${status.pending === 1 ? " is" : "s are"} still outstanding.`
           : playoffField.eligibleTeamIds.length < 2
             ? "At least two non-withdrawn teams are needed before a bracket can be seeded."
-            : null;
+            : tiebreakerLockedReason;
   const resetPlayoffsLockedReason =
     season.status !== SEASON_STATUS.PLAYOFFS &&
     season.status !== SEASON_STATUS.COMPLETE
@@ -3196,7 +3295,7 @@ function PlayoffControls({
           ? `${status.pending} regular-season result${status.pending === 1 ? " is" : "s are"} still outstanding.`
           : playoffField.eligibleTeamIds.length < 2
             ? "At least two non-withdrawn teams are needed before the bracket can be reseeded."
-            : null;
+            : tiebreakerLockedReason;
 
   return (
     <Card id="playoffs" className="scroll-mt-20">
@@ -3234,7 +3333,6 @@ function PlayoffControls({
                         "The stored champion record is cleared and the season reopens into Playoffs.",
                       ]
                     : []),
-                  ...(coinFlipNote ? [coinFlipNote] : []),
                 ]}
                 recovery={
                   playoffGameCount
@@ -3254,11 +3352,7 @@ function PlayoffControls({
                 variant="secondary"
                 size="sm"
                 disabled={startPlayoffsLockedReason != null}
-                confirm={
-                  coinFlipNote
-                    ? `Seed and start the playoff bracket?\n\n⚖️ ${coinFlipNote}`
-                    : "Seed and start the playoff bracket?"
-                }
+                confirm="Seed and start the playoff bracket?"
               >
                 Start playoffs
               </SubmitButton>
@@ -3302,9 +3396,133 @@ function PlayoffControls({
             {status.pendingWeeks.join(", ")}).
           </div>
         ) : null}
-        {coinFlipNote && playoffMatches.length === 0 ? (
-          <div className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2">
-            ⚖️ {coinFlipNote}
+        {(unresolvedTeams.length > 0 ||
+          tiebreakerMatches.length > 0 ||
+          playoffField.tiebreakers.error) &&
+        playoffMatches.length === 0 ? (
+          <div className="space-y-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-3">
+            <h3 className="font-medium">Playoff tiebreaker week</h3>
+            <p className="text-sm text-muted">
+              {playoffField.tiebreakers.error
+                ? "An administrator must review the tiebreaker fixtures before the playoff order is final."
+                : !status.allComplete
+                  ? "Ties are provisional until the regular season finishes. Any remaining tie affecting qualification or seeding then requires a tiebreaker week."
+                  : unresolvedTeams.length > 0
+                    ? `${unresolvedTeams.join(", ")} still need to be separated for playoff qualification or seeding.`
+                    : "The tiebreaker results have settled the playoff order."}{" "}
+              These matches do not change regular-season points. Playoffs stay
+              locked until every relevant tie is resolved.
+            </p>
+            {unresolvedTeams.length > 0 ? (
+              <p className="text-sm text-muted">
+                Two tied teams play one best-of-three series. Three tied teams
+                play a best-of-one double-elimination bracket in the same week:
+                four games, with a fifth only if the undefeated team loses the
+                first final. The opening matchup and bye are randomly drawn
+                when scheduled. Each result creates the next game automatically;
+                set its time in Schedule &amp; results. Two losses eliminate a
+                team, giving a definite first, second and third place.
+                {playoffField.tiebreakers.groups.some((group) => group.format === "BO3_ROUND_ROBIN" && group.teamIds.length > 2)
+                  ? " Existing round robins and groups of four or more use best-of-three series; wins, then game differential rank each round. Remaining relevant ties play again."
+                  : ""}
+              </p>
+            ) : null}
+            {[...new Set(playoffField.tiebreakers.groups.flatMap((group) => group.byeTeamId ? [group.byeTeamId] : []))].map((id) => (
+              <p key={`bye-${id}`} className="text-xs text-muted">
+                Opening bye drawn: {teamNameById.get(id) ?? id}. This team enters
+                game 2 against the game 1 winner.
+              </p>
+            ))}
+            {playoffField.tiebreakers.error ? (
+              <p className="text-danger" role="alert">
+                {playoffField.tiebreakers.error}
+              </p>
+            ) : null}
+            {!status.allComplete ? (
+              <p className="text-xs text-muted">
+                Finish all regular-season results before scheduling a tiebreaker
+                week.
+              </p>
+            ) : null}
+            {playoffField.tiebreakers.pending ? (
+              <p className="text-xs text-muted">
+                Enter the scheduled tiebreaker scores in Schedule &amp; results
+                above.
+              </p>
+            ) : null}
+            {scheduleTiebreakersOpen ? (
+              <div className="space-y-2">
+                <ul className="space-y-1 text-xs text-muted">
+                  {playoffField.tiebreakers.groups
+                    .filter((group) => group.status === "needed")
+                    .flatMap((group) => group.drawRequired ? [
+                      <li key={group.key}>
+                        {group.teamIds.map((id) => teamNameById.get(id) ?? id).join(", ")} · Best of 1 · Opening matchup and bye drawn when scheduled
+                      </li>,
+                    ] : group.pairings.map((pairing) => (
+                        <li
+                          key={`${group.key}:${pairing.home}:${pairing.away}`}
+                        >
+                          {teamNameById.get(pairing.home) ?? pairing.home} vs{" "}
+                          {teamNameById.get(pairing.away) ?? pairing.away} ·
+                          Best of {group.bestOf}{group.stage ? ` · Game ${group.stage}` : ""}
+                        </li>
+                      )),
+                    )}
+                </ul>
+                {playoffField.tiebreakers.groups.some(
+                  (group) =>
+                    group.status === "needed" && group.teamIds.length > 2,
+                ) ? (
+                  <p className="text-xs text-muted">
+                    Set a time for each match in Schedule &amp; results. Reserve
+                    enough time in the tiebreaker week for the whole bracket;
+                    later games appear as their participants are decided.
+                  </p>
+                ) : null}
+                <ActionForm
+                  action={scheduleTiebreakerWeek}
+                  hidden={{
+                    seasonId: season.id,
+                    expectedRevision: commandClaim.expectedRevision,
+                  }}
+                >
+                  <SubmitButton variant="secondary" size="sm">
+                    {playoffField.tiebreakers.groups.some((group) => group.status === "needed" && (group.stage ?? 1) > 1)
+                      ? "Create next tiebreaker match"
+                      : "Schedule tiebreaker week"}
+                  </SubmitButton>
+                </ActionForm>
+              </div>
+            ) : null}
+            {tiebreakerMatches.length > 0 &&
+            season.status === SEASON_STATUS.REGULAR_SEASON ? (
+              <ActionForm
+                action={resetTiebreakerWeek}
+                hidden={{
+                  seasonId: season.id,
+                  expectedRevision: commandClaim.expectedRevision,
+                }}
+              >
+                <DangerSubmit
+                  token={season.name}
+                  title="Reset the tiebreaker week?"
+                  consequences={[
+                    `All ${tiebreakerMatches.length} tiebreaker fixture(s) and their results are removed.`,
+                    ...(tiebreakerGameCount
+                      ? [
+                          `Their ${tiebreakerGameCount} imported game(s), box scores, fantasy points and record entries are removed.`,
+                        ]
+                      : []),
+                    "Tiebreaker check-ins, standin bookings, reschedule requests and pick'em picks are removed.",
+                    "Regular-season result corrections reopen. Resolve any remaining playoff ties by scheduling fresh tiebreakers after corrections.",
+                  ]}
+                  recovery="Deleted OpenDota match IDs are saved below for re-import. Check-ins, bookings and picks cannot be restored."
+                >
+                  Reset tiebreaker week
+                </DangerSubmit>
+              </ActionForm>
+            ) : null}
           </div>
         ) : null}
         {playoffMatches.length > 0 ? (
@@ -3362,6 +3580,25 @@ function PlayoffControls({
               : `Will seed the top ${bracketSize} of ${playoffField.eligibleTeamIds.length} eligible team(s) by standings${data.teams.length !== playoffField.eligibleTeamIds.length ? `; ${data.teams.length - playoffField.eligibleTeamIds.length} withdrawn team(s) keep their results but cannot take a seed` : ""}. Start this after the regular season is finished.`}
           </p>
         )}
+        {data.tiebreakerArchive.length > 0 ? (
+          <details className="rounded-lg border border-line px-3 py-2">
+            <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+              {data.tiebreakerArchive.length} removed tiebreaker game(s) —
+              OpenDota IDs kept for re-import
+            </summary>
+            <p className="mt-2 text-xs text-muted">
+              After recreating the matching tiebreaker fixture, add these IDs
+              with its Add game control in Schedule &amp; results.
+            </p>
+            <ul className="mt-2 space-y-1 text-xs text-muted">
+              {data.tiebreakerArchive.map((game) => (
+                <li key={game.dotaMatchId}>
+                  {game.dotaMatchId} · Week {game.week}
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
         {data.playoffArchive.length > 0 ? (
           <details className="rounded-lg border border-line px-3 py-2">
             <summary className="cursor-pointer text-xs text-muted hover:text-fg">
@@ -3384,8 +3621,9 @@ function PlayoffControls({
           </details>
         ) : null}
         <p className="text-xs text-muted">
-          Series lengths (regular / playoffs / final) are set in the
-          phase-control panel above.
+          Two-team tiebreakers are best of 3; three-team brackets are best of 1.
+          Series lengths for the regular
+          season, playoffs and final are set in the phase-control panel above.
         </p>
       </CardBody>
     </Card>
@@ -3454,8 +3692,12 @@ function StandinControls({
   }
   // Standins are assigned for the imminent night — group by week and only
   // expand the earliest open one so the current night isn't a scroll away.
-  const regularUpcoming = upcoming.filter((m) => m.phase === "REGULAR");
-  const playoffUpcoming = upcoming.filter((m) => m.phase !== "REGULAR");
+  const regularUpcoming = upcoming.filter(
+    (m) => m.phase === "REGULAR" || m.phase === "TIEBREAKER",
+  );
+  const playoffUpcoming = upcoming.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
   const weeks = [...new Set(regularUpcoming.map((m) => m.week))].sort(
     (a, b) => a - b,
   );
@@ -3463,7 +3705,7 @@ function StandinControls({
   // upcoming (not-yet-played) rounds would drop the first-round count and
   // mislabel a lone remaining semifinal/final.
   const { totalRounds } = groupPlayoffRounds(
-    data.matches.filter((m) => m.phase !== "REGULAR"),
+    data.matches.filter((m) => m.phase === "PLAYOFF" || m.phase === "FINAL"),
   );
 
   return (
@@ -3516,6 +3758,9 @@ function StandinControls({
                   className="rounded-lg border border-line"
                 >
                   <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                    {wkMatches[0]?.phase === "TIEBREAKER"
+                      ? "Tiebreaker week · "
+                      : ""}
                     Week {wk}
                     <span className="ml-2 text-xs font-normal text-muted">
                       {wkMatches.length} match

@@ -1,3 +1,4 @@
+import { isPlayoffPhase } from "./league-lifecycle";
 import { prisma } from "./prisma";
 import {
   MATCH_PHASE,
@@ -224,7 +225,8 @@ export async function maybeAnnounceUpcomingWeek(season: {
 
   const announcement = weekReminderAnnouncement({
     week: next.week,
-    isPlayoff: next.phase !== MATCH_PHASE.REGULAR,
+    isPlayoff: isPlayoffPhase(next.phase),
+    isTiebreaker: next.phase === MATCH_PHASE.TIEBREAKER,
     fixtures,
   });
   const sent = await sendDiscordMessage(

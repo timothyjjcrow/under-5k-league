@@ -125,6 +125,22 @@ beforeEach(() => {
 });
 
 describe("GET /api/calendar", () => {
+  it.each([1, 3])("exports tiebreaker fixtures with their own week label and best-of-%i format", async (bestOf) => {
+    mocks.findMatches.mockResolvedValueOnce([{
+      ...matchRows[0],
+      id: "match-tiebreaker",
+      phase: "TIEBREAKER",
+      week: 6,
+      bestOf,
+    }]);
+    const response = await GET(request());
+    const body = await response.text();
+    expect(body).toContain("UID:match-tiebreaker@league.example");
+    expect(body).toContain("SUMMARY:Tiebreaker week 6: Radiant Raiders vs Dire Wolves");
+    expect(body).toContain(`best of ${bestOf}`);
+    expect(body).not.toContain("Playoffs");
+  });
+
   it("returns 404 when no season is active", async () => {
     mocks.getActiveSeason.mockResolvedValue(null);
 

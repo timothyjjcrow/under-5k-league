@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
-import { computeStandings } from "@/lib/standings";
+import { projectPlayoffField } from "@/lib/playoff-field";
 import { draftRecap } from "@/lib/draft-recap";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
@@ -95,10 +95,7 @@ export default async function TeamsPage() {
     );
   }
 
-  const standings = computeStandings(
-    teams.map((t) => t.id),
-    matches,
-  );
+  const standings = projectPlayoffField(teams, matches).standings;
   const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
   const rowOf = new Map(standings.map((s) => [s.teamId, s]));
   const played = matches.some(

@@ -163,6 +163,32 @@ describe("discord message formatters", () => {
     expect(msg).toContain("a draw");
   });
 
+  it("labels tiebreaker results, reminders, and logistics as tiebreakers", () => {
+    const fixture = {
+      homeName: "A",
+      awayName: "B",
+      week: 6,
+      isPlayoff: false,
+      isTiebreaker: true,
+      whenMs: Date.parse("2026-09-12T20:00:00Z"),
+    };
+    expect(matchResultMessage({ ...fixture, homeScore: 2, awayScore: 1 }))
+      .toContain("Tiebreaker week 6:");
+    expect(weekReminderMessage({ ...fixture, fixtures: [] }))
+      .toContain("Tiebreaker week 6 matches");
+    expect(rescheduleMessage(fixture)).toContain("Tiebreaker week 6:");
+    expect(rescheduleProposedMessage({ ...fixture, proposerName: "Captain" }))
+      .toContain("tiebreaker match");
+    expect(rescheduleDeclinedMessage({ ...fixture, declinerName: "Captain" }))
+      .toContain("tiebreaker match");
+    expect(playerOutMessage({ ...fixture, playerName: "Player" }))
+      .toContain("tiebreaker match");
+    expect(standinAssignedMessage({ ...fixture, standinName: "Cover", replacedName: "Player", teamName: "A" }))
+      .toContain("tiebreaker match");
+    expect(standinRemovedMessage({ ...fixture, standinName: "Cover", teamName: "A" }))
+      .toContain("tiebreaker match");
+  });
+
   it("lists every playoff pairing", () => {
     const msg = playoffsStartedMessage("Season 1", [
       { home: "A", away: "D" },

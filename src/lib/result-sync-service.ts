@@ -39,6 +39,7 @@ import {
   SETTING_KEYS,
 } from "./settings";
 import { advancePlayoffBracket, announceChampionOnce } from "./playoff-service";
+import { advanceTiebreakerWeek } from "./tiebreaker-service";
 import { syncInhouseBoard } from "./inhouse-board-service";
 import {
   deliverInhouseAnnouncements,
@@ -106,6 +107,7 @@ const RESULT_SYNC_ISSUE = {
   INHOUSE_NOTIFICATIONS: "INHOUSE_NOTIFICATION_DELIVERY_FAILED",
   DRAFT: "DRAFT_SYNC_FAILED",
   PLAYOFF: "PLAYOFF_SYNC_FAILED",
+  TIEBREAKER: "TIEBREAKER_SYNC_FAILED",
   REMINDER: "REMINDER_FAILED",
   NOTIFICATIONS: "NOTIFICATION_RETRY_FAILED",
   OUTBOX: "LEAGUE_NOTIFICATION_DELIVERY_FAILED",
@@ -117,6 +119,7 @@ const RESULT_SYNC_SKIPPED = {
   INHOUSE: "INHOUSE_BUDGET_EXHAUSTED",
   DRAFT: "DRAFT_BUDGET_EXHAUSTED",
   PLAYOFF: "PLAYOFF_BUDGET_EXHAUSTED",
+  TIEBREAKER: "TIEBREAKER_BUDGET_EXHAUSTED",
   REMINDER: "REMINDER_BUDGET_EXHAUSTED",
   NOTIFICATIONS: "NOTIFICATIONS_BUDGET_EXHAUSTED",
   CURSOR: "CURSOR_BUDGET_EXHAUSTED",
@@ -1021,6 +1024,21 @@ async function reconcilePlayoffBracket(): Promise<boolean> {
   return advancePlayoffBracket(season.id);
 }
 
+/** Recover a committed BO1 result whose request ended before its next game. */
+async function reconcileTiebreakerWeek(): Promise<void> {
+  const season = singleActiveSeason(
+    await prisma.season.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: "desc" },
+      take: 2,
+      select: { id: true, status: true },
+    }),
+  );
+  if (season?.status === SEASON_STATUS.REGULAR_SEASON) {
+    await advanceTiebreakerWeek(season.id);
+  }
+}
+
 /** One sync pass: league matches + inhouse + due draft clocks. */
 export async function runResultSync(
   options: RunResultSyncOptions = {},
@@ -1091,6 +1109,16 @@ export async function runResultSync(
   }
 
   let playoff = false;
+  if (!canStartWork(options)) {
+    skipped.push(RESULT_SYNC_SKIPPED.TIEBREAKER);
+  } else {
+    try {
+      await reconcileTiebreakerWeek();
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.TIEBREAKER);
+      logStepFailure("tiebreaker", error);
+    }
+  }
   if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
     skipped.push(RESULT_SYNC_SKIPPED.PLAYOFF);
   } else {

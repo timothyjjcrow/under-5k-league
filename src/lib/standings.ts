@@ -2,12 +2,15 @@
 // Points: 3 per series win, 0 per loss. Tiebreakers: game (map) differential,
 // total series wins, then HEAD-TO-HEAD among the still-tied (a mini-table of
 // the tied teams' meetings — mini points, then mini game diff), and only then
-// team id — determinism's last resort, never the thing that decides a playoff
-// seed between teams the schedule actually separated.
+// team id for a stable display. Unresolved groups are flagged so the playoff
+// projection can require extra tiebreaker matches before assigning seeds.
 
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 
 export type MatchLike = {
+  /** Tiebreaker fixtures carry their immutable round identity here. */
+  bracketSlot?: string | null;
+  bestOf?: number;
   homeTeamId: string;
   awayTeamId: string;
   status: string;
@@ -39,11 +42,13 @@ export type TeamStanding = {
    * head-to-head mini-table all tied. Set only when true (never false), so
    * comparisons against rows built without the field still hold. The id keeps
    * the sort deterministic, but a fully-tied pair straddling a playoff cut or
-   * a seed line is a coin flip the league should SEE, not discover.
+   * a seed line requires an extra tiebreaker round before playoffs can start.
    */
   idDecided?: boolean;
   /** Stable identifier for every row in the same fully unresolved tie. */
   idTieGroup?: string;
+  /** Playoff order was settled by an extra tiebreaker round. */
+  tiebreakerResolved?: boolean;
 };
 
 /**

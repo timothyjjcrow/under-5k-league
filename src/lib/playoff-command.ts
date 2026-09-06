@@ -82,7 +82,7 @@ export function playoffSetupRevision(input: {
       games: [...match.games]
         .map((game) => ({ id: game.id, dotaMatchId: game.dotaMatchId }))
         .sort((a, b) => a.id.localeCompare(b.id)),
-      // Only postseason dependents are teardown inputs. Regular-season RSVPs,
+      // Extra-fixture dependents are teardown inputs. Regular-season RSVPs,
       // picks, cover, and proposals survive every playoff command and should
       // not make a harmless match-night update stale an admin's Start form.
       dependents:

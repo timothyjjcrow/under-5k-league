@@ -16,6 +16,8 @@ import {
 } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
+import { TiebreakerNotice } from "@/components/tiebreaker-notice";
+import { regularSeasonStatus } from "@/lib/schedule-status";
 import { type ScenarioReport } from "@/lib/scenarios";
 import {
   bracketRounds,
@@ -370,7 +372,9 @@ export default async function Home() {
       <RegularSeasonProgress progress={leagueProgress(matches, progressNow)} />
     );
   } else if (season.status === "PLAYOFFS") {
-    const playoff = matches.filter((m) => m.phase !== "REGULAR");
+    const playoff = matches.filter(
+      (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+    );
     const inBracket = new Set(
       playoff.flatMap((m) => [m.homeTeamId, m.awayTeamId]),
     );
@@ -1862,7 +1866,9 @@ async function SeasonView({
       ? myOpen.find((m) => m.id === myScenario.nextMatchId)
       : undefined) ?? [...myOpen].sort(byKickoff)[0];
 
-  const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
+  const playoffMatches = matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
   const bracketRoundsView = buildBracketRounds(
     playoffMatches,
     teamName,
@@ -1958,6 +1964,14 @@ async function SeasonView({
     <div className="space-y-6">
       {/* During playoffs the bracket IS the story — it leads, and the
           regular-season standings drop below as context. */}
+      {season.status === "REGULAR_SEASON" ? (
+        <TiebreakerNotice
+          projection={playoffField}
+          teams={teams}
+          regularComplete={regularSeasonStatus(matches).allComplete}
+          hasTiebreakers={matches.some((m) => m.phase === "TIEBREAKER")}
+        />
+      ) : null}
       {showBracket ? (
         // overflow-hidden on the CARD: Bracket's root is `overflow-x-auto` over
         // a `min-w-max` row, and Chrome propagates that inner width into the
@@ -2062,6 +2076,7 @@ async function SeasonView({
                     : undefined
                 }
                 playoffSeedByTeam={playoffField.seedByTeam}
+                unresolvedPlayoffTeamIds={playoffField.seedingDeadHeatTeamIds}
                 clinch={clinchFromReport(report)}
                 viewerTeamId={myTeam?.id}
                 movement={standingsMovement(
@@ -3099,7 +3114,9 @@ function CompleteBracket({
   teamLogoUrl: Map<string, string | null>;
   championTeamId: string | null;
 }) {
-  const playoffMatches = matches.filter((m) => m.phase !== "REGULAR");
+  const playoffMatches = matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
   const rounds = buildBracketRounds(
     playoffMatches,
     teamName,

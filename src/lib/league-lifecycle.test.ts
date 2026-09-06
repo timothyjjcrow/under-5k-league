@@ -9,6 +9,7 @@ import {
   matchCheckinOpen,
   matchLogisticsOpen,
   matchResultsOpen,
+  isPlayoffPhase,
   postAuctionWorkOpen,
   standinAssignmentOpen,
 } from "./league-lifecycle";
@@ -156,6 +157,7 @@ describe("standinAssignmentOpen", () => {
 describe("matchResultsOpen", () => {
   it.each([
     [SEASON_STATUS.REGULAR_SEASON, MATCH_PHASE.REGULAR],
+    [SEASON_STATUS.REGULAR_SEASON, MATCH_PHASE.TIEBREAKER],
     [SEASON_STATUS.PLAYOFFS, MATCH_PHASE.PLAYOFF],
     [SEASON_STATUS.PLAYOFFS, MATCH_PHASE.FINAL],
   ])("allows %s results for %s fixtures", (season, match) => {
@@ -168,7 +170,22 @@ describe("matchResultsOpen", () => {
     [SEASON_STATUS.PLAYOFFS, MATCH_PHASE.REGULAR],
     [SEASON_STATUS.REGULAR_SEASON, MATCH_PHASE.PLAYOFF],
     [SEASON_STATUS.COMPLETE, MATCH_PHASE.FINAL],
+    [SEASON_STATUS.PLAYOFFS, MATCH_PHASE.TIEBREAKER],
+    [SEASON_STATUS.COMPLETE, MATCH_PHASE.TIEBREAKER],
+    [SEASON_STATUS.DRAFT, MATCH_PHASE.TIEBREAKER],
+    [SEASON_STATUS.PLAYOFFS, "UNKNOWN"],
   ])("blocks %s results for %s fixtures", (season, match) => {
     expect(matchResultsOpen(season, match)).toBe(false);
+  });
+});
+
+
+describe("isPlayoffPhase", () => {
+  it("keeps pre-playoff tiebreakers outside bracket advancement", () => {
+    expect(isPlayoffPhase(MATCH_PHASE.TIEBREAKER)).toBe(false);
+    expect(isPlayoffPhase(MATCH_PHASE.REGULAR)).toBe(false);
+    expect(isPlayoffPhase(MATCH_PHASE.PLAYOFF)).toBe(true);
+    expect(isPlayoffPhase(MATCH_PHASE.FINAL)).toBe(true);
+    expect(isPlayoffPhase("UNKNOWN")).toBe(false);
   });
 });

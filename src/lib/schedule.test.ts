@@ -437,9 +437,11 @@ describe("matchPhaseLabel / matchPhaseAbbrev", () => {
     expect(matchPhaseLabel("REGULAR", 3)).toBe("Week 3");
     expect(matchPhaseLabel("PLAYOFF", 9)).toBe("Playoffs");
     expect(matchPhaseLabel("FINAL", 10)).toBe("Grand final");
+    expect(matchPhaseLabel("TIEBREAKER", 8)).toBe("Tiebreaker week 8");
     expect(matchPhaseAbbrev("REGULAR", 3)).toBe("W3");
     expect(matchPhaseAbbrev("PLAYOFF", 9)).toBe("PO");
     expect(matchPhaseAbbrev("FINAL", 10)).toBe("GF");
+    expect(matchPhaseAbbrev("TIEBREAKER", 8)).toBe("TB");
   });
 });
 
@@ -518,10 +520,11 @@ describe("focusSlate", () => {
 
   it("takes every open bracket match during playoffs, whatever the week", () => {
     const { slate, title } = focusSlate("PLAYOFFS", [
-      m("r1", 9, "COMPLETED", "SEMI"),
-      m("r2", 9, "SCHEDULED", "SEMI"),
+      m("r1", 9, "COMPLETED", "PLAYOFF"),
+      m("r2", 9, "SCHEDULED", "PLAYOFF"),
       m("f", 10, "SCHEDULED", "FINAL"),
       m("reg", 5, "SCHEDULED", "REGULAR"),
+      m("tb", 8, "SCHEDULED", "TIEBREAKER"),
     ]);
     expect(slate.map((x) => x.id)).toEqual(["r2", "f"]);
     expect(title).toBe("The round in progress");
@@ -533,6 +536,17 @@ describe("focusSlate", () => {
       m("b", 2, "COMPLETED"),
     ]);
     expect(slate).toEqual([]);
+  });
+
+  it("shows the next tiebreaker week after regular-season results are complete", () => {
+    const { slate, title } = focusSlate("REGULAR_SEASON", [
+      m("regular", 5, "COMPLETED"),
+      m("tb-done", 6, "COMPLETED", "TIEBREAKER"),
+      m("tb-live", 6, "LIVE", "TIEBREAKER"),
+      m("tb-later", 7, "SCHEDULED", "TIEBREAKER"),
+    ]);
+    expect(slate.map((match) => match.id)).toEqual(["tb-live"]);
+    expect(title).toBe("Tiebreaker week · Week 6");
   });
 
   // The dedupe contract: whatever the slate holds, the "coming up" list is the

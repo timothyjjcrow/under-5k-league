@@ -109,6 +109,29 @@ describe("adminNextStep — draft", () => {
 });
 
 describe("adminNextStep — regular season", () => {
+  it("requires a tiebreaker week for unresolved playoff qualification or seeds", () => {
+    const result = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      scheduledRegularCount: 15,
+      unresolvedPlayoffTieCount: 2,
+    });
+    expect(result.title).toMatch(/schedule a tiebreaker week/i);
+    expect(result.detail).toMatch(/best-of-three/);
+  });
+
+  it("waits for scheduled tiebreaker results before prompting playoffs", () => {
+    const result = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      scheduledRegularCount: 15,
+      unresolvedPlayoffTieCount: 2,
+      pendingTiebreakerResults: 1,
+    });
+    expect(result.title).toMatch(/Tiebreaker week.*1 result/);
+    expect(result.tone).toBe("waiting");
+  });
+
   it("asks for a schedule before anything else", () => {
     expect(at({ seasonStatus: SEASON_STATUS.REGULAR_SEASON }).title).toMatch(
       /generate the schedule/i,
