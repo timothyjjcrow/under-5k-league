@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { TiebreakerNotice } from "./tiebreaker-notice";
 import { projectPlayoffField } from "@/lib/playoff-field";
+import { scenarioReport } from "@/lib/scenarios";
 
 const teams = [
   { id: "a", name: "Alpha" },
@@ -21,6 +22,25 @@ const render = (props: Partial<Parameters<typeof TiebreakerNotice>[0]> = {}) =>
   );
 
 describe("public tiebreaker notice", () => {
+  it("describes only seeding after the third-place team is eliminated", () => {
+    const threeTeams = [...teams, { id: "c", name: "Charlie" }];
+    const field = projectPlayoffField(threeTeams, []);
+    const report = scenarioReport(field.eligibleStandings, [], 2);
+    report.forecast = { basis: "final", total: 1 };
+    for (const [id, scenario] of report.teams) {
+      scenario.outlook = {
+        total: 1, qualified: id === "c" ? 0 : 1,
+        qualificationTiebreaker: 0, eliminated: id === "c" ? 1 : 0,
+        seedingTiebreaker: id === "c" ? 0 : 1,
+        bestRank: id === "c" ? 3 : 1, worstRank: id === "c" ? 3 : 2,
+        qualificationTies: [],
+      };
+    }
+    const html = render({ teams: threeTeams, projection: field, report, hasTiebreakers: true });
+    expect(html).toContain("Alpha, Bravo have qualified; their seeding tiebreaker decides playoff order.");
+    expect(html).not.toContain("Charlie");
+    expect(html).not.toContain("need a qualification tiebreaker");
+  });
   it("keeps provisional in-season ties quiet until regular results are complete", () => {
     expect(render({ regularComplete: false })).toBe("");
   });

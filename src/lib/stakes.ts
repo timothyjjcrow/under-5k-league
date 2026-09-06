@@ -5,7 +5,9 @@
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { scenarioReport, type ScenarioMatch, type ScenarioReport } from "./scenarios";
 import { pickBracketSize } from "./schedule";
-import type { ClinchStatus, TeamStanding } from "./standings";
+import type { ClinchStatus, MatchLike, TeamStanding } from "./standings";
+import type { PlayoffFieldProjection } from "./playoff-field";
+import { applyFinalOutlook, applyNormalOutlook, partialTiebreakerStandings } from "./scenario-outlook";
 
 export type StakesMatchRow = {
   id: string;
@@ -16,6 +18,11 @@ export type StakesMatchRow = {
   bestOf: number;
   week: number;
   scheduledAt?: Date | null;
+  homeScore?: number;
+  awayScore?: number;
+  winnerTeamId?: string | null;
+  bracketSlot?: string | null;
+  forfeit?: boolean;
 };
 
 /**
@@ -40,6 +47,8 @@ export function remainingRegular(matches: StakesMatchRow[]): ScenarioMatch[] {
     homeTeamId: m.homeTeamId,
     awayTeamId: m.awayTeamId,
     bestOf: m.bestOf,
+    homeScore: m.homeScore ?? 0,
+    awayScore: m.awayScore ?? 0,
   }));
 }
 
@@ -73,7 +82,20 @@ function memoized(key: string, compute: () => ScenarioReport): ScenarioReport {
   // The report is shared across requests and viewers now, so freeze it: a
   // future caller that patches a status fails loudly here (ESM is strict
   // mode) instead of leaking one viewer's edit into another's page.
-  for (const s of report.teams.values()) Object.freeze(s);
+  const freezeOutlook = (outlook: NonNullable<import("./scenarios").TeamScenario["outlook"]>) => {
+    for (const tie of outlook.qualificationTies) { Object.freeze(tie.teamIds); Object.freeze(tie); }
+    Object.freeze(outlook.qualificationTies);
+    Object.freeze(outlook);
+  };
+  for (const s of report.teams.values()) {
+    if (s.outlook) freezeOutlook(s.outlook);
+    if (s.paths) {
+      for (const path of Object.values(s.paths)) if (path) freezeOutlook(path);
+      Object.freeze(s.paths);
+    }
+    Object.freeze(s);
+  }
+  if (report.forecast) Object.freeze(report.forecast);
   Object.freeze(report);
   memo.set(key, report);
   if (memo.size > MEMO_MAX) {
@@ -93,18 +115,46 @@ export function seasonScenarioReport(
   standings: TeamStanding[],
   matches: StakesMatchRow[],
   teamCount: number,
+  field?: PlayoffFieldProjection,
 ): ScenarioReport | null {
   if (teamCount === 0) return null;
-  const cut = pickBracketSize(teamCount);
-  if (cut >= teamCount) return null;
+  const cut = field?.bracketSize ?? pickBracketSize(teamCount);
+  if (cut === 0 || (!field && cut >= teamCount)) return null;
   const remaining = remainingRegular(matches);
   // Stringify the WHOLE input rather than a hand-picked projection of the
   // fields the engine happens to read today: adding a field to TeamStanding or
   // ScenarioMatch can then never silently stale the cache. Both are plain JSON
   // (remainingRegular strips scheduledAt), and ~8 rows + ~11 matches is
   // microseconds against a 60ms enumeration.
-  const key = JSON.stringify([cut, teamCount, standings, remaining]);
-  return memoized(key, () => scenarioReport(standings, remaining, cut));
+  const key = JSON.stringify([cut, teamCount, standings, remaining,
+    field && [field.standings, field.eligibleStandings, field.tiebreakers, matches]]);
+  return memoized(key, () => {
+    const report = scenarioReport(standings, remaining, cut);
+    if (!field) return report;
+    if (field.tiebreakers.error) {
+      if (remaining.length === 0) for (const team of report.teams.values()) {
+        team.status = null;
+        team.magicNumber = null;
+        team.eliminationLosses = null;
+        team.exact = false;
+        team.madeCount = null;
+        team.leafCount = null;
+      }
+      report.exact = false;
+      return report;
+    }
+    if (remaining.length === 0) {
+      applyFinalOutlook(report, partialTiebreakerStandings(
+        field.eligibleStandings, field.tiebreakers.groups, matches as MatchLike[],
+      ));
+    } else if (matches.every((m) => m.phase !== MATCH_PHASE.REGULAR ||
+      m.status !== MATCH_STATUS.COMPLETED ||
+      (typeof m.homeScore === "number" && typeof m.awayScore === "number" && m.winnerTeamId !== undefined))) {
+      applyNormalOutlook(report, field.standings.map((row) => row.teamId),
+        matches as MatchLike[], remaining);
+    }
+    return report;
+  });
 }
 
 /**

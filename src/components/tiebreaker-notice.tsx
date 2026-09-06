@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { PlayoffFieldProjection } from "@/lib/playoff-field";
+import type { ScenarioReport } from "@/lib/scenarios";
 
 /** The playoff order is provisional until every required extra series is final. */
 export function TiebreakerNotice({
@@ -7,16 +8,22 @@ export function TiebreakerNotice({
   teams,
   regularComplete,
   hasTiebreakers,
+  report,
   scheduleLink = true,
 }: {
   projection: PlayoffFieldProjection;
   teams: { id: string; name: string }[];
   regularComplete: boolean;
   hasTiebreakers: boolean;
+  report?: ScenarioReport | null;
   scheduleLink?: boolean;
 }) {
   if (!regularComplete && !hasTiebreakers) return null;
-  const unresolved = projection.seedingDeadHeatTeamIds;
+  const finalTeams = report?.forecast?.basis === "final" ? report.teams : null;
+  const unresolved = projection.seedingDeadHeatTeamIds.filter((id) => {
+    const outlook = finalTeams?.get(id)?.outlook;
+    return !outlook || outlook.qualificationTiebreaker > 0 || outlook.seedingTiebreaker > 0;
+  });
   if (
     unresolved.length === 0 &&
     !hasTiebreakers &&
@@ -24,6 +31,23 @@ export function TiebreakerNotice({
   )
     return null;
   const names = new Map(teams.map((team) => [team.id, team.name]));
+  const qualificationIds = unresolved.filter((id) => {
+    const outlook = finalTeams?.get(id)?.outlook;
+    if (outlook) return outlook.qualificationTiebreaker > 0;
+    const group = projection.eligibleStandings.find((row) => row.teamId === id)?.idTieGroup;
+    return projection.eligibleStandings.some((row, index) =>
+      row.idTieGroup === group && index >= projection.bracketSize,
+    );
+  });
+  const seedingIds = unresolved.filter((id) => !qualificationIds.includes(id));
+  const tieSummary = [
+    qualificationIds.length > 0
+      ? `${qualificationIds.map((id) => names.get(id) ?? id).join(", ")} need a qualification tiebreaker.`
+      : "",
+    seedingIds.length > 0
+      ? `${seedingIds.map((id) => names.get(id) ?? id).join(", ")} have qualified; their seeding tiebreaker decides playoff order.`
+      : "",
+  ].filter(Boolean).join(" ");
   const hasThreeTeamBracket = projection.tiebreakers.groups.some(
     (group) => group.format === "BO1_DOUBLE_ELIMINATION",
   );
@@ -44,7 +68,7 @@ export function TiebreakerNotice({
         {projection.tiebreakers.error
           ? "The tiebreaker fixtures need an administrator's review before the playoff bracket can start."
           : unresolved.length > 0
-            ? `${unresolved.map((id) => names.get(id) ?? id).join(", ")} are tied for playoff qualification or seeding. ${projection.tiebreakers.pending ? "The scheduled tiebreaker matches must finish before playoffs begin." : "The remaining tiebreaker matches must be scheduled before playoffs begin."}`
+            ? `${tieSummary} ${projection.tiebreakers.pending ? "The scheduled tiebreaker matches must finish before playoffs begin." : "The remaining tiebreaker matches must be scheduled before playoffs begin."}`
             : "The extra results have settled playoff qualification and seeding. The playoff bracket can now be started by an administrator."}{" "}
         Regular-season points stay the same.
       </p>

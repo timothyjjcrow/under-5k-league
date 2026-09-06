@@ -4,13 +4,17 @@
 // standings scoring exactly (3 pts series win, 1 draw, 0 loss) and its
 // tiebreaker-agnostic philosophy: a team is only "in" if it's in even when
 // every tie counts against it, and only "out" if it's out even when every tie
-// counts for it. EVERY match enumerates a draw branch regardless of bestOf
+// counts for it. An unstarted match includes a draw branch regardless of bestOf
 // parity — recordResult accepts drawn/abandoned scores (1-1 Bo3, 0-0 Bo1) for
 // regular matches, so "exact" must cover them or a CLINCHED team could still
-// miss the cut. Never contradicts a non-null clinchStatuses result —
+// miss the cut. Live results constrain outcomes to preserve recorded game wins.
+// Never contradicts a non-null clinchStatuses result —
 // enumeration can only turn null into certainty.
 
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { possibleSeriesOutcomes } from "./series-outcomes";
+import type { ScenarioOutlook, ScenarioPaths } from "./scenario-outlook";
+export type { ScenarioOutlook, ScenarioPaths, ScenarioResult } from "./scenario-outlook";
 import {
   clinchStatuses,
   type ClinchStatus,
@@ -24,6 +28,8 @@ export type ScenarioMatch = {
   awayTeamId: string;
   /** Kept for context/labels; any series can end drawn (partial/forfeit). */
   bestOf: number;
+  homeScore?: number;
+  awayScore?: number;
 };
 
 export type TeamScenario = {
@@ -82,12 +88,16 @@ export type TeamScenario = {
    * pinning a "win and in" line on a specific match page.
    */
   nextMatchId: string | null;
+  /** Explicitly scoped normal-series forecast, or actual final ordering. */
+  outlook?: ScenarioOutlook;
+  paths?: ScenarioPaths;
 };
 
 export type ScenarioReport = {
   cut: number;
   exact: boolean;
   teams: Map<string, TeamScenario>;
+  forecast?: { basis: "normal_series" | "final"; total: number };
 };
 
 const DEFAULT_CAP = 200000;
@@ -114,6 +124,7 @@ export function scenarioReport(
   );
 
   const banked = standings.map((s) => s.points);
+  const possible = matches.map(possibleSeriesOutcomes);
   const remCount = new Array<number>(n).fill(0);
   const nextMatch = new Array<number | null>(n).fill(null);
   const mHome: number[] = [];
@@ -129,6 +140,8 @@ export function scenarioReport(
     if (nextMatch[a] === null) nextMatch[a] = i;
   });
   const maxPts = banked.map((p, i) => p + 3 * remCount[i]);
+  const possibleWins = standings.map((_, t) => matches.filter((_, i) =>
+    (mHome[i] === t && possible[i].includes(0)) || (mAway[i] === t && possible[i].includes(1))).length);
 
   // ---- Layer 1: pure points bounds, no enumeration ----
   const bounds = standings.map((_, t) => {
@@ -137,7 +150,7 @@ export function scenarioReport(
     // conservative, no head-to-head deduction). k=0 matches clinchStatuses'
     // CLINCHED test exactly.
     let magicNumber: number | null = null;
-    for (let k = 0; k <= remCount[t]; k++) {
+    for (let k = 0; k <= possibleWins[t]; k++) {
       let couldCatch = 0;
       for (let o = 0; o < n; o++) {
         if (o !== t && maxPts[o] >= banked[t] + 3 * k) couldCatch++;
@@ -180,8 +193,8 @@ export function scenarioReport(
         const oMin = o === opp ? banked[o] + 3 : banked[o];
         if (oMin > maxPts[t] - 3) certainlyAhead++;
       }
-      winAndIn = couldCatch <= cut - 1;
-      loseAndOut = certainlyAhead >= cut;
+      winAndIn = possible[mi].includes(mHome[mi] === t ? 0 : 1) && couldCatch <= cut - 1;
+      loseAndOut = possible[mi].includes(mHome[mi] === t ? 1 : 0) && certainlyAhead >= cut;
     }
 
     let bestRank = 1;
@@ -203,14 +216,13 @@ export function scenarioReport(
   });
 
   // ---- Layer 2: exact enumeration when the outcome tree is small enough ----
-  // Three outcomes per match — home win / away win / draw. The draw branch is
-  // unconditional: recordResult lets a regular series of ANY length complete
-  // drawn (1-1 Bo3 forfeit, 0-0 abandonment), and "exact" claims must survive
-  // every recordable result.
+  // Enumerate every recordable outcome that preserves current game wins,
+  // including partial draws/forfeits for odd series. This is broader than the
+  // separate forecast that assumes every remaining series plays to completion.
   let leafBudget = 1;
   let withinCap = true;
   for (let i = 0; i < matches.length; i++) {
-    leafBudget *= 3;
+    leafBudget *= possible[i].length;
     if (leafBudget > cap) {
       withinCap = false;
       break;
@@ -272,20 +284,16 @@ export function scenarioReport(
       }
       const h = mHome[i];
       const a = mAway[i];
-      outcome[i] = 0; // home win
-      delta[h] += 3;
-      dfs(i + 1);
-      delta[h] -= 3;
-      outcome[i] = 1; // away win
-      delta[a] += 3;
-      dfs(i + 1);
-      delta[a] -= 3;
-      outcome[i] = 2; // draw — recordable for any series length
-      delta[h] += 1;
-      delta[a] += 1;
-      dfs(i + 1);
-      delta[h] -= 1;
-      delta[a] -= 1;
+      for (const result of possible[i]) {
+        outcome[i] = result;
+        const homePoints = result === 0 ? 3 : result === 2 ? 1 : 0;
+        const awayPoints = result === 1 ? 3 : result === 2 ? 1 : 0;
+        delta[h] += homePoints;
+        delta[a] += awayPoints;
+        dfs(i + 1);
+        delta[h] -= homePoints;
+        delta[a] -= awayPoints;
+      }
       outcome[i] = -1;
     };
     dfs(0);
@@ -300,9 +308,9 @@ export function scenarioReport(
         teamId: s.teamId,
         status,
         winAndIn:
-          nextMatch[t] !== null && winOk[t] && status !== "CLINCHED",
+          nextMatch[t] !== null && possible[nextMatch[t]!].includes(mHome[nextMatch[t]!] === t ? 0 : 1) && winOk[t] && status !== "CLINCHED",
         loseAndOut:
-          nextMatch[t] !== null && loseOk[t] && status !== "ELIMINATED",
+          nextMatch[t] !== null && possible[nextMatch[t]!].includes(mHome[nextMatch[t]!] === t ? 1 : 0) && loseOk[t] && status !== "ELIMINATED",
         magicNumber: bounds[t].magicNumber,
         eliminationLosses: bounds[t].eliminationLosses,
         bestRank: bestRank[t],

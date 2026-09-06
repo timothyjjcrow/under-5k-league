@@ -1,3 +1,4 @@
+import type { ScenarioReport } from "@/lib/scenarios";
 import type { computeStandings, ClinchStatus } from "@/lib/standings";
 import type { FormResult } from "@/lib/team-matches";
 import { StandingsTableClient, type StandingsRowView } from "./standings-table";
@@ -19,6 +20,7 @@ export function StandingsTable({
   formByTeam,
   playoffCut,
   clinch,
+  playoffScenarios,
   viewerTeamId,
   movement,
   totalTeams,
@@ -36,6 +38,8 @@ export function StandingsTable({
   playoffCut?: number;
   /** Per-team clinched/eliminated verdicts (see clinchStatuses). */
   clinch?: Map<string, ClinchStatus>;
+  /** Authoritative final classification only (report.forecast.basis === "final"). */
+  playoffScenarios?: ScenarioReport["teams"];
   /** The signed-in viewer's team — its row gets a subtle highlight. */
   viewerTeamId?: string | null;
   /** Weekly rank movement (see standingsMovement). */
@@ -63,7 +67,28 @@ export function StandingsTable({
   const cutIsReal =
     playoffCut != null && playoffCut > 0 && playoffCut < eligibleFieldSize;
   const pendingTeamIds = new Set(unresolvedPlayoffTeamIds);
-  const rows: StandingsRowView[] = standings.map((s, i) => ({
+  const eligibleRows = standings.filter((row) => !withdrawnIds?.has(row.teamId));
+  const qualificationTieIds = new Set<string>();
+  for (const row of eligibleRows) {
+    if (!pendingTeamIds.has(row.teamId)) continue;
+    const tied = row.idTieGroup
+      ? eligibleRows.filter((other) => other.idTieGroup === row.idTieGroup)
+      : [row];
+    // A pending seed order must not erase an already secured playoff place.
+    // A group crossing the cut still cannot inherit a stale clinch verdict.
+    if (tied.some((other) => eligibleRows.indexOf(other) >= (playoffCut ?? 0)))
+      tied.forEach((other) => qualificationTieIds.add(other.teamId));
+  }
+  const rows: StandingsRowView[] = standings.map((s, i) => {
+    const outlook = playoffScenarios?.get(s.teamId)?.outlook;
+    const confirmedIn = !!outlook && outlook.qualified === outlook.total;
+    const confirmedOut = !!outlook && outlook.eliminated === outlook.total;
+    const pending = pendingTeamIds.has(s.teamId) && !confirmedOut &&
+      (!outlook || outlook.qualificationTiebreaker > 0 || outlook.seedingTiebreaker > 0);
+    const seedPending = pending && (outlook
+      ? confirmedIn && outlook.seedingTiebreaker > 0
+      : !qualificationTieIds.has(s.teamId));
+    return ({
     teamId: s.teamId,
     name: teamName.get(s.teamId) ?? "—",
     logoUrl: teamLogoUrl?.get(s.teamId) ?? null,
@@ -74,18 +99,21 @@ export function StandingsTable({
     gameDiff: s.gameDiff,
     points: s.points,
     form: formByTeam ? (formByTeam.get(s.teamId) ?? []) : null,
-    clinch: cutIsReal && !pendingTeamIds.has(s.teamId)
-      ? (clinch?.get(s.teamId) ?? null)
+    clinch: cutIsReal || pending
+      ? confirmedIn ? "CLINCHED" : confirmedOut ? "ELIMINATED"
+        : pending && !seedPending ? null : (clinch?.get(s.teamId) ?? null)
       : null,
     move: movement?.get(s.teamId) ?? 0,
-    idDecided: s.idDecided ?? false,
+    idDecided: !confirmedOut && (s.idDecided ?? false),
     tiebreakerResolved: s.tiebreakerResolved ?? false,
-    tiebreakerPending: pendingTeamIds.has(s.teamId) && !withdrawnIds?.has(s.teamId),
+    tiebreakerPending: pending && !withdrawnIds?.has(s.teamId),
+    seedingTiebreakerPending: seedPending,
     withdrawn: withdrawnIds?.has(s.teamId) ?? false,
-    playoffSeed: pendingTeamIds.has(s.teamId)
+    playoffSeed: pending || confirmedOut
       ? null
       : playoffSeedByTeam?.get(s.teamId) ?? null,
-  }));
+  });
+  });
   return (
     <StandingsTableClient
       rows={rows}

@@ -85,6 +85,24 @@ async function main() {
       ? `Tiebreaker fixture ready: ${teams.slice(2, 5).map((team) => team.name).join(", ")} tied for third through fifth.`
       : `Tiebreaker fixture ready: ${teams[3].name} and ${teams[4].name} tied for the fourth playoff place.`,
   );
+  if (process.argv.includes("--live")) {
+    const live = await prisma.match.findFirstOrThrow({
+      where: {
+        seasonId: season.id,
+        homeTeamId: { in: ids.slice(3, 5) },
+        awayTeamId: { in: ids.slice(3, 5) },
+      },
+    });
+    await prisma.match.update({
+      where: { id: live.id },
+      data: { status: "LIVE", homeScore: 1, awayScore: 0, winnerTeamId: null },
+    });
+    console.log(JSON.stringify({
+      liveMatchId: live.id,
+      homeTeamId: live.homeTeamId,
+      awayTeamId: live.awayTeamId,
+    }));
+  }
 }
 
 main().finally(() => prisma.$disconnect());
