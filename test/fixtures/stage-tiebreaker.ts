@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { prisma } from "@/lib/prisma";
 import { assertExpectedFixtureDatabase } from "@/lib/fixture-database";
 import { roundRobin } from "@/lib/schedule";
@@ -8,6 +9,15 @@ async function main() {
     ["postseason"],
     "stage the playoff-cut tiebreaker browser fixture",
   );
+  // The full postseason suite ends by opening a new, empty active season.
+  // Rebuild this test's baseline every time so neither that handoff nor a
+  // previous tiebreaker test can supply its teams, settings or results.
+  // Keep the exact dedicated-database guard above the destructive reseed.
+  execFileSync(process.execPath, ["--import", "tsx", "e2e-postseason/seed.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, FIXTURE_MODE: "playoffs", FIXTURE_TEAMS: "8" },
+    stdio: "pipe",
+  });
   const season = await prisma.season.findFirstOrThrow({
     where: { isActive: true },
   });
