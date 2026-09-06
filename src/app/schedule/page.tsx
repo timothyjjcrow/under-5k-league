@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
+import { TiebreakerNotice } from "@/components/tiebreaker-notice";
 import type { ScenarioReport } from "@/lib/scenarios";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
@@ -338,7 +339,10 @@ export default async function SchedulePage() {
       : null;
 
   const regular = matches.filter((m) => m.phase === "REGULAR");
-  const playoff = matches.filter((m) => m.phase !== "REGULAR");
+  const tiebreakers = matches.filter((m) => m.phase === "TIEBREAKER");
+  const playoff = matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
   const status = regularSeasonStatus(matches);
   const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
@@ -456,6 +460,28 @@ export default async function SchedulePage() {
   // counts, standin lines, or reschedule chips. groupPlayoffRounds only holds
   // real matches, so TBD slots never render a row.
   const playoffGrouping = groupPlayoffRounds(playoff);
+  const tiebreakerWeeks = [...new Set(tiebreakers.map((m) => m.week))].sort(
+    (a, b) => a - b,
+  );
+  const currentTiebreakerWeek = tiebreakerWeeks.find((week) =>
+    tiebreakers.some((m) => m.week === week && m.status !== "COMPLETED"),
+  );
+  const tiebreakerWeekViews: WeekView[] = tiebreakerWeeks.map((week) => {
+    const weekMatches = tiebreakers.filter((m) => m.week === week);
+    const night = earliestScheduled(weekMatches);
+    return {
+      week,
+      label: `Tiebreaker week · Week ${week} · ${weekMatches.every((match) => match.bestOf === 1) ? "Best of 1" : weekMatches.every((match) => match.bestOf === 3) ? "Best of 3" : "Best of 1 / Best of 3"}`,
+      completed: weekMatches.filter((m) => m.status === "COMPLETED").length,
+      total: weekMatches.length,
+      isCurrent: week === currentTiebreakerWeek,
+      isOverdue: false,
+      matches: weekMatches.map(toMatchView),
+      byes: [],
+      nightTs: night?.getTime() ?? null,
+      nightInitial: night ? formatMatchTime(night, "date") : null,
+    };
+  });
   const playoffRoundViews: WeekView[] = playoffGrouping.rounds.map((r) => {
     const night = earliestScheduled(r.matches);
     return {
@@ -596,7 +622,7 @@ export default async function SchedulePage() {
       {myNextMatch ? (
         <CheckinBanner
           matchId={myNextMatch.id}
-          heading={`Your next match — Week ${myNextMatch.week}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
+          heading={`Your next match — ${myNextMatch.phase === "TIEBREAKER" ? "Tiebreaker week · " : ""}Week ${myNextMatch.week}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
           when={fmtWhen(myNextMatch.scheduledAt)}
           whenTs={myNextMatch.scheduledAt?.getTime()}
           myRsvp={myRsvp}
@@ -666,6 +692,38 @@ export default async function SchedulePage() {
       ) : null}
 
       {postseasonSection}
+
+      {tiebreakers.length > 0 ||
+      (status.allComplete && playoffField.seedingDeadHeatTeamIds.length > 0) ? (
+        <section id="tiebreakers" className="scroll-mt-24 space-y-4">
+          <SectionTitle>Tiebreaker week</SectionTitle>
+          {season.status === "REGULAR_SEASON" ? (
+            <TiebreakerNotice
+              projection={playoffField}
+              teams={teams}
+              regularComplete={status.allComplete}
+              hasTiebreakers={tiebreakers.length > 0}
+              scheduleLink={false}
+            />
+          ) : null}
+          {tiebreakerWeekViews.length > 0 ? (
+            <ScheduleWeeks
+              weeks={tiebreakerWeekViews}
+              teams={teams.map((team) => ({
+                id: team.id,
+                name: team.name,
+                logoUrl: team.logoUrl,
+              }))}
+              initialTeamId={[...myTeamIds][0]}
+            />
+          ) : (
+            <p className="text-sm text-muted">
+              An administrator will schedule the required tiebreaker matches
+              before the playoff bracket starts.
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <div id="fixtures" className="scroll-mt-24 space-y-8">
         <section className="space-y-4">
@@ -754,6 +812,7 @@ export default async function SchedulePage() {
                 : undefined
             }
             playoffSeedByTeam={playoffField.seedByTeam}
+            unresolvedPlayoffTeamIds={playoffField.seedingDeadHeatTeamIds}
             clinch={clinchFromReport(stakesReport)}
             viewerTeamId={[...myTeamIds][0]}
             movement={standingsMovement(
@@ -777,6 +836,8 @@ export default async function SchedulePage() {
             teamName={teamName}
             teamLogoUrl={teamLogoUrl}
             report={stakesReport}
+            unresolvedTeamIds={playoffField.seedingDeadHeatTeamIds}
+            tiebreakerError={playoffField.tiebreakers.error}
           />
           <RunIn
             standings={playoffField.eligibleStandings}
@@ -981,16 +1042,23 @@ function PlayoffPicture({
   teamName,
   teamLogoUrl,
   report,
+  unresolvedTeamIds,
+  tiebreakerError,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
   teamLogoUrl: Map<string, string | null>;
   report: ScenarioReport | null;
+  unresolvedTeamIds: string[];
+  tiebreakerError: string | null;
 }) {
   const order = standings.map((s) => s.teamId);
   const size = pickBracketSize(order.length);
   const seedOf = new Map(order.slice(0, size).map((id, i) => [id, i + 1]));
-  const pairings = playoffFirstRound(order, size);
+  const pairings =
+    unresolvedTeamIds.length > 0 || tiebreakerError
+      ? []
+      : playoffFirstRound(order, size);
 
   // One line per team whose fate is still open — what tonight/this week means.
   const raceNotes = order
@@ -1041,6 +1109,21 @@ function PlayoffPicture({
         subtitle="First-round matchups if the season ended today"
       />
       <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {tiebreakerError ? (
+          <p className="text-sm text-muted sm:col-span-2">
+            An administrator must review the tiebreaker fixtures before playoff
+            matchups can be confirmed.
+          </p>
+        ) : null}
+        {unresolvedTeamIds.length > 0 ? (
+          <p className="text-sm text-muted sm:col-span-2">
+            Playoff matchups are provisional:{" "}
+            {unresolvedTeamIds.map((id) => teamName.get(id) ?? id).join(", ")}{" "}
+            are tied. If the normal standings tiebreaks remain equal after the
+            regular season, a tiebreaker week settles
+            qualification and seeding.
+          </p>
+        ) : null}
         {pairings.map((p, index) => (
           <div
             key={p.home}

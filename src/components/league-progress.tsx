@@ -157,6 +157,13 @@ export function RegularSeasonProgress({ progress }: { progress: Progress }) {
             <span className="mx-1 text-muted/70">/</span>
             <span className="tabular-nums">{progress.total}</span> series final
           </p>
+          {progress.tiebreakerTotal > 0 ? (
+            <p className="mt-2 text-xs text-accent">
+              {progress.tiebreakerPending > 0
+                ? `Tiebreaker week${progress.tiebreakerFocusWeek != null ? ` ${progress.tiebreakerFocusWeek}` : ""} · ${progress.tiebreakerPending} tiebreaker result(s) pending`
+                : `${progress.tiebreakerCompleted} tiebreaker series complete`}
+            </p>
+          ) : null}
           {states.length > 0 ? (
             <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-2 text-xs">
               {states.map((state) => (

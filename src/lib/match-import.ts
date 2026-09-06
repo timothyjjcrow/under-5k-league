@@ -12,6 +12,7 @@ import {
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
 import { advancePlayoffBracket } from "./playoff-service";
+import { advanceTiebreakerWeek } from "./tiebreaker-service";
 import { raceHook } from "./race-hook";
 import { markWeekHonorsStale, maybeAnnounceWeekHonors } from "./honors-service";
 import {
@@ -36,7 +37,11 @@ import {
   MATCH_STATUS,
   SCRIM_STATUS,
 } from "./constants";
-import { matchResultsOpen } from "./league-lifecycle";
+import {
+  isPlayoffPhase,
+  matchResultLockReason,
+  matchResultsOpen,
+} from "./league-lifecycle";
 import {
   announcementDedupeKey,
   claimAnnouncementMarker,
@@ -183,7 +188,8 @@ export async function announceSeriesResultOnce(match: {
       homeScore: current.homeScore,
       awayScore: current.awayScore,
       week: current.week,
-      isPlayoff: current.phase !== MATCH_PHASE.REGULAR,
+      isPlayoff: isPlayoffPhase(current.phase),
+      isTiebreaker: current.phase === MATCH_PHASE.TIEBREAKER,
       forfeit: current.forfeit,
     }),
     undefined,
@@ -700,6 +706,7 @@ export async function recomputeSeries(matchId: string) {
       return;
     }
     won = await prisma.$transaction(async (tx) => {
+      if (await matchResultLockReason(tx, match)) return false;
       const swap = await tx.match.updateMany({
         where: {
           id: matchId,
@@ -771,8 +778,11 @@ export async function recomputeSeries(matchId: string) {
   }
 
   // Advance the playoff bracket only once the series has a decided winner.
-  if (match.phase !== MATCH_PHASE.REGULAR && decided && winnerTeamId) {
+  if (isPlayoffPhase(match.phase) && decided && winnerTeamId) {
     await advancePlayoffBracket(match.seasonId);
+  }
+  if (match.phase === MATCH_PHASE.TIEBREAKER && decided && winnerTeamId) {
+    await advanceTiebreakerWeek(match.seasonId);
   }
   // Once a regular week's last series wraps, its honors go out (idempotent).
   if (match.phase === MATCH_PHASE.REGULAR && decided) {
@@ -825,6 +835,8 @@ export async function importGameForMatch(
         "Results are locked for this fixture in the league's current phase",
     };
   }
+  const resultLock = await matchResultLockReason(prisma, match);
+  if (resultLock) return { ok: false, error: resultLock };
   if (
     options.expectedCaptainId &&
     match.homeTeam.captainId !== options.expectedCaptainId &&
@@ -1071,6 +1083,7 @@ export async function importGameForMatch(
               awayTeamId: true,
               phase: true,
               week: true,
+              bracketSlot: true,
               scheduledAt: true,
               status: true,
               bestOf: true,
@@ -1099,6 +1112,8 @@ export async function importGameForMatch(
               "The league phase or schedule changed — reload before importing",
             );
           }
+          const resultLock = await matchResultLockReason(tx, fresh);
+          if (resultLock) throw new ImportRaceError(resultLock);
           if (
             options.expectedCaptainId &&
             fresh.homeTeam.captainId !== options.expectedCaptainId &&
@@ -1251,7 +1266,7 @@ export async function importGameForMatch(
 
   // External effects are deliberately post-commit: OpenDota data and the
   // series projection are durable even if Discord or bracket reconciliation
-  // has a transient failure. The heartbeat re-runs playoff advancement, while
+  // has a transient failure. The heartbeat re-runs bracket advancement, while
   // failed announcement markers remain claimable by its retry sweep.
   const effects: Promise<unknown>[] = [];
   if (
@@ -1271,11 +1286,18 @@ export async function importGameForMatch(
     );
   }
   if (
-    committed.phase !== MATCH_PHASE.REGULAR &&
+    isPlayoffPhase(committed.phase) &&
     committed.projection.decided &&
     committed.projection.winnerTeamId
   ) {
     effects.push(advancePlayoffBracket(committed.seasonId));
+  }
+  if (
+    committed.phase === MATCH_PHASE.TIEBREAKER &&
+    committed.projection.decided &&
+    committed.projection.winnerTeamId
+  ) {
+    effects.push(advanceTiebreakerWeek(committed.seasonId));
   }
   if (committed.phase === MATCH_PHASE.REGULAR && committed.projection.decided) {
     effects.push(maybeAnnounceWeekHonors(committed.seasonId, committed.week));
@@ -1385,6 +1407,8 @@ export async function autoDetectGamesForMatch(
         "Results are locked for this fixture in the league's current phase",
     };
   }
+  const resultLock = await matchResultLockReason(prisma, match);
+  if (resultLock) return { imported: 0, scanned: 0, error: resultLock };
   if (
     opts.expectedCaptainId &&
     match.homeTeam.captainId !== opts.expectedCaptainId &&

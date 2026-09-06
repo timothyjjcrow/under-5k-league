@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { computeStandings } from "@/lib/standings";
 import { recomputeSeries } from "@/lib/match-import";
 import { createPlayoffBracket } from "@/lib/playoff-service";
+import { projectPlayoffField } from "@/lib/playoff-field";
+import { createTiebreakerWeek, advanceTiebreakerWeek } from "@/lib/tiebreaker-service";
 import { regularSeasonStatus } from "@/lib/schedule-status";
 import { SEASON_STATUS } from "@/lib/constants";
 import {
@@ -125,6 +127,26 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     });
     const regular = await generateRegularSchedule(season.id);
     for (const match of regular) await recordMatch(match.id, 2, 0);
+    const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
+    const field = projectPlayoffField(
+      teams,
+      await prisma.match.findMany({ where: { seasonId: season.id } }),
+    );
+    if (!field.tiebreakers.resolved) {
+      await createTiebreakerWeek(season.id);
+      for (let stage = 0; stage < 5; stage++) {
+        const tiebreakers = await prisma.match.findMany({
+          where: { seasonId: season.id, phase: "TIEBREAKER", status: "SCHEDULED" },
+        });
+        if (!tiebreakers.length) break;
+        for (const match of tiebreakers) await recordMatch(match.id, match.bestOf === 1 ? 1 : 2, 0);
+        await advanceTiebreakerWeek(season.id);
+      }
+      expect(projectPlayoffField(
+        teams,
+        await prisma.match.findMany({ where: { seasonId: season.id } }),
+      ).tiebreakers.resolved).toBe(true);
+    }
     await createPlayoffBracket(season.id);
 
     const final = (
@@ -151,7 +173,7 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     expect(s.championTeamId).toBe(winner);
   });
 
-  it("seeds an all-draws season deterministically (every team tied on points)", async () => {
+  it("requires a BO3 week after an all-draws season and seeds by those results", async () => {
     const season = await makeSeason({
       teamSize: 3,
       minTeams: 4,
@@ -176,15 +198,51 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     expect(
       standings.every((s) => s.points === 3 && s.draws === 3 && s.wins === 0),
     ).toBe(true);
-    // No crash; bracket still seeds a full field.
+    await expect(createPlayoffBracket(season.id)).rejects.toThrow(/tiebreaker week/i);
+    expect(await prisma.match.count({
+      where: { seasonId: season.id, phase: { in: ["PLAYOFF", "FINAL"] } },
+    })).toBe(0);
+    expect(await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
+      .toMatchObject({ status: "REGULAR_SEASON", championTeamId: null });
+
+    await createTiebreakerWeek(season.id);
+    const tiebreakers = await prisma.match.findMany({
+      where: { seasonId: season.id, phase: "TIEBREAKER" },
+    });
+    expect(tiebreakers).toHaveLength(6);
+    expect(tiebreakers.every((match) => match.bestOf === 3)).toBe(true);
+    for (const match of tiebreakers) {
+      // Away is the higher ID in these round-robin fixtures. Give it two
+      // imported wins so the sporting seeds reverse the old ID fallback.
+      await addGameToMatch(match.id, `tb-${match.id}-1`, match.awayTeamId);
+      await recomputeSeries(match.id);
+      expect(await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
+        .toMatchObject({ status: "LIVE", homeScore: 0, awayScore: 1 });
+      await addGameToMatch(match.id, `tb-${match.id}-2`, match.awayTeamId);
+      await recomputeSeries(match.id);
+      expect(await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
+        .toMatchObject({ status: "COMPLETED", homeScore: 0, awayScore: 2, winnerTeamId: match.awayTeamId });
+    }
+    const allMatches = await prisma.match.findMany({ where: { seasonId: season.id } });
+    expect(computeStandings(ids, allMatches)).toEqual(standings);
+    const sportingSeeds = [...ids].sort((a, b) => b.localeCompare(a));
+    const field = projectPlayoffField(ids.map((id) => ({ id })), allMatches);
+    expect(field.seededTeamIds).toEqual(sportingSeeds);
+    expect(field.tiebreakers).toMatchObject({ resolved: true, error: null });
+    expect(field.seedingDeadHeatTeamIds).toEqual([]);
+
     await createPlayoffBracket(season.id);
     const r0 = await prisma.match.findMany({
       where: { seasonId: season.id, bracketSlot: { startsWith: "R0" } },
+      orderBy: { bracketSlot: "asc" },
     });
-    expect(r0.flatMap((m) => [m.homeTeamId, m.awayTeamId])).toHaveLength(4);
+    expect(r0.map((match) => [match.homeTeamId, match.awayTeamId])).toEqual([
+      [sportingSeeds[0], sportingSeeds[3]],
+      [sportingSeeds[1], sportingSeeds[2]],
+    ]);
     const finalSeason = await drivePlayoffsToChampion(season.id);
     expect(finalSeason.status).toBe("COMPLETE");
-    expect(finalSeason.championTeamId).not.toBeNull();
+    expect(finalSeason.championTeamId).toBe(sportingSeeds[0]);
   });
 
   it("flags an unfinished Bo2 as outstanding (so playoffs stay locked) until it's entered", async () => {

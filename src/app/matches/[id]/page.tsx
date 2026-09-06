@@ -78,6 +78,7 @@ import {
 import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
 import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
+import { parseTiebreakerStage } from "@/lib/tiebreaker-format";
 import { matchStakes, stakesHeadline } from "@/lib/scenarios";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
@@ -172,10 +173,13 @@ export default async function MatchDetailPage({
   // eslint-disable-next-line react-hooks/purity
   const renderedAt = Date.now();
   const postseason =
-    match.phase === "REGULAR"
+    match.phase !== "PLAYOFF" && match.phase !== "FINAL"
       ? []
       : await prisma.match.findMany({
-          where: { seasonId: match.seasonId, phase: { not: "REGULAR" } },
+          where: {
+            seasonId: match.seasonId,
+            phase: { in: ["PLAYOFF", "FINAL"] },
+          },
           select: {
             id: true,
             phase: true,
@@ -197,6 +201,7 @@ export default async function MatchDetailPage({
           groupPlayoffRounds(postseason).totalRounds,
         )
       : matchPhaseLabel(match.phase, match.week);
+  const tiebreakerStage = parseTiebreakerStage(match.bracketSlot)?.stage;
   const viewer = await getSessionUser();
   const isCaptain =
     !!viewer &&
@@ -235,21 +240,32 @@ export default async function MatchDetailPage({
           <ContextBackLink
             href={
               match.season.isActive
-                ? match.phase === "REGULAR"
-                  ? "/schedule#fixtures"
+                ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
+                  ? match.phase === "TIEBREAKER"
+                    ? "/schedule#tiebreakers"
+                    : "/schedule#fixtures"
                   : "/schedule#playoff-bracket"
                 : `/seasons/${match.seasonId}`
             }
             className={buttonClasses("secondary", "sm")}
           >
             {match.season.isActive
-              ? match.phase === "REGULAR"
+              ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
                 ? "← Schedule"
                 : "← Playoff bracket"
               : "← Season archive"}
           </ContextBackLink>
         }
       />
+
+      {match.phase === "TIEBREAKER" ? (
+        <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
+          <strong>Playoff tiebreaker · Best of {match.bestOf}.</strong>{" "}
+          {tiebreakerStage ? `Game ${tiebreakerStage}${tiebreakerStage === 5 ? " · Deciding final" : tiebreakerStage === 4 ? " · Final" : tiebreakerStage === 3 ? " · Elimination game" : ""}. ` : ""}
+          This match settles playoff qualification or seeding. Regular-season
+          points stay the same.
+        </div>
+      ) : null}
 
       <Card className="relative overflow-hidden">
         <div
@@ -1615,9 +1631,11 @@ async function ReportResultSection({
         <CardHeader
           title="Result reporting locked"
           subtitle={
-            match.phase === "REGULAR"
-              ? "Regular-season games can be reported only while the league is in the Regular season phase. Ask an admin to correct the phase or fixture."
-              : "Playoff games can be reported only while the league is in the Playoffs phase. Ask an admin to reopen the postseason before reporting."
+            match.phase === "TIEBREAKER"
+              ? `Tiebreaker games can be reported while the league is in Regular season. Complete this best-of-${match.bestOf} match to settle playoff qualification and seeding.`
+              : match.phase === "REGULAR"
+                ? "Regular-season games can be reported only while the league is in the Regular season phase. Ask an admin to correct the phase or fixture."
+                : "Playoff games can be reported only while the league is in the Playoffs phase. Ask an admin to reopen the postseason before reporting."
           }
         />
       </Card>

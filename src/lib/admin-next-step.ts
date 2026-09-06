@@ -35,6 +35,9 @@ export type AdminPhaseInput = {
   /** Regular matches carrying a kickoff time. */
   scheduledRegularCount: number;
   pendingRegularResults: number;
+  pendingTiebreakerResults?: number;
+  /** Unresolved ties that still affect playoff qualification or seed order. */
+  unresolvedPlayoffTieCount?: number;
   playoffMatchCount: number;
   unfinishedPlayoffCount: number;
   hasChampion: boolean;
@@ -78,6 +81,8 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
     regularMatchCount,
     scheduledRegularCount,
     pendingRegularResults,
+    pendingTiebreakerResults = 0,
+    unresolvedPlayoffTieCount = 0,
     playoffMatchCount,
     unfinishedPlayoffCount,
     hasChampion,
@@ -168,6 +173,22 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
         detail:
           "Results import themselves from OpenDota; enter any that can't be found by hand in Schedule & results.",
         tone: "waiting",
+      };
+    }
+    if (pendingTiebreakerResults > 0) {
+      return {
+        title: `Tiebreaker week — ${pendingTiebreakerResults} result(s) outstanding.`,
+        detail:
+          "Finish the best-of-three tiebreakers to settle playoff qualification and seed order. Keep the season in Regular season until every required tie is resolved.",
+        tone: "waiting",
+      };
+    }
+    if (unresolvedPlayoffTieCount > 0) {
+      return {
+        title: "Next step: schedule a tiebreaker week.",
+        detail:
+          "Teams remain tied for playoff qualification or seeding. Schedule best-of-three tiebreakers before starting the playoffs.",
+        tone: "action",
       };
     }
     return {

@@ -388,7 +388,7 @@ export default async function FeaturesPage() {
           status: true,
           championTeamId: true,
           matches: {
-            where: { phase: { not: "REGULAR" } },
+            where: { phase: { in: ["PLAYOFF", "FINAL"] } },
             select: {
               id: true,
               phase: true,

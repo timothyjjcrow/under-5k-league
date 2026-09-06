@@ -127,7 +127,7 @@ async function removePostseason(
   matches: { id: string; phase: string; week: number }[],
 ): Promise<PostseasonRemoval> {
   const postseasonMatches = matches.filter(
-    (match) => match.phase !== MATCH_PHASE.REGULAR,
+    (match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL,
   );
   const archiveKey = playoffGamesArchiveKey(seasonId);
   const [doomedGames, priorRaw, doomedCover] = await Promise.all([
@@ -313,7 +313,7 @@ export async function createPlayoffBracket(
           },
         });
         const hasPostseason = matches.some(
-          (match) => match.phase !== MATCH_PHASE.REGULAR,
+          (match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL,
         );
         if (claim) {
           if (season.status !== claim.expectedSeasonStatus) {
@@ -377,9 +377,18 @@ export async function createPlayoffBracket(
           );
         }
 
+        if (playoffField.tiebreakers.error) {
+          throw new UserFacingError(playoffField.tiebreakers.error);
+        }
+        if (!playoffField.tiebreakers.resolved || playoffField.seedingDeadHeatTeamIds.length > 0) {
+          throw new UserFacingError(
+            "Playoff qualification or seeding is still tied. Schedule and complete the best-of-three tiebreaker week before starting playoffs.",
+          );
+        }
+
         const pairings = playoffField.pairings;
         const lastRegularWeek = matches
-          .filter((match) => match.phase === MATCH_PHASE.REGULAR)
+          .filter((match) => match.phase === MATCH_PHASE.REGULAR || match.phase === MATCH_PHASE.TIEBREAKER)
           .reduce((max, match) => Math.max(max, match.week), 0);
         const phase =
           pairings.length === 1 ? MATCH_PHASE.FINAL : MATCH_PHASE.PLAYOFF;
@@ -387,11 +396,14 @@ export async function createPlayoffBracket(
           phase === MATCH_PHASE.FINAL
             ? season.finalBestOf
             : season.playoffBestOf;
+        const lastTiebreakerKickoff = matches
+          .filter((match) => match.phase === MATCH_PHASE.TIEBREAKER)
+          .reduce((latest, match) => Math.max(latest, match.scheduledAt?.getTime() ?? 0), 0);
         const playoffScheduledAt = season.firstMatchNight
           ? upcomingMatchNight(
               season.firstMatchNight,
               lastRegularWeek + 1,
-              Date.now(),
+              Math.max(Date.now(), lastTiebreakerKickoff + 1),
             )
           : null;
         // Do this before teardown. The transaction would roll a teardown back
@@ -528,7 +540,7 @@ export async function returnToRegularSeason(
             "The standings, playoff bracket, imported games, or playoff activity changed while this recovery control was open — reload before trying again",
           );
         }
-        if (!matches.some((match) => match.phase !== MATCH_PHASE.REGULAR)) {
+        if (!matches.some((match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL)) {
           throw new UserFacingError("There is no playoff bracket to remove");
         }
 

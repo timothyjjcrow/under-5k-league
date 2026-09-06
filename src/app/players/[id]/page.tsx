@@ -18,7 +18,7 @@ import { getActiveSeason } from "@/lib/season";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
-import { computeStandings } from "@/lib/standings";
+import { projectPlayoffField } from "@/lib/playoff-field";
 import { matchPhaseLabel } from "@/lib/schedule";
 import { getSessionUser } from "@/lib/auth";
 import { DiscordTag } from "@/components/discord-tag";
@@ -505,10 +505,7 @@ export default async function PlayerProfilePage({
   const team = membership?.team ?? null;
   const standings =
     team && seasonTeams.length
-      ? computeStandings(
-          seasonTeams.map((t) => t.id),
-          seasonMatches,
-        )
+      ? projectPlayoffField(seasonTeams, seasonMatches).standings
       : [];
   const teamRow = team
     ? standings.find((s) => s.teamId === team.id)

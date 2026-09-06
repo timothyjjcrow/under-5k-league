@@ -1,3 +1,4 @@
+import { isPlayoffPhase } from "./league-lifecycle";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
@@ -547,7 +548,8 @@ export async function assignStandinGuarded(opts: {
       homeName: match.homeTeam.name,
       awayName: match.awayTeam.name,
       week: match.week,
-      isPlayoff: match.phase !== MATCH_PHASE.REGULAR,
+      isPlayoff: isPlayoffPhase(match.phase),
+      isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
       whenMs: match.scheduledAt?.getTime() ?? null,
       matchId: match.id,
     }),
@@ -646,7 +648,8 @@ export async function removeStandinGuarded(opts: {
       homeName: assignment.match.homeTeam.name,
       awayName: assignment.match.awayTeam.name,
       week: assignment.match.week,
-      isPlayoff: assignment.match.phase !== MATCH_PHASE.REGULAR,
+      isPlayoff: isPlayoffPhase(assignment.match.phase),
+      isTiebreaker: assignment.match.phase === MATCH_PHASE.TIEBREAKER,
     }),
   };
 }

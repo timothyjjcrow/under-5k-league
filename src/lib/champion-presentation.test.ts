@@ -18,6 +18,23 @@ function match(overrides: Partial<MatchInput> = {}): MatchInput {
 }
 
 describe("resolveChampionPresentation", () => {
+  it("does not treat a tiebreaker week as a playoff bracket", () => {
+    expect(resolveChampionPresentation(
+      { status: SEASON_STATUS.REGULAR_SEASON, championTeamId: null },
+      [match({ phase: MATCH_PHASE.TIEBREAKER, bracketSlot: "TB:group:1" })],
+    )).toMatchObject({ hasPostseason: false, championTeamId: null });
+  });
+
+  it("ignores a tiebreaker when finding a two-team playoff final", () => {
+    expect(resolveChampionPresentation(
+      { status: SEASON_STATUS.COMPLETE, championTeamId: "alpha" },
+      [
+        match({ id: "tb", phase: MATCH_PHASE.TIEBREAKER, bracketSlot: "TB:group:1" }),
+        match({ bracketSlot: "R0M0" }),
+      ],
+    )).toMatchObject({ championTeamId: "alpha", authoritativeFinalId: "final", issue: null });
+  });
+
   it("preserves a completed legacy season with a champion but no saved postseason", () => {
     expect(
       resolveChampionPresentation(

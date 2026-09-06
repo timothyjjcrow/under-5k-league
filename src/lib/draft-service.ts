@@ -1,3 +1,4 @@
+import { isPlayoffPhase } from "./league-lifecycle";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
@@ -762,6 +763,7 @@ export type AbortDraftSummary = {
     awayName: string;
     week: number;
     isPlayoff: boolean;
+    isTiebreaker?: boolean;
   }[];
 };
 
@@ -988,7 +990,10 @@ export async function abortDraft(
             homeName: assignment.match.homeTeam.name,
             awayName: assignment.match.awayTeam.name,
             week: assignment.match.week,
-            isPlayoff: assignment.match.phase !== MATCH_PHASE.REGULAR,
+            isPlayoff: isPlayoffPhase(assignment.match.phase),
+            ...(assignment.match.phase === MATCH_PHASE.TIEBREAKER
+              ? { isTiebreaker: true }
+              : {}),
           })),
         };
       },

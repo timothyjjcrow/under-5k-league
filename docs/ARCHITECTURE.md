@@ -266,11 +266,16 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
 - _Automatic sync_: see §7. Results flow in with no button press.
 - _Standings and stats_: everything is derived at read time.
   `computeStandings` (`src/lib/standings.ts`, 3/1/0 points, tiebreak chain
-  ending in head-to-head mini-tables) is the public table. The shared
+  ending in head-to-head mini-tables) is the regular points table. The shared
   `projectPlayoffField` projection computes that complete table first and only
   then removes withdrawn teams from eligibility, preserving every survivor's
   played/ruled results while producing the cut, one-indexed seed map, and
-  first-round pairings used by every page and the write service. The playoff
+  first-round pairings used by every page and the write service. Unresolved
+  qualification/seeding ties require a tiebreaker week (two teams BO3; three teams BO1 double elimination): `TIEBREAKER`
+  fixtures settle only the tied group's order without changing regular points.
+  The projection applies those results, and the seeding transaction refuses
+  unresolved or stale ties. See [Tiebreaker week](TIEBREAKER-WEEK.md) for the
+  competition rules and admin recovery workflow. The playoff
   scenario engine (`src/lib/scenarios.ts` + `src/lib/stakes.ts`) enumerates
   equal-weight result combinations for clinch and “win and in” guidance; the
   UI explicitly does not present those combinations as predictive odds. The

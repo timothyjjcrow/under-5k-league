@@ -17,6 +17,7 @@ import { databaseNow } from "./database-time";
 import { detectIntervalSeconds } from "./inhouse";
 import { inhouseBoardNeedsSync } from "./inhouse-board-service";
 import { prisma } from "./prisma";
+import { parseTiebreakerStage } from "./tiebreaker-format";
 import {
   autoSyncClosesAt,
   autoSyncIntervalSeconds,
@@ -74,6 +75,7 @@ export const AUTOMATION_GATE_REASONS = [
   "INHOUSE_OUTBOX",
   "REMINDER",
   "PLAYOFF_REPAIR",
+  "TIEBREAKER_REPAIR",
   "ANNOUNCEMENT_RETRY",
   "BOARD",
 ] as const;
@@ -338,6 +340,33 @@ function latestPlayoffRound(matches: AutomationGateMatch[]) {
   };
   const maxRound = Math.max(...playoff.map((match) => roundOf(match.bracketSlot)));
   return playoff.filter((match) => roundOf(match.bracketSlot) === maxRound);
+}
+
+/** A decided BO1 stage needs its next fixture, never another league week. */
+function tiebreakerNeedsAdvancement(matches: AutomationGateMatch[]): boolean {
+  const brackets = new Map<string, Map<number, AutomationGateMatch>>();
+  for (const match of matches) {
+    if (match.phase !== MATCH_PHASE.TIEBREAKER) continue;
+    const parsed = parseTiebreakerStage(match.bracketSlot);
+    if (!parsed) continue;
+    const stages = brackets.get(parsed.bracketKey) ?? new Map<number, AutomationGateMatch>();
+    stages.set(parsed.stage, match);
+    brackets.set(parsed.bracketKey, stages);
+  }
+  for (const stages of brackets.values()) {
+    const stage = Math.max(...stages.keys());
+    const latest = stages.get(stage)!;
+    if (
+      latest.status !== MATCH_STATUS.COMPLETED ||
+      !latest.winnerTeamId ||
+      (latest.winnerTeamId !== latest.homeTeamId && latest.winnerTeamId !== latest.awayTeamId)
+    ) continue;
+    if (stage < 4) return true;
+    // Game 4 only needs a reset when the previously undefeated team loses.
+    if (stage === 4 && stages.get(2)?.winnerTeamId &&
+        latest.winnerTeamId !== stages.get(2)!.winnerTeamId) return true;
+  }
+  return false;
 }
 
 function boardWakeAt(
@@ -805,6 +834,11 @@ export function computeAutomationGateSnapshot(
         addCandidate(candidates, nowMs, markerAt, "REMINDER");
       }
     }
+  }
+
+  if (season?.status === SEASON_STATUS.REGULAR_SEASON &&
+      tiebreakerNeedsAdvancement(season.matches)) {
+    addCandidate(candidates, nowMs, nowMs, "TIEBREAKER_REPAIR");
   }
 
   if (season?.status === SEASON_STATUS.PLAYOFFS) {

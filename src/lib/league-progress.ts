@@ -3,6 +3,11 @@ import { isRelevantOpenMatch, type SlateMatch } from "./schedule";
 /** Presentation counts only; this never advances a week, result, or season. */
 export function leagueProgress(matches: SlateMatch[], nowMs: number) {
   const regular = matches.filter((match) => match.phase === "REGULAR");
+  const tiebreakers = matches.filter((match) => match.phase === "TIEBREAKER");
+  const tiebreakerOpen = tiebreakers.filter((match) => match.status !== "COMPLETED");
+  const tiebreakerFocusWeeks = tiebreakerOpen
+    .filter((match) => isRelevantOpenMatch(match, nowMs))
+    .map((match) => match.week);
   const completed = regular.filter(
     (match) => match.status === "COMPLETED",
   ).length;
@@ -25,5 +30,11 @@ export function leagueProgress(matches: SlateMatch[], nowMs: number) {
     scheduled,
     totalWeeks: Math.max(0, ...regular.map((match) => match.week)),
     focusWeek: focusWeeks.length ? Math.min(...focusWeeks) : null,
+    tiebreakerTotal: tiebreakers.length,
+    tiebreakerCompleted: tiebreakers.length - tiebreakerOpen.length,
+    tiebreakerPending: tiebreakerOpen.length,
+    tiebreakerFocusWeek: tiebreakerFocusWeeks.length
+      ? Math.min(...tiebreakerFocusWeeks)
+      : null,
   };
 }
