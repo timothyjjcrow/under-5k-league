@@ -254,7 +254,7 @@ test("public statistics metadata is route-specific and invalid archives are noin
   }
   await expect(page.locator('meta[property="og:site_name"]')).toHaveAttribute(
     "content",
-    "GGD2L",
+    LEAGUE_CONFIG.name,
   );
   await expect(page.locator('meta[property="og:type"]')).toHaveAttribute(
     "content",
