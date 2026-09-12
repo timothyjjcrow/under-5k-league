@@ -79,3 +79,15 @@ its steps. Keep schedulers paused until their reviewed release is promoted;
 then resume and observe two successful scheduled runs.
 
 No database migration is introduced by the consolidated tracker UI.
+
+When production environment values are non-exportable, an operator can run
+`node scripts/hosted-migration-release.mjs` as a separate, unaliased Vercel build
+job with production configuration. Supply `HOSTED_MIGRATION_RELEASE_SHA` and
+temporary `HOSTED_MIGRATION_DATABASE_URL`/`HOSTED_MIGRATION_DIRECT_URL` as
+build-only inputs. The job clones the reviewed immutable commit and invokes
+the existing guarded migration release there. First rehearse on a provider
+restore branch preserving ownership, then use the same job for production
+after all selected prerequisites pass. The static `migration-only` receipt is
+never promotable as an application; remove these temporary job deployments
+after recording the result. Production candidates use the ordinary project
+configuration and runtime roles.

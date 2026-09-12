@@ -2,9 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { LEAGUE_TARGETS, assertDeployment, assertReleaseInfo, promotePair } from "./league-targets.mjs";
 import { requireSuccessfulCi, requireMaintenanceEvidence, scheduledPasses } from "./release-both.mjs";
+import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 
 const sha = "a".repeat(40);
 const baseSha = "b".repeat(40);
+test("hosted migration jobs require a full approved commit, production validation and temporary URLs", () => {
+  const env = { VERCEL_ENV: "production", HOSTED_MIGRATION_RELEASE_SHA: sha, HOSTED_MIGRATION_DATABASE_URL: "postgresql://fixture", HOSTED_MIGRATION_DIRECT_URL: "postgresql://fixture" };
+  assert.equal(hostedReleaseInputs(env).sha, sha);
+  for (const patch of [{ VERCEL_ENV: "preview" }, { HOSTED_MIGRATION_RELEASE_SHA: "main" }, { HOSTED_MIGRATION_DIRECT_URL: undefined }, { HOSTED_MIGRATION_DATABASE_URL: "file:./fixture.db" }])
+    assert.throws(() => hostedReleaseInputs({ ...env, ...patch }));
+});
 test("scheduler verification requires two consecutive successful minute slots and clean logs", () => {
   const log = (timestamp, responseStatusCode = 200) => ({ timestamp, responseStatusCode, requestPath: "/api/cron/automation" });
   assert.equal(scheduledPasses([log(60_000)], 0), null);
