@@ -251,14 +251,14 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     `${LEAGUE_CONFIG.name} Inhouse`,
   );
   await expect(page.getByTitle("Copy password")).toContainText("ggd2l");
-  await expect(page.getByTitle("Copy league ticket")).toContainText(
-    "Under 5K In-House League",
-  );
-  await expect(
-    page.getByText(
-      /without this ticket, the game will not appear on OpenDota/i,
-    ),
-  ).toBeVisible();
+  if (LEAGUE_CONFIG.inhouseLeagueConfigured) {
+    await expect(page.getByTitle("Copy league ticket")).toContainText(LEAGUE_CONFIG.inhouseLeagueName);
+    await expect(page.getByText(/without this ticket, the game will not appear on OpenDota/i)).toBeVisible();
+  } else {
+    await expect(page.getByTitle("Copy league ticket")).toHaveCount(0);
+    await expect(page.getByText(LEAGUE_CONFIG.inhouseLeagueName, { exact: true })).toBeVisible();
+    await expect(page.getByText("The league administrators will provide the European ticket before tracked inhouse games begin.")).toBeVisible();
+  }
   await expect(page.getByText(/inhouse team [12]/).first()).toBeVisible();
 
   // --- Betting: the 45s window opens on this same transition ---------------

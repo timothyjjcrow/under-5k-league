@@ -126,9 +126,13 @@ test("home renders the season timeline, pool composition, and footer", async ({
   ).toBeVisible();
   // The old hero tagline went away when the footer was slimmed down — anchor
   // the footer assertion on its stable Discord CTA instead.
-  await expect(
-    page.getByRole("contentinfo").getByText("Join our Discord"),
-  ).toBeVisible();
+  const discord = page.getByRole("contentinfo").getByText("Join our Discord");
+  if (LEAGUE_CONFIG.discordInviteUrl) {
+    await expect(discord).toBeVisible();
+    await expect(discord).toHaveAttribute("href", LEAGUE_CONFIG.discordInviteUrl);
+  } else {
+    await expect(discord).toHaveCount(0);
+  }
   const support = page.getByRole("contentinfo").getByRole("link", {
     name: "Support the league on Buy Me a Coffee (opens in a new tab)",
   });
