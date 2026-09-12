@@ -24,3 +24,6 @@ blob-report/
 # Independently hosted services; never upload Steam sessions to the website.
 ops/dota-lobby-bot/
 ops/dota-lobby-relay/
+
+# Release evidence is local or a CI artifact, never an application upload.
+output/

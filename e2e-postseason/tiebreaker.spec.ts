@@ -14,15 +14,15 @@ async function expectFinalTracker(
   await page.goto("/schedule");
   await page.locator("summary").filter({ hasText: "Playoff race & possible matchups" }).click();
   for (const [names, status] of [
-    [qualified, "Qualified for playoffs."],
-    [eliminated, "Eliminated from playoffs."],
+    [qualified, "Qualified for playoffs"],
+    [eliminated, "Eliminated"],
   ] as const) {
     for (const name of names) {
       const href = await page.getByRole("link", { name, exact: true }).first().getAttribute("href");
       expect(href).toMatch(/^\/teams\//);
       const teamId = href!.split("/").pop()!;
       const outlook = page.locator(`[data-testid="playoff-outlook"][data-team-id="${teamId}"]`).first();
-      await expect(outlook).toContainText(status);
+      await expect(outlook.getByTestId("playoff-status")).toContainText(status);
       await expect(outlook).not.toContainText("Waiting on other results");
     }
   }
@@ -241,12 +241,12 @@ test("live best-of-two tracker only offers results still possible at 1–0", asy
   await page.goto(`/matches/${fixture.liveMatchId}`);
   const home = page.locator(`[data-testid="playoff-outlook"][data-team-id="${fixture.homeTeamId}"]`);
   const away = page.locator(`[data-testid="playoff-outlook"][data-team-id="${fixture.awayTeamId}"]`);
-  await expect(home.getByText("Win", { exact: true })).toBeVisible();
-  await expect(home.getByText("Draw", { exact: true })).toBeVisible();
-  await expect(home.getByText("Loss", { exact: true })).toHaveCount(0);
-  await expect(away.getByText("Draw", { exact: true })).toBeVisible();
-  await expect(away.getByText("Loss", { exact: true })).toBeVisible();
-  await expect(away.getByText("Win", { exact: true })).toHaveCount(0);
+  await expect(home.getByTestId("playoff-paths").getByText("Win", { exact: true })).toBeVisible();
+  await expect(home.getByTestId("playoff-paths").getByText("Draw", { exact: true })).toBeVisible();
+  await expect(home.getByTestId("playoff-paths").getByText("Loss", { exact: true })).toHaveCount(0);
+  await expect(away.getByTestId("playoff-paths").getByText("Draw", { exact: true })).toBeVisible();
+  await expect(away.getByTestId("playoff-paths").getByText("Loss", { exact: true })).toBeVisible();
+  await expect(away.getByTestId("playoff-paths").getByText("Win", { exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoHorizontalOverflow(page, "live playoff tracker");
   assertNoErrors();

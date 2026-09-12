@@ -68,22 +68,27 @@ export function TiebreakerNotice({
         {projection.tiebreakers.error
           ? "The tiebreaker fixtures need an administrator's review before the playoff bracket can start."
           : unresolved.length > 0
-            ? `${tieSummary} ${projection.tiebreakers.pending ? "The scheduled tiebreaker matches must finish before playoffs begin." : "The remaining tiebreaker matches must be scheduled before playoffs begin."}`
-            : "The extra results have settled playoff qualification and seeding. The playoff bracket can now be started by an administrator."}{" "}
-        Regular-season points stay the same.
+            ? tieSummary
+            : "Qualification and seeds are settled. Ready for playoffs."}
       </p>
       {unresolved.length > 0 && !projection.tiebreakers.error ? (
-        <p className="text-muted">
-          {hasThreeTeamBracket
-            ? "Three tied teams play a best-of-one double-elimination bracket: four games, or five if the final needs a reset, all in the same tiebreaker week. Two losses eliminate a team; the bracket determines every seed."
-            : "Two tied teams play one best-of-three series. Larger round-robin groups play best-of-three series, ranked by wins then game differential."}
-          {hasThreeTeamBracket ? " Two-team ties use one best-of-three series." : ""}
-          {byes.length > 0
-            ? ` Opening bye drawn: ${byes.map((id) => names.get(id) ?? id).join(", ")}.`
-            : hasThreeTeamBracket
-              ? " The opening matchup and bye are drawn when the week is scheduled."
-              : ""}
-        </p>
+        <details className="text-xs text-muted">
+          <summary className="w-fit cursor-pointer py-1 text-info hover:underline">Format &amp; next steps</summary>
+          <div className="mt-1 space-y-2">
+            <p>{projection.tiebreakers.pending ? "Finish the scheduled tiebreakers before playoffs begin." : "An administrator must schedule the remaining tiebreakers."} Regular-season points stay the same.</p>
+            <p className="text-muted">
+              {hasThreeTeamBracket
+                ? "Three tied teams play a best-of-one double-elimination bracket: four games, or five if the final needs a reset, all in the same tiebreaker week. Two losses eliminate a team; the bracket determines every seed."
+                : "Two tied teams play one best-of-three series. Larger round-robin groups play best-of-three series, ranked by wins then game differential."}
+              {hasThreeTeamBracket ? " Two-team ties use one best-of-three series." : ""}
+              {byes.length > 0
+                ? ` Opening bye drawn: ${byes.map((id) => names.get(id) ?? id).join(", ")}.`
+                : hasThreeTeamBracket
+                  ? " The opening matchup and bye are drawn when the week is scheduled."
+                  : ""}
+            </p>
+          </div>
+        </details>
       ) : null}
       {scheduleLink ? (
         <Link

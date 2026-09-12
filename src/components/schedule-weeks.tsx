@@ -598,12 +598,6 @@ function MatchRow({ match: m }: { match: MatchView }) {
           </div>
         ))}
       </div>
-      {m.playoffPaths && (m.playoffPaths.home.length > 0 || m.playoffPaths.away.length > 0) ? (
-        <p className="px-4 pb-2 text-[10px] text-muted sm:px-5">
-          Counts show result combinations, not odds. Assumes normally completed series;
-          administrative rulings or score corrections can change outcomes.
-        </p>
-      ) : null}
       <div className="mt-auto flex flex-wrap items-center gap-x-2 border-t border-line-soft px-4 sm:px-5">
         <span
           className="mr-auto text-[11px] text-muted"

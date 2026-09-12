@@ -49,7 +49,7 @@ describe("public tiebreaker notice", () => {
     const html = render();
     expect(html).toContain("Alpha, Bravo");
     expect(html).toContain("Two tied teams play one best-of-three series");
-    expect(html).toContain("remaining tiebreaker matches must be scheduled");
+    expect(html).toContain("An administrator must schedule the remaining tiebreakers");
     expect(html).toContain('href="/schedule#tiebreakers"');
     expect(html).toContain("Regular-season points stay the same");
   });
@@ -62,7 +62,7 @@ describe("public tiebreaker notice", () => {
         tiebreakers: { ...projection.tiebreakers, pending: true },
       },
     });
-    expect(html).toContain("scheduled tiebreaker matches must finish");
+    expect(html).toContain("Finish the scheduled tiebreakers before playoffs begin");
     expect(html).not.toContain("tiebreakers complete");
   });
 
@@ -109,6 +109,6 @@ describe("public tiebreaker notice", () => {
       },
     });
     expect(html).toContain("Playoff tiebreakers complete");
-    expect(html).toContain("settled playoff qualification and seeding");
+    expect(html).toContain("Qualification and seeds are settled");
   });
 });

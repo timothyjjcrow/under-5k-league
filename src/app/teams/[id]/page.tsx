@@ -1,5 +1,5 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { PlayoffOutlook, playoffStatusLine } from "@/components/playoff-outlook";
+import { PlayoffOutlook } from "@/components/playoff-outlook";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -818,7 +818,6 @@ function WhatWeNeed({
     <Card className={scenario.status === "CLINCHED" ? "border-success/30" : "border-accent/30"}>
       <CardHeader
         title="Playoff outlook"
-        subtitle={playoffStatusLine(scenario)}
         headingLevel={2}
       />
       <CardBody>

@@ -1,0 +1,54 @@
+name: Release both leagues
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# Do not interrupt a promotion or its compensating rollback.
+concurrency:
+  group: shared-league-production
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Paired production release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
+      # Remote builds keep sensitive production variables inside Vercel.
+      # No league database or Discord credentials are copied to GitHub.
+      - name: Verify CI, rehearse both previews, stage and promote both leagues
+        run: npm run release:both -- --apply --output output/shared-release.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          VERCEL_US_TOKEN: ${{ secrets.VERCEL_US_TOKEN }}
+          VERCEL_EU_TOKEN: ${{ secrets.VERCEL_EU_TOKEN }}
+      - name: Save credential-free release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: shared-league-release
+          path: output/shared-release.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -1086,7 +1086,7 @@ function PlayoffPicture({
       <CardHeader
         headingLevel={2}
         title="Playoff picture"
-        subtitle="First-round matchups if the season ended today"
+        subtitle="Where each team stands"
       />
       <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {tiebreakerError ? (
@@ -1097,11 +1097,11 @@ function PlayoffPicture({
         ) : null}
         {pendingTeamIds.length > 0 ? (
           <p className="text-sm text-muted sm:col-span-2">
-            Playoff matchups are provisional:{" "}
+            Still tied:{" "}
             {pendingTeamIds.map((id) => teamName.get(id) ?? id).join(", ")}{" "}
             {report?.forecast?.basis === "final"
-              ? "still need tiebreaker results before playoff order can be confirmed. The tracker below shows which places are already secured."
-              : "are tied. If the normal standings tiebreaks remain equal after the regular season, a tiebreaker week settles qualification and seeding."}
+              ? "— tiebreaker results will settle the remaining places and seeds."
+              : "— an extra week is needed only if the tie remains after regular-season results."}
           </p>
         ) : null}
         {pairings.map((p, index) => (
@@ -1131,7 +1131,7 @@ function PlayoffPicture({
         {raceNotes.length > 0 ? (
           <div className="sm:col-span-2">
             <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
-              Playoff tracker{report?.forecast ? "" : " (conservative points bounds)"}
+              Playoff tracker
             </div>
             <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {raceNotes.map((n) => (

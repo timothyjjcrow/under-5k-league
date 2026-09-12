@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PlayoffOutlook, outlookSummary } from "./playoff-outlook";
+import { PlayoffOutlook, outlookSummary, shortOutlook, playoffStatusLine } from "./playoff-outlook";
 import type { ScenarioOutlook, TeamScenario } from "@/lib/scenarios";
 
 const result = (overrides: Partial<ScenarioOutlook> = {}): ScenarioOutlook => ({
@@ -22,6 +22,38 @@ const render = (scenario: TeamScenario, matchId?: string) => renderToStaticMarku
 );
 
 describe("playoff outlook presentation", () => {
+  it.each([
+    [1, 0, 0, "Qualify"],
+    [0, 1, 0, "Tiebreaker for a spot"],
+    [0, 0, 1, "Out"],
+    [1, 1, 0, "Qualify or tiebreaker"],
+    [0, 1, 1, "Tiebreaker or out"],
+    [1, 0, 1, "Qualify or out"],
+    [1, 1, 1, "Qualify, tiebreaker or out"],
+  ])("keeps every possible outcome in the short label (%s/%s/%s)", (qualified, qualificationTiebreaker, eliminated, label) => {
+    expect(shortOutlook(result({ total: qualified + qualificationTiebreaker + eliminated,
+      qualified, qualificationTiebreaker, eliminated }))).toBe(label);
+  });
+
+  it("keeps detailed math collapsed and compact match links free of controls and repeated rules", () => {
+    const scenario = team({ nextMatchId: "match", outlook: result({ total: 3, qualified: 1, qualificationTiebreaker: 2 }),
+      paths: { win: result({ qualified: 1 }), draw: result({ qualificationTiebreaker: 1 }), loss: result({ eliminated: 1 }) } });
+    const html = render(scenario);
+    expect(html).toContain("How this works");
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+    expect(html.indexOf("qualify in 1 of 3")).toBeGreaterThan(html.indexOf("<details"));
+    const compact = renderToStaticMarkup(createElement(PlayoffOutlook, { scenario, compact: true }));
+    expect(compact).not.toMatch(/<details|<summary|of 3|BO3|administrative/);
+    expect(compact).toContain("Win to qualify");
+    expect(compact).toContain("Tiebreaker for a spot");
+  });
+
+  it("never calls a qualification tie qualified and preserves a secured place during a seed tie", () => {
+    expect(playoffStatusLine(team({ status: "CLINCHED", outlook: result({ qualificationTiebreaker: 1 }) })))
+      .toBe("Playoff spot decided by tiebreaker");
+    expect(playoffStatusLine(team({ outlook: result({ qualified: 1, seedingTiebreaker: 1 }) })))
+      .toBe("Qualified · seeding tiebreaker");
+  });
   it.each([
     [result({ qualified: 1 }), "Qualified for playoffs."],
     [result({ qualified: 1, seedingTiebreaker: 1 }), "Qualified for playoffs; seeding tiebreaker required."],

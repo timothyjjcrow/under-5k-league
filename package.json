@@ -48,7 +48,9 @@
     "test:inhouse": "vitest run --config vitest.integration.config.mts test/integration/inhouse.itest.ts",
     "test:e2e": "playwright test",
     "test:e2e:mid": "playwright test --config playwright.midseason.config.ts",
-    "test:e2e:postseason": "playwright test --config playwright.postseason.config.ts"
+    "test:e2e:postseason": "playwright test --config playwright.postseason.config.ts",
+    "test:release": "node --test scripts/shared-release.test.mjs",
+    "release:both": "node scripts/release-both.mjs"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

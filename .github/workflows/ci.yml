@@ -123,6 +123,10 @@ jobs:
         run: npm run lint -- --max-warnings=0
       - name: Type check
         run: npx tsc --noEmit
+      - name: Shared release and regional provisioning guards
+        run: npm run test:release && npm run test:provisioning
+      - name: Validate European scheduler artifacts
+        run: npm run scheduler:europe:check && npm run scheduler:europe:check:paused
       - name: Validate active scheduler artifact
         run: npm run scheduler:check
       - name: Validate paused scheduler artifact
@@ -349,13 +353,18 @@ jobs:
         run: node scripts/mutation-guard.mjs --shard ${{ matrix.shard }}/4
 
   e2e:
-    name: playwright e2e
+    name: playwright e2e (${{ matrix.region }})
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [us, eu]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       DATABASE_URL: "file:./dev.db"
       ALLOW_DEV_LOGIN: "true"
       AUTH_SECRET: "ci-secret-please-change-0123456789abcdef"
+      NEXT_PUBLIC_LEAGUE_REGION: ${{ matrix.region }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -385,7 +394,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.region }}
           path: |
             playwright-report/
             test-results/

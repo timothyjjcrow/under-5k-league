@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import {
   test,
   expect,
@@ -247,7 +248,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await expect(page.getByText("Teams are set!")).toBeVisible();
   await expect(page.getByText("How to play this game")).toBeVisible();
   await expect(page.getByTitle("Copy lobby name")).toContainText(
-    "GGD2L Inhouse",
+    `${LEAGUE_CONFIG.name} Inhouse`,
   );
   await expect(page.getByTitle("Copy password")).toContainText("ggd2l");
   await expect(page.getByTitle("Copy league ticket")).toContainText(

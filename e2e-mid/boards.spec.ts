@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { test, expect } from "@playwright/test";
 import {
   expectNoCollapsedTruncation,
@@ -236,11 +237,11 @@ test("public statistics metadata is route-specific and invalid archives are noin
 }) => {
   for (const [path, description] of [
     ["/leaders", /season leaders/i],
-    ["/meta", /heroes GGD2L players pick/i],
+    ["/meta", new RegExp(`heroes ${LEAGUE_CONFIG.name} players pick`, "i")],
     ["/records", /all-time single-game/i],
     ["/recap", /awards, superlatives/i],
     ["/fantasy", /salary-capped fantasy five/i],
-    ["/pickem", /Call every GGD2L match/i],
+    ["/pickem", new RegExp(`Call every ${LEAGUE_CONFIG.name} match`, "i")],
   ] as const) {
     await page.goto(path);
     await expect(

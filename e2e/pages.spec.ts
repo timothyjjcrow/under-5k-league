@@ -1,3 +1,4 @@
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { test, expect } from "@playwright/test";
 
 // Read-only render checks for the enhanced UI — these catch client-render /
@@ -10,7 +11,7 @@ test("signed-out profile requests explain sign-in without a duplicate header CTA
   await page.goto("/me");
   await expect(page).toHaveURL(/\/login\?next=%2Fme|\/login\?next=\/me/);
   await expect(
-    page.getByRole("heading", { name: "Sign in to GGD2L", level: 1 }),
+    page.getByRole("heading", { name: `Sign in to ${LEAGUE_CONFIG.name}`, level: 1 }),
   ).toBeVisible();
   await expect(
     page.getByText(

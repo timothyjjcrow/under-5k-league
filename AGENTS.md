@@ -7,3 +7,13 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Shared league application
+
+US and Europe ship the same application commit from `main`. Make feature and
+schema changes once; use `src/lib/league-config.ts` for regional presentation.
+Keep databases, Discord integrations and runtime settings isolated. Follow
+`docs/SHARED-LEAGUE-RELEASE.md` and the impact-selected production operations
+procedure. Release both projects through `npm run release:both`; do not deploy
+one regional feature branch independently. Run browser coverage for both league
+configurations when changing shared behavior.
