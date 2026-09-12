@@ -62,7 +62,7 @@ export function projectProvider(target, token, request = fetch) {
 }
 
 // Read-only credential verification can run before the exact-commit CI gate.
-export async function checkReleaseAccess(env = process.env) {
+export async function checkReleaseAccess(env = process.env, { includeLogs = true } = {}) {
   for (const target of LEAGUE_TARGETS) {
     const provider = projectProvider(target, env[target.tokenEnv]);
     const alias = await provider.api(`/v4/aliases/${new URL(target.origin).hostname}`);
@@ -71,10 +71,10 @@ export async function checkReleaseAccess(env = process.env) {
     if (!id) throw new Error(`${target.region}: canonical deployment is missing`);
     if (JSON.parse(await provider.probe(target.origin, "/api/health/live")).ok !== true)
       throw new Error(`${target.region}: liveness failed`);
-    await provider.logs(id, Date.now() - 5 * 60_000);
-    console.log(`${target.region}: project metadata, protected probes and runtime-log access verified`);
+    if (includeLogs) await provider.logs(id, Date.now() - 5 * 60_000);
+    console.log(`${target.region}: project metadata and protected probes${includeLogs ? ", plus runtime-log access," : ""} verified`);
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href)
-  checkReleaseAccess().catch((error) => { console.error(error.message); process.exitCode = 1; });
+  checkReleaseAccess(process.env, { includeLogs: !process.argv.includes("--previews-only") }).catch((error) => { console.error(error.message); process.exitCode = 1; });

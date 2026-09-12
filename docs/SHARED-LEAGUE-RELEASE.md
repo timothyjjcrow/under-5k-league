@@ -14,19 +14,22 @@ leagues. An administrator editing a season edits only that league's data.
 ## Release both sites
 
 CI runs the complete browser suites for both `us` and `eu`, including signup,
-regular season, playoffs and BO1/BO3 tiebreakers. The shared release workflow
-runs after successful `main` push CI. It requires dedicated `VERCEL_US_TOKEN`
+regular season, playoffs and BO1/BO3 tiebreakers. The shared preparation workflow
+builds both isolated Previews after successful `main` push CI. It requires dedicated `VERCEL_US_TOKEN`
 and `VERCEL_EU_TOKEN` GitHub Actions secrets scoped to the corresponding Vercel
 projects. Configure these through the providers; do not commit token values.
 Project-scoped credentials use explicit project IDs and project API operations
-for protected health checks, promotion and runtime logs. The workflow verifies
-this read-only access before attempting a release; it never needs a token with
-access to unrelated projects. Existing automation protection credentials remain
-inside the process and are never written to release evidence.
+for protected health checks. The preparation workflow verifies this read-only
+access first and never publishes production. Vercel currently rejects runtime
+request-log access with project-scoped tokens. Production publishing therefore
+uses one operator action through the existing Vercel login, which can complete
+the required runtime checks. Do not broaden credential access to work around
+this limitation without explicit authorization. Existing automation protection
+credentials remain inside the process and never enter release evidence.
 Vercel's independent Git deployment is disabled in `vercel.json` so it cannot
 publish one league before the paired checks finish.
 
-The same workflow is available to an authenticated release operator:
+Publish both sites together through an authenticated release operator:
 
 ```sh
 npm run release:both -- --check
@@ -65,8 +68,8 @@ One committed Prisma schema and migration history applies to both independent
 databases. The release checks both against that same history; schema drift in
 either blocks the paired promotion. Builds never run production migrations.
 
-Changes classified as affecting the database or scheduler stop automatic
-deployment before promotion. Complete the existing backup, restore, guarded
+Changes classified as affecting the database or scheduler stop the paired
+release before production staging. Complete the existing backup, restore, guarded
 migration and/or scheduler procedure for every affected region. Run the same
 reviewed migration release against each database with its own temporary DDL
 credentials. Record evidence for both; never mark a failed region complete.
