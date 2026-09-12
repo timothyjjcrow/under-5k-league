@@ -47,10 +47,13 @@ test("provider errors never include returned credentials or response bodies", as
 test("runtime logs are paginated, include nested failures, and reject mixed deployments", async () => {
   const target = LEAGUE_TARGETS[0];
   let page = 0;
-  const provider = projectProvider(target, "fixture-access", async () => Response.json({
+  const provider = projectProvider(target, "fixture-access", async (url) => {
+    assert.equal(new URL(url).searchParams.get("teamId"), "team_AAPVeTcNEWDyESODtRIjzyry");
+    return Response.json({
     rows: [{ deploymentId: "dpl_fixture123", timestamp: `2026-09-12T10:0${page}:00Z`, statusCode: 200, requestPath: "/api/cron/automation", logs: page ? [{ level: "error" }] : [] }],
     hasMoreRows: page++ === 0,
-  }));
+    });
+  });
   const logs = await provider.logs("dpl_fixture123", 0);
   assert.equal(logs.length, 2);
   assert.throws(() => scheduledPasses(logs, 0), /runtime errors/);

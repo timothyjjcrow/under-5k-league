@@ -11,7 +11,7 @@ export function projectProvider(target, token, request = fetch) {
     try {
       response = await request(url, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, redirect: "error", signal: AbortSignal.timeout(45_000) });
     } catch { throw new Error(`${target.region}: provider request failed`); }
-    if (!response.ok) throw new Error(`${target.region}: provider request failed (HTTP ${response.status})`);
+    if (!response.ok) throw new Error(`${target.region}: ${new URL(url).pathname} failed (HTTP ${response.status})`);
     const text = await response.text();
     try { return text ? JSON.parse(text) : null; }
     catch { throw new Error(`${target.region}: provider returned an invalid response`); }
@@ -46,7 +46,7 @@ export function projectProvider(target, token, request = fetch) {
     async logs(id, since) {
       const logs = [];
       for (let page = 0; page < 5; page++) {
-        const query = new URLSearchParams({ projectId: target.projectId, ownerId: VERCEL_TEAM_ID, deploymentId: id, startDate: String(since), endDate: String(Date.now()), page: String(page) });
+        const query = new URLSearchParams({ projectId: target.projectId, ownerId: VERCEL_TEAM_ID, teamId: VERCEL_TEAM_ID, deploymentId: id, startDate: String(since), endDate: String(Date.now()), page: String(page) });
         const data = await json(`https://vercel.com/api/logs/request-logs?${query}`);
         if (!Array.isArray(data?.rows)) throw new Error(`${target.region}: invalid runtime log response`);
         for (const row of data.rows) {
