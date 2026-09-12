@@ -37,6 +37,11 @@ jobs:
           node-version: "22.x"
       # Remote builds keep sensitive production variables inside Vercel.
       # No league database or Discord credentials are copied to GitHub.
+      - name: Verify project-scoped release access
+        run: node scripts/release-provider.mjs
+        env:
+          VERCEL_US_TOKEN: ${{ secrets.VERCEL_US_TOKEN }}
+          VERCEL_EU_TOKEN: ${{ secrets.VERCEL_EU_TOKEN }}
       - name: Verify CI, rehearse both previews, stage and promote both leagues
         run: npm run release:both -- --apply --output output/shared-release.json
         env:

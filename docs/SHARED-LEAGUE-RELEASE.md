@@ -18,6 +18,11 @@ regular season, playoffs and BO1/BO3 tiebreakers. The shared release workflow
 runs after successful `main` push CI. It requires dedicated `VERCEL_US_TOKEN`
 and `VERCEL_EU_TOKEN` GitHub Actions secrets scoped to the corresponding Vercel
 projects. Configure these through the providers; do not commit token values.
+Project-scoped credentials use explicit project IDs and project API operations
+for protected health checks, promotion and runtime logs. The workflow verifies
+this read-only access before attempting a release; it never needs a token with
+access to unrelated projects. Existing automation protection credentials remain
+inside the process and are never written to release evidence.
 Vercel's independent Git deployment is disabled in `vercel.json` so it cannot
 publish one league before the paired checks finish.
 

@@ -1,15 +1,29 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { LEAGUE_TARGETS, VERCEL_TEAM_ID, VERCEL_SCOPE, RELEASE_REPOSITORY, assertDeployment, assertReleaseInfo, promotePair } from "./league-targets.mjs";
+import { projectProvider } from "./release-provider.mjs";
 
 const exec = promisify(execFile);
 const SHA = /^[0-9a-f]{40}$/;
 const CLI = "vercel@59.11.7";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// --scope asks the CLI to load account-wide user/team resources. Project
+// credentials deliberately cannot read those; the explicit ORG_ID/PROJECT_ID
+// environment and linked checkout already select the authorized project.
+export function cliScopeArgs(target, env = process.env) {
+  return env[target.tokenEnv] ? [] : ["--scope", VERCEL_SCOPE];
+}
+
+export async function createReleaseDirectory(root = tmpdir()) {
+  // Node resolves import.meta.url through symlinks. The trusted classifier's
+  // entry-point check also needs argv[1] to use the real path (macOS /var).
+  return mkdtemp(path.join(await realpath(root), "ggd2l-shared-release-"));
+}
 
 async function command(file, args, options = {}) {
   try {
@@ -82,13 +96,17 @@ export async function runRelease(argv = process.argv.slice(2)) {
     const main = await command("git", ["rev-parse", "origin/main"], { cwd });
     if (main !== sha) throw new Error("A newer main commit exists; this superseded release will not deploy");
   }
-  const temporary = await mkdtemp(path.join(tmpdir(), "ggd2l-shared-release-"));
+  const temporary = await createReleaseDirectory();
   const output = path.resolve(options["--output"] || "output/shared-release.json");
   const report = { sha, startedAt: new Date().toISOString(), status: "planning", bases: {}, classifications: {}, candidates: {}, previews: {}, events: [] };
   const save = async () => { await mkdir(path.dirname(output), { recursive: true }); await writeFile(output, JSON.stringify(report, null, 2) + "\n"); };
   const envFor = (target) => ({ ...process.env, VERCEL_ORG_ID: VERCEL_TEAM_ID, VERCEL_PROJECT_ID: target.projectId,
     ...(process.env[target.tokenEnv] ? { VERCEL_TOKEN: process.env[target.tokenEnv] } : {}) });
-  const api = async (target, endpoint) => JSON.parse(await command("npx", ["--yes", CLI, "api", `${endpoint}${endpoint.includes("?") ? "&" : "?"}teamId=${VERCEL_TEAM_ID}`], { cwd, env: envFor(target) }));
+  const providers = new Map(LEAGUE_TARGETS.filter((target) => process.env[target.tokenEnv])
+    .map((target) => [target.region, projectProvider(target, process.env[target.tokenEnv])]));
+  const api = async (target, endpoint) => providers.has(target.region)
+    ? providers.get(target.region).api(endpoint)
+    : JSON.parse(await command("npx", ["--yes", CLI, "api", `${endpoint}${endpoint.includes("?") ? "&" : "?"}teamId=${VERCEL_TEAM_ID}`], { cwd, env: envFor(target) }));
   const deployment = (target, id) => api(target, `/v13/deployments/${encodeURIComponent(id)}`);
   const readLive = async (target) => {
     const alias = await api(target, `/v4/aliases/${new URL(target.origin).hostname}`);
@@ -99,11 +117,14 @@ export async function runRelease(argv = process.argv.slice(2)) {
     return { id: d.id, sha: commit, url: d.url };
   };
   const probe = async (target, url, pathname) => {
+    if (providers.has(target.region)) return providers.get(target.region).probe(url, pathname);
     return command("npx", ["--yes", CLI, "curl", pathname, "--deployment", url, "--yes", "--", "--fail", "--silent", "--show-error", "--max-time", "45"], { cwd, env: envFor(target) });
   };
   const verify = async (target, d, production) => {
-    assertDeployment(target, await deployment(target, d.id), sha, production);
-    const url = `https://${d.url}`;
+    const actual = await deployment(target, d.id);
+    assertDeployment(target, actual, sha, production);
+    if (d.url !== actual.url) throw new Error(`${target.region}: recorded deployment URL does not match its identity`);
+    const url = `https://${actual.url}`;
     assertReleaseInfo(target, JSON.parse(await probe(target, url, "/api/health/release")), sha);
     for (const kind of ["live", "ready", ...(production && !report.classifications[target.region]?.needs_scheduler_pause ? ["automation"] : [])])
       if (JSON.parse(await probe(target, url, `/api/health/${kind}`)).ok !== true)
@@ -146,7 +167,7 @@ export async function runRelease(argv = process.argv.slice(2)) {
       await command("git", ["worktree", "add", "--detach", directory, sha], { cwd }); worktrees.push(directory);
       await mkdir(path.join(directory, ".vercel"), { recursive: true });
       await writeFile(path.join(directory, ".vercel/project.json"), JSON.stringify({ orgId: VERCEL_TEAM_ID, projectId: target.projectId, projectName: target.name }));
-      const stdout = await command("npx", ["--yes", CLI, "deploy", "--yes", "--scope", VERCEL_SCOPE,
+      const stdout = await command("npx", ["--yes", CLI, "deploy", "--yes", ...cliScopeArgs(target),
         ...(production ? ["--prod", "--skip-domain"] : []),
         "--env", `LEAGUE_RELEASE_SHA=${sha}`, "--build-env", `LEAGUE_RELEASE_SHA=${sha}`], { cwd: directory, env: envFor(target) });
       const url = stdout.match(/https:\/\/[a-z0-9-]+\.vercel\.app\b/)?.[0];
@@ -191,7 +212,8 @@ export async function runRelease(argv = process.argv.slice(2)) {
       if (remote.split(/\s/)[0] !== sha) throw new Error("A newer main commit exists; staged candidates will not replace production");
     }
     const promote = async (target, id) => {
-      await command("npx", ["--yes", CLI, "promote", id, "--yes", "--scope", VERCEL_SCOPE], { cwd, env: envFor(target) });
+      if (providers.has(target.region)) await providers.get(target.region).promote(id);
+      else await command("npx", ["--yes", CLI, "promote", id, "--yes", ...cliScopeArgs(target)], { cwd, env: envFor(target) });
       for (let attempt = 0; attempt < 12; attempt++) {
         if ((await readLive(target)).id === id) return;
         await sleep(5000);
@@ -210,10 +232,14 @@ export async function runRelease(argv = process.argv.slice(2)) {
           console.log(`Observing two scheduled automation passes for ${target.region}.`);
           let passes = null;
           for (let attempt = 0; attempt < 12 && !passes; attempt++) {
-            const raw = await command("npx", ["--yes", CLI, "logs", "--project", target.projectId,
-              "--deployment", report.candidates[target.region].id, "--since", new Date(promotedAt).toISOString(),
-              "--json", "--limit", "100"], { cwd, env: envFor(target) });
-            const logs = raw ? raw.split("\n").map((line) => JSON.parse(line)) : [];
+            let logs;
+            if (providers.has(target.region)) logs = await providers.get(target.region).logs(report.candidates[target.region].id, promotedAt);
+            else {
+              const raw = await command("npx", ["--yes", CLI, "logs", "--project", target.projectId,
+                "--deployment", report.candidates[target.region].id, "--since", new Date(promotedAt).toISOString(),
+                "--json", "--limit", "100"], { cwd, env: envFor(target) });
+              logs = raw ? raw.split("\n").map((line) => JSON.parse(line)) : [];
+            }
             passes = scheduledPasses(logs, promotedAt);
             if (!passes) await sleep(15_000);
           }

@@ -1,11 +1,82 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, symlink, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { LEAGUE_TARGETS, assertDeployment, assertReleaseInfo, promotePair } from "./league-targets.mjs";
-import { requireSuccessfulCi, requireMaintenanceEvidence, scheduledPasses } from "./release-both.mjs";
+import { requireSuccessfulCi, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory } from "./release-both.mjs";
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
+import { projectProvider } from "./release-provider.mjs";
 
 const sha = "a".repeat(40);
 const baseSha = "b".repeat(40);
+test("provider requests isolate project credentials, protection headers, and promotion targets", async () => {
+  for (const target of LEAGUE_TARGETS) {
+    const calls = [];
+    const request = async (url, init) => {
+      calls.push({ url: String(url), init });
+      if (String(url).includes('/v9/projects/'))
+        return Response.json({ id: target.projectId, protectionBypass: { "fixture-bypass": { scope: "automation-bypass" } } });
+      if (String(url).includes('/promote/')) return new Response(null, { status: 204 });
+      return Response.json({ ok: true });
+    };
+    const provider = projectProvider(target, "fixture-access", request);
+    await provider.probe(target.origin, "/api/health/live");
+    await provider.promote("dpl_fixture123");
+    assert.equal(calls[0].init.headers.Authorization, "Bearer fixture-access");
+    assert.equal(calls[1].init.headers.Authorization, undefined);
+    assert.equal(calls[1].init.headers["x-vercel-protection-bypass"], "fixture-bypass");
+    assert.ok(calls.every((call) => call.init.redirect === "error"));
+    assert.ok(calls[2].url.includes(`/projects/${target.projectId}/promote/dpl_fixture123`));
+    assert.equal(calls[2].init.method, "POST");
+    assert.equal(calls[2].init.body, "{}");
+    await assert.rejects(provider.probe("https://example.com", "/"), /unexpected deployment/);
+    await assert.rejects(provider.probe(target.origin, "//example.com"), /invalid probe/);
+    assert.equal(calls.length, 3);
+  }
+});
+test("provider errors never include returned credentials or response bodies", async () => {
+  const target = LEAGUE_TARGETS[0];
+  const provider = projectProvider(target, "fixture-access", async () => new Response("private-provider-body", { status: 403 }));
+  await assert.rejects(provider.api(`/v9/projects/${target.projectId}`), (error) => {
+    assert.match(error.message, /HTTP 403/);
+    assert.doesNotMatch(error.message, /fixture-access|private-provider-body/);
+    return true;
+  });
+});
+test("runtime logs are paginated, include nested failures, and reject mixed deployments", async () => {
+  const target = LEAGUE_TARGETS[0];
+  let page = 0;
+  const provider = projectProvider(target, "fixture-access", async () => Response.json({
+    rows: [{ deploymentId: "dpl_fixture123", timestamp: `2026-09-12T10:0${page}:00Z`, statusCode: 200, requestPath: "/api/cron/automation", logs: page ? [{ level: "error" }] : [] }],
+    hasMoreRows: page++ === 0,
+  }));
+  const logs = await provider.logs("dpl_fixture123", 0);
+  assert.equal(logs.length, 2);
+  assert.throws(() => scheduledPasses(logs, 0), /runtime errors/);
+  const mixed = projectProvider(target, "fixture-access", async () => Response.json({ rows: [{ deploymentId: "dpl_wrong" }] }));
+  await assert.rejects(mixed.logs("dpl_fixture123", 0), /unexpected deployment/);
+  const malformed = projectProvider(target, "fixture-access", async () => Response.json({}));
+  await assert.rejects(malformed.logs("dpl_fixture123", 0), /invalid runtime log/);
+});
+test("project credentials use linked project context without account-wide CLI scope lookup", () => {
+  for (const target of LEAGUE_TARGETS) {
+    assert.deepEqual(cliScopeArgs(target, { [target.tokenEnv]: "fixture-token" }), []);
+    assert.deepEqual(cliScopeArgs(target, {}), ["--scope", "timothyjjcrows-projects"]);
+    const other = LEAGUE_TARGETS.find((candidate) => candidate !== target);
+    assert.equal(cliScopeArgs(target, { [other.tokenEnv]: "fixture-token" })[0], "--scope");
+  }
+});
+test("temporary classifier paths resolve symlinks before Node entry-point checks", async () => {
+  const temporary = await mkdtemp(path.join(await realpath(tmpdir()), "release-path-test-"));
+  try {
+    await mkdir(path.join(temporary, "actual"));
+    await symlink(path.join(temporary, "actual"), path.join(temporary, "alias"), "dir");
+    const directory = await createReleaseDirectory(path.join(temporary, "alias"));
+    assert.equal(directory, await realpath(directory));
+    assert.equal(path.dirname(directory), path.join(temporary, "actual"));
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
 test("hosted migration jobs require a full approved commit, production validation and temporary URLs", () => {
   const env = { VERCEL_ENV: "production", HOSTED_MIGRATION_RELEASE_SHA: sha, HOSTED_MIGRATION_DATABASE_URL: "postgresql://fixture", HOSTED_MIGRATION_DIRECT_URL: "postgresql://fixture" };
   assert.equal(hostedReleaseInputs(env).sha, sha);
