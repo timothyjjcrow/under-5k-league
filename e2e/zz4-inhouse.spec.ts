@@ -256,7 +256,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     await expect(page.getByText(/without this ticket, the game will not appear on OpenDota/i)).toBeVisible();
   } else {
     await expect(page.getByTitle("Copy league ticket")).toHaveCount(0);
-    await expect(page.getByText(LEAGUE_CONFIG.inhouseLeagueName, { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Game setup", { exact: true }).getByText(LEAGUE_CONFIG.inhouseLeagueName, { exact: true })).toBeVisible();
     await expect(page.getByText("The league administrators will provide the European ticket before tracked inhouse games begin.")).toBeVisible();
   }
   await expect(page.getByText(/inhouse team [12]/).first()).toBeVisible();
