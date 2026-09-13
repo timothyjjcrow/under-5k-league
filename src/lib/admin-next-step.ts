@@ -179,7 +179,7 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: `Tiebreaker week — ${pendingTiebreakerResults} result(s) outstanding.`,
         detail:
-          "Finish the best-of-three tiebreakers to settle playoff qualification and seed order. Keep the season in Regular season until every required tie is resolved.",
+          "Finish the tiebreaker bracket to settle playoff qualification and seed order. Keep the season in Regular season until every required tie is resolved.",
         tone: "waiting",
       };
     }
@@ -187,7 +187,7 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: "Next step: schedule a tiebreaker week.",
         detail:
-          "Teams remain tied for playoff qualification or seeding. Schedule best-of-three tiebreakers before starting the playoffs.",
+          "Teams remain tied for playoff qualification or seeding. Schedule the tiebreaker week before starting the playoffs.",
         tone: "action",
       };
     }

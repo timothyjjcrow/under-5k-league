@@ -117,7 +117,8 @@ describe("adminNextStep — regular season", () => {
       unresolvedPlayoffTieCount: 2,
     });
     expect(result.title).toMatch(/schedule a tiebreaker week/i);
-    expect(result.detail).toMatch(/best-of-three/);
+    expect(result.detail).toMatch(/tiebreaker week/);
+    expect(result.detail).not.toMatch(/best-of-three/);
   });
 
   it("waits for scheduled tiebreaker results before prompting playoffs", () => {

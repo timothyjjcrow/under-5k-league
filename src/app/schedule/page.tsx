@@ -10,6 +10,8 @@ import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { TiebreakerNotice } from "@/components/tiebreaker-notice";
+import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
+import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
 import type { ScenarioReport } from "@/lib/scenarios";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
@@ -490,6 +492,7 @@ export default async function SchedulePage() {
       nightInitial: night ? formatMatchTime(night, "date") : null,
     };
   });
+  const tiebreakerBrackets = buildTiebreakerBrackets({ projection: playoffField, teams, matches });
   const playoffRoundViews: WeekView[] = playoffGrouping.rounds.map((r) => {
     const night = earliestScheduled(r.matches);
     return {
@@ -704,10 +707,10 @@ export default async function SchedulePage() {
       {tiebreakers.length > 0 ||
       (status.allComplete && playoffField.seedingDeadHeatTeamIds.length > 0) ? (
         <section id="tiebreakers" className="scroll-mt-24 space-y-4">
-          <SectionTitle>Tiebreaker week</SectionTitle>
+          <SectionTitle>Tiebreaker bracket</SectionTitle>
           {season.status === "REGULAR_SEASON" ? (
             <TiebreakerNotice
-          report={stakesReport}
+              report={stakesReport}
               projection={playoffField}
               teams={teams}
               regularComplete={status.allComplete}
@@ -715,16 +718,26 @@ export default async function SchedulePage() {
               scheduleLink={false}
             />
           ) : null}
+          {tiebreakerBrackets.groups.map((bracket) => (
+            <TiebreakerBracket key={bracket.key} bracket={bracket} teams={teams} postseasonStarted={season.status === "PLAYOFFS" || season.status === "COMPLETE"} />
+          ))}
+          {tiebreakerBrackets.error && season.status !== "REGULAR_SEASON" ? (
+            <p className="text-sm text-accent">The tiebreaker bracket needs an administrator’s review. Recorded matches are available below.</p>
+          ) : null}
           {tiebreakerWeekViews.length > 0 ? (
-            <ScheduleWeeks
-              weeks={tiebreakerWeekViews}
-              teams={teams.map((team) => ({
-                id: team.id,
-                name: team.name,
-                logoUrl: team.logoUrl,
-              }))}
-              initialTeamId={[...myTeamIds][0]}
-            />
+            <details data-testid="tiebreaker-match-details" className="rounded-xl border border-line p-4">
+              <summary className="cursor-pointer text-sm font-medium text-info">Match details &amp; check-in</summary>
+              <p className="mb-4 mt-2 text-xs text-muted">Published matches only. Later games are added as their teams are decided.</p>
+              <ScheduleWeeks
+                weeks={tiebreakerWeekViews}
+                teams={teams.map((team) => ({
+                  id: team.id,
+                  name: team.name,
+                  logoUrl: team.logoUrl,
+                }))}
+                initialTeamId={[...myTeamIds][0]}
+              />
+            </details>
           ) : (
             <p className="text-sm text-muted">
               An administrator will schedule the required tiebreaker matches

@@ -160,7 +160,7 @@ export function RegularSeasonProgress({ progress }: { progress: Progress }) {
           {progress.tiebreakerTotal > 0 ? (
             <p className="mt-2 text-xs text-accent">
               {progress.tiebreakerPending > 0
-                ? `Tiebreaker week${progress.tiebreakerFocusWeek != null ? ` ${progress.tiebreakerFocusWeek}` : ""} · ${progress.tiebreakerPending} tiebreaker result(s) pending`
+                ? `Tiebreaker week${progress.tiebreakerFocusWeek != null ? ` ${progress.tiebreakerFocusWeek}` : ""} in progress · See the full tiebreaker bracket for remaining games`
                 : `${progress.tiebreakerCompleted} tiebreaker series complete`}
             </p>
           ) : null}

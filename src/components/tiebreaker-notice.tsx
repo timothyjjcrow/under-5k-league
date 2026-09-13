@@ -64,6 +64,12 @@ export function TiebreakerNotice({
           ? "Playoff tiebreaker week"
           : "Playoff tiebreakers complete"}
       </p>
+      {hasThreeTeamBracket && unresolved.length > 0 && !projection.tiebreakers.error ? (
+        <p className="text-xs text-fg">
+          Three teams · 4–5 best-of-one games · One tiebreaker week.
+          {byes.length > 0 ? ` ${byes.map((id) => names.get(id) ?? id).join(", ")} starts in Game 2 with an opening bye.` : " The opening matchup and bye will be drawn when scheduled."}
+        </p>
+      ) : null}
       <p className="text-muted">
         {projection.tiebreakers.error
           ? "The tiebreaker fixtures need an administrator's review before the playoff bracket can start."
@@ -95,7 +101,7 @@ export function TiebreakerNotice({
           href="/schedule#tiebreakers"
           className="inline-block py-1 text-info hover:underline"
         >
-          Tiebreaker schedule →
+          View tiebreaker bracket →
         </Link>
       ) : null}
     </aside>

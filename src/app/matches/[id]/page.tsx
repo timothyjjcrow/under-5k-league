@@ -259,11 +259,18 @@ export default async function MatchDetailPage({
       />
 
       {match.phase === "TIEBREAKER" ? (
-        <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
-          <strong>Playoff tiebreaker · Best of {match.bestOf}.</strong>{" "}
-          {tiebreakerStage ? `Game ${tiebreakerStage}${tiebreakerStage === 5 ? " · Deciding final" : tiebreakerStage === 4 ? " · Final" : tiebreakerStage === 3 ? " · Elimination game" : ""}. ` : ""}
-          This match settles playoff qualification or seeding. Regular-season
-          points stay the same.
+        <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
+          <p><strong>Playoff tiebreaker · Best of {match.bestOf}.</strong>{" "}
+            {tiebreakerStage ? `Game ${tiebreakerStage} of a three-team bracket: four games, or five if the final needs a reset.` : "This series helps settle playoff qualification or seeding."}
+          </p>
+          {tiebreakerStage ? <p className="text-xs text-muted">{
+            tiebreakerStage === 1 ? "Winner plays the team with the bye in Game 2. Loser plays in Game 3."
+              : tiebreakerStage === 2 ? "Winner advances to Game 4. Loser plays the loser of Game 1 in Game 3."
+                : tiebreakerStage === 3 ? "Winner advances to Game 4. Loser finishes third in the tiebreaker."
+                  : tiebreakerStage === 4 ? "If the team from Game 2 wins, the bracket is complete. If the team from Game 3 wins, both teams play Game 5."
+                    : "Deciding final: winner finishes first, loser finishes second in the tiebreaker."
+          }</p> : null}
+          <Link href={match.season.isActive ? "/schedule#tiebreakers" : `/seasons/${match.seasonId}`} className="inline-block py-1 text-info hover:underline">{match.season.isActive ? "View full tiebreaker bracket →" : "View tiebreaker results →"}</Link>
         </div>
       ) : null}
 

@@ -382,7 +382,7 @@ export async function createPlayoffBracket(
         }
         if (!playoffField.tiebreakers.resolved || playoffField.seedingDeadHeatTeamIds.length > 0) {
           throw new UserFacingError(
-            "Playoff qualification or seeding is still tied. Schedule and complete the best-of-three tiebreaker week before starting playoffs.",
+            "Playoff qualification or seeding is still tied. Schedule and complete the tiebreaker week before starting playoffs.",
           );
         }
 
