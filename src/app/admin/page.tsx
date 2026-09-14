@@ -93,6 +93,9 @@ import {
   resetTiebreakerWeek,
 } from "@/app/actions/tiebreakers";
 import { hasLaterTiebreakerStage, parseTiebreakerStage } from "@/lib/tiebreaker-format";
+import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
+import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
+import { schedulableAdminTiebreakerGroups } from "@/components/admin-tiebreaker-view";
 import { cancelReschedule } from "@/app/actions/reschedule";
 import { adjustCredAction } from "@/app/actions/inhouse-bets";
 import {
@@ -245,6 +248,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const season = await getActiveSeason();
 
   const data = season ? await loadSeasonAdminData(season.id) : null;
+  const showTiebreakers = data != null && (
+    data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
+    (regularSeasonStatus(data.matches).allComplete &&
+      projectPlayoffField(data.teams, data.matches).tiebreakers.groups.length > 0)
+  );
   const handoffReadiness =
     season && data
       ? completedSeasonArchiveReadiness(
@@ -281,6 +289,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           ...(season && data
             ? [
                 { id: "adm-attention", label: "Needs attention" },
+                ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
                 { id: "adm-schedule", label: "Schedule & results" },
                 { id: "adm-playoffs", label: "Playoffs" },
                 ...(rosterMovesVisible(season, data)
@@ -311,6 +320,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       {season && data ? (
         <>
           <AdminAttention season={season} data={data} />
+          {showTiebreakers ? (
+            <AdminAnchor id="adm-tiebreakers">
+              <TiebreakerControls season={season} data={data} />
+            </AdminAnchor>
+          ) : null}
           {season.status === "SIGNUPS" || season.status === "DRAFT" ? setupControls : null}
           <AdminAnchor id="adm-schedule">
             <ScheduleControls season={season} data={data} />
@@ -965,6 +979,9 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
       .length,
     pendingTiebreakerResults: data.matches.filter(
       (m) => m.phase === "TIEBREAKER" && m.status !== "COMPLETED",
+    ).length,
+    existingTiebreakerCount: data.matches.filter(
+      (match) => match.phase === MATCH_PHASE.TIEBREAKER,
     ).length,
     unresolvedPlayoffTieCount: projectPlayoffField(data.teams, data.matches)
       .seedingDeadHeatTeamIds.length,
@@ -2471,6 +2488,108 @@ function CaptainControls({
   );
 }
 
+function TiebreakerControls({ season, data }: { season: Season; data: AdminData }) {
+  const projection = projectPlayoffField(data.teams, data.matches);
+  const brackets = buildTiebreakerBrackets({ projection, teams: data.teams, matches: data.matches });
+  const tiebreakerMatches = data.matches.filter((match) => match.phase === MATCH_PHASE.TIEBREAKER);
+  const hasBo1Bracket = brackets.groups.some((bracket) => bracket.format === "BO1_DOUBLE_ELIMINATION");
+  const postseasonStarted = season.status !== SEASON_STATUS.REGULAR_SEASON ||
+    data.matches.some((match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL);
+  const canSchedule = !postseasonStarted && regularSeasonStatus(data.matches).allComplete &&
+    schedulableAdminTiebreakerGroups(projection.tiebreakers).length > 0;
+  const pending = tiebreakerMatches.filter((match) => match.status !== MATCH_STATUS.COMPLETED);
+  const names = new Map(data.teams.map((team) => [team.id, team.name]));
+  return (
+    <Card>
+      <CardHeader headingLevel={2} title="Tiebreakers" subtitle="Full bracket, match times and results — before playoffs." action={
+        <Link href="/schedule#tiebreakers" className={textLink("text-sm")}>Player view →</Link>
+      } />
+      <CardBody className="space-y-5">
+        <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm">
+          {hasBo1Bracket ? (
+            <p>Only games with decided opponents have match controls. Finalizing or importing a result creates the next game automatically. Games 2–5 stay in the same tiebreaker week; Game 5 is only created if needed.</p>
+          ) : (
+            <p>Manage each created tiebreaker match below. Finish all required tiebreakers before starting playoffs.</p>
+          )}
+          {hasBo1Bracket && !postseasonStarted ? (
+            <p className="text-xs text-muted">Keep the season in Regular season. Check the next game’s kickoff after each result; if the opening game has no time, set each new game’s time below.</p>
+          ) : null}
+          {canSchedule ? (
+            <a href="#playoffs" className={textLink("inline-block py-1")}>
+              {tiebreakerMatches.length > 0 ? "Next match is ready to create — open tiebreaker controls →" : "Schedule the opening matches in Playoffs controls →"}
+            </a>
+          ) : null}
+          {pending.length > 0 && !postseasonStarted ? (
+            <div className="flex flex-wrap gap-x-4 gap-y-2" aria-label="Current tiebreaker matches">
+              {pending.map((match) => (
+                <a key={match.id} href={`#admin-tiebreaker-match-${match.id}`} className={textLink("py-1")}>
+                  Manage {parseTiebreakerStage(match.bracketSlot) ? `Game ${parseTiebreakerStage(match.bracketSlot)!.stage}` : "series"}: {names.get(match.homeTeamId ?? "")} vs {names.get(match.awayTeamId ?? "")} →
+                </a>
+              ))}
+            </div>
+          ) : null}
+          {projection.tiebreakers.resolved && tiebreakerMatches.length > 0 && !postseasonStarted ? (
+            <p>Tiebreakers complete. <a href="#playoffs" className={textLink()}>Review the seeds and start playoffs →</a></p>
+          ) : null}
+          {postseasonStarted ? <p className="text-xs text-muted">Tiebreaker results are read-only once playoffs begin.</p> : null}
+        </div>
+        {brackets.error ? <p role="alert" className="text-sm text-danger">{brackets.error} Review the recorded matches below and the recovery controls in Playoffs.</p> : null}
+        {brackets.groups.map((bracket) => (
+          <TiebreakerBracket key={bracket.key} bracket={bracket} teams={data.teams} postseasonStarted={postseasonStarted} admin />
+        ))}
+        {tiebreakerMatches.length > 0 ? <h3 className="font-medium">Match controls</h3> : null}
+        {[...new Set(tiebreakerMatches.map((m) => m.week))].map((week) => {
+          const weekMatches = tiebreakerMatches.filter(
+            (m) => m.week === week,
+          );
+          const pending = weekMatches.filter(
+            (m) => m.status !== "COMPLETED",
+          ).length;
+          return (
+            <details
+              key={`tb${week}`}
+              open
+              className="rounded-lg border border-accent/40"
+            >
+              <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                Tiebreaker week · Week {week} · {weekMatches.every((match) => match.bestOf === 1) ? "Best of 1" : weekMatches.every((match) => match.bestOf === 3) ? "Best of 3" : "Best of 1 / Best of 3"}
+                <span className="ml-2 text-xs font-normal text-muted">
+                  {weekMatches.length - pending}/{weekMatches.length}{" "}
+                  created matches entered
+                </span>
+              </summary>
+              <div className="space-y-2 px-3 pb-3">
+                {weekMatches.map((m) => (
+                  <div key={m.id} id={`admin-tiebreaker-match-${m.id}`} data-testid="admin-tiebreaker-match" className="scroll-mt-40">
+                    <MatchResultRow
+                      m={m}
+                      teams={data.teams}
+                      expectedActiveSeasonId={season.id}
+                      seasonStatus={season.status}
+                      draftStatus={data.draft?.status ?? null}
+                      championTeamId={season.championTeamId}
+                      correctionBlockedByLaterRound={hasLaterTiebreakerStage(m, tiebreakerMatches)}
+                      isSoleLatestPlayoffSeries={false}
+                      label={
+                        <Link
+                          href={`/matches/${m.id}`}
+                          className={textLink("shrink-0 text-xs")}
+                        >
+                          TB · {parseTiebreakerStage(m.bracketSlot) ? `Game ${parseTiebreakerStage(m.bracketSlot)!.stage}` : `Wk ${m.week}`} · BO{m.bestOf}
+                        </Link>
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            </details>
+          );
+        })}
+      </CardBody>
+    </Card>
+  );
+}
+
 function ScheduleControls({
   season,
   data,
@@ -2633,7 +2752,7 @@ function ScheduleControls({
                       ? `✓ Season complete — all ${status.total} regular-season results recorded.`
                       : playoffField.seedingDeadHeatTeamIds.length > 0 ||
                           playoffField.tiebreakers.error
-                        ? `All ${status.total} regular-season results in — resolve the playoff tiebreakers in the Playoffs controls below.`
+                        ? `All ${status.total} regular-season results in — finish the bracket in Tiebreakers above before starting playoffs.`
                         : `✓ All ${status.total} results in — ready to start the playoffs.`}
               </div>
             ) : null}
@@ -2748,52 +2867,6 @@ function ScheduleControls({
                             className={textLink("w-14 shrink-0 text-xs")}
                           >
                             Wk {m.week}
-                          </Link>
-                        }
-                      />
-                    ))}
-                  </div>
-                </details>
-              );
-            })}
-            {[...new Set(tiebreakerMatches.map((m) => m.week))].map((week) => {
-              const weekMatches = tiebreakerMatches.filter(
-                (m) => m.week === week,
-              );
-              const pending = weekMatches.filter(
-                (m) => m.status !== "COMPLETED",
-              ).length;
-              return (
-                <details
-                  key={`tb${week}`}
-                  open={pending > 0}
-                  className="rounded-lg border border-accent/40"
-                >
-                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
-                    Tiebreaker week · Week {week} · {weekMatches.every((match) => match.bestOf === 1) ? "Best of 1" : weekMatches.every((match) => match.bestOf === 3) ? "Best of 3" : "Best of 1 / Best of 3"}
-                    <span className="ml-2 text-xs font-normal text-muted">
-                      {weekMatches.length - pending}/{weekMatches.length}{" "}
-                      entered
-                    </span>
-                  </summary>
-                  <div className="space-y-2 px-3 pb-3">
-                    {weekMatches.map((m) => (
-                      <MatchResultRow
-                        key={m.id}
-                        m={m}
-                        teams={data.teams}
-                        expectedActiveSeasonId={season.id}
-                        seasonStatus={season.status}
-                        draftStatus={data.draft?.status ?? null}
-                        championTeamId={season.championTeamId}
-                        correctionBlockedByLaterRound={hasLaterTiebreakerStage(m, tiebreakerMatches)}
-                        isSoleLatestPlayoffSeries={false}
-                        label={
-                          <Link
-                            href={`/matches/${m.id}`}
-                            className={textLink("shrink-0 text-xs")}
-                          >
-                            TB · {parseTiebreakerStage(m.bracketSlot) ? `Game ${parseTiebreakerStage(m.bracketSlot)!.stage}` : `Wk ${m.week}`} · BO{m.bestOf}
                           </Link>
                         }
                       />
@@ -3243,13 +3316,12 @@ function PlayoffControls({
         ? "Complete every scheduled tiebreaker series before starting playoffs."
         : "Schedule the tiebreaker week to settle playoff qualification and seeding."
       : null);
+  const schedulableTiebreakers = schedulableAdminTiebreakerGroups(playoffField.tiebreakers);
   const scheduleTiebreakersOpen =
     season.status === SEASON_STATUS.REGULAR_SEASON &&
     status.allComplete &&
     playoffMatches.length === 0 &&
-    playoffField.tiebreakers.needsMatches &&
-    !playoffField.tiebreakers.pending &&
-    !playoffField.tiebreakers.error;
+    schedulableTiebreakers.length > 0;
   const champion = championPresentation.championTeamId
     ? data.teams.find((t) => t.id === championPresentation.championTeamId)
     : null;
@@ -3420,7 +3492,7 @@ function PlayoffControls({
                 four games, with a fifth only if the undefeated team loses the
                 first final. The opening matchup and bye are randomly drawn
                 when scheduled. Each result creates the next game automatically;
-                set its time in Schedule &amp; results. Two losses eliminate a
+                check its time in Tiebreakers. Two losses eliminate a
                 team, giving a definite first, second and third place.
                 {playoffField.tiebreakers.groups.some((group) => group.format === "BO3_ROUND_ROBIN" && group.teamIds.length > 2)
                   ? " Existing round robins and groups of four or more use best-of-three series; wins, then game differential rank each round. Remaining relevant ties play again."
@@ -3445,16 +3517,14 @@ function PlayoffControls({
               </p>
             ) : null}
             {playoffField.tiebreakers.pending ? (
-              <p className="text-xs text-muted">
-                Enter the scheduled tiebreaker scores in Schedule &amp; results
-                above.
-              </p>
+              <a href="#adm-tiebreakers" className={textLink("inline-block py-1 text-sm")}>
+                Manage the tiebreaker bracket, times and scores →
+              </a>
             ) : null}
             {scheduleTiebreakersOpen ? (
               <div className="space-y-2">
                 <ul className="space-y-1 text-xs text-muted">
-                  {playoffField.tiebreakers.groups
-                    .filter((group) => group.status === "needed")
+                  {schedulableTiebreakers
                     .flatMap((group) => group.drawRequired ? [
                       <li key={group.key}>
                         {group.teamIds.map((id) => teamNameById.get(id) ?? id).join(", ")} · Best of 1 · Opening matchup and bye drawn when scheduled
@@ -3475,7 +3545,7 @@ function PlayoffControls({
                     group.status === "needed" && group.teamIds.length > 2,
                 ) ? (
                   <p className="text-xs text-muted">
-                    Set a time for each match in Schedule &amp; results. Reserve
+                    Check each match time in Tiebreakers. Reserve
                     enough time in the tiebreaker week for the whole bracket;
                     later games appear as their participants are decided.
                   </p>
@@ -3488,7 +3558,7 @@ function PlayoffControls({
                   }}
                 >
                   <SubmitButton variant="secondary" size="sm">
-                    {playoffField.tiebreakers.groups.some((group) => group.status === "needed" && (group.stage ?? 1) > 1)
+                    {schedulableTiebreakers.some((group) => (group.stage ?? 1) > 1)
                       ? "Create next tiebreaker match"
                       : "Schedule tiebreaker week"}
                   </SubmitButton>
@@ -3588,7 +3658,7 @@ function PlayoffControls({
             </summary>
             <p className="mt-2 text-xs text-muted">
               After recreating the matching tiebreaker fixture, add these IDs
-              with its Add game control in Schedule &amp; results.
+              with its Add game control in <a href="#adm-tiebreakers" className={textLink()}>Tiebreakers</a>.
             </p>
             <ul className="mt-2 space-y-1 text-xs text-muted">
               {data.tiebreakerArchive.map((game) => (

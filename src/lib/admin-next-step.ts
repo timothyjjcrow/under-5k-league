@@ -36,6 +36,8 @@ export type AdminPhaseInput = {
   scheduledRegularCount: number;
   pendingRegularResults: number;
   pendingTiebreakerResults?: number;
+  /** Already-created tiebreaker fixtures, including completed games. */
+  existingTiebreakerCount?: number;
   /** Unresolved ties that still affect playoff qualification or seed order. */
   unresolvedPlayoffTieCount?: number;
   playoffMatchCount: number;
@@ -82,6 +84,7 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
     scheduledRegularCount,
     pendingRegularResults,
     pendingTiebreakerResults = 0,
+    existingTiebreakerCount = 0,
     unresolvedPlayoffTieCount = 0,
     playoffMatchCount,
     unfinishedPlayoffCount,
@@ -177,13 +180,21 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
     }
     if (pendingTiebreakerResults > 0) {
       return {
-        title: `Tiebreaker week — ${pendingTiebreakerResults} result(s) outstanding.`,
+        title: "Tiebreaker bracket in progress.",
         detail:
-          "Finish the tiebreaker bracket to settle playoff qualification and seed order. Keep the season in Regular season until every required tie is resolved.",
+          "Enter the current game in Tiebreakers. For three-team ties, each confirmed result creates the next required game automatically. Keep the season in Regular season until every required tie is resolved.",
         tone: "waiting",
       };
     }
     if (unresolvedPlayoffTieCount > 0) {
+      if (existingTiebreakerCount > 0) {
+        return {
+          title: "Next step: continue the tiebreaker bracket.",
+          detail:
+            "Review Tiebreakers, then use “Create next tiebreaker match” in the Playoffs controls, or schedule the next round if one is required. Keep the season in Regular season until every required tie is resolved.",
+          tone: "action",
+        };
+      }
       return {
         title: "Next step: schedule a tiebreaker week.",
         detail:

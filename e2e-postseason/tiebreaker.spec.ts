@@ -62,6 +62,20 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
   await expect(
     page.getByRole("button", { name: "Schedule tiebreaker week", exact: true }),
   ).toHaveCount(0);
+  const adminTiebreakers = page.locator("#adm-tiebreakers");
+  await page.locator('a[href="#adm-tiebreakers"]').first().click();
+  await expect(page).toHaveURL(/#adm-tiebreakers$/);
+  const adminBracket = adminTiebreakers.getByTestId("tiebreaker-bracket");
+  await expect(adminBracket).toHaveAttribute("data-format", "BO3_ROUND_ROBIN");
+  await expect(adminBracket.getByTestId("tiebreaker-game")).toHaveCount(1);
+  await expect(adminTiebreakers.getByTestId("admin-tiebreaker-match")).toHaveCount(1);
+  const manageSeries = adminBracket.getByRole("link", { name: "Manage series →", exact: true });
+  const seriesTarget = await manageSeries.getAttribute("href");
+  expect(seriesTarget).toMatch(/^#admin-tiebreaker-match-/);
+  await manageSeries.click();
+  await expect(page.locator(seriesTarget!).locator('input[name="homeScore"]')).toBeVisible();
+  await expect(page.locator(seriesTarget!).getByLabel("Kickoff time", { exact: true })).toBeVisible();
+  await expect(page.locator("#adm-schedule")).not.toContainText("Tiebreaker week · Week 6");
   await page
     .locator("#playoffs")
     .screenshot({ path: testInfo.outputPath("admin-tiebreaker-pending.png") });
@@ -102,8 +116,8 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
     page.getByText("Playoff tiebreaker · Best of 3.", { exact: true }),
   ).toBeVisible();
 
-  await page.goto("/admin#adm-schedule");
-  const result = page
+  await page.goto("/admin#adm-tiebreakers");
+  const result = adminTiebreakers
     .locator("details")
     .filter({
       has: page
@@ -111,6 +125,7 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
         .filter({ hasText: "Tiebreaker week · Week 6 · Best of 3" }),
     });
   await expect(result).toBeVisible();
+  await expect(adminBracket.getByRole("link", { name: "Manage series →", exact: true })).toBeVisible();
   const form = result.locator('form:has(input[name="homeScore"])');
   const winnerName = (await form
     .locator('input[name="awayScore"]')
@@ -238,10 +253,47 @@ for (const resetFinal of [false, true]) {
     await expectNoHorizontalOverflow(page, "three-team opening match context");
     await page.screenshot({ path: testInfo.outputPath("three-team-opening-match-mobile.png"), fullPage: true });
     await page.setViewportSize({ width: 1366, height: 900 });
-    await page.goto("/admin#adm-schedule");
-    const results = page.locator("details").filter({
+    await page.goto("/admin");
+    await page.locator('a[href="#adm-tiebreakers"]').first().click();
+    await expect(page).toHaveURL(/#adm-tiebreakers$/);
+    const adminTiebreakers = page.locator("#adm-tiebreakers");
+    const adminBracket = adminTiebreakers.getByTestId("tiebreaker-bracket");
+    const adminGame = (number: number) => adminBracket.locator(`[data-testid="tiebreaker-game"][data-game="${number}"]`);
+    const adminMatches = adminTiebreakers.getByTestId("admin-tiebreaker-match");
+    const results = adminTiebreakers.locator("details").filter({
       has: page.locator("summary").filter({ hasText: "Tiebreaker week · Week 6 · Best of 1" }),
     });
+    await expect(adminTiebreakers).toBeVisible();
+    await expect(adminBracket).toHaveAttribute("data-format", "BO1_DOUBLE_ELIMINATION");
+    await expect(adminBracket.getByTestId("tiebreaker-game")).toHaveCount(5);
+    await expect(adminMatches).toHaveCount(1);
+    await expect(adminBracket.getByRole("link", { name: "Manage game →", exact: true })).toHaveCount(1);
+    for (const name of tiedTeamNames) {
+      await expect(adminBracket.getByTestId("tiebreaker-teams").getByText(name, { exact: true })).toBeVisible();
+    }
+    await expect(adminGame(2).getByText(openingBye!, { exact: true })).toBeVisible();
+    await expect(adminTiebreakers).toContainText(/next game.*automatically/i);
+    await expect(page.locator("#adm-schedule")).not.toContainText("Tiebreaker week · Week 6");
+    expect(await adminTiebreakers.evaluate((section) => Boolean(
+      section.compareDocumentPosition(document.getElementById("adm-schedule")!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ))).toBe(true);
+    for (const number of [2, 3, 4, 5]) {
+      await expect(adminGame(number).getByRole("link", { name: "Manage game →", exact: true })).toHaveCount(0);
+    }
+    await adminTiebreakers.screenshot({ path: testInfo.outputPath("three-team-admin-opening-desktop.png") });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expectNoHorizontalOverflow(page, "three-team admin bracket");
+    for (const number of [1, 2, 3, 4, 5]) {
+      await expect(adminGame(number)).toBeVisible();
+    }
+    const openingManage = adminGame(1).getByRole("link", { name: "Manage game →", exact: true });
+    const openingTarget = await openingManage.getAttribute("href");
+    expect(openingTarget).toMatch(/^#admin-tiebreaker-match-/);
+    await openingManage.click();
+    await expect(page.locator(openingTarget!).locator('input[name="homeScore"]')).toBeVisible();
+    await expect(page.locator(openingTarget!).getByLabel("Kickoff time", { exact: true })).toBeVisible();
+    await adminTiebreakers.screenshot({ path: testInfo.outputPath("three-team-admin-opening-mobile.png") });
+    await page.setViewportSize({ width: 1366, height: 900 });
     const totalGames = resetFinal ? 5 : 4;
     let thirdPlace = "";
     let firstPlace = "";
@@ -249,10 +301,27 @@ for (const resetFinal of [false, true]) {
     const outcomes = new Map<number, { winner: string; loser: string }>();
     for (let stage = 1; stage <= totalGames; stage++) {
       await expect(start).toBeDisabled();
-      const form = results.locator('form:has(input[name="homeScore"])');
+      await expect(adminMatches).toHaveCount(stage);
+      await expect(adminBracket.getByTestId("tiebreaker-game")).toHaveCount(5);
+      await expect(adminGame(stage)).toHaveAttribute("data-status", "scheduled");
+      const manage = adminGame(stage).getByRole("link", { name: "Manage game →", exact: true });
+      const target = await manage.getAttribute("href");
+      expect(target).toMatch(/^#admin-tiebreaker-match-/);
+      await manage.click();
+      const currentMatch = page.locator(target!);
+      const form = currentMatch.locator('form:has(input[name="homeScore"])');
       await expect(form).toHaveCount(1);
+      await expect(results.locator('form:has(input[name="homeScore"])')).toHaveCount(1);
+      await expect(currentMatch.getByLabel("Kickoff time", { exact: true })).toBeVisible();
+      await expect(currentMatch.getByRole("button", { name: /^(Set|Update) time$/ })).toBeVisible();
       const homeName = (await form.locator('input[name="homeScore"]').getAttribute("aria-label"))!.replace(/ series score$/, "");
       const awayName = (await form.locator('input[name="awayScore"]').getAttribute("aria-label"))!.replace(/ series score$/, "");
+      if (stage > 1) {
+        const expectedTeams = stage === 2 ? [outcomes.get(1)!.winner, openingBye!]
+          : stage === 3 ? [outcomes.get(1)!.loser, outcomes.get(2)!.loser]
+          : [outcomes.get(2)!.winner, outcomes.get(3)!.winner];
+        expect([homeName, awayName].sort()).toEqual(expectedTeams.sort());
+      }
       const awayWins = resetFinal && stage === 4;
       outcomes.set(stage, {
         winner: awayWins ? awayName : homeName,
@@ -271,6 +340,17 @@ for (const resetFinal of [false, true]) {
       await form.getByRole("button", { name: "Save as final", exact: true }).click();
       // A new fixture is created automatically after each decisive result.
       await expect(results.locator('a[href^="/matches/"]')).toHaveCount(Math.min(stage + 1, totalGames));
+      await expect(adminMatches).toHaveCount(Math.min(stage + 1, totalGames));
+      await expect(adminBracket.getByRole("link", { name: "Manage game →", exact: true })).toHaveCount(Math.min(stage + 1, totalGames));
+      if (stage < totalGames) {
+        await expect(adminGame(stage + 1)).toHaveAttribute("data-status", "scheduled");
+        await expect(currentMatch.locator('input[name="homeScore"]')).toHaveCount(0);
+        await expect(currentMatch.getByRole("button", { name: "Reopen for import", exact: true })).toHaveCount(0);
+        await expect(currentMatch).toContainText("Tiebreaker fixtures depend on this result.");
+      } else if (!resetFinal) {
+        await expect(adminGame(5)).toHaveAttribute("data-status", "not-needed");
+        await expect(adminGame(5).getByRole("link", { name: "Manage game →", exact: true })).toHaveCount(0);
+      }
       await page.goto("/schedule#tiebreakers");
       await expect(bracket.getByTestId("tiebreaker-game")).toHaveCount(5);
       for (let completed = 1; completed <= stage; completed++) {
@@ -302,7 +382,7 @@ for (const resetFinal of [false, true]) {
         await expect(third).toContainText("Out of playoffs");
         await expectFinalTracker(page, [], [thirdPlace]);
       }
-      await page.goto("/admin#adm-schedule");
+      await page.goto("/admin#adm-tiebreakers");
     }
     await expect(start).toBeEnabled();
     await expect(page.locator("#playoffs")).toContainText("The tiebreaker results have settled the playoff order.");

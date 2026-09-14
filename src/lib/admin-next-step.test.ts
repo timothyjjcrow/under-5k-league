@@ -129,8 +129,52 @@ describe("adminNextStep — regular season", () => {
       unresolvedPlayoffTieCount: 2,
       pendingTiebreakerResults: 1,
     });
-    expect(result.title).toMatch(/Tiebreaker week.*1 result/);
+    expect(result.title).toBe("Tiebreaker bracket in progress.");
+    expect(result.detail).toMatch(/current game in Tiebreakers/);
+    expect(result.detail).toMatch(/three-team ties.*next required game automatically/);
     expect(result.tone).toBe("waiting");
+  });
+
+  it("continues an existing bracket when its next fixture has not been created", () => {
+    const result = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      scheduledRegularCount: 15,
+      unresolvedPlayoffTieCount: 3,
+      existingTiebreakerCount: 1,
+      pendingTiebreakerResults: 0,
+    });
+    expect(result.title).toBe("Next step: continue the tiebreaker bracket.");
+    expect(result.detail).toMatch(/Create next tiebreaker match.*Playoffs controls/);
+    expect(result.detail).toMatch(/schedule the next round/);
+    expect(result.detail).toMatch(/Regular season/);
+    expect(result.tone).toBe("action");
+  });
+
+  it("keeps scheduled results ahead of continuation instructions", () => {
+    const result = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      scheduledRegularCount: 15,
+      unresolvedPlayoffTieCount: 3,
+      existingTiebreakerCount: 4,
+      pendingTiebreakerResults: 1,
+    });
+    expect(result.title).toBe("Tiebreaker bracket in progress.");
+    expect(result.tone).toBe("waiting");
+  });
+
+  it("prompts playoffs when existing tiebreaker results settle every relevant tie", () => {
+    const result = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      scheduledRegularCount: 15,
+      existingTiebreakerCount: 4,
+      unresolvedPlayoffTieCount: 0,
+      pendingTiebreakerResults: 0,
+    });
+    expect(result.title).toBe("Next step: Start playoffs.");
+    expect(result.tone).toBe("action");
   });
 
   it("asks for a schedule before anything else", () => {

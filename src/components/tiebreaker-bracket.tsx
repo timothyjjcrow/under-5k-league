@@ -48,7 +48,7 @@ function BracketSide({ side, score, winner }: {
   );
 }
 
-function BracketGame({ game, doubleElimination }: { game: TiebreakerBracketMatchView; doubleElimination: boolean }) {
+function BracketGame({ game, doubleElimination, admin }: { game: TiebreakerBracketMatchView; doubleElimination: boolean; admin: boolean }) {
   return (
     <article
       data-testid="tiebreaker-game"
@@ -65,7 +65,7 @@ function BracketGame({ game, doubleElimination }: { game: TiebreakerBracketMatch
       <div className="flex flex-wrap items-center justify-between gap-1 border-b border-line-soft px-3 py-2.5">
         <h4 className="text-xs font-semibold uppercase tracking-wider">{`${doubleElimination ? "Game" : "Series"} ${game.number}`}</h4>
         <span className={cn("text-[10px] font-semibold uppercase tracking-wide", game.status === "live" ? "text-danger" : game.status === "scheduled" ? "text-accent" : "text-muted")}>
-          {statusLabels[game.status]}
+          {admin && game.status === "waiting" ? "Not created yet" : statusLabels[game.status]}
         </span>
       </div>
       <div className="p-2">
@@ -80,17 +80,20 @@ function BracketGame({ game, doubleElimination }: { game: TiebreakerBracketMatch
         ) : null}
         {game.condition ? <p className="leading-relaxed text-muted">{game.condition}</p> : null}
         {doubleElimination && game.status !== "not-needed" ? <p className="leading-relaxed text-muted">{gameRoutes[game.number]}</p> : null}
-        {game.matchId ? <Link className="inline-block py-1 font-medium text-info hover:underline" href={`/matches/${game.matchId}`}>Match details →</Link> : null}
+        {game.matchId ? admin ? (
+          <a className="inline-block py-1 font-medium text-info hover:underline" href={`#admin-tiebreaker-match-${game.matchId}`}>Manage {doubleElimination ? "game" : "series"} →</a>
+        ) : <Link className="inline-block py-1 font-medium text-info hover:underline" href={`/matches/${game.matchId}`}>Match details →</Link> : null}
       </div>
     </article>
   );
 }
 
 /** A complete, read-only bracket, including games whose teams are not known yet. */
-export function TiebreakerBracket({ bracket, teams, postseasonStarted }: {
+export function TiebreakerBracket({ bracket, teams, postseasonStarted, admin = false }: {
   bracket: TiebreakerBracketView;
   teams: TiebreakerBracketTeam[];
   postseasonStarted: boolean;
+  admin?: boolean;
 }) {
   const doubleElimination = bracket.format === "BO1_DOUBLE_ELIMINATION";
   const names = new Map(teams.map((team) => [team.id, team]));
@@ -152,7 +155,7 @@ export function TiebreakerBracket({ bracket, teams, postseasonStarted }: {
           ) : null}
           {bracket.matches.map((game, index) => (
             <div key={game.key} className={cn("min-w-0", doubleElimination && positions[index])}>
-              <BracketGame game={game} doubleElimination={doubleElimination} />
+              <BracketGame game={game} doubleElimination={doubleElimination} admin={admin} />
             </div>
           ))}
         </div>
