@@ -55,7 +55,7 @@ import {
   draftSetupLockedMessage,
   draftSetupOpen,
 } from "@/lib/draft-setup";
-import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
+import { clampMmrToRank, formatMmrRange, isEditableRankTier, rankMedalName } from "@/lib/rank";
 import {
   abortDraft,
   pauseDraft,
@@ -2018,6 +2018,124 @@ export async function setRegistrationMmr(
     seasonId: season.id,
   });
   return { message: `${reg.user.name}'s MMR set to ${mmr}${rangeNote}` };
+}
+
+/** Correct the current signup and the player's public medal together. */
+export async function setPlayerRank(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const integer = (key: string): number => {
+    const raw = formData.get(key);
+    return typeof raw === "string" && /^\d+$/.test(raw.trim())
+      ? Number(raw)
+      : NaN;
+  };
+  const mmr = integer("mmr");
+  const expectedMmr = integer("expectedMmr");
+  const expectedRankTier = integer("expectedRankTier");
+  const expectedManual = str(formData, "expectedRankTierManual");
+  const mode = str(formData, "medalMode");
+  const manualRank = integer("rankTier");
+  if (!Number.isInteger(mmr) || mmr < 0 || mmr > 12000) {
+    return { error: "Enter a whole-number MMR from 0 to 12000." };
+  }
+  if (mode !== "manual" && mode !== "automatic") {
+    return { error: "Choose a medal source." };
+  }
+  if (mode === "manual" && !isEditableRankTier(manualRank)) {
+    return { error: "Choose a valid medal and star level." };
+  }
+  if (
+    !Number.isInteger(expectedMmr) || expectedMmr < 0 ||
+    !Number.isInteger(expectedRankTier) || expectedRankTier < 0 ||
+    (expectedManual !== "0" && expectedManual !== "1")
+  ) {
+    return { error: "Reload the player editor and try again." };
+  }
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  if (season.status === SEASON_STATUS.COMPLETE) {
+    return { error: "The season is complete — player medal and MMR are read-only." };
+  }
+  const reg = await prisma.registration.findUnique({
+    where: { id: str(formData, "registrationId") },
+    include: { user: true },
+  });
+  if (!reg || reg.seasonId !== season.id) return { error: "Unknown signup" };
+  if (reg.status !== REGISTRATION_STATUS.ACTIVE) {
+    return { error: "That signup is not active — reinstate it before editing medal or MMR." };
+  }
+  const staleError = "This player's medal or MMR just changed — reload and try again.";
+  if (
+    reg.mmr !== expectedMmr || (reg.user.rankTier ?? 0) !== expectedRankTier ||
+    reg.user.rankTierManual !== (expectedManual === "1")
+  ) return { error: staleError };
+
+  let rankTier = mode === "manual" ? manualRank || null : reg.user.rankTier;
+  if (mode === "automatic" && reg.user.rankTierManual) {
+    const accountId = effectiveDotaAccountId(reg.user);
+    if (!accountId) return { error: "This player has no linked Dota account to fetch a medal from." };
+    const result = await fetchRankTier(accountId);
+    if (!result.ok) {
+      return { error: "OpenDota couldn't be reached. Nothing was changed — try again later." };
+    }
+    rankTier = result.rankTier;
+  }
+  await raceHook("admin.setPlayerRank.beforeWrite");
+  try {
+    await prisma.$transaction(async (tx) => {
+      const [currentSeason, draft] = await Promise.all([
+        tx.season.findUnique({ where: { id: season.id }, select: { isActive: true, status: true } }),
+        tx.draft.findUnique({ where: { seasonId: season.id }, select: { status: true } }),
+      ]);
+      if (!currentSeason?.isActive || currentSeason.status === SEASON_STATUS.COMPLETE) {
+        throw new SignupChangedError();
+      }
+      if (
+        reg.type === REGISTRATION_TYPE.PLAYER && mmr !== expectedMmr &&
+        (draft?.status === DRAFT_STATUS.IN_PROGRESS || draft?.status === DRAFT_STATUS.PAUSED)
+      ) throw new DraftAlreadyStartedError();
+      const changed = await tx.registration.updateMany({
+        where: {
+          id: reg.id, userId: reg.userId, seasonId: season.id,
+          status: REGISTRATION_STATUS.ACTIVE, type: reg.type, mmr: expectedMmr,
+        },
+        data: { mmr },
+      });
+      if (changed.count !== 1) throw new SignupChangedError();
+      const userChanged = await tx.user.updateMany({
+        where: {
+          id: reg.userId,
+          ...dotaAccountLinkSnapshot(reg.user),
+          rankTier: reg.user.rankTier,
+          rankTierManual: expectedManual === "1",
+        },
+        data: { rankTier, rankTierManual: mode === "manual" },
+      });
+      if (userChanged.count !== 1) throw new SignupChangedError();
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (error instanceof DraftAlreadyStartedError) {
+      return { error: "The auction is live or paused — full-player MMR is locked until it finishes. You can still edit their medal." };
+    }
+    if (error instanceof SignupChangedError || (error as { code?: string }).code === "P2034") {
+      return { error: staleError };
+    }
+    throw error;
+  }
+  refresh();
+  await logAdminAction({
+    action: "setPlayerRank",
+    summary: `Updated ${reg.user.name}: MMR ${reg.mmr} → ${mmr}; medal ${rankMedalName(reg.user.rankTier)} → ${rankMedalName(rankTier)} (${mode === "manual" ? "manual" : "OpenDota"})`,
+    seasonId: season.id,
+  });
+  return { message: `${reg.user.name}'s medal and MMR saved · ${rankMedalName(rankTier)} · ${mmr} MMR` };
 }
 
 /** Randomize the nomination/draft order of teams. */
@@ -6012,19 +6130,25 @@ async function syncOneRank(
   // snapshot. A failed half never blocks the half that answered, and neither
   // failure ever wipes stored data.
   const data: {
-    rankTier?: number;
     fhUnavailable?: boolean;
     pubStats?: string;
     pubStatsAt?: Date;
   } = {};
   if (result.ok) {
-    if (result.rankTier != null) data.rankTier = result.rankTier;
     if (result.fhUnavailable !== null)
       data.fhUnavailable = result.fhUnavailable;
   }
   if (pub.ok) {
     data.pubStats = JSON.stringify(pub.stats);
     data.pubStatsAt = new Date();
+  }
+  if (result.ok && result.rankTier != null) {
+    // Admin corrections survive every automatic refresh, including one that
+    // was already in flight when the correction was saved.
+    await prisma.user.updateMany({
+      where: { id: u.id, ...dotaAccountLinkSnapshot(u), rankTierManual: false },
+      data: { rankTier: result.rankTier },
+    });
   }
   if (Object.keys(data).length > 0) {
     // The WHERE re-asserts the account these figures describe (read-time
@@ -6219,7 +6343,7 @@ export async function syncAllRanks(
   } catch {
     return { error: "Not authorized" };
   }
-  const users = await prisma.user.findMany({ where: { rankTier: null } });
+  const users = await prisma.user.findMany({ where: { rankTier: null, rankTierManual: false } });
   if (users.length === 0) {
     return { message: "Every account already has a medal" };
   }

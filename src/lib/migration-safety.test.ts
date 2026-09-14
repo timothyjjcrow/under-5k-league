@@ -132,6 +132,7 @@ describe("migration SQL safety gate", () => {
       "20260814000000_team_logo",
       "20260817000000_scrims",
       "20260831000000_inhouse_queue_idle_timeout",
+      "20260914000000_manual_player_medal",
     ]);
   });
 

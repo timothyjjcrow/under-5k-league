@@ -183,19 +183,27 @@ export async function ensureRankTier(
     dotaAccountIdV2: number | null;
     legacyDotaAccountId: number | null;
     rankTier: number | null;
+    rankTierManual?: boolean;
   },
 ): Promise<void> {
-  if (user.rankTier != null) return;
+  if (user.rankTier != null || user.rankTierManual) return;
   const accountId = effectiveDotaAccountId(user);
   if (!accountId) return;
   const result = await fetchRankTier(accountId);
   if (!result.ok) return;
-  const data: { rankTier?: number; fhUnavailable?: boolean } = {};
-  if (result.rankTier != null) data.rankTier = result.rankTier;
   // The same payload says whether their match data is public — the flag every
   // automatic import path depends on. Only a definite answer is stored.
-  if (result.fhUnavailable !== null) data.fhUnavailable = result.fhUnavailable;
-  if (Object.keys(data).length > 0) {
+  if (result.fhUnavailable !== null) {
+    await prisma.user.updateMany({
+      where: {
+        id: user.id,
+        ...dotaAccountLinkSnapshot(user),
+        rankTier: null,
+      },
+      data: { fhUnavailable: result.fhUnavailable },
+    });
+  }
+  if (result.rankTier != null) {
     await prisma.user.updateMany({
       // Re-assert both inputs this result describes. A /me relink or another
       // sync completing while OpenDota was in flight wins; stale login data is
@@ -204,8 +212,9 @@ export async function ensureRankTier(
         id: user.id,
         ...dotaAccountLinkSnapshot(user),
         rankTier: null,
+        rankTierManual: false,
       },
-      data,
+      data: { rankTier: result.rankTier },
     });
   }
 }

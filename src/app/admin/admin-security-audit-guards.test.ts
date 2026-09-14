@@ -25,6 +25,7 @@ describe("security and league configuration audit trail", () => {
     "withdrawSignup",
     "reinstateSignup",
     "setRegistrationMmr",
+    "setPlayerRank",
     "assignStandin",
     "removeStandin",
     "setMatchTime",

@@ -18,10 +18,17 @@ export async function retireStaleDotaAccountClaims(
     where: {
       steamId: { not: ownerSteamId },
       dotaAccountIdV2: verifiedAccountId,
+      rankTierManual: false,
+    },
+    data: { rankTier: null },
+  });
+  await tx.user.updateMany({
+    where: {
+      steamId: { not: ownerSteamId },
+      dotaAccountIdV2: verifiedAccountId,
     },
     data: {
       dotaAccountIdV2: null,
-      rankTier: null,
       fhUnavailable: null,
       pubStats: null,
       pubStatsAt: null,
@@ -35,10 +42,18 @@ export async function retireStaleDotaAccountClaims(
       steamId: { not: ownerSteamId },
       dotaAccountIdV2: null,
       legacyDotaAccountId: verifiedAccountId,
+      rankTierManual: false,
+    },
+    data: { rankTier: null },
+  });
+  await tx.user.updateMany({
+    where: {
+      steamId: { not: ownerSteamId },
+      dotaAccountIdV2: null,
+      legacyDotaAccountId: verifiedAccountId,
     },
     data: {
       legacyDotaAccountId: null,
-      rankTier: null,
       fhUnavailable: null,
       pubStats: null,
       pubStatsAt: null,

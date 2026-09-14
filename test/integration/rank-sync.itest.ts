@@ -94,6 +94,194 @@ async function setLegacyOnly(userId: string, accountId: number) {
   });
 }
 
+describe("manual medals survive provider updates", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockRequireUser.mockReset();
+    mockFetch.mockResolvedValue({ ok: true, rankTier: 75, fhUnavailable: true });
+    mockPubFetch.mockResolvedValue({ ok: true, stats: PUB_FIXTURE });
+  });
+
+  it.each([42, null])("keeps manual %s through bulk sync while updating scouting", async (rankTier) => {
+    const season = await makeSeason();
+    const user = await makePlayer(season.id, "League Rated Player", 2400);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier, rankTierManual: true },
+    });
+
+    await syncPlayerRanks({}, new FormData());
+
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({
+        rankTier,
+        rankTierManual: true,
+        fhUnavailable: true,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+      });
+  });
+
+  it("keeps an admin override committed while bulk OpenDota sync is in flight", async () => {
+    const season = await makeSeason();
+    const user = await makePlayer(season.id, "Bulk Manual Racer", 2400);
+    mockFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { rankTier: 42, rankTierManual: true },
+      });
+      return { ok: true, rankTier: 75, fhUnavailable: true };
+    });
+
+    await syncPlayerRanks({}, new FormData());
+
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({ rankTier: 42, rankTierManual: true, fhUnavailable: true });
+  });
+
+  it("keeps manual Unranked through login and all-account medal backfill", async () => {
+    const original = await makeUser("Intentionally Unranked");
+    const user = await prisma.user.update({
+      where: { id: original.id },
+      data: { rankTier: null, rankTierManual: true },
+    });
+
+    await ensureRankTier(prisma, user);
+    await syncAllRanks({}, new FormData());
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(await medalOf(user.id)).toBeNull();
+  });
+
+  it("keeps an explicit Unranked override committed during login's rank fetch", async () => {
+    const user = await makeUser("Login Manual Racer");
+    mockFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { rankTier: null, rankTierManual: true },
+      });
+      return { ok: true, rankTier: 75, fhUnavailable: true };
+    });
+
+    await ensureRankTier(prisma, user);
+
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({ rankTier: null, rankTierManual: true, fhUnavailable: true });
+  });
+
+  it.each([42, null])("keeps manual %s through the player's refresh", async (rankTier) => {
+    const original = await makeUser("Player Refresh");
+    const user = await prisma.user.update({
+      where: { id: original.id },
+      data: { rankTier, rankTierManual: true },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(user));
+
+    const result = await refreshRank({}, new FormData());
+
+    expect(result?.message).toMatch(/admin-set medal kept/i);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({
+        rankTier,
+        rankTierManual: true,
+        fhUnavailable: true,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+      });
+  });
+
+  it("keeps an admin override committed during the player's refresh", async () => {
+    const user = await makeUser("Refresh Manual Racer");
+    mockRequireUser.mockResolvedValue(sessionFor(user));
+    mockFetch.mockImplementationOnce(async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { rankTier: 42, rankTierManual: true },
+      });
+      return { ok: true, rankTier: 75, fhUnavailable: true };
+    });
+
+    const result = await refreshRank({}, new FormData());
+
+    expect(result?.message).toMatch(/admin-set medal kept: Archon 2/i);
+    expect(await medalOf(user.id)).toBe(42);
+  });
+
+  it.each([true, false])("keeps a manual medal across an account change with provider success %s", async (providerOk) => {
+    const original = await makeUser("Manual Medal Relink");
+    const user = await prisma.user.update({
+      where: { id: original.id },
+      data: {
+        steamId: accountIdToSteamId64(923451),
+        dotaAccountIdV2: 923452,
+        rankTier: 42,
+        rankTierManual: true,
+        fhUnavailable: true,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+      },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(user));
+    mockPubFetch.mockResolvedValue({ ok: false, stats: null });
+    mockFetch.mockResolvedValue(providerOk
+      ? { ok: true, rankTier: 75, fhUnavailable: false }
+      : { ok: false, rankTier: null, fhUnavailable: null });
+    const form = new FormData();
+    form.set("dotaAccountId", "923451");
+
+    const result = await updateDotaAccount({}, form);
+
+    expect(result?.error).toBeUndefined();
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({
+        dotaAccountIdV2: null,
+        rankTier: 42,
+        rankTierManual: true,
+        fhUnavailable: providerOk ? false : null,
+        pubStats: null,
+      });
+  });
+
+  it("keeps the manual medal when unlinking an account without a Steam fallback", async () => {
+    const original = await makeUser("Manual Unlink");
+    const user = await prisma.user.update({
+      where: { id: original.id },
+      data: { steamId: `x-${original.id}`, dotaAccountIdV2: 923451, rankTier: 42, rankTierManual: true },
+    });
+    mockRequireUser.mockResolvedValue(sessionFor(user));
+
+    const result = await updateDotaAccount({}, new FormData());
+
+    expect(result?.error).toBeUndefined();
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({ dotaAccountIdV2: null, rankTier: 42, rankTierManual: true });
+  });
+
+  it.each(["v2", "legacy"])("keeps admin judgement when verified ownership retires a stale %s claim", async (column) => {
+    const user = await makeUser("Manual Claim Holder");
+    const accountId = 923451;
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        dotaAccountIdV2: accountId,
+        rankTier: 42,
+        rankTierManual: true,
+        fhUnavailable: true,
+        pubStats: JSON.stringify(PUB_FIXTURE),
+      },
+    });
+    if (column === "legacy") await setLegacyOnly(user.id, accountId);
+
+    await upsertLeagueUser(prisma, { steamId: accountIdToSteamId64(accountId), profile: null });
+
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({
+        dotaAccountIdV2: null,
+        rankTier: 42,
+        rankTierManual: true,
+        fhUnavailable: null,
+        pubStats: null,
+      });
+  });
+});
+
 describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
   beforeEach(() => mockFetch.mockReset());
 

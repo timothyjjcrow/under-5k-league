@@ -13,6 +13,14 @@ export const RANK_MEDALS = [
   "Immortal",
 ] as const;
 
+/** Accepted medal values for a manual correction; 0 explicitly means unranked. */
+export function isEditableRankTier(value: number): boolean {
+  if (value === 0 || value === 80) return true;
+  const medal = Math.floor(value / 10);
+  const stars = value % 10;
+  return Number.isInteger(value) && medal >= 1 && medal <= 7 && stars >= 1 && stars <= 5;
+}
+
 // The accepted MMR ladder (Dota 2 wiki / rank guides, stable for years):
 // 154 per star and 770 per medal from Herald through Ancient, then Divine's
 // five stars are 200 each (4620/4820/5020/5220/5420), and Immortal starts at

@@ -269,6 +269,78 @@ describe("saveRegistration — submission integrity", () => {
     expect(await regFor(season.id, user.id)).not.toBeNull();
   });
 
+  it("does not backfill a deliberately Unranked manual medal during signup", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const original = await makeUser("Manual Unranked Signup");
+    const user = await prisma.user.update({
+      where: { id: original.id },
+      data: { rankTier: null, rankTierManual: true },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    vi.mocked(fetchPlayerRankTier).mockResolvedValue(75);
+
+    const result = await saveRegistration({}, form({ type: "PLAYER", mmr: 2400 }));
+
+    expect(result?.error).toBeUndefined();
+    expect(vi.mocked(fetchPlayerRankTier)).not.toHaveBeenCalled();
+    expect(await regFor(season.id, user.id)).toMatchObject({ mmr: 2400 });
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({ rankTier: null, rankTierManual: true });
+  });
+
+  it("keeps an admin MMR correction that commits during an unchanged player submit", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const original = await makePlayer(season.id, "MMR Correction Racer", 2400);
+    const user = await prisma.user.update({
+      where: { id: original.id },
+      data: { rankTier: 42, rankTierManual: true },
+    });
+    const registration = await regFor(season.id, user.id);
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    setRaceHook(onceAt("registration.saveRegistration.beforeWrite", async () => {
+      const correction = await setRegistrationMmr(
+        {},
+        form({ registrationId: registration!.id, mmr: 2600 }),
+      );
+      expect(correction?.error).toBeUndefined();
+    }));
+
+    const result = await saveRegistration({}, form({ type: "PLAYER", mmr: 2400, roles: "5" }));
+
+    expect(result?.error).toMatch(/MMR changed.*reload/i);
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      mmr: 2600,
+      roles: registration!.roles,
+    });
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({ rankTier: 42, rankTierManual: true });
+
+    // A fresh request sees the corrected number and may still edit it normally.
+    const retried = await saveRegistration({}, form({ type: "PLAYER", mmr: 2700, roles: "5" }));
+    expect(retried?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({ mmr: 2700, roles: "5" });
+  });
+
+  it("keeps an Unranked manual override that commits during signup's provider fetch", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Signup Manual Racer");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    vi.mocked(fetchPlayerRankTier).mockResolvedValue(75);
+    setRaceHook(onceAt("registration.saveRegistration.beforeRankWrite", async () => {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { rankTier: null, rankTierManual: true },
+      });
+    }));
+
+    const result = await saveRegistration({}, form({ type: "PLAYER", mmr: 2400 }));
+
+    expect(result?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({ mmr: 2400 });
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({ rankTier: null, rankTierManual: true });
+  });
+
   it("ignores captain volunteering for standins and preserves it after signups close", async () => {
     const season = await makeSeason({ status: "SIGNUPS" });
     const standin = await makeUser("Standin Volunteer");

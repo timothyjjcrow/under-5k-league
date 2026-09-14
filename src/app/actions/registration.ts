@@ -65,6 +65,7 @@ class DraftConfirmationChangedError extends Error {}
 class RegistrationLifecycleChangedError extends Error {}
 class RegistrationRosterChangedError extends Error {}
 class RegistrationIdentityChangedError extends Error {}
+class RegistrationMmrChangedError extends Error {}
 class RegistrationStateChangedError extends Error {}
 class DotaAccountCollisionError extends Error {}
 
@@ -287,11 +288,12 @@ export async function saveRegistration(
       dotaAccountIdV2: true,
       legacyDotaAccountId: true,
       rankTier: true,
+      rankTierManual: true,
     },
   });
   let rankTier = dbUser?.rankTier ?? null;
   let medalLabel = "";
-  if (!existing && dbUser && dbUser.rankTier == null) {
+  if (!existing && dbUser && dbUser.rankTier == null && !dbUser.rankTierManual) {
     const accountId = effectiveDotaAccountId({
       ...dbUser,
       steamId: user.steamId,
@@ -307,6 +309,7 @@ export async function saveRegistration(
         where: {
           id: user.id,
           rankTier: null,
+          rankTierManual: false,
           ...dotaAccountLinkSnapshot(dbUser),
         },
         data: { rankTier: fetched },
@@ -508,7 +511,7 @@ export async function saveRegistration(
               where: {
                 seasonId_userId: { seasonId: season.id, userId: user.id },
               },
-              select: { id: true, status: true },
+              select: { id: true, status: true, mmr: true },
             }),
             tx.user.findUnique({
               where: { id: user.id },
@@ -546,6 +549,12 @@ export async function saveRegistration(
           }
           if (!currentUser || currentUser.rankTier !== rankTier) {
             throw new RegistrationIdentityChangedError();
+          }
+          // An admin can correct MMR while this request is in flight without
+          // changing the medal. Keep that newer correction and let the player
+          // review it before submitting another profile or MMR edit.
+          if (existing && currentRegistration?.mmr !== existing.mmr) {
+            throw new RegistrationMmrChangedError();
           }
           if (seat) throw new RegistrationRosterChangedError();
 
@@ -591,6 +600,12 @@ export async function saveRegistration(
         return {
           error:
             "Your verified Dota details changed while you submitted — reload before trying again.",
+        };
+      }
+      if (error instanceof RegistrationMmrChangedError) {
+        return {
+          error:
+            "Your MMR changed while you submitted — reload and review the updated number before trying again.",
         };
       }
       if (error instanceof RegistrationRosterChangedError) {
@@ -955,13 +970,24 @@ export async function updateDotaAccount(
           );
         }
 
+        if (accountChanged) {
+          // A league administrator's judgement belongs to this player and
+          // survives a provider-account change. Clear only automatic medals.
+          await tx.user.updateMany({
+            where: {
+              id: user.id,
+              ...dotaAccountLinkSnapshot(linkedBefore),
+              rankTierManual: false,
+            },
+            data: { rankTier: null },
+          });
+        }
         return tx.user.updateMany({
           where: { id: user.id, ...dotaAccountLinkSnapshot(linkedBefore) },
           data: {
             ...linkedAfter,
             ...(accountChanged
               ? {
-                  rankTier: null,
                   fhUnavailable: null,
                   pubStats: null,
                   pubStatsAt: null,
@@ -1059,9 +1085,16 @@ export async function updateDotaAccount(
       await prisma.user.updateMany({
         where: { id: user.id, ...dotaAccountLinkSnapshot(linkedAfter) },
         data: {
-          rankTier: result.rankTier,
           fhUnavailable: result.fhUnavailable,
         },
+      });
+      await prisma.user.updateMany({
+        where: {
+          id: user.id,
+          ...dotaAccountLinkSnapshot(linkedAfter),
+          rankTierManual: false,
+        },
+        data: { rankTier: result.rankTier },
       });
       medal = result.rankTier ? ` · ${rankMedalName(result.rankTier)}` : "";
     } else {
@@ -1071,7 +1104,12 @@ export async function updateDotaAccount(
     }
     const current = await prisma.user.findUnique({
       where: { id: user.id },
-      select: { dotaAccountIdV2: true, legacyDotaAccountId: true },
+      select: {
+        dotaAccountIdV2: true,
+        legacyDotaAccountId: true,
+        rankTier: true,
+        rankTierManual: true,
+      },
     });
     if (!current || !sameDotaAccountLink(current, linkedAfter)) {
       refresh();
@@ -1080,6 +1118,9 @@ export async function updateDotaAccount(
           "Your Dota account changed in another tab — reload to see the current link.",
       };
     }
+    if (current.rankTierManual) {
+      medal = ` · admin-set medal kept: ${rankMedalName(current.rankTier)}`;
+    }
   } else {
     // No derivable account — clear any stale medal (and the private-data
     // flag + scouting snapshot, which belonged to the unlinked account).
@@ -1087,10 +1128,17 @@ export async function updateDotaAccount(
     // before this cleanup. Keep the seam immediately beside the guarded write
     // so the old account's cleanup can never wipe the newer account's data.
     await raceHook("registration.updateDotaAccount.beforeClearMetadata");
+    await prisma.user.updateMany({
+      where: {
+        id: user.id,
+        ...dotaAccountLinkSnapshot(linkedAfter),
+        rankTierManual: false,
+      },
+      data: { rankTier: null },
+    });
     const cleared = await prisma.user.updateMany({
       where: { id: user.id, ...dotaAccountLinkSnapshot(linkedAfter) },
       data: {
-        rankTier: null,
         fhUnavailable: null,
         pubStats: null,
         pubStatsAt: null,
@@ -1163,19 +1211,29 @@ export async function refreshRank(
     });
   }
   if (result.ok) {
+    if (result.fhUnavailable !== null) {
+      await prisma.user.updateMany({
+        where: { id: user.id, ...dotaAccountLinkSnapshot(dbUser) },
+        data: { fhUnavailable: result.fhUnavailable },
+      });
+    }
     await prisma.user.updateMany({
-      where: { id: user.id, ...dotaAccountLinkSnapshot(dbUser) },
-      data: {
-        rankTier: result.rankTier,
-        ...(result.fhUnavailable !== null
-          ? { fhUnavailable: result.fhUnavailable }
-          : {}),
+      where: {
+        id: user.id,
+        ...dotaAccountLinkSnapshot(dbUser),
+        rankTierManual: false,
       },
+      data: { rankTier: result.rankTier },
     });
   }
   const current = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { dotaAccountIdV2: true, legacyDotaAccountId: true },
+    select: {
+      dotaAccountIdV2: true,
+      legacyDotaAccountId: true,
+      rankTier: true,
+      rankTierManual: true,
+    },
   });
   if (!current || !sameDotaAccountLink(current, dbUser)) {
     refresh();
@@ -1201,9 +1259,11 @@ export async function refreshRank(
   }
   refresh();
   return {
-    message: result.rankTier
-      ? `Medal: ${rankMedalName(result.rankTier)}`
-      : "No medal found — is your match data public?",
+    message: current.rankTierManual
+      ? `Admin-set medal kept: ${rankMedalName(current.rankTier)} · OpenDota profile refreshed`
+      : current.rankTier
+        ? `Medal: ${rankMedalName(current.rankTier)}`
+        : "No medal found — is your match data public?",
   };
 }
 

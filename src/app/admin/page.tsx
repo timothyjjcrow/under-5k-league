@@ -52,7 +52,6 @@ import {
   renameSeason,
   renameTeam,
   withdrawSignup,
-  setRegistrationMmr,
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
@@ -191,6 +190,7 @@ import {
 } from "@/lib/schedule-status";
 import { MatchImportControls } from "@/components/match-import-controls";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { AdminPlayerRankEditor } from "@/components/admin-player-rank-editor";
 import { TEAM_LOGO_URL_MAX_LENGTH } from "@/lib/team-logo";
 import {
   Avatar,
@@ -1963,48 +1963,16 @@ function CaptainControls({
                         </ActionForm>
                       </details>
                     ) : null}
-                    {/* A captain's MMR is the ONE number that has to be right
-                        before the auction: mmrWeightedBudgets interpolates
-                        across the whole captain pool, so a single typo moves the
-                        pool's min/max and skews EVERY team's budget, not just
-                        this one's. This control lived only in the non-captain
-                        list below, so designating someone captain — the natural
-                        FIRST step — put their MMR permanently out of reach, and
-                        setRegistrationMmr never refused captains: it was a
-                        missing render, not a rule. Gated on the draft not
-                        having STARTED, not on SIGNUPS: an admin who walks the
-                        phase to DRAFT before pressing Start draft is in
-                        exactly the window where a typo still skews every
-                        budget, and the SIGNUPS-only gate hid the fix there. */}
-                    {setupOpen && captainReg.get(t.captainId) ? (
-                      <details className="mt-1.5">
-                        <summary className="cursor-pointer text-xs text-muted hover:text-fg">
-                          ✎ Edit captain MMR
-                        </summary>
-                        <ActionForm
-                          action={setRegistrationMmr}
-                          className="mt-1.5 flex flex-wrap items-center gap-2"
-                          hidden={{
-                            registrationId: captainReg.get(t.captainId)!.id,
-                          }}
-                        >
-                          <input
-                            name="mmr"
-                            type="number"
-                            min={0}
-                            max={12000}
-                            defaultValue={captainReg.get(t.captainId)!.mmr}
-                            aria-label={`MMR for ${t.captain.name}`}
-                            className="h-8 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-                          />
-                          <SubmitButton variant="secondary" size="sm">
-                            Save MMR
-                          </SubmitButton>
-                          <span className="text-xs text-muted">
-                            sets every team&rsquo;s starting budget
-                          </span>
-                        </ActionForm>
-                      </details>
+                    {season.status !== SEASON_STATUS.COMPLETE && captainReg.get(t.captainId) ? (
+                      <AdminPlayerRankEditor
+                        key={`${captainReg.get(t.captainId)!.id}:${captainReg.get(t.captainId)!.mmr}:${t.captain.rankTier}:${t.captain.rankTierManual}`}
+                        registrationId={captainReg.get(t.captainId)!.id}
+                        name={t.captain.name}
+                        mmr={captainReg.get(t.captainId)!.mmr}
+                        rankTier={t.captain.rankTier}
+                        rankTierManual={t.captain.rankTierManual}
+                        mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
+                      />
                     ) : null}
                     {/* Post-draft only: before the auction runs, removeCaptain
                         (which deletes the empty team) is the right tool. After
@@ -2204,7 +2172,7 @@ function CaptainControls({
           <h3 className="mb-2 text-sm font-medium text-muted">
             {setupOpen ? "Eligible players" : "Active player signups"}
           </h3>
-          <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
+          <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1 has-[details[open]]:max-h-[70vh]">
             {nonCaptains.length === 0 ? (
               <p className="text-sm text-muted">
                 {setupOpen
@@ -2319,33 +2287,16 @@ function CaptainControls({
                     season={season}
                     showDraftReadiness={setupOpen}
                   />
-                  {/* Same window as the captain edit above: the number only
-                      feeds budgets until Start draft, so the gate is the
-                      draft, not the SIGNUPS phase. */}
-                  {setupOpen ? (
-                    <details className="mt-1">
-                      <summary className="cursor-pointer text-xs text-muted hover:text-fg">
-                        ✎ Edit MMR
-                      </summary>
-                      <ActionForm
-                        action={setRegistrationMmr}
-                        className="mt-1 flex items-center gap-2"
-                        hidden={{ registrationId: p.id }}
-                      >
-                        <input
-                          name="mmr"
-                          type="number"
-                          min={0}
-                          max={12000}
-                          defaultValue={p.mmr}
-                          aria-label={`MMR for ${p.user.name}`}
-                          className="h-8 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-                        />
-                        <SubmitButton variant="secondary" size="sm">
-                          Save MMR
-                        </SubmitButton>
-                      </ActionForm>
-                    </details>
+                  {season.status !== SEASON_STATUS.COMPLETE ? (
+                    <AdminPlayerRankEditor
+                      key={`${p.id}:${p.mmr}:${p.user.rankTier}:${p.user.rankTierManual}`}
+                      registrationId={p.id}
+                      name={p.user.name}
+                      mmr={p.mmr}
+                      rankTier={p.user.rankTier}
+                      rankTierManual={p.user.rankTierManual}
+                      mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
+                    />
                   ) : null}
                 </div>
               ))
@@ -2417,33 +2368,15 @@ function CaptainControls({
                         sweep={membershipSweep}
                         season={season}
                       />
-                      {/* Standins stay open through PLAYOFFS, so their MMR edit
-                          remains available after the player auction — it
-                          informs captains choosing cover all season. */}
                       {season.status !== SEASON_STATUS.COMPLETE ? (
-                        <details className="mt-1">
-                          <summary className="cursor-pointer text-xs text-muted hover:text-fg">
-                            ✎ Edit MMR
-                          </summary>
-                          <ActionForm
-                            action={setRegistrationMmr}
-                            className="mt-1 flex items-center gap-2"
-                            hidden={{ registrationId: s.id }}
-                          >
-                            <input
-                              name="mmr"
-                              type="number"
-                              min={0}
-                              max={12000}
-                              defaultValue={s.mmr}
-                              aria-label={`MMR for ${s.user.name}`}
-                              className="h-8 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-                            />
-                            <SubmitButton variant="secondary" size="sm">
-                              Save MMR
-                            </SubmitButton>
-                          </ActionForm>
-                        </details>
+                        <AdminPlayerRankEditor
+                          key={`${s.id}:${s.mmr}:${s.user.rankTier}:${s.user.rankTierManual}`}
+                          registrationId={s.id}
+                          name={s.user.name}
+                          mmr={s.mmr}
+                          rankTier={s.user.rankTier}
+                          rankTierManual={s.user.rankTierManual}
+                        />
                       ) : null}
                     </div>
                   ))}
