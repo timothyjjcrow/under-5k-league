@@ -20,6 +20,7 @@ const TEAM_LOGO_MIGRATION = "20260814000000_team_logo";
 const SCRIMS_MIGRATION = "20260817000000_scrims";
 const INHOUSE_QUEUE_IDLE_MIGRATION =
   "20260831000000_inhouse_queue_idle_timeout";
+const MANUAL_PLAYER_MEDAL_MIGRATION = "20260914000000_manual_player_medal";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -146,6 +147,7 @@ async function rehearseFreshDatabase(url) {
           TEAM_LOGO_MIGRATION,
           SCRIMS_MIGRATION,
           INHOUSE_QUEUE_IDLE_MIGRATION,
+          MANUAL_PLAYER_MEDAL_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -397,6 +399,7 @@ async function rehearseExistingLegacyDatabase(url) {
           TEAM_LOGO_MIGRATION,
           SCRIMS_MIGRATION,
           INHOUSE_QUEUE_IDLE_MIGRATION,
+          MANUAL_PLAYER_MEDAL_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );

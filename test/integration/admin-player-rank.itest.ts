@@ -291,6 +291,34 @@ describe("admin player medal and MMR corrections", () => {
     });
   });
 
+  it.each([
+    { mmr: 3100 },
+    { status: "REMOVED" },
+    { type: "STANDIN" },
+  ])("keeps a newer registration change %j and rolls back the medal", async (change) => {
+    const { registration } = await fixture();
+    setRaceHook(
+      onceAt("admin.setPlayerRank.beforeWrite", async () => {
+        await prisma.registration.update({
+          where: { id: registration.id },
+          data: change,
+        });
+      }),
+    );
+
+    const result = await setPlayerRank({}, editForm(registration.id));
+
+    expect(result?.error).toMatch(/changed|reload/i);
+    expect(await prisma.registration.findUniqueOrThrow({
+      where: { id: registration.id },
+    })).toMatchObject(change);
+    expect(await stored(registration.id)).toEqual({
+      mmr: "mmr" in change ? change.mmr : 2300,
+      rankTier: 31,
+      rankTierManual: false,
+    });
+  });
+
   it("does not overwrite a medal changed after the initial read", async () => {
     const { registration, user } = await fixture();
     setRaceHook(
