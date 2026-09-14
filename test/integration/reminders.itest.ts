@@ -237,8 +237,9 @@ describe("week reminder — reaching the people who owe an answer", () => {
         ),
       );
     }
+    const fixtures = [{ matchId: match.id, teamIndexes: [0, 1] }];
     for (let i = 2; i < teams.length; i += 2) {
-      await prisma.match.create({
+      const fixture = await prisma.match.create({
         data: {
           seasonId: season.id,
           week: 1,
@@ -248,6 +249,7 @@ describe("week reminder — reaching the people who owe an answer", () => {
           scheduledAt: kickoff,
         },
       });
+      fixtures.push({ matchId: fixture.id, teamIndexes: [i, i + 1] });
     }
 
     const discordIds: string[] = [];
@@ -290,7 +292,15 @@ describe("week reminder — reaching the people who owe an answer", () => {
     expect(summary).not.toBeNull();
     expect(shownFixtures + Number(summary?.[1])).toBe(16);
     expect(content).toContain("/schedule>");
-    expect(mentions?.users ?? []).not.toContain(discordIds.at(-1));
+    // Equal kickoff timestamps do not imply creation order on PostgreSQL.
+    // Check every waiter whose fixture was actually omitted from the body.
+    const hiddenIds = fixtures
+      .filter((fixture) => !content.includes(`/matches/${fixture.matchId}>`))
+      .flatMap((fixture) => fixture.teamIndexes.map((index) => discordIds[index]));
+    expect(hiddenIds).toHaveLength(Number(summary?.[1]) * 2);
+    for (const id of hiddenIds) {
+      expect(mentions?.users ?? []).not.toContain(id);
+    }
     expect(options?.marker).toEqual({
       key: expect.stringMatching(`^weekReminder:${season.id}:1:`),
       eventId: expect.any(String),
