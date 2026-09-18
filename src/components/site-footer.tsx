@@ -191,6 +191,18 @@ export function SiteFooter({
               •
             </span>
             <a
+              href="https://ggd2l-shop.fourthwall.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Merch — GGD2L shop (opens in a new tab)"
+              className="-my-1 inline-flex items-center gap-1 rounded py-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              Merch <span aria-hidden="true">↗</span>
+            </a>
+            <span aria-hidden="true" className="hidden text-line sm:inline">
+              •
+            </span>
+            <a
               href="https://buymeacoffee.com/vgedota"
               target="_blank"
               rel="noopener noreferrer"
