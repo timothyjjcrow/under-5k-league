@@ -197,6 +197,7 @@ function SingleEliminationBracket({ bracket, teams, admin }: {
         <h3 className="font-display text-xl font-semibold">Tiebreaker weekend</h3>
         <p className="text-sm text-accent">{TIEBREAKER_SUMMARY}</p>
         <p className="text-sm font-medium">{qualifies ? `${bracket.qualifyingPlaces} playoff place${bracket.qualifyingPlaces === 1 ? "" : "s"} available` : "All teams qualified · Playing for seeds"}</p>
+        {qualifies && bracket.teamIds.length > (bracket.qualifyingPlaces ?? 0) * 8 ? <p className="text-xs text-accent">To keep the three-game limit, the published draw selects {bracket.qualifyingPlaces! * 8} teams before play. The remaining teams are out of playoffs.</p> : null}
         {bracket.openingAt ? <p className="text-xs text-muted">Starts <LocalTime ts={bracket.openingAt.getTime()} variant="full" initial={formatMatchTime(bracket.openingAt, "full")} /> · your local time</p> : <p className="text-xs text-muted">Opening time to be announced</p>}
         <p className="text-xs text-muted">Games run in parallel. Your next game starts when both opponents are ready.</p>
       </div>
@@ -205,6 +206,7 @@ function SingleEliminationBracket({ bracket, teams, admin }: {
         <p className="text-muted">{bracket.teamIds.map((id) => names.get(id) ?? "Unknown team").join(" · ")}</p>
       </div> : <>
         <p className="text-xs text-muted">{complete} of {bracket.matches.length} games complete</p>
+        {plan.excluded.length ? <p data-testid="tiebreaker-draw-cutoff" className="text-sm text-muted">Outside the draw cutoff · Out of playoffs: {plan.excluded.map((id) => names.get(id) ?? "Unknown team").join(", ")}.</p> : null}
         {plan.brackets.map((tree, index) => <section key={index} aria-label={`Qualifying bracket ${index + 1}`} className="space-y-3">
           <h4 className="text-sm font-semibold">Bracket {index + 1}{qualifies && plan.brackets.length <= plan.places ? " · One playoff place" : ""}</h4>
           {tree.byes.length ? <p data-testid="tiebreaker-byes" className="text-xs text-accent">
@@ -221,8 +223,7 @@ function SingleEliminationBracket({ bracket, teams, admin }: {
         </section>)}
         <details className="rounded-lg border border-line-soft p-3 text-xs text-muted">
           <summary className="cursor-pointer font-medium text-fg">Published draw &amp; final order</summary>
-          <p className="mt-3">Bracket winners rank first, followed by teams that reached later rounds. Equal finishes use this draw order. Byes and places across brackets use the same draw; resetting cannot redraw it.</p>
-          {qualifies && plan.brackets.length > plan.places ? <p className="mt-2 text-accent">There are more brackets than playoff places. The highest teams in the published draw among the bracket winners qualify. No fourth game is played.</p> : null}
+          <p className="mt-3">Bracket winners rank first, followed by teams that reached later rounds. Equal finishes and byes use this draw order; resetting cannot redraw it.</p>
           <ol className="mt-3 list-inside list-decimal space-y-1" data-testid="tiebreaker-draw">{plan.draw.map((id) => <li key={id}>{names.get(id) ?? "Unknown team"}</li>)}</ol>
         </details>
         {bracket.status === "resolved" ? <ol data-testid="tiebreaker-placements" className="grid gap-2 sm:grid-cols-2">

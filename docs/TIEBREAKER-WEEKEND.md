@@ -6,18 +6,20 @@ Both leagues use the same rules for newly scheduled tiebreakers:
   teams’ head-to-head points and game differential first.
 - A remaining tie affecting qualification or seeds uses BO1 single elimination.
   One loss ends a team’s run; no team plays more than three games.
-- For qualification ties, create one bracket per available place, adding more
-  brackets only when needed to keep every bracket at eight teams or fewer.
+- For qualification ties, create one bracket per available place. Three wins
+  can decide a place among at most eight entrants: if more teams are tied, the
+  published draw selects the first eight teams per place before games begin.
+  The remaining teams are eliminated without playing. Every bracket winner
+  qualifies; no team plays a bracket that cannot earn a place.
   Seeding-only ties use the fewest brackets needed for that same limit.
 - Draw all tied teams once. Fill smaller brackets first in draw order; the
   first entrants within each bracket receive any opening byes. A one-team
   qualifying bracket is an automatic qualification. For example, three teams
   for two places means one qualifying bye and one BO1 for the other place.
 - Bracket winners rank first. Other teams rank by how close to their bracket’s
-  final they finished. Equal finishes use the original draw order. When a very
-  large tie needs more brackets than available places, draw order separates
-  the bracket winners for qualification. Everyone has a bracket entry; no
-  fourth game or repeated round is added.
+  final they finished. Equal finishes use the original draw order. Teams outside
+  an oversized field's draw cutoff rank last. No fourth game or repeated round
+  is added.
 - All ready opening games share the league’s next match-night kickoff. Each
   dependent game is created as soon as its own feeders finish, in the same
   league week, without a scheduled break. Different branches run independently.

@@ -21,7 +21,7 @@ vi.mock("@/lib/tiebreaker-service", async (original) => {
 import { prisma } from "@/lib/prisma";
 import { fetchOpenDotaMatch, steamIdToAccountId } from "@/lib/dota";
 import { recordResult, removeGame, reopenMatch } from "@/app/actions/admin";
-import { advanceTiebreakerWeek, createTiebreakerWeek } from "@/lib/tiebreaker-service";
+import { advanceTiebreakerWeek, clearTiebreakerWeek, createTiebreakerWeek } from "@/lib/tiebreaker-service";
 import { parseSingleTiebreakerSlot } from "@/lib/tiebreaker-format";
 import { importGameForMatch } from "@/lib/match-import";
 import { projectPlayoffField } from "@/lib/playoff-field";
@@ -82,6 +82,39 @@ afterEach(() => {
 });
 
 describe("weekend BO1 knockout lifecycle", () => {
+  it("persists the oversized draw cutoff, schedules only contenders, and qualifies its winner", async () => {
+    const season = await makeSeason({ status: "REGULAR_SEASON" });
+    const teams = [];
+    for (let i = 0; i < 24; i++) teams.push(await makeTeam(season.id, `Team ${i}`, i));
+    const rank = new Map(teams.map((team, i) => [team.id, i]));
+    for (const match of await generateRegularSchedule(season.id)) {
+      const home = rank.get(match.homeTeamId)!, away = rank.get(match.awayTeamId)!;
+      await recordMatch(match.id, home >= 15 && away >= 15 ? 1 : home < away ? 2 : 0,
+        home >= 15 && away >= 15 ? 1 : home < away ? 0 : 2);
+    }
+    await createTiebreakerWeek(season.id);
+    const project = async () => projectPlayoffField(teams, await prisma.match.findMany({ where: { seasonId: season.id } }));
+    const first = (await project()).tiebreakers.groups[0].singlePlan!;
+    expect(first.excluded).toHaveLength(1);
+    expect(first.brackets).toHaveLength(1);
+    expect(await stages(season.id)).toHaveLength(4);
+    await clearTiebreakerWeek(season.id);
+    await createTiebreakerWeek(season.id);
+    expect((await project()).tiebreakers.groups[0].singlePlan!.draw).toEqual(first.draw);
+    for (;;) {
+      const pending = (await stages(season.id)).find((m) => m.status === "SCHEDULED");
+      if (!pending) break;
+      expect((await win(pending))?.error).toBeUndefined();
+    }
+    const field = await project();
+    expect(field.tiebreakers).toMatchObject({ resolved: true, error: null });
+    expect(field.seededTeamIds).not.toContain(first.excluded[0]);
+    expect(field.seededTeamIds).toContain(field.tiebreakers.groups[0].singlePlan!.brackets[0].winner);
+    const played = await stages(season.id);
+    expect(played).toHaveLength(7);
+    expect(played.some((m) => [m.homeTeamId, m.awayTeamId].includes(first.excluded[0]))).toBe(false);
+  });
+
   it("runs ready branches independently, without breaks, and caps all eight teams at three games", async () => {
     const { season, teams } = await setup();
     const before = await prisma.match.findMany({ where: { seasonId: season.id, phase: "REGULAR" } });

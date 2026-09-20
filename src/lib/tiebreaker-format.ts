@@ -16,7 +16,7 @@ export function parseSingleTiebreakerSlot(slot: string | null | undefined) {
 }
 
 export const TIEBREAKER_SUMMARY = "Best of 1 · One loss ends your run · Up to 3 games per team";
-export const TIEBREAKER_RULES = "Normal standings rules come first. Remaining ties use single-elimination brackets of up to eight teams. Games run in parallel; the next game starts when both opponents are ready. The published draw assigns byes and settles equal finishes or places across brackets. No extra deciders.";
+export const TIEBREAKER_RULES = "Normal standings rules come first. Remaining ties use BO1 brackets. Qualification uses one bracket per available place; seeding brackets decide order. If more than eight teams are tied per place, the published draw selects the entrants before play; the rest are eliminated. Byes and equal finishes use draw order. Ready games run in parallel. No extra deciders.";
 
 export function parseTiebreakerStage(slot: string | null | undefined): {
   bracketKey: string;

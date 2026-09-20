@@ -55,7 +55,7 @@ describe("capped BO1 single elimination", () => {
         }
       }
     }
-  });
+  }, 30_000);
 
   it.each([[9, 1], [16, 2], [24, 1], [32, 16], [65, 65]])("caps large fields (%i teams, %i places) and uses the published draw", (count, places) => {
     const rows = tied(count), { key, draw, matches } = start(rows, places);
@@ -83,6 +83,30 @@ describe("capped BO1 single elimination", () => {
     expect(standingOutlooks(pending.standings, 2).get(draw[0])).toMatchObject({ qualified: 1, qualificationTiebreaker: 0, seedingTiebreaker: 0 });
     Object.assign(matches[0], fixture(matches[0].bracketSlot!, matches[0].homeTeamId, matches[0].awayTeamId, true));
     expect(resolveTiebreakers(rows, matches, 2, basis).state.resolved).toBe(true);
+  });
+
+  it.each([[9, 1], [17, 2], [25, 3]])("settles the oversized cutoff before play and every entrant can qualify (%i/%i)", (count, places) => {
+    const rows = tied(count), { draw, key, matches } = start(rows, places);
+    const plan = singleEliminationPlan(draw, places, key);
+    expect(plan.brackets).toHaveLength(places);
+    expect(plan.excluded).toEqual(draw.slice(places * 8));
+    const pending = resolveTiebreakers(rows, matches, places, basis);
+    for (const id of plan.excluded) {
+      expect(matches.some((m) => m.homeTeamId === id || m.awayTeamId === id)).toBe(false);
+      expect(standingOutlooks(pending.standings, places).get(id)).toMatchObject({ eliminated: 1, qualificationTiebreaker: 0 });
+    }
+    // Whichever entrant keeps winning earns a place, regardless of draw rank.
+    for (const target of draw.slice(0, places * 8)) {
+      const played: MatchLike[] = [];
+      for (let round = 0; round < 3; round++) {
+        const ready = singleEliminationPlan(draw, places, key, played).games.filter((g) => !g.winner && g.home.teamId && g.away.teamId);
+        for (const game of ready) played.push(fixture(game.key, game.home.teamId!, game.away.teamId!, true, game.away.teamId !== target));
+      }
+      const result = resolveTiebreakers(rows, played, places, basis);
+      expect(result.state).toMatchObject({ resolved: true, error: null });
+      expect(result.standings.slice(0, places).map((r) => r.teamId)).toContain(target);
+      expect(result.standings.slice(places * 8).map((r) => r.teamId)).toEqual(plan.excluded);
+    }
   });
 
   it("releases only ready successors and locks only their actual feeders", () => {

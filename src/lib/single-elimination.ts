@@ -15,9 +15,12 @@ export type SingleEliminationGame = {
 /** One immutable draw, at most eight entrants per tree, and no consolation games. */
 export function singleEliminationPlan(draw: string[], places: number, key: string, matches: MatchLike[] = []) {
   const qualifying = places < draw.length;
-  // One tree per available place where possible. Very large groups use more
-  // trees; the disclosed draw then separates winners for the remaining spots.
-  const count = Math.max(qualifying ? places : 1, Math.ceil(draw.length / 8));
+  // Three wins can decide one place among at most eight teams. Apply the
+  // disclosed draw cutoff before play; every qualifying tree then has a spot
+  // to win, rather than asking teams to play a bracket that cannot qualify.
+  const entrants = qualifying ? draw.slice(0, places * 8) : draw;
+  const excluded = draw.slice(entrants.length);
+  const count = qualifying ? places : Math.ceil(entrants.length / 8);
   const brackets: { teamIds: string[]; byes: string[]; games: SingleEliminationGame[]; winner: string | null }[] = [];
   const fixtures = new Map(matches.map((m) => [m.bracketSlot, m]));
   const finishes = new Map<string, number>();
@@ -25,8 +28,8 @@ export function singleEliminationPlan(draw: string[], places: number, key: strin
   let cursor = 0;
   for (let b = 0; b < count; b++) {
     // Smaller trees come first: any bye advantage follows the published draw.
-    const size = Math.floor(draw.length / count) + (b >= count - draw.length % count ? 1 : 0);
-    const ids = draw.slice(cursor, cursor + size);
+    const size = Math.floor(entrants.length / count) + (b >= count - entrants.length % count ? 1 : 0);
+    const ids = entrants.slice(cursor, cursor + size);
     cursor += size;
     const levels = Math.ceil(Math.log2(size));
     const width = 2 ** levels;
@@ -60,9 +63,10 @@ export function singleEliminationPlan(draw: string[], places: number, key: strin
     brackets.push({ teamIds: ids, byes: size === 1 ? ids : byes, games: bracketGames, winner });
   }
   const resolved = games.every((game) => game.winner != null);
+  for (const id of excluded) finishes.set(id, Number.MAX_SAFE_INTEGER);
   const drawRank = new Map(draw.map((id, index) => [id, index]));
   const order = [...draw].sort((a, b) =>
     (finishes.get(a) ?? -1) - (finishes.get(b) ?? -1) || drawRank.get(a)! - drawRank.get(b)!,
   );
-  return { brackets, games, resolved, order, places, draw };
+  return { brackets, games, resolved, order, places, draw, excluded };
 }

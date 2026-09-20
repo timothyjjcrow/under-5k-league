@@ -133,9 +133,14 @@ export function resolveTiebreakers(
     }
     if (state.error) { state.resolved = false; return ids; }
     if (plan.resolved) return settled(plan.order);
-    const eliminated = new Set(plan.games.flatMap((g) => g.loser ? [g.loser] : []));
+    const eliminated = new Set([...plan.excluded, ...plan.games.flatMap((g) => g.loser ? [g.loser] : [])]);
     const winners = new Set(plan.brackets.flatMap((b) => b.winner ? [b.winner] : []));
     for (const id of ids) {
+      if (plan.excluded.includes(id)) {
+        const position = offset + plan.draw.indexOf(id) + 1;
+        byId.get(id)!.tiebreakerRankRange = { best: position, worst: position };
+        continue;
+      }
       const otherTrees = plan.brackets.filter((b) => !b.teamIds.includes(id));
       const rank = plan.draw.indexOf(id);
       const contenders = otherTrees.map((b) => b.winner ? [b.winner] : b.teamIds.filter((team) => !eliminated.has(team)));
