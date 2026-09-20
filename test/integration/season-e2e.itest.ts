@@ -7,6 +7,7 @@ import { projectPlayoffField } from "@/lib/playoff-field";
 import { createTiebreakerWeek, advanceTiebreakerWeek } from "@/lib/tiebreaker-service";
 import { regularSeasonStatus } from "@/lib/schedule-status";
 import { SEASON_STATUS } from "@/lib/constants";
+import { seedLegacyTiebreaker } from "../fixtures/legacy-tiebreaker";
 import {
   addGameToMatch,
   drivePlayoffsToChampion,
@@ -173,7 +174,7 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     expect(s.championTeamId).toBe(winner);
   });
 
-  it("requires a BO3 week after an all-draws season and seeds by those results", async () => {
+  it("preserves a published legacy BO3 week after an all-draws season and seeds by those results", async () => {
     const season = await makeSeason({
       teamSize: 3,
       minTeams: 4,
@@ -205,7 +206,9 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     expect(await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
       .toMatchObject({ status: "REGULAR_SEASON", championTeamId: null });
 
-    await createTiebreakerWeek(season.id);
+    // This season already published the old round robin before the upgrade.
+    // New seasons use the knockout flow covered by tiebreaker-single-lifecycle.
+    await seedLegacyTiebreaker(season.id);
     const tiebreakers = await prisma.match.findMany({
       where: { seasonId: season.id, phase: "TIEBREAKER" },
     });
