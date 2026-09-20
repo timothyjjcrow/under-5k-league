@@ -84,7 +84,7 @@ afterEach(() => {
 describe("weekend BO1 knockout lifecycle", () => {
   it("persists the oversized draw cutoff, schedules only contenders, and qualifies its winner", async () => {
     const season = await makeSeason({ status: "REGULAR_SEASON" });
-    const teams = [];
+    const teams: Awaited<ReturnType<typeof makeTeam>>[] = [];
     for (let i = 0; i < 24; i++) teams.push(await makeTeam(season.id, `Team ${i}`, i));
     const rank = new Map(teams.map((team, i) => [team.id, i]));
     for (const match of await generateRegularSchedule(season.id)) {
