@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { projectPlayoffField } from "@/lib/playoff-field";
+import { projectPlayoffField as projectCurrentPlayoffField } from "@/lib/playoff-field";
+// Historical fixture generation; production continues to recognize these stored formats.
+const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, "legacy");
 import { tiebreakerSlot, type TiebreakerGroup } from "@/lib/tiebreakers";
 import {
   buildTiebreakerBrackets,

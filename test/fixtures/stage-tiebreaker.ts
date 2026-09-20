@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { prisma } from "@/lib/prisma";
 import { assertExpectedFixtureDatabase } from "@/lib/fixture-database";
 import { roundRobin } from "@/lib/schedule";
+import { seedLegacyTiebreaker } from "./legacy-tiebreaker";
 
 async function main() {
   assertExpectedFixtureDatabase(
@@ -24,9 +25,9 @@ async function main() {
   const teams = await prisma.team.findMany({
     where: { seasonId: season.id },
     orderBy: { draftOrder: "asc" },
-    take: 6,
+    take: process.argv.includes("--all") ? 8 : 6,
   });
-  if (teams.length !== 6)
+  if (teams.length !== (process.argv.includes("--all") ? 8 : 6))
     throw new Error("The tiebreaker browser fixture requires six teams.");
   const ids = teams.map((team) => team.id);
   const threeTeamTie = process.argv.includes("--three");
@@ -58,9 +59,9 @@ async function main() {
         const awayRank = rank.get(pairing.away)!;
         // Fourth and fifth beat sixth, lose to the top three, and draw each
         // other: equal points, game differential, wins and head-to-head.
-        const tied = threeTeamTie
+        const tied = process.argv.includes("--all") || (threeTeamTie
           ? [homeRank, awayRank].every((rank) => rank >= 2 && rank <= 4)
-          : [homeRank, awayRank].sort().join(",") === "3,4";
+          : [homeRank, awayRank].sort().join(",") === "3,4");
         const homeWins = homeRank < awayRank;
         await tx.match.create({
           data: {
@@ -80,6 +81,7 @@ async function main() {
       }
     }
   });
+  if (process.argv.includes("--legacy")) await seedLegacyTiebreaker(season.id);
   console.log(
     threeTeamTie
       ? `Tiebreaker fixture ready: ${teams.slice(2, 5).map((team) => team.name).join(", ")} tied for third through fifth.`

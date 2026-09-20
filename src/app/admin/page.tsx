@@ -91,7 +91,7 @@ import {
   scheduleTiebreakerWeek,
   resetTiebreakerWeek,
 } from "@/app/actions/tiebreakers";
-import { hasLaterTiebreakerStage, parseTiebreakerStage } from "@/lib/tiebreaker-format";
+import { hasLaterTiebreakerStage, parseSingleTiebreakerSlot, parseTiebreakerStage, TIEBREAKER_RULES, TIEBREAKER_SUMMARY } from "@/lib/tiebreaker-format";
 import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
 import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
 import { schedulableAdminTiebreakerGroups } from "@/components/admin-tiebreaker-view";
@@ -2426,6 +2426,7 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
   const brackets = buildTiebreakerBrackets({ projection, teams: data.teams, matches: data.matches });
   const tiebreakerMatches = data.matches.filter((match) => match.phase === MATCH_PHASE.TIEBREAKER);
   const hasBo1Bracket = brackets.groups.some((bracket) => bracket.format === "BO1_DOUBLE_ELIMINATION");
+  const hasSingle = brackets.groups.some((bracket) => bracket.format === "BO1_SINGLE_ELIMINATION");
   const postseasonStarted = season.status !== SEASON_STATUS.REGULAR_SEASON ||
     data.matches.some((match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL);
   const canSchedule = !postseasonStarted && regularSeasonStatus(data.matches).allComplete &&
@@ -2439,7 +2440,7 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
       } />
       <CardBody className="space-y-5">
         <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm">
-          {hasBo1Bracket ? (
+          {hasSingle ? <p>Record or import each BO1 result below. Ready opponents get their next match automatically, in the same week, with no scheduled break. Independent brackets continue in parallel.</p> : hasBo1Bracket ? (
             <p>Only games with decided opponents have match controls. Finalizing or importing a result creates the next game automatically. Games 2–5 stay in the same tiebreaker week; Game 5 is only created if needed.</p>
           ) : (
             <p>Manage each created tiebreaker match below. Finish all required tiebreakers before starting playoffs.</p>
@@ -2456,7 +2457,7 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
             <div className="flex flex-wrap gap-x-4 gap-y-2" aria-label="Current tiebreaker matches">
               {pending.map((match) => (
                 <a key={match.id} href={`#admin-tiebreaker-match-${match.id}`} className={textLink("py-1")}>
-                  Manage {parseTiebreakerStage(match.bracketSlot) ? `Game ${parseTiebreakerStage(match.bracketSlot)!.stage}` : "series"}: {names.get(match.homeTeamId ?? "")} vs {names.get(match.awayTeamId ?? "")} →
+                  Manage {match.bestOf === 1 ? "game" : "series"}: {names.get(match.homeTeamId ?? "")} vs {names.get(match.awayTeamId ?? "")} →
                 </a>
               ))}
             </div>
@@ -3051,7 +3052,7 @@ function MatchResultRow({
             confirm={`Record the score in the boxes as the FINAL result for ${home?.name ?? "home"} v ${away?.name ?? "away"}?\n\nCheck the two score boxes first. A played series must reach its real finish; use the forfeit / ruling box only when an admin is ending it early. Marking a match final stops automatic result import for it${
               m.phase === "PLAYOFF" || m.phase === "FINAL"
                 ? " and advances the playoff bracket"
-                : m.phase === "TIEBREAKER" && parseTiebreakerStage(m.bracketSlot)
+                : m.phase === "TIEBREAKER" && (parseTiebreakerStage(m.bracketSlot) || parseSingleTiebreakerSlot(m.bracketSlot))
                   ? " and creates the next tiebreaker game when needed; this result locks once that dependent game exists"
                 : ""
             }, and "Reopen for import" only undoes it while no games are attached.`}
@@ -3418,7 +3419,11 @@ function PlayoffControls({
               These matches do not change regular-season points. Playoffs stay
               locked until every relevant tie is resolved.
             </p>
-            {unresolvedTeams.length > 0 ? (
+            {unresolvedTeams.length > 0 && playoffField.tiebreakers.groups.some((group) => group.format === "BO1_SINGLE_ELIMINATION") ? <div className="space-y-2 text-sm text-muted">
+              <p>{TIEBREAKER_SUMMARY}</p>
+              <p>{TIEBREAKER_RULES}</p>
+              <p>A one-team qualifying bracket is a bye into playoffs. The draw is saved and cannot be rerolled by resetting.</p>
+            </div> : unresolvedTeams.length > 0 ? (
               <p className="text-sm text-muted">
                 Two tied teams play one best-of-three series. Three tied teams
                 play a best-of-one double-elimination bracket in the same week:
@@ -3460,7 +3465,7 @@ function PlayoffControls({
                   {schedulableTiebreakers
                     .flatMap((group) => group.drawRequired ? [
                       <li key={group.key}>
-                        {group.teamIds.map((id) => teamNameById.get(id) ?? id).join(", ")} · Best of 1 · Opening matchup and bye drawn when scheduled
+                        {group.teamIds.map((id) => teamNameById.get(id) ?? id).join(", ")} · Best of 1 · Draw and byes published when scheduled
                       </li>,
                     ] : group.pairings.map((pairing) => (
                         <li
@@ -3624,7 +3629,7 @@ function PlayoffControls({
           </details>
         ) : null}
         <p className="text-xs text-muted">
-          Two-team tiebreakers are best of 3; three-team brackets are best of 1.
+          New tiebreakers use BO1 knockouts, up to three games per team. Existing brackets keep their published format.
           Series lengths for the regular
           season, playoffs and final are set in the phase-control panel above.
         </p>

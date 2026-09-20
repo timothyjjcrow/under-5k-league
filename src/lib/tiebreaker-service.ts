@@ -7,6 +7,8 @@ import { playoffSetupRevision } from "./playoff-command";
 import { regularSeasonStatus } from "./schedule-status";
 import { upcomingMatchNight } from "./schedule";
 import { parseTiebreakerStage, tiebreakerSlot, type TiebreakerGroup } from "./tiebreakers";
+import { parseSingleTiebreakerSlot } from "./tiebreaker-format";
+import { singleEliminationPlan } from "./single-elimination";
 import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
 import { raceHook } from "./race-hook";
@@ -63,7 +65,7 @@ async function openingDraw(tx: Prisma.TransactionClient, seasonId: string, group
   if (existing) {
     let parsed: unknown;
     try { parsed = JSON.parse(existing.value); } catch { /* Refuse corrupt draw below. */ }
-    if (!Array.isArray(parsed) || parsed.length !== 3 || new Set(parsed).size !== 3 ||
+    if (!Array.isArray(parsed) || parsed.length !== group.teamIds.length || new Set(parsed).size !== group.teamIds.length ||
         parsed.some((id) => typeof id !== "string" || !group.teamIds.includes(id))) {
       throw new UserFacingError("The saved opening draw needs an administrator's review. No new tiebreaker fixture was created.");
     }
@@ -87,8 +89,10 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
     }
     const field = projectPlayoffField(teams, matches);
     if (field.tiebreakers.error) throw new UserFacingError(field.tiebreakers.error);
-    const continuation = (g: TiebreakerGroup) => g.format === "BO1_DOUBLE_ELIMINATION" && (g.stage ?? 0) > 1;
-    const groups = field.tiebreakers.groups.filter((g) => g.status === "needed" &&
+    const continuation = (g: TiebreakerGroup) =>
+      g.format === "BO1_SINGLE_ELIMINATION" ? !g.drawRequired :
+        g.format === "BO1_DOUBLE_ELIMINATION" && (g.stage ?? 0) > 1;
+    const groups = field.tiebreakers.groups.filter((g) => g.status === "needed" && !g.blocked &&
       (automatic ? continuation(g) : !field.tiebreakers.pending || continuation(g)));
     if (!groups.length) {
       if (automatic) return null;
@@ -102,6 +106,30 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
       : null;
     const data: Prisma.MatchCreateManyInput[] = [];
     for (const group of groups) {
+      if (group.format === "BO1_SINGLE_ELIMINATION") {
+        const parsed = parseSingleTiebreakerSlot(group.key);
+        const opening = parsed ? matches.filter((m) =>
+          parseSingleTiebreakerSlot(m.bracketSlot)?.tournamentKey === parsed.tournamentKey,
+        ).sort((a, b) => a.week - b.week)[0] : null;
+        if (!group.drawRequired && !opening) throw new UserFacingError("The tiebreaker opening fixture is missing. Reload before continuing.");
+        const draw = group.drawRequired ? await openingDraw(tx, seasonId, group) : null;
+        const drawKey = draw ? `${group.key}:${draw.map((id) => group.teamIds.indexOf(id)).join(".")}` : null;
+        const ready = draw && drawKey
+          ? singleEliminationPlan(draw, group.qualifyingPlaces!, drawKey).games.filter((game) => game.home.teamId && game.away.teamId)
+            .map((game) => ({ home: game.home.teamId!, away: game.away.teamId!, slot: game.key }))
+          : group.pairings.map((pair) => ({ ...pair, slot: group.key }));
+        // Independent openings share one kickoff. Descendants start as soon
+        // as their own feeders finish, even while other trees are still playing.
+        const scheduledAt = opening ? new Date() : night;
+        for (const pair of ready) {
+          if (scheduledAt && await hasConfirmedScrimConflict(tx, { seasonId, teamIds: [pair.home, pair.away], scheduledAt })) {
+            throw new UserFacingError("A tied team has a booked scrim near kickoff. Move or cancel the scrim before continuing.");
+          }
+          data.push({ seasonId, week: opening?.week ?? nextWeek, phase: MATCH_PHASE.TIEBREAKER,
+            homeTeamId: pair.home, awayTeamId: pair.away, bestOf: 1, bracketSlot: pair.slot, scheduledAt });
+        }
+        continue;
+      }
       const stage = parseTiebreakerStage(tiebreakerSlot(group, 0));
       const opening = continuation(group) ? matches.find((m) => {
         const stored = parseTiebreakerStage(m.bracketSlot);

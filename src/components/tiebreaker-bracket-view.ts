@@ -1,7 +1,7 @@
 import type { PlayoffFieldProjection } from "@/lib/playoff-field";
 import type { MatchLike } from "@/lib/standings";
 import type { TiebreakerGroup } from "@/lib/tiebreakers";
-import { parseTiebreakerStage } from "@/lib/tiebreaker-format";
+import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "@/lib/tiebreaker-format";
 
 export type TiebreakerBracketTeam = {
   id: string;
@@ -37,6 +37,8 @@ export type TiebreakerBracketMatchView = {
   winnerTeamId: string | null;
   scheduledAt: Date | null;
   condition: string | null;
+  bracket?: number;
+  stage?: number;
 };
 
 export type TiebreakerPlacementView = {
@@ -60,6 +62,8 @@ export type TiebreakerBracketView = {
   openingAt: Date | null;
   matches: TiebreakerBracketMatchView[];
   placements: TiebreakerPlacementView[];
+  singlePlan?: TiebreakerGroup["singlePlan"];
+  qualifyingPlaces?: number;
 };
 
 /**
@@ -86,8 +90,9 @@ export function buildTiebreakerBrackets({
     .map((match) => [match.bracketSlot!, match]));
   const grouped = new Map<string, TiebreakerGroup[]>();
   for (const group of projection.tiebreakers.groups) {
+    const single = parseSingleTiebreakerSlot(group.key);
     const parsed = parseTiebreakerStage(`${group.key}:0`);
-    const key = group.format === "BO1_DOUBLE_ELIMINATION" && parsed
+    const key = single ? single.tournamentKey : group.format === "BO1_DOUBLE_ELIMINATION" && parsed
       ? parsed.bracketKey : group.key;
     grouped.set(key, [...(grouped.get(key) ?? []), group]);
   }
@@ -151,7 +156,21 @@ export function buildTiebreakerBrackets({
     let byeTeamId: string | null = null;
     let views: TiebreakerBracketMatchView[];
 
-    if (group.format === "BO1_DOUBLE_ELIMINATION") {
+    if (group.format === "BO1_SINGLE_ELIMINATION") {
+      const plan = group.singlePlan;
+      const numbers = new Map(plan?.games.map((g, i) => [g.key, i + 1]));
+      views = plan?.games.map((g, i) => {
+        const source = (feeder: string | null) => feeder ? `Winner of Game ${numbers.get(feeder)}` : null;
+        const next = plan.games.find((n) => n.home.feeder === g.key || n.away.feeder === g.key);
+        const qualifies = plan.places < plan.draw.length && plan.brackets.length <= plan.places;
+        return { ...matchView(g.key, i + 1, next ? `Bracket ${g.bracket + 1} · Round ${g.stage}` : `Bracket ${g.bracket + 1} · Decider`, 1,
+          side(g.home.teamId, source(g.home.feeder)), side(g.away.teamId, source(g.away.feeder))),
+          bracket: g.bracket, stage: g.stage,
+          condition: next ? `Winner → Game ${numbers.get(next.key)} · Loser out of this bracket`
+            : `${qualifies ? "Winner qualifies" : "Winner leads this bracket"} · Loser out of this bracket`,
+        };
+      }) ?? [];
+    } else if (group.format === "BO1_DOUBLE_ELIMINATION") {
       const game = (number: number) => fixtures.get(`${key}:${number}:0`);
       const opening = game(1);
       byeTeamId = opening
@@ -204,6 +223,7 @@ export function buildTiebreakerBrackets({
       openingAt: actual[0]?.scheduledAt ?? null,
       matches: views,
       placements,
+      ...(group.format === "BO1_SINGLE_ELIMINATION" ? { singlePlan: group.singlePlan, qualifyingPlaces: group.qualifyingPlaces } : {}),
     };
   });
   return { error: null, groups };

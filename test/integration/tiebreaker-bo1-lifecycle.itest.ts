@@ -21,7 +21,8 @@ vi.mock("@/lib/tiebreaker-service", async (original) => {
 import { prisma } from "@/lib/prisma";
 import { fetchOpenDotaMatch, steamIdToAccountId } from "@/lib/dota";
 import { recordResult, removeGame, reopenMatch } from "@/app/actions/admin";
-import { advanceTiebreakerWeek, createTiebreakerWeek } from "@/lib/tiebreaker-service";
+import { advanceTiebreakerWeek } from "@/lib/tiebreaker-service";
+import { seedLegacyTiebreaker } from "../fixtures/legacy-tiebreaker";
 import { parseTiebreakerStage } from "@/lib/tiebreakers";
 import { importGameForMatch } from "@/lib/match-import";
 import { projectPlayoffField } from "@/lib/playoff-field";
@@ -41,7 +42,7 @@ async function setup() {
   for (let i = 0; i < 3; i++) teams.push(await makeTeam(season.id, `Team ${i}`, i));
   const regular = await generateRegularSchedule(season.id);
   for (const match of regular) await recordMatch(match.id, 1, 1);
-  await createTiebreakerWeek(season.id);
+  await seedLegacyTiebreaker(season.id);
   return { season, teams, regular };
 }
 

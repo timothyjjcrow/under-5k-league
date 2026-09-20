@@ -28,7 +28,7 @@ async function expectFinalTracker(
   }
 }
 
-test("a tied playoff place requires a BO3 extra week before the bracket starts", async ({
+test("a tied playoff place requires a BO1 weekend before the bracket starts", async ({
   page,
 }, testInfo) => {
   test.setTimeout(90_000);
@@ -66,10 +66,10 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
   await page.locator('a[href="#adm-tiebreakers"]').first().click();
   await expect(page).toHaveURL(/#adm-tiebreakers$/);
   const adminBracket = adminTiebreakers.getByTestId("tiebreaker-bracket");
-  await expect(adminBracket).toHaveAttribute("data-format", "BO3_ROUND_ROBIN");
+  await expect(adminBracket).toHaveAttribute("data-format", "BO1_SINGLE_ELIMINATION");
   await expect(adminBracket.getByTestId("tiebreaker-game")).toHaveCount(1);
   await expect(adminTiebreakers.getByTestId("admin-tiebreaker-match")).toHaveCount(1);
-  const manageSeries = adminBracket.getByRole("link", { name: "Manage series →", exact: true });
+  const manageSeries = adminBracket.getByRole("link", { name: "Manage game →", exact: true });
   const seriesTarget = await manageSeries.getAttribute("href");
   expect(seriesTarget).toMatch(/^#admin-tiebreaker-match-/);
   await manageSeries.click();
@@ -83,12 +83,12 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
   await page.goto("/schedule#tiebreakers");
   const extraWeek = page.locator("#tiebreakers");
   const bracket = extraWeek.getByTestId("tiebreaker-bracket");
-  await expect(bracket).toHaveAttribute("data-format", "BO3_ROUND_ROBIN");
+  await expect(bracket).toHaveAttribute("data-format", "BO1_SINGLE_ELIMINATION");
   await expect(bracket.getByTestId("tiebreaker-game")).toHaveCount(1);
   const matchDetails = extraWeek.getByTestId("tiebreaker-match-details");
   await matchDetails.locator("summary").first().click();
   await expect(
-    matchDetails.getByText("Tiebreaker week · Week 6 · Best of 3", {
+    matchDetails.getByText("Tiebreaker week · Week 6 · Best of 1", {
       exact: true,
     }),
   ).toBeVisible();
@@ -113,7 +113,7 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
   await page.screenshot({ path: testInfo.outputPath("home-tiebreaker-pending-mobile.png"), fullPage: true });
   await page.goto(matchHref!);
   await expect(
-    page.getByText("Playoff tiebreaker · Best of 3.", { exact: true }),
+    page.getByText("Playoff tiebreaker · Best of 1.", { exact: true }),
   ).toBeVisible();
 
   await page.goto("/admin#adm-tiebreakers");
@@ -122,10 +122,10 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
     .filter({
       has: page
         .locator("summary")
-        .filter({ hasText: "Tiebreaker week · Week 6 · Best of 3" }),
+        .filter({ hasText: "Tiebreaker week · Week 6 · Best of 1" }),
     });
   await expect(result).toBeVisible();
-  await expect(adminBracket.getByRole("link", { name: "Manage series →", exact: true })).toBeVisible();
+  await expect(adminBracket.getByRole("link", { name: "Manage game →", exact: true })).toBeVisible();
   const form = result.locator('form:has(input[name="homeScore"])');
   const winnerName = (await form
     .locator('input[name="awayScore"]')
@@ -133,8 +133,8 @@ test("a tied playoff place requires a BO3 extra week before the bracket starts",
   const loserName = (await form
     .locator('input[name="homeScore"]')
     .getAttribute("aria-label"))!.replace(/ series score$/, "");
-  await form.locator('input[name="homeScore"]').fill("1");
-  await form.locator('input[name="awayScore"]').fill("2");
+  await form.locator('input[name="homeScore"]').fill("0");
+  await form.locator('input[name="awayScore"]').fill("1");
   await form
     .getByRole("button", { name: "Save as final", exact: true })
     .click();
@@ -174,7 +174,7 @@ for (const resetFinal of [false, true]) {
     test.setTimeout(180_000);
     const fixtureOutput = execFileSync(
       process.platform === "win32" ? "npx.cmd" : "npx",
-      ["tsx", "test/fixtures/stage-tiebreaker.ts", "--three"],
+      ["tsx", "test/fixtures/stage-tiebreaker.ts", "--three", "--legacy"],
       { cwd: process.cwd(), env: { ...process.env, DATABASE_URL: POSTSEASON_DB_URL }, encoding: "utf8" },
     );
     const tiedTeamNames = fixtureOutput.trim().split("\n").at(-1)!
@@ -190,8 +190,6 @@ for (const resetFinal of [false, true]) {
     await page.goto("/admin#playoffs");
     const start = page.getByRole("button", { name: "Start playoffs", exact: true });
     await expect(start).toBeDisabled();
-    await expect(page.locator("#playoffs")).toContainText("Opening matchup and bye drawn when scheduled");
-    await page.getByRole("button", { name: "Schedule tiebreaker week", exact: true }).click();
     await expect(page.locator("#playoffs")).toContainText("Opening bye drawn:");
 
     await page.goto("/schedule#tiebreakers");

@@ -21,7 +21,7 @@ export async function scheduleTiebreakerWeek(_prev: ActionResult, form: FormData
     revalidatePath("/", "layout");
     await logAdminAction({ action: "scheduleTiebreakerWeek", seasonId,
       summary: `Scheduled ${result.matchCount} tiebreaker match${result.matchCount === 1 ? "" : "es"} in week ${result.week}` });
-    return { message: `Tiebreaker week ${result.week}: ${result.matchCount} match${result.matchCount === 1 ? "" : "es"} scheduled.${result.untimedCount ? " Set a time for each undated match in the schedule." : ""}` };
+    return { message: `Tiebreaker week ${result.week}: ${result.matchCount} match${result.matchCount === 1 ? "" : "es"} scheduled.${result.untimedCount ? " Set the opening times in Admin → Tiebreakers." : ""}` };
   } catch (error) {
     return { error: actionErrorMessage(error, "Couldn't schedule the tiebreaker week. Reload and try again.", "tiebreakers.schedule") };
   }

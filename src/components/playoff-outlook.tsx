@@ -135,8 +135,8 @@ export function PlayoffOutlook({
             ) : null}
             {mayNeedQualificationTiebreaker ? (
               <p className="text-[11px] text-muted">
-                Tiebreakers: two teams play BO3; three teams play BO1 double
-                elimination, four or five games in one extra week.
+                Tiebreakers use BO1 knockouts: up to three games per team in one weekend.
+                Published brackets keep their original format.
               </p>
             ) : null}
             {paths.length > 0 || (outlook && outlook.total > 1) ? (

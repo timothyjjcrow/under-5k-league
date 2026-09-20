@@ -772,6 +772,21 @@ describe("computeAutomationGateSnapshot", () => {
     });
   });
 
+  it("repairs only missing ready knockout successors and sleeps once the new bracket is complete", () => {
+    const key = `TBS:${"a".repeat(64)}:1:${"b".repeat(64)}:0.1.2.3:0`;
+    const game = (stage: number, index: number, completed = true) => match({
+      id: `${stage}-${index}`, phase: "TIEBREAKER", week: 8,
+      bracketSlot: `${key}:${stage}:${index}`, scheduledAt: null,
+      status: completed ? "COMPLETED" : "SCHEDULED", winnerTeamId: completed ? "home" : null,
+    });
+    const check = (matches: AutomationGateMatch[], status = "REGULAR_SEASON") =>
+      computeAutomationGateSnapshot(inputs({ seasons: [season({ status, matches })] }), NOW);
+    expect(check([game(1, 0), game(1, 1, false)]).reason).toBeNull();
+    expect(check([game(1, 0), game(1, 1)])).toMatchObject({ nextWakeAtMs: NOW, reason: "TIEBREAKER_REPAIR" });
+    expect(check([game(1, 0), game(1, 1), game(2, 0)]).reason).toBeNull();
+    expect(check([game(1, 0), game(1, 1)], "PLAYOFFS").reason).toBeNull();
+  });
+
   it("wakes for a missing same-week BO1 stage even without remaining scheduled matches or Discord", () => {
     const slot = (stage: number) => `TBD:${"a".repeat(64)}:1:${"b".repeat(64)}:${stage}:0`;
     const fixtures = [1, 2, 3].map((stage) => match({

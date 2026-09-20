@@ -36,6 +36,7 @@ export type PlayoffFieldProjection = {
 export function projectPlayoffField(
   teams: { id: string; withdrawn?: boolean }[],
   matches: MatchLike[],
+  format: "current" | "legacy" = "current",
 ): PlayoffFieldProjection {
   let standings = computeStandings(
     teams.map((team) => team.id),
@@ -50,7 +51,7 @@ export function projectPlayoffField(
   const bracketSize =
     eligibleStandings.length < 2 ? 0 : pickBracketSize(eligibleStandings.length);
   const resolution = resolveTiebreakers(
-    eligibleStandings, matches, bracketSize, tiebreakerBasis(teams, matches),
+    eligibleStandings, matches, bracketSize, tiebreakerBasis(teams, matches), format,
   );
   eligibleStandings = resolution.standings;
   let eligibleIndex = 0;

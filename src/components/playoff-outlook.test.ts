@@ -84,8 +84,8 @@ describe("playoff outlook presentation", () => {
     expect(html).toContain("not qualification odds");
     expect(html).toContain("normally completed series");
     expect(html).toContain("administrative rulings or score corrections");
-    expect(html).toContain("two teams play BO3");
-    expect(html).toContain("three teams play BO1");
+    expect(html).toContain("BO1 knockouts");
+    expect(html).toContain("up to three games per team in one weekend");
     expect(render(scenario, "different-match")).not.toContain(">Win</dt>");
   });
 

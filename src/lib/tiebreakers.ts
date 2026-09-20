@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import type { MatchLike, TeamStanding } from "./standings";
 import type { Pairing } from "./schedule";
+import { parseSingleTiebreakerSlot } from "./tiebreaker-format";
+import { singleEliminationPlan } from "./single-elimination";
 export { parseTiebreakerStage, hasLaterTiebreakerStage } from "./tiebreaker-format";
 
 export const TIEBREAKER_BEST_OF = 3;
@@ -12,11 +14,14 @@ export type TiebreakerGroup = {
   round: number;
   status: "needed" | "pending" | "resolved";
   pairings: Pairing[];
-  format: "BO3_ROUND_ROBIN" | "BO1_DOUBLE_ELIMINATION";
+  format: "BO3_ROUND_ROBIN" | "BO1_DOUBLE_ELIMINATION" | "BO1_SINGLE_ELIMINATION";
   bestOf: 1 | 3;
   stage?: number;
   drawRequired?: boolean;
   byeTeamId?: string;
+  blocked?: boolean;
+  qualifyingPlaces?: number;
+  singlePlan?: ReturnType<typeof singleEliminationPlan>;
 };
 
 export type TiebreakerState = {
@@ -46,21 +51,21 @@ export function tiebreakerBasis(
 }
 
 export function tiebreakerSlot(group: TiebreakerGroup, index: number): string {
+  if (group.format === "BO1_SINGLE_ELIMINATION" && !group.drawRequired) return group.key;
   return `${group.key}:${index}`;
 }
 
 /**
- * Two teams play BO3; three teams play a 4–5 game BO1 double-elimination
- * bracket. Larger groups and existing round robins rank by series wins and
- * differential in that round. A still-tied subgroup plays another round;
- * groups entirely below the playoff cut need no extra fixtures. No game
- * contributes regular-season points and no ID ever settles a playoff tie.
+ * New ties use capped BO1 knockouts. Published TB/TBD fixtures retain their
+ * original BO3/BO1 double-elimination rules, including legacy continuation.
+ * No tiebreaker contributes regular-season points.
  */
 export function resolveTiebreakers(
   eligible: TeamStanding[],
   matches: MatchLike[],
   bracketSize: number,
   basis: string,
+  format: "current" | "legacy" = "current",
 ): { standings: TeamStanding[]; state: TiebreakerState } {
   const state: TiebreakerState = {
     groups: [], pending: false, needsMatches: false, resolved: true, error: null,
@@ -74,7 +79,71 @@ export function resolveTiebreakers(
       const row = byId.get(id)!;
       delete row.idDecided;
       delete row.idTieGroup;
+      delete row.tiebreakerRankRange;
       row.tiebreakerResolved = true;
+    }
+    return ids;
+  }
+
+  function rankSingle(ids: string[], offset: number, round: number): string[] {
+    const ordered = [...ids].sort();
+    const root = `TBS:${basis}:${round}:${digest(ordered)}`;
+    const fixtures = extra.filter((m) => m.bracketSlot?.startsWith(`${root}:`));
+    for (const match of fixtures) visited.add(match);
+    const places = Math.min(ids.length, bracketSize - offset);
+    if (!fixtures.length) {
+      state.groups.push({ key: root, teamIds: ordered, round, status: "needed", pairings: [],
+        format: "BO1_SINGLE_ELIMINATION", bestOf: 1, drawRequired: true, qualifyingPlaces: places });
+      state.needsMatches = true;
+      state.resolved = false;
+      return ids;
+    }
+    const metadata = parseSingleTiebreakerSlot(fixtures[0].bracketSlot);
+    if (!metadata || metadata.draw.length !== ordered.length || fixtures.some((m) =>
+      parseSingleTiebreakerSlot(m.bracketSlot)?.tournamentKey !== metadata.tournamentKey)) {
+      state.error = "The published tiebreaker draw needs an administrator’s review. Reset the tiebreaker week before continuing.";
+      state.resolved = false;
+      return ids;
+    }
+    const plan = singleEliminationPlan(metadata.draw.map((i) => ordered[i]), places, metadata.tournamentKey, fixtures);
+    const slots = new Set(plan.games.map((game) => game.key));
+    if (fixtures.some((m) => !slots.has(m.bracketSlot!)) || new Set(fixtures.map((m) => m.bracketSlot)).size !== fixtures.length) {
+      state.error = "The tiebreaker fixtures no longer match the published bracket. Reset the tiebreaker week before continuing.";
+    }
+    for (const game of plan.games) {
+      const match = fixtures.find((m) => m.bracketSlot === game.key);
+      const ready = !!game.home.teamId && !!game.away.teamId;
+      const group: TiebreakerGroup = {
+        key: game.key, teamIds: ordered, round,
+        stage: game.stage, status: match ? match.status === MATCH_STATUS.COMPLETED ? "resolved" : "pending" : "needed",
+        pairings: ready ? [{ home: game.home.teamId!, away: game.away.teamId! }] : [],
+        format: "BO1_SINGLE_ELIMINATION", bestOf: 1, blocked: !ready,
+        qualifyingPlaces: places, singlePlan: plan,
+      };
+      state.groups.push(group);
+      if (match && (!ready || match.bestOf !== 1 || match.homeTeamId !== game.home.teamId ||
+        match.awayTeamId !== game.away.teamId || (match.status === MATCH_STATUS.COMPLETED && !(
+          match.homeScore === 1 && match.awayScore === 0 && match.winnerTeamId === match.homeTeamId ||
+          match.homeScore === 0 && match.awayScore === 1 && match.winnerTeamId === match.awayTeamId)))) {
+        state.error = "Every BO1 tiebreaker must match its feeder results and finish 1–0. Correct the result before continuing.";
+      }
+      if (group.status !== "resolved") state.resolved = false;
+      if (group.status === "pending") state.pending = true;
+      if (!match && ready) state.needsMatches = true;
+    }
+    if (state.error) { state.resolved = false; return ids; }
+    if (plan.resolved) return settled(plan.order);
+    const eliminated = new Set(plan.games.flatMap((g) => g.loser ? [g.loser] : []));
+    const winners = new Set(plan.brackets.flatMap((b) => b.winner ? [b.winner] : []));
+    for (const id of ids) {
+      const otherTrees = plan.brackets.filter((b) => !b.teamIds.includes(id));
+      const rank = plan.draw.indexOf(id);
+      const contenders = otherTrees.map((b) => b.winner ? [b.winner] : b.teamIds.filter((team) => !eliminated.has(team)));
+      byId.get(id)!.tiebreakerRankRange = {
+        best: offset + (winners.has(id) ? 1 + contenders.filter((teams) => teams.every((team) => plan.draw.indexOf(team) < rank)).length
+          : eliminated.has(id) ? plan.brackets.length + 1 : 1),
+        worst: offset + (winners.has(id) ? 1 + contenders.filter((teams) => teams.some((team) => plan.draw.indexOf(team) < rank)).length : ids.length),
+      };
     }
     return ids;
   }
@@ -149,6 +218,9 @@ export function resolveTiebreakers(
     if (ids.length < 2 || offset >= bracketSize) return ids;
     const orderedIds = [...ids].sort();
     const key = `TB:${basis}:${round}:${digest(orderedIds)}`;
+    const legacy = extra.some((m) => m.bracketSlot?.startsWith(`${key}:`) ||
+      m.bracketSlot?.startsWith(`${key.replace(/^TB:/, "TBD:")}:`));
+    if (round === 1 && format === "current" && !legacy) return rankSingle(ids, offset, round);
     // Existing BO3 fixtures keep their published format. New three-team ties
     // use the bounded BO1 bracket, including subgroups of larger round robins.
     if (ids.length === 3 && !extra.some((m) => m.bracketSlot?.startsWith(`${key}:`))) {

@@ -17,7 +17,8 @@ import { databaseNow } from "./database-time";
 import { detectIntervalSeconds } from "./inhouse";
 import { inhouseBoardNeedsSync } from "./inhouse-board-service";
 import { prisma } from "./prisma";
-import { parseTiebreakerStage } from "./tiebreaker-format";
+import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "./tiebreaker-format";
+import { singleEliminationPlan } from "./single-elimination";
 import {
   autoSyncClosesAt,
   autoSyncIntervalSeconds,
@@ -344,6 +345,23 @@ function latestPlayoffRound(matches: AutomationGateMatch[]) {
 
 /** A decided BO1 stage needs its next fixture, never another league week. */
 function tiebreakerNeedsAdvancement(matches: AutomationGateMatch[]): boolean {
+  const single = new Map<string, AutomationGateMatch[]>();
+  for (const match of matches) {
+    const parsed = parseSingleTiebreakerSlot(match.bracketSlot);
+    if (match.phase === MATCH_PHASE.TIEBREAKER && parsed) {
+      single.set(parsed.tournamentKey, [...(single.get(parsed.tournamentKey) ?? []), match]);
+    }
+  }
+  for (const [key, fixtures] of single) {
+    const metadata = parseSingleTiebreakerSlot(fixtures[0].bracketSlot)!;
+    // Every nonempty tree's opening is created in one transaction. Trees are
+    // ordered smallest first, so the last (largest) always has a real fixture.
+    const trees = Math.max(...fixtures.map((m) => parseSingleTiebreakerSlot(m.bracketSlot)!.bracket)) + 1;
+    const plan = singleEliminationPlan(metadata.draw.map(String), trees, key,
+      fixtures.map((m) => ({ ...m, homeScore: 0, awayScore: 0 })));
+    const existing = new Set(fixtures.map((m) => m.bracketSlot));
+    if (plan.games.some((g) => !existing.has(g.key) && g.home.teamId && g.away.teamId)) return true;
+  }
   const brackets = new Map<string, Map<number, AutomationGateMatch>>();
   for (const match of matches) {
     if (match.phase !== MATCH_PHASE.TIEBREAKER) continue;

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { PlayoffFieldProjection } from "@/lib/playoff-field";
 import type { ScenarioReport } from "@/lib/scenarios";
+import { TIEBREAKER_RULES, TIEBREAKER_SUMMARY } from "@/lib/tiebreaker-format";
 
 /** The playoff order is provisional until every required extra series is final. */
 export function TiebreakerNotice({
@@ -40,17 +41,19 @@ export function TiebreakerNotice({
     );
   });
   const seedingIds = unresolved.filter((id) => !qualificationIds.includes(id));
+  const teamList = (ids: string[]) => ids.length > 3 ? `${ids.length} teams` : ids.map((id) => names.get(id) ?? id).join(", ");
   const tieSummary = [
     qualificationIds.length > 0
-      ? `${qualificationIds.map((id) => names.get(id) ?? id).join(", ")} need a qualification tiebreaker.`
+      ? `${teamList(qualificationIds)} need a qualification tiebreaker.`
       : "",
     seedingIds.length > 0
-      ? `${seedingIds.map((id) => names.get(id) ?? id).join(", ")} have qualified; their seeding tiebreaker decides playoff order.`
+      ? `${teamList(seedingIds)} have qualified; their seeding tiebreaker decides playoff order.`
       : "",
   ].filter(Boolean).join(" ");
   const hasThreeTeamBracket = projection.tiebreakers.groups.some(
     (group) => group.format === "BO1_DOUBLE_ELIMINATION",
   );
+  const hasSingle = projection.tiebreakers.groups.some((group) => group.format === "BO1_SINGLE_ELIMINATION");
   const byes = [...new Set(projection.tiebreakers.groups.flatMap(
     (group) => group.byeTeamId ? [group.byeTeamId] : [],
   ))];
@@ -64,6 +67,7 @@ export function TiebreakerNotice({
           ? "Playoff tiebreaker week"
           : "Playoff tiebreakers complete"}
       </p>
+      {hasSingle && unresolved.length > 0 ? <p className="text-xs text-fg">{TIEBREAKER_SUMMARY}</p> : null}
       {hasThreeTeamBracket && unresolved.length > 0 && !projection.tiebreakers.error ? (
         <p className="text-xs text-fg">
           Three teams · 4–5 best-of-one games · One tiebreaker week.
@@ -83,7 +87,7 @@ export function TiebreakerNotice({
           <div className="mt-1 space-y-2">
             <p>{projection.tiebreakers.pending ? "Finish the scheduled tiebreakers before playoffs begin." : "An administrator must schedule the remaining tiebreakers."} Regular-season points stay the same.</p>
             <p className="text-muted">
-              {hasThreeTeamBracket
+              {hasSingle ? TIEBREAKER_RULES : hasThreeTeamBracket
                 ? "Three tied teams play a best-of-one double-elimination bracket: four games, or five if the final needs a reset, all in the same tiebreaker week. Two losses eliminate a team; the bracket determines every seed."
                 : "Two tied teams play one best-of-three series. Larger round-robin groups play best-of-three series, ranked by wins then game differential."}
               {hasThreeTeamBracket ? " Two-team ties use one best-of-three series." : ""}

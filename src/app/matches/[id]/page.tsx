@@ -79,7 +79,7 @@ import {
 import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
 import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
-import { parseTiebreakerStage } from "@/lib/tiebreaker-format";
+import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "@/lib/tiebreaker-format";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   Avatar,
@@ -261,7 +261,7 @@ export default async function MatchDetailPage({
       {match.phase === "TIEBREAKER" ? (
         <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
           <p><strong>Playoff tiebreaker · Best of {match.bestOf}.</strong>{" "}
-            {tiebreakerStage ? `Game ${tiebreakerStage} of a three-team bracket: four games, or five if the final needs a reset.` : "This series helps settle playoff qualification or seeding."}
+            {parseSingleTiebreakerSlot(match.bracketSlot) ? "Win to advance; lose and your run ends. Up to three games per team. The next game starts when both opponents are ready." : tiebreakerStage ? `Game ${tiebreakerStage} of a three-team bracket: four games, or five if the final needs a reset.` : "This series helps settle playoff qualification or seeding."}
           </p>
           {tiebreakerStage ? <p className="text-xs text-muted">{
             tiebreakerStage === 1 ? "Winner plays the team with the bye in Game 2. Loser plays in Game 3."

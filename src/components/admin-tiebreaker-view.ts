@@ -6,8 +6,9 @@ export function schedulableAdminTiebreakerGroups(
 ) {
   if (tiebreakers.error) return [];
   return tiebreakers.groups.filter((group) =>
-    group.status === "needed" &&
+    group.status === "needed" && !group.blocked &&
     (!tiebreakers.pending ||
+      (group.format === "BO1_SINGLE_ELIMINATION" && !group.drawRequired) ||
       (group.format === "BO1_DOUBLE_ELIMINATION" && (group.stage ?? 0) > 1)),
   );
 }

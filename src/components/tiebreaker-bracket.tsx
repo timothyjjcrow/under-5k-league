@@ -3,6 +3,7 @@ import { LocalTime } from "@/components/local-time";
 import { TeamCrest } from "@/components/ui";
 import { formatMatchTime } from "@/lib/match-time";
 import { cn } from "@/lib/utils";
+import { TIEBREAKER_SUMMARY } from "@/lib/tiebreaker-format";
 import type {
   TiebreakerBracketMatchView,
   TiebreakerBracketSide,
@@ -54,7 +55,7 @@ function BracketGame({ game, doubleElimination, admin }: { game: TiebreakerBrack
       data-testid="tiebreaker-game"
       data-game={game.number}
       data-status={game.status}
-      aria-label={`${doubleElimination ? "Game" : "Series"} ${game.number}: ${game.title}`}
+      aria-label={`${game.bestOf === 1 ? "Game" : "Series"} ${game.number}: ${game.title}`}
       className={cn(
         "relative z-10 min-w-0 overflow-hidden rounded-xl border bg-surface shadow-sm",
         game.status === "live" ? "border-danger/60" : game.status === "scheduled" ? "border-accent/60" : "border-line",
@@ -63,7 +64,7 @@ function BracketGame({ game, doubleElimination, admin }: { game: TiebreakerBrack
       )}
     >
       <div className="flex flex-wrap items-center justify-between gap-1 border-b border-line-soft px-3 py-2.5">
-        <h4 className="text-xs font-semibold uppercase tracking-wider">{`${doubleElimination ? "Game" : "Series"} ${game.number}`}</h4>
+        <h4 className="text-xs font-semibold uppercase tracking-wider">{`${game.bestOf === 1 ? "Game" : "Series"} ${game.number}`}</h4>
         <span className={cn("text-[10px] font-semibold uppercase tracking-wide", game.status === "live" ? "text-danger" : game.status === "scheduled" ? "text-accent" : "text-muted")}>
           {admin && game.status === "waiting" ? "Not created yet" : statusLabels[game.status]}
         </span>
@@ -81,7 +82,7 @@ function BracketGame({ game, doubleElimination, admin }: { game: TiebreakerBrack
         {game.condition ? <p className="leading-relaxed text-muted">{game.condition}</p> : null}
         {doubleElimination && game.status !== "not-needed" ? <p className="leading-relaxed text-muted">{gameRoutes[game.number]}</p> : null}
         {game.matchId ? admin ? (
-          <a className="inline-block py-1 font-medium text-info hover:underline" href={`#admin-tiebreaker-match-${game.matchId}`}>Manage {doubleElimination ? "game" : "series"} →</a>
+          <a className="inline-block py-1 font-medium text-info hover:underline" href={`#admin-tiebreaker-match-${game.matchId}`}>Manage {game.bestOf === 1 ? "game" : "series"} →</a>
         ) : <Link className="inline-block py-1 font-medium text-info hover:underline" href={`/matches/${game.matchId}`}>Match details →</Link> : null}
       </div>
     </article>
@@ -95,6 +96,9 @@ export function TiebreakerBracket({ bracket, teams, postseasonStarted, admin = f
   postseasonStarted: boolean;
   admin?: boolean;
 }) {
+  if (bracket.format === "BO1_SINGLE_ELIMINATION") {
+    return <SingleEliminationBracket bracket={bracket} teams={teams} admin={admin} />;
+  }
   const doubleElimination = bracket.format === "BO1_DOUBLE_ELIMINATION";
   const names = new Map(teams.map((team) => [team.id, team]));
   const spots = bracket.placements.filter((place) => place.qualifies);
@@ -176,6 +180,58 @@ export function TiebreakerBracket({ bracket, teams, postseasonStarted, admin = f
         </ol>
         <p className="text-xs leading-relaxed text-muted">{bracket.status === "resolved" ? "This tiebreaker is complete. " : ""}{postseasonStarted ? "" : "Playoffs follow in the next league week once all tiebreakers are settled. "}Regular-season points stay the same.</p>
       </div>
+    </div>
+  );
+}
+
+function SingleEliminationBracket({ bracket, teams, admin }: {
+  bracket: TiebreakerBracketView; teams: TiebreakerBracketTeam[]; admin: boolean;
+}) {
+  const names = new Map(teams.map((team) => [team.id, team.name]));
+  const plan = bracket.singlePlan;
+  const qualifies = (bracket.qualifyingPlaces ?? 0) < bracket.teamIds.length;
+  const complete = bracket.matches.filter((game) => game.status === "complete").length;
+  return (
+    <div data-testid="tiebreaker-bracket" data-format={bracket.format} className="min-w-0 space-y-5 rounded-2xl border border-line bg-surface/40 p-4 sm:p-5">
+      <div className="space-y-2">
+        <h3 className="font-display text-xl font-semibold">Tiebreaker weekend</h3>
+        <p className="text-sm text-accent">{TIEBREAKER_SUMMARY}</p>
+        <p className="text-sm font-medium">{qualifies ? `${bracket.qualifyingPlaces} playoff place${bracket.qualifyingPlaces === 1 ? "" : "s"} available` : "All teams qualified · Playing for seeds"}</p>
+        {bracket.openingAt ? <p className="text-xs text-muted">Starts <LocalTime ts={bracket.openingAt.getTime()} variant="full" initial={formatMatchTime(bracket.openingAt, "full")} /> · your local time</p> : <p className="text-xs text-muted">Opening time to be announced</p>}
+        <p className="text-xs text-muted">Games run in parallel. Your next game starts when both opponents are ready.</p>
+      </div>
+      {!plan ? <div className="space-y-2 text-sm">
+        <p>The draw will appear when an administrator schedules the weekend.</p>
+        <p className="text-muted">{bracket.teamIds.map((id) => names.get(id) ?? "Unknown team").join(" · ")}</p>
+      </div> : <>
+        <p className="text-xs text-muted">{complete} of {bracket.matches.length} games complete</p>
+        {plan.brackets.map((tree, index) => <section key={index} aria-label={`Qualifying bracket ${index + 1}`} className="space-y-3">
+          <h4 className="text-sm font-semibold">Bracket {index + 1}{qualifies && plan.brackets.length <= plan.places ? " · One playoff place" : ""}</h4>
+          {tree.byes.length ? <p data-testid="tiebreaker-byes" className="text-xs text-accent">
+            {tree.byes.map((id) => names.get(id)).join(", ")}: {tree.teamIds.length === 1 && qualifies && plan.brackets.length <= plan.places ? "bye into playoffs" : "opening bye"}.
+          </p> : null}
+          <div className="grid gap-4 lg:grid-cols-3">
+            {[...new Set(tree.games.map((g) => g.stage))].map((stage) => <div key={stage} className="flex min-w-0 flex-col gap-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted">Round {stage}</p>
+              <div className="flex flex-1 flex-col justify-around gap-4">{bracket.matches.filter((game) => game.bracket === index && game.stage === stage).map((game) =>
+                <BracketGame key={game.key} game={game} doubleElimination={false} admin={admin} />)}
+              </div>
+            </div>)}
+          </div>
+        </section>)}
+        <details className="rounded-lg border border-line-soft p-3 text-xs text-muted">
+          <summary className="cursor-pointer font-medium text-fg">Published draw &amp; final order</summary>
+          <p className="mt-3">Bracket winners rank first, followed by teams that reached later rounds. Equal finishes use this draw order. Byes and places across brackets use the same draw; resetting cannot redraw it.</p>
+          {qualifies && plan.brackets.length > plan.places ? <p className="mt-2 text-accent">There are more brackets than playoff places. The highest teams in the published draw among the bracket winners qualify. No fourth game is played.</p> : null}
+          <ol className="mt-3 list-inside list-decimal space-y-1" data-testid="tiebreaker-draw">{plan.draw.map((id) => <li key={id}>{names.get(id) ?? "Unknown team"}</li>)}</ol>
+        </details>
+        {bracket.status === "resolved" ? <ol data-testid="tiebreaker-placements" className="grid gap-2 sm:grid-cols-2">
+          {bracket.placements.map((place) => <li key={place.place} className="rounded-lg border border-line-soft p-3 text-sm">
+            {place.name} <span className="text-xs text-muted">· {place.qualifies ? `Playoff seed ${place.seed}` : "Out of playoffs"}</span>
+          </li>)}
+        </ol> : null}
+      </>}
+      <p className="text-xs text-muted">Regular-season points stay the same. Playoffs start after the tiebreakers are complete.</p>
     </div>
   );
 }

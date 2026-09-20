@@ -46,7 +46,7 @@ function form(seasonId: string, expectedRevision: string) {
 }
 
 describe("tiebreaker week and playoff handoff", () => {
-  it("blocks the arbitrary last seed, schedules BO3, and seeds its winner the following week", async () => {
+  it("blocks the arbitrary last seed, schedules BO1, and seeds its winner the following week", async () => {
     const { season, teams, regular } = await setup();
     await expect(createPlayoffBracket(season.id)).rejects.toThrow(/tiebreaker week/);
     expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(regular.length);
@@ -54,10 +54,10 @@ describe("tiebreaker week and playoff handoff", () => {
     const result = await createTiebreakerWeek(season.id, snapshot.revision);
     expect(result).toMatchObject({ matchCount: 1, week: Math.max(...regular.map((m) => m.week)) + 1 });
     const tb = await prisma.match.findFirstOrThrow({ where: { seasonId: season.id, phase: "TIEBREAKER" } });
-    expect(tb.bestOf).toBe(3);
+    expect(tb.bestOf).toBe(1);
     await expect(createPlayoffBracket(season.id)).rejects.toThrow(/tiebreaker week/);
     await expect(createTiebreakerWeek(season.id)).rejects.toThrow(/Finish the scheduled/);
-    await recordMatch(tb.id, 1, 2);
+    await recordMatch(tb.id, 0, 1);
     const ready = await state(season.id);
     expect(projectPlayoffField(ready.teams, ready.matches).seededTeamIds[3]).toBe(tb.awayTeamId);
     await createPlayoffBracket(season.id, { intent: "start", expectedSeasonStatus: "REGULAR_SEASON", expectedRevision: ready.revision });
@@ -76,12 +76,12 @@ describe("tiebreaker week and playoff handoff", () => {
     expect(await prisma.match.count({ where: { id: tb.id } })).toBe(1);
   });
 
-  it("finishes a three-team tie in at most five BO1 games in the same week", async () => {
+  it("settles three teams for two places with one BO1 and a published qualifying bye", async () => {
     const { season } = await setup(3, true);
     const first = await createTiebreakerWeek(season.id);
     expect(first).toMatchObject({ matchCount: 1, untimedCount: 1 });
     await expect(createPlayoffBracket(season.id)).rejects.toThrow(/tiebreaker week/);
-    for (let game = 1; game <= 5; game++) {
+    for (let game = 1; game <= 1; game++) {
       const open = await prisma.match.findMany({ where: { seasonId: season.id, phase: "TIEBREAKER", status: "SCHEDULED" } });
       expect(open).toHaveLength(1);
       expect(open[0]).toMatchObject({ week: first.week, bestOf: 1 });
@@ -89,7 +89,7 @@ describe("tiebreaker week and playoff handoff", () => {
       await advanceTiebreakerWeek(season.id);
       await advanceTiebreakerWeek(season.id);
     }
-    expect(await prisma.match.count({ where: { seasonId: season.id, phase: "TIEBREAKER" } })).toBe(5);
+    expect(await prisma.match.count({ where: { seasonId: season.id, phase: "TIEBREAKER" } })).toBe(1);
     await createPlayoffBracket(season.id);
     expect(await prisma.match.findFirstOrThrow({ where: { seasonId: season.id, phase: "FINAL" } }))
       .toMatchObject({ week: first.week + 1 });
@@ -150,7 +150,7 @@ describe("tiebreaker week and playoff handoff", () => {
     expect(tb.scheduledAt?.getTime()).toBeGreaterThan(anchor.getTime());
     const movedKickoff = new Date(anchor.getTime() + 100 * 86400_000);
     await prisma.match.update({ where: { id: tb.id }, data: { scheduledAt: movedKickoff } });
-    await recordMatch(tb.id, 2, 0);
+    await recordMatch(tb.id, 1, 0);
     await createPlayoffBracket(season.id);
     const playoff = await prisma.match.findFirstOrThrow({ where: { seasonId: season.id, phase: "PLAYOFF" } });
     expect(playoff.scheduledAt!.getTime()).toBeGreaterThan(movedKickoff.getTime());

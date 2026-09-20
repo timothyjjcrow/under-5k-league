@@ -49,6 +49,8 @@ export type TeamStanding = {
   idTieGroup?: string;
   /** Playoff order was settled by an extra tiebreaker round. */
   tiebreakerResolved?: boolean;
+  /** Conservative live bounds within a validated capped knockout draw. */
+  tiebreakerRankRange?: { best: number; worst: number };
 };
 
 /**

@@ -55,14 +55,14 @@ export function standingOutlooks(rows: TeamStanding[], cut: number): Map<string,
   });
   return new Map(rows.map((row, index) => {
     const tied = row.idTieGroup ? groups.get(row.idTieGroup)! : [index];
-    const bestRank = Math.min(...tied) + 1;
-    const worstRank = Math.max(...tied) + 1;
+    const bestRank = row.tiebreakerRankRange?.best ?? Math.min(...tied) + 1;
+    const worstRank = row.tiebreakerRankRange?.worst ?? Math.max(...tied) + 1;
     const qualified = worstRank <= cut;
     const eliminated = bestRank > cut;
     const qualificationTiebreaker = !qualified && !eliminated;
     return [row.teamId, { total: 1, qualified: +qualified,
       eliminated: +eliminated, qualificationTiebreaker: +qualificationTiebreaker,
-      seedingTiebreaker: +(qualified && tied.length > 1), bestRank, worstRank,
+      seedingTiebreaker: +(qualified && bestRank !== worstRank), bestRank, worstRank,
       qualificationTies: qualificationTiebreaker
         ? [{ teamIds: tied.map((i) => rows[i].teamId).sort(), spots: cut - bestRank + 1 }] : [] }];
   }));
