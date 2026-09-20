@@ -45,41 +45,43 @@ describe("Cloudflare automation scheduler", () => {
     expect(cloudflare.secrets?.required).toEqual(["AUTOMATION_SECRET"]);
   });
 
-  it("has a reviewed pause artifact that only removes the cron trigger", () => {
+  it.each(["", ".europe"])("has a reviewed pause artifact that blocks dispatch (%s)", (region) => {
     const active = JSON.parse(
       readFileSync(
         path.resolve(
           process.cwd(),
-          "ops/cloudflare-automation-worker/wrangler.jsonc",
+          `ops/cloudflare-automation-worker/wrangler${region}.jsonc`,
         ),
         "utf8",
       ),
-    ) as Record<string, unknown> & { triggers?: { crons?: string[] } };
+    ) as { vars: Record<string, string>; triggers: { crons: string[] } };
     const paused = JSON.parse(
       readFileSync(
         path.resolve(
           process.cwd(),
-          "ops/cloudflare-automation-worker/wrangler.paused.jsonc",
+          `ops/cloudflare-automation-worker/wrangler${region}.paused.jsonc`,
         ),
         "utf8",
       ),
-    ) as Record<string, unknown> & { triggers?: { crons?: string[] } };
+    ) as { vars: Record<string, string>; triggers: { crons: string[] } };
 
+    expect(active.vars.AUTOMATION_PAUSED).toBe("false");
+    expect(paused.vars.AUTOMATION_PAUSED).toBe("true");
     expect(paused.triggers?.crons).toEqual([]);
-    expect({ ...paused, triggers: undefined }).toEqual({
+    expect({ ...paused, triggers: undefined, vars: { ...paused.vars, AUTOMATION_PAUSED: "false" } }).toEqual({
       ...active,
       triggers: undefined,
     });
   });
 
-  it("calls the exact HTTPS worker route with the bearer and no redirects", async () => {
+  it.each([undefined, "false"])("calls the exact HTTPS worker route with the bearer and no redirects (%s)", async (paused) => {
     const fetcher = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         response({ ok: true, status: "SUCCEEDED" }),
     );
 
     await invokeAutomation(
-      { AUTOMATION_URL: URL, AUTOMATION_SECRET: SECRET },
+      { AUTOMATION_URL: URL, AUTOMATION_SECRET: SECRET, AUTOMATION_PAUSED: paused },
       fetcher as typeof fetch,
     );
 
@@ -96,6 +98,30 @@ describe("Cloudflare automation scheduler", () => {
       },
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("never forwards a stray scheduled tick while paused, even with invalid credentials", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      await invokeAutomation(
+        { AUTOMATION_URL: "invalid", AUTOMATION_SECRET: "", AUTOMATION_PAUSED: "true" },
+        fetcher,
+      );
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledExactlyOnceWith("AUTOMATION_PAUSED");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each(["", "TRUE", "False", " true ", "invalid"])("fails closed for a malformed pause flag (%s)", async (paused) => {
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(invokeAutomation(
+      { AUTOMATION_URL: URL, AUTOMATION_SECRET: SECRET, AUTOMATION_PAUSED: paused },
+      fetcher,
+    )).rejects.toThrow("AUTOMATION_PAUSED must be true or false");
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("accepts an authenticated not-due tick as scheduler success", async () => {

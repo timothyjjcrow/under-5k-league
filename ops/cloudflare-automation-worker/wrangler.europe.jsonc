@@ -4,6 +4,7 @@
   "compatibility_date": "2026-08-04",
   "workers_dev": false,
   "vars": {
+    "AUTOMATION_PAUSED": "false",
     "AUTOMATION_URL": "https://ggd2l-europe.vercel.app/api/cron/automation"
   },
   "triggers": { "crons": ["* * * * *"] },

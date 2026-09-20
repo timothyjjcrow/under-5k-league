@@ -86,6 +86,12 @@ provider evidence required by the operations runbook, not permission to skip
 its steps. Keep schedulers paused until their reviewed release is promoted;
 then resume and observe two successful scheduled runs.
 
+Each paused Worker also sets `AUTOMATION_PAUSED=true`, so late Cloudflare ticks
+cannot dispatch application requests. Verify the deployed flag, active version,
+empty trigger list, and actual absence of canonical automation requests under
+the operations runbook. The guard does not replace the full propagation, quiet
+window, or lease-drain checks. Resume both with the flag set to `false`.
+
 No database migration is introduced by the consolidated tracker UI.
 
 When production environment values are non-exportable, an operator can run

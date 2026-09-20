@@ -234,8 +234,9 @@ Complete only the branches selected by `needs_db_release` and
 1. Confirm production promotion still requires a human approval or protected
    deployment check and that full CI passed for the exact SHA.
 2. When `needs_scheduler_pause` is true, run `npm run scheduler:pause`, verify
-   zero Cloudflare Cron Triggers, wait the full 15-minute propagation bound,
-   prove no Scheduled cron attempt lands across two further expected minute
+   zero Cloudflare Cron Triggers and `AUTOMATION_PAUSED=true` on the deployed
+   Worker, wait the full 15-minute propagation bound,
+   prove no automation HTTP request lands across two further expected minute
    slots, then wait at least 90 seconds after the last possible attempt and
    prove no active lease remains.
 3. When `needs_db_release` is true, validate production configuration with no
@@ -375,8 +376,11 @@ subsystem they cover.
 `ops/cloudflare-automation-worker/wrangler.jsonc`: `workers.dev` is disabled,
 the reviewed non-secret `AUTOMATION_URL` is pinned to the exact Vercel production
 route, and one `* * * * *` Cron Trigger invokes its `scheduled()` handler. The
-sibling `wrangler.paused.jsonc` has the same reviewed settings and an empty
-`crons` array; it is the only supported pause configuration.
+sibling `wrangler.paused.jsonc` removes all triggers and sets
+`AUTOMATION_PAUSED=true`; it is the only supported pause configuration. The
+active configuration sets this flag to `false`. A paused Worker logs only
+`AUTOMATION_PAUSED` and returns before making any HTTP request, including when
+Cloudflare delivers a late scheduled event. All other settings stay identical.
 `AUTOMATION_SECRET` is its only encrypted secret binding and must be
 byte-for-byte identical to Vercel's `CRON_SECRET`. Never expose that value in a
 command argument, URL, source, `.dev.vars`, launch record, log, screenshot,
@@ -438,7 +442,7 @@ failures before opening traffic.
 
 ### Pause and resume
 
-To pause, deploy the reviewed empty-trigger configuration and record the
+To pause, deploy the reviewed guarded, empty-trigger configuration and record the
 successful deployment:
 
 ```bash
@@ -446,9 +450,15 @@ npm run scheduler:pause
 npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
 ```
 
-Verify the Cloudflare dashboard shows zero Cron Triggers. Wait the full
-15-minute propagation bound, then confirm Admin → Automation shows no new
-Scheduled cron attempt across two further expected minute slots. Wait another
+Verify Cloudflare shows zero Cron Triggers and the deployed Worker has
+`AUTOMATION_PAUSED=true`. Record its active version and canonical target. Wait
+the full 15-minute propagation bound, then prove the canonical Vercel route
+receives no `/api/cron/automation` request across two further expected minute
+slots, using request logs and the database's last cron attempt. Observe Worker
+logs throughout those slots: a late scheduled event is allowed only if it logs
+`AUTOMATION_PAUSED` and makes no outbound request. A flag or empty trigger list
+alone is not proof of a quiet application. Restart the quiet window after any
+observation gap. Wait another
 90 seconds after the last possible attempt and prove no active lease remains.
 A trigger removal is not immediate, disabling a monitor does not pause the
 Worker, and dashboard-only deletion creates drift from Wrangler's source of
@@ -461,7 +471,8 @@ npm run scheduler:deploy
 npx wrangler@4.118.0 deployments status --cwd ops/cloudflare-automation-worker
 ```
 
-The committed config reattaches exactly one trigger. Allow for propagation and
+The committed config clears `AUTOMATION_PAUSED` to `false` and reattaches exactly
+one trigger. Verify both deployed settings. Allow for propagation and
 repeat the two-pass health gate. Stop if Vercel has acquired any cron or a second
 Cloudflare/external schedule exists.
 
@@ -719,9 +730,10 @@ opens.
 The first action in a suspected data-integrity incident is to stop new writes,
 not to deploy a speculative fix.
 
-1. Run `npm run scheduler:pause`, verify zero Cloudflare Cron Triggers, wait the
-   full 15-minute propagation bound, and confirm no new Scheduled cron request
-   starts across two further expected minute slots.
+1. Run `npm run scheduler:pause`, verify zero Cloudflare Cron Triggers and
+   `AUTOMATION_PAUSED=true`, wait the full 15-minute propagation bound, and
+   complete the quiet-request verification in **Pause and resume** across two
+   further expected minute slots.
 2. Enable the rehearsed hosting-provider maintenance/firewall rule that blocks
    all public traffic to the deployment, including OAuth callbacks and the cron
    route. A method-only rule is insufficient because several authentication

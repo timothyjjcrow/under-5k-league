@@ -5,6 +5,7 @@ const MAX_RESPONSE_BYTES = 2_048;
 export type SchedulerEnv = {
   AUTOMATION_URL: string;
   AUTOMATION_SECRET: string;
+  AUTOMATION_PAUSED?: string;
 };
 
 type AutomationResponse = {
@@ -96,6 +97,15 @@ export async function invokeAutomation(
   env: SchedulerEnv,
   fetcher: typeof fetch = fetch,
 ): Promise<void> {
+  // Trigger removal can propagate slowly. Fence dispatch in the deployed
+  // Worker as well, so a late scheduled event cannot reach the application.
+  if (env.AUTOMATION_PAUSED === "true") {
+    console.info("AUTOMATION_PAUSED");
+    return;
+  }
+  if (env.AUTOMATION_PAUSED !== undefined && env.AUTOMATION_PAUSED !== "false") {
+    throw new Error("AUTOMATION_PAUSED must be true or false");
+  }
   const url = configuredUrl(env.AUTOMATION_URL);
   const secret = configuredSecret(env.AUTOMATION_SECRET);
   let response: Response;

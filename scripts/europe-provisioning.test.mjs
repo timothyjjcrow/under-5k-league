@@ -91,7 +91,9 @@ test("Europe scheduler active/pause configurations never address or rename the U
   assert.equal(eu.vars.AUTOMATION_URL, `${VALID.APP_URL}/api/cron/automation`);
   assert.deepEqual(eu.triggers.crons, ["* * * * *"]);
   assert.deepEqual(paused.triggers.crons, []);
-  assert.deepEqual({ ...paused, triggers: null }, { ...eu, triggers: null });
+  assert.equal(eu.vars.AUTOMATION_PAUSED, "false");
+  assert.equal(paused.vars.AUTOMATION_PAUSED, "true");
+  assert.deepEqual({ ...paused, triggers: null, vars: { ...paused.vars, AUTOMATION_PAUSED: "false" } }, { ...eu, triggers: null });
 });
 
 test("PostgreSQL bootstrap is empty-only, atomic, concurrency-safe and region-isolated", {
