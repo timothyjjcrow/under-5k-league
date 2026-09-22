@@ -44,6 +44,7 @@ export function createLeagueConfig(env: LeagueEnvironment) {
   return {
     region,
     name,
+    merchUrl: "https://ggd2l-shop.fourthwall.com/",
     branding: {
       blendMode: europe ? "lighten" : "normal",
       logo: europe ? "/brand/ggd2l-europe-logo.png" : "/brand/ggd2l-logo.png",

@@ -12,9 +12,8 @@ test("league tools live under Explore on desktop and mobile", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  // A rostered admin produces the most crowded real account cluster: My Team,
-  // Admin, profile and logout all render together. This is the state from the
-  // reported screenshot, and the one that must fit without a hidden nav scroll.
+  // A rostered admin adds My Team and account actions. The primary row must
+  // fit without horizontal scrolling while Explore keeps side tools nearby.
   await page.goto(
     "/api/auth/dev?name=Navigation%20Stress%20Tester&steamId=76561190000991001&admin=1&redirect=/pickem",
   );

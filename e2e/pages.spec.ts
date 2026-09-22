@@ -58,7 +58,8 @@ test("logout confirms the session ended", async ({ page }) => {
   await page.goto(
     `/api/auth/dev?name=LogoutTester&steamId=${steamId}&redirect=/me`,
   );
-  await page.getByRole("button", { name: "Logout", exact: true }).click();
+  await page.getByRole("button", { name: "Account — LogoutTester" }).click();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
 
   await expect(page).toHaveURL(/\/login\?signedOut=1$/);
   await expect(page.getByRole("status")).toContainText("You're signed out");

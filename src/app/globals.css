@@ -45,7 +45,7 @@
 
 /* Keep content, focused fields and feedback clear of the phone navigation.
    The existing 80px top bar and all draft/admin sticky offsets stay intact. */
-@media (width < 80rem) {
+@media (width < 64rem) {
   :root {
     --mobile-dock-height: calc(4.25rem + env(safe-area-inset-bottom, 0px));
   }

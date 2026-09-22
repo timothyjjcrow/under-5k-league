@@ -191,7 +191,7 @@ export function SiteFooter({
               •
             </span>
             <a
-              href="https://ggd2l-shop.fourthwall.com/"
+              href={LEAGUE_CONFIG.merchUrl}
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Merch — GGD2L shop (opens in a new tab)"

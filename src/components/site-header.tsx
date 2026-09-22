@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge } from "@/components/ui";
+import { MerchLink } from "@/components/merch-link";
 import { scheduleDestinationLabel } from "@/lib/season-copy";
 import { cn } from "@/lib/utils";
 
@@ -146,13 +147,22 @@ export function SiteHeader({
 }) {
   const pathname = usePathname();
   const items = navItems(phase, myTeamId, hasHistory);
+  // Keep the desktop row focused on the current season. Evergreen Features
+  // and History remain in Explore; the phone menu has room for the full list.
+  const desktopItems = items.filter(
+    (item) => !["/", "/features", "/seasons"].includes(item.href),
+  );
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
   const [open, setOpen] = useState(false);
   const [desktopExploreOpen, setDesktopExploreOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [mobileExploreOpen, setMobileExploreOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<"menu" | "explore">("menu");
   const buttonRef = useRef<HTMLButtonElement>(null);
   const exploreButtonRef = useRef<HTMLButtonElement>(null);
+  const accountButtonRef = useRef<HTMLButtonElement>(null);
+  const desktopExploreRef = useRef<HTMLDivElement>(null);
+  const accountRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const dockRef = useRef<HTMLElement>(null);
   const discoveryRef = useRef<HTMLElement>(null);
@@ -167,28 +177,51 @@ export function SiteHeader({
     setMenuPath(pathname);
     setOpen(false);
     setDesktopExploreOpen(false);
+    setAccountOpen(false);
     setMobileExploreOpen(false);
   }
 
-  // While the mobile menu is open, Escape closes it (returning focus to the
-  // toggle so keyboard users don't lose their place) and a tap/click outside
-  // the header dismisses it — a route change already closes it otherwise.
+  // Switching between the desktop bar and phone dock must not leave a hidden
+  // disclosure open, ready to reappear on the next resize.
   useEffect(() => {
-    if (!open && !desktopExploreOpen) return;
+    const desktop = window.matchMedia("(min-width: 64rem)");
+    function closePanels() {
+      setOpen(false);
+      setDesktopExploreOpen(false);
+      setMobileExploreOpen(false);
+      setAccountOpen(false);
+    }
+    desktop.addEventListener("change", closePanels);
+    return () => desktop.removeEventListener("change", closePanels);
+  }, []);
+
+  // Escape returns focus to the disclosure's own trigger. Clicking outside a
+  // desktop dropdown closes it even when the click is elsewhere in the header.
+  useEffect(() => {
+    if (!open && !desktopExploreOpen && !accountOpen) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        const returnTo = open
-          ? mobilePanel === "explore"
-            ? dockExploreRef.current
-            : buttonRef.current
-          : exploreButtonRef.current;
+        const returnTo = accountOpen
+          ? accountButtonRef.current
+          : open
+            ? mobilePanel === "explore"
+              ? dockExploreRef.current
+              : buttonRef.current
+            : exploreButtonRef.current;
         setOpen(false);
         setDesktopExploreOpen(false);
         setMobileExploreOpen(false);
+        setAccountOpen(false);
         returnTo?.focus();
       }
     }
     function onPointerDown(e: PointerEvent) {
+      if (!desktopExploreRef.current?.contains(e.target as Node)) {
+        setDesktopExploreOpen(false);
+      }
+      if (!accountRef.current?.contains(e.target as Node)) {
+        setAccountOpen(false);
+      }
       if (
         headerRef.current &&
         !headerRef.current.contains(e.target as Node) &&
@@ -206,7 +239,7 @@ export function SiteHeader({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open, desktopExploreOpen, mobilePanel]);
+  }, [open, desktopExploreOpen, accountOpen, mobilePanel]);
 
   const adminActive = pathname.startsWith("/admin");
 
@@ -232,6 +265,9 @@ export function SiteHeader({
   const exploreActive = exploreItems.some((item) =>
     isActive(pathname, item.href, myTeamHref),
   );
+  const mobileExploreActive = mobileExploreItems.some((item) =>
+    isActive(pathname, item.href, myTeamHref),
+  );
   const hasTeams = items.some((item) => item.href === "/teams");
   const dockItems = [
     { href: "/", label: "Home", icon: "home" as const },
@@ -253,7 +289,7 @@ export function SiteHeader({
         ref={headerRef}
         className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur"
       >
-        <div className="mx-auto flex h-20 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
+        <div className="mx-auto flex h-20 w-full max-w-7xl items-center gap-3 px-4 sm:px-6 lg:gap-4">
           <Link
             href="/"
             aria-label={`${LEAGUE_CONFIG.name} — home`}
@@ -286,31 +322,27 @@ export function SiteHeader({
               <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
                 {PHASE_LABEL[phase] ?? phase}
               </Badge>
-              <span className="hidden max-w-28 truncate text-xs text-muted 2xl:inline">
-                {seasonName}
-              </span>
             </Link>
           ) : null}
 
-          {/* Inline nav — only when there's room (xl+). Below that it collapses
-            into the menu button so links never get cut off. "Home" is omitted
-            inline (the logo is the home link) and the list scrolls rather than
-            overlapping the account cluster if space still runs out. */}
-          <nav
-            aria-label="Primary"
-            className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:flex"
-          >
-            {items
-              .filter((item) => item.href !== "/")
-              .map((item) => {
-                const active = isActive(pathname, item.href, myTeamHref);
+          {/* The desktop row fits from 1024px, including a rostered admin in
+            draft or postseason. Keep Explore beside its sibling links and
+            reserve the right edge for merch and the account disclosure. */}
+          <div className="relative hidden min-w-0 flex-1 items-center gap-1 lg:flex">
+            <nav
+              aria-label="Primary"
+              className="flex shrink-0 items-center gap-0.5 xl:gap-1"
+            >
+              {desktopItems.map((item) => {
+                const active =
+                  !exploreActive && isActive(pathname, item.href, myTeamHref);
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+                      "inline-flex min-h-10 shrink-0 items-center whitespace-nowrap rounded-lg px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 xl:px-2.5",
                       active
                         ? "bg-accent/15 text-fg"
                         : "text-muted hover:bg-surface-2/60 hover:text-fg",
@@ -320,88 +352,123 @@ export function SiteHeader({
                   </Link>
                 );
               })}
-          </nav>
+            </nav>
 
-          {/* Pushes the account cluster to the right when the inline nav is hidden. */}
-          <div className="flex-1 xl:hidden" />
-
-          {/* Evergreen club/discovery pages stay reachable on wide screens too.
+            {/* Evergreen club/discovery pages stay reachable on wide screens too.
             The phone menu already exposes these below the phase navigation. */}
-          <div className="relative hidden xl:block">
-            <button
-              ref={exploreButtonRef}
-              type="button"
-              aria-expanded={desktopExploreOpen}
-              aria-controls="desktop-explore-nav"
-              onClick={() => setDesktopExploreOpen((value) => !value)}
-              className={cn(
-                "rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
-                exploreActive ? "bg-accent/15 text-fg" : "text-muted",
-              )}
-            >
-              Explore <span aria-hidden>{desktopExploreOpen ? "↑" : "↓"}</span>
-            </button>
-            {desktopExploreOpen ? (
-              <nav
-                id="desktop-explore-nav"
-                aria-label="Explore"
-                className="absolute right-0 top-full z-40 mt-3 max-h-[70vh] w-[34rem] overflow-y-auto rounded-xl border border-line bg-surface p-4 shadow-xl shadow-black/30"
+            <div ref={desktopExploreRef} className="shrink-0">
+              <button
+                ref={exploreButtonRef}
+                type="button"
+                aria-expanded={desktopExploreOpen}
+                aria-controls="desktop-explore-nav"
+                onClick={() => {
+                  setDesktopExploreOpen((value) => !value);
+                  setAccountOpen(false);
+                }}
+                className={cn(
+                  "inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 xl:px-2.5",
+                  exploreActive ? "bg-accent/15 text-fg" : "text-muted",
+                )}
               >
-                <ExploreLinks
-                  items={exploreItems}
-                  pathname={pathname}
-                  myTeamHref={myTeamHref}
-                  onNavigate={() => setDesktopExploreOpen(false)}
-                />
-              </nav>
-            ) : null}
+                Explore <ChevronIcon open={desktopExploreOpen} />
+              </button>
+              {desktopExploreOpen ? (
+                <nav
+                  id="desktop-explore-nav"
+                  aria-label="Explore"
+                  className="absolute left-0 top-full z-40 mt-3 max-h-[70vh] w-[34rem] max-w-[calc(100vw-3rem)] overflow-y-auto rounded-xl border border-line bg-surface p-4 shadow-xl shadow-black/30"
+                >
+                  <ExploreLinks
+                    items={exploreItems}
+                    pathname={pathname}
+                    myTeamHref={myTeamHref}
+                    onNavigate={() => setDesktopExploreOpen(false)}
+                  />
+                </nav>
+              ) : null}
+            </div>
           </div>
 
+          <div className="flex-1 lg:hidden" />
+
+          <MerchLink className="hidden lg:inline-flex" />
+
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            {/* Season phase/name lives on the home hero + footer, not here — it
-              kept the nav from fitting once the league adds its links. */}
             {user ? (
-              <>
-                {user.role === "ADMIN" ? (
-                  <Link
-                    href="/admin"
-                    aria-current={adminActive ? "page" : undefined}
-                    className={cn(
-                      "hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 xl:block",
-                      adminActive
-                        ? "bg-surface-2 text-accent"
-                        : "text-accent/80 hover:text-accent",
-                    )}
-                  >
-                    Admin
-                  </Link>
-                ) : null}
+              <div ref={accountRef} className="relative">
                 <Link
                   href="/me"
-                  // Below xl the name is hidden and this is an unlabeled 30px
-                  // pill — give assistive tech its destination.
                   aria-label={`My profile — ${user.name}`}
-                  className="flex min-h-11 items-center gap-2 rounded-full border border-line py-1 pl-1 pr-1 text-sm hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 xl:pr-3"
+                  className="flex min-h-11 items-center rounded-full border border-line p-1 text-sm hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:hidden"
                 >
                   <Avatar name={user.name} src={user.avatar} size={28} />
-                  <span className="hidden max-w-[8rem] truncate xl:block">
+                </Link>
+                <button
+                  ref={accountButtonRef}
+                  type="button"
+                  aria-label={`Account — ${user.name}`}
+                  aria-expanded={accountOpen}
+                  aria-controls="desktop-account-nav"
+                  onClick={() => {
+                    setAccountOpen((value) => !value);
+                    setDesktopExploreOpen(false);
+                  }}
+                  className={cn(
+                    "hidden min-h-10 items-center gap-2 rounded-full border py-1 pl-1 pr-2 text-sm transition-colors hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:flex",
+                    accountOpen || adminActive || pathname === "/me"
+                      ? "border-accent/40 bg-accent/5"
+                      : "border-line",
+                  )}
+                >
+                  <Avatar name={user.name} src={user.avatar} size={28} />
+                  <span className="hidden max-w-32 truncate xl:block">
                     {user.name}
                   </span>
-                </Link>
-                <form
-                  action="/api/auth/logout"
-                  method="POST"
-                  className="hidden xl:inline"
-                >
-                  <button
-                    type="submit"
-                    className="rounded text-sm text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-                    title="Log out"
+                  <ChevronIcon open={accountOpen} />
+                </button>
+                {accountOpen ? (
+                  <nav
+                    id="desktop-account-nav"
+                    aria-label="Account"
+                    className="absolute right-0 top-full z-40 mt-3 hidden max-h-[calc(100dvh-6rem)] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface p-2 shadow-xl shadow-black/30 lg:block"
                   >
-                    Logout
-                  </button>
-                </form>
-              </>
+                    <p className="mb-1 break-words border-b border-line-soft px-3 pb-3 pt-2 text-sm font-semibold">
+                      {user.name}
+                    </p>
+                    <Link
+                      href="/me"
+                      onClick={() => setAccountOpen(false)}
+                      aria-current={pathname === "/me" ? "page" : undefined}
+                      className="flex min-h-11 items-center rounded-lg px-3 text-sm text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+                    >
+                      My profile
+                    </Link>
+                    {user.role === "ADMIN" ? (
+                      <Link
+                        href="/admin"
+                        onClick={() => setAccountOpen(false)}
+                        aria-current={adminActive ? "page" : undefined}
+                        className="flex min-h-11 items-center rounded-lg px-3 text-sm text-accent hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+                      >
+                        Admin
+                      </Link>
+                    ) : null}
+                    <form
+                      action="/api/auth/logout"
+                      method="POST"
+                      className="mt-1 border-t border-line-soft pt-1"
+                    >
+                      <button
+                        type="submit"
+                        className="flex min-h-11 w-full items-center rounded-lg px-3 text-sm text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+                      >
+                        Log out
+                      </button>
+                    </form>
+                  </nav>
+                ) : null}
+              </div>
             ) : pathname !== "/login" ? (
               <Link
                 // Carry the current page through sign-in — landing back on the
@@ -411,13 +478,13 @@ export function SiteHeader({
                     ? `/login?next=${encodeURIComponent(pathname)}`
                     : "/login"
                 }
-                className="inline-flex min-h-11 items-center rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-0 sm:px-4"
+                className="inline-flex min-h-11 items-center rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:px-4 lg:min-h-10"
               >
                 Sign in
               </Link>
             ) : null}
 
-            {/* Menu toggle — only below xl, where the inline nav is hidden. */}
+            {/* Menu toggle — below the desktop breakpoint. */}
             <button
               ref={buttonRef}
               type="button"
@@ -432,7 +499,7 @@ export function SiteHeader({
               }
               aria-expanded={open && mobilePanel === "menu"}
               aria-controls="mobile-nav"
-              className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9 sm:w-9 xl:hidden"
+              className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:hidden"
             >
               {open && mobilePanel === "menu" ? <CloseIcon /> : <MenuIcon />}
             </button>
@@ -445,15 +512,18 @@ export function SiteHeader({
           <nav
             id="mobile-nav"
             aria-label="Primary"
-            className="absolute inset-x-0 top-full max-h-[min(70vh,calc(100dvh-5rem-var(--mobile-dock-height)-0.5rem))] overflow-y-auto overscroll-contain border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur xl:hidden"
+            className="absolute inset-x-0 top-full max-h-[min(70vh,calc(100dvh-5rem-var(--mobile-dock-height)-0.5rem))] overflow-y-auto overscroll-contain border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur lg:hidden"
           >
             <div className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
               {items.map((item) => {
-                const active = isActive(pathname, item.href, myTeamHref);
+                const active =
+                  !mobileExploreActive &&
+                  isActive(pathname, item.href, myTeamHref);
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={() => setOpen(false)}
                     aria-current={active ? "page" : undefined}
                     className={cn(
                       "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
@@ -467,6 +537,8 @@ export function SiteHeader({
                 );
               })}
 
+              <MerchLink className="my-2 w-full" />
+
               {/* Explore is a disclosure on phones too; the four dense league
                 tools no longer expand the primary menu unless requested. */}
               <div className="mt-1 border-t border-line/80 pt-2">
@@ -477,7 +549,7 @@ export function SiteHeader({
                   onClick={() => setMobileExploreOpen((value) => !value)}
                   className={cn(
                     "flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                    exploreActive ? "bg-accent/15 text-fg" : "text-muted",
+                    mobileExploreActive ? "bg-accent/15 text-fg" : "text-muted",
                   )}
                 >
                   Explore
@@ -561,7 +633,7 @@ export function SiteHeader({
       <nav
         ref={dockRef}
         aria-label="Quick navigation"
-        className="mobile-dock fixed inset-x-0 bottom-0 z-40 border-t border-line bg-bg/95 px-3 pt-1.5 shadow-[0_-8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl xl:hidden"
+        className="mobile-dock fixed inset-x-0 bottom-0 z-40 border-t border-line bg-bg/95 px-3 pt-1.5 shadow-[0_-8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl lg:hidden"
       >
         <div className="mx-auto grid max-w-lg grid-cols-4 gap-1">
           {dockItems.map((item) => {
@@ -613,7 +685,7 @@ export function SiteHeader({
           ref={discoveryRef}
           id="mobile-discovery"
           aria-label="Explore league"
-          className="mobile-discovery fixed inset-x-3 z-40 mx-auto max-h-[calc(100dvh-11rem)] max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-3 shadow-2xl shadow-black/50 xl:hidden"
+          className="mobile-discovery fixed inset-x-3 z-40 mx-auto max-h-[calc(100dvh-11rem)] max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-3 shadow-2xl shadow-black/50 lg:hidden"
         >
           <div className="mb-2 flex items-center justify-between border-b border-line-soft pb-2 pl-3">
             <span className="font-display text-lg font-semibold">
@@ -657,9 +729,28 @@ export function SiteHeader({
             onNavigate={() => setOpen(false)}
             compact
           />
+          <MerchLink className="mt-3 w-full" />
         </nav>
       ) : null}
     </>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d={open ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
+    </svg>
   );
 }
 
