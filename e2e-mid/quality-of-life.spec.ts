@@ -121,26 +121,52 @@ test("admin jumps reveal closed sections clear of both sticky bars", async ({
 test("hero explorer exposes the full pool and filters without navigating", async ({
   page,
 }) => {
+  const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meta");
-  const table = page.getByRole("table", {
-    name: "All picked heroes",
-    exact: true,
-  });
-  const rows = table.locator("tbody tr");
-  const name = await rows.first().getByRole("rowheader").innerText();
-  await page.getByRole("searchbox", { name: "Hero search" }).fill(name);
-  await expect(rows).toHaveCount(1);
-  await page.getByRole("spinbutton", { name: "Minimum picks" }).fill("99999");
-  await expect(rows).toHaveCount(0);
-  await expect(page.getByText(/No heroes match these filters/)).toBeVisible();
-  await page.getByRole("spinbutton", { name: "Minimum picks" }).fill("1");
-  await page.getByRole("searchbox", { name: "Hero search" }).fill("");
-  await page
-    .getByRole("combobox", { name: "Sort heroes" })
-    .selectOption("name");
-  const names = await rows.getByRole("rowheader").allTextContents();
+  const initialUrl = page.url();
+  const explorer = page.locator("#explore-heroes");
+  const cards = explorer.locator("article");
+  const status = explorer.getByRole("status");
+  const sampleFilters = explorer.getByRole("group", { name: "Hero sample filter" });
+  const allHeroes = sampleFilters.getByRole("button", { name: /All heroes/ });
+  const poolSize = Number((await allHeroes.innerText()).match(/\d+/)?.[0]);
+  expect(poolSize).toBeGreaterThan(12);
+  await expect(allHeroes).toHaveAttribute("aria-pressed", "true");
+  await expect(status).toContainText(`of ${poolSize} matching heroes`);
+  await expect(cards).toHaveCount(12);
+  await explorer.getByRole("button", { name: /Show more heroes/ }).click();
+  await expect(cards).toHaveCount(24);
+
+  // The leading picked hero opens its per-pick stats without leaving the page.
+  await cards.first().getByRole("button").click();
+  await expect(cards.first()).toContainText("Kills / pick");
+
+  const search = explorer.getByRole("searchbox", { name: "Find a hero" });
+  await search.fill("Axe");
+  await expect(cards).toHaveCount(1);
+  await expect(cards.first()).toContainText("Axe");
+  await search.fill("");
+
+  const untouched = sampleFilters.getByRole("button", { name: /Untouched/ });
+  await untouched.click();
+  await expect(untouched).toHaveAttribute("aria-pressed", "true");
+  await expect(cards.first()).toContainText("No recorded picks");
+  await search.fill("no-such-hero");
+  await expect(cards).toHaveCount(0);
+  await expect(explorer.getByText("No heroes match these filters")).toBeVisible();
+  await explorer.getByRole("button", { name: "Clear filters" }).click();
+  await expect(allHeroes).toHaveAttribute("aria-pressed", "true");
+  await expect(status).toContainText(`of ${poolSize} matching heroes`);
+
+  await explorer.getByRole("combobox", { name: "Sort by" }).selectOption("name");
+  const names = await cards.evaluateAll((nodes) =>
+    nodes.map((node) => node.querySelector("button")?.innerText.split("\n")[0]?.trim() ?? ""),
+  );
   expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+  expect(page.url()).toBe(initialUrl);
+  await expectNoHorizontalOverflow(page, "hero explorer");
+  noErrors();
 });
 
 test("profile saves optional details with clear dirty state", async ({
