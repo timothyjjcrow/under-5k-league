@@ -1689,8 +1689,10 @@ function recordDisplayValue(record: PlayerRecord): string {
       return formatNetWorth(record.value);
     case "gpm":
       return `${record.value} GPM`;
+    case "xpm":
+      return `${record.value} XPM`;
     default:
-      return String(record.value);
+      return new Intl.NumberFormat("en-US").format(record.value);
   }
 }
 

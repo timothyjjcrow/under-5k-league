@@ -5,9 +5,9 @@ describe("gameMvp", () => {
   it("crowns the best fantasy line, favoring winners via the win bonus", () => {
     const mvp = gameMvp(
       [
-        // Winner: 8*3 + 2*1.5 - 1 + 10 = 36
+        // Winner's base plus playmaking bonus edges the losing slayer.
         { userId: "w", isRadiant: true, kills: 8, deaths: 1, assists: 2 },
-        // Loser with a bigger raw line: 10*3 + 0 - 2 = 28
+        // Loser with a bigger kill count.
         { userId: "l", isRadiant: false, kills: 10, deaths: 2, assists: 0 },
       ],
       true,
@@ -22,11 +22,10 @@ describe("gameMvp", () => {
   });
 
   it("breaks point ties by kills then deaths", () => {
-    // Same points: 5 kills/0 deaths (15) vs 4 kills/+2 assists... construct equal:
-    // a: 4k 2a 0d = 12+3 = 15 ; b: 5k 0a 0d = 15 → b wins on kills.
+    // A farm bonus makes 4 kills equal 5 kills; the kill tiebreak chooses b.
     const mvp = gameMvp(
       [
-        { userId: "a", isRadiant: false, kills: 4, deaths: 0, assists: 2 },
+        { userId: "a", isRadiant: false, kills: 4, deaths: 0, assists: 0, lastHits: 200 },
         { userId: "b", isRadiant: false, kills: 5, deaths: 0, assists: 0 },
       ],
       true,

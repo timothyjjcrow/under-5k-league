@@ -17,6 +17,11 @@ export type RecordLine = {
   netWorth: number | null;
   gpm: number | null;
   lastHits: number | null;
+  xpm?: number | null;
+  denies?: number | null;
+  heroDamage?: number | null;
+  towerDamage?: number | null;
+  heroHealing?: number | null;
   isRadiant: boolean;
 };
 
@@ -85,6 +90,39 @@ const PLAYER_RECORDS: PlayerRecordSpec[] = [
     metric: (l) => l.lastHits,
   },
   {
+    key: "xpm",
+    title: "Highest XPM",
+    emoji: "✨",
+    metric: (l) => l.xpm ?? null,
+  },
+  {
+    key: "denies",
+    title: "Most denies",
+    emoji: "🛡️",
+    metric: (l) => (l.denies != null && l.denies > 0 ? l.denies : null),
+  },
+  {
+    key: "heroDamage",
+    title: "Most hero damage",
+    emoji: "💥",
+    metric: (l) =>
+      l.heroDamage != null && l.heroDamage > 0 ? l.heroDamage : null,
+  },
+  {
+    key: "towerDamage",
+    title: "Most tower damage",
+    emoji: "🏰",
+    metric: (l) =>
+      l.towerDamage != null && l.towerDamage > 0 ? l.towerDamage : null,
+  },
+  {
+    key: "heroHealing",
+    title: "Most hero healing",
+    emoji: "💚",
+    metric: (l) =>
+      l.heroHealing != null && l.heroHealing > 0 ? l.heroHealing : null,
+  },
+  {
     key: "deaths",
     title: "Most deaths",
     emoji: "🪦",
@@ -132,6 +170,28 @@ const GAME_RECORDS: GameRecordSpec[] = [
       g.radiantScore + g.direScore > 0
         ? Math.abs(g.radiantScore - g.direScore)
         : null,
+  },
+  {
+    key: "closest",
+    title: "Closest finish",
+    emoji: "⚖️",
+    metric: (g) =>
+      g.radiantScore + g.direScore >= 20 &&
+      g.radiantScore !== g.direScore
+        ? Math.abs(g.radiantScore - g.direScore)
+        : null,
+    ascending: true,
+  },
+  {
+    key: "losingKills",
+    title: "Most kills in defeat",
+    emoji: "🔥",
+    metric: (g) => {
+      const losingScore = g.radiantWin ? g.direScore : g.radiantScore;
+      return g.radiantScore + g.direScore > 0 && losingScore > 0
+        ? losingScore
+        : null;
+    },
   },
 ];
 
@@ -244,6 +304,11 @@ export function analyzeRecordGames(
         netWorth: p.netWorth ?? null,
         gpm: p.gpm ?? null,
         lastHits: p.lastHits ?? null,
+        xpm: p.xpm ?? null,
+        denies: p.denies ?? null,
+        heroDamage: p.heroDamage ?? null,
+        towerDamage: p.towerDamage ?? null,
+        heroHealing: p.heroHealing ?? null,
         isRadiant: p.isRadiant,
       })),
     });

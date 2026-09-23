@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   fantasyPoints,
+  fantasyScore,
+  fantasyTotalsByPlayer,
   fantasyCap,
   fantasyPrices,
   validateFantasyPicks,
@@ -9,19 +11,34 @@ import {
 } from "./fantasy";
 
 describe("fantasyPoints", () => {
-  it("weights kills, assists, deaths, economy, and the win bonus", () => {
-    // 10*3 + 8*1.5 - 4 + 500*0.02 + 200*0.02 + 10 = 30+12-4+10+4+10 = 62
+  it("scores the common line plus only the strongest contribution bonus", () => {
+    // Base: 20 + 16 - 3 + 8 = 41. Farm: (500-300)*.02 + 200*.01 = 6.
     expect(
       fantasyPoints(
         { kills: 10, deaths: 4, assists: 8, gpm: 500, lastHits: 200 },
         true,
       ),
-    ).toBe(62);
+    ).toBe(47);
   });
 
-  it("handles missing economy stats and losses", () => {
-    // 2*3 + 4*1.5 - 7 = 5
-    expect(fantasyPoints({ kills: 2, deaths: 7, assists: 4 }, false)).toBe(5);
+  it("still rewards playmaking when optional OpenDota stats are missing", () => {
+    // Base 6.75 + playmaking 1.8, rounded once.
+    expect(fantasyPoints({ kills: 2, deaths: 7, assists: 4 }, false)).toBe(8.6);
+  });
+
+  it("lets support and offlane production compete with core farm", () => {
+    const carry = fantasyScore({ kills: 12, deaths: 4, assists: 7, gpm: 600, lastHits: 320, heroDamage: 29000, towerDamage: 5000 }, true);
+    const support = fantasyScore({ kills: 2, deaths: 5, assists: 17, heroHealing: 2000 }, true);
+    const offlane = fantasyScore({ kills: 6, deaths: 6, assists: 12, heroDamage: 26000, towerDamage: 2500, denies: 15 }, true);
+    expect(carry).toMatchObject({ bonus: 8, impact: "pressure", points: 51 });
+    expect(support).toMatchObject({ bonus: 8, impact: "playmaking", points: 50.3 });
+    expect(offlane).toMatchObject({ bonus: 8, impact: "pressure", points: 47.5 });
+  });
+
+  it("caps the bonus even when a player farms and deals huge damage", () => {
+    const score = fantasyScore({ kills: 0, deaths: 0, assists: 0, gpm: 900, lastHits: 400, heroDamage: 80000, towerDamage: 12000 }, false);
+    expect(score.bonus).toBe(8);
+    expect(score.points).toBe(8);
   });
 });
 
@@ -98,24 +115,25 @@ describe("pointsByPlayer + fantasyStandings", () => {
     {
       radiantWin: true,
       players: [
-        { userId: "a", isRadiant: true, kills: 10, deaths: 0, assists: 0 }, // 30 + 10 = 40
-        { userId: "b", isRadiant: false, kills: 0, deaths: 5, assists: 0 }, // -5
+        { userId: "a", isRadiant: true, kills: 10, deaths: 0, assists: 0 }, // 20 + 8 = 28
+        { userId: "b", isRadiant: false, kills: 0, deaths: 5, assists: 0 }, // -3.7
         { userId: null, isRadiant: true, kills: 5, deaths: 0, assists: 0 }, // anonymous, ignored
       ],
     },
     {
       radiantWin: false,
       players: [
-        { userId: "a", isRadiant: true, kills: 2, deaths: 2, assists: 2 }, // 6-2+3 = 7
+        { userId: "a", isRadiant: true, kills: 2, deaths: 2, assists: 2 }, // 6.5 + .9 = 7.4
       ],
     },
   ];
 
   it("totals points per league player across games", () => {
     const pts = pointsByPlayer(games);
-    expect(pts.get("a")).toBe(47);
-    expect(pts.get("b")).toBe(-5);
+    expect(pts.get("a")).toBe(35.4);
+    expect(pts.get("b")).toBe(-3.7);
     expect(pts.has("null")).toBe(false);
+    expect(fantasyTotalsByPlayer(games).get("a")).toMatchObject({ games: 2, wins: 1, impacts: { economy: 0, playmaking: 1, pressure: 0 } });
   });
 
   it("ranks fantasy rosters with per-pick breakdowns", () => {
@@ -127,9 +145,9 @@ describe("pointsByPlayer + fantasyStandings", () => {
       ],
       pts,
     );
-    expect(standings[0]).toMatchObject({ managerId: "m1", points: 42 });
-    expect(standings[0].breakdown[0]).toEqual({ userId: "a", points: 47 });
-    expect(standings[1]).toMatchObject({ managerId: "m2", points: -5 });
+    expect(standings[0]).toMatchObject({ managerId: "m1", points: 31.7 });
+    expect(standings[0].breakdown[0]).toEqual({ userId: "a", points: 35.4 });
+    expect(standings[1]).toMatchObject({ managerId: "m2", points: -3.7 });
   });
 });
 

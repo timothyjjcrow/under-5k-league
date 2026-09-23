@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { competitionRanks, leaderIdentity } from "./leader-ranking";
+import {
+  competitionRanks,
+  killParticipationByPlayer,
+  leaderIdentity,
+} from "./leader-ranking";
 
 describe("competitionRanks", () => {
   it("gives equal displayed values the same placement", () => {
@@ -34,6 +38,52 @@ describe("leaderIdentity", () => {
       avatar: null,
       rankTier: null,
       hasProfile: false,
+    });
+  });
+});
+
+describe("killParticipationByPlayer", () => {
+  it("credits assists and includes unlinked teammates in the denominator", () => {
+    const results = killParticipationByPlayer([
+      {
+        lines: [
+          { userId: "support", isRadiant: true, kills: 0, assists: 4 },
+          { userId: "carry", isRadiant: true, kills: 3, assists: 1 },
+          { userId: null, isRadiant: true, kills: 2, assists: 0 },
+          { userId: "opponent", isRadiant: false, kills: 1, assists: 0 },
+        ],
+      },
+    ]);
+    expect(results.get("support")).toEqual({
+      involved: 4,
+      teamKills: 5,
+      scoredGames: 1,
+      rate: 80,
+    });
+    expect(results.get("carry")?.rate).toBe(80);
+  });
+
+  it("weights games by team kills and skips scoreless sides", () => {
+    const results = killParticipationByPlayer([
+      {
+        lines: [
+          { userId: "player", isRadiant: true, kills: 1, assists: 0 },
+          { userId: null, isRadiant: true, kills: 1, assists: 0 },
+        ],
+      },
+      {
+        lines: [
+          { userId: "player", isRadiant: false, kills: 0, assists: 1 },
+          { userId: null, isRadiant: false, kills: 2, assists: 0 },
+        ],
+      },
+      { lines: [{ userId: "player", isRadiant: true, kills: 0, assists: 0 }] },
+    ]);
+    expect(results.get("player")).toEqual({
+      involved: 2,
+      teamKills: 4,
+      scoredGames: 2,
+      rate: 50,
     });
   });
 });

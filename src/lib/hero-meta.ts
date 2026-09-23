@@ -31,6 +31,11 @@ export type HeroMetaRow = {
   winRate: number; // whole-number percent of picks that won
   pickRate: number; // whole-number percent of games featuring this hero
   kda: number; // (kills + assists) / max(1, deaths) across all picks, 1 decimal
+  killsPerPick: number;
+  deathsPerPick: number;
+  assistsPerPick: number;
+  /** Distinct league accounts with a mapped appearance on this hero. */
+  mappedPlayers: number;
   /** The league player with the most games on this hero (wins tiebreak). */
   topPlayer: HeroPlayerTally | null;
 };
@@ -137,6 +142,10 @@ export function heroMeta(games: MetaGame[]): HeroMeta {
       kda:
         Math.round(((agg.kills + agg.assists) / Math.max(1, agg.deaths)) * 10) /
         10,
+      killsPerPick: Math.round((agg.kills / agg.picks) * 10) / 10,
+      deathsPerPick: Math.round((agg.deaths / agg.picks) * 10) / 10,
+      assistsPerPick: Math.round((agg.assists / agg.picks) * 10) / 10,
+      mappedPlayers: agg.players.size,
       topPlayer,
     };
   });
@@ -165,6 +174,8 @@ export function bestWinRates(
     .filter((r) => r.picks >= minPicks)
     .sort(
       (a, b) =>
-        b.winRate - a.winRate || b.picks - a.picks || a.heroId - b.heroId,
+        b.wins / b.picks - a.wins / a.picks ||
+        b.picks - a.picks ||
+        a.heroId - b.heroId,
     );
 }

@@ -1,4 +1,3 @@
-import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { test, expect } from "@playwright/test";
 import {
   expectNoCollapsedTruncation,
@@ -13,16 +12,26 @@ import {
 // previously untested in a browser. Each check: key cards render, the
 // interactive bits respond, and nothing crashed client-side.
 
-test("leaders renders boards with the show-all toggle", async ({ page }) => {
+test("leaders groups metrics and preserves ranks through search", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/leaders");
   await expect(page.getByRole("heading", { name: "Leaders" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Winning", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Teamfights", level: 2 })).toBeVisible();
+  await expect(page.locator("#metric-participation")).toBeVisible();
   const toggle = page.getByRole("button", { name: /Show all/ }).first();
   await expect(toggle).toBeVisible();
   await toggle.click();
   await expect(
-    page.getByRole("button", { name: /Show top 5/ }).first(),
+    page.getByRole("button", { name: /Show top 3/ }).first(),
   ).toBeVisible();
+  const wins = page.locator("#metric-wins");
+  await wins.getByRole("button", { name: "Find player" }).click();
+  const search = wins.getByRole("searchbox", { name: /Find a player or team/i });
+  await search.fill("no-such-league-player");
+  await expect(wins.getByText("No player or team matches that search.")).toBeVisible();
+  await search.fill("");
+  await expect(wins.getByRole("button", { name: /Show top 3/ })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Weekly honors", level: 2 }),
   ).toBeVisible();
@@ -64,39 +73,59 @@ test("homepage league pulse shares the trusted honors and hero state", async ({
   assertNoErrors();
 });
 
-test("hero meta renders the contested and win-rate boards", async ({
+test("hero meta explains its sample and lets players explore the pool", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/meta");
-  await expect(page.getByText("Most contested")).toBeVisible();
-  // ("Untouched" only renders when unpicked heroes exist — data-dependent;
-  // the win-rate board always accompanies games.)
-  await expect(page.getByText("Winning the meta")).toBeVisible();
-  await expect(
-    page.getByRole("table", { name: "Most contested heroes" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Most contested", level: 2 }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hero meta", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What the league is actually picking" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The meta, at a glance" })).toBeVisible();
+  await expect(page.getByText("Most in demand")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Explore the hero pool" })).toBeVisible();
+  const search = page.getByRole("searchbox", { name: "Find a hero" });
+  await search.fill("no-such-hero");
+  await expect(page.getByText("No heroes match these filters")).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByRole("status")).toContainText(/matching heroes/i);
+  await expectNoHorizontalOverflow(page, "/meta");
   assertNoErrors();
 });
 
-test("the record book renders all-time records", async ({ page }) => {
+test("the record book groups performances and filters by season", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/records");
-  await expect(
-    page.getByRole("heading", { name: "Record book" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Player records", level: 2 }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Game records", level: 2 }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: /kill score/i }).first(),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Record book" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Impact & team play" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Economy & lane" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Match stories" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View match →" }).first()).toBeVisible();
+  const season = page.getByRole("combobox", { name: "Season" });
+  const firstSeason = await season.locator('option:not([value=""])').first().getAttribute("value");
+  expect(firstSeason).toBeTruthy();
+  await season.selectOption(firstSeason!);
+  await page.getByRole("button", { name: "View records" }).click();
+  await expect(page).toHaveURL(new RegExp(`/records\\?season=${firstSeason}`));
+  await expect(page.getByRole("heading", { name: "Record book" })).toBeVisible();
+  const statsNav = page.getByRole("navigation", { name: "Statistics" });
+  await expect(statsNav.getByRole("link", { name: "Leaders" })).toHaveAttribute("href", `/leaders?season=${firstSeason}`);
+  await expect(statsNav.getByRole("link", { name: "Hero meta" })).toHaveAttribute("href", `/meta?season=${firstSeason}`);
+  await expect(statsNav.getByRole("link", { name: "Record book" })).toHaveAttribute("href", `/records?season=${firstSeason}`);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expectNoHorizontalOverflow(page, "/records");
+  assertNoErrors();
+});
+
+test("Hall of Fame puts career rates and champion history in context", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/hall-of-fame");
+  await expect(page.getByRole("heading", { name: "Hall of Fame" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Career honors" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Game performance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fantasy per game" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Champion history" })).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expectNoHorizontalOverflow(page, "/hall-of-fame");
   assertNoErrors();
 });
 
@@ -235,13 +264,16 @@ test("failed news media degrades to its source link", async ({ page }) => {
 test("public statistics metadata is route-specific and invalid archives are noindex not-found pages", async ({
   page,
 }) => {
+  await page.goto("/leaders");
+  const brand = await page.getByRole("banner").locator("img[alt]").first().getAttribute("alt");
+  expect(brand).toBeTruthy();
   for (const [path, description] of [
     ["/leaders", /season leaders/i],
-    ["/meta", new RegExp(`heroes ${LEAGUE_CONFIG.name} players pick`, "i")],
+    ["/meta", /heroes .+ players pick/i],
     ["/records", /all-time single-game/i],
     ["/recap", /awards, superlatives/i],
     ["/fantasy", /salary-capped fantasy five/i],
-    ["/pickem", new RegExp(`Call every ${LEAGUE_CONFIG.name} match`, "i")],
+    ["/pickem", /Call every .+ match/i],
   ] as const) {
     await page.goto(path);
     await expect(
@@ -254,7 +286,7 @@ test("public statistics metadata is route-specific and invalid archives are noin
   }
   await expect(page.locator('meta[property="og:site_name"]')).toHaveAttribute(
     "content",
-    LEAGUE_CONFIG.name,
+    brand!,
   );
   await expect(page.locator('meta[property="og:type"]')).toHaveAttribute(
     "content",
@@ -265,7 +297,7 @@ test("public statistics metadata is route-specific and invalid archives are noin
   // archive lookup. Next 16 therefore documents this as a 200 response with a
   // not-found UI and an injected noindex directive. Preserve the shared page
   // loading experience and verify the complete browser-visible contract.
-  for (const path of ["/leaders", "/meta", "/recap", "/fantasy", "/pickem"]) {
+  for (const path of ["/leaders", "/meta", "/records", "/recap", "/fantasy", "/pickem"]) {
     for (const query of [
       "season=definitely-missing",
       "season=one&season=two",

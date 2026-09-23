@@ -30,6 +30,7 @@ import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
 import { formatNetWorth } from "@/lib/utils";
 import {
   buttonClasses,
+  Avatar,
   Card,
   CardBody,
   CardHeader,
@@ -40,7 +41,10 @@ import {
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
-import { leaderIdentity } from "@/lib/leader-ranking";
+import {
+  killParticipationByPlayer,
+  leaderIdentity,
+} from "@/lib/leader-ranking";
 
 type LeadersSearchParams = { season?: string | string[] };
 
@@ -83,6 +87,43 @@ type DisplayUser = {
   avatar: string | null;
   rankTier: number | null;
 };
+
+function SeasonSwitcher({
+  seasons,
+  selectedId,
+}: {
+  seasons: { id: string; name: string; isActive: boolean }[];
+  selectedId: string;
+}) {
+  if (seasons.length < 2) return null;
+  return (
+    <nav
+      aria-label="Choose a season for leaders"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-line bg-surface/55 px-4 py-3"
+    >
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+        Season
+      </span>
+      <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
+        {seasons.map((option) => (
+          <Link
+            key={option.id}
+            href={option.isActive ? "/leaders" : `/leaders?season=${option.id}`}
+            aria-current={option.id === selectedId ? "page" : undefined}
+            className={
+              option.id === selectedId
+                ? "inline-flex min-h-10 shrink-0 items-center rounded-lg border border-accent/50 bg-accent/10 px-3 text-xs font-semibold text-fg"
+                : "inline-flex min-h-10 shrink-0 items-center rounded-lg border border-line px-3 text-xs text-muted transition-colors hover:border-info/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+            }
+          >
+            {option.name}
+            {option.isActive ? " · Current" : ""}
+          </Link>
+        ))}
+      </div>
+    </nav>
+  );
+}
 
 export default async function LeadersPage({
   searchParams,
@@ -143,9 +184,13 @@ export default async function LeadersPage({
   // Parse each game's players JSON once and reuse the lines for both the
   // boards and the weekly-honors card (the dashboard's League pulse does the
   // same) — honorsByWeek used to re-parse the week's games per week.
-  const [gameRows, honorReadiness] = await Promise.all([
+  const [gameRows, honorReadiness, seasonOptions] = await Promise.all([
     getSeasonGameLeaders(season.id),
     getSeasonHonorReadiness(season.id),
+    prisma.season.findMany({
+      select: { id: true, name: true, isActive: true },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
   const decodedRows = gameRows.map((game) => ({
     game,
@@ -229,6 +274,7 @@ export default async function LeadersPage({
           active="leaders"
           seasonId={season.isActive ? undefined : season.id}
         />
+        <SeasonSwitcher seasons={seasonOptions} selectedId={season.id} />
         <StatsDataNotice
           invalidLines={invalidLines}
           malformedGames={malformedGames}
@@ -296,7 +342,9 @@ export default async function LeadersPage({
 
   const boards: {
     title: string;
-    subtitle?: string;
+    description: string;
+    valueUnit: string;
+    category: "winning" | "teamfights" | "economy";
     key: LeaderboardKey;
     minGames?: number;
     format: (r: LeaderRow) => string;
@@ -305,13 +353,18 @@ export default async function LeadersPage({
   }[] = [
     {
       title: "Most wins",
+      description: "Games won across this season.",
+      valueUnit: "game wins",
+      category: "winning",
       key: "wins",
       format: (r) => `${r.value}`,
       hint: (r) => `${r.summary.wins}–${r.summary.losses}`,
     },
     {
       title: "Best KDA",
-      subtitle: `min ${rateFloor} game${rateFloor > 1 ? "s" : ""}`,
+      description: "Kills plus assists for each death.",
+      valueUnit: "KDA ratio",
+      category: "teamfights",
       key: "kda",
       minGames: rateFloor,
       format: (r) => r.value.toFixed(1),
@@ -320,7 +373,9 @@ export default async function LeadersPage({
     },
     {
       title: "Highest win rate",
-      subtitle: `min ${rateFloor} game${rateFloor > 1 ? "s" : ""}`,
+      description: "Share of games won, with a game minimum.",
+      valueUnit: "of games won",
+      category: "winning",
       key: "winRate",
       minGames: rateFloor,
       format: (r) => `${r.value}%`,
@@ -328,25 +383,36 @@ export default async function LeadersPage({
     },
     {
       title: "Most kills",
+      description: "Total enemy heroes taken down.",
+      valueUnit: "kills",
+      category: "teamfights",
       key: "kills",
       format: (r) => `${r.value}`,
       hint: (r) => `${r.summary.avgKills}/game`,
     },
     {
       title: "Most assists",
+      description: "Total kills set up for teammates.",
+      valueUnit: "assists",
+      category: "teamfights",
       key: "assists",
       format: (r) => `${r.value}`,
       hint: (r) => `${r.summary.avgAssists}/game`,
     },
     {
       title: "Most games",
+      description: "Players who showed up most often.",
+      valueUnit: "games played",
+      category: "economy",
       key: "games",
       format: (r) => `${r.value}`,
       hint: (r) => `${r.summary.wins}–${r.summary.losses}`,
     },
     {
       title: "Best avg GPM",
-      subtitle: `min ${rateFloor} game${rateFloor > 1 ? "s" : ""}`,
+      description: "Gold earned per minute, averaged over reported games.",
+      valueUnit: "gold / min",
+      category: "economy",
       key: "gpm",
       minGames: rateFloor,
       format: (r) => `${r.value}`,
@@ -355,7 +421,9 @@ export default async function LeadersPage({
     },
     {
       title: "Richest (avg net worth)",
-      subtitle: `min ${rateFloor} game${rateFloor > 1 ? "s" : ""}`,
+      description: "Final net worth averaged over reported games.",
+      valueUnit: "avg net worth",
+      category: "economy",
       key: "netWorth",
       minGames: rateFloor,
       format: (r) => formatNetWorth(r.value),
@@ -392,6 +460,124 @@ export default async function LeadersPage({
       };
     });
 
+  const participationRows: LeaderBoardRow[] = [
+    ...killParticipationByPlayer(games).entries(),
+  ]
+    .filter(([, stat]) => stat.scoredGames >= rateFloor)
+    .sort(
+      ([idA, a], [idB, b]) =>
+        b.rate - a.rate ||
+        b.scoredGames - a.scoredGames ||
+        idA.localeCompare(idB),
+    )
+    .map(([id, stat]) => ({
+      id,
+      ...leaderIdentity(userMap.get(id)),
+      value: stat.rate,
+      rankValue: Math.round(stat.rate),
+      valueLabel: `${Math.round(stat.rate)}%`,
+      hint: `${stat.involved} of ${stat.teamKills} team kills · ${stat.scoredGames} scored game${stat.scoredGames === 1 ? "" : "s"}`,
+      isViewer: viewer?.id === id,
+      team: teamNameFor(id),
+    }));
+
+  // Healing is an optional provider field. Show a sustain board only when
+  // enough reported games exist; missing values must never count as zeroes.
+  const healingRows: LeaderBoardRow[] = [...rawByUser.entries()]
+    .map(([id, lines]) => {
+      const reported = lines.flatMap((line) =>
+        line.heroHealing == null ? [] : [line.heroHealing],
+      );
+      const total = reported.reduce((sum, value) => sum + value, 0);
+      return {
+        id,
+        games: reported.length,
+        total,
+        average: reported.length ? total / reported.length : 0,
+      };
+    })
+    .filter((row) => row.games >= rateFloor && row.total > 0)
+    .sort(
+      (a, b) =>
+        b.average - a.average ||
+        b.games - a.games ||
+        a.id.localeCompare(b.id),
+    )
+    .map((row) => ({
+      id: row.id,
+      ...leaderIdentity(userMap.get(row.id)),
+      value: row.average,
+      rankValue: Math.round(row.average),
+      valueLabel: Math.round(row.average).toLocaleString("en-US"),
+      hint: `${Math.round(row.total).toLocaleString("en-US")} total · ${row.games} reported game${row.games === 1 ? "" : "s"}`,
+      isViewer: viewer?.id === row.id,
+      team: teamNameFor(row.id),
+    }));
+
+  const boardRows = new Map(
+    boards.map((board) => [
+      board.key,
+      topBy(entries, board.key, {
+        minGames: board.minGames,
+        limit: Number.POSITIVE_INFINITY,
+      }).map((row): LeaderBoardRow => ({
+        id: row.id,
+        ...leaderIdentity(userMap.get(row.id)),
+        value: row.value,
+        rankValue: board.rankValue?.(row),
+        valueLabel: board.format(row),
+        hint: board.hint(row),
+        isViewer: viewer?.id === row.id,
+        team: teamNameFor(row.id),
+      })),
+    ]),
+  );
+  const hasHonors =
+    honorsByWeek.length > 0 ||
+    inProgressWeeks.length > 0 ||
+    awaitingBoxScoreWeeks.length > 0;
+  const spotlights = [
+    {
+      label: "Winningest player",
+      measure: "Game wins",
+      row: boardRows.get("wins")?.[0],
+      href: "#metric-wins",
+    },
+    {
+      label: "In every fight",
+      measure: "Kill involvement",
+      row: participationRows[0] ?? boardRows.get("assists")?.[0],
+      href: participationRows.length ? "#metric-participation" : "#metric-assists",
+    },
+    {
+      label: "Standout report card",
+      measure: "World benchmark",
+      row: reportRows[0],
+      href: "#metric-report",
+    },
+  ].filter((item) => item.row != null);
+
+  const categories = [
+    {
+      id: "winning",
+      index: "01",
+      title: "Winning",
+      description: "Results first: total wins and sustained success across the schedule.",
+    },
+    {
+      id: "teamfights",
+      index: "02",
+      title: "Teamfights",
+      description: "Who finishes fights, creates chances, joins kills and sustains teammates.",
+    },
+    {
+      id: "economy",
+      index: "03",
+      title: "Resources & presence",
+      description: "Gold, net worth and the players who put in the most games.",
+    },
+  ] as const;
+
   return (
     <div className="space-y-6">
       <PageTitle
@@ -420,103 +606,152 @@ export default async function LeadersPage({
         active="leaders"
         seasonId={season.isActive ? undefined : season.id}
       />
+      <SeasonSwitcher seasons={seasonOptions} selectedId={season.id} />
       <StatsDataNotice
         invalidLines={invalidLines}
         malformedGames={malformedGames}
         unusableGames={unusableGames}
         unmappedLines={unmappedLines}
       />
-      <dl className="grid grid-cols-3 divide-x divide-line rounded-xl border border-line bg-surface/60 py-4">
-        <div className="flex min-w-0 flex-col px-3 text-center sm:px-5">
-          <dt className="order-2 mt-1 text-xs text-muted">Trusted 5v5 games</dt>
-          <dd className="font-display text-2xl font-semibold tabular-nums text-cyan-300 sm:text-3xl">
+      <section aria-labelledby="leaders-intro" className="overflow-hidden rounded-2xl border border-line bg-gradient-to-br from-surface-3 via-surface to-bg p-5 sm:p-7">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-accent">Season snapshot</p>
+            <h2 id="leaders-intro" className="mt-2 font-display text-3xl font-semibold uppercase leading-tight tracking-wide text-fg sm:text-4xl">
+              Who is setting the pace?
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted">
+              Explore results, teamfight impact and economy from verified match box scores. Every board keeps a player’s actual season rank when you search.
+            </p>
+          </div>
+          <details className="max-w-md text-sm text-muted">
+            <summary className="min-h-11 cursor-pointer py-3 font-medium text-info hover:text-fg">How these boards work</summary>
+            <p className="pb-2 text-xs leading-relaxed">
+              Only complete 5v5 box scores count. Rate boards need {rateFloor} eligible game{rateFloor === 1 ? "" : "s"}; reported economy stats use that many reported games. Equal displayed values share a rank. Kill involvement is the share of a player’s team kills they scored or assisted, weighted by team kills across games.
+            </p>
+          </details>
+        </div>
+        {spotlights.length > 0 ? (
+          <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+            {spotlights.map(({ label, measure, row, href }) =>
+              row ? (
+                <div key={label} className="rounded-xl border border-line/80 bg-bg/55 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">{label}</p>
+                  <div className="mt-3 flex items-center gap-3">
+                    <Avatar name={row.name} src={row.avatar} size={36} />
+                    <div className="min-w-0 flex-1">
+                      {row.hasProfile === false ? (
+                        <p className="truncate text-sm font-semibold text-fg">{row.name}</p>
+                      ) : (
+                        <PlayerLink userId={row.id} className="block truncate text-sm font-semibold">{row.name}</PlayerLink>
+                      )}
+                      <p className="truncate text-xs text-muted">{row.team ?? measure}</p>
+                    </div>
+                    <span className="font-display text-2xl font-semibold tabular-nums text-accent">{row.valueLabel}</span>
+                  </div>
+                  <a href={href} className="mt-3 inline-flex min-h-11 items-center text-xs font-medium text-info hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60">
+                    View {measure.toLowerCase()} board →
+                  </a>
+                </div>
+              ) : null,
+            )}
+          </div>
+        ) : null}
+      </section>
+      <dl className="flex flex-wrap gap-x-8 gap-y-3 rounded-xl border border-line bg-surface/60 px-5 py-4">
+        <div>
+          <dt className="text-xs text-muted">Complete 5v5 games</dt>
+          <dd className="mt-1 font-display text-xl font-semibold tabular-nums text-cyan-300">
             {games.filter((game) => game.lines.length > 0).length}
-            <span className="ml-1 text-sm text-muted">/ {gameRows.length}</span>
+            <span className="ml-1 text-sm font-normal text-muted">/ {gameRows.length} imported</span>
           </dd>
         </div>
-        <div className="flex min-w-0 flex-col px-3 text-center sm:px-5">
-          <dt className="order-2 mt-1 text-xs text-muted">Players with stats</dt>
-          <dd className="font-display text-2xl font-semibold tabular-nums sm:text-3xl">
-            {entries.length}
-          </dd>
+        <div>
+          <dt className="text-xs text-muted">Players with stats</dt>
+          <dd className="mt-1 font-display text-xl font-semibold tabular-nums">{entries.length}</dd>
         </div>
-        <div className="flex min-w-0 flex-col px-3 text-center sm:px-5">
-          <dt className="order-2 mt-1 text-xs text-muted">
-            Rate-board minimum
-          </dt>
-          <dd className="font-display text-2xl font-semibold tabular-nums sm:text-3xl">
-            {rateFloor}
-            <span className="ml-1 text-sm font-normal text-muted">games</span>
+        <div>
+          <dt className="text-xs text-muted">Rate minimum</dt>
+          <dd className="mt-1 font-display text-xl font-semibold tabular-nums">
+            {rateFloor}<span className="ml-1 text-sm font-normal text-muted">game{rateFloor === 1 ? "" : "s"}</span>
           </dd>
         </div>
       </dl>
       <SectionNav
-        label="Leaderboard metrics"
+        label="Leaderboard sections"
         items={[
-          ...(reportRows.length
-            ? [{ id: "metric-report", label: "Report card" }]
-            : []),
-          ...boards.map((board) => ({
-            id: `metric-${board.key}`,
-            label: board.title,
-          })),
-          ...(honorsByWeek.length > 0 ||
-          inProgressWeeks.length > 0 ||
-          awaitingBoxScoreWeeks.length > 0
-            ? [{ id: "weekly-honors", label: "Weekly honors" }]
-            : []),
+          ...categories.map((category) => ({ id: category.id, label: category.title })),
+          ...(reportRows.length ? [{ id: "report-card", label: "Report card" }] : []),
+          ...(hasHonors ? [{ id: "weekly-honors", label: "Weekly honors" }] : []),
         ]}
       />
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {reportRows.length > 0 ? (
-          <LeaderBoard
-            id="metric-report"
-            title="Best report card"
-            subtitle={`avg percentile vs the world · min ${rateFloor} graded game${rateFloor > 1 ? "s" : ""}`}
-            rows={reportRows}
-            scaleMax={1}
-            headingLevel={2}
-          />
-        ) : null}
-        {boards.map((b) => {
-          // Full ranked list per board — the client card shows top 5 and
-          // expands on demand; labels are precomputed here (fns don't
-          // serialize across the boundary).
-          const rows: LeaderBoardRow[] = topBy(entries, b.key, {
-            minGames: b.minGames,
-            limit: Number.POSITIVE_INFINITY,
-          }).map((r) => {
-            const u = userMap.get(r.id);
-            const identity = leaderIdentity(u);
-            return {
-              id: r.id,
-              ...identity,
-              value: r.value,
-              rankValue: b.rankValue?.(r),
-              valueLabel: b.format(r),
-              hint: b.hint(r),
-              isViewer: viewer?.id === r.id,
-              team: teamNameFor(r.id),
-            };
-          });
-          return (
+      {categories.map((category) => (
+        <section key={category.id} id={category.id} aria-labelledby={`${category.id}-title`} className="scroll-mt-24 space-y-4">
+          <div className="flex items-start gap-4 border-b border-line-soft pb-3">
+            <span aria-hidden className="font-display text-3xl font-semibold text-accent/65">{category.index}</span>
+            <div>
+              <h2 id={`${category.id}-title`} className="font-display text-2xl font-semibold uppercase tracking-wide text-fg">{category.title}</h2>
+              <p className="mt-1 text-sm text-muted">{category.description}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {boards.filter((board) => board.category === category.id).map((board) => (
+              <LeaderBoard
+                key={board.key}
+                id={`metric-${board.key}`}
+                title={board.title}
+                subtitle={`${board.description}${board.minGames ? ` Min ${board.minGames} eligible game${board.minGames === 1 ? "" : "s"}.` : ""}`}
+                rows={boardRows.get(board.key) ?? []}
+                valueUnit={board.valueUnit}
+                previewCount={3}
+                scaleMax={board.key === "winRate" ? 100 : undefined}
+              />
+            ))}
+            {category.id === "teamfights" && participationRows.length > 0 ? (
+              <LeaderBoard
+                id="metric-participation"
+                title="Kill involvement"
+                subtitle={`The share of team kills each player scored or assisted. Min ${rateFloor} scored game${rateFloor === 1 ? "" : "s"}.`}
+                rows={participationRows}
+                valueUnit="of team kills"
+                previewCount={3}
+                scaleMax={100}
+              />
+            ) : null}
+            {category.id === "teamfights" && healingRows.length > 0 ? (
+              <LeaderBoard
+                id="metric-healing"
+                title="Team sustain"
+                subtitle={`Hero healing per reported game. Min ${rateFloor} reported game${rateFloor === 1 ? "" : "s"}; unavailable box scores are excluded.`}
+                rows={healingRows}
+                valueUnit="healing / game"
+                previewCount={3}
+              />
+            ) : null}
+          </div>
+        </section>
+      ))}
+      {reportRows.length > 0 ? (
+        <section id="report-card" aria-labelledby="report-card-title" className="scroll-mt-24 space-y-4">
+          <div className="border-b border-line-soft pb-3">
+            <h2 id="report-card-title" className="font-display text-2xl font-semibold uppercase tracking-wide">League report card</h2>
+            <p className="mt-1 text-sm text-muted">A broader view of each performance, graded against worldwide Dota benchmarks when those measurements are available.</p>
+          </div>
+          <div className="max-w-3xl">
             <LeaderBoard
-              key={b.title}
-              id={`metric-${b.key}`}
-              title={b.title}
-              subtitle={b.subtitle}
-              rows={rows}
-              scaleMax={b.key === "winRate" ? 100 : undefined}
-              headingLevel={2}
+              id="metric-report"
+              title="Best report card"
+              subtitle={`Average benchmark percentile · min ${rateFloor} graded game${rateFloor === 1 ? "" : "s"}.`}
+              rows={reportRows}
+              valueUnit="percentile"
+              previewCount={3}
+              scaleMax={1}
             />
-          );
-        })}
-      </div>
+          </div>
+        </section>
+      ) : null}
 
-      {honorsByWeek.length > 0 ||
-      inProgressWeeks.length > 0 ||
-      awaitingBoxScoreWeeks.length > 0 ? (
+      {hasHonors ? (
         <Card id="weekly-honors" className="scroll-mt-24">
           <CardHeader
             headingLevel={2}

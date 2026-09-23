@@ -9,7 +9,7 @@ export function StatsNav({
   seasonId,
 }: {
   active: StatsSection;
-  /** Archive context is meaningful only on season-scoped Leaders and Meta. */
+  /** Keep a selected season when moving between the season-scoped boards. */
   seasonId?: string;
 }) {
   const query = seasonId
@@ -18,7 +18,7 @@ export function StatsNav({
   const items: { key: StatsSection; href: string; label: string }[] = [
     { key: "leaders", href: `/leaders${query}`, label: "Leaders" },
     { key: "meta", href: `/meta${query}`, label: "Hero meta" },
-    { key: "records", href: "/records", label: "Record book" },
+    { key: "records", href: `/records${query}`, label: "Record book" },
     { key: "compare", href: "/players/compare", label: "Compare players" },
   ];
 

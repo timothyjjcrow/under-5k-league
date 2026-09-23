@@ -15,7 +15,7 @@ describe("weeklyHonors", () => {
         {
           radiantWin: true,
           players: [
-            // T1 radiant, wins: a1 pops off (30+10=40), a2 quiet (3+10=13)
+            // T1 radiant wins: a1 scores 20+8=28, a2 scores 2+8=10.
             {
               userId: "a1",
               isRadiant: true,
@@ -32,7 +32,7 @@ describe("weeklyHonors", () => {
               deaths: 0,
               assists: 0,
             },
-            // T2 dire, loses: b1 decent but beaten (8*3-2=22)
+            // T2 dire loses: b1 scores 16-1.5=14.5.
             {
               userId: "b1",
               isRadiant: false,
@@ -46,9 +46,9 @@ describe("weeklyHonors", () => {
       ],
       teamOf,
     );
-    expect(honors.player).toEqual({ userId: "a1", points: 40, heroId: 8 });
+    expect(honors.player).toEqual({ userId: "a1", points: 28, heroId: 8 });
     expect(honors.team).toMatchObject({ teamId: "T1", gameWins: 1 });
-    expect(honors.team!.points).toBe(53);
+    expect(honors.team!.points).toBe(38);
   });
 
   it("breaks equal game wins by summed points", () => {

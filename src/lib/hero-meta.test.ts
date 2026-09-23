@@ -93,6 +93,41 @@ describe("heroMeta", () => {
     expect(row.kda).toBe(7.5);
   });
 
+  it("reports per-pick contributions and counts distinct mapped players", () => {
+    const games: MetaGame[] = [
+      {
+        radiantWin: true,
+        lines: [
+          line({ heroId: 1, userId: "a", kills: 4, deaths: 2, assists: 13 }),
+        ],
+      },
+      {
+        radiantWin: false,
+        lines: [
+          line({ heroId: 1, userId: "a", kills: 1, deaths: 3, assists: 8 }),
+        ],
+      },
+      {
+        radiantWin: true,
+        lines: [
+          line({ heroId: 1, userId: "b", kills: 0, deaths: 4, assists: 11 }),
+        ],
+      },
+      {
+        radiantWin: false,
+        lines: [
+          line({ heroId: 1, userId: null, kills: 1, deaths: 1, assists: 12 }),
+        ],
+      },
+    ];
+    const [row] = heroMeta(games).rows;
+    expect(row.killsPerPick).toBe(1.5);
+    expect(row.deathsPerPick).toBe(2.5);
+    expect(row.assistsPerPick).toBe(11);
+    expect(row.mappedPlayers).toBe(2);
+    expect(row.picks).toBe(4);
+  });
+
   it("crowns the top player by games with a wins tiebreak, ignoring unmapped lines", () => {
     const games: MetaGame[] = [
       {
@@ -177,6 +212,15 @@ describe("metaMinPicks", () => {
 });
 
 describe("bestWinRates", () => {
+  it("uses the unrounded rate when displayed percentages tie", () => {
+    const base = heroMeta([
+      { radiantWin: true, lines: [line({ heroId: 1 })] },
+    ]).rows[0];
+    const lowerRate = { ...base, heroId: 1, picks: 27, wins: 17, losses: 10, winRate: 63 };
+    const higherRate = { ...base, heroId: 2, picks: 19, wins: 12, losses: 7, winRate: 63 };
+    expect(bestWinRates([lowerRate, higherRate], 2).map((row) => row.heroId)).toEqual([2, 1]);
+  });
+
   it("filters below the floor and ranks by rate, then picks", () => {
     const rows = heroMeta([
       {

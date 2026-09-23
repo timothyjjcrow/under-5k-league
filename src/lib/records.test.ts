@@ -20,6 +20,11 @@ function line(overrides: Partial<RecordLine>): RecordLine {
     netWorth: 15000,
     gpm: 400,
     lastHits: 150,
+    xpm: null,
+    denies: null,
+    heroDamage: null,
+    towerDamage: null,
+    heroHealing: null,
     isRadiant: true,
     ...overrides,
   };
@@ -129,6 +134,30 @@ describe("leagueRecords", () => {
     expect(book.games.find((r) => r.key === "bloodiest")).toBeUndefined();
     expect(book.games.find((r) => r.key === "stomp")).toBeUndefined();
   });
+
+  it("recognizes support and objective records only when those fields were reported", () => {
+    const book = leagueRecords([
+      game({
+        lines: [
+          line({ userId: "support", heroHealing: 12000, heroDamage: 9000, towerDamage: 100 }),
+          line({ userId: "pusher", heroHealing: null, heroDamage: 25000, towerDamage: 8000 }),
+        ],
+      }),
+    ]);
+    expect(book.players.find((r) => r.key === "heroHealing")).toMatchObject({ userId: "support", value: 12000 });
+    expect(book.players.find((r) => r.key === "towerDamage")).toMatchObject({ userId: "pusher", value: 8000 });
+    expect(book.players.find((r) => r.key === "heroDamage")).toMatchObject({ userId: "pusher", value: 25000 });
+  });
+
+  it("keeps game-story records grounded in a reported score", () => {
+    const book = leagueRecords([
+      game({ matchId: "close", radiantWin: true, radiantScore: 21, direScore: 20 }),
+      game({ matchId: "loss", radiantWin: false, radiantScore: 35, direScore: 40 }),
+      game({ matchId: "empty", radiantScore: 0, direScore: 0 }),
+    ]);
+    expect(book.games.find((r) => r.key === "closest")).toMatchObject({ matchId: "close", value: 1 });
+    expect(book.games.find((r) => r.key === "losingKills")).toMatchObject({ matchId: "loss", value: 35 });
+  });
 });
 
 describe("formatGameDuration", () => {
@@ -189,6 +218,11 @@ describe("toRecordGames", () => {
       netWorth: 21000,
       gpm: 512,
       lastHits: 230,
+      xpm: null,
+      denies: null,
+      heroDamage: null,
+      towerDamage: null,
+      heroHealing: null,
       isRadiant: true,
     });
   });
@@ -237,6 +271,27 @@ describe("toRecordGames", () => {
     );
     expect(book.players.find((r) => r.key === "netWorth")).toBeUndefined();
     expect(book.players.find((r) => r.key === "gpm")).toBeUndefined();
+  });
+
+  it("carries optional imported damage, healing, and lane stats into records", () => {
+    const [mapped] = toRecordGames([
+      row({
+        players: JSON.stringify(storedRoster({
+          xpm: 610,
+          denies: 12,
+          heroDamage: 24000,
+          towerDamage: 5100,
+          heroHealing: 3200,
+        })),
+      }),
+    ]);
+    expect(mapped.lines[0]).toMatchObject({
+      xpm: 610,
+      denies: 12,
+      heroDamage: 24000,
+      towerDamage: 5100,
+      heroHealing: 3200,
+    });
   });
 
   it("omits a malformed box score from player and game records", () => {

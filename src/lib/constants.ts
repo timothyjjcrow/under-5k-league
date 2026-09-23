@@ -191,15 +191,21 @@ export const FANTASY = {
   SLOTS: 5,
   /** MMR salary cap = league-average rostered MMR × SLOTS × CAP_SLACK. */
   CAP_SLACK: 1.05,
-  // Scoring weights, applied per imported game.
-  KILL: 3,
-  ASSIST: 1.5,
-  DEATH: -1,
-  WIN: 10,
-  /** Points per GPM (economy signal without dwarfing kills). */
-  GPM: 0.02,
-  /** Points per last hit. */
-  LAST_HIT: 0.02,
+  // Scoring weights, applied per imported game. Every player earns the same
+  // base score plus their strongest of three capped contribution bonuses.
+  KILL: 2,
+  ASSIST: 2,
+  DEATH: -0.75,
+  WIN: 8,
+  BONUS_CAP: 8,
+  ECONOMY_GPM_FLOOR: 300,
+  ECONOMY_GPM: 0.02,
+  ECONOMY_LAST_HIT: 0.01,
+  PLAYMAKING_ASSIST: 0.45,
+  PLAYMAKING_HEALING: 0.001,
+  PRESSURE_HERO_DAMAGE: 0.0003,
+  PRESSURE_TOWER_DAMAGE: 0.0005,
+  PRESSURE_DENY: 0.1,
 } as const;
 
 // ---------- Inhouse (casual pick-up mode, separate from the league) ----------

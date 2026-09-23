@@ -11,12 +11,12 @@ import {
   fantasyCap,
   fantasyPrices,
   fantasyStandings,
+  fantasyTotalsByPlayer,
   ownershipByPlayer,
-  pointsByPlayer,
 } from "@/lib/fantasy";
 import { FANTASY } from "@/lib/constants";
 import { saveFantasyRoster } from "@/app/actions/fantasy";
-import { ActionForm, SubmitButton } from "@/components/action-form";
+import { ActionForm } from "@/components/action-form";
 import { FantasyPicker } from "@/components/fantasy-picker";
 import { LeaderBoard, type LeaderBoardRow } from "@/components/leader-board";
 import {
@@ -36,8 +36,66 @@ import { cn } from "@/lib/utils";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
+import { parseRoles } from "@/lib/roles";
 
 type FantasySearchParams = { season?: string | string[] };
+
+function FantasySeasonSwitcher({
+  season,
+  pastSeasons,
+}: {
+  season: { id: string; name: string; isActive: boolean };
+  pastSeasons: { id: string; name: string }[];
+}) {
+  if (pastSeasons.length === 0 && season.isActive) return null;
+  return (
+    <nav aria-label="Fantasy seasons" className="flex flex-wrap items-center gap-2 text-xs text-muted">
+      <span>Season:</span>
+      {season.isActive ? (
+        <Badge tone="info">{season.name}</Badge>
+      ) : (
+        <Link href="/fantasy" className={buttonClasses("secondary", "sm")}>Current season</Link>
+      )}
+      {pastSeasons.filter((past) => past.id !== season.id).map((past) => (
+        <Link key={past.id} href={`/fantasy?season=${past.id}`} className={buttonClasses("secondary", "sm")}>{past.name}</Link>
+      ))}
+      {!season.isActive ? <Badge tone="neutral">{season.name}</Badge> : null}
+    </nav>
+  );
+}
+
+function ScoringGuide() {
+  return (
+    <Card id="scoring" className="scroll-mt-24 overflow-hidden">
+      <CardHeader
+        title="One score, three ways to contribute"
+        subtitle="Every player gets the same base points. Their best contribution bonus counts each game, capped at eight points, so farm and damage cannot stack into an overwhelming lead."
+        headingLevel={2}
+      />
+      <CardBody className="space-y-4">
+        <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm">
+          <span className="font-semibold">Every game</span>
+          <span className="ml-2 text-muted">+{FANTASY.KILL} / kill · +{FANTASY.ASSIST} / assist · {FANTASY.DEATH} / death · +{FANTASY.WIN} / win</span>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border border-line bg-surface/70 p-4">
+            <div className="text-sm font-semibold">Farm</div>
+            <p className="mt-1 text-xs leading-relaxed text-muted">Gold per minute above {FANTASY.ECONOMY_GPM_FLOOR} × {FANTASY.ECONOMY_GPM}, plus last hits × {FANTASY.ECONOMY_LAST_HIT}.</p>
+          </div>
+          <div className="rounded-lg border border-line bg-surface/70 p-4">
+            <div className="text-sm font-semibold">Playmaking</div>
+            <p className="mt-1 text-xs leading-relaxed text-muted">Assists × {FANTASY.PLAYMAKING_ASSIST}, plus hero healing × {FANTASY.PLAYMAKING_HEALING}.</p>
+          </div>
+          <div className="rounded-lg border border-line bg-surface/70 p-4">
+            <div className="text-sm font-semibold">Pressure</div>
+            <p className="mt-1 text-xs leading-relaxed text-muted">Hero damage × {FANTASY.PRESSURE_HERO_DAMAGE}, tower damage × {FANTASY.PRESSURE_TOWER_DAMAGE}, plus denies × {FANTASY.PRESSURE_DENY}.</p>
+          </div>
+        </div>
+        <p className="text-xs leading-relaxed text-muted">Only the highest of these three bonuses is added, up to +{FANTASY.BONUS_CAP} per game. Scores use complete imported 5v5 box scores. Preferred positions help browse the draft pool; they do not change scoring.</p>
+      </CardBody>
+    </Card>
+  );
+}
 
 export async function generateMetadata({
   searchParams,
@@ -124,7 +182,7 @@ export default async function FantasyPage({
   const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
-  const [draft, members, regs, games, gameCount, rosters] = await Promise.all([
+  const [draft, members, regs, games, gameCount, rosters, pastSeasons] = await Promise.all([
     prisma.draft.findUnique({
       where: { seasonId: season.id },
       select: { status: true },
@@ -136,7 +194,7 @@ export default async function FantasyPage({
     }),
     prisma.registration.findMany({
       where: { seasonId: season.id, status: "ACTIVE" },
-      select: { userId: true, mmr: true },
+      select: { userId: true, mmr: true, roles: true },
     }),
     getSeasonGameScores(season.id),
     // Unlike the cached scoring scan above, the competitive lock must be an
@@ -146,6 +204,11 @@ export default async function FantasyPage({
     prisma.fantasyRoster.findMany({
       where: { seasonId: season.id },
       include: { user: true, picks: { include: { player: true } } },
+    }),
+    prisma.season.findMany({
+      where: { isActive: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true },
     }),
   ]);
 
@@ -158,6 +221,7 @@ export default async function FantasyPage({
           title="Fantasy"
           subtitle={`${season.name}${readOnly ? " · archived" : ""}`}
         />
+        <FantasySeasonSwitcher season={season} pastSeasons={pastSeasons} />
         <EmptyState
           title={
             isFinal
@@ -180,6 +244,7 @@ export default async function FantasyPage({
     return (
       <div className="space-y-6">
         <PageTitle title="Fantasy" subtitle={season.name} />
+        <FantasySeasonSwitcher season={season} pastSeasons={pastSeasons} />
         <EmptyState
           title="Fantasy opens after the draft"
           description="When the auction is complete, build your five before the first league game is imported."
@@ -189,6 +254,7 @@ export default async function FantasyPage({
   }
 
   const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
+  const rolesByUser = new Map(regs.map((r) => [r.userId, parseRoles(r.roles)]));
   const priceByUser = fantasyPrices(
     new Map(members.map((m) => [m.userId, mmrByUser.get(m.userId) ?? 0])),
   );
@@ -203,6 +269,8 @@ export default async function FantasyPage({
       (priceByUser.get(m.userId) ?? 0) > 0,
     teamName: m.team.name,
     isCaptain: m.isCaptain,
+    roles: rolesByUser.get(m.userId) ?? [],
+    released: false,
   }));
   const cap = fantasyCap([...priceByUser.values()]);
   // `readOnly` folds into `locked`, which is the ONE branch that decides
@@ -232,15 +300,20 @@ export default async function FantasyPage({
         mmrEstimated: false,
         teamName: "released",
         isCaptain: false,
+        roles: [],
+        released: true,
       });
     }
   }
 
-  const playerPoints = pointsByPlayer(
-    games.map((g) => ({
-      radiantWin: g.radiantWin,
-      players: trustedGamePlayers(decodeGamePlayers(g.players)),
-    })),
+  const scoredGames = games.map((g) => ({
+    radiantWin: g.radiantWin,
+    players: trustedGamePlayers(decodeGamePlayers(g.players)),
+  }));
+  const scoredGameCount = scoredGames.filter((g) => g.players.length === 10).length;
+  const playerTotals = fantasyTotalsByPlayer(scoredGames);
+  const playerPoints = new Map(
+    [...playerTotals].map(([id, total]) => [id, total.points]),
   );
   const standings = fantasyStandings(
     rosters.map((r) => ({
@@ -263,6 +336,9 @@ export default async function FantasyPage({
 
   const myRoster = viewer ? rosters.find((r) => r.userId === viewer.id) : null;
   const myPicks = myRoster?.picks.map((p) => p.userId) ?? [];
+  const myStandingIndex = viewer
+    ? standings.findIndex((standing) => standing.managerId === viewer.id)
+    : -1;
 
   // Which players are actually producing, and how contested each one was.
   const ownership = ownershipByPlayer(
@@ -274,6 +350,10 @@ export default async function FantasyPage({
     .map(([userId, points]) => {
       const m = memberByUser.get(userId);
       const pct = Math.round((ownership.get(userId) ?? 0) * 100);
+      const total = playerTotals.get(userId);
+      const impact = total
+        ? Object.entries(total.impacts).sort((a, b) => b[1] - a[1])[0]
+        : null;
       return {
         id: userId,
         name: m?.user.name ?? playerName.get(userId) ?? "?",
@@ -281,115 +361,91 @@ export default async function FantasyPage({
         rankTier: m?.user.rankTier ?? null,
         value: points,
         valueLabel: `${points} pts`,
-        hint:
-          rosters.length > 0
-            ? m
-              ? `picked by ${pct}% · ${m.team.name}`
-              : `picked by ${pct}%`
-            : (m?.team.name ?? "league player"),
+        hint: `${total?.games ?? 0} games · ${total ? (points / total.games).toFixed(1) : "0"} pts/game${impact && impact[1] > 0 ? ` · ${impact[0]} bonus most often` : ""}${rosters.length > 0 ? ` · picked by ${pct}%` : ""}`,
+        team: m?.team.name ?? null,
         isViewer: viewer?.id === userId,
       };
     });
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-7">
       <PageTitle
         title="Fantasy"
-        // cap 0 = no roster MMRs are known — "under 0 MMR" would read as
-        // nonsense, so drop the cap phrasing until there's a real number.
-        subtitle={`${season.name}${readOnly ? " · archived" : ""} · ${
-          locked
-            ? isFinal
-              ? "final standings and fantasy fives"
-              : "live scoring and locked fantasy fives"
-            : cap > 0
-              ? `pick five under ${cap.toLocaleString()} MMR`
-              : "uncapped — roster ratings are unavailable"
-        }${locked ? "" : " — points from real games"}`}
+        subtitle={`${season.name}${readOnly ? " · archived" : ""}. ${locked ? "Follow the fantasy standings from real league games." : "Build a five from drafted players before the first game."}`}
         action={
           readOnly ? (
             <Badge tone="neutral">Archived</Badge>
           ) : locked ? (
-            <Badge tone="accent">Rosters locked</Badge>
+            <Badge tone="accent">{isFinal ? "Final standings" : "Live scoring"}</Badge>
           ) : (
-            <Badge tone="info">Picks open</Badge>
+            <Badge tone="success">Picks open</Badge>
           )
         }
       />
 
+      <nav aria-label="Fantasy sections" className="flex flex-wrap gap-2 text-xs font-medium">
+        <a href="#lineup" className={buttonClasses("secondary", "sm")}>{locked ? "Your five" : "Build your five"}</a>
+        {locked && standings.length > 0 ? <a href="#standings" className={buttonClasses("secondary", "sm")}>Standings</a> : null}
+        {locked && topScorers.length > 0 ? <a href="#scorers" className={buttonClasses("secondary", "sm")}>Player scores</a> : null}
+        <a href="#scoring" className={buttonClasses("secondary", "sm")}>Scoring rules</a>
+      </nav>
+
+      <FantasySeasonSwitcher season={season} pastSeasons={pastSeasons} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card tone="feature"><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Entries</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{rosters.length}</div><p className="mt-1 text-xs text-muted">{locked ? "Locked fantasy fives" : "Saved fantasy fives"}</p></CardBody></Card>
+        <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Games scored</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{scoredGameCount}</div><p className="mt-1 text-xs text-muted">Complete imported games</p></CardBody></Card>
+        <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Draft pool</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{members.length}</div><p className="mt-1 text-xs text-muted">Players to choose from</p></CardBody></Card>
+        <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">{locked && myStandingIndex >= 0 ? "Your rank" : "Salary cap"}</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{locked && myStandingIndex >= 0 ? `#${myStandingIndex + 1}` : cap > 0 ? cap.toLocaleString() : "Open"}</div><p className="mt-1 text-xs text-muted">{locked && myStandingIndex >= 0 ? `${standings[myStandingIndex].points} points` : cap > 0 ? "MMR across five players" : "No ratings available"}</p></CardBody></Card>
+      </div>
+
       {locked && standings.length > 0 ? (
-        <Card>
+        <Card id="standings" className="scroll-mt-24 overflow-hidden">
           <CardHeader
             title="Fantasy standings"
-            subtitle={`${standings.length} manager${standings.length === 1 ? "" : "s"} · scoring: ${FANTASY.KILL}/kill, ${FANTASY.ASSIST}/assist, ${FANTASY.DEATH}/death, +${FANTASY.WIN}/win, economy bonus`}
+            subtitle={`${standings.length} manager${standings.length === 1 ? "" : "s"} · open any row to see how each pick contributed`}
             headingLevel={2}
           />
-          <CardBody className="divide-y divide-line/60 p-0">
+          <CardBody className="p-0">
+            <ol className="divide-y divide-line-soft">
             {standings.map((s, i) => (
-              <div
+              <li
                 key={s.managerId}
                 className={cn(
-                  "flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm",
+                  "px-4 py-3 text-sm sm:px-5",
+                  i === 0 && "bg-accent/[0.04]",
                   viewer?.id === s.managerId && "bg-info/[0.07]",
                 )}
               >
-                <span className="w-6 text-center text-muted">{i + 1}</span>
-                <Avatar
-                  name={managerName.get(s.managerId) ?? "?"}
-                  src={managerAvatar.get(s.managerId) ?? null}
-                  size={24}
-                />
-                <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <PlayerLink
-                    userId={s.managerId}
-                    className="min-w-0 truncate font-medium"
-                  >
-                    {managerName.get(s.managerId) ?? "?"}
-                  </PlayerLink>
-                  {viewer?.id === s.managerId ? (
-                    <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info">
-                      You
-                    </span>
-                  ) : null}
-                </span>
-                <span className="hidden flex-wrap gap-1 text-xs text-muted sm:flex">
-                  {s.breakdown.slice(0, 5).map((b) => (
-                    <span
-                      key={b.userId}
-                      className="rounded bg-surface-2 px-1.5 py-0.5"
-                    >
-                      <PlayerLink userId={b.userId}>
-                        {playerName.get(b.userId) ?? "?"}
-                      </PlayerLink>{" "}
-                      <span className="font-mono tabular-nums">{b.points}</span>
-                    </span>
-                  ))}
-                </span>
-                <span className="shrink-0 font-mono text-base font-semibold tabular-nums">
-                  {s.points}
-                </span>
-                <details className="w-full pl-9 text-xs text-muted sm:hidden">
-                  <summary className="cursor-pointer py-1 underline-offset-2 hover:text-info hover:underline">
-                    View fantasy five
-                  </summary>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {s.breakdown.slice(0, 5).map((b) => (
-                      <span
-                        key={b.userId}
-                        className="rounded bg-surface-2 px-1.5 py-0.5"
-                      >
-                        <PlayerLink userId={b.userId}>
-                          {playerName.get(b.userId) ?? "?"}
-                        </PlayerLink>{" "}
-                        <span className="font-mono tabular-nums">
-                          {b.points}
-                        </span>
-                      </span>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-full border text-xs font-bold tabular-nums", i === 0 ? "border-accent/50 bg-accent/15 text-accent" : "border-line bg-surface-2 text-muted")}>{i + 1}</span>
+                  <Avatar name={managerName.get(s.managerId) ?? "?"} src={managerAvatar.get(s.managerId) ?? null} size={32} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <PlayerLink userId={s.managerId} className="min-w-0 truncate font-semibold">{managerName.get(s.managerId) ?? "?"}</PlayerLink>
+                      {viewer?.id === s.managerId ? <Badge tone="info">You</Badge> : null}
+                    </div>
+                    <span className="text-xs text-muted">{s.breakdown.length} player{s.breakdown.length === 1 ? "" : "s"} scoring</span>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className={cn("font-display text-2xl font-semibold leading-none tabular-nums", i === 0 && "text-accent")}>{s.points}</div>
+                    <div className="mt-1 text-[10px] uppercase tracking-wide text-muted">points</div>
+                  </div>
+                </div>
+                <details className="mt-2 pl-11 text-xs">
+                  <summary className="w-fit cursor-pointer py-1 font-medium text-info underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60">View fantasy five</summary>
+                  <div className="mt-2 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-5">
+                    {s.breakdown.map((b) => (
+                      <div key={b.userId} className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-line bg-surface-2/45 px-2.5 py-2">
+                        <PlayerLink userId={b.userId} className="min-w-0 truncate">{playerName.get(b.userId) ?? "?"}</PlayerLink>
+                        <span className="shrink-0 font-mono tabular-nums">{b.points}</span>
+                      </div>
                     ))}
                   </div>
                 </details>
-              </div>
+              </li>
             ))}
+            </ol>
           </CardBody>
         </Card>
       ) : null}
@@ -410,18 +466,17 @@ export default async function FantasyPage({
 
       {locked && topScorers.length > 0 ? (
         <LeaderBoard
-          title="Top scorers"
-          subtitle={
-            rosters.length > 0
-              ? `fantasy points from every imported game · ownership across ${rosters.length} roster${rosters.length === 1 ? "" : "s"}`
-              : "fantasy points from every imported game · no managers entered this season"
-          }
+          id="scorers"
+          title="Player scores"
+          subtitle="Ranked by total points. Each row shows games played, points per game, strongest contribution, and how often the player was picked."
           rows={topScorers}
           headingLevel={2}
         />
+      ) : locked && gameCount > 0 ? (
+        <EmptyState title="No linked player scores yet" description="Imported games are present, but fantasy needs complete 5v5 box scores with league players linked before points appear." />
       ) : null}
 
-      <section className="space-y-4">
+      <section id="lineup" className="scroll-mt-24 space-y-4">
         <SectionTitle
           aside={
             readOnly
@@ -456,23 +511,24 @@ export default async function FantasyPage({
           />
         ) : locked ? (
           myRoster ? (
-            <Card>
-              <CardBody className="flex flex-wrap gap-2">
+          <Card>
+            <CardBody className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                 {myRoster.picks.map((p) => (
-                  <span
+                  <div
                     key={p.id}
-                    className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 text-sm"
+                    className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-surface-2/50 p-2.5 text-sm"
                   >
                     <Avatar
                       name={p.player.name}
                       src={p.player.avatar}
-                      size={24}
+                      size={28}
                     />
-                    <PlayerLink userId={p.userId}>{p.player.name}</PlayerLink>
-                    <span className="font-mono text-xs tabular-nums text-muted">
-                      {playerPoints.get(p.userId) ?? 0} pts
+                    <span className="min-w-0 flex-1">
+                      <PlayerLink userId={p.userId} className="block truncate font-medium">{p.player.name}</PlayerLink>
+                      <span className="block text-xs text-muted">{playerTotals.get(p.userId)?.games ?? 0} games</span>
                     </span>
-                  </span>
+                    <span className="shrink-0 font-mono text-xs font-semibold tabular-nums">{playerPoints.get(p.userId) ?? 0}<span className="block text-[10px] font-normal text-muted">pts</span></span>
+                  </div>
                 ))}
               </CardBody>
             </Card>
@@ -504,33 +560,25 @@ export default async function FantasyPage({
             />
           )
         ) : (
-          <Card>
-            <CardBody className="space-y-4">
-              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm text-muted">
-                <b className="text-fg">How scoring works:</b> {FANTASY.KILL} per
-                kill, {FANTASY.ASSIST} per assist, {FANTASY.DEATH} per death,
-                and +{FANTASY.WIN} for a win. Economy adds {FANTASY.GPM} per GPM
-                and {FANTASY.LAST_HIT} per last hit in each imported game.
-              </div>
+          <Card tone="feature">
+            <CardBody>
               <ActionForm
                 action={saveFantasyRoster}
                 hidden={{ expectedSeasonId: season.id }}
-                className="space-y-4"
               >
                 <FantasyPicker
                   candidates={candidates}
                   slots={FANTASY.SLOTS}
                   cap={cap}
                   initial={myPicks}
+                  saveLabel={myRoster ? "Update fantasy five" : "Save fantasy five"}
                 />
-                <SubmitButton variant="accent">
-                  {myRoster ? "Update fantasy five" : "Save fantasy five"}
-                </SubmitButton>
               </ActionForm>
             </CardBody>
           </Card>
         )}
       </section>
+      <ScoringGuide />
     </div>
   );
 }

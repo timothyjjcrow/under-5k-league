@@ -1,9 +1,7 @@
 "use client";
 
-// One /leaders board, made explorable: top 5 by default with a "show all"
-// toggle, the signed-in viewer's row highlighted — and pinned below the top 5
-// (with their real rank) when they didn't crack it. The server precomputes
-// every row and label; this component only expands/collapses.
+// The server precomputes every value and rank. This client component only
+// handles the local find-player and expand controls.
 
 import { useId, useState } from "react";
 import {
@@ -34,7 +32,7 @@ export type LeaderBoardRow = {
   hasProfile?: boolean;
 };
 
-const TOP = 5;
+const DEFAULT_PREVIEW_COUNT = 5;
 
 export function LeaderBoard({
   id,
@@ -43,6 +41,8 @@ export function LeaderBoard({
   rows,
   headingLevel = 3,
   scaleMax,
+  valueUnit,
+  previewCount = DEFAULT_PREVIEW_COUNT,
 }: {
   id?: string;
   title: string;
@@ -51,16 +51,38 @@ export function LeaderBoard({
   headingLevel?: 2 | 3;
   /** Fixed upper bound for percentages; count metrics compare to the leader. */
   scaleMax?: number;
+  /** Short context displayed with every value, e.g. "team kills". */
+  valueUnit?: string;
+  /** How many leaders appear before the board expands. */
+  previewCount?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [query, setQuery] = useState("");
   const listId = useId();
+  const searchId = useId();
   const max =
     scaleMax ?? (rows.length ? Math.max(...rows.map((r) => r.value)) : 0);
-  const visible = showAll ? rows : rows.slice(0, TOP);
   const ranks = competitionRanks(rows.map((row) => row.rankValue ?? row.value));
+  const matchedIndexes = query.trim()
+    ? rows.flatMap((row, index) =>
+        `${row.name} ${row.team ?? ""}`
+          .toLocaleLowerCase()
+          .includes(query.trim().toLocaleLowerCase())
+          ? [index]
+          : [],
+      )
+    : [];
+  const visibleIndexes = query.trim()
+    ? matchedIndexes
+    : showAll
+      ? rows.map((_, index) => index)
+      : rows.slice(0, previewCount).map((_, index) => index);
   const viewerIdx = rows.findIndex((r) => r.isViewer);
   const pinnedViewer =
-    !showAll && viewerIdx >= TOP ? rows[viewerIdx] : undefined;
+    !query.trim() && !showAll && viewerIdx >= previewCount
+      ? rows[viewerIdx]
+      : undefined;
 
   return (
     <Card id={id} className="min-w-0 scroll-mt-24 overflow-hidden">
@@ -68,15 +90,66 @@ export function LeaderBoard({
         title={title}
         subtitle={subtitle}
         headingLevel={headingLevel}
+        action={
+          rows.length > previewCount ? (
+            <button
+              type="button"
+              aria-expanded={showSearch}
+              aria-controls={searchId}
+              onClick={() => {
+                setShowSearch((open) => !open);
+                setQuery("");
+              }}
+              className="min-h-11 rounded-lg border border-line px-3 text-xs font-medium text-muted transition-colors hover:border-info/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+            >
+              {showSearch ? "Close search" : "Find player"}
+            </button>
+          ) : undefined
+        }
       />
       <CardBody className="p-0">
+        <div
+          id={searchId}
+          hidden={!showSearch}
+          className="border-b border-line-soft bg-surface-2/25 px-4 py-3 sm:px-5"
+        >
+          <label
+            htmlFor={`${searchId}-input`}
+            className="mb-1.5 block text-xs font-medium text-muted"
+          >
+            Find a player or team in {title.toLocaleLowerCase()}
+          </label>
+          <input
+            id={`${searchId}-input`}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search by name or team"
+            className="min-h-11 w-full rounded-lg border border-line bg-bg px-3 text-sm text-fg placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+          />
+          {query.trim() ? (
+            <p className="mt-1.5 text-xs text-muted" aria-live="polite">
+              {matchedIndexes.length}{" "}
+              {matchedIndexes.length === 1 ? "player" : "players"} found ·
+              original season ranks shown
+            </p>
+          ) : null}
+        </div>
         {rows.length === 0 ? (
-          <p className="px-5 py-4 text-sm text-muted">Not enough games yet.</p>
+          <p className="px-5 py-4 text-sm text-muted">
+            No eligible players for this metric yet.
+          </p>
         ) : (
           <>
             <ul id={listId} className="divide-y divide-line-soft">
-              {visible.map((r, i) => (
-                <BoardRow key={r.id} row={r} rank={ranks[i]} max={max} />
+              {visibleIndexes.map((index) => (
+                <BoardRow
+                  key={rows[index].id}
+                  row={rows[index]}
+                  rank={ranks[index]}
+                  max={max}
+                  valueUnit={valueUnit}
+                />
               ))}
               {pinnedViewer ? (
                 <>
@@ -90,20 +163,26 @@ export function LeaderBoard({
                     row={pinnedViewer}
                     rank={ranks[viewerIdx]}
                     max={max}
+                    valueUnit={valueUnit}
                   />
                 </>
               ) : null}
             </ul>
-            {rows.length > TOP ? (
+            {query.trim() && visibleIndexes.length === 0 ? (
+              <p className="px-5 py-5 text-sm text-muted">
+                No player or team matches that search.
+              </p>
+            ) : null}
+            {rows.length > previewCount && !query.trim() ? (
               <button
                 type="button"
                 aria-expanded={showAll}
                 aria-controls={listId}
-                aria-label={`${showAll ? "Show top 5" : `Show all ${rows.length}`} ${title} leaders`}
+                aria-label={`${showAll ? `Show top ${previewCount}` : `Show all ${rows.length}`} ${title} leaders`}
                 onClick={() => setShowAll((v) => !v)}
                 className="min-h-11 w-full border-t border-line-soft bg-surface-2/20 px-5 py-2 text-center text-xs font-medium text-muted transition-colors hover:bg-surface-2/60 hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
               >
-                {showAll ? "Show top 5 ↑" : `Show all ${rows.length} ↓`}
+                {showAll ? `Show top ${previewCount} ↑` : `Show all ${rows.length} ↓`}
               </button>
             ) : null}
           </>
@@ -117,10 +196,12 @@ function BoardRow({
   row: r,
   rank,
   max,
+  valueUnit,
 }: {
   row: LeaderBoardRow;
   rank: number;
   max: number;
+  valueUnit?: string;
 }) {
   const pct = max > 0 ? Math.max(0, (r.value / max) * 100) : 0;
   return (
@@ -172,6 +253,11 @@ function BoardRow({
           >
             {r.valueLabel}
           </span>
+          {valueUnit ? (
+            <span className="mt-0.5 block text-[10px] leading-tight text-muted">
+              {valueUnit}
+            </span>
+          ) : null}
         </span>
       </div>
       <div
@@ -188,7 +274,7 @@ function BoardRow({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <p className="mt-1.5 text-right text-[10px] leading-relaxed text-muted [overflow-wrap:anywhere]">
+      <p className="mt-1.5 text-right text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
         {r.hint}
       </p>
     </li>
@@ -200,7 +286,7 @@ function LeaderRank({ rank }: { rank: number }) {
   if (rank > 3) {
     return (
       <span className="w-6 shrink-0 text-center text-xs text-muted">
-        {rank}
+        <span className="sr-only">Rank </span>{rank}
       </span>
     );
   }
@@ -217,7 +303,7 @@ function LeaderRank({ rank }: { rank: number }) {
         tone,
       )}
     >
-      {rank}
+      <span className="sr-only">Rank </span>{rank}
     </span>
   );
 }

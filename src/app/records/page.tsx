@@ -1,13 +1,15 @@
-import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
 import {
-  formatGameDuration,
   analyzeRecordGames,
+  formatGameDuration,
   leagueRecords,
   type GameRecord,
   type PlayerRecord,
+  type RecordGame,
 } from "@/lib/records";
 import { heroById } from "@/lib/heroes";
 import { formatNetWorth } from "@/lib/utils";
@@ -23,6 +25,7 @@ import {
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
 import { shareMetadata } from "@/lib/share-metadata";
+import { singleSearchParam } from "@/lib/search-params";
 
 export const metadata = shareMetadata(
   "Record book",
@@ -30,224 +33,253 @@ export const metadata = shareMetadata(
   "/records",
 );
 
-/** Big display value per record key. */
-function playerValue(r: PlayerRecord): string {
-  switch (r.key) {
-    case "netWorth":
-      return formatNetWorth(r.value);
-    case "gpm":
-      return `${r.value} GPM`;
-    default:
-      return String(r.value);
-  }
-}
-
-function gameValue(r: GameRecord): string {
-  switch (r.key) {
-    case "longest":
-    case "shortest":
-      return formatGameDuration(r.value);
-    case "stomp":
-      return `+${r.value}`;
-    default:
-      return String(r.value);
-  }
-}
-
-const PLAYER_BLURB: Record<string, string> = {
-  kills: "kills in a single game",
-  assists: "assists in a single game",
-  netWorth: "net worth at the horn",
-  gpm: "gold per minute",
-  lastHits: "last hits farmed",
-  deaths: "deaths in a single game",
+const number = new Intl.NumberFormat("en-US");
+const PLAYER_GROUPS = [
+  { id: "impact", title: "Impact & team play", description: "The biggest fight, support, and objective performances.", keys: ["kills", "assists", "heroDamage", "towerDamage", "heroHealing"] },
+  { id: "economy", title: "Economy & lane", description: "Gold, experience, and lane control in one game.", keys: ["netWorth", "gpm", "xpm", "lastHits", "denies"] },
+  { id: "wild-card", title: "Wild card", description: "Not every record is one you set out to break.", keys: ["deaths"] },
+] as const;
+const PLAYER_DESCRIPTION: Record<string, string> = {
+  kills: "Finishing blows in a single game",
+  assists: "Helped secure the most kills",
+  heroDamage: "Damage dealt to enemy heroes",
+  towerDamage: "Damage dealt to towers",
+  heroHealing: "Healing delivered to heroes",
+  netWorth: "Gold value at the final horn",
+  gpm: "Gold earned per minute",
+  xpm: "Experience earned per minute",
+  lastHits: "Creeps and units last hit",
+  denies: "Friendly units denied",
+  deaths: "The roughest single outing",
+};
+const GAME_DESCRIPTION: Record<string, string> = {
+  longest: "A true marathon",
+  shortest: "Over in a flash",
+  bloodiest: "Combined team kills",
+  stomp: "Largest final kill margin",
+  closest: "Smallest kill margin, with 20+ total kills",
+  losingKills: "The losing side kept fighting",
 };
 
-const GAME_BLURB: Record<string, string> = {
-  longest: "the marathon",
-  shortest: "over before it started",
-  bloodiest: "combined kills",
-  stomp: "kill-score margin",
-};
+function playerValue(record: PlayerRecord): string {
+  if (record.key === "netWorth") return formatNetWorth(record.value);
+  if (record.key === "gpm") return `${number.format(record.value)} GPM`;
+  if (record.key === "xpm") return `${number.format(record.value)} XPM`;
+  return number.format(record.value);
+}
+function gameValue(record: GameRecord): string {
+  if (record.key === "longest" || record.key === "shortest") return formatGameDuration(record.value);
+  if (record.key === "stomp") return `${record.value} kills`;
+  if (record.key === "closest") return `${record.value} kill${record.value === 1 ? "" : "s"}`;
+  return number.format(record.value);
+}
+function metricCoverage(games: RecordGame[], key: string): number | null {
+  if (!["heroDamage", "towerDamage", "heroHealing", "xpm", "denies"].includes(key)) return null;
+  return games.filter((game) => game.lines.some((line) => {
+    if (!line.userId) return false;
+    switch (key) {
+      case "heroDamage": return line.heroDamage != null;
+      case "towerDamage": return line.towerDamage != null;
+      case "heroHealing": return line.heroHealing != null;
+      case "xpm": return line.xpm != null;
+      case "denies": return line.denies != null;
+      default: return false;
+    }
+  })).length;
+}
 
-export default async function RecordsPage() {
-  const games = await getAllGamesForRecords();
-  const recordAnalysis = analyzeRecordGames(games);
-  const {
-    invalidLines,
-    malformedGames,
-    unusableGames,
-    unknownHeroLines,
-    unmappedLines,
-    invalidGameMetrics,
-  } = recordAnalysis.diagnostics;
-
-  // Game records name the matchup. Home/away come off the match — radiant/dire
-  // sides can swap between games of a series, so the kill score stays
-  // side-agnostic ("final score") rather than claiming an orientation.
-  const matchupOf = new Map(
-    games.map((g) => [
-      g.matchId,
-      `${g.match.homeTeam.name} vs ${g.match.awayTeam.name}`,
-    ]),
+type User = { id: string; name: string; avatar: string | null };
+function PlayerRecordCard({
+  record, holder, season, coverage, totalGames,
+}: {
+  record: PlayerRecord;
+  holder?: User;
+  season: string;
+  coverage: number | null;
+  totalGames: number;
+}) {
+  const hero = heroById(record.heroId);
+  return (
+    <Card className="h-full overflow-hidden">
+      <CardBody className="flex h-full flex-col">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">{record.emoji} {record.title}</h3>
+            <p className="mt-2 font-display text-3xl font-bold leading-none tabular-nums text-fg sm:text-4xl">{playerValue(record)}</p>
+          </div>
+          <span
+            aria-label={record.won ? "Won the game" : "Lost the game"}
+            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${record.won ? "bg-success/15 text-success" : "bg-surface-2 text-muted"}`}
+          >{record.won ? "W" : "L"}</span>
+        </div>
+        <p className="mt-2 text-sm text-muted">{PLAYER_DESCRIPTION[record.key]}</p>
+        <div className="mt-5 flex min-w-0 items-center gap-3 border-t border-line-soft pt-4">
+          <Avatar name={holder?.name ?? "Former player"} src={holder?.avatar} size={32} />
+          <div className="min-w-0 flex-1">
+            {holder ? (
+              <PlayerLink userId={record.userId} className="block truncate text-sm font-semibold">{holder.name}</PlayerLink>
+            ) : <span className="block truncate text-sm font-semibold text-muted">Former player</span>}
+            <p className="truncate text-xs text-muted">{season}</p>
+          </div>
+          {hero ? <HeroIcon hero={hero} size={32} /> : null}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-xs">
+          <span className="text-muted">{hero?.name ?? `Hero #${record.heroId}`}{coverage != null ? ` · reported in ${coverage}/${totalGames} games` : ""}</span>
+          <Link href={`/matches/${record.matchId}`} className="font-semibold text-info underline-offset-2 hover:underline focus-visible:underline">View match →</Link>
+        </div>
+      </CardBody>
+    </Card>
   );
+}
 
-  // Shared with the profile page's record-holder chips — one mapping, no drift.
-  const book = leagueRecords(recordAnalysis.games);
-  if (book.players.length === 0 && book.games.length === 0) {
-    return (
-      <div className="space-y-6">
-        <PageTitle title="Record book" />
-        <StatsNav active="records" />
-        <StatsDataNotice
-          invalidLines={invalidLines}
-          malformedGames={malformedGames}
-          unusableGames={unusableGames}
-          unknownHeroLines={unknownHeroLines}
-          unmappedLines={unmappedLines}
-          invalidGameMetrics={invalidGameMetrics}
-        />
-        <EmptyState
-          title="No records yet"
-          description={
-            games.length > 0
-              ? "Games are stored, but none has a complete, valid 5v5 box score that can enter the record book. Use the data notice above to repair the imports."
-              : "All-time records appear once match games are imported."
-          }
-        />
-      </div>
-    );
-  }
-
-  const [users, seasons] = await Promise.all([
-    prisma.user.findMany({
-      where: { id: { in: [...new Set(book.players.map((r) => r.userId))] } },
-      select: { id: true, name: true, avatar: true },
-    }),
-    prisma.season.findMany({ select: { id: true, name: true } }),
+export default async function RecordsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ season?: string | string[] }>;
+}) {
+  const [games, seasons, query] = await Promise.all([
+    getAllGamesForRecords(),
+    prisma.season.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, name: true } }),
+    searchParams,
   ]);
-  const userOf = new Map(users.map((u) => [u.id, u]));
-  const seasonName = new Map(seasons.map((s) => [s.id, s.name]));
+  const seasonParam = singleSearchParam(query.season);
+  if (seasonParam === null) notFound();
+  const selectedSeason = seasons.find((season) => season.id === seasonParam);
+  if (seasonParam && !selectedSeason) notFound();
+  const scopedGames = selectedSeason
+    ? games.filter((game) => game.match.seasonId === selectedSeason.id)
+    : games;
+  const analysis = analyzeRecordGames(scopedGames);
+  const eligibleGames = analysis.games;
+  const book = leagueRecords(eligibleGames);
+  const userIds = [...new Set(book.players.map((record) => record.userId))];
+  const users = userIds.length
+    ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, avatar: true } })
+    : [];
+  const userOf = new Map(users.map((user) => [user.id, user]));
+  const seasonName = new Map(seasons.map((season) => [season.id, season.name]));
+  const matchupOf = new Map(games.map((game) => [
+    game.matchId,
+    `${game.match.homeTeam.name} vs ${game.match.awayTeam.name}`,
+  ]));
+  const featured = book.players.find((record) => record.key === "kills");
+  const holderCount = new Set(book.players.map((record) => record.userId)).size;
+  const categoryCount = book.players.length + book.games.length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       <PageTitle
         title="Record book"
-        subtitle="All-time single-game records — every season counts"
+        subtitle="The biggest single-game performances and the matches that made league history."
+        action={<Link href="/hall-of-fame" className="text-sm font-semibold text-info hover:underline">Career legends →</Link>}
       />
-      <StatsNav active="records" />
-      <StatsDataNotice
-        invalidLines={invalidLines}
-        malformedGames={malformedGames}
-        unusableGames={unusableGames}
-        unknownHeroLines={unknownHeroLines}
-        unmappedLines={unmappedLines}
-        invalidGameMetrics={invalidGameMetrics}
-      />
-      <p className="text-xs text-muted">
-        A tied record stays with the first player or game to set it; legacy
-        imports without a start time sort after known chronology.
-      </p>
+      <StatsNav active="records" seasonId={selectedSeason?.id} />
+      <StatsDataNotice {...analysis.diagnostics} />
 
-      {book.players.length > 0 && (
-        <section className="space-y-3">
-          <SectionTitle>Player records</SectionTitle>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {book.players.map((r) => {
-              const holder = userOf.get(r.userId);
-              const hero = heroById(r.heroId);
-              return (
-                <Card key={r.key}>
-                  <CardBody>
-                    <h3 className="text-xs uppercase tracking-wide text-muted">
-                      {r.emoji} {r.title}
-                    </h3>
-                    <div className="mt-1 font-display text-3xl font-bold tabular-nums">
-                      {playerValue(r)}
-                    </div>
-                    <div className="mt-0.5 text-xs text-muted">
-                      {PLAYER_BLURB[r.key]}
-                    </div>
-                    <div className="mt-3 flex min-w-0 items-center gap-2">
-                      {holder && (
-                        <Avatar
-                          name={holder.name}
-                          src={holder.avatar}
-                          size={24}
-                        />
-                      )}
-                      {holder ? (
-                        <PlayerLink
-                          userId={r.userId}
-                          className="min-w-0 truncate text-sm font-medium"
-                        >
-                          {holder.name}
-                        </PlayerLink>
-                      ) : (
-                        <span className="min-w-0 truncate text-sm font-medium text-muted">
-                          Former player
-                        </span>
-                      )}
-                      {hero ? (
-                        <HeroIcon hero={hero} size={22} />
-                      ) : (
-                        <span className="shrink-0 text-xs text-muted">
-                          Hero #{r.heroId}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-2 text-xs text-muted">
-                      {seasonName.get(r.seasonId) ?? "—"} ·{" "}
-                      <Link
-                        href={`/matches/${r.matchId}`}
-                        className="underline-offset-2 hover:text-info hover:underline"
-                      >
-                        {r.won ? "won it, too" : "lost the game anyway"}
-                      </Link>
-                    </div>
-                  </CardBody>
-                </Card>
-              );
-            })}
+      <section className="overflow-hidden rounded-2xl border border-accent/30 bg-gradient-to-br from-surface-3 via-surface to-bg p-5 sm:p-7">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-accent">{selectedSeason ? `${selectedSeason.name} records` : "All-time archive"}</p>
+            <h2 className="mt-2 max-w-2xl font-display text-3xl font-bold leading-tight sm:text-4xl">
+              {featured
+                ? `${userOf.get(featured.userId)?.name ?? "A former player"} set the kills mark at ${featured.value}.`
+                : "Every record starts with one complete game."}
+            </h2>
+            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">
+              Browse by play style, then open the match to see the performance in context. Only complete, validated 5v5 imports count.
+            </p>
           </div>
-        </section>
-      )}
-
-      {book.games.length > 0 && (
-        <section className="space-y-3">
-          <SectionTitle>Game records</SectionTitle>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {book.games.map((r) => (
-              <Card key={r.key}>
-                <CardBody>
-                  <h3 className="text-xs uppercase tracking-wide text-muted">
-                    {r.emoji} {r.title}
-                  </h3>
-                  <div className="mt-1 font-display text-3xl font-bold tabular-nums">
-                    {gameValue(r)}
-                  </div>
-                  <div className="mt-0.5 text-xs text-muted">
-                    {GAME_BLURB[r.key]}
-                  </div>
-                  {matchupOf.has(r.matchId) && (
-                    <div className="mt-3 text-sm font-medium">
-                      {matchupOf.get(r.matchId)}
-                    </div>
-                  )}
-                  <div className="mt-2 text-xs text-muted">
-                    {seasonName.get(r.seasonId) ?? "—"} ·{" "}
-                    <Link
-                      href={`/matches/${r.matchId}`}
-                      className="underline-offset-2 hover:text-info hover:underline"
-                    >
-                      kill score {r.score}
-                    </Link>
-                  </div>
-                </CardBody>
-              </Card>
+          <div className="grid grid-cols-3 gap-3 text-center lg:min-w-72">
+            {([[eligibleGames.length, "games"], [categoryCount, "marks"], [holderCount, "holders"]] as const).map(([value, label]) => (
+              <div key={label} className="rounded-xl border border-line bg-bg/45 px-3 py-3">
+                <div className="font-display text-2xl font-bold tabular-nums">{value}</div>
+                <div className="text-xs text-muted">{label}</div>
+              </div>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
+
+      <div className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-4 sm:flex-row sm:items-end sm:justify-between">
+        <form method="get" action="/records" className="flex flex-wrap items-end gap-2">
+          <label className="min-w-48 flex-1 text-xs font-semibold uppercase tracking-wide text-muted sm:flex-none">
+            Season
+            <select name="season" defaultValue={selectedSeason?.id ?? ""} className="mt-1.5 block h-11 w-full rounded-lg border border-line bg-surface-2 px-3 text-sm font-medium normal-case tracking-normal text-fg sm:min-w-52">
+              <option value="">All seasons</option>
+              {seasons.map((season) => <option key={season.id} value={season.id}>{season.name}</option>)}
+            </select>
+          </label>
+          <button type="submit" className="h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-bg hover:bg-accent/90">View records</button>
+        </form>
+        <p className="text-xs leading-relaxed text-muted">Ties belong to the first achiever. Legacy games without a known start time sort last.</p>
+      </div>
+
+      {categoryCount === 0 ? (
+        <EmptyState
+          title={selectedSeason ? `No ${selectedSeason.name} records yet` : "No records yet"}
+          description={scopedGames.length > 0
+            ? "Stored games need a complete, valid 5v5 box score before they enter the record book."
+            : "Records appear after league games are imported."}
+        />
+      ) : (
+        <>
+          <nav aria-label="Record categories" className="flex flex-wrap gap-2">
+            {[
+              ...PLAYER_GROUPS.filter((group) => book.players.some((record) => group.keys.some((key) => key === record.key))).map((group) => ({ id: group.id, label: group.title })),
+              ...(book.games.length ? [{ id: "matches", label: "Match stories" }] : []),
+            ].map((section) => (
+              <a key={section.id} href={`#${section.id}`} className="rounded-full border border-line bg-surface px-3 py-2 text-sm font-medium text-muted hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{section.label} ↓</a>
+            ))}
+          </nav>
+
+          {PLAYER_GROUPS.map((group) => {
+            const records = group.keys
+              .map((key) => book.players.find((record) => record.key === key))
+              .filter((record): record is PlayerRecord => Boolean(record));
+            if (!records.length) return null;
+            return (
+              <section id={group.id} key={group.id} className="scroll-mt-24 space-y-3">
+                <SectionTitle aside={group.description}>{group.title}</SectionTitle>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  {records.map((record) => (
+                    <PlayerRecordCard
+                      key={record.key}
+                      record={record}
+                      holder={userOf.get(record.userId)}
+                      season={seasonName.get(record.seasonId) ?? "Unknown season"}
+                      coverage={metricCoverage(eligibleGames, record.key)}
+                      totalGames={eligibleGames.length}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+
+          {book.games.length > 0 && (
+            <section id="matches" className="scroll-mt-24 space-y-3">
+              <SectionTitle aside="The games behind the numbers">Match stories</SectionTitle>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {book.games.map((record) => (
+                  <Card key={record.key}>
+                    <CardBody className="flex h-full flex-col gap-3 sm:flex-row sm:items-center">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">{record.emoji} {record.title}</h3>
+                        <p className="mt-1 text-sm text-muted">{GAME_DESCRIPTION[record.key]}</p>
+                        <p className="mt-3 truncate text-sm font-semibold">{matchupOf.get(record.matchId) ?? "League match"}</p>
+                        <p className="text-xs text-muted">{seasonName.get(record.seasonId) ?? "Unknown season"} · final score {record.score}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center justify-between gap-4 sm:block sm:text-right">
+                        <p className="font-display text-2xl font-bold tabular-nums sm:text-3xl">{gameValue(record)}</p>
+                        <Link href={`/matches/${record.matchId}`} className="text-xs font-semibold text-info underline-offset-2 hover:underline focus-visible:underline">View match →</Link>
+                      </div>
+                    </CardBody>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
     </div>
   );

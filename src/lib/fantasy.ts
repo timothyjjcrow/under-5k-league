@@ -11,18 +11,72 @@ export type FantasyStatLine = {
   assists: number;
   gpm?: number | null;
   lastHits?: number | null;
+  heroDamage?: number | null;
+  towerDamage?: number | null;
+  heroHealing?: number | null;
+  denies?: number | null;
 };
 
-/** Points one game line is worth. */
-export function fantasyPoints(stat: FantasyStatLine, won: boolean): number {
-  const raw =
+export type FantasyImpact = "economy" | "playmaking" | "pressure";
+
+export type FantasyScore = {
+  points: number;
+  base: number;
+  bonus: number;
+  impact: FantasyImpact | null;
+};
+
+/**
+ * Every position has a path to the same eight-point contribution bonus.
+ * Only the strongest path counts: a carry cannot stack farm and damage while
+ * supports can reach the cap through assists or healing, and offlaners through
+ * hero/tower damage or denies. We use box-score production from this game,
+ * rather than self-reported preferred roles, so flex players score what they
+ * actually did. Missing optional OpenDota fields contribute zero.
+ */
+export function fantasyScore(stat: FantasyStatLine, won: boolean): FantasyScore {
+  const base =
     stat.kills * FANTASY.KILL +
     stat.assists * FANTASY.ASSIST +
     stat.deaths * FANTASY.DEATH +
-    (stat.gpm ?? 0) * FANTASY.GPM +
-    (stat.lastHits ?? 0) * FANTASY.LAST_HIT +
     (won ? FANTASY.WIN : 0);
-  return Math.round(raw * 10) / 10;
+  const contributions: { impact: FantasyImpact; value: number }[] = [
+    {
+      impact: "economy",
+      value:
+        Math.max(0, (stat.gpm ?? 0) - FANTASY.ECONOMY_GPM_FLOOR) *
+          FANTASY.ECONOMY_GPM +
+        (stat.lastHits ?? 0) * FANTASY.ECONOMY_LAST_HIT,
+    },
+    {
+      impact: "playmaking",
+      value:
+        stat.assists * FANTASY.PLAYMAKING_ASSIST +
+        (stat.heroHealing ?? 0) * FANTASY.PLAYMAKING_HEALING,
+    },
+    {
+      impact: "pressure",
+      value:
+        (stat.heroDamage ?? 0) * FANTASY.PRESSURE_HERO_DAMAGE +
+        (stat.towerDamage ?? 0) * FANTASY.PRESSURE_TOWER_DAMAGE +
+        (stat.denies ?? 0) * FANTASY.PRESSURE_DENY,
+    },
+  ];
+  const strongest = contributions.reduce((best, current) =>
+    current.value > best.value ? current : best,
+  );
+  const bonus = Math.min(FANTASY.BONUS_CAP, Math.max(0, strongest.value));
+  return {
+    points: Math.round((base + bonus) * 10) / 10,
+    base: Math.round(base * 10) / 10,
+    bonus: Math.round(bonus * 10) / 10,
+    impact: bonus > 0 ? strongest.impact : null,
+  };
+}
+
+/** Points one game line is worth; shared by fantasy, MVPs, and weekly honors. */
+export function fantasyPoints(stat: FantasyStatLine, won: boolean): number {
+  return fantasyScore(stat, won).points;
 }
 
 /**
@@ -103,20 +157,49 @@ export type FantasyGame = {
 };
 
 /** Total fantasy points per league player across the season's games. */
-export function pointsByPlayer(games: FantasyGame[]): Map<string, number> {
-  const totals = new Map<string, number>();
+export type FantasyPlayerTotal = {
+  points: number;
+  games: number;
+  wins: number;
+  impacts: Record<FantasyImpact, number>;
+};
+
+export function fantasyTotalsByPlayer(
+  games: FantasyGame[],
+): Map<string, FantasyPlayerTotal> {
+  const totals = new Map<string, FantasyPlayerTotal>();
   for (const g of games) {
     for (const p of g.players) {
       if (!p.userId) continue;
       const won = p.isRadiant === g.radiantWin;
-      totals.set(
-        p.userId,
-        Math.round(((totals.get(p.userId) ?? 0) + fantasyPoints(p, won)) * 10) /
-          10,
-      );
+      const score = fantasyScore(p, won);
+      const previous = totals.get(p.userId) ?? {
+        points: 0,
+        games: 0,
+        wins: 0,
+        impacts: { economy: 0, playmaking: 0, pressure: 0 },
+      };
+      totals.set(p.userId, {
+        points: Math.round((previous.points + score.points) * 10) / 10,
+        games: previous.games + 1,
+        wins: previous.wins + Number(won),
+        impacts: {
+          ...previous.impacts,
+          ...(score.impact
+            ? { [score.impact]: previous.impacts[score.impact] + 1 }
+            : {}),
+        },
+      });
     }
   }
   return totals;
+}
+
+/** Total fantasy points per league player across the season's games. */
+export function pointsByPlayer(games: FantasyGame[]): Map<string, number> {
+  return new Map(
+    [...fantasyTotalsByPlayer(games)].map(([id, total]) => [id, total.points]),
+  );
 }
 
 /**
