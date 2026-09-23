@@ -50,10 +50,19 @@ export function scheduledPasses(logs, since) {
   const recent = logs.filter((log) => log.timestamp >= since);
   if (recent.some((log) => log.level === "error" || log.level === "fatal" || log.responseStatusCode >= 500))
     throw new Error("Fresh runtime errors require release review");
-  const attempts = recent.filter((log) => log.requestPath === "/api/cron/automation")
-    .sort((a, b) => a.timestamp - b.timestamp);
-  const last = attempts.slice(-2);
-  return last.length === 2 && last.every((log) => log.responseStatusCode === 200) &&
+  // Vercel's CLI can return the same request more than once. Count distinct
+  // scheduler requests, while retaining every row in the error scan above.
+  const attempts = new Map();
+  for (const log of recent.filter((entry) => entry.requestPath === "/api/cron/automation")) {
+    const key = log.id ?? log.timestamp;
+    const prior = attempts.get(key);
+    attempts.set(key, {
+      timestamp: log.timestamp,
+      success: log.responseStatusCode === 200 && (prior?.success ?? true),
+    });
+  }
+  const last = [...attempts.values()].sort((a, b) => a.timestamp - b.timestamp).slice(-2);
+  return last.length === 2 && last.every((log) => log.success) &&
     last[1].timestamp - last[0].timestamp >= 30_000 && last[1].timestamp - last[0].timestamp <= 90_000
     ? last.map((log) => new Date(log.timestamp).toISOString()) : null;
 }

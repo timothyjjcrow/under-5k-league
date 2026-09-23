@@ -95,6 +95,20 @@ test("scheduler verification requires two consecutive successful minute slots an
   assert.equal(scheduledPasses([log(60_000), log(120_000)], 0).length, 2);
   assert.throws(() => scheduledPasses([log(60_000), log(120_000, 500)], 0));
 });
+test("scheduler verification counts duplicate provider rows once without hiding failures", () => {
+  const first = { id: "request-one", timestamp: 60_000, responseStatusCode: 200, requestPath: "/api/cron/automation" };
+  const second = { id: "request-two", timestamp: 120_000, responseStatusCode: 200, requestPath: "/api/cron/automation" };
+  assert.deepEqual(scheduledPasses([first, second, first, second], 0), [
+    new Date(first.timestamp).toISOString(), new Date(second.timestamp).toISOString(),
+  ]);
+  assert.deepEqual(scheduledPasses([
+    { ...first, id: undefined }, { ...second, id: undefined },
+    { ...first, id: undefined }, { ...second, id: undefined },
+  ], 0), [new Date(first.timestamp).toISOString(), new Date(second.timestamp).toISOString()]);
+  assert.equal(scheduledPasses([first, first], 0), null);
+  assert.equal(scheduledPasses([first, second, { ...second, responseStatusCode: 202 }], 0), null);
+  assert.throws(() => scheduledPasses([first, second, { ...second, responseStatusCode: 500 }], 0), /runtime errors/);
+});
 test("CI must cover the exact commit and both regional browser suites", () => {
   const run = { head_sha: sha, status: "completed", conclusion: "success" };
   const jobs = ["classify release impact", "audit, lint, types, build, tests", "playwright e2e (us)", "playwright e2e (eu)", "integration on postgres", ...[1, 2, 3, 4].map((n) => `mutation guard ${n}/4`)].map((name) => ({ name, status: "completed", conclusion: "success" }));
