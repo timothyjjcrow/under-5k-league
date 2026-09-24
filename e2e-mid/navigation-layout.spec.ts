@@ -50,7 +50,8 @@ test.afterAll(async () => {
 });
 
 async function expectHeaderFits(page: Page) {
-  const issues = await page.locator("header > div").evaluate((row) => {
+  const headerRow = page.getByRole("banner").locator(":scope > div");
+  const issues = await headerRow.evaluate((row) => {
     const controls = [...row.querySelectorAll("a, button")]
       .map((element) => ({
         label:
