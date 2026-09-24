@@ -8,6 +8,42 @@ import {
 
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
+for (const archived of [false, true]) {
+  test(`feature tour preserves history ${archived ? "when the next season opens" : "after the final"}`, async ({
+    page,
+  }) => {
+    const assertNoErrors = trackPageErrors(page);
+    await reseed(page, "complete", archived);
+    await page.goto("/features");
+    const directory = page.getByRole("region", {
+      name: "Everything the league offers.",
+    });
+    await expect(directory.getByRole("article")).toHaveCount(32);
+    await expect(
+      directory.getByRole("link", { name: "Season history", exact: true }),
+    ).toHaveAttribute("href", "/seasons");
+    await expect(
+      directory.getByRole("link", { name: "Hall of Fame", exact: true }),
+    ).toHaveAttribute("href", "/hall-of-fame");
+    await expect(
+      page.getByRole("heading", {
+        name: archived ? "Signups are open" : "Ready for next season?",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Sign up with Steam" }),
+    ).toHaveCount(archived ? 2 : 0);
+    await expect(page.locator('main a[href="/draft"]')).toHaveCount(0);
+    await expect(
+      directory.getByRole("link", { name: "Playoff race", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      directory.getByRole("link", { name: "Season recap", exact: true }),
+    ).toHaveCount(archived ? 0 : 1);
+    assertNoErrors();
+  });
+}
+
 async function expireFixtureCache(page: Page) {
   const cache = await page.request.post("/api/test/cache");
   expect(cache.ok()).toBe(true);
@@ -401,6 +437,19 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   ).toBeVisible();
   await expectNoHorizontalOverflow(page, "/ offseason home");
 
+  await page.goto("/features");
+  await expect(
+    page.getByRole("heading", { name: "Ready for next season?" }),
+  ).toBeVisible();
+  await expect(page.locator('main a[href="/recap"]')).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Sign up with Steam" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Find an inhouse game" }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/features offseason");
+
   for (const [path, heading] of [
     ["/players", "Players"],
     ["/teams", "Teams"],
@@ -409,7 +458,9 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     await expect(
       page.getByRole("heading", { name: heading, exact: true }),
     ).toBeVisible();
-    await expect(page.getByText("League offseason", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("League offseason", { exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByRole("link", { name: "Season history" }),
     ).toBeVisible();
@@ -435,7 +486,9 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Create season" }).click();
   await expect(page.getByText(/Created Season 10 \(audit\)/)).toBeVisible();
-  await expect(page.getByText(/Season 10 \(audit\) — phase control/)).toBeVisible();
+  await expect(
+    page.getByText(/Season 10 \(audit\) — phase control/),
+  ).toBeVisible();
 
   await page.goto("/seasons");
   await expect(

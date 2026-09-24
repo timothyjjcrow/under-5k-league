@@ -1,25 +1,17 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
-import { heroById } from "@/lib/heroes";
+import { DiscordButton, buttonClasses } from "@/components/ui";
 import {
-  Badge,
-  Card,
-  DiscordButton,
-  HeroIcon,
-  KDA,
-  TeamCrest,
-  buttonClasses,
-  textLink,
-} from "@/components/ui";
-import { cn } from "@/lib/utils";
-import {
+  HARD_MMR_CEILING,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
-  type SeasonStatus,
+  SOFT_MMR_LIMIT,
 } from "@/lib/constants";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   featureAvailability,
@@ -28,330 +20,87 @@ import {
   type FeatureGate,
 } from "@/lib/features-lifecycle";
 import { draftPhasePresentation } from "@/lib/season-copy";
+import { FeatureDirectory } from "./feature-directory";
+import { TOUR_GROUPS } from "./tour-content";
+import {
+  DraftPreview,
+  MatchPreview,
+  RacePreview,
+  ReportPreview,
+} from "./tour-previews";
+import styles from "./features.module.css";
 
 export const metadata = shareMetadata(
-  "Features",
-  "Everything waiting inside the league — auction draft night, hero report cards, scouting dossiers, a playoff scenario engine, fantasy, pick'em, inhouses, and a record book that never forgets.",
+  "Feature tour",
+  `Find your team in ${LEAGUE_CONFIG.name}. Explore the auction draft, weekly Dota 2 matches, player stats, scouting, fantasy, inhouses, and the stories that stay with every season.`,
   "/features",
 );
 
-// The tour is static content, but its destinations are not. Each linked
-// feature declares the lifecycle gate that makes its real page useful.
-type Feature = {
-  icon: string;
-  title: string;
-  desc: string;
-  href?: string;
-  gate?: FeatureGate;
-};
+const CHAPTERS = [
+  { id: "draft", label: "The draft" },
+  { id: "match-night", label: "Match night" },
+  { id: "your-game", label: "Your game" },
+  { id: "more-dota", label: "More Dota" },
+  { id: "history", label: "The history" },
+  { id: "all-features", label: "All features" },
+  { id: "join", label: "How to join" },
+];
 
-type Section = {
+function TourLink({
+  href,
+  children,
+  availability,
+}: {
+  href: string;
+  children: ReactNode;
+  availability?: FeatureAvailability;
+}) {
+  return !availability || availability.available ? (
+    <Link href={href} prefetch={false} className={styles.textLink}>
+      {children}
+      <span aria-hidden="true">↗</span>
+    </Link>
+  ) : (
+    <p className={styles.comingUp}>{availability.unavailableReason}</p>
+  );
+}
+
+function ChapterHeading({
+  number,
+  eyebrow,
+  id,
+  children,
+}: {
+  number: string;
+  eyebrow: string;
   id: string;
-  kicker: string;
-  title: string;
-  blurb: string;
-  phases: SeasonStatus[]; // which season phases this chapter covers
-  features: Feature[];
-};
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <p className={styles.eyebrow}>
+        <span>{number}</span>
+        {eyebrow}
+      </p>
+      <h2 id={id} className={styles.chapterTitle}>
+        {children}
+      </h2>
+    </>
+  );
+}
 
-const SECTIONS: Section[] = [
-  {
-    id: "always-on",
-    kicker: "Between seasons",
-    title: "The league never goes offline",
-    blurb: "No season required — there's always something happening.",
-    phases: [],
-    features: [
-      {
-        icon: "⚔️",
-        title: "Inhouses",
-        desc: "Queue with nine players, accept the match, vote how captains are chosen, draft, play. Results auto-detect from Dota and the Elo ladder updates itself.",
-        href: "/inhouse",
-      },
-      {
-        icon: "🪪",
-        title: "Player profiles",
-        desc: "Seasons, teams, trophies, achievements, career stats, report card — everything you've ever done in the league, on one page.",
-        href: "/players",
-      },
-      {
-        icon: "⚖️",
-        title: "Player comparison",
-        desc: "Any two players, head to head: rivalry record, career numbers side by side, signature heroes. Settle the argument.",
-        href: "/players/compare",
-      },
-      {
-        icon: "🏛️",
-        title: "Hall of Fame",
-        desc: "Career titles, series wins, all-time fantasy points, the league's best oracle. Legacies, ranked.",
-        href: "/hall-of-fame",
-      },
-      {
-        icon: "📜",
-        title: "Record book",
-        desc: "Most kills in a game. Fastest win. Biggest stomp. Records stand across every season until someone breaks them.",
-        href: "/records",
-      },
-      {
-        icon: "📣",
-        title: "Discord integration",
-        desc: "Signups, draft sales, results, playoffs, champions, and league news can be announced automatically to keep the league channel in the loop.",
-      },
-    ],
-  },
-  {
-    id: "signups",
-    kicker: "1 — Signups",
-    title: "Getting in takes about a minute",
-    blurb: "No new account. No password. Just sign in with Steam.",
-    phases: ["SIGNUPS"],
-    features: [
-      {
-        icon: "🎮",
-        title: "Steam login",
-        desc: "Your profile, avatar, and ranked medal import automatically.",
-      },
-      {
-        icon: "📝",
-        title: "Tell captains about yourself",
-        desc: "Preferred roles. Favorite heroes. A public note to the drafters. Everything is visible in the player pool before draft night.",
-      },
-      {
-        icon: "🔁",
-        title: "Returning players",
-        desc: "Your previous info is already filled in. Update what changed. Done.",
-      },
-      {
-        icon: "🧢",
-        title: "Built for Under 4.5K",
-        desc: "4.5K is a soft limit, not a hard cap. Over it? We review case by case — the real line is keeping out Immortals and anyone past 5K.",
-      },
-    ],
-  },
-  {
-    id: "draft",
-    kicker: "2 — Draft night",
-    title: "Every player is up for auction",
-    blurb:
-      "Limited budgets. Live bids. Spend too early — or wait too long — and someone steals your player.",
-    phases: ["DRAFT"],
-    features: [
-      {
-        icon: "🔨",
-        title: "Live bidding",
-        desc: "A server-authoritative auction clock. Every nomination matters; every bid changes the room.",
-        href: "/draft",
-        gate: "DRAFT_ROOM",
-      },
-      {
-        icon: "⚖️",
-        title: "Balanced budgets",
-        desc: "Lower-MMR captains get bigger budgets, scaled to the captain gap. Every team has a real shot.",
-      },
-      {
-        icon: "🔎",
-        title: "A scoutable pool",
-        desc: "Search, role filters, MMR sorting, ranked medals, and every player's note to captains — right in the draft room.",
-      },
-      {
-        icon: "🧾",
-        title: "Draft recap",
-        desc: "Biggest spend. Best value steal. Budget disasters. The draft remembers everything.",
-        href: "/teams",
-        gate: "POST_AUCTION",
-      },
-    ],
-  },
-  {
-    id: "season",
-    kicker: "3 — Regular season",
-    title: "You play Dota. We'll handle the league.",
-    blurb:
-      "A match ends. Box scores, standings, stats, awards, storylines — everything updates on its own.",
-    phases: ["REGULAR_SEASON"],
-    features: [
-      {
-        icon: "📊",
-        title: "Automatic box scores",
-        desc: "Heroes, KDA, net worth, MVP of every game — pulled straight from Dota. Nobody types in results.",
-        href: "/schedule",
-        gate: "REGULAR_RESULTS",
-      },
-      {
-        icon: "🎓",
-        title: "Hero report cards",
-        desc: "Every performance graded S to D against the world's players on that hero. Know exactly what to work on.",
-        href: "/leaders",
-        gate: "REGULAR_RESULTS",
-      },
-      {
-        icon: "🕵️",
-        title: "Scouting reports",
-        desc: "Before every match: the enemy's comfort heroes, a ban board, and how fast their games run. Know your enemy.",
-        href: "/schedule",
-        gate: "ACTIVE_SEASON",
-      },
-      {
-        icon: "🎯",
-        title: "The scenario engine",
-        desc: 'Win, draw or loss: see direct qualification, tiebreaker paths and elimination using feasible scores and official standings rules. Result combinations are not predictive odds.',
-        href: "/schedule",
-        gate: "REGULAR_ONLY",
-      },
-      {
-        icon: "🗺️",
-        title: "The season grid",
-        desc: "Who's played who, at a glance — every meeting's result in one map of the season.",
-        href: "/schedule",
-        gate: "REGULAR_RESULTS",
-      },
-      {
-        icon: "📈",
-        title: "Power rankings",
-        desc: "Standings tell you who won. Elo-based power rankings tell everyone who looks dangerous.",
-        href: "/teams",
-        gate: "REGULAR_RESULTS",
-      },
-      {
-        icon: "🥇",
-        title: "Weekly honors & leaders",
-        desc: "Player and Team of the Week crowned automatically, plus leaderboards for every stat that matters.",
-        href: "/leaders",
-        gate: "REGULAR_RESULTS",
-      },
-      {
-        icon: "🧙",
-        title: "Fantasy",
-        desc: "Draft your fantasy five under an MMR salary cap. Score points from real league games all season.",
-        href: "/fantasy",
-        gate: "POST_AUCTION",
-      },
-      {
-        icon: "🔮",
-        title: "Pick'em",
-        desc: "Predict every result, watch the community split, climb the oracle board. Trash talk included.",
-        href: "/pickem",
-        gate: "POST_AUCTION",
-      },
-      {
-        icon: "🧪",
-        title: "Hero meta report",
-        desc: "The league's own meta: pick rates, win rates, most-contested heroes, and who owns each one.",
-        href: "/meta",
-        gate: "REGULAR_RESULTS",
-      },
-      {
-        icon: "✅",
-        title: "Match-night logistics",
-        desc: "One-click check-ins, standins for no-shows, captain-to-captain rescheduling. The admin never has to chase anyone.",
-        href: "/schedule",
-        gate: "ACTIVE_SEASON",
-      },
-      {
-        icon: "📅",
-        title: "Calendar feed",
-        desc: "Download the active season's .ics feed for every scheduled match, with stable event IDs for calendar imports.",
-        href: "/schedule",
-        gate: "ACTIVE_SEASON",
-      },
-    ],
-  },
-  {
-    id: "playoffs",
-    kicker: "4 — Playoffs",
-    title: "Win — or your season is over",
-    blurb:
-      "Single elimination. Seeds locked from the final table. No second chances.",
-    phases: ["PLAYOFFS"],
-    features: [
-      {
-        icon: "🏆",
-        title: "The bracket",
-        desc: "A classic tournament tree — two wings converging on the grand final, updating live as winners advance. Tap a team to trace its run.",
-        href: "/schedule",
-        gate: "PLAYOFF_RESULTS",
-      },
-    ],
-  },
-  {
-    id: "history",
-    kicker: "5 — League history",
-    title: "A champion joins league history",
-    blurb:
-      "The final result stays readable after the live season ends — for returning players and future rivals.",
-    phases: ["COMPLETE"],
-    features: [
-      {
-        icon: "🎬",
-        title: "Season recap",
-        desc: "Awards, superlatives, the championship run — one page that tells the season's story.",
-        href: "/recap",
-        gate: "COMPLETE",
-      },
-      {
-        icon: "📚",
-        title: "Permanent history",
-        desc: "The draft, the standings, the bracket, the champion — archived forever, browsable season by season.",
-        href: "/seasons",
-      },
-    ],
-  },
-];
-
-// The five-step journey strip under the intro.
-const JOURNEY: { label: string; phases: SeasonStatus[] }[] = [
-  { label: "Sign up", phases: ["SIGNUPS"] },
-  { label: "Get drafted", phases: ["DRAFT"] },
-  { label: "Play weekly", phases: ["REGULAR_SEASON"] },
-  { label: "Make playoffs", phases: ["PLAYOFFS"] },
-  { label: "Become league history", phases: ["COMPLETE"] },
-];
-
-// "Pick your obsession" — one door per kind of degenerate.
-const OBSESSIONS: {
-  icon: string;
-  title: string;
-  desc: string;
-  links: { label: string; href: string; gate?: FeatureGate }[];
-}[] = [
-  {
-    icon: "🏅",
-    title: "The competitor",
-    desc: "Standings, clinch marks, and exactly what your team needs tonight.",
-    links: [
-      { label: "Standings", href: "/schedule", gate: "POST_AUCTION" },
-      { label: "Teams", href: "/teams", gate: "POST_AUCTION" },
-    ],
-  },
-  {
-    icon: "🤓",
-    title: "The stat nerd",
-    desc: "Report cards, leaderboards, the league meta, and all-time records.",
-    links: [
-      { label: "Leaders", href: "/leaders", gate: "REGULAR_RESULTS" },
-      { label: "Meta", href: "/meta", gate: "REGULAR_RESULTS" },
-      { label: "Records", href: "/records" },
-    ],
-  },
-  {
-    icon: "🔮",
-    title: "The oracle",
-    desc: "Call every series in pick'em and run a fantasy five on the side.",
-    links: [
-      { label: "Pick'em", href: "/pickem", gate: "POST_AUCTION" },
-      { label: "Fantasy", href: "/fantasy", gate: "POST_AUCTION" },
-    ],
-  },
-  {
-    icon: "🏛️",
-    title: "The historian",
-    desc: "Champions, careers, and every season preserved exactly as it ended.",
-    links: [
-      { label: "Hall of Fame", href: "/hall-of-fame" },
-      { label: "Past seasons", href: "/seasons" },
-    ],
-  },
-];
+function Highlights({ items }: { items: { title: string; detail: string }[] }) {
+  return (
+    <dl className={styles.highlights}>
+      {items.map((item) => (
+        <div key={item.title}>
+          <dt>{item.title}</dt>
+          <dd>{item.detail}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 export default async function FeaturesPage() {
   const [season, user] = await Promise.all([
@@ -360,9 +109,7 @@ export default async function FeaturesPage() {
   ]);
   const [players, games, seasonsRun, seasonRecords, draft, registration] =
     await Promise.all([
-      // A Steam account is not automatically a league player. Count people
-      // who have actually signed up as a player, joined a roster, or played an
-      // inhouse so the tour's social proof stays truthful.
+      // Count participation rather than every account created through Steam.
       prisma.user.count({
         where: {
           OR: [
@@ -373,8 +120,6 @@ export default async function FeaturesPage() {
         },
       }),
       prisma.game.count(),
-      // Ignore a just-created signup shell or abandoned setup. A season has
-      // run once it reached COMPLETE or retained at least one imported game.
       prisma.season.count({
         where: {
           OR: [
@@ -421,571 +166,637 @@ export default async function FeaturesPage() {
       resolveChampionPresentation(record, record.matches).championTeamId !=
       null,
   ).length;
-  const phase = (season?.status ?? null) as SeasonStatus | null;
+  const phase = season?.status ?? null;
   const draftStatus = draft?.status ?? null;
   const hasActivePlayerSignup =
     registration?.status === REGISTRATION_STATUS.ACTIVE &&
     registration.type === REGISTRATION_TYPE.PLAYER;
-
-  const accessFor = (feature: Feature) =>
-    feature.href
-      ? featureAvailability(feature.gate ?? "ALWAYS", phase, draftStatus)
-      : { available: false };
-  const reportCardShowcase = featureAvailability(
-    "REGULAR_RESULTS",
-    phase,
-    draftStatus,
-  );
-  const stakesShowcase = featureAvailability(
-    "REGULAR_ONLY",
-    phase,
-    draftStatus,
-  );
-  const bracketShowcase = featureAvailability(
-    "PLAYOFF_RESULTS",
-    phase,
-    draftStatus,
-  );
   const closing = featuresClosingPresentation(
     phase,
     !!user,
     hasActivePlayerSignup,
   );
-
+  const availability = (gate: FeatureGate) =>
+    featureAvailability(gate, phase, draftStatus);
+  const groups = TOUR_GROUPS.map((group) => ({
+    ...group,
+    features: group.features.map((feature) => ({
+      ...feature,
+      availability: availability(feature.gate ?? "ALWAYS"),
+    })),
+  }));
+  const regionName = LEAGUE_CONFIG.region === "eu" ? "Europe" : "United States";
+  const softLimit = season?.maxMmr ?? SOFT_MMR_LIMIT;
+  const phaseLabel =
+    phase === "DRAFT"
+      ? draftPhasePresentation(draftStatus).badge
+      : ((
+          {
+            SIGNUPS: "Signups open",
+            REGULAR_SEASON: "Regular season",
+            PLAYOFFS: "Playoffs",
+            COMPLETE: "Season complete",
+          } as Record<string, string>
+        )[phase ?? ""] ?? "Between seasons");
   const numbers = [
-    { label: "seasons", value: seasonsRun },
     { label: "league players", value: players },
-    { label: "games on record", value: games },
+    { label: "games recorded", value: games },
+    { label: "seasons played", value: seasonsRun },
     { label: "champions crowned", value: champions },
-  ].filter((n) => n.value > 0);
+  ].filter((number) => number.value > 0);
 
   return (
-    <div className="mx-auto max-w-4xl">
-      {/* Intro — same glow language as a match page hero. */}
-      <div className="relative mb-10 overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/60 to-surface/30">
-        <div
-          aria-hidden
-          className="hero-grid pointer-events-none absolute inset-0 opacity-40"
-        />
-        <div
-          aria-hidden
-          className="animate-hero-glow pointer-events-none absolute -left-12 -top-12 h-48 w-48 rounded-full bg-accent/20 blur-3xl"
-        />
-        <div
-          aria-hidden
-          className="animate-hero-glow-alt pointer-events-none absolute -bottom-16 -right-10 h-56 w-56 rounded-full bg-info/15 blur-3xl"
-        />
-        <div className="relative px-6 py-10 text-center sm:py-14">
-          <Badge tone="brand" className="mb-4">
-            The tour
-          </Badge>
-          <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl">
-            Everything the league offers
-          </h1>
-          <p className="mx-auto mt-3 max-w-2xl text-muted sm:text-lg">
-            An auction draft. Weekly matches that grade themselves. Scouting
-            dossiers, playoff math, fantasy, pick&apos;em — and a record book
-            that never forgets. Here&apos;s the full tour.
+    <div className={styles.tour}>
+      <header className={styles.hero}>
+        <div className={styles.heroCopy}>
+          <p className={styles.eyebrow}>
+            {LEAGUE_CONFIG.name}
+            <span aria-hidden="true">/</span>THE FEATURE TOUR
           </p>
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
-            {!user ? (
-              <Link href="/login?next=/me" className={buttonClasses("primary")}>
-                Sign in with Steam →
-              </Link>
-            ) : null}
-            {user && phase === "SIGNUPS" && closing.action ? (
+          <h1>
+            Your team.
+            <br />
+            Your season.
+            <br />
+            <span>Your kind of Dota.</span>
+          </h1>
+          <p className={styles.heroDescription}>
+            The same five players. A match to prepare for. A season to make
+            something of. Join an amateur Dota 2 league where the games add up
+            to more than your next rank.
+          </p>
+          <div className={styles.heroActions}>
+            {closing.action ? (
               <Link
                 href={closing.action.href}
-                className={buttonClasses("primary")}
+                className={buttonClasses("accent", "lg", styles.primaryAction)}
               >
                 {closing.action.label}
               </Link>
-            ) : null}
-            <Link href="/inhouse" className={buttonClasses("accent")}>
-              Play an inhouse
-            </Link>
-            <DiscordButton />
-          </div>
-          {numbers.length > 0 ? (
-            <dl className="mx-auto mt-8 flex max-w-xl flex-wrap items-center justify-center gap-x-8 gap-y-3">
-              {numbers.map((n) => (
-                <div key={n.label} className="flex flex-col text-center">
-                  <dt className="order-2 text-[11px] font-medium uppercase tracking-wider text-muted">
-                    {n.label}
-                  </dt>
-                  <dd className="order-1 font-display text-2xl font-bold tabular-nums">
-                    {n.value.toLocaleString()}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-        </div>
-      </div>
-
-      {/* Journey strip — where the current season is on the road map. */}
-      <p className="mb-3 text-center text-sm text-muted">
-        Every season follows the same journey.
-      </p>
-      <ol className="mb-12 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-xs sm:text-sm">
-        {JOURNEY.map((step, i) => {
-          const here = !!phase && step.phases.includes(phase);
-          return (
-            <li key={step.label} className="flex items-center gap-1">
-              {i > 0 ? (
-                <span aria-hidden className="px-1 text-muted">
-                  →
-                </span>
-              ) : null}
-              <span
-                className={cn(
-                  "whitespace-nowrap rounded-full border px-2.5 py-1",
-                  here
-                    ? "border-accent/40 bg-accent/15 font-medium text-accent"
-                    : "border-line bg-surface-2/50 text-muted",
-                )}
+            ) : (
+              <Link
+                href="/inhouse"
+                className={buttonClasses("accent", "lg", styles.primaryAction)}
               >
-                {step.label}
-                {here ? " · now" : ""}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-
-      {/* Show, don't tell — three flagship features as living mockups. */}
-      <section aria-labelledby="features-showcase" className="mb-14">
-        <div className="mb-4 text-center">
-          <h2
-            id="features-showcase"
-            className="font-display text-2xl font-semibold"
-          >
-            Not your average league site
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Illustrative previews of what match night can look like. Links
-            appear when the current season has reached each feature.
+                Find an inhouse game <span aria-hidden="true">→</span>
+              </Link>
+            )}
+            <a href="#join" className={styles.heroSecondary}>
+              How to join <span aria-hidden="true">↓</span>
+            </a>
+          </div>
+          <p className={styles.heroFootnote}>
+            Sign up as a player. Meet your team on draft night.
           </p>
         </div>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <ShowcaseReportCard availability={reportCardShowcase} />
-          <ShowcaseStakes availability={stakesShowcase} />
-          <ShowcaseBracket availability={bracketShowcase} />
+        <div className={styles.heroVisual}>
+          <div className={styles.visualCaption}>
+            <span>FROM THE FIRST BID TO THE FINAL ANCIENT</span>
+            <span aria-hidden="true">↘</span>
+          </div>
+          <MatchPreview />
+          <div className={styles.visualAfterword}>
+            <span aria-hidden="true">01 — 05</span>
+            <p>
+              A team to play with.
+              <br />
+              <strong>A whole league to be part of.</strong>
+            </p>
+          </div>
         </div>
-      </section>
+      </header>
 
-      {/* Chapters */}
-      <div className="space-y-12 pb-4">
-        {SECTIONS.map((section) => {
-          const current = !!phase && section.phases.includes(phase);
-          const currentLabel = current
-            ? section.id === "draft"
-              ? draftPhasePresentation(draftStatus).badge
-              : "Happening now"
-            : null;
-          return (
-            <div key={section.id} className="space-y-12">
-              {/* The season chapters get their own act break. */}
-              {section.id === "signups" ? (
-                <div className="pt-2 text-center">
-                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-muted">
-                    The season
-                  </div>
-                  <div className="mt-1 font-display text-2xl font-semibold">
-                    Five phases. One champion.
-                  </div>
-                </div>
-              ) : null}
-              <section aria-labelledby={`features-${section.id}`}>
-                <div className="mb-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-accent">
-                      {section.kicker}
-                    </span>
-                    {currentLabel ? (
-                      <Badge
-                        tone={
-                          section.id === "draft" &&
-                          currentLabel !== "Draft live"
-                            ? "info"
-                            : "success"
-                        }
-                      >
-                        {currentLabel}
-                      </Badge>
-                    ) : null}
-                  </div>
-                  <h2
-                    id={`features-${section.id}`}
-                    className="mt-1 font-display text-2xl font-semibold"
-                  >
-                    {section.title}
-                  </h2>
-                  <p className="mt-1 text-sm text-muted">{section.blurb}</p>
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {section.features.map((f) => (
-                    <FeatureCard
-                      key={f.title}
-                      feature={f}
-                      availability={accessFor(f)}
-                    />
-                  ))}
-                </div>
-              </section>
-            </div>
-          );
-        })}
+      <div className={styles.leagueStrip} aria-label="Your league">
+        <div>
+          <span>YOUR LEAGUE</span>
+          <strong>
+            {regionName} · {LEAGUE_CONFIG.gameServerRegion}
+          </strong>
+        </div>
+        <div>
+          <span>MATCH NIGHT</span>
+          <strong>{LEAGUE_CONFIG.matchSchedule.label}</strong>
+        </div>
+        <Link href="/" className={styles.seasonStatus}>
+          <span>{season?.name ?? LEAGUE_CONFIG.name}</span>
+          <strong>
+            <i aria-hidden="true" />
+            {phaseLabel}
+            <span aria-hidden="true">↗</span>
+          </strong>
+        </Link>
       </div>
-
-      {/* Pick your obsession */}
-      <section aria-labelledby="features-obsessions" className="mb-14 mt-2">
-        <div className="mb-4 text-center">
-          <h2
-            id="features-obsessions"
-            className="font-display text-2xl font-semibold"
-          >
-            Pick your obsession
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Everyone finds their own corner of the league.
-          </p>
-        </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {OBSESSIONS.map((o) => (
-            <Card key={o.title} className="min-w-0 p-4">
-              <div className="flex items-center gap-2">
-                <span aria-hidden className="text-xl">
-                  {o.icon}
-                </span>
-                <h3 className="font-display text-base font-semibold">
-                  {o.title}
-                </h3>
-              </div>
-              <p className="mt-1.5 text-sm text-muted">{o.desc}</p>
-              <div className="mt-2.5 space-y-2 text-sm">
-                {o.links.map((l) => {
-                  const availability = featureAvailability(
-                    l.gate ?? "ALWAYS",
-                    phase,
-                    draftStatus,
-                  );
-                  return availability.available ? (
-                    <Link
-                      key={l.href}
-                      href={l.href}
-                      className={textLink("block font-medium")}
-                    >
-                      {l.label} →
-                    </Link>
-                  ) : (
-                    <div key={l.href} className="text-muted">
-                      <span className="font-medium">
-                        <span aria-hidden>🔒 </span>
-                        {l.label}
-                      </span>
-                      {availability.unavailableReason ? (
-                        <span className="block text-[11px] leading-snug">
-                          {availability.unavailableReason}
-                        </span>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
+      <nav className={styles.tourNav} aria-label="Feature tour chapters">
+        <div>
+          {CHAPTERS.map((chapter) => (
+            <a key={chapter.id} href={`#${chapter.id}`}>
+              {chapter.label}
+            </a>
           ))}
         </div>
+      </nav>
+
+      <section
+        id="draft"
+        aria-labelledby="draft-title"
+        className={styles.chapter}
+      >
+        <div className={styles.chapterCopy}>
+          <ChapterHeading number="01" eyebrow="FIND YOUR FIVE" id="draft-title">
+            The season starts
+            <br />
+            with a paddle raised.
+          </ChapterHeading>
+          <p className={styles.chapterIntro}>
+            You bring your hero pool, your preferred roles, and a little
+            ambition. Captains bring a budget. Auction night turns a room full
+            of individual players into the teams you’ll spend the season getting
+            to know.
+          </p>
+          <Highlights
+            items={[
+              {
+                title: "Give captains something to go on",
+                detail:
+                  "Roles, favorite heroes, public notes, and available match history put a player behind the MMR.",
+              },
+              {
+                title: "Follow every nomination and bid",
+                detail:
+                  "Watch teams take shape in the live draft room. Captain budgets account for differences in MMR.",
+              },
+              {
+                title: "Make the team your own",
+                detail:
+                  "A roster, a name, a logo, and a team page that follows your run. The draft recap keeps every signing on record.",
+              },
+            ]}
+          />
+          <div className={styles.chapterLinks}>
+            <TourLink href="/players">Meet the player pool</TourLink>
+            <TourLink href="/draft" availability={availability("DRAFT_ROOM")}>
+              Follow the auction
+            </TourLink>
+          </div>
+        </div>
+        <DraftPreview />
       </section>
 
-      {/* Closing CTA */}
-      <div className="mb-4 rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40 px-6 py-10 text-center">
-        <h2 className="font-display text-2xl font-semibold">{closing.title}</h2>
-        <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          {closing.detail}
+      <section
+        id="match-night"
+        aria-labelledby="match-night-title"
+        className={`${styles.chapter} ${styles.matchChapter}`}
+      >
+        <div className={styles.wideHeading}>
+          <ChapterHeading
+            number="02"
+            eyebrow="SOMETHING TO PLAY FOR"
+            id="match-night-title"
+          >
+            Put match night on the calendar.
+          </ChapterHeading>
+          <p className={styles.chapterIntro}>
+            A familiar roster changes the game. You can plan a draft, learn from
+            last week, and come back with an answer. The site keeps the
+            schedule, preparation, and results together.
+          </p>
+        </div>
+        <ol className={styles.matchSteps}>
+          <li>
+            <span className={styles.stepNumber}>BEFORE THE HORN</span>
+            <h3>Come prepared.</h3>
+            <p>
+              Scout comfort picks and opponent tendencies. Check in, arrange
+              cover, and find your kickoff in local time. Add the season
+              calendar so match night stays on your radar.
+            </p>
+          </li>
+          <li>
+            <span className={styles.stepNumber}>IN THE LOBBY</span>
+            <h3>Get your five ready.</h3>
+            <p>
+              Your match center holds the roster checklist and lobby setup.
+              Captains can coordinate a reschedule when needed, with both sides
+              working from the same fixture.
+            </p>
+          </li>
+          <li>
+            <span className={styles.stepNumber}>AFTER THE ANCIENT</span>
+            <h3>See what changed.</h3>
+            <p>
+              Imported games become box scores, MVPs, and updated standings.
+              Open the series to see the individual performances behind the
+              result.
+            </p>
+          </li>
+        </ol>
+        <div className={styles.raceSection}>
+          <RacePreview />
+          <div>
+            <h3>
+              The table has a story.
+              <br />
+              Know your part in it.
+            </h3>
+            <p>
+              Follow points, head-to-head results, and team power rankings. As
+              the season tightens, explore the results your team needs to
+              qualify and the ties that still need settling.
+            </p>
+            <p>
+              Then it’s the knockout bracket: a path through playoffs, a grand
+              final, and one team left standing.
+            </p>
+            <TourLink
+              href="/schedule"
+              availability={availability("REGULAR_RESULTS")}
+            >
+              Explore the competition
+            </TourLink>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="your-game"
+        aria-labelledby="your-game-title"
+        className={`${styles.chapter} ${styles.analysisChapter}`}
+      >
+        <ReportPreview />
+        <div className={styles.chapterCopy}>
+          <ChapterHeading
+            number="03"
+            eyebrow="GET TO KNOW YOUR GAME"
+            id="your-game-title"
+          >
+            There’s more to
+            <br />a game than the score.
+          </ChapterHeading>
+          <p className={styles.chapterIntro}>
+            Maybe your farming is excellent, but the damage isn’t there yet.
+            Maybe your best games start with a support pick nobody bans. The
+            numbers give you somewhere to look.
+          </p>
+          <Highlights
+            items={[
+              {
+                title: "Read your performance in context",
+                detail:
+                  "Hero report cards use available OpenDota benchmarks to compare your game with others on the same hero.",
+              },
+              {
+                title: "Find the patterns",
+                detail:
+                  "Explore the league’s hero meta, stat leaders, and weekly honors. See the sample behind a win rate before drawing conclusions.",
+              },
+              {
+                title: "Build a career you can revisit",
+                detail:
+                  "Profiles collect your teams, results, hero pool, achievements, and records. Compare careers or look up a familiar rival.",
+              },
+            ]}
+          />
+          <div className={styles.chapterLinks}>
+            <TourLink href="/players/compare">Compare players</TourLink>
+            <TourLink
+              href="/meta"
+              availability={availability("REGULAR_RESULTS")}
+            >
+              Explore the hero meta
+            </TourLink>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="more-dota"
+        aria-labelledby="more-dota-title"
+        className={styles.playChapter}
+      >
+        <ChapterHeading
+          number="04"
+          eyebrow="STAY FOR ANOTHER GAME"
+          id="more-dota-title"
+        >
+          Your week has room for more Dota.
+        </ChapterHeading>
+        <p className={styles.chapterIntro}>
+          Practice with your roster, find a pickup game, or give yourself a
+          reason to follow every other team. There’s more than one way to be
+          involved.
         </p>
-        <div className="mt-5 flex flex-wrap justify-center gap-3">
+        <div className={styles.playGrid}>
+          <article className={styles.inhouseCard}>
+            <div className={styles.playCardTop}>
+              <span>THE PICKUP GAME</span>
+              <span aria-hidden="true">↗</span>
+            </div>
+            <h3>
+              Good games.
+              <br />
+              Familiar names.
+            </h3>
+            <p>
+              Queue for inhouses, accept the ready check, choose captains, and
+              draft sides. Build an Elo record with the community, even between
+              seasons.
+            </p>
+            <ol className={styles.queueSteps} aria-label="How inhouses work">
+              <li>Queue</li>
+              <li>Ready check</li>
+              <li>Draft</li>
+              <li>Play</li>
+            </ol>
+            <TourLink href="/inhouse">Find an inhouse</TourLink>
+          </article>
+          <article className={styles.playCard}>
+            <div className={styles.playCardTop}>
+              <span>THE PRACTICE ROOM</span>
+              <span aria-hidden="true">02</span>
+            </div>
+            <h3>Try it in a scrim.</h3>
+            <p>
+              Post a time, book another team, and practice with a purpose.
+              Coaches and casual guests can take part, with practice results and
+              stats kept separate from the league table.
+            </p>
+            <TourLink
+              href="/scrims"
+              availability={availability("POST_AUCTION")}
+            >
+              Browse scrims
+            </TourLink>
+          </article>
+          <article className={styles.playCard}>
+            <div className={styles.playCardTop}>
+              <span>YOUR OTHER STARTING FIVE</span>
+              <span aria-hidden="true">03</span>
+            </div>
+            <h3>Build a fantasy roster.</h3>
+            <p>
+              Spend an MMR salary cap on five drafted players. Score from their
+              real games, with contributions from economy, playmaking, and
+              pressure. You can manage a five without being on a league team.
+            </p>
+            <TourLink
+              href="/fantasy"
+              availability={availability("POST_AUCTION")}
+            >
+              Explore fantasy
+            </TourLink>
+          </article>
+          <article className={styles.playCard}>
+            <div className={styles.playCardTop}>
+              <span>CALL IT BEFORE IT HAPPENS</span>
+              <span aria-hidden="true">04</span>
+            </div>
+            <h3>Make your picks.</h3>
+            <p>
+              Choose the winners, see how the community voted, and climb the
+              oracle board. In inhouses, you can also back your own side with
+              Cred and track your net winnings.
+            </p>
+            <TourLink
+              href="/pickem"
+              availability={availability("POST_AUCTION")}
+            >
+              Explore pick’em
+            </TourLink>
+          </article>
+        </div>
+      </section>
+
+      <section
+        id="history"
+        aria-labelledby="history-title"
+        className={styles.historyChapter}
+      >
+        <div className={styles.historyMark} aria-hidden="true">
+          <svg
+            viewBox="0 0 100 100"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M32 15h36v26c0 17-8 26-18 26S32 58 32 41V15Z" />
+            <path d="M32 24H18v13c0 12 8 19 20 19m30-32h14v13c0 12-8 19-20 19M50 67v16M34 88h32M40 83h20" />
+            <path d="m50 29 3.6 7.3 8.1 1.2-5.9 5.7 1.4 8.1-7.2-3.8-7.2 3.8 1.4-8.1-5.9-5.7 8.1-1.2L50 29Z" />
+          </svg>
+          <span>THE NEXT CHAPTER IS YOURS</span>
+        </div>
+        <div>
+          <ChapterHeading
+            number="05"
+            eyebrow="LEAVE SOMETHING ON THE RECORD"
+            id="history-title"
+          >
+            The season ends.
+            <br />
+            The stories stay.
+          </ChapterHeading>
+          <p className={styles.chapterIntro}>
+            That unlikely playoff run. The game you still talk about. The roster
+            you’d play with again. Season archives, recaps, the record book, and
+            the Hall of Fame give those moments a home.
+          </p>
+          <div className={styles.chapterLinks}>
+            <TourLink href="/seasons">Past seasons</TourLink>
+            <TourLink href="/hall-of-fame">Hall of Fame</TourLink>
+            <TourLink href="/records">The record book</TourLink>
+          </div>
+        </div>
+        {numbers.length > 0 ? (
+          <dl className={styles.leagueNumbers}>
+            {numbers.map((number) => (
+              <div key={number.label}>
+                <dt>{number.label}</dt>
+                <dd>{number.value.toLocaleString("en-US")}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+      </section>
+
+      <section
+        id="all-features"
+        aria-labelledby="directory-title"
+        className={styles.directorySection}
+      >
+        <p className={styles.eyebrow}>THE FULL DIRECTORY</p>
+        <h2 id="directory-title" className={styles.chapterTitle}>
+          Everything the league offers.
+        </h2>
+        <p className={styles.chapterIntro}>
+          Looking for something specific? Start here. Features that need a live
+          season or recorded results show when they become available.
+        </p>
+        <FeatureDirectory groups={groups} />
+      </section>
+
+      <section
+        id="join"
+        aria-labelledby="join-title"
+        className={styles.joinSection}
+      >
+        <div>
+          <p className={styles.eyebrow}>YOUR FIRST SEASON STARTS HERE</p>
+          <h2 id="join-title" className={styles.chapterTitle}>
+            Bring yourself.
+            <br />
+            We’ll start with that.
+          </h2>
+          <p className={styles.chapterIntro}>
+            You don’t need to assemble a stack. Sign up as a player, tell
+            captains a little about yourself, and be ready to commit to your
+            team’s matches.
+          </p>
+          <ol className={styles.joinSteps}>
+            <li>
+              <span>01</span>
+              <div>
+                <h3>Sign in with Steam</h3>
+                <p>Your Steam account is your league identity.</p>
+              </div>
+            </li>
+            <li>
+              <span>02</span>
+              <div>
+                <h3>Complete your signup</h3>
+                <p>
+                  Choose player or standin, confirm your details, and add roles
+                  and heroes to help captains get to know you.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span>03</span>
+              <div>
+                <h3>Stay in the loop</h3>
+                <p>
+                  Check the season’s draft and match schedule. Join your
+                  league’s Discord when available for team coordination and
+                  announcements.
+                </p>
+              </div>
+            </li>
+          </ol>
+        </div>
+        <div className={styles.faq}>
+          <h3>A few things before you join</h3>
+          <details>
+            <summary>Who is the league for?</summary>
+            <p>
+              An amateur Dota 2 community.{" "}
+              {softLimit > 0 ? (
+                <>
+                  The current soft limit is {softLimit.toLocaleString("en-US")}{" "}
+                  MMR; players above it can be reviewed before the draft.{" "}
+                </>
+              ) : (
+                <>This season has no additional soft MMR limit. </>
+              )}
+              Players above {HARD_MMR_CEILING.toLocaleString("en-US")} MMR and
+              Immortal players are not eligible.
+            </p>
+          </details>
+          <details>
+            <summary>Do I need to bring a team?</summary>
+            <p>
+              No. Players sign up individually, and captains build rosters in
+              the auction draft. Add your preferred roles and favorite heroes so
+              captains can see how you might fit.
+            </p>
+          </details>
+          <details>
+            <summary>Where and when do we play?</summary>
+            <p>
+              This is the {regionName} league, using{" "}
+              {LEAGUE_CONFIG.gameServerRegion} servers.{" "}
+              {LEAGUE_CONFIG.matchSchedule.announced ? (
+                <>
+                  The usual match night is {LEAGUE_CONFIG.matchSchedule.label}
+                  .{" "}
+                </>
+              ) : (
+                <>The regular match night has not been announced yet. </>
+              )}
+              Check the season schedule for each fixture’s confirmed kickoff,
+              shown in your local time.
+            </p>
+          </details>
+          <details>
+            <summary>What if I cannot commit to every week?</summary>
+            <p>
+              Consider signing up as a standin to cover roster absences, or play
+              inhouses without a season-long team commitment. Let organizers and
+              captains know what you can manage before joining a roster.
+            </p>
+          </details>
+          <details>
+            <summary>How do my games get recorded?</summary>
+            <p>
+              The site imports eligible Dota matches through OpenDota. Enable
+              Expose Public Match Data in Dota and follow the match’s lobby
+              instructions. Imports can take time; match IDs and manual result
+              reporting provide fallback paths.
+            </p>
+          </details>
+          <details>
+            <summary>Can I follow along without playing?</summary>
+            <p>
+              Yes. Browse teams, results, profiles, and league history. A Steam
+              login also lets you take part in fantasy and pick’em when they are
+              open; you do not need a roster spot.
+            </p>
+          </details>
+        </div>
+      </section>
+
+      <section aria-labelledby="tour-closing-title" className={styles.closing}>
+        <div>
+          <p className={styles.eyebrow}>
+            {LEAGUE_CONFIG.name} · {regionName}
+          </p>
+          <h2 id="tour-closing-title">{closing.title}</h2>
+          <p>
+            {!closing.action && !LEAGUE_CONFIG.discordInviteUrl
+              ? "Check league news for the next signup announcement. Inhouses are another way to meet the community in the meantime."
+              : closing.detail}
+          </p>
+        </div>
+        <div className={styles.closingActions}>
           {closing.action ? (
             <Link
               href={closing.action.href}
-              className={buttonClasses("primary")}
+              className={buttonClasses("accent", "lg", styles.primaryAction)}
             >
               {closing.action.label}
             </Link>
           ) : null}
-          <DiscordButton />
+          <DiscordButton size="lg" label="Meet the community" />
+          {!LEAGUE_CONFIG.discordInviteUrl ? (
+            <Link href="/news" className={buttonClasses("secondary", "lg")}>
+              League news <span aria-hidden="true">→</span>
+            </Link>
+          ) : null}
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Showcase mockups ----------
-// Hand-built stills of real features, drawn with the same components and
-// styles the live pages use — static, no client JS, safe on an empty DB.
-
-function ShowcaseFrame({
-  title,
-  caption,
-  href,
-  availability,
-  children,
-}: {
-  title: string;
-  caption: string;
-  href: string;
-  availability: FeatureAvailability;
-  children: React.ReactNode;
-}) {
-  return (
-    <Card className="flex min-w-0 flex-col p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-display text-base font-semibold">{title}</h3>
-        <Badge tone="neutral">Illustrative preview</Badge>
-      </div>
-      <div className="my-3 flex-1 rounded-lg border border-line/70 bg-surface-2/30 p-3">
-        {children}
-      </div>
-      <p className="text-sm text-muted">{caption}</p>
-      {availability.available ? (
-        <Link
-          href={href}
-          className={textLink("mt-2 inline-block text-sm font-medium")}
-        >
-          Open this feature →
-        </Link>
-      ) : availability.unavailableReason ? (
-        <p className="mt-2 text-xs font-medium text-muted">
-          <span aria-hidden>🔒 </span>
-          {availability.unavailableReason}
-        </p>
-      ) : null}
-    </Card>
-  );
-}
-
-const DEMO_GRADES: { short: string; grade: string; tone: string }[] = [
-  { short: "GPM", grade: "S", tone: "border-success/40 text-success" },
-  { short: "XPM", grade: "A", tone: "border-success/40 text-success" },
-  { short: "K/min", grade: "B", tone: "border-accent/40 text-accent" },
-  { short: "HD/min", grade: "C", tone: "border-line text-fg/80" },
-];
-
-function ShowcaseReportCard({
-  availability,
-}: {
-  availability: FeatureAvailability;
-}) {
-  const hero = heroById(8); // Juggernaut
-  return (
-    <ShowcaseFrame
-      title="Every game gets graded"
-      caption="OpenDota percentiles turn each performance into a report card vs the world."
-      href="/leaders"
-      availability={availability}
-    >
-      <div className="flex items-center gap-2.5">
-        {hero ? <HeroIcon hero={hero} size={30} /> : null}
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm">You, next season</div>
-          <div className="text-[11px] text-muted">Juggernaut</div>
-        </div>
-        <KDA kills={11} deaths={2} assists={9} className="shrink-0 text-xs" />
-      </div>
-      <div
-        role="img"
-        aria-label="Example report card: overall grade A, farming S, experience A, kills B, hero damage C"
-        className="mt-2 flex flex-wrap items-center gap-1"
-      >
-        <span
-          aria-hidden
-          className="inline-flex items-center rounded border border-success/40 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-success"
-        >
-          Report A
-        </span>
-        {DEMO_GRADES.map((g) => (
-          <span
-            key={g.short}
-            aria-hidden
-            className={cn(
-              "inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] tabular-nums",
-              g.tone,
-            )}
+      </section>
+      <div className={styles.communityLinks}>
+        <p>Keep up with the league. Take a little of it with you.</p>
+        <div>
+          <Link href="/news">
+            League news <span aria-hidden="true">↗</span>
+          </Link>
+          <a
+            href={LEAGUE_CONFIG.merchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
           >
-            {g.short} <b>{g.grade}</b>
-          </span>
-        ))}
-      </div>
-    </ShowcaseFrame>
-  );
-}
-
-function ShowcaseStakes({
-  availability,
-}: {
-  availability: FeatureAvailability;
-}) {
-  return (
-    <ShowcaseFrame
-      title="The math of match night"
-      caption="Track feasible results, playoff places and the tiebreakers that settle them."
-      href="/schedule"
-      availability={availability}
-    >
-      <div className="text-[11px] font-medium uppercase tracking-wider text-muted">
-        Tonight&apos;s stakes
-      </div>
-      <div className="mt-0.5 text-sm font-medium">
-        Win, draw or loss: see the playoff outcome
-      </div>
-      <div className="mt-2 space-y-1.5">
-        {[
-          { name: "Pudge Patrol", note: "Win: qualify · Draw: qualification tiebreaker" },
-          { name: "Techies Anonymous", note: "Qualified · Seeding tiebreaker required" },
-        ].map((t) => (
-          <div
-            key={t.name}
-            className="flex min-w-0 items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-2.5 py-1.5"
-          >
-            <TeamCrest
-              name={t.name}
-              seed={t.name}
-              size={20}
-              className="shrink-0 rounded-md"
-            />
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-medium">
-                {t.name}
-              </span>
-              <span className="block text-xs text-muted">{t.note}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </ShowcaseFrame>
-  );
-}
-
-// A miniature of the real bracket's centered shape: two semis flanking the
-// grand final, trophy on top. Decorative — the live one is interactive.
-function ShowcaseBracket({
-  availability,
-}: {
-  availability: FeatureAvailability;
-}) {
-  const pill = (name: string, win?: boolean) => (
-    <div
-      className={cn(
-        "flex min-w-0 items-center gap-1.5 rounded-md border bg-surface-2/50 px-2 py-1",
-        win ? "border-amber-400/40" : "border-line",
-      )}
-    >
-      <TeamCrest
-        name={name}
-        seed={name}
-        size={16}
-        className="shrink-0 rounded"
-      />
-      <span
-        className={cn(
-          "min-w-0 truncate text-[11px]",
-          win ? "font-semibold" : "text-muted",
-        )}
-      >
-        {name}
-      </span>
-      {win ? (
-        <span aria-hidden className="shrink-0 text-[10px]">
-          🏆
-        </span>
-      ) : null}
-    </div>
-  );
-  return (
-    <ShowcaseFrame
-      title="A bracket worth printing"
-      caption="Playoffs draw the classic tree — wings converging on the grand final."
-      href="/schedule"
-      availability={availability}
-    >
-      <div
-        role="img"
-        aria-label="Miniature playoff bracket: two semifinals converging on a grand final, champion crowned"
-        className="flex h-full items-center justify-center"
-      >
-        {/* minmax(0,1fr): the wing tracks must shrink below pill content on
-            phones so the names truncate instead of widening the page. */}
-        <div
-          aria-hidden
-          className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2"
-        >
-          <div className="space-y-2">
-            {pill("Your Team", true)}
-            {pill("The Rival")}
-          </div>
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-2xl drop-shadow-[0_0_10px_rgba(251,191,36,0.4)]">
-              🏆
-            </span>
-            {pill("Your Team", true)}
-          </div>
-          <div className="space-y-2">
-            {pill("Dark Horse")}
-            {pill("Cinderella")}
-          </div>
+            League shop <span className="sr-only">(opens in a new tab)</span>
+            <span aria-hidden="true">↗</span>
+          </a>
         </div>
       </div>
-    </ShowcaseFrame>
-  );
-}
-
-function FeatureCard({
-  feature,
-  availability,
-}: {
-  feature: Feature;
-  availability: FeatureAvailability;
-}) {
-  const available = availability.available;
-  const body = (
-    <div className="flex h-full min-w-0 items-start gap-3 p-4">
-      <span
-        aria-hidden
-        className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-xl"
-      >
-        {feature.icon}
-      </span>
-      <div className="min-w-0">
-        <h3 className="font-display text-base font-semibold [overflow-wrap:anywhere]">
-          {feature.title}
-        </h3>
-        <p className="mt-1 text-sm text-muted">{feature.desc}</p>
-        {available ? (
-          <span className="mt-2 inline-block text-sm font-medium text-accent">
-            Open feature →
-          </span>
-        ) : feature.href && availability.unavailableReason ? (
-          <p className="mt-2 text-xs font-medium text-muted">
-            <span aria-hidden>🔒 </span>
-            {availability.unavailableReason}
-          </p>
-        ) : null}
-      </div>
     </div>
-  );
-
-  // Only link the card when the destination actually has something to show
-  // for the current phase — a tour full of empty states sells nothing.
-  return available && feature.href ? (
-    <Link
-      href={feature.href}
-      className="block min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-    >
-      <Card interactive className="h-full">
-        {body}
-      </Card>
-    </Link>
-  ) : (
-    <Card className="h-full min-w-0">{body}</Card>
   );
 }

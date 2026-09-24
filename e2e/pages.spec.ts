@@ -209,52 +209,6 @@ test("desktop Explore menu keeps evergreen league pages discoverable", async ({
   await expect(button).toBeFocused();
 });
 
-test("features tour renders the showcase and phase-aware chapters", async ({
-  page,
-}) => {
-  await page.goto("/features");
-  await expect(
-    page.getByRole("heading", { name: "Everything the league offers" }),
-  ).toBeVisible();
-  // Showcase mockups render (report card demo + mini bracket).
-  await expect(
-    page.getByRole("heading", { name: "Not your average league site" }),
-  ).toBeVisible();
-  await expect(page.getByText("Every game gets graded")).toBeVisible();
-  await expect(
-    page.getByText("Illustrative preview", { exact: true }),
-  ).toHaveCount(3);
-  // SIGNUPS has no report cards, scenario board, or playoff bracket yet. The
-  // examples stay visible, but must not masquerade as live destinations.
-  await expect(
-    page.getByRole("link", { name: "Open this feature" }),
-  ).toHaveCount(0);
-  await expect(page.getByText("Five phases. One champion.")).toBeVisible();
-  // Seeded DB sits in SIGNUPS — that chapter (and only a chapter, not the
-  // whole page) carries the live badge.
-  await expect(page.getByText("Happening now")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Signups are open", level: 2 }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Sign up with Steam" }).last(),
-  ).toHaveAttribute("href", "/login?next=/me");
-  await expect(
-    page.getByRole("heading", { name: "Pick your obsession" }),
-  ).toBeVisible();
-  const obsessions = page.getByRole("region", { name: "Pick your obsession" });
-  await expect(obsessions.getByRole("link", { name: "Leaders" })).toHaveCount(
-    0,
-  );
-  await expect(obsessions.getByRole("link", { name: "Pick'em" })).toHaveCount(
-    0,
-  );
-  await expect(obsessions.getByRole("link", { name: "Records" })).toBeVisible();
-  await expect(
-    obsessions.getByText(/Opens when regular-season results arrive/).first(),
-  ).toBeVisible();
-});
-
 test("public statistics and news explain their pre-result empty states", async ({
   page,
 }) => {
