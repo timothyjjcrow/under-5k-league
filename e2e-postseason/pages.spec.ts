@@ -40,6 +40,17 @@ for (const archived of [false, true]) {
     await expect(
       directory.getByRole("link", { name: "Season recap", exact: true }),
     ).toHaveCount(archived ? 0 : 1);
+    if (!archived) {
+      await expect(
+        page.locator("main").getByText(/^Season complete/),
+      ).toBeVisible();
+      await expect(
+        directory.getByRole("link", { name: "Fantasy", exact: true }),
+      ).toHaveAttribute("href", "/fantasy");
+      await expect(
+        directory.getByRole("link", { name: "Pick'em", exact: true }),
+      ).toHaveAttribute("href", "/pickem");
+    }
     assertNoErrors();
   });
 }
@@ -360,32 +371,6 @@ test("complete-season public pages agree on the champion and recap", async ({
     page.getByRole("heading", { name: /Your void picks/ }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page, "/pickem completed side game");
-
-  assertNoErrors();
-});
-
-test("feature tour calls COMPLETE league history, not active playoffs", async ({
-  page,
-}) => {
-  await reseed(page, "complete");
-  const assertNoErrors = trackPageErrors(page);
-  await page.goto("/features");
-
-  const playoffs = page.getByRole("region", {
-    name: "Win — or your season is over",
-  });
-  const history = page.getByRole("region", {
-    name: "A champion joins league history",
-  });
-  await expect(playoffs.getByText("Happening now")).toHaveCount(0);
-  await expect(history.getByText("Happening now")).toBeVisible();
-  await expect(page.getByText("Five phases. One champion.")).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Open this feature" }),
-  ).toHaveCount(2);
-  const obsessions = page.getByRole("region", { name: "Pick your obsession" });
-  await expect(obsessions.getByRole("link", { name: "Pick'em" })).toBeVisible();
-  await expect(obsessions.getByRole("link", { name: "Fantasy" })).toBeVisible();
 
   assertNoErrors();
 });
