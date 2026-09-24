@@ -168,7 +168,11 @@ test("signup calls to action distinguish a new account from a registered player"
   await expect(
     page.getByRole("link", { name: "Complete your signup" }).first(),
   ).toHaveAttribute("href", "/me");
-  await page.goto("/api/auth/dev?steamId=7656119800001002&redirect=/features");
+  // Dev login updates the supplied display name. Preserve the seeded player
+  // identity used by the later captain and draft tests in this shared suite.
+  await page.goto(
+    "/api/auth/dev?name=Dendi&steamId=7656119800001002&redirect=/features",
+  );
   await expect(
     page.getByRole("heading", { name: "You're signed up" }),
   ).toBeVisible();
