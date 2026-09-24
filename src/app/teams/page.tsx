@@ -9,6 +9,8 @@ import { formByTeam } from "@/lib/team-matches";
 import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { getTeamJersey } from "@/lib/team-jerseys";
+import { TeamJerseyPreview } from "@/components/team-jersey-preview";
 import {
   Avatar,
   Badge,
@@ -154,6 +156,10 @@ export default async function TeamsPage() {
         (a, b) => (rankOf.get(a.id) ?? 99) - (rankOf.get(b.id) ?? 99),
       )
     : teams;
+  const jerseys = ordered.flatMap((team) => {
+    const jersey = getTeamJersey(team.name);
+    return jersey ? [jersey] : [];
+  });
 
   // Elo power rankings — only regular-season series feed the rating.
   const power = powerRankings(
@@ -670,6 +676,25 @@ export default async function TeamsPage() {
             ) : null}
           </CardBody>
         </Card>
+      ) : null}
+
+      {jerseys.length > 0 ? (
+        <section aria-labelledby="team-jerseys-title" className="space-y-4">
+          <div>
+            <h2 id="team-jerseys-title" className="text-lg font-semibold">
+              Team jerseys
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
+              Your team, front and back. Explore the Fourthwall previews, then
+              choose a player&apos;s personalized jersey.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
+            {jerseys.map((jersey) => (
+              <TeamJerseyPreview key={jersey.teamName} jersey={jersey} />
+            ))}
+          </div>
+        </section>
       ) : null}
     </div>
   );

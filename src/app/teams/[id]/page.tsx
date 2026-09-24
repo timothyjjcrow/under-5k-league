@@ -30,6 +30,8 @@ import { cn } from "@/lib/utils";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { draftSetupOpen } from "@/lib/draft-setup";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { getTeamJersey } from "@/lib/team-jerseys";
+import { TeamJerseyPreview } from "@/components/team-jersey-preview";
 import { canViewLeagueContact } from "@/lib/visibility";
 import {
   REGISTRATION_STATUS,
@@ -98,6 +100,7 @@ export default async function TeamPage({
     },
   });
   if (!team) notFound();
+  const jersey = team.season.isActive ? getTeamJersey(team.name) : null;
   const viewer = await getSessionUser();
 
   const memberIds = team.members.map((m) => m.userId);
@@ -274,6 +277,7 @@ export default async function TeamPage({
     ...(myScenario && stakesReport && played
       ? [{ id: "team-outlook", label: "Playoff outlook" }]
       : []),
+    ...(jersey ? [{ id: "team-jersey", label: "Jersey" }] : []),
   ];
 
   return (
@@ -800,6 +804,25 @@ export default async function TeamPage({
           className="scroll-mt-40"
         >
           <WhatWeNeed scenario={myScenario} teamNames={teamName} />
+        </section>
+      ) : null}
+
+      {jersey ? (
+        <section
+          id="team-jersey"
+          aria-labelledby="team-jersey-title"
+          className="scroll-mt-40 space-y-4"
+        >
+          <div>
+            <h2 id="team-jersey-title" className="text-lg font-semibold">
+              Team jersey
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
+              Explore the Fourthwall front and back previews, then choose your
+              player. Each jersey has a personalized name and position.
+            </p>
+          </div>
+          <TeamJerseyPreview jersey={jersey} featured />
         </section>
       ) : null}
     </div>
