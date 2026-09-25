@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ChampionBanner } from "@/components/champion-banner";
+import { AuctionHistory } from "@/components/auction-history";
 import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -503,6 +504,7 @@ export default async function SeasonArchivePage({
           </div>
         </section>
       ) : null}
+      <AuctionHistory seasonId={season.id} />
     </div>
   );
 }

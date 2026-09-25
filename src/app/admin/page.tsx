@@ -26,6 +26,7 @@ import {
 import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
 import { ImportProgress } from "@/components/import-progress";
 import { DatabaseHealth } from "@/components/database-health";
+import { HistoryCoverage } from "@/components/history-coverage";
 import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
@@ -307,6 +308,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               ]
             : []),
           { id: "adm-automation", label: "Automation" },
+          { id: "adm-history", label: "Historical records" },
           // Season-independent: inhouse alerts/board and the Cred economy are
           // most important in the offseason, when inhouse is the live mode.
           { id: "adm-discord", label: "Discord" },
@@ -359,6 +361,12 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </CardBody>
         </Card>
       )}
+
+      <AdminAnchor id="adm-history">
+        <Suspense fallback={<CardSkeleton rows={3} />}>
+          <HistoryCoverage />
+        </Suspense>
+      </AdminAnchor>
 
       {/* Evergreen: cron also owns offseason/inhouse maintenance, and an
           absent active season must never hide the only production scheduler
@@ -810,7 +818,7 @@ async function loadSeasonAdminData(seasonId: string) {
         orderBy: [{ week: "asc" }, { createdAt: "asc" }],
         include: {
           games: { select: { id: true, dotaMatchId: true, winnerTeamId: true, durationSecs: true } },
-          availability: { select: { id: true, userId: true, status: true } },
+          availability: { select: { id: true, userId: true, status: true, scheduleRevision: true } },
           standins: {
             select: {
               id: true,
@@ -879,10 +887,10 @@ async function loadSeasonAdminData(seasonId: string) {
     standins,
     removed,
     teams,
-    matches,
+    matches: matches.map((match) => ({ ...match, availability: match.availability.filter((rsvp) => rsvp.scheduleRevision === match.scheduleRevision) })),
     draft,
     assignments,
-    outRsvps,
+    outRsvps: outRsvps.filter((rsvp) => rsvp.scheduleRevision === matches.find((match) => match.id === rsvp.matchId)?.scheduleRevision),
     playoffArchive: parsePlayoffArchive(playoffArchive),
     tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
     collateral: { rsvps, picks, covers, proposals },

@@ -9,6 +9,7 @@ import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
 import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
+import { invalidateMatchLineups } from "./match-lineups";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
@@ -332,6 +333,7 @@ export async function respondReschedule(
           // against the old one so the moved night is scanned promptly.
           data: {
             scheduledAt: request.proposedTime,
+            scheduleRevision: { increment: 1 },
             autoSyncedAt: null,
             autoSyncAttempts: 0,
           },
@@ -340,6 +342,7 @@ export async function respondReschedule(
           throw new UserFacingError(
             "That match is no longer awaiting play",
           );
+        await invalidateMatchLineups(tx, match.id, "The kickoff was rescheduled");
 
         // Every RSVP answered the OLD night. Clear them and release the old
         // reminder marker atomically with the retime.

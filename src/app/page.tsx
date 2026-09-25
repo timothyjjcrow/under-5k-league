@@ -756,7 +756,7 @@ async function MyNextMatch({
 
   const [myRsvp, pendingReschedule] = await Promise.all([
     prisma.matchAvailability.findUnique({
-      where: { matchId_userId: { matchId: next.id, userId } },
+      where: { matchId_userId: { matchId: next.id, userId }, scheduleRevision: next.scheduleRevision },
       select: { status: true },
     }),
     prisma.rescheduleRequest.findFirst({
@@ -778,6 +778,8 @@ async function MyNextMatch({
         variant="panel"
         eyebrow={`Your next match · ${matchPhaseLabel(next.phase, next.week)}`}
         matchId={next.id}
+        scheduleRevision={next.scheduleRevision}
+        remainingGames={next.status === "LIVE"}
         heading={`${next.homeTeam.name} vs ${next.awayTeam.name}`}
         when={fmtWhen(next.scheduledAt)}
         whenTs={next.scheduledAt?.getTime()}
@@ -2426,7 +2428,7 @@ async function ThisWeek({
     showCheckins
       ? prisma.matchAvailability.findMany({
           where: { matchId: { in: focus.map((m) => m.id) } },
-          select: { matchId: true, userId: true, status: true },
+          select: { matchId: true, userId: true, status: true, scheduleRevision: true },
         })
       : Promise.resolve([]),
     showCheckins
@@ -2455,7 +2457,7 @@ async function ThisWeek({
     if (roster.length === 0) return null;
     const a = teamAvailability(
       roster,
-      avail.filter((r) => r.matchId === matchId),
+      avail.filter((r) => r.matchId === matchId && r.scheduleRevision === focus.find((m) => m.id === matchId)?.scheduleRevision),
     );
     // Out of the SEASON's side size, not the roster we happen to have — a
     // 4-of-5 team used to render "4/4" in success green.

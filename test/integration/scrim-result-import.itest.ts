@@ -13,7 +13,7 @@ import {
   importScrimGame,
   removeScrimGame,
 } from "@/lib/scrim-result-service";
-import { importGameForMatch } from "@/lib/match-import";
+import { importGameForMatch, loadImportSkips } from "@/lib/match-import";
 import { makeCaptain, makeSeason, makeUser } from "./factories";
 
 vi.mock("@/lib/dota", async (importOriginal) => {
@@ -240,6 +240,7 @@ describe("scrim result ownership and competitive isolation", () => {
     expect(officialAttempt).toEqual({
       ok: false,
       error: "That game is already recorded as a scrim",
+      code: "OWNED_ELSEWHERE",
     });
     expect(fetchOpenDotaMatch).toHaveBeenCalledTimes(1);
     expect(claimProviderCooldown).toHaveBeenCalledTimes(1);
@@ -286,12 +287,9 @@ describe("scrim result ownership and competitive isolation", () => {
       awayScore: 0,
       winnerTeamId: null,
     });
-    expect(
-      JSON.parse(
-        (await prisma.setting.findUniqueOrThrow({
-          where: { key: `importSkip:${season.id}` },
-        })).value,
-      ),
-    ).toContain(DOTA_MATCH_ID);
+    expect(await prisma.importSuppression.findUniqueOrThrow({
+      where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: DOTA_MATCH_ID } },
+    })).toMatchObject({ reason: "ADMIN_REMOVAL" });
+    expect(await loadImportSkips(season.id)).toContain(DOTA_MATCH_ID);
   });
 });

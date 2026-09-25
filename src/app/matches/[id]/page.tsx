@@ -1,7 +1,9 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
 import { Suspense } from "react";
-import { fetchAllGamesForScouting } from "@/lib/cached-queries";
+import { MatchLineups } from "@/components/match-lineups";
+import { fetchGamesForScouting } from "@/lib/game-participants";
+import { GameIdentityEditor } from "@/components/game-identity-editor";
 import {
   decodeGamePlayers,
   parseGamePlayers,
@@ -134,6 +136,7 @@ export default async function MatchDetailPage({
       awayTeam: true,
       games: { orderBy: { startTime: "asc" } },
       standins: { include: { standin: true, replaced: true } },
+      _count: { select: { lineups: true } },
       season: {
         select: {
           isActive: true,
@@ -581,12 +584,18 @@ export default async function MatchDetailPage({
                     maxNet={maxNet}
                   />
                 </CardBody>
+                {viewer?.role === "ADMIN" ? <GameIdentityEditor gameId={g.id} /> : null}
               </Card>
             );
           })
         )}
       </section>
 
+      {match._count.lineups > 0 || (match.season.isActive && match.status !== "COMPLETED") ? (
+        <Suspense fallback={<p className="text-sm text-muted">Loading playing lineups…</p>}>
+          <MatchLineups matchId={match.id} />
+        </Suspense>
+      ) : null}
       {showCaptainTools ? (
         <section
           id="match-tools"
@@ -639,6 +648,7 @@ async function MatchPreview({
     phase: string;
     status: string;
     scheduledAt: Date | null;
+    scheduleRevision: number;
     homeTeamId: string;
     awayTeamId: string;
     homeTeam: { name: string; logoUrl: string | null; captainId: string };
@@ -674,6 +684,7 @@ async function MatchPreview({
       ? prisma.matchAvailability.findMany({
           where: {
             matchId: match.id,
+            scheduleRevision: match.scheduleRevision,
             ...(canSeeNamedAvailability ? {} : { userId: viewer.id }),
           },
           select: { userId: true, status: true },
@@ -691,7 +702,8 @@ async function MatchPreview({
   const rsvpByUser = new Map(rsvps.map((r) => [r.userId, r.status]));
 
   // Mirror setAvailability's decisive capability gate: an RSVP is about one
-  // published, upcoming match night, not an archived/locked/untimed/LIVE row.
+  // published, upcoming match night. LIVE readiness is rendered with the
+  // playing-lineup controls, including after the first game's import.
   const [previewSeason, previewDraft] = await Promise.all([
     prisma.season.findUnique({
       where: { id: match.seasonId },
@@ -721,6 +733,7 @@ async function MatchPreview({
   const previewNow = Date.now();
   const isParticipant =
     !!viewer &&
+    match.status !== "LIVE" &&
     !!previewSeason?.isActive &&
     matchCheckinOpen(
       previewSeason.status,
@@ -760,6 +773,8 @@ async function MatchPreview({
       {isParticipant ? (
         <CheckinBanner
           matchId={match.id}
+          scheduleRevision={match.scheduleRevision}
+          remainingGames={match.status === "LIVE"}
           heading="You're playing in this match"
           when={
             match.scheduledAt
@@ -1032,7 +1047,7 @@ async function ScoutingReport({
 }) {
   // Uncached on purpose — see fetchAllGamesForScouting in cached-queries.ts:
   // the unstable_cache wrapper hangs inside this nested Suspense boundary.
-  const allGames = await fetchAllGamesForScouting();
+  const allGames = await fetchGamesForScouting(sides.flatMap((side) => side.roster.map((player) => player.userId)));
   const scoutGames: ScoutGame[] = allGames.map((g) => ({
     radiantWin: g.radiantWin,
     durationSecs: g.durationSecs,
@@ -1713,6 +1728,7 @@ async function StandinSection({
     id: string;
     seasonId: string;
     status: string;
+    scheduleRevision: number;
     homeTeamId: string;
     awayTeamId: string;
     homeTeam: { name: string; captainId: string };
@@ -1800,7 +1816,7 @@ async function StandinSection({
       // fix (the assign form right below), had to notice a small ✗ in the
       // preview grid instead.
       prisma.matchAvailability.findMany({
-        where: { matchId: match.id, status: "OUT" },
+        where: { matchId: match.id, status: "OUT", scheduleRevision: match.scheduleRevision },
         select: { userId: true },
       }),
     ]);
@@ -1974,6 +1990,7 @@ async function RescheduleSection({
     seasonId: string;
     status: string;
     scheduledAt: Date | null;
+    scheduleRevision: number;
     homeTeam: { name: string; captainId: string };
     awayTeam: { name: string; captainId: string };
   };
@@ -2072,6 +2089,7 @@ async function RescheduleCard({
     id: string;
     status: string;
     scheduledAt: Date | null;
+    scheduleRevision: number;
     homeTeam: { name: string; captainId: string };
     awayTeam: { name: string; captainId: string };
   };
@@ -2085,7 +2103,7 @@ async function RescheduleCard({
 }) {
   if (match.status === "COMPLETED") return null;
   const checkinCount = pending
-    ? await prisma.matchAvailability.count({ where: { matchId: match.id } })
+    ? await prisma.matchAvailability.count({ where: { matchId: match.id, scheduleRevision: match.scheduleRevision } })
     : 0;
   const fmt = (d: Date) =>
     d.toLocaleString(undefined, {

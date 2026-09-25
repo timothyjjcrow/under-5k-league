@@ -56,7 +56,7 @@ function form(fields: Record<string, string>): FormData {
   return data;
 }
 
-const availabilityForm = () => form({ matchId: "match-1", status: "IN" });
+const availabilityForm = () => form({ matchId: "match-1", status: "IN", expectedScheduleRevision: "0" });
 const importForm = () =>
   form({ matchId: "match-1", dotaMatchRef: "123456789" });
 const detectForm = () => form({ matchId: "match-1" });

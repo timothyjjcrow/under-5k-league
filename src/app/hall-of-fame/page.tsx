@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
-import { getAllGameScores } from "@/lib/cached-queries";
-import { careerCounts, careerGameCounts, topCounts, type HofRow } from "@/lib/hall-of-fame";
+import { getPublicGameSnapshot } from "@/lib/public-game-snapshot";
+import { careerGameCounts, topCounts, type HofRow } from "@/lib/hall-of-fame";
+import { appearanceCareers } from "@/lib/appearance-careers";
 import { pointsByPlayer } from "@/lib/fantasy";
 import { pickemStandings } from "@/lib/pickem";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
@@ -72,12 +73,11 @@ function BoardCard({ board, userOf }: { board: Board; userOf: Map<string, User> 
 }
 
 export default async function HallOfFamePage() {
-  const [seasons, memberships, matches, games, predictions] = await Promise.all([
+  const [seasons, matches, games, predictions] = await Promise.all([
     prisma.season.findMany({
       orderBy: { createdAt: "desc" },
       select: { id: true, name: true, status: true, championTeamId: true },
     }),
-    prisma.teamMember.findMany({ select: { userId: true, teamId: true } }),
     prisma.match.findMany({
       select: {
         id: true, seasonId: true, phase: true, bracketSlot: true,
@@ -85,7 +85,7 @@ export default async function HallOfFamePage() {
         awayTeamId: true, scheduledAt: true,
       },
     }),
-    getAllGameScores(),
+    getPublicGameSnapshot(null),
     prisma.prediction.findMany({ select: { matchId: true, userId: true, pickedTeamId: true } }),
   ]);
   const matchesBySeason = new Map<string, typeof matches>();
@@ -102,11 +102,11 @@ export default async function HallOfFamePage() {
     .filter((row): row is { season: typeof seasons[number]; teamId: string } => Boolean(row.teamId));
   const championTeamIds = champions.map((row) => row.teamId);
 
-  const titles = careerCounts(memberships, championTeamIds);
-  const seriesWins = careerCounts(
-    memberships,
-    matches.filter((match) => match.status === "COMPLETED").map((match) => match.winnerTeamId),
-  );
+  const careers = appearanceCareers(games, matches,
+    champions.map(({ season, teamId }) => ({ seasonId: season.id, teamId })));
+  const titles = careers.championshipContributions;
+  const seriesWins = careers.seriesWins;
+  const memberships = careers.rows.filter((row) => row.championshipContribution);
   const trustedGames = games.map((game) => ({
     radiantWin: game.radiantWin,
     players: trustedGamePlayers(decodeGamePlayers(game.players)),
@@ -133,14 +133,14 @@ export default async function HallOfFamePage() {
   const pointsNumber = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   const careerBoards: Board[] = [
     {
-      id: "titles", title: "🏆 Championships", subtitle: "Official titles across completed seasons.",
+      id: "titles", title: "🏆 Championship contributions", subtitle: "Appeared for a title-winning team during its championship season, including substitutes and former members.",
       rows: topCounts(titles), format: (value) => `${value}×`,
-      detail: (id) => `${seriesWins.get(id) ?? 0} series wins`,
+      detail: (id) => `${seriesWins.get(id) ?? 0} series wins with an appearance`,
     },
     {
-      id: "series", title: "⚔️ Series wins", subtitle: "Completed league match victories with a recorded winner.",
+      id: "series", title: "⚔️ Series wins", subtitle: "Completed victories with at least one recorded appearance for the winning team. Counted once per series.",
       rows: topCounts(seriesWins), format: (value) => number.format(value),
-      detail: (id) => `${titles.get(id) ?? 0} titles`,
+      detail: (id) => `${titles.get(id) ?? 0} championship contributions`,
     },
   ];
   const performanceBoards: Board[] = [
@@ -221,7 +221,7 @@ export default async function HallOfFamePage() {
                 : "The next chapter is still being written."}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">
-              Explore official titles, match wins, imported game performances, and pick&apos;em results across the full archive.
+              Explore official team titles, recorded player contributions, imported game performances, and pick&apos;em results across the full archive.
             </p>
             {featuredChampion && featuredTeam ? (
               <Link href={`/seasons/${featuredChampion.season.id}`} className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-info hover:underline">
@@ -308,6 +308,7 @@ export default async function HallOfFamePage() {
                     </div>
                     {roster.length > 0 ? (
                       <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line-soft pt-4">
+                        <p className="w-full text-xs text-muted">Recorded contributors during this championship season</p>
                         {roster.map((member) => {
                           const user = userOf.get(member.userId);
                           return user ? (
@@ -315,7 +316,7 @@ export default async function HallOfFamePage() {
                           ) : null;
                         })}
                       </div>
-                    ) : null}
+                    ) : <p className="mt-4 text-xs text-muted">The team title is recorded; individual appearances have not been recovered.</p>}
                   </CardBody>
                 </Card>
               );
@@ -325,7 +326,9 @@ export default async function HallOfFamePage() {
       </section>
 
       <p className="border-t border-line-soft pt-4 text-xs leading-relaxed text-muted">
-        Historical totals change when an archived result is corrected. Fantasy uses the current role-aware scoring rules for every imported game.
+        Player contributions use {careers.coverage.trustedGames} trusted game{careers.coverage.trustedGames === 1 ? "" : "s"} of {careers.coverage.importedGames} imported.
+        {careers.coverage.unattributedLines > 0 ? ` ${careers.coverage.unattributedLines} player lines lack a verified player/team pairing and cannot receive a team contribution.` : ""}
+        {" "}Manual results without box scores still count for teams; they do not invent individual appearances. Historical totals change when a result is corrected. Fantasy uses the current role-aware scoring rules for every imported game.
       </p>
     </div>
   );

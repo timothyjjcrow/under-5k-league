@@ -14,6 +14,7 @@ import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
 import { isPlayoffPhase, matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import type { ActionResult } from "@/lib/action-result";
 import { singleActiveSeason } from "@/lib/season";
+import { invalidateMatchLineups, loadLineupCandidates } from "@/lib/match-lineups";
 import {
   actionErrorMessage,
   UserFacingError,
@@ -21,7 +22,7 @@ import {
 
 /**
  * Record the signed-in player's match-night RSVP (IN | OUT) for a scheduled
- * match they're rostered in (or assigned to as a standin).
+ * match, or readiness for the remaining games of a live series.
  */
 export async function setAvailability(
   _prev: ActionResult,
@@ -37,11 +38,14 @@ export async function setAvailability(
   const matchId = str(formData, "matchId");
   const status = parseAvailabilityStatus(str(formData, "status"));
   if (!status) return { error: "Invalid RSVP" };
+  const revisionValue = formData.get("expectedScheduleRevision");
+  const expectedScheduleRevision = typeof revisionValue === "string" && /^(0|[1-9]\d*)$/.test(revisionValue) ? Number(revisionValue) : NaN;
+  if (!Number.isSafeInteger(expectedScheduleRevision)) return { error: "Reload the match to check in for its current kickoff." };
 
   // Match phase/status, current roster authority, standin cover and the prior
   // answer all belong to one write-time decision. Keeping these reads outside
-  // the transaction let an RSVP land after the season archived, the match went
-  // live, or this player's seat was replaced. SERIALIZABLE makes those state
+  // the transaction let an RSVP land after the season archived, the match
+  // finished, or this player's seat was replaced. SERIALIZABLE makes those state
   // changes contend with this write instead of accepting a stale snapshot.
   let committed;
   try {
@@ -69,14 +73,16 @@ export async function setAvailability(
               phase: true,
               status: true,
               scheduledAt: true,
+              scheduleRevision: true,
               homeTeamId: true,
               awayTeamId: true,
-              homeTeam: { select: { name: true, captainId: true } },
-              awayTeam: { select: { name: true, captainId: true } },
+              homeTeam: { select: { name: true, captainId: true, withdrawn: true } },
+              awayTeam: { select: { name: true, captainId: true, withdrawn: true } },
             },
           }),
         ]);
         if (!match) throw new UserFacingError("Unknown match");
+        if (match.scheduleRevision !== expectedScheduleRevision) throw new UserFacingError("The kickoff changed — reload before answering for the new time.");
         // An archived season's unplayed match still lists its rosters, and an
         // OUT here would ping a captain about a fixture nobody is playing.
         if (!activeSeason || match.seasonId !== activeSeason.id) {
@@ -97,10 +103,6 @@ export async function setAvailability(
         ) {
           if (match.status === MATCH_STATUS.COMPLETED)
             throw new UserFacingError("That match is already finished");
-          if (match.status === MATCH_STATUS.LIVE)
-            throw new UserFacingError(
-              "Check-in is closed because that match is live",
-            );
           if (!postAuctionWorkOpen(activeSeason.status, draftStatus))
             throw new UserFacingError(
               "Check-in is not open in this league phase",
@@ -138,7 +140,7 @@ export async function setAvailability(
           }),
           tx.matchAvailability.findUnique({
             where: { matchId_userId: { matchId, userId: user.id } },
-            select: { status: true },
+            select: { status: true, scheduleRevision: true },
           }),
         ]);
         if (onRoster && replacedSeat) {
@@ -149,19 +151,30 @@ export async function setAvailability(
         if (!onRoster && !standinSeat) {
           throw new UserFacingError("You're not playing in this match");
         }
+        const affectedTeamId = onRoster?.teamId ?? standinSeat!.teamId;
+        if ((affectedTeamId === match.homeTeamId ? match.homeTeam : match.awayTeam).withdrawn) {
+          throw new UserFacingError("A withdrawn team cannot check in for this match.");
+        }
+        const candidates = await loadLineupCandidates(tx, match, affectedTeamId);
+        if (!candidates.some((candidate) => candidate.userId === user.id && candidate.eligible)) {
+          throw new UserFacingError("You're not playing in this match — the roster or cover assignment changed.");
+        }
 
-        await tx.matchAvailability.upsert({
-          where: { matchId_userId: { matchId, userId: user.id } },
-          create: { matchId, userId: user.id, status },
-          update: { status },
-        });
+        const priorStatus = prior?.scheduleRevision === match.scheduleRevision ? prior.status : null;
+        if (priorStatus !== status) {
+          await tx.matchAvailability.upsert({
+            where: { matchId_userId: { matchId, userId: user.id } },
+            create: { matchId, userId: user.id, status, scheduleRevision: match.scheduleRevision },
+            update: { status, scheduleRevision: match.scheduleRevision },
+          });
+          await invalidateMatchLineups(tx, match.id, "A player's check-in changed", new Date(), affectedTeamId);
+        }
 
         // Which side loses a player — the roster seat, or the team a standin
         // was covering for. This is who has to go find replacement cover.
-        const affectedTeamId = onRoster?.teamId ?? standinSeat?.teamId ?? null;
         return {
           match,
-          priorStatus: prior?.status ?? null,
+          priorStatus,
           affectedCaptainId:
             affectedTeamId === match.homeTeamId
               ? match.homeTeam.captainId
@@ -240,7 +253,7 @@ export async function setAvailability(
   return {
     message:
       status === "IN"
-        ? "You're confirmed for the match ✓"
+        ? match.status === MATCH_STATUS.LIVE ? "You're ready for the next game ✓" : "You're confirmed for the match ✓"
         : "Marked as unavailable — your captain and the admin can line up a standin",
   };
 }

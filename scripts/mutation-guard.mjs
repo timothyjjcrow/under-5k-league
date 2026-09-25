@@ -79,11 +79,6 @@ const EQUIVALENT = new Set([
   // two-start test (including the existing-row/after-abort branch) pins the
   // actual one-winner invariant and its one Discord announcement.
   "src/app/actions/admin.ts::startDraft::status#1",
-  // voidCurrentLot reads and writes the singleton Draft row in one
-  // SERIALIZABLE transaction. A rival lot mutation therefore forces P2034
-  // even without the copied lot/version fields; the WHERE remains as explicit
-  // state-machine documentation and defense in depth.
-  "src/lib/draft-service.ts::voidCurrentLot::currentBid+currentBidTeamId+nominatedUserId+status+updatedAt#1",
   // undoLastSale reads Draft.status and nominatedUserId, performs its refund,
   // and reopens that same Draft row inside one SERIALIZABLE transaction. A
   // poller opening a lot in the gap changes the row and forces Undo to abort
@@ -271,6 +266,13 @@ const FILES = [
   "src/app/api/dota-lobby/route.ts",
   "src/lib/dota-account-service.ts",
   "src/lib/draft-service.ts",
+  "src/lib/draft-history.ts",
+  "src/lib/roster-history.ts",
+  "src/lib/game-participants.ts",
+  "src/lib/game-identity-correction.ts",
+  "src/lib/participant-admin.ts",
+  "src/lib/match-lineups.ts",
+  "src/lib/import-candidates.ts",
   "src/lib/inhouse-service.ts",
   "src/lib/match-import.ts",
   "src/lib/reschedule-service.ts",
@@ -283,6 +285,7 @@ const FILES = [
   "src/lib/settings.ts",
   "src/lib/season.ts",
   "src/app/actions/admin.ts",
+  "src/app/actions/import-progress.ts",
   "src/app/actions/news.ts",
   "src/app/actions/registration.ts",
   "src/lib/honors-service.ts",

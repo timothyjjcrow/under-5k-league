@@ -3,6 +3,8 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { draftRecap } from "@/lib/draft-recap";
+import { readDraftSales } from "@/lib/draft-history";
+import { AuctionHistory } from "@/components/auction-history";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
 import { formByTeam } from "@/lib/team-matches";
@@ -77,7 +79,7 @@ export default async function TeamsPage() {
     }),
     prisma.draft.findUnique({
       where: { seasonId: season.id },
-      select: { status: true },
+      select: { status: true, activeRunId: true, activeRun: { select: { provenance: true } } },
     }),
   ]);
 
@@ -123,7 +125,6 @@ export default async function TeamsPage() {
         select: { userId: true, mmr: true, status: true, type: true },
       })
     : [];
-  const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
   const displayBudgets = draftBudgetsForDisplay({
     seasonIsActive: season.isActive,
     seasonStatus: season.status,
@@ -138,14 +139,17 @@ export default async function TeamsPage() {
         registration.type === REGISTRATION_TYPE.PLAYER,
     ),
   });
-  const recap = draftRecap(
-    teams.flatMap((t) =>
+  const hasAuctionReceipts = draft?.activeRunId && draft.activeRun?.provenance === "COMMAND";
+  const recap = draftRecap(hasAuctionReceipts
+    ? await readDraftSales(prisma, draft.activeRunId!)
+    : teams.flatMap((t) =>
       t.members.map((m) => ({
         name: m.user.name,
         teamName: t.name,
+        teamId: t.id,
         price: m.price,
         isCaptain: m.isCaptain,
-        mmr: mmrByUser.get(m.userId) ?? null,
+        mmr: null,
       })),
     ),
   );
@@ -617,8 +621,8 @@ export default async function TeamsPage() {
       {recap.totalSpent > 0 ? (
         <Card>
           <CardHeader
-            title={isDraft ? "Draft night — so far" : "Draft night"}
-            subtitle={`$${recap.totalSpent} total spent`}
+            title={hasAuctionReceipts ? (isDraft ? "Draft night — so far" : "Draft night") : "Surviving roster prices"}
+            subtitle={hasAuctionReceipts ? `$${recap.totalSpent} total spent · original auction values` : `$${recap.totalSpent} in current roster rows · original auction history is incomplete`}
           />
           <CardBody className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
             {recap.biggestSpend ? (
@@ -661,7 +665,7 @@ export default async function TeamsPage() {
               </div>
             ) : null}
             {recap.bargainHunter &&
-            recap.bargainHunter.teamName !== recap.topSpender?.teamName ? (
+            (recap.bargainHunter.teamId ?? recap.bargainHunter.teamName) !== (recap.topSpender?.teamId ?? recap.topSpender?.teamName) ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   🧾 Bargain hunter
@@ -696,6 +700,7 @@ export default async function TeamsPage() {
           </div>
         </section>
       ) : null}
+      <AuctionHistory seasonId={season.id} />
     </div>
   );
 }

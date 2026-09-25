@@ -6,6 +6,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { raceHook } from "@/lib/race-hook";
 import { requireAdmin } from "@/lib/auth";
+import { captureRosterTenure, closeRosterTenure, recordHistoryAction } from "@/lib/roster-history";
+import { startDraftRun } from "@/lib/draft-history";
+import { invalidateMatchLineups, invalidateTeamLineups } from "@/lib/match-lineups";
 import {
   archiveCompletedSeason,
   completedSeasonArchiveReadiness,
@@ -971,8 +974,9 @@ export async function addCaptain(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -1059,7 +1063,7 @@ export async function addCaptain(
             draftOrder: order,
           },
         });
-        await tx.teamMember.create({
+        const member = await tx.teamMember.create({
           data: {
             seasonId: currentSeason.id,
             teamId: team.id,
@@ -1068,6 +1072,8 @@ export async function addCaptain(
             price: 0,
           },
         });
+        await captureRosterTenure(tx, member, { kind: "CAPTAIN_DESIGNATION", mmr: reg.mmr || null, roles: reg.roles, actorId: actor.id });
+        await invalidateTeamLineups(tx, team.id, "ROSTER_CAPTAIN_DESIGNATED");
         return { name: user.name, teamName, discordId: user.discordId };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -1114,8 +1120,9 @@ export async function removeCaptain(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -1228,6 +1235,9 @@ export async function removeCaptain(
         if (fixtures > 0) {
           await tx.match.deleteMany({ where: { seasonId: currentSeason.id } });
         }
+        const historyAt = new Date();
+        for (const member of team.members) await closeRosterTenure(tx, member, "PRE_DRAFT_TEAM_REMOVED", actor.id, historyAt);
+        await invalidateTeamLineups(tx, team.id, "ROSTER_CAPTAIN_REMOVED", historyAt);
         const gone = await tx.team.deleteMany({
           where: {
             id: team.id,
@@ -1324,8 +1334,9 @@ export async function transferCaptaincy(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -1474,6 +1485,14 @@ export async function transferCaptaincy(
           data: { isCaptain: true },
         });
         if (promoted.count === 0) throw new CaptainStateChangedError();
+        // Authority changed, not membership or its acquisition price.
+        const historyAt = new Date();
+        await captureRosterTenure(tx, incoming, undefined, historyAt);
+        await captureRosterTenure(tx, outgoing, undefined, historyAt);
+        await recordHistoryAction(tx, actor, currentSeason.id, "captainTransferHistory",
+          `Transferred captaincy of ${team.name} from ${team.captain.name} to ${incoming.user.name}`,
+          { teamId: team.id, outgoingUserId: outgoing.userId, incomingUserId: incoming.userId, effectiveAt: historyAt.toISOString() });
+        await invalidateTeamLineups(tx, team.id, "CAPTAIN_AUTHORITY_CHANGED", historyAt);
         return {
           teamName: team.name,
           incomingName: incoming.user.name,
@@ -2237,8 +2256,9 @@ export async function startDraft(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -2291,7 +2311,7 @@ export async function startDraft(
               status: REGISTRATION_STATUS.ACTIVE,
               type: REGISTRATION_TYPE.PLAYER,
             },
-            select: { userId: true, mmr: true },
+            select: { userId: true, mmr: true, roles: true },
           }),
           tx.teamMember.findMany({
             where: { seasonId: expectedActiveSeasonId },
@@ -2453,6 +2473,12 @@ export async function startDraft(
           data: { status: SEASON_STATUS.DRAFT },
         });
         if (phaseClaim.count === 0) throw new ActiveSeasonChangedError();
+        await startDraftRun(tx, {
+          seasonId: currentSeason.id, actor, rules: {
+            teamSize: currentSeason.teamSize, draftBudget: currentSeason.draftBudget,
+            budgetMmrWeight: currentSeason.budgetMmrWeight,
+          }, teams, registrations: regs, budgets,
+        });
 
         return {
           seasonName: currentSeason.name,
@@ -3129,8 +3155,9 @@ export async function startPlayoffs(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -3181,7 +3208,7 @@ export async function startPlayoffs(
       intent,
       expectedSeasonStatus,
       expectedRevision,
-    });
+    }, actor);
   } catch (e) {
     return {
       error: actionErrorMessage(
@@ -3259,8 +3286,9 @@ export async function returnToRegularSeasonAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -3284,7 +3312,7 @@ export async function returnToRegularSeasonAction(
     outcome = await returnToRegularSeason(season.id, {
       expectedSeasonStatus,
       expectedRevision,
-    });
+    }, actor);
   } catch (error) {
     return {
       error: actionErrorMessage(
@@ -3717,8 +3745,9 @@ export async function signFreeAgent(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -3894,7 +3923,7 @@ export async function signFreeAgent(
           },
         });
         if (stillCovering > 0) throw new Error("STANDIN_COVER");
-        await tx.teamMember.create({
+        const member = await tx.teamMember.create({
           data: {
             seasonId: season.id,
             teamId,
@@ -3903,6 +3932,9 @@ export async function signFreeAgent(
             isCaptain: false,
           },
         });
+        await captureRosterTenure(tx, member, { kind: "FREE_AGENT", mmr: currentRegistration.mmr || null,
+          roles: currentRegistration.roles, actorId: actor.id });
+        await invalidateTeamLineups(tx, teamId, "ROSTER_FREE_AGENT_SIGNED");
         // The reverse of releasePlayer's stale-cover rule: an EMPTY-SEAT
         // assignment (replacingUserId null) is permanently "live" to
         // matchNightRoster, so once this signing fills the team's LAST seat
@@ -4103,8 +4135,9 @@ export async function releasePlayer(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -4220,6 +4253,8 @@ export async function releasePlayer(
           }
           throw new Error("ALREADY_RELEASED");
         }
+        await closeRosterTenure(tx, member, "RELEASE", actor.id);
+        await invalidateTeamLineups(tx, member.teamId, "ROSTER_RELEASED");
         // Only cover on a series that hasn't started. Once a game is imported the
         // assignment is load-bearing for the REST of that series: gatherTeamAccounts
         // re-reads StandinAssignment on every import, so deleting it mid-Bo3 drops
@@ -4503,6 +4538,7 @@ export async function withdrawTeam(
         if (flagged.count === 0) {
           throw new TeamAlreadyWithdrawnError(team.name);
         }
+        await invalidateTeamLineups(tx, teamId, "TEAM_WITHDRAWN");
         const cancelledScrims = await tx.scrim.updateMany({
           where: {
             seasonId: expectedActiveSeasonId,
@@ -5078,6 +5114,7 @@ export async function reopenMatch(
             "That match or its games just changed — reload before reopening it.",
           );
         }
+        await invalidateMatchLineups(tx, match.id, "MATCH_REOPENED");
 
         if (match.scheduledAt) {
           await invalidatePendingAnnouncementMarkers(
@@ -5707,9 +5744,10 @@ export async function setWeekNight(
               status: MATCH_STATUS.SCHEDULED,
               scheduledAt: match.scheduledAt,
             },
-            data: { scheduledAt, autoSyncedAt: null, autoSyncAttempts: 0 },
+            data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
           });
           if (updated.count !== 1) throw new ScheduleMatchChangedError();
+          await invalidateMatchLineups(tx, match.id, "KICKOFF_CHANGED");
         }
 
         // Keep the arithmetic anchor used for future playoff rounds aligned with
@@ -5972,9 +6010,10 @@ export async function setMatchTime(
             status: MATCH_STATUS.SCHEDULED,
             scheduledAt: before.scheduledAt,
           },
-          data: { scheduledAt, autoSyncedAt: null, autoSyncAttempts: 0 },
+          data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
         });
         if (updated.count !== 1) throw new ScheduleMatchChangedError();
+        await invalidateMatchLineups(tx, matchId, "KICKOFF_CHANGED");
 
         const [rsvps, proposals] = await Promise.all([
           tx.matchAvailability.deleteMany({ where: { matchId } }),

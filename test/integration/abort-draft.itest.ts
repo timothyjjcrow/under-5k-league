@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // abortDraft is the escape hatch for the league's one unrecoverable mistake:
 // startDraft is a one-way door (nothing else ever writes Draft.status back to
@@ -10,7 +10,7 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   updateTag: vi.fn(),
 }));
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })), requireUser: vi.fn() }));
 vi.mock("@/lib/discord", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/discord")>()),
   getWebhookUrl: vi.fn(async () => ""),
@@ -31,6 +31,7 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { weekReminderKey } from "@/lib/settings";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
   makeCaptain,
   makePlayer,
@@ -40,9 +41,11 @@ import {
   runDraftToCompletion,
   sessionFor,
   startDraftState,
+  ON_POSTGRES,
 } from "./factories";
 
 const admin = () => makeUser("Boss", "ADMIN").then(sessionFor);
+afterEach(() => setRaceHook(null));
 
 /** A season mid-auction with two captains and a pool, the premature-start state. */
 async function prematureStart(teamSize = 3) {
@@ -926,10 +929,48 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
         expect(member).not.toBeNull();
         expect(budget).toBe(43); // untouched
       }
+      const runs = await prisma.draftRun.findMany({ where: { seasonId: season.id }, include: { lots: true } });
+      expect(runs).toHaveLength(1);
+      expect(draft.activeRunId).toBe(runs[0].id);
+      expect(runs[0].runNumber).toBe(1);
+      const undoReceipts = await prisma.adminAction.count({ where: { seasonId: season.id, action: "undoLegacyDraftSale" } });
+      const closedTenures = await prisma.rosterTenure.count({ where: { seasonId: season.id, userId: sold.id, endReason: "DRAFT_UNDO" } });
+      expect(undoReceipts).toBe(result.ok ? 1 : 0);
+      expect(closedTenures).toBe(result.ok ? 1 : 0);
+      expect(runs[0].lots).toHaveLength(draft.nominatedUserId ? 1 : 0);
       await prisma.season.update({
         where: { id: season.id },
         data: { isActive: false },
       });
     }
+  });
+
+  it.skipIf(!ON_POSTGRES)("refuses a losing legacy history bootstrap without refunding or retaining partial undo history", async () => {
+    const { season, a, sold } = await saleWithExpiredNominationClock("Bootstrap");
+    const adm = await admin();
+    const memberBefore = await prisma.teamMember.findUniqueOrThrow({
+      where: { seasonId_userId: { seasonId: season.id, userId: sold.id } },
+    });
+    let rivalOpened = false;
+    setRaceHook(onceAt("draft.ensureDraftRun.beforeClaim", async () => {
+      // Undo has deleted its member only in its still-open transaction. The
+      // other connection can claim Draft and bootstrap a genuine new lot.
+      rivalOpened = await resolveStalledNomination(season.id);
+    }));
+    const result = await undoLastSale(season.id, adm);
+    expect(rivalOpened).toBe(true);
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/changed|try again/i) });
+    expect(await prisma.teamMember.findUnique({ where: { id: memberBefore.id } })).toEqual(memberBefore);
+    expect((await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })).budget).toBe(43);
+    expect(await prisma.rosterTenure.count({ where: { seasonId: season.id } })).toBe(0);
+    expect(await prisma.adminAction.count({ where: { seasonId: season.id } })).toBe(0);
+    const runs = await prisma.draftRun.findMany({ where: { seasonId: season.id }, include: { lots: true } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ runNumber: 1, provenance: "LEGACY_OBSERVATION", status: "RUNNING" });
+    expect(runs[0].lots).toHaveLength(1);
+    expect(runs[0].lots[0].status).toBe("OPEN");
+    const current = await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } });
+    expect(current).toMatchObject({ activeRunId: runs[0].id, currentLotId: runs[0].lots[0].id, nominationEndsAt: null });
+    expect(current.nominatedUserId).not.toBeNull();
   });
 });

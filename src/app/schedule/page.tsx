@@ -210,7 +210,7 @@ export default async function SchedulePage() {
       showRsvpSummaries
         ? prisma.matchAvailability.findMany({
             where: { match: { seasonId: season.id } },
-            select: { matchId: true, userId: true, status: true },
+            select: { matchId: true, userId: true, status: true, scheduleRevision: true },
           })
         : Promise.resolve([]),
       prisma.draft.findUnique({
@@ -251,6 +251,7 @@ export default async function SchedulePage() {
   }
   const rsvpsByMatch = new Map<string, { userId: string; status: string }[]>();
   for (const r of rsvps) {
+    if (r.scheduleRevision !== matches.find((match) => match.id === r.matchId)?.scheduleRevision) continue;
     const arr = rsvpsByMatch.get(r.matchId) ?? [];
     arr.push(r);
     rsvpsByMatch.set(r.matchId, arr);
@@ -633,6 +634,8 @@ export default async function SchedulePage() {
       {myNextMatch ? (
         <CheckinBanner
           matchId={myNextMatch.id}
+          scheduleRevision={myNextMatch.scheduleRevision}
+          remainingGames={myNextMatch.status === "LIVE"}
           heading={`Your next match — ${myNextMatch.phase === "TIEBREAKER" ? "Tiebreaker week · " : ""}Week ${myNextMatch.week}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
           when={fmtWhen(myNextMatch.scheduledAt)}
           whenTs={myNextMatch.scheduledAt?.getTime()}

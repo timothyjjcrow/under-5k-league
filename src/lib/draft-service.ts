@@ -33,6 +33,14 @@ import {
   sendDiscordMessage,
 } from "./discord";
 import { canViewLeagueContact } from "./visibility";
+import { captureRosterTenure, closeRosterTenure } from "./roster-history";
+import {
+  abortDraftHistory, appendAcceptedDraftBid, ensureCurrentDraftLot,
+  DraftHistoryRaceError,
+  openDraftLot, readDraftSales, setDraftRunStatus, settleDraftLot,
+  undoDraftSaleHistory, voidDraftLot,
+} from "./draft-history";
+import { invalidateTeamLineups } from "./match-lineups";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
@@ -84,6 +92,7 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         currentBidTeamId: draft.currentBidTeamId,
         currentBid: draft.currentBid,
         bidEndsAt: draft.bidEndsAt,
+        currentLotId: draft.currentLotId,
       },
       data: {
         nominatedUserId: null,
@@ -107,7 +116,7 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     });
     if (nomReg && nomReg.status === "ACTIVE" && nomReg.type === "PLAYER") {
       // Award the player to the winning team.
-      await tx.teamMember.create({
+      const member = await tx.teamMember.create({
         data: {
           seasonId,
           teamId: draft.currentBidTeamId,
@@ -116,6 +125,8 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
           isCaptain: false,
         },
       });
+      await settleDraftLot(tx, draft, member, nomReg.mmr, nomReg.roles);
+      await invalidateTeamLineups(tx, member.teamId, "ROSTER_AUCTION_ACQUISITION");
       await tx.team.update({
         where: { id: draft.currentBidTeamId },
         data: { budget: { decrement: draft.currentBid } },
@@ -127,6 +138,9 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
       if (soldUser && soldTeam) {
         sale = { player: soldUser.name, team: soldTeam.name, price: draft.currentBid };
       }
+    } else {
+      await voidDraftLot(tx, draft, "NOMINEE_NO_LONGER_ELIGIBLE", null);
+      await tx.bid.deleteMany({ where: { draftId: draft.id, userId: draft.nominatedUserId } });
     }
 
     // Recompute needs and pick the next nominator.
@@ -167,6 +181,7 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         where: { seasonId },
         data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
       });
+      await setDraftRunStatus(tx, draft, "COMPLETE");
       completedSeasonName = season.name;
     } else {
       await tx.draft.update({
@@ -198,31 +213,20 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
  * superlatives via the same tested draftRecap math the /teams card uses.
  */
 async function sendDraftRecap(seasonId: string): Promise<void> {
-  const [teams, regs] = await Promise.all([
-    prisma.team.findMany({
-      where: { seasonId },
-      include: { members: { include: { user: { select: { name: true } } } } },
-    }),
-    prisma.registration.findMany({
-      where: { seasonId },
-      select: { userId: true, mmr: true },
-    }),
-  ]);
-  const mmrByUser = new Map(regs.map((r) => [r.userId, r.mmr]));
-  const recap = draftRecap(
-    teams.flatMap((t) =>
-      t.members.map((m) => ({
-        name: m.user.name,
-        teamName: t.name,
-        price: m.price,
-        isCaptain: m.isCaptain,
-        mmr: mmrByUser.get(m.userId) ?? null,
-      })),
-    ),
-  );
-  if (recap.totalSpent > 0) {
-    await sendDiscordMessage(draftRecapMessage(recap));
-  }
+  const draft = await prisma.draft.findUnique({ where: { seasonId }, include: { activeRun: true } });
+  const players = draft?.activeRun?.provenance === "COMMAND"
+    ? await readDraftSales(prisma, draft.activeRun.id)
+    : (await prisma.team.findMany({
+        where: { seasonId },
+        include: { members: { include: { user: { select: { name: true } } } } },
+      })).flatMap((team) => team.members.map((member) => ({
+        name: member.user.name, teamName: team.name, teamId: team.id, price: member.price,
+        isCaptain: member.isCaptain,
+        // Existing rosters prove their observed price, not acquisition MMR.
+        mmr: null,
+      })));
+  const recap = draftRecap(players);
+  if (recap.totalSpent > 0) await sendDiscordMessage(draftRecapMessage(recap));
 }
 
 /**
@@ -304,6 +308,7 @@ export async function resolveStalledNomination(
           data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
         });
         if (done.count === 0) return false;
+        await setDraftRunStatus(tx, draft, "COMPLETE");
         completedSeasonName = season.name;
       } else {
         const adv = await tx.draft.updateMany({
@@ -354,6 +359,7 @@ export async function resolveStalledNomination(
         },
       });
       if (done.count === 0) return false;
+      await setDraftRunStatus(tx, draft, "COMPLETE");
       completedSeasonName = season.name;
       return true;
     }
@@ -378,7 +384,8 @@ export async function resolveStalledNomination(
       },
     });
     if (claim.count === 0) return false;
-    await tx.bid.create({
+    const lot = await openDraftLot(tx, draft, { userId: pick.userId, teamId: nominator.id, kind: "AUTOMATIC" });
+    const bid = await tx.bid.create({
       data: {
         draftId: draft.id,
         seasonId,
@@ -387,6 +394,7 @@ export async function resolveStalledNomination(
         amount,
       },
     });
+    await appendAcceptedDraftBid(tx, lot, bid, nominator.name);
     return true;
   });
   if (completedSeasonName) {
@@ -528,6 +536,7 @@ export async function voidCurrentLot(
           currentBid: draft.currentBid,
           currentBidTeamId: draft.currentBidTeamId,
           updatedAt: draft.updatedAt,
+          currentLotId: draft.currentLotId,
         },
         data: {
           nominatedUserId: null,
@@ -540,6 +549,7 @@ export async function voidCurrentLot(
       if (claim.count === 0) {
         return { ok: false as const, error: "The lot just changed — reload" };
       }
+      await voidDraftLot(tx, draft, "ADMIN_VOID", viewer.id);
       await tx.bid.deleteMany({
         where: { draftId: draft.id, userId: draft.nominatedUserId },
       });
@@ -626,7 +636,7 @@ export async function undoLastSale(
     // sale in place, and still re-opening the auction.
     const last = await tx.teamMember.findFirst({
       where: { seasonId, isCaptain: false, price: { gt: 0 } },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       include: { user: { select: { name: true } }, team: { select: { name: true } } },
     });
     if (!last) {
@@ -656,7 +666,10 @@ export async function undoLastSale(
         error: "That sale was already undone — nothing changed.",
       };
     }
-    // Void this lot's audit trail too. The Bid rows are keyed by
+    await undoDraftSaleHistory(tx, draft, last, viewer);
+    await closeRosterTenure(tx, last, "DRAFT_UNDO", viewer.id);
+    await invalidateTeamLineups(tx, last.teamId, "ROSTER_DRAFT_UNDO");
+    // Clear only the operational trail; immutable lot receipts survive. The Bid rows are keyed by
     // (draftId, userId) with no per-nomination id, so leaving them meant the
     // re-run auction's "Bid trail" replayed the VOIDED sale's prices — every
     // captain saw the price apparently falling from $57 to $1.
@@ -718,6 +731,7 @@ export async function undoLastSale(
         "A lot went live while you were undoing — let it settle and try again.",
       );
     }
+    await setDraftRunStatus(tx, draft, "RUNNING");
     return {
       ok: true as const,
       player: last.user.name,
@@ -729,7 +743,7 @@ export async function undoLastSale(
   } catch (e) {
     // Outside the callback on purpose — catching inside would resolve the
     // transaction and commit the very writes the throw exists to roll back.
-    if (e instanceof UndoRaceError) {
+    if (e instanceof UndoRaceError || e instanceof DraftHistoryRaceError) {
       return { ok: false as const, error: e.message };
     }
     if ((e as { code?: string }).code === "P2034") {
@@ -871,7 +885,6 @@ export async function abortDraft(
           }),
           tx.teamMember.findMany({
             where: { seasonId },
-            select: { id: true, teamId: true, userId: true, price: true },
           }),
         ]);
         const captainByTeam = new Map(
@@ -893,6 +906,11 @@ export async function abortDraft(
             (spentByTeam.get(member.teamId) ?? 0) + member.price,
           );
         }
+        const historyAt = new Date();
+        await abortDraftHistory(tx, draft, roster, viewer, historyAt);
+        for (const member of retainedCaptains) await captureRosterTenure(tx, member, undefined, historyAt);
+        for (const member of returned) await closeRosterTenure(tx, member, "DRAFT_ABORT", viewer.id, historyAt);
+        for (const team of teamAuthorities) await invalidateTeamLineups(tx, team.id, "ROSTER_DRAFT_ABORT", historyAt);
         if (returned.length > 0) {
           await tx.teamMember.deleteMany({
             where: { id: { in: returned.map((member) => member.id) } },
@@ -1168,7 +1186,9 @@ export async function getDraftState(
           }
         : undefined;
 
-      const recentSales = teams
+      const historyRun = draft?.activeRunId
+        ? await tx.draftRun.findUniqueOrThrow({ where: { id: draft.activeRunId } }) : null;
+      const observedSales = teams
         .flatMap((team) =>
           team.members
             .filter((member) => !member.isCaptain && member.price > 0)
@@ -1181,6 +1201,9 @@ export async function getDraftState(
         )
         .sort((a, b) => b.at - a.at)
         .slice(0, 8);
+      const recentSales = historyRun?.provenance === "COMMAND"
+        ? (await readDraftSales(tx, historyRun.id)).slice(0, 8)
+        : observedSales;
       const nominatedPlayer = draft?.nominatedUserId
         ? (playerRegs.find(
             (registration) => registration.userId === draft.nominatedUserId,
@@ -1213,6 +1236,8 @@ export async function getDraftState(
         draftAtMs: season.draftAt?.getTime() ?? null,
         draftRevision: season.draftRevision,
         draftVersion: draft?.updatedAt.getTime() ?? null,
+        currentLotId: draft?.currentLotId ?? null,
+        historyProvenance: historyRun?.provenance ?? "LEGACY_OBSERVATION",
         status: draft?.status ?? DRAFT_STATUS.NOT_STARTED,
         budgetsProjected: displayBudgets.isProjected,
         teamSize: season.teamSize,
@@ -1397,7 +1422,10 @@ export async function nominatePlayer(
         error: "The draft just changed — check the clock and try again",
       };
     }
-    await tx.bid.create({
+    const lot = await openDraftLot(tx, draft, {
+      userId: playerId, teamId: nominator.id, kind: "MANUAL", actorId: viewer.id,
+    });
+    const bid = await tx.bid.create({
       data: {
         draftId: draft.id,
         seasonId,
@@ -1406,6 +1434,7 @@ export async function nominatePlayer(
         amount,
       },
     });
+    await appendAcceptedDraftBid(tx, lot, bid, nominator.name);
     return { ok: true as const };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
@@ -1436,6 +1465,15 @@ export async function placeBid(
     if (!season || !draft) return { ok: false as const, error: "No draft" };
     if (!season.isActive || season.status !== SEASON_STATUS.DRAFT) {
       return { ok: false as const, error: "The auction is not in the Draft phase" };
+    }
+    const historyRun = draft.activeRunId
+      ? await tx.draftRun.findUniqueOrThrow({ where: { id: draft.activeRunId } }) : null;
+    if (historyRun?.provenance === "COMMAND" &&
+        (!draft.currentLotId || expected?.currentLotId !== draft.currentLotId)) {
+      return { ok: false as const, error: "The auction lot changed — refresh the room before bidding." };
+    }
+    if (expected?.currentLotId != null && expected.currentLotId !== draft.currentLotId) {
+      return { ok: false as const, error: "The auction lot changed — refresh the room before bidding." };
     }
     if (
       expected &&
@@ -1489,6 +1527,7 @@ export async function placeBid(
         currentBidTeamId: draft.currentBidTeamId,
         bidEndsAt: draft.bidEndsAt,
         updatedAt: draft.updatedAt,
+        currentLotId: draft.currentLotId,
       },
       data: {
         currentBid: amount,
@@ -1499,7 +1538,8 @@ export async function placeBid(
     if (applied.count === 0) {
       return { ok: false as const, error: "Another bid just landed — try again" };
     }
-    await tx.bid.create({
+    const lot = await ensureCurrentDraftLot(tx, draft);
+    const bid = await tx.bid.create({
       data: {
         draftId: draft.id,
         seasonId,
@@ -1508,6 +1548,7 @@ export async function placeBid(
         amount,
       },
     });
+    await appendAcceptedDraftBid(tx, lot, bid, myTeam.name);
     return { ok: true as const };
   });
 }

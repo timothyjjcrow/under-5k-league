@@ -93,7 +93,7 @@ describe("matchCheckinOpen", () => {
     ).toBe(true);
   });
 
-  it("still blocks a live match that has a kickoff", () => {
+  it("allows a live series participant to check in for remaining games", () => {
     expect(
       matchCheckinOpen(
         SEASON_STATUS.REGULAR_SEASON,
@@ -101,7 +101,11 @@ describe("matchCheckinOpen", () => {
         MATCH_STATUS.LIVE,
         new Date("2026-08-06T02:00:00Z"),
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it.each([SEASON_STATUS.SIGNUPS, SEASON_STATUS.COMPLETE])("keeps LIVE check-in closed in %s", (status) => {
+    expect(matchCheckinOpen(status, null, MATCH_STATUS.LIVE, new Date("2026-08-06T02:00:00Z"))).toBe(false);
   });
 
   it("treats a timed fixture outside the result-sync window as overdue, not check-in work", () => {

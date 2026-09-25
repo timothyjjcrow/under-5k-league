@@ -235,7 +235,7 @@ describe("GET /api/admin/season-export", () => {
     );
 
     const body = await res.json();
-    expect(body.formatVersion).toBe(4);
+    expect(body.formatVersion).toBe(5);
     expect(body.artifactPurpose).toBe("AUDIT_ARCHIVE_ONLY");
     expect(body.restorable).toBe(false);
     expect(body.recoveryWarning).toMatch(/cannot restore/i);
@@ -391,7 +391,109 @@ describe("GET /api/admin/season-export", () => {
       settings: 2,
       adminActions: 1,
       importSuppressions: 1,
+      rosterTenures: 0,
+      draftRuns: 0,
+      draftLots: 0,
+      gameParticipants: 0,
+      matchLineups: 0,
+      matchLineupSeats: 0,
     });
+  });
+
+  it("exports all six history tables and their independent actors, then cascades them only with the deleted season", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue(undefined as never);
+    const a = await stageSeason("History", false);
+    const other = await stageSeason("Other history");
+    const [starter, closer, reverser, creator, confirmer, participantUser, seatUser] = await Promise.all(
+      ["Starter", "Closer", "Reverser", "Lineup creator", "Lineup confirmer", "Actual participant", "Planned player"]
+        .map((name) => makeUser(name)),
+    );
+    const at = new Date("2026-08-01T20:00:00.000Z");
+    const later = new Date("2026-08-02T20:00:00.000Z");
+    const run = await prisma.draftRun.create({ data: {
+      seasonId: a.season.id, runNumber: 1, provenance: "COMMAND", status: "COMPLETE",
+      startedAt: at, endedAt: later, startedById: starter.id,
+      rulesSnapshot: JSON.stringify({ version: 1, budgetMmrWeight: 30 }),
+      openingTeamsSnapshot: JSON.stringify({ version: 1, teams: [] }),
+      poolSnapshot: JSON.stringify({ version: 1, players: [] }),
+    } });
+    const bidsSnapshot = JSON.stringify({ version: 1, provenance: "COMMAND", bids: [
+      { bidId: "preserved-bid", teamId: a.home.id, teamName: a.home.name, amount: 17, at: at.toISOString() },
+    ] });
+    const lot = await prisma.draftLot.create({ data: {
+      runId: run.id, sequence: 1, provenance: "COMMAND", openedAt: at, openingKind: "MANUAL",
+      nominatedUserId: a.player.id, nominatorTeamId: a.home.id, openedById: starter.id,
+      nomineeSnapshot: JSON.stringify({ version: 1, userId: a.player.id, name: a.player.name, mmr: 3200 }),
+      nominatorSnapshot: JSON.stringify({ version: 1, teamId: a.home.id, name: a.home.name }),
+      acceptedBidsSnapshot: bidsSnapshot, status: "UNDONE", soldTeamId: a.home.id,
+      soldTeamNameSnapshot: a.home.name, soldPrice: 17, soldAt: at, closedAt: at,
+      closedById: closer.id, reversedAt: later, reversedById: reverser.id, reversalReason: "ADMIN_UNDO",
+      sourceMembershipId: "removed-historical-seat",
+    } });
+    const tenure = await prisma.rosterTenure.create({ data: {
+      seasonId: a.season.id, teamId: a.home.id, userId: a.player.id,
+      sourceMembershipId: "removed-historical-seat", joinedAt: at, endedAt: later, closedAt: later,
+      startProvenance: "COMMAND", endProvenance: "COMMAND", endReason: "DRAFT_UNDO",
+      createdById: starter.id, endedById: reverser.id, acquisitionKind: "AUCTION", acquisitionPrice: 17,
+      acquisitionMmr: 3200, rolesSnapshot: "4,5", isCaptainAtJoin: false,
+      playerNameSnapshot: a.player.name, teamNameSnapshot: a.home.name, draftLotId: lot.id,
+    } });
+    // Draft pointers introduce SetNull back-references; they must not form a
+    // cascade cycle that prevents deleting the archived season.
+    await prisma.draft.create({ data: {
+      seasonId: a.season.id, status: "COMPLETE", activeRunId: run.id, currentLotId: lot.id,
+    } });
+    const participant = await prisma.gameParticipant.create({ data: {
+      gameId: a.game.id, sourceLineIndex: 0, userId: participantUser.id, teamId: a.home.id,
+      accountId: 3_500_000_000, heroId: 14, isRadiant: true, kills: 7, deaths: 2, assists: 11,
+    } });
+    const lineup = await prisma.matchLineup.create({ data: {
+      matchId: a.match.id, teamId: a.home.id, revision: 1, scheduleRevision: 0, logisticsRevision: 0,
+      scheduledAtSnapshot: at, status: "SUPERSEDED", createdAt: at,
+      createdById: creator.id, confirmedAt: at, confirmedById: confirmer.id,
+      confirmedByName: confirmer.name, supersededAt: later, reason: "ROSTER_RELEASED",
+      compositionFingerprint: "historic-lineup",
+    } });
+    const seat = await prisma.matchLineupSeat.create({ data: {
+      lineupId: lineup.id, seatKey: "position-4", userId: seatUser.id,
+      userNameSnapshot: seatUser.name, accountId: 3_500_000_001, replacingUserId: a.player.id,
+      entryKind: "STANDIN", acceptanceStatusSnapshot: "LEGACY_UNCONFIRMED", position: 4,
+      mmr: 3100, mmrSource: "REGISTRATION", ratingAt: at, sourceTenureId: tenure.id,
+      availabilityAt: at,
+    } });
+    const body = await (await GET(exportReq(a.season.id))).json();
+    for (const [key, id] of Object.entries({ rosterTenures: tenure.id, draftRuns: run.id,
+      draftLots: lot.id, gameParticipants: participant.id, matchLineups: lineup.id, matchLineupSeats: seat.id })) {
+      expect(body[key].map((row: { id: string }) => row.id)).toEqual([id]);
+      expect(body.counts[key]).toBe(1);
+    }
+    expect(body.draftLots[0]).toMatchObject({ status: "UNDONE", soldPrice: 17, reversedById: reverser.id,
+      acceptedBidsSnapshot: bidsSnapshot });
+    expect(body.rosterTenures[0]).toMatchObject({ sourceMembershipId: "removed-historical-seat", endReason: "DRAFT_UNDO" });
+    expect(body.gameParticipants[0].accountId).toBe(3_500_000_000);
+    expect(body.matchLineups[0]).toMatchObject({ status: "SUPERSEDED", confirmedByName: confirmer.name });
+    expect(body.matchLineupSeats[0]).toMatchObject({ acceptanceStatusSnapshot: "LEGACY_UNCONFIRMED", sourceTenureId: tenure.id });
+    for (const user of [starter, closer, reverser, creator, confirmer, participantUser, seatUser]) {
+      expect(body.users.find((row: { id: string }) => row.id === user.id)).toMatchObject({ name: user.name, steamId: user.steamId });
+    }
+    expect(body.users.some((row: { name: string }) => row.name.startsWith("Other history"))).toBe(false);
+    expect(body.users.every((row: Record<string, unknown>) => !("discordId" in row) && !("role" in row))).toBe(true);
+
+    // The production command already validates archived state/backup receipts;
+    // this checks the additive schema's actual FK behavior beneath that guard.
+    await prisma.$transaction(async (tx) => {
+      await tx.match.deleteMany({ where: { seasonId: a.season.id } });
+      await tx.season.delete({ where: { id: a.season.id } });
+    });
+    expect(await prisma.rosterTenure.count()).toBe(0);
+    expect(await prisma.draftRun.count()).toBe(0);
+    expect(await prisma.draftLot.count()).toBe(0);
+    expect(await prisma.gameParticipant.count()).toBe(0);
+    expect(await prisma.matchLineup.count()).toBe(0);
+    expect(await prisma.matchLineupSeat.count()).toBe(0);
+    expect(await prisma.season.findUnique({ where: { id: other.season.id } })).not.toBeNull();
+    expect(await prisma.game.findUnique({ where: { id: other.game.id } })).not.toBeNull();
+    expect(await prisma.adminAction.count({ where: { seasonId: a.season.id } })).toBe(1);
   });
 
   it("refuses a non-admin with a bare 404 — never confirming what exists", async () => {

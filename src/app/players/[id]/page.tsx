@@ -8,10 +8,12 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
-  getAllGameLines,
-  getAllGameScores,
   getAllGamesForRecords,
 } from "@/lib/cached-queries";
+import { getPlayerGameFacts } from "@/lib/player-game-history";
+import { getRosterHistory } from "@/lib/player-roster-history";
+import { appearanceCareers } from "@/lib/appearance-careers";
+import { PlayerTeamHistory } from "@/components/player-team-history";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
@@ -58,13 +60,10 @@ import {
   SectionTitle,
   Sparkline,
   Stat,
-  TAP_SAFE,
-  TeamCrest,
   textLink,
 } from "@/components/ui";
 import {
   INHOUSE_STATUS,
-  MATCH_STATUS,
   REGISTRATION_STATUS,
 } from "@/lib/constants";
 import { PROVISIONAL_GAMES } from "@/lib/inhouse-stats";
@@ -73,7 +72,7 @@ import { parseInhouseBox } from "@/lib/inhouse-box";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
-import { resultFor, type FormResult } from "@/lib/team-matches";
+import { type FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
 import {
   careerReportCard,
@@ -95,7 +94,7 @@ export async function generateMetadata({
       where: { id },
       select: { name: true, rankTier: true, pubStats: true },
     }),
-    getAllGameScores(),
+    getPlayerGameFacts(id),
   ]);
   // notFound() in metadata runs before the shell streams → real 404 status.
   if (!user) notFound();
@@ -156,7 +155,7 @@ export default async function PlayerProfilePage({
     membership,
     seasonTeams,
     seasonMatches,
-    careerMemberships,
+    rosterHistory,
     gamesLite,
     recentInhouse,
     recordRows,
@@ -175,15 +174,9 @@ export default async function PlayerProfilePage({
       : null,
     season ? prisma.team.findMany({ where: { seasonId: season.id } }) : [],
     season ? prisma.match.findMany({ where: { seasonId: season.id } }) : [],
-    prisma.teamMember.findMany({
-      where: { userId: id },
-      include: { team: { include: { season: true } } },
-    }),
-    // A player's userId lives inside each game's stored box-score JSON, not a
-    // column, so pass 1 is a lightweight scan (no joins) to find their game ids.
-    // Cached (viewer-independent) so every profile view doesn't re-scan the
-    // whole Game table — see getAllGameLines.
-    getAllGameLines(),
+    getRosterHistory(id),
+    // Participant indexes narrow covered history; old sources retain a safe fallback.
+    getPlayerGameFacts(id),
     // Latest completed inhouse game doubles as the activity-card data and the
     // gate for the streamed ladder card, so league-only players never mount a
     // skeleton that will immediately disappear.
@@ -271,88 +264,17 @@ export default async function PlayerProfilePage({
     : null;
   const pubHeroes = parsePubStats(user.pubStats)?.topHeroes ?? [];
 
-  // Career: every season this player was rostered in, with their team's record.
-  const careerSeasonIds = [
-    ...new Set(careerMemberships.map((m) => m.team.seasonId)),
-  ];
+  const careerSeasonIds = [...new Set(games.map((game) => game.match.seasonId))];
   const careerMatches = careerSeasonIds.length
-    ? await prisma.match.findMany({
-        where: { seasonId: { in: careerSeasonIds } },
-      })
-    : [];
-  const careerMatchesBySeason = new Map<string, typeof careerMatches>();
-  for (const match of careerMatches) {
-    const seasonMatches = careerMatchesBySeason.get(match.seasonId) ?? [];
-    seasonMatches.push(match);
-    careerMatchesBySeason.set(match.seasonId, seasonMatches);
-  }
-  const championBySeason = new Map<string, string | null>();
-  for (const membership of careerMemberships) {
-    const careerSeason = membership.team.season;
-    if (championBySeason.has(careerSeason.id)) continue;
-    championBySeason.set(
-      careerSeason.id,
-      resolveChampionPresentation(
-        careerSeason,
-        careerMatchesBySeason.get(careerSeason.id) ?? [],
-      ).championTeamId,
-    );
-  }
-  const careerRows = careerMemberships
-    .map((m) => {
-      const tally = { W: 0, L: 0, D: 0 };
-      for (const match of careerMatchesBySeason.get(m.team.seasonId) ?? []) {
-        if (match.status !== MATCH_STATUS.COMPLETED) continue;
-        if (match.homeTeamId !== m.teamId && match.awayTeamId !== m.teamId) {
-          continue;
-        }
-        tally[resultFor(m.teamId, match)]++;
-      }
-      return {
-        membership: m,
-        tally,
-        champion: championBySeason.get(m.team.seasonId) === m.teamId,
-      };
-    })
-    .sort(
-      (a, b) =>
-        b.membership.team.season.createdAt.getTime() -
-        a.membership.team.season.createdAt.getTime(),
-    );
-  const titles = careerRows.filter((r) => r.champion).length;
-
-  // Served cover — the standin's season, which used to vanish from every
-  // player-visible surface the moment each match completed (/me filters to
-  // pending, the rostered-seasons card never saw them). Recognition is the
-  // league's cheapest standin-recruitment tool for season two. COMPLETED
-  // matches only: pending bookings are /me's operational state, not history.
-  const coverServed = await prisma.standinAssignment.findMany({
-    where: { standinUserId: id, match: { status: "COMPLETED" } },
-    select: {
-      match: {
-        select: {
-          seasonId: true,
-          season: { select: { name: true, createdAt: true } },
-        },
-      },
-    },
+    ? await prisma.match.findMany({ where: { seasonId: { in: careerSeasonIds } } }) : [];
+  const careerSeasons = new Map(games.map((game) => [game.match.seasonId, game.match.season]));
+  const champions = [...careerSeasons.values()].flatMap((row) => {
+    const teamId = resolveChampionPresentation(row, careerMatches.filter((match) => match.seasonId === row.id)).championTeamId;
+    return teamId ? [{ seasonId: row.id, teamId }] : [];
   });
-  const coverSeasons = [
-    ...coverServed
-      .reduce((acc, c) => {
-        const cur = acc.get(c.match.seasonId);
-        if (cur) cur.count += 1;
-        else
-          acc.set(c.match.seasonId, {
-            seasonId: c.match.seasonId,
-            name: c.match.season.name,
-            createdAt: c.match.season.createdAt,
-            count: 1,
-          });
-        return acc;
-      }, new Map<string, { seasonId: string; name: string; createdAt: Date; count: number }>())
-      .values(),
-  ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const careerRows = appearanceCareers(games, careerMatches, champions).rows.filter((row) => row.userId === id);
+  const careerTeams = [...new Map(games.flatMap((game) => [game.match.homeTeam, game.match.awayTeam]
+    .map((team) => [team.id, { id: team.id, name: team.name, seasonId: game.match.seasonId, seasonName: game.match.season.name }] as const))).values()];
 
   // Pull this player's line out of each imported game — every season's games.
   // The parsed box score is kept so achievements can identify each game's MVP;
@@ -636,7 +558,7 @@ export default async function PlayerProfilePage({
   const careerVisible =
     badges.length > 0 ||
     careerRows.length > 0 ||
-    coverSeasons.length > 0 ||
+    rosterHistory.length > 0 ||
     !!recentInhouse;
   const sectionItems = [
     { id: "player-overview", label: "Overview" },
@@ -1412,111 +1334,7 @@ export default async function PlayerProfilePage({
             </Card>
           ) : null}
 
-          {careerRows.length > 0 || coverSeasons.length > 0 ? (
-            <Card>
-              <CardHeader
-                title="Seasons"
-                subtitle={
-                  careerRows.length > 0
-                    ? `${careerRows.length} season${careerRows.length === 1 ? "" : "s"} played${titles > 0 ? ` · ${titles} title${titles === 1 ? "" : "s"} 🏆` : ""}`
-                    : // A standin-only career is still a career — this card used
-                      // to not render at all for the people who kept match nights
-                      // running.
-                      "Stood in when teams needed cover"
-                }
-              />
-              <CardBody className="divide-y divide-line/60 p-0">
-                {careerRows.map(({ membership: m, tally, champion }) => (
-                  <div
-                    key={m.id}
-                    // gap-y-2 for the TAP_SAFE rule below: at gap-y-1 (4px) the two
-                    // links' grown hit boxes would overlap when this row wraps.
-                    className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
-                  >
-                    <Link
-                      href={`/seasons/${m.team.seasonId}`}
-                      className={cn(
-                        "w-24 shrink-0 text-muted hover:text-info",
-                        TAP_SAFE,
-                      )}
-                    >
-                      {m.team.season.name}
-                    </Link>
-                    {/* Two unrelated fixes on one element, both measured.
-
-                    basis-40 below sm — the same collapse as the hero, in its
-                    other flavour. This is the `min-w-0 flex-1` child, and its
-                    three siblings are all `shrink-0` (season 96px, the Captain
-                    badge 67px, the W–L–D cell 36px). min-w-0 zeroes its
-                    line-breaking contribution, so the row never overflows,
-                    `flex-wrap` never fires, and the team name gets whatever is
-                    left: measured 0px at 320, 21px at 360 and 36px at 375
-                    against 119px of name — a captain reading their own profile
-                    saw a crest, "Captain" and "3–0–1" with the team name gone.
-                    It looks fine on a desktop because it is healthy from
-                    ~500px. `truncate` is why the hero's squeezed-text tripwire
-                    cannot see this one: one line, no ratio to measure.
-
-                    TAP_SAFE — the link is a flex box sized by its 22px crest,
-                    so it measured exactly 22px tall, under WCAG 2.5.8's 24px
-                    floor, with two targets inside 24px of it. Being `flex` and
-                    not inline, the spec's in-a-run-of-text exemption does not
-                    cover it either. */}
-                    <Link
-                      href={`/teams/${m.teamId}`}
-                      className={cn(
-                        "flex min-w-0 flex-1 basis-40 items-center gap-2 hover:text-info sm:basis-auto",
-                        TAP_SAFE,
-                      )}
-                    >
-                      <TeamCrest
-                        name={m.team.name}
-                        seed={m.teamId}
-                        logoUrl={m.team.logoUrl}
-                        size={22}
-                        className="shrink-0 rounded-md"
-                      />
-                      <span className="truncate font-medium">
-                        {m.team.name}
-                      </span>
-                      {champion ? <span title="Champion">🏆</span> : null}
-                    </Link>
-                    <span className="shrink-0 text-xs text-muted">
-                      {m.isCaptain ? (
-                        <Badge tone="accent">Captain</Badge>
-                      ) : (
-                        `$${m.price}`
-                      )}
-                    </span>
-                    <span className="shrink-0 font-mono text-xs tabular-nums">
-                      {tally.W}–{tally.L}
-                      {tally.D > 0 ? `–${tally.D}` : ""}
-                    </span>
-                  </div>
-                ))}
-                {coverSeasons.map((s) => (
-                  <div
-                    key={`cover-${s.seasonId}`}
-                    className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
-                  >
-                    <Link
-                      href={`/seasons/${s.seasonId}`}
-                      className={cn(
-                        "w-24 shrink-0 text-muted hover:text-info",
-                        TAP_SAFE,
-                      )}
-                    >
-                      {s.name}
-                    </Link>
-                    <span className="min-w-0 flex-1 text-muted">
-                      🧩 Stood in — {s.count} match{s.count === 1 ? "" : "es"}{" "}
-                      covered
-                    </span>
-                  </div>
-                ))}
-              </CardBody>
-            </Card>
-          ) : null}
+          <PlayerTeamHistory appearances={careerRows} teams={careerTeams} tenures={rosterHistory} />
 
           {/* Inhouse career — only stream for players with a completed game. */}
           {recentInhouse ? (

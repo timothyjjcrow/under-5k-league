@@ -50,4 +50,15 @@ describe("draftRecap", () => {
     expect(r.topSpender).toBeNull();
     expect(r.totalSpent).toBe(0);
   });
+
+  it("keeps a renamed team's purchases together and distinct same-name teams apart", () => {
+    const recap = draftRecap([
+      { ...p("Latest", "New name", 12), teamId: "a" },
+      { ...p("Earlier", "Old name", 20), teamId: "a" },
+      { ...p("Other", "New name", 5), teamId: "b" },
+    ]);
+    expect(recap.topSpender).toEqual({ teamId: "a", teamName: "New name", spent: 32 });
+    expect(recap.bargainHunter).toEqual({ teamId: "b", teamName: "New name", spent: 5 });
+    expect(recap.totalSpent).toBe(37);
+  });
 });

@@ -37,6 +37,7 @@ async function readSeasonArchive(
     reschedules,
     adminActions,
     importSuppressions,
+    rosterTenures, draftRuns, draftLots, gameParticipants, matchLineups, matchLineupSeats,
   ] = await Promise.all([
     tx.registration.findMany({
       where: { seasonId },
@@ -87,6 +88,12 @@ async function readSeasonArchive(
       where: { seasonId },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
+    tx.rosterTenure.findMany({ where: { seasonId }, orderBy: { id: "asc" } }),
+    tx.draftRun.findMany({ where: { seasonId }, orderBy: { runNumber: "asc" } }),
+    tx.draftLot.findMany({ where: { run: { seasonId } }, orderBy: { id: "asc" } }),
+    tx.gameParticipant.findMany({ where: { game: { match: { seasonId } } }, orderBy: [{ gameId: "asc" }, { sourceLineIndex: "asc" }] }),
+    tx.matchLineup.findMany({ where: { match: { seasonId } }, orderBy: { id: "asc" } }),
+    tx.matchLineupSeat.findMany({ where: { lineup: { match: { seasonId } } }, orderBy: { id: "asc" } }),
   ]);
 
   const matchIds = matches.map((match) => match.id);
@@ -141,6 +148,21 @@ async function readSeasonArchive(
   }
   for (const row of reschedules) userIds.add(row.proposedById);
   for (const row of adminActions) userIds.add(row.actorId);
+  for (const row of rosterTenures) {
+    if (row.userId) userIds.add(row.userId);
+    if (row.createdById) userIds.add(row.createdById);
+    if (row.endedById) userIds.add(row.endedById);
+  }
+  for (const row of gameParticipants) { if (row.userId) userIds.add(row.userId); }
+  for (const row of draftRuns) { if (row.startedById) userIds.add(row.startedById); }
+  for (const row of draftLots) {
+    if (row.nominatedUserId) userIds.add(row.nominatedUserId);
+    if (row.openedById) userIds.add(row.openedById);
+    if (row.closedById) userIds.add(row.closedById);
+    if (row.reversedById) userIds.add(row.reversedById);
+  }
+  for (const row of matchLineupSeats) { userIds.add(row.userId); if (row.replacingUserId) userIds.add(row.replacingUserId); }
+  for (const row of matchLineups) { userIds.add(row.createdById); userIds.add(row.confirmedById); }
 
   // A single identity table covers every foreign id, including fantasy
   // managers, predictors, standins, and admins who may not have registered.
@@ -202,6 +224,7 @@ async function readSeasonArchive(
     settings,
     adminActions,
     importSuppressions,
+    rosterTenures, draftRuns, draftLots, gameParticipants, matchLineups, matchLineupSeats,
   };
 }
 
@@ -274,7 +297,7 @@ export async function GET(req: NextRequest) {
   }
 
   const core = {
-    formatVersion: 4,
+    formatVersion: 5,
     artifactPurpose: "AUDIT_ARCHIVE_ONLY",
     restorable: false,
     recoveryWarning:
@@ -297,6 +320,12 @@ export async function GET(req: NextRequest) {
       settings: archive.settings.length,
       adminActions: archive.adminActions.length,
       importSuppressions: archive.importSuppressions.length,
+      rosterTenures: archive.rosterTenures.length,
+      draftRuns: archive.draftRuns.length,
+      draftLots: archive.draftLots.length,
+      gameParticipants: archive.gameParticipants.length,
+      matchLineups: archive.matchLineups.length,
+      matchLineupSeats: archive.matchLineupSeats.length,
     },
   };
   const digest = createHash("sha256")

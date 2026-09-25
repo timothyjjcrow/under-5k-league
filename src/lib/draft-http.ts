@@ -15,6 +15,7 @@ export type DraftTurnExpectation = {
 };
 
 export type DraftLotExpectation = {
+  currentLotId?: string | null;
   draftVersion: number;
   nominatedUserId: string;
   currentBid: number;
@@ -85,6 +86,7 @@ export function parseDraftLotExpectation(
   const value = objectBody(body);
   const draftVersion = safeInteger(value.draftVersion);
   const nominatedUserId = nonEmptyString(value.nominatedUserId);
+  const currentLotId = value.currentLotId == null ? null : nonEmptyString(value.currentLotId);
   const currentBid = safeInteger(value.currentBid);
   const currentBidTeamId = nonEmptyString(value.currentBidTeamId);
   const bidEndsAt = safeInteger(value.bidEndsAt);
@@ -92,6 +94,7 @@ export function parseDraftLotExpectation(
     draftVersion == null ||
     draftVersion <= 0 ||
     !nominatedUserId ||
+    (value.currentLotId != null && !currentLotId) ||
     currentBid == null ||
     currentBid < 0 ||
     !currentBidTeamId ||
@@ -108,6 +111,7 @@ export function parseDraftLotExpectation(
     value: {
       draftVersion,
       nominatedUserId,
+      ...(currentLotId ? { currentLotId } : {}),
       currentBid,
       currentBidTeamId,
       bidEndsAt,

@@ -1,4 +1,6 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import { recordHistoryAction, type HistoryActor } from "./roster-history";
 import { prisma } from "./prisma";
 import { nextRoundPairings, upcomingMatchNight } from "./schedule";
 import { projectPlayoffField } from "./playoff-field";
@@ -117,30 +119,32 @@ type PostseasonRemoval = {
 };
 
 /**
- * Remove the current postseason without losing the only durable receipt for
- * imported OpenDota ids. Reset playoffs and Return to regular season share
- * this command so their cascade cleanup cannot drift apart.
+ * Preserve the exact removed fixture, game and lineup evidence transactionally,
+ * while retaining the compact OpenDota ID archive used by reimport controls.
+ * Reset playoffs and Return to regular season share this command so their
+ * cascade cleanup and retention cannot drift apart.
  */
 async function removePostseason(
   tx: Prisma.TransactionClient,
   seasonId: string,
   matches: { id: string; phase: string; week: number }[],
+  intent: "RESET_PLAYOFFS" | "RETURN_TO_REGULAR_SEASON",
+  actor?: HistoryActor,
 ): Promise<PostseasonRemoval> {
   const postseasonMatches = matches.filter(
     (match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL,
   );
   const archiveKey = playoffGamesArchiveKey(seasonId);
-  const [doomedGames, priorRaw, doomedCover] = await Promise.all([
-    tx.game.findMany({
-      where: {
-        match: {
-          seasonId,
-          phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
-        },
-      },
-      select: {
-        dotaMatchId: true,
-        match: { select: { bracketSlot: true, week: true } },
+  const [doomedFixtures, priorRaw, doomedCover] = await Promise.all([
+    tx.match.findMany({
+      where: { seasonId, phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] } },
+      orderBy: [{ week: "asc" }, { id: "asc" }],
+      include: {
+        games: { orderBy: { id: "asc" }, include: { participants: { orderBy: { sourceLineIndex: "asc" } } } },
+        lineups: { orderBy: [{ teamId: "asc" }, { revision: "asc" }], include: { seats: { orderBy: { seatKey: "asc" } } } },
+        standins: { orderBy: { id: "asc" } },
+        homeTeam: { select: { name: true } },
+        awayTeam: { select: { name: true } },
       },
     }),
     tx.setting.findUnique({ where: { key: archiveKey } }),
@@ -170,6 +174,21 @@ async function removePostseason(
   // here must make this Serializable transaction lose rather than disappear
   // through the Match cascade without appearing in the snapshot above.
   await raceHook("playoffs.removePostseason.afterSnapshot");
+
+  const operationId = randomUUID();
+  for (const fixture of doomedFixtures) {
+    // Required, not best-effort: a snapshot failure must roll back the reset.
+    // One receipt per fixture keeps a natural archive boundary; no rows or
+    // canonical payload fields are silently truncated. Contact details from
+    // stand-down messaging are intentionally absent from this archive.
+    await recordHistoryAction(tx, actor ?? { id: "unknown", name: "(actor not recorded)" },
+      seasonId, "archiveRemovedPostseasonFixture", `Preserved playoff fixture ${fixture.id} before ${intent}`, {
+        operationId, intent, capturedAt: new Date().toISOString(), fixture,
+      });
+  }
+  const doomedGames = doomedFixtures.flatMap((fixture) => fixture.games.map((game) => ({
+    dotaMatchId: game.dotaMatchId, match: { bracketSlot: fixture.bracketSlot, week: fixture.week },
+  })));
 
   let prior: ArchivedGame[] = [];
   try {
@@ -257,6 +276,7 @@ async function removePostseason(
 export async function createPlayoffBracket(
   seasonId: string,
   claim?: PlayoffBracketClaim,
+  actor?: HistoryActor,
 ): Promise<{ standDowns: StandDown[]; removedGameCount: number }> {
   // Test seam immediately before the authoritative snapshot. Every input used
   // below is read after this point, so a result, withdrawal, game import or
@@ -419,7 +439,7 @@ export async function createPlayoffBracket(
         // These teardown reads and deletes share this Serializable snapshot
         // with the fresh bracket creation. A late game import or standin claim
         // therefore conflicts instead of disappearing through a cascade.
-        const removed = await removePostseason(tx, seasonId, matches);
+        const removed = await removePostseason(tx, seasonId, matches, "RESET_PLAYOFFS", actor);
         await tx.match.createMany({
           data: pairings.map((pairing, index) => ({
             seasonId,
@@ -472,6 +492,7 @@ export async function createPlayoffBracket(
 export async function returnToRegularSeason(
   seasonId: string,
   claim: Pick<PlayoffBracketClaim, "expectedSeasonStatus" | "expectedRevision">,
+  actor?: HistoryActor,
 ): Promise<PostseasonRemoval> {
   await raceHook("playoffs.returnToRegular.beforeTx");
   try {
@@ -539,7 +560,7 @@ export async function returnToRegularSeason(
           throw new UserFacingError("There is no playoff bracket to remove");
         }
 
-        const removed = await removePostseason(tx, seasonId, matches);
+        const removed = await removePostseason(tx, seasonId, matches, "RETURN_TO_REGULAR_SEASON", actor);
         const moved = await tx.season.updateMany({
           where: {
             id: seasonId,

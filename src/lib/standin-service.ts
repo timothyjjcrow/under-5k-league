@@ -16,6 +16,7 @@ import {
 } from "./discord";
 import { mentionsOf } from "./discord-mentions";
 import { standinConflict, standinMmrNote } from "./standin";
+import { invalidateMatchLineups } from "./match-lineups";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -506,6 +507,7 @@ export async function assignStandinGuarded(opts: {
             replacingUserId,
           },
         });
+        await invalidateMatchLineups(tx, matchId, "Standin cover changed", new Date(), coverTeamId);
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -624,12 +626,27 @@ export async function removeStandinGuarded(opts: {
   // window excludes the OpenDota fetch (it's DB round trips only), game 1
   // keeps correct attribution, and re-assigning the same standin (legal even
   // with games imported) repairs the remaining games.
-  const gone = await prisma.standinAssignment.deleteMany({
-    where: {
-      id: opts.assignmentId,
-      match: { status: { not: MATCH_STATUS.COMPLETED }, games: { none: {} } },
-    },
-  });
+  let gone;
+  try {
+    gone = await prisma.$transaction(async (tx) => {
+      const currentTeam = await tx.team.findUnique({ where: { id: assignment.teamId }, select: { captainId: true } });
+      if (!currentTeam || (opts.actingCaptainId && currentTeam.captainId !== opts.actingCaptainId)) {
+        throw new StandinRaceError("The team captain changed — reload before removing this cover.");
+      }
+      const deleted = await tx.standinAssignment.deleteMany({
+        where: {
+          id: opts.assignmentId,
+          match: { status: { not: MATCH_STATUS.COMPLETED }, games: { none: {} } },
+        },
+      });
+      if (deleted.count) await invalidateMatchLineups(tx, assignment.matchId, "Standin cover was removed", new Date(), assignment.teamId);
+      return deleted;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (error instanceof StandinRaceError) return { ok: false, error: error.message };
+    if ((error as { code?: string }).code === "P2034") return { ok: false, error: "The match just changed — reload before removing this cover." };
+    throw error;
+  }
   if (gone.count === 0) {
     return {
       ok: false,

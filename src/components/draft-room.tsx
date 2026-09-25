@@ -668,6 +668,7 @@ export function DraftRoom({
         ? {
             draftVersion: state.draftVersion,
             nominatedUserId: state.nominatedUserId,
+            currentLotId: state.currentLotId,
             currentBid: state.currentBid,
             currentBidTeamId: state.currentBidTeamId,
             bidEndsAt: state.bidEndsAt,

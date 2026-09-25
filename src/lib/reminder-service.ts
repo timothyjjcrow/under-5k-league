@@ -159,7 +159,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     }),
     prisma.matchAvailability.findMany({
       where: { matchId: { in: matchIds } },
-      select: { matchId: true, userId: true, status: true },
+      select: { matchId: true, userId: true, status: true, scheduleRevision: true },
     }),
     prisma.standinAssignment.findMany({
       where: { matchId: { in: matchIds } },
@@ -184,7 +184,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     );
 
   const draft = matches.map((m) => {
-    const rows = rsvps.filter((r) => r.matchId === m.id);
+    const rows = rsvps.filter((r) => r.matchId === m.id && r.scheduleRevision === m.scheduleRevision);
     const home = sideRoster(m.id, m.homeTeamId);
     const away = sideRoster(m.id, m.awayTeamId);
     const homeAv = teamAvailability(home, rows);

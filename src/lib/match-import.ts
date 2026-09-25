@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import { rebuildGameParticipants } from "./game-participants";
+import { applyImportLineups, loadImportLineups, type ImportIdentity, type ImportLineup } from "./import-lineups";
 import {
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
@@ -467,7 +469,8 @@ type MatchRow = {
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
 export async function gatherTeamAccounts(
   match: MatchRow,
-  db: Pick<Prisma.TransactionClient, "season" | "teamMember" | "standinAssignment" | "registration"> = prisma,
+  db: Pick<Prisma.TransactionClient, "season" | "teamMember" | "standinAssignment" | "registration" | "matchLineup"> = prisma,
+  gameStartTime?: number,
 ) {
   // Select-narrowed: this runs on every import AND every auto-sync roster
   // scan, and only the identity fields read by `add` are selected.
@@ -504,10 +507,7 @@ export async function gatherTeamAccounts(
     }),
   ]);
 
-  const accountMap = new Map<
-    number,
-    { userId: string; name: string; teamId: string | null }
-  >();
+  const accountMap = new Map<number, ImportIdentity>();
   const homeSet = new Set<number>();
   const awaySet = new Set<number>();
 
@@ -538,7 +538,9 @@ export async function gatherTeamAccounts(
     accountMap.set(acc, { userId: r.user.id, name: r.user.name, teamId: null });
   }
 
-  return { accountMap, homeSet, awaySet, teamSize: season?.teamSize ?? 5 };
+  const current = { accountMap, homeSet, awaySet, teamSize: season?.teamSize ?? 5 };
+  if (gameStartTime === undefined) return current;
+  return applyImportLineups(current, match, await loadImportLineups(db, { matchId: match.id }), gameStartTime);
 }
 
 /**
@@ -565,16 +567,28 @@ export function sanitizeBenchmarks(
 /** Shape a fetched game's players into the stored box-score JSON lines. */
 export function buildPlayers(
   match: OpenDotaMatch,
-  accountMap: Map<
-    number,
-    { userId: string; name: string; teamId: string | null }
-  >,
+  accountMap: Map<number, ImportIdentity>,
 ) {
   return match.players.map((p) => {
     const isRadiant = p.isRadiant ?? p.player_slot < 128;
     const mapped =
       p.account_id != null ? accountMap.get(p.account_id) : undefined;
+    const metadata: {
+      providerPlayerSlot?: number; plannedPosition?: number; positionSource?: string;
+      ratingSnapshot?: number; ratingSource?: string; ratingAt?: string;
+    } = {};
+    if (Number.isInteger(p.player_slot) && p.player_slot >= 0 && p.player_slot <= 255) metadata.providerPlayerSlot = p.player_slot;
+    if (mapped?.plannedPosition !== undefined) {
+      metadata.plannedPosition = mapped.plannedPosition;
+      metadata.positionSource = mapped.positionSource;
+    }
+    if (mapped?.ratingSnapshot !== undefined) {
+      metadata.ratingSnapshot = mapped.ratingSnapshot;
+      metadata.ratingSource = mapped.ratingSource;
+      metadata.ratingAt = mapped.ratingAt;
+    }
     return {
+      ...metadata,
       accountId: p.account_id,
       heroId: p.hero_id,
       isRadiant,
@@ -598,7 +612,15 @@ export function buildPlayers(
   });
 }
 
-export type PlayerStat = ReturnType<typeof buildPlayers>[number];
+export type PlayerStat = ReturnType<typeof buildPlayers>[number] & {
+  providerPlayerSlot?: number;
+  plannedPosition?: number;
+  playedPosition?: number;
+  positionSource?: string;
+  ratingSnapshot?: number;
+  ratingSource?: string;
+  ratingAt?: string;
+};
 
 /**
  * Thrown from inside importGameForMatch's write transaction when the series
@@ -1122,9 +1144,9 @@ export async function importGameForMatch(
           // Classification/attribution belongs to the write snapshot too:
           // roster and standin changes during provider IO must not be stamped
           // into a result as if the stale participants still represented it.
-          // Historical lineup integration can replace this resolver while
-          // retaining this transaction boundary and the shared buildPlayers.
-          const { accountMap, homeSet, awaySet, teamSize } = await gatherTeamAccounts(fresh, tx);
+          // Confirmed lineup intervals resolve historical games; uncovered
+          // legacy games retain the current-roster compatibility resolver.
+          const { accountMap, homeSet, awaySet, teamSize } = await gatherTeamAccounts(fresh, tx, od.start_time);
           const cls = classifyGame(od,
             { teamId: fresh.homeTeamId, accountIds: homeSet },
             { teamId: fresh.awayTeamId, accountIds: awaySet },
@@ -1141,7 +1163,8 @@ export async function importGameForMatch(
               contextId: matchId,
             },
           });
-          await tx.game.create({
+          const players = JSON.stringify(buildPlayers(od, accountMap));
+          const importedGame = await tx.game.create({
             data: {
               matchId,
               dotaMatchId: String(od.match_id),
@@ -1153,9 +1176,10 @@ export async function importGameForMatch(
               radiantTeamId: cls.radiantTeamId,
               direTeamId: cls.direTeamId,
               winnerTeamId: cls.winnerTeamId,
-              players: JSON.stringify(buildPlayers(od, accountMap)),
+              players,
             },
           });
+          await rebuildGameParticipants(tx, { gameId: importedGame.id, expectedPlayers: players });
           // Durable fetch evidence is no longer needed once the authoritative
           // game owns it. Clear it in the same command, never before commit.
           await tx.importCandidate.deleteMany({
@@ -1376,8 +1400,14 @@ export async function autoDetectGamesForMatch(
     };
   }
 
-  const { homeSet, awaySet, teamSize } = await gatherTeamAccounts(match);
-  const accounts = [...homeSet, ...awaySet].slice(0, 12);
+  const [{ homeSet, awaySet, teamSize }, historicalLineups] = await Promise.all([
+    gatherTeamAccounts(match), loadImportLineups(prisma, { matchId: match.id }),
+  ]);
+  const accounts = [...new Set([
+    ...homeSet, ...awaySet,
+    ...[...historicalLineups].sort((a, b) => b.confirmedAt.getTime() - a.confirmedAt.getTime())
+      .flatMap((lineup) => lineup.seats.flatMap((seat) => seat.accountId === null ? [] : [seat.accountId])),
+  ])].slice(0, 20);
   const fetchOptions: OpenDotaFetchOptions = {
     deadlineMs: opts.deadlineMs,
     signal: opts.signal,
@@ -1495,10 +1525,11 @@ export async function autoDetectGamesForMatch(
       const persisted = await saveImportEvidence(match.seasonId, od, saved);
       if (persisted) cached.set(String(id), persisted);
     }
+    const historical = applyImportLineups({ homeSet, awaySet }, match, historicalLineups, od.start_time);
     const cls = classifyGame(
       od,
-      { teamId: match.homeTeamId, accountIds: homeSet },
-      { teamId: match.awayTeamId, accountIds: awaySet },
+      { teamId: match.homeTeamId, accountIds: historical.homeSet },
+      { teamId: match.awayTeamId, accountIds: historical.awaySet },
       minPerSide,
     );
     if (cls.ok) {
@@ -1660,6 +1691,11 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
       data,
     });
     if (changed.count !== 1) return false;
+    if (data.players !== undefined) {
+      if (!(await rebuildGameParticipants(tx, { gameId: game.id, expectedPlayers: data.players }))) {
+        throw new Error("Enrichment projection lost its game source");
+      }
+    }
     await stampResultChange(tx);
     return true;
   });
@@ -1856,6 +1892,7 @@ export async function syncLeagueGames(
     string,
     { home: Set<number>; away: Set<number>; teamSize: number }
   >();
+  let historicalLineups: ImportLineup[] = [];
   let accountsReady = false;
   const ensureAccounts = async () => {
     if (accountsReady) return;
@@ -1870,7 +1907,7 @@ export async function syncLeagueGames(
       dotaAccountIdV2: true,
       legacyDotaAccountId: true,
     } as const;
-    const [members, standins] = await Promise.all([
+    const [members, standins, lineups] = await Promise.all([
       prisma.teamMember.findMany({
         where: { seasonId },
         select: { teamId: true, user: { select: identitySelect } },
@@ -1882,7 +1919,9 @@ export async function syncLeagueGames(
         where: { match: { seasonId, status: { not: MATCH_STATUS.COMPLETED } } },
         select: { matchId: true, teamId: true, standin: { select: identitySelect } },
       }),
+      loadImportLineups(prisma, { match: { seasonId, status: { not: MATCH_STATUS.COMPLETED } } }),
     ]);
+    historicalLineups = lineups;
     const teamAccounts = new Map<string, Set<number>>();
     for (const member of members) {
       const account = effectiveDotaAccountId(member.user);
@@ -2052,10 +2091,11 @@ export async function syncLeagueGames(
         ) {
           continue;
         }
+        const historical = applyImportLineups({ homeSet: acc.home, awaySet: acc.away }, m, historicalLineups, od.start_time);
         const cls = classifyGame(
           od,
-          { teamId: m.homeTeamId, accountIds: acc.home },
-          { teamId: m.awayTeamId, accountIds: acc.away },
+          { teamId: m.homeTeamId, accountIds: historical.homeSet },
+          { teamId: m.awayTeamId, accountIds: historical.awaySet },
           Math.min(3, acc.teamSize),
         );
         if (cls.ok) {

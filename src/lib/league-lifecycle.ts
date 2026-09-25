@@ -52,7 +52,7 @@ export function matchLogisticsOpen(
 
 /**
  * Can a captain/admin assign cover for the remaining games in this series?
- * Unlike rescheduling and RSVP, a LIVE series deliberately remains open: a
+ * Like readiness and unlike rescheduling, a LIVE series remains open: a
  * player can disconnect after game one and need a standin for game two. The
  * imported game keeps its original attribution; completed history is locked.
  */
@@ -84,10 +84,11 @@ export function matchCheckinOpen(
   const kickoffMs =
     scheduledAt == null ? null : new Date(scheduledAt).getTime();
   return (
-    matchLogisticsOpen(seasonStatus, draftStatus, matchStatus) &&
+    postAuctionWorkOpen(seasonStatus, draftStatus) &&
+    (matchStatus === MATCH_STATUS.SCHEDULED || matchStatus === MATCH_STATUS.LIVE) &&
     kickoffMs != null &&
     Number.isFinite(kickoffMs) &&
-    (nowMs == null || kickoffMs >= nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000)
+    (matchStatus === MATCH_STATUS.LIVE || nowMs == null || kickoffMs >= nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000)
   );
 }
 

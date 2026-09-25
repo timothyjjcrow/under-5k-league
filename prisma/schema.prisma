@@ -63,6 +63,8 @@ model User {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
+  rosterTenures          RosterTenure[]
+  nominatedDraftLots     DraftLot[] @relation("DraftLotNominee")
   registrations          Registration[]
   teamMemberships        TeamMember[]
   captainedTeams         Team[]               @relation("TeamCaptain")
@@ -142,6 +144,8 @@ model Season {
   scrims         Scrim[]
   importSuppressions ImportSuppression[]
   importCandidates   ImportCandidate[]
+  rosterTenures      RosterTenure[]
+  draftRuns          DraftRun[]
 }
 
 // Deliberate exclusions survive retries and cannot overwrite one another.
@@ -238,6 +242,9 @@ model Team {
   opponentScrims    Scrim[]            @relation("ScrimOpponentTeam")
   wonScrims         Scrim[]            @relation("ScrimWinnerTeam")
   scrimParticipants ScrimParticipant[]
+  rosterTenures     RosterTenure[]
+  nominatedDraftLots DraftLot[] @relation("DraftLotNominator")
+  purchasedDraftLots DraftLot[] @relation("DraftLotBuyer")
 
   @@unique([seasonId, captainId])
 }
@@ -293,6 +300,11 @@ model Draft {
   nominationIndex  Int       @default(0)
   updatedAt        DateTime  @updatedAt
 
+  activeRunId  String? @unique
+  currentLotId String? @unique
+  activeRun    DraftRun? @relation("ActiveDraftRun", fields: [activeRunId], references: [id], onDelete: SetNull)
+  currentLot   DraftLot? @relation("CurrentDraftLot", fields: [currentLotId], references: [id], onDelete: SetNull)
+
   season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
   bids   Bid[]
 }
@@ -322,6 +334,9 @@ model Match {
   homeTeamId       String
   awayTeamId       String
   scheduledAt      DateTime?
+  scheduleRevision Int @default(0)
+  logisticsRevision Int @default(0)
+  lineups          MatchLineup[]
   status           String    @default("SCHEDULED") // SCHEDULED | LIVE | COMPLETED
   homeScore        Int       @default(0)
   awayScore        Int       @default(0)
@@ -389,6 +404,7 @@ model MatchAvailability {
   matchId   String
   userId    String
   status    String // IN | OUT
+  scheduleRevision Int @default(0)
   updatedAt DateTime @updatedAt
 
   match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
@@ -427,6 +443,11 @@ model Game {
   direTeamId    String?
   winnerTeamId  String?
   players       String   @default("[]") // JSON: per-player stats mapped to our users where known
+  // Exact-source proof detects writes by an older app that cannot dual-write.
+  participantSource String?
+  participantVersion Int @default(0)
+  participantComplete Boolean @default(false)
+  participants GameParticipant[]
   fetchedAt     DateTime @default(now())
 
   match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
@@ -594,12 +615,12 @@ model LeagueAnnouncement {
 }
 
 // What an admin did, so "the schedule is gone and I don't know what I pressed"
-// has an answer. The other models carry no actor column at all, and
+// has an answer. Many older models carry no actor column, and
 // Discord — the de-facto audit trail — is silent on exactly the destructive
 // half of the panel (nothing announces a delete, a regenerate, an abort or a
-// bracket reset). Append-only and best-effort: a failed write must never fail
-// the mutation it describes, because a missing log line is a smaller problem
-// than a half-applied league change.
+// bracket reset). Legacy activity messages are best-effort. Corrections and
+// destructive history snapshots use required, append-only receipts inside the
+// same transaction: failure rolls the whole change back, never half-applies it.
 //
 // actorName is DENORMALISED on purpose. The whole point is to stay readable
 // after the fact, and a User row can be renamed by the Steam profile sync (or,
@@ -612,6 +633,8 @@ model AdminAction {
   action    String
   /// One human sentence, already including the counts that made it destructive.
   summary   String
+  /// Bounded structured before/after evidence for required transactional audits.
+  detailsJson String?
   /// Null for season-independent work (webhooks, security, news).
   seasonId  String?
   createdAt DateTime @default(now())
@@ -904,4 +927,195 @@ model InhouseCreditEntry {
 
   @@unique([reason, refId])
   @@index([userId])
+}
+
+// Proposed concrete Prisma additions. Add inverse lists to Season/User/Team.
+// Existing model uses String JSON for SQLite compatibility. Actors/source IDs
+// are audit strings, not relations that can cascade history away.
+model RosterTenure {
+  id                   String   @id @default(cuid())
+  seasonId             String
+  teamId               String?
+  userId               String?
+  sourceMembershipId   String   @unique
+  openKey              String?  @unique // JSON.stringify([seasonId,userId]); null on closure
+  joinedAt             DateTime
+  endedAt              DateTime? // Exact command end only; null for unknown legacy end
+  closedAt             DateTime? // When closure was recorded, including observed reconciliation
+  recordedAt           DateTime @default(now())
+  startProvenance       String   // COMMAND | LEGACY_ROW
+  endProvenance         String?  // COMMAND | OBSERVED_RECONCILIATION
+  endReason            String?
+  createdById          String?
+  endedById            String?
+  acquisitionKind      String   // CAPTAIN_DESIGNATION | AUCTION | FREE_AGENT | LEGACY_CAPTURE
+  acquisitionPrice     Int
+  acquisitionMmr       Int?
+  rolesSnapshot        String?
+  isCaptainAtJoin       Boolean?
+  playerNameSnapshot   String
+  teamNameSnapshot     String
+  draftLotId           String?  @unique
+
+  season Season    @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  team   Team?     @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  user   User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  draftLot DraftLot? @relation(fields: [draftLotId], references: [id], onDelete: SetNull)
+
+  @@index([seasonId, userId, joinedAt])
+  @@index([teamId, joinedAt])
+}
+
+model DraftRun {
+  id                   String   @id @default(cuid())
+  seasonId             String
+  runNumber            Int
+  provenance           String   // COMMAND | LEGACY_OBSERVATION
+  status               String   // RUNNING | COMPLETE | ABORTED
+  startedAt            DateTime?
+  endedAt              DateTime?
+  recordedAt           DateTime @default(now())
+  startedById          String?
+  rulesSnapshot        String?
+  openingTeamsSnapshot String?
+  poolSnapshot         String?
+  legacySnapshot       String?
+  nextLotSequence      Int      @default(1)
+
+  season      Season     @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  lots        DraftLot[]
+  activeDraft Draft?     @relation("ActiveDraftRun")
+
+  @@unique([seasonId, runNumber])
+}
+
+model DraftLot {
+  id                       String   @id @default(cuid())
+  runId                    String
+  sequence                 Int?     // New run: exact ordinal. Legacy unknown: null.
+  provenance               String   // COMMAND | LEGACY_OBSERVATION
+  openedAt                 DateTime?
+  recordedAt               DateTime @default(now())
+  openedById               String?
+  openingKind              String   // MANUAL | AUTOMATIC | LEGACY_OBSERVATION
+  nominatedUserId          String?
+  nominatorTeamId          String?
+  nomineeSnapshot          String   // v1 {userId,name,mmr?,roles?,factsObservedAt}
+  nominatorSnapshot        String   // v1 {teamId,name}
+  acceptedBidsSnapshot     String   // v1 {provenance, bids:[{bidId,teamId,teamName,amount,at}]}
+  status                   String   // OPEN | SOLD | VOIDED | UNDONE | ABORTED
+  closedAt                 DateTime?
+  closeReason              String?
+  closedById               String?
+  soldTeamId               String?
+  soldTeamNameSnapshot      String?
+  soldPrice                Int?
+  soldAt                   DateTime?
+  sourceMembershipId       String?  @unique
+  reversedAt               DateTime?
+  reversalReason           String?
+  reversedById             String?
+
+  run            DraftRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  nominatedUser  User?    @relation("DraftLotNominee", fields: [nominatedUserId], references: [id], onDelete: SetNull)
+  nominatorTeam  Team?    @relation("DraftLotNominator", fields: [nominatorTeamId], references: [id], onDelete: SetNull)
+  soldTeam       Team?    @relation("DraftLotBuyer", fields: [soldTeamId], references: [id], onDelete: SetNull)
+  tenure         RosterTenure?
+  currentDraft   Draft?   @relation("CurrentDraftLot")
+
+  @@unique([runId, sequence])
+  @@index([nominatedUserId])
+  @@index([soldTeamId])
+}
+
+
+// Actual appearances remain a projection of canonical Game.players. Identity
+// IDs are historical scalars, like the source JSON, not cascading user links.
+model GameParticipant {
+  id String @id @default(cuid())
+  gameId String
+  sourceLineIndex Int
+  userId String?
+  teamId String?
+  accountId Float?
+  heroId Int
+  isRadiant Boolean
+  kills Int
+  deaths Int
+  assists Int
+  personaname String?
+  netWorth Float?
+  gpm Float?
+  lastHits Float?
+  xpm Float?
+  denies Float?
+  level Float?
+  heroDamage Float?
+  towerDamage Float?
+  heroHealing Float?
+  benchmarks String?
+  providerPlayerSlot Int?
+  plannedPosition Int?
+  playedPosition Int?
+  positionSource String?
+  ratingSnapshot Int?
+  ratingSource String?
+  ratingAt String?
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, sourceLineIndex])
+  @@index([userId, gameId])
+  @@index([teamId, gameId])
+  @@index([accountId, gameId])
+}
+
+// A captain's confirmed plan is independent of actual imported appearances.
+// Superseding closes its validity interval without changing any stored seats.
+model MatchLineup {
+  id String @id @default(cuid())
+  matchId String
+  teamId String
+  revision Int
+  activeKey String? @unique
+  scheduleRevision Int
+  logisticsRevision Int
+  scheduledAtSnapshot DateTime
+  status String @default("CONFIRMED")
+  createdAt DateTime @default(now())
+  createdById String
+  confirmedAt DateTime
+  confirmedById String
+  confirmedByName String
+  supersededAt DateTime?
+  reason String?
+  compositionFingerprint String
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  seats MatchLineupSeat[]
+
+  @@unique([matchId, teamId, revision])
+  @@index([teamId, confirmedAt])
+}
+
+model MatchLineupSeat {
+  id String @id @default(cuid())
+  lineupId String
+  seatKey String
+  userId String
+  userNameSnapshot String
+  accountId Float?
+  replacingUserId String?
+  entryKind String
+  acceptanceStatusSnapshot String
+  position Int?
+  mmr Int?
+  mmrSource String?
+  ratingAt DateTime?
+  assignmentId String?
+  sourceTenureId String?
+  availabilityAt DateTime
+  eligibilitySnapshot String?
+  lineup MatchLineup @relation(fields: [lineupId], references: [id], onDelete: Cascade)
+
+  @@unique([lineupId, seatKey])
+  @@unique([lineupId, userId])
 }

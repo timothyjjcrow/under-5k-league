@@ -34,8 +34,16 @@ import {
   generateRegularSchedule,
   makeSeason,
   makeTeam,
+  ON_POSTGRES,
   recordMatch,
 } from "./factories";
+
+let failPostseasonSnapshot = false;
+prisma.$use(async (params, next) => {
+  if (failPostseasonSnapshot && params.model === "AdminAction" && params.action === "create" &&
+      params.args.data.action === "archiveRemovedPostseasonFixture") throw new Error("postseason history unavailable");
+  return next(params);
+});
 
 function form(values: Record<string, string>): FormData {
   const data = new FormData();
@@ -143,8 +151,104 @@ async function crownedImportedFinalWithRemovableLoss() {
 
 describe("postseason admin commands", () => {
   afterEach(() => {
+    failPostseasonSnapshot = false;
     setRaceHook(null);
     vi.restoreAllMocks();
+  });
+
+  it.each(["reset", "return"])("preserves canonical games, attribution and all confirmed plans before postseason %s", async (intent) => {
+    const { season } = await seededSeason(2);
+    await createPlayoffBracket(season.id);
+    const [fixture] = await postseason(season.id);
+    const team = await prisma.team.findUniqueOrThrow({ where: { id: fixture.homeTeamId } });
+    const playedAt = new Date("2026-09-20T20:00:00.000Z");
+    const players = JSON.stringify([{ userId: team.captainId, teamId: team.id, accountId: 3_400_000_000,
+      heroId: 14, isRadiant: true, kills: 8, deaths: 2, assists: 13, plannedPosition: 4, positionSource: "CONFIRMED_LINEUP" }]);
+    const game = await prisma.game.create({ data: {
+      matchId: fixture.id, dotaMatchId: `preserved-${intent}`, radiantWin: true,
+      radiantTeamId: team.id, direTeamId: fixture.awayTeamId, winnerTeamId: team.id,
+      players, participantSource: players, participantVersion: 1,
+      participants: { create: { sourceLineIndex: 0, userId: team.captainId, teamId: team.id,
+        accountId: 3_400_000_000, heroId: 14, isRadiant: true, kills: 8, deaths: 2, assists: 13,
+        plannedPosition: 4, positionSource: "CONFIRMED_LINEUP" } },
+    } });
+    const lineupIds: string[] = [];
+    for (const revision of [1, 2]) {
+      const lineup = await prisma.matchLineup.create({ data: {
+        matchId: fixture.id, teamId: team.id, revision, scheduleRevision: 0, logisticsRevision: revision,
+        scheduledAtSnapshot: playedAt, status: revision === 1 ? "SUPERSEDED" : "CONFIRMED",
+        createdById: team.captainId, confirmedAt: playedAt, confirmedById: team.captainId,
+        confirmedByName: "Captain at confirmation", compositionFingerprint: `lineup-${revision}`,
+        supersededAt: revision === 1 ? playedAt : null,
+        seats: { create: { seatKey: "roster-seat", userId: team.captainId,
+          userNameSnapshot: "Captain then", accountId: 3_400_000_000, entryKind: "ROSTER",
+          acceptanceStatusSnapshot: "NOT_APPLICABLE", position: 4, mmr: 3200,
+          mmrSource: "REGISTRATION", availabilityAt: playedAt } },
+      } });
+      lineupIds.push(lineup.id);
+    }
+    const claim = await commandFields(season.id);
+    const result = intent === "reset"
+      ? await startPlayoffs({}, form({ ...claim, intent: "reset" }))
+      : await returnToRegularSeasonAction({}, form(claim));
+    expect(result?.error).toBeUndefined();
+    expect(await prisma.game.findUnique({ where: { id: game.id } })).toBeNull();
+    expect(await prisma.matchLineup.count({ where: { matchId: fixture.id } })).toBe(0);
+    const audit = await prisma.adminAction.findFirstOrThrow({ where: { action: "archiveRemovedPostseasonFixture", seasonId: season.id } });
+    expect(audit).toMatchObject({ actorId: "test-admin", actorName: "Test administrator" });
+    const receipt = JSON.parse(audit.detailsJson!);
+    expect(receipt).toMatchObject({ version: 1, intent: intent === "reset" ? "RESET_PLAYOFFS" : "RETURN_TO_REGULAR_SEASON",
+      fixture: { id: fixture.id, homeTeamId: team.id, homeTeam: { name: team.name } } });
+    expect(receipt.fixture.games[0]).toMatchObject({ id: game.id, players, participantSource: players,
+      participants: [expect.objectContaining({ userId: team.captainId, plannedPosition: 4, accountId: 3_400_000_000 })] });
+    expect(receipt.fixture.lineups.map((row: { id: string }) => row.id)).toEqual(lineupIds);
+    expect(receipt.fixture.lineups[0]).toMatchObject({ status: "SUPERSEDED",
+      seats: [expect.objectContaining({ userNameSnapshot: "Captain then", position: 4, mmr: 3200 })] });
+    const recovery = await prisma.setting.findUniqueOrThrow({ where: { key: `playoffGamesArchive:${season.id}` } });
+    expect(JSON.parse(recovery.value).map((row: { dotaMatchId: string }) => row.dotaMatchId)).toContain(game.dotaMatchId);
+  });
+
+  it("rolls back a postseason reset when its mandatory history snapshot cannot be saved", async () => {
+    const { season } = await seededSeason(2);
+    await createPlayoffBracket(season.id);
+    const [fixture] = await postseason(season.id);
+    const game = await prisma.game.create({ data: { matchId: fixture.id, dotaMatchId: "snapshot-failure",
+      radiantWin: true, winnerTeamId: fixture.homeTeamId, players: "[{\"retained\":true}]" } });
+    const claim = await commandFields(season.id);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    failPostseasonSnapshot = true;
+    const result = await startPlayoffs({}, form({ ...claim, intent: "reset" }));
+    expect(result?.error).toMatch(/couldn't update/i);
+    expect(await prisma.match.findUnique({ where: { id: fixture.id } })).not.toBeNull();
+    expect(await prisma.game.findUnique({ where: { id: game.id } })).not.toBeNull();
+    expect(await prisma.adminAction.count({ where: { action: "archiveRemovedPostseasonFixture" } })).toBe(0);
+    expect((await prisma.season.findUniqueOrThrow({ where: { id: season.id } })).status).toBe("PLAYOFFS");
+  });
+
+  it.skipIf(!ON_POSTGRES)("does not silently cascade a confirmed plan committed after the teardown snapshot", async () => {
+    const { season } = await seededSeason(2);
+    await createPlayoffBracket(season.id);
+    const [fixture] = await postseason(season.id);
+    let inserted: string | null = null;
+    let insertError: unknown;
+    setRaceHook(onceAt("playoffs.removePostseason.afterSnapshot", async () => {
+      try {
+        inserted = (await prisma.matchLineup.create({ data: {
+          matchId: fixture.id, teamId: fixture.homeTeamId, revision: 1, scheduleRevision: 0, logisticsRevision: 0,
+          scheduledAtSnapshot: new Date(), createdById: "actor", confirmedAt: new Date(),
+          confirmedById: "actor", confirmedByName: "Actor", compositionFingerprint: "late-confirmation",
+        } })).id;
+      } catch (error) { insertError = error; }
+    }));
+    let resetError: unknown;
+    try { await createPlayoffBracket(season.id); } catch (error) { resetError = error; }
+    if (inserted) {
+      expect(insertError).toBeUndefined();
+      expect(resetError).toBeInstanceOf(Error);
+      expect(await prisma.matchLineup.findUnique({ where: { id: inserted } })).not.toBeNull();
+      expect(await prisma.match.findUnique({ where: { id: fixture.id } })).not.toBeNull();
+      expect(await prisma.adminAction.count({ where: { action: "archiveRemovedPostseasonFixture" } })).toBe(0);
+    } else expect(insertError).toBeInstanceOf(Error);
   });
 
   it("makes Start explicit and replay-safe all the way through the Server Action", async () => {

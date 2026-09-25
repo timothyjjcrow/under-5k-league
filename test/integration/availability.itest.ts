@@ -30,10 +30,11 @@ import {
 
 const mockSend = vi.mocked(sendDiscordMessage);
 
-function rsvpForm(matchId: string, status: string): FormData {
+function rsvpForm(match: { id: string; scheduleRevision: number }, status: string): FormData {
   const fd = new FormData();
-  fd.set("matchId", matchId);
+  fd.set("matchId", match.id);
   fd.set("status", status);
+  fd.set("expectedScheduleRevision", String(match.scheduleRevision));
   return fd;
 }
 
@@ -70,14 +71,14 @@ describe("setAvailability", () => {
     const { match, player } = await setupMatch();
     vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.message).toMatch(/confirmed/i);
     let row = await prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: match.id, userId: player.id } },
     });
     expect(row?.status).toBe("IN");
 
-    const out = await setAvailability({}, rsvpForm(match.id, "OUT"));
+    const out = await setAvailability({}, rsvpForm(match, "OUT"));
     expect(out?.message).toMatch(/unavailable/i);
     row = await prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: match.id, userId: player.id } },
@@ -90,7 +91,7 @@ describe("setAvailability", () => {
     const rando = await makeUser("Rando");
     vi.mocked(requireUser).mockResolvedValue(sessionFor(rando));
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.error).toMatch(/not playing/i);
   });
 
@@ -102,11 +103,11 @@ describe("setAvailability", () => {
       data: { status: MATCH_STATUS.COMPLETED, homeScore: 2, awayScore: 0 },
     });
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.error).toMatch(/already finished/i);
   });
 
-  it("refuses a LIVE match — availability must be decided before play starts", async () => {
+  it("accepts a LIVE participant's availability for remaining games", async () => {
     const { match, player } = await setupMatch();
     vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
     await prisma.match.update({
@@ -114,11 +115,11 @@ describe("setAvailability", () => {
       data: { status: MATCH_STATUS.LIVE },
     });
 
-    const res = await setAvailability({}, rsvpForm(match.id, "OUT"));
-    expect(res?.error).toMatch(/closed.*live/i);
+    const res = await setAvailability({}, rsvpForm(match, "OUT"));
+    expect(res?.message).toMatch(/unavailable/i);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
-    ).toBe(0);
+    ).toBe(1);
   });
 
   it("refuses an unscheduled match — IN/OUT needs a concrete night", async () => {
@@ -129,7 +130,7 @@ describe("setAvailability", () => {
       data: { scheduledAt: null },
     });
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.error).toMatch(/does not have a kickoff/i);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
@@ -144,7 +145,7 @@ describe("setAvailability", () => {
       data: { scheduledAt: new Date(Date.now() - 49 * 60 * 60 * 1000) },
     });
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.error).toMatch(/kickoff has passed.*result.*outstanding/i);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
@@ -168,7 +169,7 @@ describe("setAvailability", () => {
       });
     }
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.error).toMatch(/not open.*league phase/i);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
@@ -186,7 +187,7 @@ describe("setAvailability", () => {
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.message).toMatch(/confirmed/i);
   });
 
@@ -200,7 +201,7 @@ describe("setAvailability", () => {
       data: { isActive: false },
     });
 
-    const res = await setAvailability({}, rsvpForm(match.id, "OUT"));
+    const res = await setAvailability({}, rsvpForm(match, "OUT"));
     expect(res?.error).toMatch(/archived season/i);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
@@ -212,7 +213,7 @@ describe("setAvailability", () => {
     vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
 
     const results = await raceN(3, () =>
-      setAvailability({}, rsvpForm(match.id, "IN")),
+      setAvailability({}, rsvpForm(match, "IN")),
     );
     expect(results.some((result) => result?.message)).toBe(true);
     expect(
@@ -256,14 +257,14 @@ describe("setAvailability — assigned standins", () => {
     await assign(match.id, home.id, standin.id, player.id);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.message).toMatch(/confirmed/i);
     let row = await prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: match.id, userId: standin.id } },
     });
     expect(row?.status).toBe("IN");
 
-    const out = await setAvailability({}, rsvpForm(match.id, "OUT"));
+    const out = await setAvailability({}, rsvpForm(match, "OUT"));
     expect(out?.message).toMatch(/unavailable/i);
     row = await prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: match.id, userId: standin.id } },
@@ -279,7 +280,7 @@ describe("setAvailability — assigned standins", () => {
     await assign(match.id, home.id, standin.id, null);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.message).toMatch(/confirmed/i);
     const row = await prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: match.id, userId: standin.id } },
@@ -293,7 +294,7 @@ describe("setAvailability — assigned standins", () => {
     await assign(match.id, home.id, standin.id, player.id);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
 
-    const res = await setAvailability({}, rsvpForm(match.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.error).toMatch(/standin is covering your seat/i);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: match.id } }),
@@ -319,7 +320,7 @@ describe("setAvailability — assigned standins", () => {
     await assign(second.id, second.homeTeamId, standin.id, null);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
 
-    const res = await setAvailability({}, rsvpForm(first.id, "IN"));
+    const res = await setAvailability({}, rsvpForm(first, "IN"));
     expect(res?.error).toMatch(/not playing/i);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: first.id } }),
@@ -338,7 +339,7 @@ describe("setAvailability — assigned standins", () => {
     await assign(match.id, home.id, standin.id, player.id);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
 
-    const res = await setAvailability({}, rsvpForm(match.id, "OUT"));
+    const res = await setAvailability({}, rsvpForm(match, "OUT"));
     expect(res?.message).toMatch(/unavailable/i);
 
     const call = mockSend.mock.calls.find(([msg]) =>
@@ -358,7 +359,7 @@ describe("setAvailability — assigned standins", () => {
     await assign(match.id, home.id, standin.id, player.id);
     vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
 
-    await setAvailability({}, rsvpForm(match.id, "OUT"));
+    await setAvailability({}, rsvpForm(match, "OUT"));
 
     const call = mockSend.mock.calls.find(([msg]) =>
       String(msg).includes("line up a standin"),

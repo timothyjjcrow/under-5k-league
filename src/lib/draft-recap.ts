@@ -1,9 +1,10 @@
-// Draft-night superlatives, computed purely from the drafted rosters so the
-// teams page can tell the auction's stories (biggest spend, best steal, …).
+// Draft-night superlatives from recorded purchases. Legacy callers may supply
+// surviving roster observations; their presentation must identify that scope.
 
 export type DraftedPlayer = {
   name: string;
   teamName: string;
+  teamId?: string;
   price: number;
   isCaptain: boolean;
   mmr: number | null;
@@ -15,9 +16,9 @@ export type DraftRecap = {
   /** Best MMR-per-dollar purchase. */
   bestValue: (DraftedPlayer & { perDollar: number }) | null;
   /** Team that paid the most in total. */
-  topSpender: { teamName: string; spent: number } | null;
+  topSpender: { teamId?: string; teamName: string; spent: number } | null;
   /** Team that paid the least in total. */
-  bargainHunter: { teamName: string; spent: number } | null;
+  bargainHunter: { teamId?: string; teamName: string; spent: number } | null;
   totalSpent: number;
 };
 
@@ -26,7 +27,7 @@ export function draftRecap(players: DraftedPlayer[]): DraftRecap {
 
   let biggestSpend: DraftedPlayer | null = null;
   let bestValue: (DraftedPlayer & { perDollar: number }) | null = null;
-  const spentByTeam = new Map<string, number>();
+  const spentByTeam = new Map<string, NonNullable<DraftRecap["topSpender"]>>();
 
   for (const p of bought) {
     if (!biggestSpend || p.price > biggestSpend.price) biggestSpend = p;
@@ -36,15 +37,20 @@ export function draftRecap(players: DraftedPlayer[]): DraftRecap {
         bestValue = { ...p, perDollar };
       }
     }
-    spentByTeam.set(p.teamName, (spentByTeam.get(p.teamName) ?? 0) + p.price);
+    const key = JSON.stringify(p.teamId ? ["id", p.teamId] : ["legacy-name", p.teamName]);
+    const spending = spentByTeam.get(key) ?? {
+      ...(p.teamId ? { teamId: p.teamId } : {}), teamName: p.teamName, spent: 0,
+    };
+    spending.spent += p.price;
+    spentByTeam.set(key, spending);
   }
 
-  let topSpender: { teamName: string; spent: number } | null = null;
-  let bargainHunter: { teamName: string; spent: number } | null = null;
-  for (const [teamName, spent] of spentByTeam) {
-    if (!topSpender || spent > topSpender.spent) topSpender = { teamName, spent };
-    if (!bargainHunter || spent < bargainHunter.spent) {
-      bargainHunter = { teamName, spent };
+  let topSpender: DraftRecap["topSpender"] = null;
+  let bargainHunter: DraftRecap["bargainHunter"] = null;
+  for (const spending of spentByTeam.values()) {
+    if (!topSpender || spending.spent > topSpender.spent) topSpender = spending;
+    if (!bargainHunter || spending.spent < bargainHunter.spent) {
+      bargainHunter = spending;
     }
   }
 

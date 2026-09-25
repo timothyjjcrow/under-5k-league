@@ -63,7 +63,7 @@ function normalizedBenchmarks(value: unknown): PlayerStat["benchmarks"] {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function normalizedPlayerStat(value: unknown): PlayerStat | null {
+export function normalizedPlayerStat(value: unknown): PlayerStat | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const line = value as Record<string, unknown>;
   if (
@@ -85,7 +85,23 @@ function normalizedPlayerStat(value: unknown): PlayerStat | null {
     }
   }
 
+  // Optional provenance is omitted for legacy rows, never guessed from a
+  // current roster or rating. Unsafe metadata cannot turn into a claimed role.
+  const metadata: Partial<PlayerStat> = {};
+  const integer = (value: unknown, min: number, max: number): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
+  if (integer(line.providerPlayerSlot, 0, 255)) metadata.providerPlayerSlot = line.providerPlayerSlot;
+  if (integer(line.plannedPosition, 1, 5)) metadata.plannedPosition = line.plannedPosition;
+  if (integer(line.playedPosition, 1, 5)) metadata.playedPosition = line.playedPosition;
+  if (integer(line.ratingSnapshot, 0, 100_000)) metadata.ratingSnapshot = line.ratingSnapshot;
+  for (const key of ["positionSource", "ratingSource"] as const) {
+    if (typeof line[key] === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(line[key])) metadata[key] = line[key];
+  }
+  if (typeof line.ratingAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(line.ratingAt) && Number.isFinite(Date.parse(line.ratingAt))) {
+    metadata.ratingAt = new Date(line.ratingAt).toISOString();
+  }
   return {
+    ...metadata,
     accountId: nullableAccountId(line.accountId),
     heroId: line.heroId,
     isRadiant: line.isRadiant,
@@ -157,6 +173,21 @@ export function decodeGamePlayers(json: string): ParsedGamePlayers {
     unique(players.map((player) => player.accountId)) &&
     unique(players.map((player) => player.userId));
   return { players, invalidLines, malformed: false, completeRoster };
+}
+
+
+/** Retain original array offsets even when preceding members are rejected. */
+export function decodeIndexedGamePlayers(json: string) {
+  const decoded = decodeGamePlayers(json);
+  const indexed: { sourceLineIndex: number; player: PlayerStat }[] = [];
+  if (!decoded.malformed) {
+    const source: unknown[] = JSON.parse(json);
+    source.forEach((candidate, sourceLineIndex) => {
+      const player = normalizedPlayerStat(candidate);
+      if (player) indexed.push({ sourceLineIndex, player });
+    });
+  }
+  return { ...decoded, indexed };
 }
 
 /**

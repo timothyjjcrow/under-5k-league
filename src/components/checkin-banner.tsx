@@ -11,6 +11,8 @@ import { LocalTime } from "@/components/local-time";
  */
 export function CheckinBanner({
   matchId,
+  scheduleRevision,
+  remainingGames = false,
   heading,
   eyebrow,
   when,
@@ -20,6 +22,8 @@ export function CheckinBanner({
   variant = "strip",
 }: {
   matchId: string;
+  scheduleRevision: number;
+  remainingGames?: boolean;
   heading: string;
   /**
    * A short kicker above the heading — lets the `panel` variant carry "Your
@@ -125,7 +129,7 @@ export function CheckinBanner({
         ) : null}
         <div className={panel ? "mt-1 text-xs text-muted" : "text-muted"}>
           {myRsvp === "IN"
-            ? "You're confirmed ✓ — change it here if plans shift."
+            ? remainingGames ? "You're ready for the remaining games ✓ — change it here if plans shift." : "You're confirmed ✓ — change it here if plans shift."
             : myRsvp === "OUT"
               ? "You're marked unavailable — a standin can be lined up."
               : "Can you make it? Let your captain know."}
@@ -138,17 +142,17 @@ export function CheckinBanner({
             : "flex shrink-0 gap-2"
         }
       >
-        <ActionForm action={setAvailability} hidden={{ matchId, status: "IN" }}>
+        <ActionForm action={setAvailability} hidden={{ matchId, status: "IN", expectedScheduleRevision: String(scheduleRevision) }}>
           <SubmitButton
             variant={myRsvp === "IN" ? "primary" : "secondary"}
             size={panel ? "md" : "sm"}
           >
-            ✓ I&apos;m in
+            {remainingGames ? "✓ Ready for the next game" : "✓ I'm in"}
           </SubmitButton>
         </ActionForm>
         <ActionForm
           action={setAvailability}
-          hidden={{ matchId, status: "OUT" }}
+          hidden={{ matchId, status: "OUT", expectedScheduleRevision: String(scheduleRevision) }}
         >
           <SubmitButton
             variant={myRsvp === "OUT" ? "primary" : "secondary"}

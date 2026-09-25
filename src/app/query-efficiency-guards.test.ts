@@ -5,12 +5,14 @@ import { join } from "node:path";
 const read = (...path: string[]) => readFileSync(join(__dirname, ...path), "utf8");
 const HOME = read("page.tsx");
 const LAYOUT = read("layout.tsx");
+const PUBLIC_NAVIGATION = read("../lib/public-navigation.ts");
 
 describe("shared-shell query efficiency", () => {
   it("checks for archived seasons without counting every archived row", () => {
-    expect(LAYOUT).toMatch(/prisma\.season\.findFirst\(\{/);
-    expect(LAYOUT).not.toMatch(/prisma\.season\.count\(\{/);
-    expect(LAYOUT).toContain("const hasHistory = archivedSeason != null;");
+    expect(LAYOUT).toContain("getPublicHasHistory(null)");
+    expect(LAYOUT).not.toMatch(/prisma\.season\.(?:count|findFirst)\(\{/);
+    expect(PUBLIC_NAVIGATION).toMatch(/prisma\.season\.findFirst\(\{/);
+    expect(PUBLIC_NAVIGATION).not.toMatch(/prisma\.season\.count\(\{/);
   });
 });
 
