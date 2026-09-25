@@ -130,6 +130,7 @@ type SeasonOverrides = Partial<{
   finalBestOf: number;
   draftAt: Date | null;
   draftRevision: number;
+  firstMatchNight: Date | null;
 }>;
 
 export async function makeSeason(overrides: SeasonOverrides = {}) {

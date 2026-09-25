@@ -1,3 +1,4 @@
+import { calendarFeedLinks } from "@/lib/calendar-links";
 import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { RegularSeasonProgress } from "@/components/league-progress";
@@ -593,13 +594,22 @@ export default async function SchedulePage() {
               </a>
             ) : null}
             {matches.some((m) => m.scheduledAt) ? (
-              <a
-                href="/api/calendar"
-                className={buttonClasses("secondary", "sm")}
-                title="Download the active season's calendar feed"
-              >
-                Calendar ↗
-              </a>
+              <>
+                <a
+                  href={calendarFeedLinks().subscribe}
+                  className={buttonClasses("secondary", "sm")}
+                  title="Add the league calendar to your calendar app — moved matches update on their own"
+                >
+                  Subscribe ↗
+                </a>
+                <a
+                  href="/api/calendar"
+                  className={buttonClasses("secondary", "sm")}
+                  title="Download the active season's calendar feed"
+                >
+                  Calendar ↗
+                </a>
+              </>
             ) : null}
           </div>
         }
@@ -805,9 +815,21 @@ export default async function SchedulePage() {
           request is only a proposal until accepted. Open a match for check-in,
           rescheduling, and result details.
         </p>
-        <a href="/api/calendar" className={buttonClasses("secondary", "sm")}>
-          Download league calendar (.ics)
-        </a>
+        <p className="text-sm leading-relaxed text-muted">
+          Subscribing keeps your calendar in step when a match moves. A
+          downloaded file is a one-time copy.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <a
+            href={calendarFeedLinks().subscribe}
+            className={buttonClasses("secondary", "sm")}
+          >
+            Subscribe in your calendar app
+          </a>
+          <a href="/api/calendar" className={buttonClasses("secondary", "sm")}>
+            Download league calendar (.ics)
+          </a>
+        </div>
       </AnalysisDisclosure>
 
       <Card id="standings" className="scroll-mt-24">

@@ -811,6 +811,55 @@ export function rescheduleMessage(m: {
   return `🗓️ **Rescheduled** — ${label}: **${name(m.homeName)}** vs **${name(m.awayName)}** now plays ${t} (both captains agreed).${reset}`;
 }
 
+export type AdminRetimeMove = {
+  matchId: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  /** Epoch ms of the new kickoff; null when the admin CLEARED the time. */
+  whenMs: number | null;
+};
+
+const ADMIN_RETIME_MAX_LINES = 10;
+
+/**
+ * An admin retime (Set time, or the week mover). Captain-agreed reschedules
+ * always announced; admin moves said nothing, so the only sign a fixture had
+ * moved was an empty check-in banner. Kickoffs render as `<t:…:F>`.
+ */
+export function adminRetimeMessage(m: {
+  moves: AdminRetimeMove[];
+  clearedRsvps: number;
+}): string {
+  const label = (move: AdminRetimeMove) =>
+    move.isTiebreaker
+      ? `Tiebreaker week ${move.week}`
+      : move.isPlayoff ? "Playoffs" : `Week ${move.week}`;
+  const when = (move: AdminRetimeMove) =>
+    move.whenMs == null
+      ? "unscheduled for now"
+      : `<t:${Math.floor(move.whenMs / 1000)}:F>`;
+  const reset = m.clearedRsvps
+    ? ` Check-ins were reset (${m.clearedRsvps} cleared) — everyone please RSVP again.`
+    : "";
+  const site = resolveSiteUrl();
+  if (m.moves.length === 1) {
+    const [move] = m.moves;
+    const what = move.whenMs == null ? "is" : "now plays";
+    return `🗓️ **Kickoff moved** — ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** ${what} ${when(move)} (set by an admin).${reset} <${site}/matches/${move.matchId}>`;
+  }
+  const shown = m.moves.slice(0, ADMIN_RETIME_MAX_LINES);
+  const lines = shown.map(
+    (move) =>
+      `• ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** — ${when(move)}`,
+  );
+  const more = m.moves.length - shown.length;
+  if (more > 0) lines.push(`• …and ${more} more`);
+  return `🗓️ **Schedule moved** by an admin — ${m.moves.length} matches have new kickoffs:\n${lines.join("\n")}\n${reset.trim() ? `${reset.trim()} ` : ""}Full schedule: <${site}/schedule>`;
+}
+
 export function testMessage(): string {
   return `👋 Webhook test from **${process.env.NEXT_PUBLIC_APP_NAME || "the league site"}** — notifications are wired up.`;
 }

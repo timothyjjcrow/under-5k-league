@@ -38,6 +38,14 @@ describe("buildCalendar", () => {
     expect(cal).toContain("DTEND:20260712T040000Z");
     expect(cal).toContain("SUMMARY:Week 1: Raiders vs Wolves");
     expect(cal).toContain("URL:https://league.test/matches/m1");
+    expect(cal).toContain("SEQUENCE:0");
+    expect(cal).toContain("X-PUBLISHED-TTL:PT1H");
+  });
+
+  it("carries the schedule revision as SEQUENCE so a moved match updates", () => {
+    expect(buildCalendar("League", [{ ...event, sequence: 3 }])).toContain("SEQUENCE:3");
+    expect(buildCalendar("League", [{ ...event, sequence: -1 }])).toContain("SEQUENCE:0");
+    expect(buildCalendar("League", [{ ...event, sequence: 1.5 }])).toContain("SEQUENCE:0");
   });
 
   it("emits an empty calendar without events", () => {

@@ -74,6 +74,9 @@ export async function GET(req: NextRequest) {
     matches.map((m) => ({
       uid: `${m.id}@${host}`,
       stamp: m.createdAt,
+      // Every retime path bumps scheduleRevision, so a subscribed calendar
+      // replaces its copy instead of keeping the old kickoff.
+      sequence: m.scheduleRevision,
       start: m.scheduledAt as Date,
       // One rough hour per possible game, plus warm-up slack.
       durationMinutes: m.bestOf * 60 + 30,

@@ -21,6 +21,7 @@ import {
   clashesAfterRetime,
   removeStandinGuarded,
 } from "@/lib/standin-service";
+import { announceAdminRetime } from "@/lib/retime-announcement";
 import {
   SEASON_STATUS,
   SEASON_PHASE_ORDER,
@@ -5885,6 +5886,7 @@ export async function setWeekNight(
     outcome.retimedIds,
   );
   refresh();
+  const announced = await announceAdminRetime(outcome.retimedIds, outcome.rsvps);
   return {
     ok: true,
     message:
@@ -5897,6 +5899,7 @@ export async function setWeekNight(
             : " · couldn't cascade (week had no previous time)"
         : "") +
       ` · ${outcome.rsvps} check-in(s) cleared · ${outcome.proposals} open reschedule proposal(s) cancelled` +
+      (announced ? " · captains notified on Discord" : "") +
       (clashes.length
         ? ` · ⚠ standin clash: ${clashes.join("; ")} — remove one of those assignments`
         : ""),
@@ -6092,6 +6095,7 @@ export async function setMatchTime(
   const clashes = scheduledAt
     ? await clashesAfterRetime(outcome.seasonId, [matchId])
     : [];
+  const announced = await announceAdminRetime([matchId], outcome.rsvps);
   return {
     message: `${
       scheduledAt
@@ -6101,7 +6105,7 @@ export async function setMatchTime(
       scheduledAt
         ? " · the week's Discord reminder is eligible to re-send with the new time"
         : ""
-    }${
+    }${announced ? " · captains notified on Discord" : ""}${
       clashes.length
         ? ` · ⚠ standin clash: ${clashes.join("; ")} — remove one of those assignments`
         : ""

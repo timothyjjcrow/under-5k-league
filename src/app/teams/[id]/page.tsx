@@ -1,3 +1,4 @@
+import { calendarFeedLinks } from "@/lib/calendar-links";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
 import Link from "next/link";
@@ -301,13 +302,22 @@ export default async function TeamPage({
             {team.season.isActive &&
             (team.season.status === "REGULAR_SEASON" ||
               team.season.status === "PLAYOFFS") ? (
-              <a
-                href={`/api/calendar?team=${team.id}`}
-                className="text-xs text-muted hover:text-info"
-                title="Download this team's active-season .ics calendar feed"
-              >
-                📅 Calendar feed
-              </a>
+              <>
+                <a
+                  href={calendarFeedLinks(team.id).subscribe}
+                  className={textLink("text-sm")}
+                  title="Add this team's matches to your calendar app — moved matches update on their own"
+                >
+                  📅 Subscribe to calendar
+                </a>
+                <a
+                  href={calendarFeedLinks(team.id).download}
+                  className={textLink("text-sm")}
+                  title="Download this team's active-season .ics calendar file"
+                >
+                  Download .ics
+                </a>
+              </>
             ) : null}
             {team.season.isActive && team.season.status === "DRAFT" ? (
               <Link href="/draft" className={textLink("text-sm")}>

@@ -4,6 +4,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   newsMessage,
   rescheduleMessage,
+  adminRetimeMessage,
   signupMessage,
   draftStartedMessage,
   draftCompleteMessage,
@@ -1365,6 +1366,19 @@ describe("no player-supplied name can inject markdown", () => {
         },
       ],
     }),
+    adminRetimeMessage({
+      clearedRsvps: 2,
+      moves: [
+        { matchId: "m1", homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: 1_800_000_000_000 },
+      ],
+    }),
+    adminRetimeMessage({
+      clearedRsvps: 0,
+      moves: [
+        { matchId: "m1", homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: 1_800_000_000_000 },
+        { matchId: "m2", homeName: EVIL, awayName: EVIL, week: 2, isPlayoff: false, whenMs: null },
+      ],
+    }),
   ];
 
   it("never emits a live masked link", () => {
@@ -1555,5 +1569,50 @@ describe("weeklyHonorsMessage corrections", () => {
       corrected: true,
     });
     expect(message).toMatch(/previous honors are withdrawn/i);
+  });
+});
+
+describe("adminRetimeMessage", () => {
+  const move = (i: number, whenMs: number | null = 1_800_000_000_000 + i * 60_000) => ({
+    matchId: `m${i}`,
+    homeName: `Home ${i}`,
+    awayName: `Away ${i}`,
+    week: 3,
+    isPlayoff: false,
+    whenMs,
+  });
+
+  it("names one moved fixture, its reader-local time and the reset", () => {
+    const msg = adminRetimeMessage({ moves: [move(1)], clearedRsvps: 4 });
+    expect(msg).toContain("Kickoff moved");
+    expect(msg).toContain("Week 3: **Home 1** vs **Away 1** now plays <t:1800000060:F>");
+    expect(msg).toContain("4 cleared");
+    expect(msg).toMatch(/\/matches\/m1>$/);
+  });
+
+  it("says so when the kickoff was cleared", () => {
+    const msg = adminRetimeMessage({ moves: [move(1, null)], clearedRsvps: 0 });
+    expect(msg).toContain("**Home 1** vs **Away 1** is unscheduled for now (set by an admin)");
+    expect(msg).not.toContain("<t:");
+    expect(msg).not.toContain("Check-ins were reset");
+  });
+
+  it("lists a week move and caps a long cascade", () => {
+    const msg = adminRetimeMessage({
+      moves: Array.from({ length: 14 }, (_, i) => move(i)),
+      clearedRsvps: 0,
+    });
+    expect(msg).toContain("14 matches have new kickoffs");
+    expect(msg.match(/<t:\d+:F>/g)?.length).toBe(10);
+    expect(msg).toContain("…and 4 more");
+    expect(msg.length).toBeLessThan(2000);
+    expect(msg).toMatch(/\/schedule>$/);
+  });
+
+  it("labels playoff and tiebreaker fixtures", () => {
+    expect(adminRetimeMessage({ moves: [{ ...move(1), isPlayoff: true }], clearedRsvps: 0 }))
+      .toContain("Playoffs:");
+    expect(adminRetimeMessage({ moves: [{ ...move(1), isTiebreaker: true }], clearedRsvps: 0 }))
+      .toContain("Tiebreaker week 3:");
   });
 });

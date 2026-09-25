@@ -7,6 +7,11 @@ export type CalendarEvent = {
   uid: string;
   /** Stable event creation stamp. Do not substitute the feed request time. */
   stamp: Date;
+  /**
+   * Revision number (RFC 5545 SEQUENCE). Bump it whenever the time moves: a
+   * calendar app that already holds the event keeps the old copy otherwise.
+   */
+  sequence?: number;
   start: Date;
   durationMinutes: number;
   summary: string;
@@ -67,12 +72,17 @@ export function buildCalendar(name: string, events: CalendarEvent[]): string {
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${escapeIcsText(name)}`,
+    // How often a subscribed calendar should re-fetch. Apple Calendar and
+    // Outlook honour these; Google Calendar picks its own interval.
+    "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+    "X-PUBLISHED-TTL:PT1H",
   ];
   for (const e of events) {
     const end = new Date(e.start.getTime() + e.durationMinutes * 60_000);
     lines.push(
       "BEGIN:VEVENT",
       `UID:${e.uid}`,
+      `SEQUENCE:${Number.isSafeInteger(e.sequence) && e.sequence! > 0 ? e.sequence : 0}`,
       `DTSTAMP:${icsDate(e.stamp)}`,
       `DTSTART:${icsDate(e.start)}`,
       `DTEND:${icsDate(end)}`,

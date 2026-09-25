@@ -16,6 +16,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
+import { sendDiscordMessage } from "@/lib/discord";
 import {
   recordResult,
   reopenMatch,
@@ -169,7 +170,9 @@ describe("admin schedule writes only touch the rows they claim to", () => {
     const { proposer, responder } = await captainsOf(target.id);
 
     // A settled (DECLINED) proposal, then a fresh open one.
-    await proposeReschedule(proposer, target.id, new Date(Date.now() + 864e5));
+    // Every fixture sits at now+1d; a proposal must clear the team's other
+    // fixtures by four hours.
+    await proposeReschedule(proposer, target.id, new Date(Date.now() + 1.5 * 864e5));
     const settled = await prisma.rescheduleRequest.findFirstOrThrow({
       where: { matchId: target.id, status: "PENDING" },
     });
@@ -377,7 +380,9 @@ describe("admin schedule writes only touch the rows they claim to", () => {
     const target = matches[0];
     const { proposer, responder } = await captainsOf(target.id);
 
-    await proposeReschedule(proposer, target.id, new Date(Date.now() + 864e5));
+    // Every fixture sits at now+1d; a proposal must clear the team's other
+    // fixtures by four hours.
+    await proposeReschedule(proposer, target.id, new Date(Date.now() + 1.5 * 864e5));
     const settled = await prisma.rescheduleRequest.findFirstOrThrow({
       where: { matchId: target.id, status: "PENDING" },
     });
@@ -726,5 +731,85 @@ describe("setWeekNight releases the reminder marker for EVERY retimed week", () 
         },
       }),
     ).not.toBeNull();
+  });
+});
+
+describe("admin retimes announce on Discord", () => {
+  async function linkCaptains(matchId: string) {
+    const { proposer, responder } = await captainsOf(matchId);
+    await prisma.user.update({ where: { id: proposer }, data: { discordId: "900000000000000001" } });
+    await prisma.user.update({ where: { id: responder }, data: { discordId: "900000000000000002" } });
+  }
+
+  it("setMatchTime posts the new kickoff and mentions both captains", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const target = matches[0];
+    await linkCaptains(target.id);
+    const send = vi.mocked(sendDiscordMessage);
+    send.mockClear();
+
+    const when = new Date(Date.now() + 6 * 864e5);
+    const out = await setMatchTime(
+      {},
+      fd({
+        matchId: target.id,
+        expectedActiveSeasonId: season.id,
+        scheduledAt: when.toISOString(),
+        scheduledAtTs: String(when.getTime()),
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const [content, mentions] = send.mock.calls[0];
+    expect(content).toContain("Kickoff moved");
+    expect(content).toContain(`<t:${Math.floor(when.getTime() / 1000)}:F>`);
+    expect(content).toContain(`/matches/${target.id}`);
+    expect(mentions?.users?.slice().sort()).toEqual([
+      "900000000000000001",
+      "900000000000000002",
+    ]);
+    expect(out?.message).toContain("captains notified on Discord");
+  });
+
+  it("setWeekNight posts one message for the whole move", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const week = matches[0].week;
+    const send = vi.mocked(sendDiscordMessage);
+    send.mockClear();
+
+    const night = new Date(Date.now() + 5 * 864e5);
+    await setWeekNight(
+      { message: "" },
+      fd({
+        expectedActiveSeasonId: season.id,
+        week: String(week),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+      }),
+    );
+
+    const moved = matches.filter((m) => m.week === week);
+    expect(moved.length).toBe(2);
+    expect(send).toHaveBeenCalledTimes(1);
+    const [content] = send.mock.calls[0];
+    expect(content).toContain("Schedule moved");
+    expect(content.match(/<t:\d+:F>/g)?.length).toBe(2);
+  });
+
+  it("an unchanged kickoff posts nothing", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const target = matches[0];
+    const send = vi.mocked(sendDiscordMessage);
+    send.mockClear();
+    await setMatchTime(
+      {},
+      fd({
+        matchId: target.id,
+        expectedActiveSeasonId: season.id,
+        scheduledAt: target.scheduledAt!.toISOString(),
+        scheduledAtTs: String(target.scheduledAt!.getTime()),
+      }),
+    );
+    expect(send).not.toHaveBeenCalled();
   });
 });
