@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   INHOUSE_ELO,
+  MONTH_MIN_GAMES,
   PROVISIONAL_GAMES,
+  parseEloDeltas,
   rankInhouse,
   summarizeInhouse,
+  summarizeInhouseMonth,
+  toMonthLobby,
   type FinishedLobby,
   type InhouseRecord,
+  type MonthLobby,
 } from "./inhouse-stats";
 
 function lobby(
@@ -196,5 +201,194 @@ describe("rankInhouse", () => {
     const { ranked, provisional } = rankInhouse([rec("a", 1, 1016)]);
     expect(ranked).toEqual([]);
     expect(provisional).toHaveLength(1);
+  });
+});
+
+describe("parseEloDeltas", () => {
+  it("keeps finite numbers and drops everything else", () => {
+    expect(
+      parseEloDeltas('{"a":16,"b":-16,"c":"12","d":null,"e":1e999}'),
+    ).toEqual({ a: 16, b: -16 });
+  });
+
+  it("reads unreadable or non-object JSON as an empty map", () => {
+    for (const bad of ["not json", "[1,2]", "null", "7", undefined, null]) {
+      expect(parseEloDeltas(bad)).toEqual({});
+    }
+  });
+});
+
+describe("summarizeInhouseMonth", () => {
+  const START = Date.UTC(2026, 8, 1, 7); // Sept 1, 00:00 Pacific
+  const END = Date.UTC(2026, 9, 1, 7); // Oct 1, 00:00 Pacific
+  const window = { startMs: START, endMs: END };
+  const HOUR = 3_600_000;
+
+  // [userId, team] pairs; deltas default to ±16 per side.
+  function month(
+    id: string,
+    completedAt: number | null,
+    winnerTeam: number | null,
+    players: [string, number | null][],
+    eloDeltas?: Record<string, number>,
+  ): MonthLobby {
+    return {
+      id,
+      completedAt,
+      winnerTeam,
+      eloDeltas:
+        eloDeltas ??
+        Object.fromEntries(
+          players
+            .filter(([, team]) => team === 1 || team === 2)
+            .map(([userId, team]) => [
+              userId,
+              team === winnerTeam ? 16 : -16,
+            ]),
+        ),
+      players: players.map(([userId, team]) => ({
+        userId,
+        name: userId.toUpperCase(),
+        avatar: null,
+        team,
+      })),
+    };
+  }
+
+  it("counts only games that completed inside the half-open window", () => {
+    const board = summarizeInhouseMonth(
+      [
+        month("before", START - 1, 1, [["a", 1], ["b", 2]]),
+        month("first", START, 1, [["a", 1], ["b", 2]]),
+        month("mid", START + 5 * HOUR, 2, [["a", 1], ["b", 2]]),
+        month("end", END, 1, [["a", 1], ["b", 2]]),
+        month("legacy", null, 1, [["a", 1], ["b", 2]]),
+      ],
+      window,
+    );
+    expect(board.games).toBe(2);
+    const rows = [...board.ranked, ...board.unranked];
+    expect(rows.find((r) => r.userId === "a")).toMatchObject({
+      games: 2,
+      wins: 1,
+      losses: 1,
+      winRate: 0.5,
+      eloNet: 0,
+    });
+  });
+
+  it("ignores lobbies with no winner and players with no side", () => {
+    const board = summarizeInhouseMonth(
+      [
+        month("g1", START + HOUR, null, [["a", 1], ["b", 2]]),
+        month("g2", START + 2 * HOUR, 1, [["a", 1], ["c", null]]),
+      ],
+      window,
+    );
+    expect(board.games).toBe(1);
+    const rows = [...board.ranked, ...board.unranked];
+    expect(rows.map((r) => r.userId)).toEqual(["a"]);
+  });
+
+  it("ranks by wins, then win rate, then games, then userId", () => {
+    const games: MonthLobby[] = [];
+    let t = START;
+    const play = (winner: string, loser: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        t += HOUR;
+        games.push(month(`g${games.length}`, t, 1, [[winner, 1], [loser, 2]]));
+      }
+    };
+    // Pads a player's LOSS column with a throwaway opponent.
+    const lose = (who: string, n: number) => play(`pad-${who}`, who, n);
+    play("fourwins", "x", 4); // 4-0
+    play("threewins", "y", 3); // 3-0 (100%)
+    play("slower", "y", 3);
+    lose("slower", 1); // 3-1 (75%): same wins, lower rate
+    play("zeta", "q", 3);
+    lose("zeta", 1); // 3-1, identical to "slower": userId decides
+    const order = summarizeInhouseMonth(games, window).ranked.map(
+      (r) => r.userId,
+    );
+    const pos = (id: string) => order.indexOf(id);
+    expect(pos("fourwins")).toBeLessThan(pos("threewins"));
+    expect(pos("threewins")).toBeLessThan(pos("slower"));
+    expect(pos("slower")).toBeLessThan(pos("zeta"));
+  });
+
+  it("breaks an equal-wins, equal-rate tie on games played", () => {
+    // Both 0 wins at 0%: the player who turned up more ranks first.
+    const games: MonthLobby[] = [];
+    for (let i = 0; i < 4; i++)
+      games.push(month(`m${i}`, START + i * HOUR, 1, [["w", 1], ["many", 2]]));
+    for (let i = 0; i < 3; i++)
+      games.push(month(`f${i}`, START + (10 + i) * HOUR, 1, [["w", 1], ["few", 2]]));
+    const order = summarizeInhouseMonth(games, window).ranked.map(
+      (r) => r.userId,
+    );
+    expect(order).toEqual(["w", "many", "few"]);
+  });
+
+  it("puts players under the games floor after the ranked block, unranked", () => {
+    const games: MonthLobby[] = [];
+    for (let i = 0; i < MONTH_MIN_GAMES; i++)
+      games.push(month(`r${i}`, START + i * HOUR, 2, [["grinder", 1], ["regular", 2]]));
+    // Two wins from two games: a hot start that must not outrank the floor.
+    games.push(month("h1", START + 20 * HOUR, 1, [["hot", 1], ["grinder", 2]]));
+    games.push(month("h2", START + 21 * HOUR, 1, [["hot", 1], ["regular", 2]]));
+    const board = summarizeInhouseMonth(games, window);
+    expect(board.ranked.map((r) => r.userId)).toEqual(["regular", "grinder"]);
+    expect(board.unranked.map((r) => r.userId)).toEqual(["hot"]);
+    expect(board.unranked[0]).toMatchObject({ games: 2, wins: 2 });
+    expect(board.ranked.every((r) => r.games >= MONTH_MIN_GAMES)).toBe(true);
+  });
+
+  it("sums the stored swings, and reports null when one is missing", () => {
+    const board = summarizeInhouseMonth(
+      [
+        month("g1", START + HOUR, 1, [["a", 1], ["b", 2]], { a: 18, b: -18 }),
+        month("g2", START + 2 * HOUR, 2, [["a", 1], ["b", 2]], { a: -11, b: 11 }),
+        // Finalization never stamped this one for b.
+        month("g3", START + 3 * HOUR, 1, [["a", 1], ["b", 2]], { a: 15 }),
+      ],
+      window,
+    );
+    const rows = [...board.ranked, ...board.unranked];
+    expect(rows.find((r) => r.userId === "a")?.eloNet).toBe(22);
+    expect(rows.find((r) => r.userId === "b")?.eloNet).toBeNull();
+  });
+
+  it("returns an empty board for a month with no games", () => {
+    expect(
+      summarizeInhouseMonth(
+        [month("old", START - HOUR, 1, [["a", 1], ["b", 2]])],
+        window,
+      ),
+    ).toEqual({ ranked: [], unranked: [], games: 0 });
+  });
+
+  it("maps a prisma row, parsing the stored delta JSON", () => {
+    const completedAt = new Date(START + HOUR);
+    expect(
+      toMonthLobby({
+        id: "l1",
+        winnerTeam: 2,
+        completedAt,
+        eloDeltas: '{"u1":-9,"u2":"x"}',
+        players: [
+          { userId: "u1", team: 1, user: { name: "One", avatar: null } },
+          { userId: "u2", team: 2, user: { name: "Two", avatar: "a.png" } },
+        ],
+      }),
+    ).toEqual({
+      id: "l1",
+      winnerTeam: 2,
+      completedAt,
+      eloDeltas: { u1: -9 },
+      players: [
+        { userId: "u1", name: "One", avatar: null, team: 1 },
+        { userId: "u2", name: "Two", avatar: "a.png", team: 2 },
+      ],
+    });
   });
 });

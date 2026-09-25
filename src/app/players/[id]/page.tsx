@@ -677,19 +677,11 @@ export default async function PlayerProfilePage({
                   </span>
                 ) : null}
                 {pubActivityNow?.quiet ? (
-                  <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
-                    last played {pubActivityNow.label}
-                  </span>
-                ) : null}
-                {canSeeLeagueContact && user.fhUnavailable === true ? (
-                  /* Members-only operational flag, like the Discord tokens
-                     below. === true on purpose: null is UNKNOWN and unknown
-                     must never render as a negative. */
-                  <span
-                    className="text-muted"
-                    title="Expose Public Match Data is off in their Dota client — their games can't auto-import, so results need the manual report paths"
-                  >
-                    private match data
+                  /* The consequence is part of the text, not a tooltip: a
+                     phone never shows a title, and "last played 5mo ago"
+                     alone doesn't say why a captain should care. */
+                  <span title="No visible pub games in over two months, so the listed MMR may describe who they used to be">
+                    last played {pubActivityNow.label} · MMR may be stale
                   </span>
                 ) : null}
                 {user.profileUrl ? (
@@ -731,15 +723,45 @@ export default async function PlayerProfilePage({
                 {canSeeLeagueContact && !user.discordName ? (
                   /* Members-only like the tag itself: on draft night the
                      absence IS the information — this player can't be reached
-                     where the league lives. */
-                  <span
-                    className="text-muted"
-                    title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
-                  >
-                    no Discord
-                  </span>
+                     where the league lives. The player themself gets the fix,
+                     not just the fact. */
+                  isSelf ? (
+                    <Link href="/me#profile-discord" className={textLink()}>
+                      Add your Discord →
+                    </Link>
+                  ) : (
+                    <span
+                      className="text-muted"
+                      title="No Discord linked or entered. The league coordinates on Discord, so reaching this player takes extra work"
+                    >
+                      no Discord
+                    </span>
+                  )
                 ) : null}
               </div>
+              {canSeeLeagueContact && user.fhUnavailable === true ? (
+                /* Members-only operational flag, like the Discord tokens
+                   above. === true on purpose: null is UNKNOWN and unknown must
+                   never render as a negative. Its own line, because the
+                   explanation used to live only in a hover title, and the
+                   player it is about needs the fix spelled out. */
+                <p className="mt-2 text-xs text-muted">
+                  <span className="font-medium text-danger">
+                    Private match data.
+                  </span>{" "}
+                  {isSelf ? (
+                    <>
+                      Expose Public Match Data is off in your Dota client, so
+                      your games can&apos;t auto-import.{" "}
+                      <Link href="/me#profile-dota" className={textLink()}>
+                        How to turn it on →
+                      </Link>
+                    </>
+                  ) : (
+                    "Expose Public Match Data is off in their Dota client, so their games can't auto-import and results need a manual report."
+                  )}
+                </p>
+              ) : null}
             </div>
             {team ? (
               // basis-full below sm: this card and the name column are flex
@@ -1665,7 +1687,12 @@ async function InhouseCareerCard({
           </span>
           <FormStrip form={me.form} size={4} />
           {me.games < PROVISIONAL_GAMES ? (
-            <Badge tone="neutral">provisional</Badge>
+            // Says what provisional MEANS, in the /inhouse strip's words: a
+            // bare "provisional" beside "unranked" explained neither.
+            <Badge tone="neutral">
+              provisional · {PROVISIONAL_GAMES - me.games} more{" "}
+              {PROVISIONAL_GAMES - me.games === 1 ? "game" : "games"} to rank
+            </Badge>
           ) : null}
         </div>
         {/* Cred was the inhouse ladder's second board and appeared nowhere on

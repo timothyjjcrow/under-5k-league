@@ -19,6 +19,7 @@ import {
   shiftMatchNight,
   upcomingMatchNight,
   rescheduleDeadline,
+  leagueMonthWindow,
 } from "./schedule";
 import { LEAGUE_CONFIG } from "./league-config";
 
@@ -84,6 +85,69 @@ describe("shiftMatchNight", () => {
       .toBe("2026-04-13T19:30:00.000Z");
     expect(shiftMatchNight(outlier, previous, next, null).toISOString())
       .toBe("2026-04-13T18:30:00.000Z");
+  });
+});
+
+describe("leagueMonthWindow", () => {
+  const iso = (w: { start: Date; end: Date }) => [
+    w.start.toISOString(),
+    w.end.toISOString(),
+  ];
+
+  it("turns the month over at local midnight, not UTC midnight", () => {
+    // 03:00 UTC on Oct 1 is still 8 PM on Sept 30 in Los Angeles.
+    const w = leagueMonthWindow(
+      Date.parse("2026-10-01T03:00:00Z"),
+      "America/Los_Angeles",
+    );
+    expect(w.label).toBe("September 2026");
+    expect(iso(w)).toEqual([
+      "2026-09-01T07:00:00.000Z",
+      "2026-10-01T07:00:00.000Z",
+    ]);
+    // A minute past local midnight is October.
+    expect(
+      leagueMonthWindow(Date.parse("2026-10-01T07:01:00Z"), "America/Los_Angeles")
+        .label,
+    ).toBe("October 2026");
+  });
+
+  it("keeps each boundary on local midnight across a clock change", () => {
+    // Nov 1 2026 00:00 is still PDT (the change is at 2 AM); Dec 1 is PST.
+    const w = leagueMonthWindow(
+      Date.parse("2026-11-15T12:00:00Z"),
+      "America/Los_Angeles",
+    );
+    expect(iso(w)).toEqual([
+      "2026-11-01T07:00:00.000Z",
+      "2026-12-01T08:00:00.000Z",
+    ]);
+    // Europe: 23:30 UTC on Oct 31 is already November in Berlin (CET, +1).
+    const eu = leagueMonthWindow(
+      Date.parse("2026-10-31T23:30:00Z"),
+      "Europe/Berlin",
+    );
+    expect(eu.label).toBe("November 2026");
+    expect(iso(eu)).toEqual([
+      "2026-10-31T23:00:00.000Z",
+      "2026-11-30T23:00:00.000Z",
+    ]);
+  });
+
+  it("rolls the year over in December and uses UTC with no zone", () => {
+    const w = leagueMonthWindow(Date.parse("2026-12-31T23:59:59Z"), null);
+    expect(w.label).toBe("December 2026");
+    expect(iso(w)).toEqual([
+      "2026-12-01T00:00:00.000Z",
+      "2027-01-01T00:00:00.000Z",
+    ]);
+  });
+
+  it("defaults to the league's configured clock", () => {
+    const now = Date.parse("2026-10-01T03:00:00Z");
+    expect(leagueMonthWindow(now)).toEqual(
+      leagueMonthWindow(now, LEAGUE_CONFIG.timeZone),
+    );
   });
 });
 

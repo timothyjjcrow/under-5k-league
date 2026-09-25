@@ -13,16 +13,24 @@ import {
   type InhouseBoxPlayer as BoxPlayer,
 } from "@/lib/inhouse-box";
 import {
+  MONTH_MIN_GAMES,
   PROVISIONAL_GAMES,
   rankInhouse,
   summarizeInhouse,
+  type InhouseMonthRecord,
 } from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
 import { gameMvp } from "@/lib/achievements";
 import { formatMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
-import { loadInhouseLadderSummary } from "@/lib/inhouse-ladder";
+import {
+  loadInhouseLadderSummary,
+  loadInhouseMonthLadder,
+  type InhouseMonthLadder,
+} from "@/lib/inhouse-ladder";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { singleSearchParam } from "@/lib/search-params";
 import { credProfitBoard } from "@/lib/inhouse-bet-service";
 import { credBetView } from "@/lib/inhouse-bets";
 import {
@@ -60,8 +68,18 @@ export const metadata = {
     "Pick-up Dota 2 games, drafted live: queue up, vote captains, draft teams, and play — results auto-record from OpenDota onto the Elo ladder.",
 };
 
-export default async function InhousePage() {
+export default async function InhousePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ladder?: string | string[] }>;
+}) {
   const user = await getSessionUser();
+  // Anything but the one known value is the default board, so a stale or
+  // hand-edited link still lands on a ladder rather than an error.
+  const ladderView: LadderView =
+    singleSearchParam((await searchParams).ladder) === "month"
+      ? "month"
+      : "all";
 
   // Seed the MMR field from the player's most recent league signup, if any,
   // and fetch the medal so the join panel can explain the MMR check (the
@@ -157,7 +175,11 @@ export default async function InhousePage() {
           aria-label="Inhouse ladder"
         >
           <Suspense fallback={<CardSkeleton rows={6} />}>
-            <LadderCard meId={user?.id ?? null} />
+            {ladderView === "month" ? (
+              <MonthLadderCard meId={user?.id ?? null} />
+            ) : (
+              <LadderCard meId={user?.id ?? null} />
+            )}
           </Suspense>
         </section>
         <section
@@ -178,7 +200,7 @@ export default async function InhousePage() {
           className="scroll-mt-28"
           aria-label="Inhouse setup help"
         >
-          <OpenDotaGuide open={dbUser?.fhUnavailable ?? false} />
+          <OpenDotaGuide matchDataPrivate={dbUser?.fhUnavailable === true} />
         </section>
       </div>
     </>
@@ -507,6 +529,7 @@ async function LadderCard({ meId }: { meId: string | null }) {
         }
       />
       <CardBody className="p-0">
+        <LadderViewSwitch view="all" />
         <YourStanding
           rows={leaderboard}
           meId={meId}
@@ -515,16 +538,19 @@ async function LadderCard({ meId }: { meId: string | null }) {
         />
         <LadderLeaders rows={leaderboard} />
         <Leaderboard rows={leaderboard} meId={meId} cred={cred} />
+        <LadderKey rows={leaderboard} cred={cred} />
+        {/* The table's marks are explained in the visible key above (see
+            LadderKey); this fold is only the "why" behind the numbers. */}
         <details className="border-t border-line px-4 py-2 text-xs text-muted sm:px-5">
           <summary className="inline-flex min-h-10 cursor-pointer items-center rounded hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
             How {cred.hasBets ? "Elo & Cred" : "Elo"} work
           </summary>
           <p className="max-w-3xl pb-3 leading-relaxed">
-            Elo starts at 1000. Beating stronger opponents earns more; your rank
-            appears after {PROVISIONAL_GAMES} games, and until then the ladder
-            lists you with a dash instead of a number.
+            Elo starts at 1000 and moves after every game: beating stronger
+            opponents earns more, and losing to weaker ones costs more. Your
+            rank appears after {PROVISIONAL_GAMES} games.
             {cred.hasBets
-              ? " Cred tracks net profit from betting on your own games. Its rank is separate from Elo and excludes starting balances and grants."
+              ? " Cred's rank is separate from Elo and counts betting results only, never starting balances or grants."
               : ""}
           </p>
         </details>
@@ -645,18 +671,22 @@ function CredFigure({
 
 // ---------- OpenDota "be findable" guide ----------
 
-function OpenDotaGuide({ open }: { open: boolean }) {
+function OpenDotaGuide({ matchDataPrivate }: { matchDataPrivate: boolean }) {
   return (
     // Not unconditionally `open` any more. This is read-once setup copy, and it
     // was costing ~200px on every visit forever — including for signed-out
     // visitors who cannot act on it and veterans who did it two years ago. It
     // still opens by itself for the one cohort it is written for (see the call
     // site), and the summary states what it is, so nothing is hidden.
+    //
+    // For that cohort the summary also SAYS why it opened. Opening silently
+    // left the one player whose games can't auto-record reading generic setup
+    // copy, with nothing telling them it was about them.
     <details
-      open={open}
+      open={matchDataPrivate}
       className={cn(
         "group rounded-[var(--radius)] border bg-surface/80 shadow-sm backdrop-blur",
-        open ? "border-accent/40" : "border-line",
+        matchDataPrivate ? "border-accent/40" : "border-line",
       )}
     >
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
@@ -668,9 +698,16 @@ function OpenDotaGuide({ open }: { open: boolean }) {
             <h3 className="text-base font-semibold text-fg">
               Make your games auto-detect
             </h3>
-            <p className="mt-0.5 text-sm text-muted">
-              Public match data, your account, and the league ticket.
-            </p>
+            {matchDataPrivate ? (
+              <p className="mt-0.5 text-sm text-danger">
+                OpenDota reports your match data as private, so your games
+                can&apos;t record automatically.
+              </p>
+            ) : (
+              <p className="mt-0.5 text-sm text-muted">
+                Public match data, your account, and the league ticket.
+              </p>
+            )}
           </div>
         </div>
         <span className="shrink-0 text-muted transition-transform group-open:rotate-180">
@@ -678,6 +715,15 @@ function OpenDotaGuide({ open }: { open: boolean }) {
         </span>
       </summary>
       <div className="space-y-3 border-t border-line px-5 py-4 text-sm">
+        {matchDataPrivate ? (
+          <p className="text-muted">
+            Step 1 fixes it. Once it&apos;s on, refresh your medal on{" "}
+            <Link href="/me#profile-dota" className={textLink()}>
+              your profile
+            </Link>{" "}
+            so this note clears.
+          </p>
+        ) : null}
         <ol className="space-y-3">
           <li className="flex gap-3">
             <GuideStep n={1} />
@@ -1198,5 +1244,350 @@ function Leaderboard({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * The table's key, printed under it. Each mark used to be explained only by a
+ * `title` tooltip, which a phone never shows and a mouse finds by accident:
+ * a player with 3 games saw a dash where their rank should be and no reason
+ * why. The tooltips stay for desktop; this is what everyone else reads. Each
+ * clause renders only when the table actually shows that mark.
+ */
+function LadderKey({
+  rows,
+  cred,
+}: {
+  rows: ReturnType<typeof summarizeInhouse>;
+  cred: CredBoard;
+}) {
+  if (rows.length === 0) return null;
+  const clauses: string[] = [];
+  if (rows.some((r) => r.games < PROVISIONAL_GAMES)) {
+    clauses.push(
+      `A dash instead of a rank means provisional: under ${PROVISIONAL_GAMES} games, listed after the ranked players with a dimmed Elo.`,
+    );
+  }
+  if (rows.some((r) => r.lastChange !== 0)) {
+    clauses.push(
+      "The signed figure beside Elo is the swing from their last game.",
+    );
+  }
+  if (cred.hasBets) {
+    clauses.push(
+      "Cred is the net won or lost betting on their own games, never a balance. A dash there means no bets yet, and #1 to #3 mark the top three by Cred, ranked separately from Elo.",
+    );
+  }
+  if (clauses.length === 0) return null;
+  return (
+    <div className="border-t border-line px-4 py-3 sm:px-5">
+      <p className="max-w-3xl text-xs leading-relaxed text-muted">
+        {clauses.join(" ")}
+      </p>
+    </div>
+  );
+}
+
+// ---------- This month ----------
+
+type LadderView = "all" | "month";
+
+/**
+ * All time vs this month. Plain links to a query param: the page stays
+ * server-rendered with no client JS, the choice survives a reload or a shared
+ * URL, and the hash brings a full-page load back to the ladder instead of the
+ * top of the room.
+ */
+function LadderViewSwitch({ view }: { view: LadderView }) {
+  const items: { key: LadderView; href: string; label: string }[] = [
+    { key: "all", href: "/inhouse#inhouse-ladder", label: "All time" },
+    {
+      key: "month",
+      href: "/inhouse?ladder=month#inhouse-ladder",
+      label: "This month",
+    },
+  ];
+  return (
+    <nav
+      aria-label="Ladder period"
+      className="border-b border-line px-4 py-3 sm:px-5"
+    >
+      <div className="grid grid-cols-2 gap-1 rounded-xl border border-line bg-surface p-1 sm:inline-grid">
+        {items.map((item) => (
+          <Link
+            key={item.key}
+            href={item.href}
+            aria-current={item.key === view ? "page" : undefined}
+            className={cn(
+              "inline-flex min-h-11 items-center justify-center rounded-lg px-4 py-2 text-center text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:min-h-10",
+              item.key === view
+                ? "bg-surface-3 text-fg shadow-sm ring-1 ring-inset ring-accent/50"
+                : "text-muted hover:bg-surface-2/70 hover:text-fg",
+            )}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+/**
+ * The monthly form race: record over games that finished this calendar month,
+ * on the league's clock. Career Elo is path-dependent from game one, so a
+ * newcomer can never catch a veteran on it; this board resets on the 1st.
+ *
+ * It never touches the full-history scan: the loader is windowed on
+ * `completedAt` and the Elo figure is the SUM of swings each game already
+ * stamped, so no Cred or career data is loaded for this view either.
+ */
+async function MonthLadderCard({ meId }: { meId: string | null }) {
+  const month = await loadInhouseMonthLadder();
+  const players = month.ranked.length + month.unranked.length;
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader
+        headingLevel={2}
+        title="Inhouse ladder"
+        subtitle={
+          players > 0
+            ? `${month.label} · ${players} ${players === 1 ? "player" : "players"} · ${month.ranked.length} ranked`
+            : month.label
+        }
+        action={
+          month.games > 0 ? (
+            <Badge tone="accent">
+              {month.games} {month.games === 1 ? "game" : "games"} this month
+            </Badge>
+          ) : undefined
+        }
+      />
+      <CardBody className="p-0">
+        <LadderViewSwitch view="month" />
+        {players === 0 ? (
+          // One quiet line, not an empty table: the first game of the month
+          // is a normal state on the 1st, not a failure.
+          <p className="px-4 py-5 text-sm text-muted sm:px-5">
+            No games yet this month.
+          </p>
+        ) : (
+          <>
+            <YourMonth month={month} meId={meId} />
+            <MonthBoard month={month} meId={meId} />
+          </>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+/** A month's summed Elo swing; null (a game with no recorded swing) is a dash. */
+function EloNet({ net, dim = false }: { net: number | null; dim?: boolean }) {
+  if (net == null) {
+    return (
+      <span className="text-muted" aria-label="Not recorded">
+        —
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "font-semibold tabular-nums",
+        dim || net === 0
+          ? "text-muted"
+          : net > 0
+            ? "text-success"
+            : "text-danger",
+      )}
+    >
+      {net > 0 ? `+${net}` : net}
+    </span>
+  );
+}
+
+// The signed-in player's month at a glance, or the way onto the board.
+function YourMonth({
+  month,
+  meId,
+}: {
+  month: InhouseMonthLadder;
+  meId: string | null;
+}) {
+  if (!meId) return null;
+  const idx = month.ranked.findIndex((r) => r.userId === meId);
+  const me =
+    idx >= 0
+      ? month.ranked[idx]
+      : month.unranked.find((r) => r.userId === meId);
+  if (!me) {
+    return (
+      <p className="border-b border-line bg-accent/5 px-4 py-3 text-sm text-muted sm:px-5">
+        You haven&apos;t played an inhouse this month yet.{" "}
+        {MONTH_MIN_GAMES} games puts you on this board.{" "}
+        <a href="#live-room" className={textLink()}>
+          Join the queue
+        </a>
+      </p>
+    );
+  }
+  const toRank = MONTH_MIN_GAMES - me.games;
+  return (
+    <div className="flex flex-wrap items-center gap-x-7 gap-y-3 border-b border-line bg-accent/5 px-4 py-3.5 sm:px-5">
+      <div className="min-w-0">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-accent/90">
+          Your month
+        </div>
+        <div className="mt-0.5 font-display text-xl font-bold leading-none tabular-nums">
+          {idx >= 0 ? `#${idx + 1}` : "—"}
+          <span className="ml-1 font-sans text-xs font-normal text-muted">
+            {idx >= 0 ? `of ${month.ranked.length}` : "unranked"}
+          </span>
+        </div>
+      </div>
+      <StatCell
+        label="Record"
+        value={
+          <>
+            <span className="text-success">{me.wins}</span>
+            <span className="text-muted">–</span>
+            <span className="text-danger">{me.losses}</span>
+          </>
+        }
+        hint={`${Math.round(me.winRate * 100)}%`}
+      />
+      <StatCell label="Elo this month" value={<EloNet net={me.eloNet} />} />
+      {toRank > 0 ? (
+        <Badge tone="neutral" className="self-center">
+          {toRank} more {toRank === 1 ? "game" : "games"} to rank this month
+        </Badge>
+      ) : null}
+    </div>
+  );
+}
+
+function MonthBoard({
+  month,
+  meId,
+}: {
+  month: InhouseMonthLadder;
+  meId: string | null;
+}) {
+  const rows: { r: InhouseMonthRecord; rank: number | null }[] = [
+    ...month.ranked.map((r, i) => ({ r, rank: i + 1 })),
+    ...month.unranked.map((r) => ({ r, rank: null })),
+  ];
+  const legend = [
+    `Ranked by wins, then win rate, once a player has ${MONTH_MIN_GAMES} games this month. Anyone under that is listed after, without a rank.`,
+    "Elo ± adds up the swing each game recorded when it finished.",
+    rows.some(({ r }) => r.eloNet == null)
+      ? "A dash there means one of their games has no swing recorded."
+      : null,
+    `The month runs on ${LEAGUE_CONFIG.matchSchedule.timezone} time and starts fresh on the 1st.`,
+  ].filter(Boolean);
+  return (
+    <>
+      <div className="overflow-x-auto">
+        {/* The career table's colgroup rule: widths live on <col>, and a
+          column hidden on phones is w-0 until the breakpoint that shows it,
+          or fixed layout hands it a share of the Player column. */}
+        <table className="w-full table-fixed text-sm">
+          <caption className="sr-only">
+            Inhouse records for {month.label}: wins, losses, games, win rate
+            and net Elo change. Players under {MONTH_MIN_GAMES} games this
+            month are listed without a rank.
+          </caption>
+          <colgroup>
+            <col className="w-11" />
+            <col />
+            <col className="w-9" />
+            <col className="w-9" />
+            <col className="w-0 sm:w-12" />
+            <col className="w-0 sm:w-14" />
+            <col className="w-[4.75rem]" />
+          </colgroup>
+          <thead>
+            <tr className="border-b border-line text-left text-xs uppercase text-muted">
+              <th className="px-4 py-2.5 font-medium sm:px-5">#</th>
+              <th className="px-2 py-2.5 font-medium">Player</th>
+              <th className="px-2 py-2.5 text-center font-medium">W</th>
+              <th className="px-2 py-2.5 text-center font-medium">L</th>
+              <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+                GP
+              </th>
+              <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
+                Win%
+              </th>
+              <th className="py-2.5 pl-2 pr-4 text-right font-medium sm:pr-5">
+                <span aria-hidden className="whitespace-nowrap">
+                  Elo ±
+                </span>
+                <span className="sr-only">Elo change this month</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ r, rank }) => (
+              <tr
+                key={r.userId}
+                className={cn(
+                  "border-b border-line/50 last:border-0",
+                  r.userId === meId ? "bg-accent/5" : "",
+                )}
+              >
+                <td className="px-4 py-2.5 text-muted tabular-nums sm:px-5">
+                  {rank == null ? (
+                    <span aria-label="Unranked this month">—</span>
+                  ) : rank <= 3 ? (
+                    <span role="img" aria-label={`Rank ${rank}`}>
+                      {["🥇", "🥈", "🥉"][rank - 1]}
+                    </span>
+                  ) : (
+                    rank
+                  )}
+                </td>
+                <td className="px-2 py-2.5">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Avatar name={r.name} src={r.avatar} size={24} />
+                    <PlayerLink
+                      userId={r.userId}
+                      className="min-w-6 truncate font-medium"
+                    >
+                      {r.name}
+                    </PlayerLink>
+                  </span>
+                </td>
+                <td
+                  className={cn(
+                    "px-2 py-2.5 text-center tabular-nums",
+                    rank == null ? "text-muted" : "text-success",
+                  )}
+                >
+                  {r.wins}
+                </td>
+                <td className="px-2 py-2.5 text-center tabular-nums text-muted">
+                  {r.losses}
+                </td>
+                <td className="hidden px-2 py-2.5 text-center tabular-nums sm:table-cell">
+                  {r.games}
+                </td>
+                <td className="hidden px-2 py-2.5 text-center tabular-nums sm:table-cell">
+                  {Math.round(r.winRate * 100)}%
+                </td>
+                <td className="whitespace-nowrap py-2.5 pl-2 pr-4 text-right sm:pr-5">
+                  <EloNet net={r.eloNet} dim={rank == null} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="border-t border-line px-4 py-3 sm:px-5">
+        <p className="max-w-3xl text-xs leading-relaxed text-muted">
+          {legend.join(" ")}
+        </p>
+      </div>
+    </>
   );
 }
