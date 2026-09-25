@@ -68,6 +68,75 @@ describe("adminNextStep — signups", () => {
   });
 });
 
+describe("adminNextStep — unverified captain MMR", () => {
+  const ready = { playerCount: 10, minPlayers: 10, teamCount: 4 };
+
+  it("names the unverified captains on the SIGNUPS Start-draft step and points at the fix", () => {
+    const s = at({ ...ready, unverifiedCaptainMmrNames: ["Ana", "Bo"] });
+    expect(s.title).toMatch(/Start draft/);
+    expect(s.detail).toContain(
+      "Also: Ana, Bo have unverified MMR that sets draft budgets.",
+    );
+    expect(s.detail).toContain(
+      "Check each with Edit medal & MMR on the Captains & draft card first",
+    );
+    const one = at({ ...ready, unverifiedCaptainMmrNames: ["Ana"] });
+    expect(one.detail).toContain("Ana has unverified MMR");
+    expect(one.detail).toContain("Check it with Edit medal & MMR");
+  });
+
+  it("keeps the note on the DRAFT-phase pre-start banner too", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.DRAFT,
+      draftStatus: DRAFT_STATUS.NOT_STARTED,
+      unverifiedCaptainMmrNames: ["Ana"],
+    });
+    expect(s.title).toMatch(/Start draft/);
+    expect(s.detail).toContain("Ana has unverified MMR");
+  });
+
+  it("warns without blocking: the step is still the Start-draft action", () => {
+    const s = at({ ...ready, unverifiedCaptainMmrNames: ["Ana"] });
+    expect(s.tone).toBe("action");
+    expect(s.title).toBe("Next step: Start draft.");
+  });
+
+  it("says nothing when every captain is verified (or the list wasn't supplied)", () => {
+    const base = at(ready).detail;
+    expect(at({ ...ready, unverifiedCaptainMmrNames: [] }).detail).toBe(base);
+    expect(base).not.toMatch(/unverified/);
+  });
+
+  it("caps a long list so the banner stays readable", () => {
+    const names = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    expect(at({ ...ready, unverifiedCaptainMmrNames: names }).detail).toContain(
+      "A, B, C, D, E, F +2 more have unverified MMR",
+    );
+  });
+
+  it("never appears once the auction has started, when budgets are fixed", () => {
+    for (const draftStatus of [
+      DRAFT_STATUS.IN_PROGRESS,
+      DRAFT_STATUS.PAUSED,
+      DRAFT_STATUS.COMPLETE,
+    ]) {
+      expect(
+        at({
+          seasonStatus: SEASON_STATUS.DRAFT,
+          draftStatus,
+          unverifiedCaptainMmrNames: ["Ana"],
+        }).detail,
+      ).not.toMatch(/unverified/);
+    }
+  });
+
+  it("uses no em-dash in its own copy", () => {
+    const withNote = at({ ...ready, unverifiedCaptainMmrNames: ["Ana"] }).detail;
+    const note = withNote.slice(at(ready).detail.length);
+    expect(note).not.toContain("—");
+  });
+});
+
 describe("adminNextStep — draft", () => {
   it("says the auction hasn't been started when the phase moved but the draft didn't", () => {
     // Reachable: the phase buttons let an admin click "Draft" without ever

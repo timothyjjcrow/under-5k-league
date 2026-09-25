@@ -26,7 +26,9 @@ const SOURCES = [
   "src/app/actions/admin.ts",
   "src/app/actions/inhouse-bets.ts",
   "src/lib/admin-next-step.ts",
+  "src/lib/captain-mmr.ts",
   "src/components/match-import-controls.tsx",
+  "src/components/admin-player-rank-editor.tsx",
 ];
 
 /** Every source that can render or describe an admin control, concatenated. */
@@ -62,6 +64,10 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Roster moves", rendered: "Roster moves" },
   // releasePlayer's quitter note points at the signup remove control's card.
   { quoted: "Captains & draft", rendered: "Captains & draft" },
+  // The unverified-captain-MMR confirm and next-step note send the admin to
+  // this disclosure. The rendered form is the JSX entity, which the quoting
+  // copy (a plain "&") can never satisfy on its own.
+  { quoted: "Edit medal & MMR", rendered: "Edit medal &amp; MMR" },
 ];
 
 describe("admin copy names only controls that exist", () => {
@@ -198,5 +204,35 @@ describe("admin copy names only controls that exist", () => {
       page.includes("confirmBase + discordReachWarning(reach)"),
       "StartDraftControl must append discordReachWarning to the confirm — the warning copy is tested, this is the line that makes it reach the admin",
     ).toBe(true);
+  });
+
+  // Same shape for the unverified-captain-MMR line, which is DB-only and so is
+  // appended to the BASE confirm (both the Suspense fallback and the upgraded
+  // button carry it). captainMmrWarning is unit-tested; these pin that it, the
+  // per-captain flag and the next-step input actually reach the admin.
+  it("the Start-draft confirm, captain rows and next-step banner carry the unverified-MMR check", () => {
+    const page = read("src/app/admin/page.tsx");
+    expect(
+      page.includes("captainMmrWarning(unverifiedMmr)"),
+      "startConfirm must append captainMmrWarning, or the confirm stops naming unverified captains",
+    ).toBe(true);
+    expect(
+      page.includes("unverifiedMmrByTeam.get(t.id)!.reason"),
+      "each captain row must render its unverified-MMR reason",
+    ).toBe(true);
+    expect(
+      page.includes("unverifiedCaptainMmrNames: unverifiedCaptainMmrsFor("),
+      "adminNextStep must receive the unverified captain names",
+    ).toBe(true);
+  });
+
+  // The fix the copy prescribes is saving a matching medal in this editor.
+  // Pin that the editor still offers a manual medal and still renders on the
+  // captain rows, or the copy points at a control that cannot clear the flag.
+  it("the Edit medal & MMR editor can still set a manual medal on captain rows", () => {
+    const editor = read("src/components/admin-player-rank-editor.tsx");
+    expect(editor).toContain('<option value="manual">Manual correction</option>');
+    const page = read("src/app/admin/page.tsx");
+    expect(page).toContain("registrationId={captainReg.get(t.captainId)!.id}");
   });
 });
