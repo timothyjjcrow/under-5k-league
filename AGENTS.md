@@ -17,3 +17,12 @@ Keep databases, Discord integrations and runtime settings isolated. Follow
 procedure. Release both projects through `npm run release:both`; do not deploy
 one regional feature branch independently. Run browser coverage for both league
 configurations when changing shared behavior.
+
+## Merchandise and Fourthwall jerseys
+
+Before creating or revising jerseys, read `docs/JERSEY-PRODUCTION-GUIDE.md`.
+It records the approved assets, garment mapping, sleeve construction,
+personalization, print exports, Fourthwall save/verification workflow, and
+lessons from the completed 25-player rollout. Resolve current player artwork
+through `output/merch/player-jerseys-2026-09-23/deployment-ledger.json`; the
+original files in `output/merch/current/` are a historical inventory snapshot.
