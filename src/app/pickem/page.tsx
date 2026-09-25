@@ -11,8 +11,6 @@ import {
   pickemStandings,
   pickSplit,
 } from "@/lib/pickem";
-import { savePrediction } from "@/app/actions/pickem";
-import { ActionForm } from "@/components/action-form";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { formatMatchTime } from "@/lib/match-time";
@@ -27,12 +25,11 @@ import {
   PageTitle,
   PlayerLink,
   SectionTitle,
-  TeamCrest,
   textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
-import { PickemSubmitButton } from "@/components/pickem-submit-button";
+import { PickemPickForm } from "@/components/pickem-pick-form";
 import { PickemDeadlineRefresh } from "@/components/pickem-deadline-refresh";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
@@ -297,39 +294,11 @@ export default async function PickemPage({
                   const grid = (
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       {weekMatches.map((m) => {
-                        const myPick = myPicks.get(m.id);
-                        const side = (teamId: string) => {
-                          const name = teamName.get(teamId) ?? "?";
-                          const mine = myPick === teamId;
-                          return (
-                            <PickemSubmitButton
-                              selected={mine}
-                              canSubmit={viewer != null}
-                              locksAt={m.scheduledAt?.getTime() ?? null}
-                              name="pickedTeamId"
-                              value={teamId}
-                            >
-                              <span className="flex min-w-0 items-center gap-2">
-                                <TeamCrest
-                                  name={name}
-                                  seed={teamId}
-                                  logoUrl={teamLogoUrl.get(teamId)}
-                                  size={20}
-                                  className="rounded"
-                                />
-                                <span className="truncate">{name}</span>
-                                {mine ? (
-                                  <>
-                                    <span aria-hidden>✓</span>
-                                    <span className="sr-only">(your pick)</span>
-                                  </>
-                                ) : null}
-                              </span>
-                            </PickemSubmitButton>
-                          );
-                        };
-                        const homeName = teamName.get(m.homeTeamId) ?? "?";
-                        const awayName = teamName.get(m.awayTeamId) ?? "?";
+                        const pickSide = (teamId: string) => ({
+                          id: teamId,
+                          name: teamName.get(teamId) ?? "?",
+                          logoUrl: teamLogoUrl.get(teamId) ?? null,
+                        });
                         return (
                           <Card key={m.id}>
                             <CardBody className="space-y-2.5">
@@ -379,29 +348,15 @@ export default async function PickemPage({
                                   </Link>
                                 </span>
                               </div>
-                              <ActionForm
-                                action={savePrediction}
-                                hidden={{ matchId: m.id }}
-                                className="min-w-0"
-                              >
-                                <fieldset className="min-w-0">
-                                  <legend className="sr-only">
-                                    Pick the winner of Week {m.week}: {homeName}{" "}
-                                    versus {awayName}
-                                  </legend>
-                                  <div className="flex items-center gap-2">
-                                    <div className="min-w-0 flex-1">
-                                      {side(m.homeTeamId)}
-                                    </div>
-                                    <span className="shrink-0 text-xs text-muted">
-                                      vs
-                                    </span>
-                                    <div className="min-w-0 flex-1">
-                                      {side(m.awayTeamId)}
-                                    </div>
-                                  </div>
-                                </fieldset>
-                              </ActionForm>
+                              <PickemPickForm
+                                matchId={m.id}
+                                week={m.week}
+                                home={pickSide(m.homeTeamId)}
+                                away={pickSide(m.awayTeamId)}
+                                pickedTeamId={myPicks.get(m.id) ?? null}
+                                canSubmit={viewer != null}
+                                locksAt={m.scheduledAt?.getTime() ?? null}
+                              />
                               <div className="text-center text-[11px] text-muted">
                                 Community split stays hidden until picks lock.
                               </div>

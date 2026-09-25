@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   groupOpenByWeek,
+  pickemControlFor,
   pickemStandings,
   pickSplit,
   partitionPickemMatches,
@@ -184,5 +185,98 @@ describe("predictionOpen and predictionOpenWhere agree on every state", () => {
         ).toBe(predictionOpen(m, now));
       }
     }
+  });
+});
+
+describe("pickemControlFor", () => {
+  const now = new Date("2026-08-03T20:00:00Z");
+  const fixture = (
+    status: string,
+    scheduledAt: Date | null,
+    winnerTeamId: string | null = null,
+  ) => ({
+    id: "m1",
+    status,
+    winnerTeamId,
+    scheduledAt,
+    homeTeamId: "home",
+    awayTeamId: "away",
+  });
+  const later = new Date("2026-08-03T21:00:00Z");
+  const earlier = new Date("2026-08-03T19:00:00Z");
+  const viewer = (pickedTeamId: string | null = null, canPlay = true) => ({
+    signedIn: true,
+    canPlay,
+    pickedTeamId,
+  });
+
+  it("shows signed-out viewers nothing, even on an open match", () => {
+    expect(
+      pickemControlFor(
+        fixture("SCHEDULED", later),
+        { signedIn: false, canPlay: true, pickedTeamId: null },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("offers the control on an open match, pressed on the viewer's pick", () => {
+    expect(pickemControlFor(fixture("SCHEDULED", later), viewer(), now)).toEqual({
+      kind: "open",
+      pickedTeamId: null,
+    });
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer("away"), now),
+    ).toEqual({ kind: "open", pickedTeamId: "away" });
+    // TBD kickoff stays open until the series goes LIVE (predictionOpen).
+    expect(pickemControlFor(fixture("SCHEDULED", null), viewer(), now)).toEqual({
+      kind: "open",
+      pickedTeamId: null,
+    });
+  });
+
+  it("locks at kickoff: the pick becomes plain text, no pick means nothing", () => {
+    expect(
+      pickemControlFor(fixture("SCHEDULED", earlier), viewer("home"), now),
+    ).toEqual({ kind: "locked", pickedTeamId: "home" });
+    expect(
+      pickemControlFor(fixture("SCHEDULED", earlier), viewer(), now),
+    ).toBeNull();
+    // Exactly at kickoff is already locked, like predictionOpen.
+    expect(pickemControlFor(fixture("SCHEDULED", now), viewer(), now)).toBeNull();
+  });
+
+  it("treats LIVE, graded and void matches as locked whatever the kickoff says", () => {
+    for (const match of [
+      fixture("LIVE", later),
+      fixture("COMPLETED", earlier, "home"),
+      fixture("COMPLETED", earlier, null),
+    ]) {
+      expect(pickemControlFor(match, viewer("away"), now)).toEqual({
+        kind: "locked",
+        pickedTeamId: "away",
+      });
+      expect(pickemControlFor(match, viewer(), now)).toBeNull();
+    }
+  });
+
+  it("never offers the control when the season gate is closed", () => {
+    // predictionOpen is true here; canPlay is what keeps an archived season
+    // (or a closed phase) from rendering buttons savePrediction would refuse.
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer(null, false), now),
+    ).toBeNull();
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer("home", false), now),
+    ).toEqual({ kind: "locked", pickedTeamId: "home" });
+  });
+
+  it("ignores a pick that names neither side", () => {
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer("other"), now),
+    ).toEqual({ kind: "open", pickedTeamId: null });
+    expect(
+      pickemControlFor(fixture("LIVE", later), viewer("other"), now),
+    ).toBeNull();
   });
 });

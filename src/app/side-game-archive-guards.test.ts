@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -32,6 +32,8 @@ const PICKEM = read("pickem", "page.tsx");
 const HOME = read("page.tsx");
 const FANTASY_ACTION = read("actions", "fantasy.ts");
 const PICKEM_BUTTON = read("..", "components", "pickem-submit-button.tsx");
+const PICK_FORM = read("..", "components", "pickem-pick-form.tsx");
+const MATCH = read("matches", "[id]", "page.tsx");
 const SEASON_ARCHIVE = read("seasons", "[id]", "page.tsx");
 
 describe("side-game archive: both pages resolve ?season=", () => {
@@ -128,8 +130,62 @@ describe("side-game live-state integrity", () => {
   });
 
   it("both Pick'em choices share one pending form", () => {
-    expect(PICKEM).toMatch(/hidden=\{\{ matchId: m\.id \}\}/);
-    expect(PICKEM).toMatch(/name="pickedTeamId"/);
-    expect(PICKEM).not.toMatch(/hidden=\{\{ matchId: m\.id, pickedTeamId:/);
+    expect(PICK_FORM).toMatch(/hidden=\{\{ matchId \}\}/);
+    expect(PICK_FORM).toMatch(/name="pickedTeamId"/);
+    expect(PICK_FORM).not.toMatch(/hidden=\{\{ matchId, pickedTeamId/);
+    expect(PICKEM).toMatch(/<PickemPickForm\s/);
+  });
+});
+
+/**
+ * The pick control now lives on THREE surfaces: /pickem, the dashboard's
+ * This-week cards and the match preview. Three hand-rolled copies of a
+ * two-button form would drift on exactly the things that matter (the one
+ * pending form, aria-pressed, the kickoff disable), so there is one
+ * implementation and this pins that nobody grows a second.
+ */
+describe("pick'em control: one implementation, gated like /pickem", () => {
+  const importers = (dir: string): string[] =>
+    readdirSync(join(__dirname, dir), { recursive: true, encoding: "utf8" })
+      .filter((f) => f.endsWith(".tsx"))
+      .filter((f) =>
+        readFileSync(join(__dirname, dir, f), "utf8").includes(
+          'from "@/app/actions/pickem"',
+        ),
+      )
+      .map((f) => join(dir, f));
+
+  it("only the shared form imports savePrediction", () => {
+    expect([...importers("."), ...importers("../components")]).toEqual([
+      join("../components", "pickem-pick-form.tsx"),
+    ]);
+  });
+
+  it("the dashboard and match preview render the shared tray off pickemControlFor", () => {
+    for (const [name, src] of [
+      ["dashboard", HOME],
+      ["match preview", MATCH],
+    ] as const) {
+      expect(src, `${name} decides via pickemControlFor`).toMatch(
+        /pickemControlFor\(/,
+      );
+      expect(src, `${name} renders PickemTray`).toMatch(/<PickemTray\s/);
+    }
+  });
+
+  it("both fixture surfaces fold the active-season gate into canPlay", () => {
+    // predictionOpen is true for a SCHEDULED fixture with no kickoff in ANY
+    // season, and savePrediction writes to the active one only.
+    expect(HOME).toMatch(
+      /pickemPlayable=\{\s*season\.isActive &&\s*postAuctionWorkOpen\(/,
+    );
+    expect(MATCH).toMatch(
+      /canPlay:\s*!!previewSeason\?\.isActive &&\s*postAuctionWorkOpen\(/,
+    );
+  });
+
+  it("signed-out dashboard viewers get no picks map, so no tray", () => {
+    expect(HOME).toMatch(/myPicks=\{userId \? myPicks : null\}/);
+    expect(HOME).toMatch(/signedIn: myPicks != null/);
   });
 });

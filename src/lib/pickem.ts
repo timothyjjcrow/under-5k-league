@@ -62,6 +62,52 @@ export function partitionPickemMatches<T extends PickemMatchLike>(
 }
 
 /**
+ * What a fixture card OUTSIDE /pickem shows the viewer — the dashboard's
+ * This-week strip and the match preview both ask this, so the two surfaces
+ * can't disagree about when a match still takes a call.
+ *
+ * - `open`: the one-tap pick control, pressed on `pickedTeamId` if any.
+ * - `locked`: the viewer's own pick as plain text, nothing else. Never the
+ *   community split: /pickem reveals it in locked review, and a fixture card
+ *   is not the place to grow a second copy of that.
+ * - `null`: nothing new at all. Signed-out viewers always land here (the
+ *   control would be an ask with nothing behind it), and so does a locked
+ *   match the viewer never picked.
+ *
+ * `canPlay` is the caller's season gate — active season AND
+ * postAuctionWorkOpen, /pickem's `canPlay`. predictionOpen alone is true for
+ * any SCHEDULED match with no kickoff, archived seasons included, and
+ * savePrediction resolves the ACTIVE season itself, so a control rendered off
+ * predictionOpen alone could only ever error.
+ */
+export type PickemControl =
+  | { kind: "open"; pickedTeamId: string | null }
+  | { kind: "locked"; pickedTeamId: string };
+
+export function pickemControlFor(
+  match: PickemMatchLike & { homeTeamId: string; awayTeamId: string },
+  viewer: {
+    signedIn: boolean;
+    canPlay: boolean;
+    pickedTeamId: string | null | undefined;
+  },
+  now = new Date(),
+): PickemControl | null {
+  if (!viewer.signedIn) return null;
+  // A pick can only ever name one of the two sides (savePrediction refuses
+  // anything else); a stray id renders as "no pick", never as a "?" name.
+  const picked =
+    viewer.pickedTeamId === match.homeTeamId ||
+    viewer.pickedTeamId === match.awayTeamId
+      ? viewer.pickedTeamId
+      : null;
+  if (viewer.canPlay && predictionOpen(match, now)) {
+    return { kind: "open", pickedTeamId: picked };
+  }
+  return picked ? { kind: "locked", pickedTeamId: picked } : null;
+}
+
+/**
  * predictionOpen as a Match WHERE fragment, so the lock can be carried in the
  * write itself (the repo's concurrency rule 1: a read-time check is not a
  * guard — an auto-sync import can flip the match LIVE between the check and
