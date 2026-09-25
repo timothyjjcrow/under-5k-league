@@ -32,8 +32,11 @@ import {
   matchCheckinOpen,
   matchLogisticsOpen,
   matchResultsOpen,
+  postAuctionWorkOpen,
   standinAssignmentOpen,
 } from "@/lib/league-lifecycle";
+import { pickemControlFor } from "@/lib/pickem";
+import { PickemTray } from "@/components/pickem-pick-form";
 import {
   groupPlayoffRounds,
   matchPhaseLabel,
@@ -646,6 +649,7 @@ async function MatchPreview({
     week: number;
     phase: string;
     status: string;
+    winnerTeamId: string | null;
     scheduledAt: Date | null;
     scheduleRevision: number;
     homeTeamId: string;
@@ -703,7 +707,7 @@ async function MatchPreview({
   // Mirror setAvailability's decisive capability gate: an RSVP is about one
   // published, upcoming match night. LIVE readiness is its own banner
   // (LiveSeriesCheckin), including after the first game's import.
-  const [previewSeason, previewDraft] = await Promise.all([
+  const [previewSeason, previewDraft, myPrediction] = await Promise.all([
     prisma.season.findUnique({
       where: { id: match.seasonId },
       select: { isActive: true, status: true },
@@ -712,6 +716,13 @@ async function MatchPreview({
       where: { seasonId: match.seasonId },
       select: { status: true },
     }),
+    // Signed-in only: the Matchup card's pick tray (pickemControlFor below).
+    viewer
+      ? prisma.prediction.findUnique({
+          where: { matchId_userId: { matchId: match.id, userId: viewer.id } },
+          select: { pickedTeamId: true },
+        })
+      : Promise.resolve(null),
   ]);
   const activeNightRoster = new Set(
     [match.homeTeamId, match.awayTeamId].flatMap((teamId) =>
@@ -743,6 +754,20 @@ async function MatchPreview({
     ) &&
     activeNightRoster.has(viewer.id);
   const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
+  // Same rule as the dashboard's This-week cards. The season gate mirrors
+  // /pickem's canPlay: savePrediction only ever writes to the ACTIVE season,
+  // so an archived fixture must never render live buttons.
+  const pick = pickemControlFor(
+    match,
+    {
+      signedIn: !!viewer,
+      canPlay:
+        !!previewSeason?.isActive &&
+        postAuctionWorkOpen(previewSeason.status, previewDraft?.status),
+      pickedTeamId: myPrediction?.pickedTeamId,
+    },
+    new Date(previewNow),
+  );
 
   const h2hRow = headToHead(match.homeTeamId, seasonMatches).find(
     (h) => h.opponentId === match.awayTeamId,
@@ -907,6 +932,25 @@ async function MatchPreview({
             </div>
           ))}
         </CardBody>
+        {pick ? (
+          <PickemTray
+            control={pick}
+            matchId={match.id}
+            week={match.week}
+            home={{
+              id: match.homeTeamId,
+              name: match.homeTeam.name,
+              logoUrl: match.homeTeam.logoUrl,
+            }}
+            away={{
+              id: match.awayTeamId,
+              name: match.awayTeam.name,
+              logoUrl: match.awayTeam.logoUrl,
+            }}
+            locksAt={match.scheduledAt?.getTime() ?? null}
+            className="border-t border-line-soft px-5 py-4"
+          />
+        ) : null}
       </Card>
 
       <ScoutingReport

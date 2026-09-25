@@ -148,6 +148,10 @@ export async function savePrediction(
     throw e;
   }
 
+  // Every surface that renders the pick control (PickemPickForm): /pickem,
+  // the dashboard's This-week cards and the match preview.
   revalidatePath("/pickem");
+  revalidatePath("/");
+  revalidatePath(`/matches/${matchId}`);
   return { message: `Locked in: ${name} to win` };
 }

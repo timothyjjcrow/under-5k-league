@@ -80,7 +80,9 @@ import {
   GAME_SERVER_REGION,
   REGISTRATION_STATUS,
 } from "@/lib/constants";
-import { predictionOpen } from "@/lib/pickem";
+import { pickemControlFor, predictionOpen } from "@/lib/pickem";
+import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { PickemTray } from "@/components/pickem-pick-form";
 import { HeroVideo } from "@/components/hero-video";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { StandingsTable } from "@/components/standings-table-server";
@@ -1921,12 +1923,22 @@ async function SeasonView({
     .filter((m) => predictionOpen(m))
     .map((m) => m.id);
   const pickemOpen = openPickemIds.length;
-  const picksMade =
-    userId && pickemOpen > 0
-      ? await prisma.prediction.count({
-          where: { userId, matchId: { in: openPickemIds } },
+  // ONE viewer query feeds both the side-game hint's count and the This-week
+  // pick controls (the slate's locked fixtures ride along so a LIVE card can
+  // still say what the viewer called). Per-card lookups would be N queries on
+  // the hottest page; signed-out viewers never reach this at all.
+  const viewerPickIds = [...new Set([...openPickemIds, ...slateIds])];
+  const viewerPicks =
+    userId && viewerPickIds.length > 0
+      ? await prisma.prediction.findMany({
+          where: { userId, matchId: { in: viewerPickIds } },
+          select: { matchId: true, pickedTeamId: true },
         })
-      : 0;
+      : [];
+  const myPicks = new Map(
+    viewerPicks.map((p) => [p.matchId, p.pickedTeamId]),
+  );
+  const picksMade = openPickemIds.filter((id) => myPicks.has(id)).length;
   const fantasyLocked = season.fantasyLockedAt != null || gamesOnRecord > 0;
   const picksMissing = pickemOpen - picksMade;
 
@@ -2044,6 +2056,11 @@ async function SeasonView({
           teamLogoUrl={teamLogoUrl}
           report={report}
           showCheckins={showCheckins}
+          myPicks={userId ? myPicks : null}
+          pickemPlayable={
+            season.isActive &&
+            postAuctionWorkOpen(season.status, snapshot.draftStatus)
+          }
         />
       </Suspense>
 
@@ -2425,6 +2442,8 @@ async function ThisWeek({
   teamLogoUrl,
   report,
   showCheckins,
+  myPicks,
+  pickemPlayable,
 }: {
   season: SeasonSnapshot["season"];
   matches: Match[];
@@ -2433,6 +2452,11 @@ async function ThisWeek({
   teamLogoUrl: Map<string, string | null>;
   report: ScenarioReport | null;
   showCheckins: boolean;
+  /** The viewer's picks on the slate, from SeasonView's one query; null when
+   * signed out, which is what keeps the pick tray off the page for them. */
+  myPicks: Map<string, string> | null;
+  /** Active season with post-auction side games open (/pickem's canPlay). */
+  pickemPlayable: boolean;
 }) {
   // Same helper the "Coming up" card partitions against — see focusSlate.
   const { slate: focus, title } = focusSlate(season.status, matches);
@@ -2498,135 +2522,165 @@ async function ThisWeek({
           empty cell next to the last fixture. */}
       <CardBody className="grid gap-3 p-3 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))] sm:p-4">
         {focus.map((m) => {
+          const pick = pickemControlFor(m, {
+            signedIn: myPicks != null,
+            canPlay: pickemPlayable,
+            pickedTeamId: myPicks?.get(m.id),
+          });
+          const pickSide = (teamId: string) => ({
+            id: teamId,
+            name: teamName.get(teamId) ?? "?",
+            logoUrl: teamLogoUrl.get(teamId) ?? null,
+          });
+          // The card is a wrapper, not the link itself: the pick tray holds a
+          // <form>, and interactive content inside an <a> is invalid HTML (a
+          // tap on a pick button would also be a tap on the link). The link
+          // keeps everything it held before, so a signed-out viewer, who never
+          // gets a tray, sees the card exactly as it was.
           return (
-            <Link
+            <div
               key={m.id}
-              href={`/matches/${m.id}`}
               className={cn(
-                "group/match relative flex min-w-0 flex-col overflow-hidden rounded-xl border bg-gradient-to-br from-surface-2/70 to-surface p-4 text-sm transition-colors hover:border-info/60",
+                "relative flex min-w-0 flex-col overflow-hidden rounded-xl border bg-gradient-to-br from-surface-2/70 to-surface text-sm transition-colors has-[>a:hover]:border-info/60",
                 m.status === "LIVE" ? "border-danger/45" : "border-line",
               )}
             >
-              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-muted">
-                <span className="uppercase tracking-wider">
-                  {matchPhaseLabel(m.phase, m.week)}
-                </span>
-                {m.status === "LIVE" ? (
-                  <span
-                    role="img"
-                    aria-label={`Live — series at ${m.homeScore}–${m.awayScore}`}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-1.5 py-0.5 font-mono text-xs tabular-nums text-danger"
-                  >
-                    <span aria-hidden className="relative flex h-1.5 w-1.5">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
-                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-danger" />
-                    </span>
-                    <span aria-hidden>LIVE</span>
+              <Link
+                href={`/matches/${m.id}`}
+                className="group/match flex min-w-0 flex-1 flex-col rounded-xl p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-muted">
+                  <span className="uppercase tracking-wider">
+                    {matchPhaseLabel(m.phase, m.week)}
                   </span>
-                ) : m.scheduledAt ? (
-                  <LocalTime
-                    ts={m.scheduledAt.getTime()}
-                    variant="full"
-                    initial={fmtWhen(m.scheduledAt) ?? ""}
-                  />
-                ) : (
-                  <span>Kickoff time not set</span>
-                )}
-              </div>
-              <div className="my-4 flex-1 space-y-3">
-                {[m.homeTeamId, m.awayTeamId].map((teamId) => {
-                  const c = checkins(m.id, teamId);
-                  return (
-                    <div
-                      key={teamId}
-                      className="flex min-w-0 items-center gap-2"
+                  {m.status === "LIVE" ? (
+                    <span
+                      role="img"
+                      aria-label={`Live — series at ${m.homeScore}–${m.awayScore}`}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-1.5 py-0.5 font-mono text-xs tabular-nums text-danger"
                     >
-                      <TeamCrest
-                        name={teamName.get(teamId) ?? "?"}
-                        seed={teamId}
-                        logoUrl={teamLogoUrl.get(teamId)}
-                        size={34}
-                        className="shrink-0 rounded-lg"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold leading-snug [overflow-wrap:anywhere]">
-                          {teamName.get(teamId) ?? "?"}
-                        </p>
-                        {(() => {
-                          const scenario = report?.teams.get(teamId);
-                          if (!scenario || scenario.nextMatchId !== m.id) return null;
-                          return (
-                            <div className="mt-1">
-                              <PlayoffOutlook scenario={scenario} teamNames={teamName} matchId={m.id} compact />
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      {c ? (
-                        <span
-                          role="img"
-                          aria-label={
-                            c.short
-                              ? `${c.confirmed} of ${c.size} checked in — ${c.short} seat(s) unfilled`
-                              : `${c.confirmed} of ${c.size} checked in`
-                          }
-                          className={cn(
-                            "shrink-0 text-xs tabular-nums",
-                            c.confirmed === c.size
-                              ? "text-success"
-                              : c.short
-                                ? "text-danger"
-                                : "text-muted",
-                          )}
-                          title={
-                            c.short
-                              ? `${c.confirmed} of ${c.size} checked in — ${c.short} roster seat(s) unfilled`
-                              : `${c.confirmed} of ${c.size} checked in`
-                          }
-                        >
+                      <span aria-hidden className="relative flex h-1.5 w-1.5">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
+                        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-danger" />
+                      </span>
+                      <span aria-hidden>LIVE</span>
+                    </span>
+                  ) : m.scheduledAt ? (
+                    <LocalTime
+                      ts={m.scheduledAt.getTime()}
+                      variant="full"
+                      initial={fmtWhen(m.scheduledAt) ?? ""}
+                    />
+                  ) : (
+                    <span>Kickoff time not set</span>
+                  )}
+                </div>
+                <div className="my-4 flex-1 space-y-3">
+                  {[m.homeTeamId, m.awayTeamId].map((teamId) => {
+                    const c = checkins(m.id, teamId);
+                    return (
+                      <div
+                        key={teamId}
+                        className="flex min-w-0 items-center gap-2"
+                      >
+                        <TeamCrest
+                          name={teamName.get(teamId) ?? "?"}
+                          seed={teamId}
+                          logoUrl={teamLogoUrl.get(teamId)}
+                          size={34}
+                          className="shrink-0 rounded-lg"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold leading-snug [overflow-wrap:anywhere]">
+                            {teamName.get(teamId) ?? "?"}
+                          </p>
+                          {(() => {
+                            const scenario = report?.teams.get(teamId);
+                            if (!scenario || scenario.nextMatchId !== m.id) return null;
+                            return (
+                              <div className="mt-1">
+                                <PlayoffOutlook scenario={scenario} teamNames={teamName} matchId={m.id} compact />
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        {c ? (
                           <span
-                            aria-hidden
-                            className="flex flex-col items-end gap-1"
+                            role="img"
+                            aria-label={
+                              c.short
+                                ? `${c.confirmed} of ${c.size} checked in — ${c.short} seat(s) unfilled`
+                                : `${c.confirmed} of ${c.size} checked in`
+                            }
+                            className={cn(
+                              "shrink-0 text-xs tabular-nums",
+                              c.confirmed === c.size
+                                ? "text-success"
+                                : c.short
+                                  ? "text-danger"
+                                  : "text-muted",
+                            )}
+                            title={
+                              c.short
+                                ? `${c.confirmed} of ${c.size} checked in — ${c.short} roster seat(s) unfilled`
+                                : `${c.confirmed} of ${c.size} checked in`
+                            }
                           >
-                            <span className="flex gap-0.5">
-                              {Array.from(
-                                { length: Math.min(c.size, 10) },
-                                (_, index) => (
-                                  <i
-                                    key={index}
-                                    className={cn(
-                                      "h-1.5 w-1.5 rounded-full",
-                                      index < c.confirmed
-                                        ? "bg-success"
-                                        : "bg-line",
-                                    )}
-                                  />
-                                ),
-                              )}
-                            </span>
-                            <span>
-                              {c.confirmed}/{c.size}
+                            <span
+                              aria-hidden
+                              className="flex flex-col items-end gap-1"
+                            >
+                              <span className="flex gap-0.5">
+                                {Array.from(
+                                  { length: Math.min(c.size, 10) },
+                                  (_, index) => (
+                                    <i
+                                      key={index}
+                                      className={cn(
+                                        "h-1.5 w-1.5 rounded-full",
+                                        index < c.confirmed
+                                          ? "bg-success"
+                                          : "bg-line",
+                                      )}
+                                    />
+                                  ),
+                                )}
+                              </span>
+                              <span>
+                                {c.confirmed}/{c.size}
+                              </span>
                             </span>
                           </span>
-                        </span>
-                      ) : null}
-                      {m.status === "LIVE" ? (
-                        <span
-                          aria-hidden
-                          className="ml-1 font-display text-3xl tabular-nums text-fg"
-                        >
-                          {teamId === m.homeTeamId ? m.homeScore : m.awayScore}
-                        </span>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="flex items-center justify-between border-t border-line-soft pt-3 text-xs text-muted group-hover/match:text-info">
-                <span>Match details & check-in</span>
-                <span aria-hidden>↗</span>
-              </p>
-            </Link>
+                        ) : null}
+                        {m.status === "LIVE" ? (
+                          <span
+                            aria-hidden
+                            className="ml-1 font-display text-3xl tabular-nums text-fg"
+                          >
+                            {teamId === m.homeTeamId ? m.homeScore : m.awayScore}
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="flex items-center justify-between border-t border-line-soft pt-3 text-xs text-muted group-hover/match:text-info">
+                  <span>Match details & check-in</span>
+                  <span aria-hidden>↗</span>
+                </p>
+              </Link>
+              {pick ? (
+                <PickemTray
+                  control={pick}
+                  matchId={m.id}
+                  week={m.week}
+                  home={pickSide(m.homeTeamId)}
+                  away={pickSide(m.awayTeamId)}
+                  locksAt={m.scheduledAt?.getTime() ?? null}
+                  className="border-t border-line-soft px-4 py-3"
+                />
+              ) : null}
+            </div>
           );
         })}
       </CardBody>

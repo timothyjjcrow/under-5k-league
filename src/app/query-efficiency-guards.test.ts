@@ -17,6 +17,15 @@ describe("shared-shell query efficiency", () => {
 });
 
 describe("homepage query efficiency", () => {
+  it("reads the viewer's picks once, for the side-game hint AND every This-week card", () => {
+    // One lookup, signed-in only; a per-card query would be N round trips on
+    // the hottest page.
+    expect(HOME.match(/prisma\.prediction\./g)).toHaveLength(1);
+    expect(HOME).toMatch(
+      /userId && viewerPickIds\.length > 0\s*\?\s*await prisma\.prediction\.findMany\(/,
+    );
+  });
+
   it("reuses the season game count for the hero and fantasy lock", () => {
     expect(HOME.match(/prisma\.game\.count\(\{/g)).toHaveLength(1);
     expect(HOME).toContain("gamesOnRecord={gamesOnRecord}");
