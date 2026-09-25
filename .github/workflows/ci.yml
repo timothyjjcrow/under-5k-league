@@ -306,12 +306,17 @@ jobs:
   # complete partition of that inventory, so coverage per push is
   # unchanged; only the wall clock moves. Raise `shard` if it creeps up again.
   # Any unclassified live claim or stale classification fails preflight.
+  # The limit is 90, not 60: at 110 protected claims shard 2 passed 26 of its
+  # 28 claims and was then cancelled at the 60-minute mark (0fadc27). A timeout
+  # reports a cancellation, never a surviving mutant, so it only blocks a
+  # release. Changing the shard count also means updating the job names that
+  # scripts/release-both.mjs requires.
   mutation:
     name: mutation guard ${{ matrix.shard }}/4
     needs: classify
     if: ${{ always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.needs_mutation != 'false') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false # one bad shard shouldn't hide the others' results
       matrix:
