@@ -76,6 +76,41 @@ export function shiftMatchNight(
 }
 
 /**
+ * The calendar month holding `nowMs` on the league's clock, as a half-open
+ * [start, end) pair of instants plus a display label ("September 2026").
+ *
+ * A monthly board must turn over at midnight on the 1st where the league
+ * plays, not where the server runs: on a UTC host a Pacific league's October
+ * would begin at 5 PM on September 30th, mid-session. Midnight is resolved the
+ * same way as a match night, so a clock change on the 1st still lands on a
+ * real local instant. `null` uses UTC (tests only).
+ */
+export function leagueMonthWindow(
+  nowMs: number,
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): { start: Date; end: Date; label: string } {
+  const formatter = timeZone ? timeFormatter(timeZone) : null;
+  // The wall-clock reading, carried in a UTC Date so its fields are the local
+  // year and month whatever the host's own zone is.
+  const local = new Date(
+    formatter ? wallTime(new Date(nowMs), formatter) : nowMs,
+  );
+  const year = local.getUTCFullYear();
+  const month = local.getUTCMonth();
+  const at = (target: number) =>
+    formatter ? dateAtWallTime(target, formatter) : new Date(target);
+  return {
+    start: at(Date.UTC(year, month, 1)),
+    end: at(Date.UTC(year, month + 1, 1)),
+    label: new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(Date.UTC(year, month, 1))),
+  };
+}
+
+/**
  * The league night for `week`, rolled forward if that date has already passed.
  *
  * Playoff rounds are dated by pure arithmetic off `firstMatchNight`, so once a
