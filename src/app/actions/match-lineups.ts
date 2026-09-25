@@ -24,11 +24,9 @@ export async function confirmLineupAction(_previous: ActionResult, form: FormDat
       expectedScheduleRevision: revision("expectedScheduleRevision"),
       expectedLogisticsRevision: revision("expectedLogisticsRevision"),
       expectedLineupRevision: revision("expectedLineupRevision"),
-      selections: selected.map((id) => {
-        const userId = String(id);
-        const position = form.get(`position:${userId}`);
-        return { userId, position: position == null || position === "" ? null : /^[1-5]$/.test(String(position)) ? Number(position) : NaN };
-      }),
+      // Captains pick who plays, never positions. The seat column stays for
+      // lineups confirmed before positions were removed from the form.
+      selections: selected.map((id) => ({ userId: String(id), position: null })),
     });
   } catch (error) {
     if (["P2034", "P2002"].includes((error as { code?: string }).code ?? "")) {

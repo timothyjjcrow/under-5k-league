@@ -9,7 +9,7 @@ import { LocalTime } from "./local-time";
 import { CheckinBanner } from "./checkin-banner";
 import { formatMatchTime } from "@/lib/match-time";
 
-/** Public plans are names/positions only. Named check-in answers and candidate
+/** Public plans are names only. Named check-in answers and candidate
  * forms are loaded solely for the captain who can confirm that side, or admin. */
 export async function MatchLineups({ matchId }: { matchId: string }) {
   const [viewer, match, snapshots] = await Promise.all([
@@ -64,7 +64,7 @@ export async function MatchLineups({ matchId }: { matchId: string }) {
                   <ul className="space-y-1">
                     {snapshot.seats.map((seat) => <li key={seat.id} className="flex flex-wrap items-baseline gap-x-2">
                       <PlayerLink userId={seat.userId}>{seat.userNameSnapshot}</PlayerLink>
-                      <span className="text-xs text-muted">{seat.position ? `Planned position ${seat.position}` : "Position not specified"}{seat.entryKind === "STANDIN" ? " · standin" : ""}</span>
+                      {seat.entryKind === "STANDIN" ? <span className="text-xs text-muted">standin</span> : null}
                     </li>)}
                   </ul>
                   {snapshot.status !== "CONFIRMED" ? <p className="text-xs text-muted">{snapshot.reason ? /^[A-Z_]+$/.test(snapshot.reason) ? snapshot.reason.toLowerCase().replaceAll("_", " ") : snapshot.reason : "Match logistics changed."} Earlier games keep their original record.</p> : null}
@@ -77,22 +77,18 @@ export async function MatchLineups({ matchId }: { matchId: string }) {
                 }}>
                   <fieldset className="space-y-2">
                     <legend className="mb-2 text-sm font-medium">Select {match.season.teamSize} players who are checked in</legend>
+                    <p className="text-xs text-muted">
+                      {candidates.filter((c) => c.eligible && c.availability?.status === "IN").length} of {match.season.teamSize} needed have checked in. Players can only be picked once they check in for this match.
+                    </p>
                     {candidates.map((candidate) => <div key={`${candidate.seatKey}:${candidate.userId}`} className="space-y-1 rounded-md bg-surface-2/50 p-2">
                       <label className="flex min-h-10 items-center gap-2 text-sm">
                         <input name="playerId" type="checkbox" value={candidate.userId} defaultChecked={candidate.eligible && candidate.availability?.status === "IN"} disabled={!candidate.eligible || candidate.availability?.status !== "IN"} />
                         <span>{candidate.userName} · {candidate.availability?.status === "IN" ? "Checked in" : candidate.availability?.status === "OUT" ? "Unavailable" : "Awaiting check-in"}</span>
                       </label>
-                      <label className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                        Planned position for {candidate.userName}
-                        <select name={`position:${candidate.userId}`} aria-label={`Planned position for ${candidate.userName}`} defaultValue={snapshot?.seats.find((seat) => seat.userId === candidate.userId)?.position ?? ""} className="min-h-10 rounded border border-line bg-surface px-2 text-fg">
-                          <option value="">Not specified</option>
-                          {[1, 2, 3, 4, 5].map((position) => <option key={position} value={position}>{position}</option>)}
-                        </select>
-                      </label>
                       {candidate.entryKind === "STANDIN" ? <p className="text-xs text-muted">Legacy cover assignment: offer acceptance is unknown. This player&apos;s current check-in is shown separately.</p> : null}
                     </div>)}
                   </fieldset>
-                  <p className="text-xs text-muted">Confirming saves the selected players and optional planned positions from now onward. It does not change earlier game participants.</p>
+                  <p className="text-xs text-muted">Optional. Confirming saves who is playing from now onward, including any standins. It does not change earlier game participants.</p>
                   <SubmitButton size="sm" disabled={candidates.filter((c) => c.eligible && c.availability?.status === "IN").length < match.season.teamSize}>Confirm playing lineup</SubmitButton>
                 </ActionForm>
               ) : null}
