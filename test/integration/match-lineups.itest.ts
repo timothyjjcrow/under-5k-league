@@ -126,7 +126,22 @@ describe("confirmed playing lineups", () => {
     const next = await confirmMatchLineup({ ...request(), expectedLineupRevision: 1, expectedLogisticsRevision: 1 });
     await prisma.match.update({ where: { id: match.id }, data: { status: "COMPLETED" } });
     await prisma.$transaction((tx) => invalidateTeamLineups(tx, home.id, "LATER_RELEASE"));
+    await prisma.$transaction((tx) => invalidateMatchLineups(tx, match.id, "LATE_DIRECT_INVALIDATION"));
     expect(await prisma.matchLineup.findUnique({ where: { id: next.id } })).toMatchObject({ status: "CONFIRMED", supersededAt: null });
+  });
+
+  it("later confirmation and invalidation never rewrite a previously ended lineup interval", async () => {
+    const { match, request } = await setup();
+    const first = await confirmMatchLineup(request());
+    await prisma.$transaction((tx) => invalidateMatchLineups(tx, match.id, "FIRST_TIME_CHANGE"));
+    const historical = await prisma.matchLineup.findUniqueOrThrow({ where: { id: first.id } });
+    await confirmMatchLineup({ ...request(), expectedLineupRevision: 1, expectedLogisticsRevision: 1 });
+    const changed = request();
+    changed.selections[0].position = 2;
+    await confirmMatchLineup({ ...changed, expectedLineupRevision: 2, expectedLogisticsRevision: 1 });
+    expect(await prisma.matchLineup.findUnique({ where: { id: first.id } })).toEqual(historical);
+    await prisma.$transaction((tx) => invalidateMatchLineups(tx, match.id, "SECOND_TIME_CHANGE"));
+    expect(await prisma.matchLineup.findUnique({ where: { id: first.id } })).toEqual(historical);
   });
 
   it("the actual admin retime keeps a same-time confirmation but invalidates both plans and old check-in forms on change", async () => {

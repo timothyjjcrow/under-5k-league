@@ -10,7 +10,7 @@ import { addCaptain, removeCaptain, startDraft, releasePlayer, signFreeAgent, tr
 import { abortDraft, getDraftState, nominatePlayer, pauseDraft, placeBid, resolveExpiredNomination, resolveStalledNomination, resumeDraft, undoLastSale, voidCurrentLot } from "@/lib/draft-service";
 import { readAcceptedBids } from "@/lib/draft-history";
 import { backfillRosterTenures, captureRosterTenure } from "@/lib/roster-history";
-import { expireClock, expireNominationClock, makeCaptain, makePlayer, makeSeason, makeUser, sessionFor, startDraftState } from "./factories";
+import { expireClock, expireNominationClock, makeCaptain, makePlayer, makeSeason, makeUser, ON_POSTGRES, sessionFor, startDraftState } from "./factories";
 
 const form = (values: Record<string, string>) => {
   const body = new FormData();
@@ -19,14 +19,18 @@ const form = (values: Record<string, string>) => {
 };
 let failTenureWrite = false;
 let failRunIntegrity = false;
+let beforeBidClaim: (() => Promise<void>) | null = null;
 prisma.$use(async (params, next) => {
+  if (beforeBidClaim && params.model === "Draft" && params.action === "updateMany" && params.args?.data?.currentBid === 5) {
+    const rival = beforeBidClaim; beforeBidClaim = null; await rival();
+  }
   if (failTenureWrite && params.model === "RosterTenure" && params.action === "create") throw new Error("history storage unavailable");
   if (failRunIntegrity && params.model === "DraftRun" && params.action === "create") {
     throw Object.assign(new Error("unrelated history unique constraint"), { code: "P2002", meta: { target: ["id"] } });
   }
   return next(params);
 });
-beforeEach(() => { failTenureWrite = false; failRunIntegrity = false; });
+beforeEach(() => { failTenureWrite = false; failRunIntegrity = false; beforeBidClaim = null; });
 
 async function setup(teamSize = 2) {
   const actor = sessionFor(await makeUser("History admin", "ADMIN"));
@@ -56,6 +60,17 @@ async function sell(f: Awaited<ReturnType<typeof setup>>, userId = f.p.id, price
 }
 
 describe("durable draft and roster history", () => {
+  it.skipIf(!ON_POSTGRES)("a pause committed after a tracked bid read cannot rearm its clock or append a bid receipt", async () => {
+    const f = await setup(); await start(f);
+    await nominatePlayer(f.season.id, sessionFor(f.a.user), f.p.id, 3);
+    const pinned = await expectation(f.season.id);
+    beforeBidClaim = async () => { expect((await pauseDraft(f.season.id, f.actor)).ok).toBe(true); };
+    expect((await placeBid(f.season.id, sessionFor(f.b.user), 5, pinned)).ok).toBe(false);
+    expect(await prisma.draft.findUniqueOrThrow({ where: { seasonId: f.season.id } })).toMatchObject({ status: "PAUSED", bidEndsAt: null, currentBid: 3 });
+    const lot = await prisma.draftLot.findUniqueOrThrow({ where: { id: pinned.currentLotId! } });
+    expect(readAcceptedBids(lot.acceptedBidsSnapshot).bids.map((bid) => bid.amount)).toEqual([3]);
+    expect(await prisma.bid.count({ where: { amount: 5 } })).toBe(0);
+  });
   it("records opening policy, every accepted bid, sale and tenure while rejecting an omitted lot UUID on new runs", async () => {
     const f = await setup(); await start(f);
     const before = await prisma.draftRun.findFirstOrThrow();
@@ -154,7 +169,12 @@ describe("durable draft and roster history", () => {
     expect(tenures).toHaveLength(2);
     expect(tenures[0]).toMatchObject({ teamId: first.teamId, endReason: "RELEASE", acquisitionPrice: 7 });
     expect(tenures[1]).toMatchObject({ teamId: second.teamId, acquisitionKind: "FREE_AGENT", acquisitionPrice: 0, closedAt: null });
-    expect(await prisma.draftLot.findUnique({ where: { sourceMembershipId: first.id } })).toMatchObject({ status: "SOLD", soldPrice: 7 });
+    const originalSale = await prisma.draftLot.findUniqueOrThrow({ where: { sourceMembershipId: first.id } });
+    expect(originalSale).toMatchObject({ status: "SOLD", soldPrice: 7 });
+    // Abort refunds current memberships. The earlier released purchase is
+    // history, even when the same person was subsequently signed elsewhere.
+    expect((await abortDraft(f.season.id, f.actor)).ok).toBe(true);
+    expect(await prisma.draftLot.findUnique({ where: { id: originalSale.id } })).toEqual(originalSale);
   });
 
   it("captures captain membership and preserves it when its team is removed", async () => {

@@ -1,8 +1,9 @@
 # League systems implementation and release record
 
-Authorized scope: implement the eight recommendations from the September 24
-deep code/database audit and release both regional applications after successful
-verification. Existing competition outcomes and scoring rules must retain their
+Current release scope: the user reduced the September 24 audit implementation
+to completed Stages 1–3 and requested both regional applications be released
+after successful verification. Stages 4–8 below are deferred. Existing
+competition outcomes and scoring rules must retain their
 meaning. The original checkout is left intact; this branch starts from the
 published application commit `9f4544df471bb673d215fc0402668aef753dcf4e`.
 
@@ -50,7 +51,7 @@ Verification: 194 focused SQLite integration tests plus 15 control tests passed
 Existing unit suite passed except its explicit migration inventory, which was
 updated and passed its focused rerun. Types, focused lint, additive migration
 validation and PostgreSQL native-object postflight passed. Full final CI remains
-required after all stages. PostgreSQL test setup restored SQLite and removed its
+required for the selected release. PostgreSQL test setup restored SQLite and removed its
 disposable database.
 
 Stage 2 implementation: shared, season-scoped public Game snapshots with a
@@ -84,5 +85,16 @@ authorization isolation. A fixture-cleanup correction passed an additional cache
 test in both regions and left no owned records. SQLite/client restoration and
 disposable database removal were verified.
 
-Current status: Stage 3 historical participation implementation. No production
-changes made; all eight stages and final release gates remain required.
+Current status: Stages 1–3 are complete through `67a04ed`. Stage 3 preserves
+historical roster tenures, auction runs/lots/bid receipts, confirmed lineup
+intervals and source-proven participant projections, with indexed historical
+readers and audited identity correction. The full PostgreSQL suite passed
+1,459 tests with three intentional SQLite-only skips. An independent clean
+checkout subsequently passed 2,460 unit tests and 1,418 SQLite integration tests
+with 44 PostgreSQL-only skips. Lineage and both regional browser checks passed
+as recorded in the stage evidence. Mutation review and final release gates
+remain required; these local checks do not mean the changes are deployed.
+
+Stages 4–8 are deferred at the user's request. Stage 4 work is preserved in the
+stash named `Stage 4 cover workflow WIP deferred at user release checkpoint`;
+it is excluded from this release. No production deployment has occurred yet.

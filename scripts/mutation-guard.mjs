@@ -86,6 +86,47 @@ const EQUIVALENT = new Set([
   // copied predicates are removed. The Postgres race test asserts the
   // no-live-lot-plus-nomination-clock invariant and all-or-nothing refund.
   "src/lib/draft-service.ts::undoLastSale::nominatedUserId+status#1",
+  // Stage 3: voidCurrentLot reads and claims the same Draft row inside one
+  // SERIALIZABLE transaction. Removing its copied state/lot fields still
+  // cannot commit over a concurrent draft change; the write itself remains.
+  // The renamed mutant survived the full PostgreSQL suite before review.
+  "src/lib/draft-service.ts::voidCurrentLot::currentBid+currentBidTeamId+currentLotId+nominatedUserId+status+updatedAt#1",
+  // All current draft-history writers run after the operational command has
+  // claimed the singleton Draft, holding its row lock until commit. The legacy
+  // undo bootstrap is SERIALIZABLE and performs a lock-only Draft write before
+  // allocating the run number. These mutants KEEP those writes: deleting the
+  // fields is equivalent, deleting the write would not be. Receipt/run/lot
+  // transitions cannot interleave while that lock is held; settle and void
+  // additionally validate the OPEN lot before writing. Each new predicate was
+  // sabotaged against PostgreSQL before classification. Do not extend this to
+  // abortDraftHistory's bulk membership filters: those select historical rows
+  // semantically and have a protected released-sale regression.
+  "src/lib/draft-history.ts::ensureDraftRun::activeRunId+updatedAt#1",
+  "src/lib/draft-history.ts::openDraftLot::nextLotSequence+status#1",
+  "src/lib/draft-history.ts::appendAcceptedDraftBid::acceptedBidsSnapshot+status#1",
+  "src/lib/draft-history.ts::preserveUnrecordedOpenBids::acceptedBidsSnapshot+status#1",
+  "src/lib/draft-history.ts::settleDraftLot::status#1",
+  "src/lib/draft-history.ts::voidDraftLot::status#1",
+  // Tenure closure follows the winning membership deletion/claim (or the
+  // SERIALIZABLE abort), so no compliant second closer can reach this write.
+  // Reconciliation freshly reads and writes the same tenure in SERIALIZABLE;
+  // a competing close conflicts, while an already-closed row fails preflight.
+  // These guards still document intent and defend inconsistent external data.
+  "src/lib/roster-history.ts::closeRosterTenure::closedAt#1",
+  "src/lib/roster-history.ts::checkActor::closedAt+openKey#1",
+  // Identity correction, its fresh administrator claim, lineup confirmation,
+  // provider-failure bookkeeping and import-progress commands read the exact
+  // row before their same-row write in SERIALIZABLE. Concurrent source/role/
+  // revision changes therefore force rollback without the copied predicates.
+  // Their write locks and fresh reads remain essential. In contrast, detached
+  // provider success/decision snapshots and participant backfill source checks
+  // are independently protected predicates, not covered by this equivalence.
+  "src/lib/game-identity-correction.ts::correctGameIdentity::players#1",
+  "src/lib/participant-admin.ts::claimParticipantAdmin::role#1",
+  "src/lib/match-lineups.ts::confirmMatchLineup::logisticsRevision+scheduleRevision+status#1",
+  "src/lib/import-candidates.ts::recordImportFetchFailure::revision#1",
+  "src/app/actions/import-progress.ts::changeImportCandidate::isActive+status#1",
+  "src/app/actions/import-progress.ts::changeImportCandidate::attempts+payload+revision+status#1",
   // abortDraft likewise reads Draft (including updatedAt) and claims that
   // singleton row in one SERIALIZABLE transaction. A concurrent draft write
   // makes one abort fail serialization before either teardown can double-land,

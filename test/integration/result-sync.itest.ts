@@ -92,8 +92,16 @@ const mockLeague = vi.mocked(fetchLeagueMatchIds);
 const mockSend = vi.mocked(sendDiscordMessage);
 const mockInhouseSend = vi.mocked(sendInhouseDiscordMessage);
 const mockLeagueDrain = vi.mocked(deliverPendingLeagueAnnouncements);
+let beforeSuppressionRead: (() => Promise<void>) | null = null;
+prisma.$use(async (params, next) => {
+  if (beforeSuppressionRead && params.model === "ImportSuppression" && params.action === "findUnique") {
+    await beforeSuppressionRead();
+  }
+  return next(params);
+});
 
 beforeEach(() => {
+  beforeSuppressionRead = null;
   mockRecent.mockReset();
   mockRecent.mockResolvedValue([]);
   mockMatch.mockReset();
@@ -1342,6 +1350,27 @@ describe("result sync — inhouse (integration)", () => {
 describe("result sync — a claim that needs a staged interleaving", () => {
   afterEach(() => setRaceHook(null));
 
+  it("pending provider review cannot reset a newer worker's attempt counter", async () => {
+    const { season, match } = await setupNight({ offsetMs: -2 * HOUR });
+    await prisma.importCandidate.create({ data: {
+      seasonId: season.id, dotaMatchId: "9988991", status: "NEEDS_REVIEW", attempts: IMPORT_CANDIDATE_MAX_ATTEMPTS,
+      expiresAt: new Date(Date.now() + 24 * HOUR),
+    } });
+    const newerSyncedAt = new Date(Date.now() + 60_000);
+    let rivalCommitted = false;
+    mockRecent.mockImplementation(async () => {
+      if (!rivalCommitted) {
+        rivalCommitted = true;
+        await prisma.match.update({ where: { id: match.id }, data: { autoSyncedAt: newerSyncedAt, autoSyncAttempts: 7 } });
+      }
+      return [9988991];
+    });
+    await runResultSync();
+    expect(rivalCommitted).toBe(true);
+    expect(await prisma.match.findUniqueOrThrow({ where: { id: match.id } })).toMatchObject({ autoSyncedAt: newerSyncedAt, autoSyncAttempts: 7 });
+    expect(await prisma.game.count()).toBe(0);
+  });
+
   it("an aborted scan cannot roll back a newer worker's match cursor", async () => {
     const { match } = await setupNight({ offsetMs: -2 * HOUR });
     const controller = new AbortController();
@@ -1670,6 +1699,7 @@ describe("durable import reliability", () => {
     const beforeRetry = await saveImportEvidence(season.id, details);
     expect(beforeRetry).not.toBeNull();
     await prisma.importCandidate.update({ where: { id: beforeRetry!.id }, data: { revision: { increment: 1 }, status: "READY", reason: null } });
+    expect(await saveImportEvidence(season.id, details, beforeRetry!)).toBeNull();
     await recordImportDecision(beforeRetry!, "NO_ELIGIBLE_FIXTURE");
     expect(await prisma.importCandidate.findUnique({ where: { id: beforeRetry!.id } })).toMatchObject({ status: "READY", revision: 1 });
 
@@ -1681,6 +1711,20 @@ describe("durable import reliability", () => {
     await prisma.dotaMatchClaim.create({ data: { dotaMatchId: "991602", kind: "LEAGUE", contextId: match.id } });
     await recordImportFetchFailure(season.id, "991602", "LATE_PROVIDER_FAILURE");
     expect(await prisma.importCandidate.findFirst({ where: { dotaMatchId: "991602" } })).toBeNull();
+  });
+
+  it("late evidence cleanup preserves a newer administrator exclusion decision", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -HOUR });
+    const details = odGame(991603, homeAccts, awayAccts, match.scheduledAt!.getTime());
+    let reads = 0;
+    beforeSuppressionRead = async () => {
+      if (++reads === 2) {
+        await rememberImportSkip(season.id, "991603");
+        await prisma.importCandidate.updateMany({ where: { seasonId: season.id, dotaMatchId: "991603" }, data: { reason: "ADMIN_IGNORED", revision: { increment: 1 } } });
+      }
+    };
+    try { expect(await saveImportEvidence(season.id, details)).toBeNull(); } finally { beforeSuppressionRead = null; }
+    expect(await prisma.importCandidate.findFirstOrThrow({ where: { dotaMatchId: "991603" } })).toMatchObject({ status: "IGNORED", reason: "ADMIN_IGNORED", payload: null, revision: 2 });
   });
 });
 
