@@ -55,6 +55,8 @@ import { Countdown } from "@/components/countdown";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
 import { SavedSignupForm } from "@/components/saved-signup-form";
+import { AwayDatesCard } from "@/components/away-dates-card";
+import { listAwayFixtures } from "@/lib/availability-service";
 import {
   Avatar,
   Badge,
@@ -419,6 +421,10 @@ export default async function MePage({
 
       <Suspense fallback={<Card><CardBody><p role="status">Checking Discord reachability… Your signup form is ready below.</p></CardBody></Card>}>
         <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} />
+      </Suspense>
+
+      <Suspense fallback={null}>
+        <AwayDatesSection userId={user.id} />
       </Suspense>
 
       <section id="profile-signup" className="scroll-mt-24">
@@ -999,6 +1005,27 @@ export default async function MePage({
       )}
       </section>
     </div>
+  );
+}
+
+/**
+ * "I'm away": only for a viewer with at least one upcoming fixture they can
+ * check in for, judged by the same seat rules the save uses. Streamed, so the
+ * roster and cover lookups never hold up the rest of the profile.
+ */
+async function AwayDatesSection({ userId }: { userId: string }) {
+  // Async server component: the clock is request-time state, not render replay.
+  // eslint-disable-next-line react-hooks/purity
+  const away = await listAwayFixtures(userId, Date.now());
+  if (!away) return null;
+  return (
+    <AwayDatesCard
+      seasonId={away.seasonId}
+      fixtures={away.fixtures.map((f) => ({
+        ...f,
+        whenLabel: formatMatchTime(new Date(f.kickoffMs), "short"),
+      }))}
+    />
   );
 }
 

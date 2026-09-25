@@ -6,15 +6,34 @@ import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
-import { parseAvailabilityStatus } from "@/lib/availability";
-import { playerOutMessage, sendDiscordMessage } from "@/lib/discord";
+import {
+  CHECKIN_REFUSAL_MESSAGE,
+  checkinClosedReason,
+  outPingThrottleKey,
+  parseAvailabilityStatus,
+} from "@/lib/availability";
+import {
+  awayRangeResult,
+  parseAwayRange,
+  parseSeenFixtures,
+} from "@/lib/away-range";
+import {
+  currentCheckinStatus,
+  markAwayRange,
+  recordCheckin,
+  resolveCheckinSeat,
+} from "@/lib/availability-service";
+import {
+  playerAwayMessage,
+  playerOutMessage,
+  sendDiscordMessage,
+} from "@/lib/discord";
 import { mentionUsers } from "@/lib/discord-mentions";
 import { claimThrottle } from "@/lib/settings";
 import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
-import { isPlayoffPhase, matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { isPlayoffPhase } from "@/lib/league-lifecycle";
 import type { ActionResult } from "@/lib/action-result";
 import { singleActiveSeason } from "@/lib/season";
-import { invalidateMatchLineups, loadLineupCandidates } from "@/lib/match-lineups";
 import {
   actionErrorMessage,
   UserFacingError,
@@ -91,97 +110,31 @@ export async function setAvailability(
           );
         }
 
-        const draftStatus = activeSeason.draft?.status;
-        if (
-          !matchCheckinOpen(
-            activeSeason.status,
-            draftStatus,
-            match.status,
-            match.scheduledAt,
-            Date.now(),
-          )
-        ) {
-          if (match.status === MATCH_STATUS.COMPLETED)
-            throw new UserFacingError("That match is already finished");
-          if (!postAuctionWorkOpen(activeSeason.status, draftStatus))
-            throw new UserFacingError(
-              "Check-in is not open in this league phase",
-            );
-          if (match.scheduledAt)
-            throw new UserFacingError(
-              "Check-in is closed because that kickoff has passed — the result is still outstanding",
-            );
-          throw new UserFacingError(
-            "That match does not have a kickoff yet",
-          );
-        }
-
-        const teamIds = [match.homeTeamId, match.awayTeamId];
-        const [onRoster, replacedSeat, standinSeat, prior] = await Promise.all([
-          tx.teamMember.findFirst({
-            where: {
-              seasonId: match.seasonId,
-              userId: user.id,
-              teamId: { in: teamIds },
-            },
-            select: { teamId: true },
-          }),
-          tx.standinAssignment.findFirst({
-            where: { matchId, replacingUserId: user.id },
-            select: { id: true },
-          }),
-          tx.standinAssignment.findFirst({
-            where: {
-              matchId,
-              standinUserId: user.id,
-              teamId: { in: teamIds },
-            },
-            select: { teamId: true },
-          }),
-          tx.matchAvailability.findUnique({
-            where: { matchId_userId: { matchId, userId: user.id } },
-            select: { status: true, scheduleRevision: true },
-          }),
+        // The fixture half of the gate, then the player half — both shared
+        // with markAwayRange so the range can never mark a fixture this
+        // action would refuse.
+        const closed = checkinClosedReason(
+          activeSeason.status,
+          activeSeason.draft?.status,
+          match,
+          Date.now(),
+        );
+        if (closed) throw new UserFacingError(CHECKIN_REFUSAL_MESSAGE[closed]);
+        const [seat, priorStatus] = await Promise.all([
+          resolveCheckinSeat(tx, match, user.id),
+          currentCheckinStatus(tx, match, user.id),
         ]);
-        if (onRoster && replacedSeat) {
-          throw new UserFacingError(
-            "A standin is covering your seat for this match, so you are not in its playing roster",
-          );
-        }
-        if (!onRoster && !standinSeat) {
-          throw new UserFacingError("You're not playing in this match");
-        }
-        const affectedTeamId = onRoster?.teamId ?? standinSeat!.teamId;
-        if ((affectedTeamId === match.homeTeamId ? match.homeTeam : match.awayTeam).withdrawn) {
-          throw new UserFacingError("A withdrawn team cannot check in for this match.");
-        }
-        const candidates = await loadLineupCandidates(tx, match, affectedTeamId);
-        if (!candidates.some((candidate) => candidate.userId === user.id && candidate.eligible)) {
-          throw new UserFacingError("You're not playing in this match — the roster or cover assignment changed.");
+        if ("refusal" in seat) {
+          throw new UserFacingError(CHECKIN_REFUSAL_MESSAGE[seat.refusal]);
         }
 
-        const priorStatus = prior?.scheduleRevision === match.scheduleRevision ? prior.status : null;
         if (priorStatus !== status) {
-          await tx.matchAvailability.upsert({
-            where: { matchId_userId: { matchId, userId: user.id } },
-            create: { matchId, userId: user.id, status, scheduleRevision: match.scheduleRevision },
-            update: { status, scheduleRevision: match.scheduleRevision },
-          });
-          await invalidateMatchLineups(tx, match.id, "A player's check-in changed", new Date(), affectedTeamId);
+          await recordCheckin(tx, match, user.id, status, seat.teamId);
         }
 
         // Which side loses a player — the roster seat, or the team a standin
         // was covering for. This is who has to go find replacement cover.
-        return {
-          match,
-          priorStatus,
-          affectedCaptainId:
-            affectedTeamId === match.homeTeamId
-              ? match.homeTeam.captainId
-              : affectedTeamId === match.awayTeamId
-                ? match.awayTeam.captainId
-                : null,
-        };
+        return { match, priorStatus, affectedCaptainId: seat.captainId };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -214,7 +167,7 @@ export async function setAvailability(
       status === "OUT" &&
       priorStatus !== "OUT" &&
       (await claimThrottle(
-        `outPing:${matchId}:${user.id}`,
+        outPingThrottleKey(matchId, user.id),
         RSVP_OUT_PING_THROTTLE_SECONDS,
         Date.now(),
       ))
@@ -256,4 +209,107 @@ export async function setAvailability(
         ? match.status === MATCH_STATUS.LIVE ? "You're ready for the next game ✓" : "You're confirmed for the match ✓"
         : "Marked as unavailable — your captain and the admin can line up a standin",
   };
+}
+
+/**
+ * "I'm away": mark the signed-in player OUT for every fixture of theirs whose
+ * kickoff falls between two dates, in one go, and tell the captain(s) once.
+ *
+ * The dates arrive as browser-computed epochs (local midnight of each day —
+ * the server's zone is UTC in production and must never read a raw date).
+ * `seen` is the fixture list the page showed, with each one's
+ * scheduleRevision: a fixture is only answered for the kickoff the player saw.
+ */
+export async function markAwayDates(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+
+  const parsed = parseAwayRange(
+    str(formData, "awayFromTs"),
+    str(formData, "awayBackTs"),
+    Date.now(),
+  );
+  if ("error" in parsed) return { error: parsed.error };
+  const expectedSeasonId = str(formData, "expectedSeasonId");
+  if (!expectedSeasonId) return { error: "Reload the page and try again." };
+
+  let outcome;
+  try {
+    outcome = await markAwayRange({
+      userId: user.id,
+      expectedSeasonId,
+      range: parsed.range,
+      seen: parseSeenFixtures(str(formData, "seen")),
+      nowMs: Date.now(),
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code === "P2034") {
+      return { error: "Your fixtures just changed. Reload and try again." };
+    }
+    return {
+      error: actionErrorMessage(
+        error,
+        "Could not save your away dates. Reload and try again.",
+        "availability.away",
+      ),
+    };
+  }
+
+  // ONE message for the whole range, after the write has committed. Each
+  // fixture still claims the single-OUT throttle key, so a range followed by
+  // a one-match OUT (or the reverse) can never ping twice for one match — and
+  // a fixture that lost its claim is left out of the message entirely.
+  // Best-effort like setAvailability: nothing here can undo the save.
+  try {
+    const announce = [];
+    for (const fixture of outcome.marked) {
+      if (
+        await claimThrottle(
+          outPingThrottleKey(fixture.matchId, user.id),
+          RSVP_OUT_PING_THROTTLE_SECONDS,
+          Date.now(),
+        )
+      ) {
+        announce.push(fixture);
+      }
+    }
+    if (announce.length) {
+      await sendDiscordMessage(
+        playerAwayMessage(
+          user.name,
+          announce.map((f) => ({
+            homeName: f.homeName,
+            awayName: f.awayName,
+            week: f.week,
+            isPlayoff: isPlayoffPhase(f.phase),
+            isTiebreaker: f.phase === "TIEBREAKER",
+            whenMs: f.whenMs,
+            matchId: f.matchId,
+          })),
+        ),
+        // Every captain who now has a seat to fill (a standin's bookings can
+        // span teams) — never the player themselves, who is a captain only
+        // when they are the one reading the toast.
+        await mentionUsers(
+          announce.map((f) => (f.captainId === user.id ? null : f.captainId)),
+        ),
+      );
+    }
+  } catch {
+    // The OUTs are committed; a throttle or mention lookup outage must not
+    // turn a saved range into an error that invites a second save.
+  }
+
+  if (outcome.marked.length) {
+    updateTag(AUTOMATION_GATE_TAG);
+    revalidatePath("/", "layout");
+  }
+  return awayRangeResult(outcome);
 }

@@ -500,6 +500,55 @@ export function playerOutMessage(m: {
   return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
 }
 
+/** One fixture of an away range, in playerOutMessage's own shape. */
+export type AwayFixtureAnnouncement = Omit<
+  Parameters<typeof playerOutMessage>[0],
+  "playerName"
+>;
+
+/** Room left under Discord's 2,000 for the captain mentions sendDiscordMessage
+ *  prepends — a handful of `<@id>` tokens at most. */
+const AWAY_MESSAGE_BUDGET = 1_800;
+
+/**
+ * ONE announcement for a whole "I'm away" range, however many fixtures it
+ * covers: a captain whose player is gone for three weeks needs one buzz with
+ * the list, not three. A single fixture is exactly playerOutMessage, so the
+ * captain reads the same words whichever way the player said it; more get one
+ * line each in that message's terms, each with its reader-local kickoff and
+ * the match page that holds the Standins card.
+ */
+export function playerAwayMessage(
+  playerName: string,
+  fixtures: AwayFixtureAnnouncement[],
+): string {
+  if (fixtures.length === 0) return "";
+  if (fixtures.length === 1) {
+    return playerOutMessage({ playerName, ...fixtures[0] });
+  }
+  const head = `🚑 **${name(playerName)}** is away and can't make ${fixtures.length} matches:`;
+  const tail = "Captains/admin: time to line up standins.";
+  const lines: string[] = [];
+  let used = head.length + tail.length + 2;
+  for (const [i, f] of fixtures.entries()) {
+    const label = f.isTiebreaker
+      ? "Tiebreaker match"
+      : f.isPlayoff ? "Playoff match" : `Week ${f.week} match`;
+    const when = f.whenMs != null ? ` (<t:${Math.floor(f.whenMs / 1000)}:F>)` : "";
+    const link = f.matchId ? ` <${resolveSiteUrl()}/matches/${f.matchId}>` : "";
+    const line = `• ${label}: **${name(f.homeName)}** vs **${name(f.awayName)}**${when}${link}`;
+    const rest = fixtures.length - i;
+    // Leave room for the "and N more" line whenever anything could follow.
+    if (used + line.length + 1 + (rest > 1 ? 24 : 0) > AWAY_MESSAGE_BUDGET) {
+      lines.push(`• …and ${rest} more`);
+      break;
+    }
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return [head, ...lines, tail].join("\n");
+}
+
 export function standinAssignedMessage(m: {
   standinName: string;
   /** null = filling an EMPTY seat on a short roster, replacing nobody. */
