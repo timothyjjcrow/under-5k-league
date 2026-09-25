@@ -2,7 +2,12 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
+import {
+  INHOUSE,
+  INHOUSE_BET_OUTCOME,
+  INHOUSE_BETS,
+  INHOUSE_STATUS,
+} from "@/lib/constants";
 import {
   parseInhouseBox,
   type InhouseBoxPlayer as BoxPlayer,
@@ -19,6 +24,11 @@ import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
 import { loadInhouseLadderSummary } from "@/lib/inhouse-ladder";
 import { credProfitBoard } from "@/lib/inhouse-bet-service";
+import { credBetView } from "@/lib/inhouse-bets";
+import {
+  loadCredSnapshot,
+  type CredSnapshot,
+} from "@/lib/inhouse-cred-summary";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
@@ -476,9 +486,10 @@ function credBoard(
 async function LadderCard({ meId }: { meId: string | null }) {
   // Shares the complete-history snapshot with the Discord board and room;
   // the ledger aggregate stays parallel and retains its independent meaning.
-  const [summary, credNet] = await Promise.all([
+  const [summary, credNet, mine] = await Promise.all([
     loadInhouseLadderSummary(),
     credProfitBoard(),
+    meId ? loadCredSnapshot(meId) : Promise.resolve(null),
   ]);
   const leaderboard = summary.records;
   const cred = credBoard(leaderboard, credNet);
@@ -496,7 +507,12 @@ async function LadderCard({ meId }: { meId: string | null }) {
         }
       />
       <CardBody className="p-0">
-        <YourStanding rows={leaderboard} meId={meId} cred={cred} />
+        <YourStanding
+          rows={leaderboard}
+          meId={meId}
+          cred={cred}
+          wallet={mine}
+        />
         <LadderLeaders rows={leaderboard} />
         <Leaderboard rows={leaderboard} meId={meId} cred={cred} />
         <details className="border-t border-line px-4 py-2 text-xs text-muted sm:px-5">
@@ -505,7 +521,8 @@ async function LadderCard({ meId }: { meId: string | null }) {
           </summary>
           <p className="max-w-3xl pb-3 leading-relaxed">
             Elo starts at 1000. Beating stronger opponents earns more; your rank
-            appears after {PROVISIONAL_GAMES} games.
+            appears after {PROVISIONAL_GAMES} games, and until then the ladder
+            lists you with a dash instead of a number.
             {cred.hasBets
               ? " Cred tracks net profit from betting on your own games. Its rank is separate from Elo and excludes starting balances and grants."
               : ""}
@@ -723,14 +740,18 @@ function YourStanding({
   rows,
   meId,
   cred,
+  wallet,
 }: {
   rows: ReturnType<typeof summarizeInhouse>;
   meId: string | null;
   cred: CredBoard;
+  wallet: CredSnapshot | null;
 }) {
   if (!meId) return null;
   const me = rows.find((r) => r.userId === meId);
-  if (!me) return null;
+  // No completed game yet: the one place on the page addressed to this viewer
+  // tells them how to get onto the board instead of saying nothing.
+  if (!me) return <FirstGameStrip balance={wallet?.balance ?? null} />;
   // Rank only counts among established players — provisionals are unranked.
   const { ranked } = rankInhouse(rows);
   const idx = ranked.findIndex((r) => r.userId === meId);
@@ -813,11 +834,137 @@ function YourStanding({
           </div>
         </div>
       ) : null}
+      {wallet ? (
+        // The spendable figure, which appeared nowhere outside a live lobby.
+        // Kept apart from the Cred cell above: that one is net profit (the
+        // ladder), this one is what the bet chips can actually spend.
+        <StatCell label="Cred balance" value={wallet.balance} hint="to bet" />
+      ) : null}
       {toRank > 0 ? (
         <Badge tone="neutral" className="self-center">
           provisional · {toRank} more {toRank === 1 ? "game" : "games"} to rank
         </Badge>
       ) : null}
+      {wallet && wallet.bets.length > 0 ? (
+        <RecentBets bets={wallet.bets} />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The viewer's last few bets, folded under their standing. Every refund names
+ * its reason (see `credBetView`), because a bare 0 beside a bet someone
+ * remembers placing reads as lost Cred.
+ */
+function RecentBets({ bets }: { bets: CredSnapshot["bets"] }) {
+  // Only a game that completed has a box score in the archive to open.
+  const archived = new Set<string>([
+    INHOUSE_BET_OUTCOME.WON,
+    INHOUSE_BET_OUTCOME.LOST,
+    INHOUSE_BET_OUTCOME.VOID_LINEUP,
+    INHOUSE_BET_OUTCOME.VOID_LATE,
+  ]);
+  return (
+    <details className="w-full text-sm">
+      <summary className="inline-flex min-h-10 cursor-pointer items-center rounded text-xs font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+        Your last {bets.length === 1 ? "bet" : `${bets.length} bets`}
+      </summary>
+      <ol className="divide-y divide-line-soft pb-1">
+        {bets.map((bet) => {
+          const view = credBetView(bet);
+          return (
+            <li
+              key={bet.id}
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2"
+            >
+              <span className="min-w-0">
+                <span className="block text-xs text-muted">
+                  <LocalTime
+                    ts={bet.playedAt.getTime()}
+                    variant="short"
+                    initial={formatMatchTime(bet.playedAt, "short")}
+                  />
+                </span>
+                {bet.outcome && archived.has(bet.outcome) ? (
+                  <Link
+                    href={`/inhouse/history?game=${bet.lobbyId}#result-${bet.lobbyId}`}
+                    className={textLink()}
+                  >
+                    {view.label}
+                  </Link>
+                ) : (
+                  view.label
+                )}
+                <span className="ml-2 text-xs text-muted tabular-nums">
+                  {bet.stake} staked
+                </span>
+              </span>
+              {view.delta != null ? (
+                <span
+                  className={cn(
+                    "font-semibold tabular-nums",
+                    view.tone === "success"
+                      ? "text-success"
+                      : view.tone === "danger"
+                        ? "text-danger"
+                        : "text-muted",
+                  )}
+                >
+                  {view.delta > 0 ? `+${view.delta}` : view.delta}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+    </details>
+  );
+}
+
+/**
+ * For a signed-in player with no completed inhouse yet. The room above already
+ * explains the current phase; this is the whole path in one glance, because a
+ * first-timer can't see what "queue" leads to until they are ten minutes in.
+ */
+function FirstGameStrip({ balance }: { balance: number | null }) {
+  const steps: React.ReactNode[] = [
+    <>
+      <a href="#live-room" className={textLink()}>
+        Join the queue
+      </a>{" "}
+      above
+    </>,
+    "Accept when ten players are in",
+    "Vote on captains, then get drafted",
+    <>
+      Play in Dota with the league ticket (
+      <a href="#opendota-setup" className={textLink()}>
+        setup help
+      </a>
+      )
+    </>,
+  ];
+  return (
+    <div className="border-b border-line bg-accent/5 px-4 py-3.5 sm:px-5">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-accent/90">
+        Your first game
+      </div>
+      <ol className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+        {steps.map((step, i) => (
+          <li key={i} className="flex min-w-0 items-baseline gap-2">
+            <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-accent/40 bg-accent/10 text-[11px] font-semibold text-accent">
+              {i + 1}
+            </span>
+            <span className="min-w-0">{step}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-2.5 text-xs text-muted">
+        Your Elo starts at 1000 and you get a rank after {PROVISIONAL_GAMES}{" "}
+        games. You also have {balance ?? INHOUSE_BETS.START_BALANCE} Cred to bet
+        on your own team once the teams lock.
+      </p>
     </div>
   );
 }
