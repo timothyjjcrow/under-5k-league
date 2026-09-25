@@ -25,6 +25,7 @@ import {
 } from "@/lib/constants";
 import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
 import { ImportProgress } from "@/components/import-progress";
+import { DatabaseHealth } from "@/components/database-health";
 import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
@@ -343,6 +344,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             <AutoSyncHealth season={season} />
             <Suspense fallback={<CardSkeleton rows={3} />}>
               <ImportProgress seasonId={season.id} page={(await searchParams).importPage} query={await searchParams} />
+              <DatabaseHealth />
             </Suspense>
           </AdminAnchor>
           {season.status !== "SIGNUPS" && season.status !== "DRAFT" ? setupControls : null}

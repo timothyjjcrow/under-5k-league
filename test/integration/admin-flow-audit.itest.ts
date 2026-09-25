@@ -123,6 +123,7 @@ async function seasonWithSchedule(
 describe("renameTeam — cached record matchups", () => {
   it("expires the shared games tag after the guarded rename commits", async () => {
     const { season, matches } = await seasonWithSchedule();
+    await setSetting(SETTING_KEYS.PUBLIC_GAME_REVISION, "before-rename");
     vi.mocked(updateTag).mockClear();
 
     const res = await renameTeam(
@@ -141,6 +142,7 @@ describe("renameTeam — cached record matchups", () => {
       }),
     ).toMatchObject({ name: "Renamed Radiants" });
     expect(vi.mocked(updateTag)).toHaveBeenCalledWith("games");
+    expect(await getSetting(SETTING_KEYS.PUBLIC_GAME_REVISION)).not.toBe("before-rename");
   });
 
   it("saves and clears a validated team logo", async () => {
@@ -409,6 +411,7 @@ describe("removeGame — the removal must survive automatic re-import", () => {
     );
     const oldCursor = "1999-01-01T00:00:00.000Z";
     await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, oldCursor);
+    await setSetting(SETTING_KEYS.PUBLIC_GAME_REVISION, "before-removal");
 
     const res = await removeGame(empty, fd({ gameId: removed.id }));
 
@@ -431,6 +434,7 @@ describe("removeGame — the removal must survive automatic re-import", () => {
       forfeit: false,
     });
     expect(snapshot.cursor?.value).not.toBe(oldCursor);
+    expect(await getSetting(SETTING_KEYS.PUBLIC_GAME_REVISION)).not.toBe("before-removal");
     expect(Date.parse(snapshot.cursor?.value ?? "")).toBeGreaterThan(
       Date.parse(oldCursor),
     );

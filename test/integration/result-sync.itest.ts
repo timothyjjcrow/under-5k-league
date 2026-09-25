@@ -1440,6 +1440,78 @@ describe("result sync — a claim that needs a staged interleaving", () => {
   });
 });
 
+describe("league feed account preparation", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("uses two identity reads for many fixtures and no registration attribution reads", async () => {
+    const { season, match } = await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({ where: { id: season.id }, data: { dotaLeagueId: "19180" } });
+    await prisma.match.createMany({ data: Array.from({ length: 12 }, (_, index) => ({
+      seasonId: season.id,
+      week: index + 2,
+      phase: MATCH_PHASE.REGULAR,
+      homeTeamId: match.homeTeamId,
+      awayTeamId: match.awayTeamId,
+      bestOf: 1,
+      scheduledAt: new Date(Date.now() + (index + 1) * 7 * 24 * HOUR),
+    })) });
+    // An unrelated finalized game requires classification but no import, so
+    // these are precisely preparation reads, not final transaction checks.
+    mockLeague.mockResolvedValue([991801]);
+    mockMatch.mockResolvedValue(odGame(991801, [880001, 880002, 880003], [880004, 880005, 880006], Date.now()));
+    const members = vi.spyOn(prisma.teamMember, "findMany");
+    const standins = vi.spyOn(prisma.standinAssignment, "findMany");
+    const registrants = vi.spyOn(prisma.registration, "findMany");
+    const seasons = vi.spyOn(prisma.season, "findUnique");
+
+    expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(0);
+    expect(members).toHaveBeenCalledTimes(1);
+    expect(standins).toHaveBeenCalledTimes(1);
+    expect(registrants).not.toHaveBeenCalled();
+    expect(seasons).toHaveBeenCalledTimes(1); // existing season context, reused
+  });
+
+  it("keeps a fixture's standin out of a rematch while preserving meeting ownership", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -24 * HOUR });
+    await prisma.season.update({ where: { id: season.id }, data: { dotaLeagueId: "19181" } });
+    const cover = await makeUser("First fixture cover");
+    const coverAccount = steamIdToAccountId(cover.steamId)!;
+    const firstRoster = [homeAccts[0], homeAccts[1], coverAccount];
+    await prisma.standinAssignment.create({ data: { matchId: match.id, teamId: match.homeTeamId, standinUserId: cover.id } });
+    const rematch = await prisma.match.create({ data: {
+      seasonId: season.id, week: 2, phase: MATCH_PHASE.REGULAR,
+      homeTeamId: match.homeTeamId, awayTeamId: match.awayTeamId,
+      bestOf: 1, scheduledAt: new Date(Date.now() - HOUR),
+    } });
+    mockLeague.mockResolvedValue([991811, 991812]);
+    mockMatch.mockImplementation(async (id) => odGame(Number(id), firstRoster, awayAccts,
+      id === "991811" ? match.scheduledAt!.getTime() : rematch.scheduledAt!.getTime()));
+
+    expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(1);
+    expect(await prisma.game.findFirst({ where: { matchId: match.id } })).toMatchObject({ dotaMatchId: "991811" });
+    expect(await prisma.game.count({ where: { matchId: rematch.id } })).toBe(0);
+    expect(await prisma.importCandidate.findFirst({ where: { dotaMatchId: "991812" } })).toMatchObject({ status: "IGNORED" });
+  });
+
+  it("does not prepare identities for closed or full fixtures", async () => {
+    const { season, match } = await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({ where: { id: season.id }, data: { dotaLeagueId: "19182" } });
+    await prisma.match.update({ where: { id: match.id }, data: { status: MATCH_STATUS.COMPLETED } });
+    const full = await prisma.match.create({ data: {
+      seasonId: season.id, week: 2, phase: MATCH_PHASE.REGULAR, status: MATCH_STATUS.LIVE,
+      homeTeamId: match.homeTeamId, awayTeamId: match.awayTeamId, bestOf: 1, scheduledAt: new Date(),
+    } });
+    await prisma.game.create({ data: { matchId: full.id, dotaMatchId: "991821", radiantWin: true } });
+    mockLeague.mockResolvedValue([991822]);
+    mockMatch.mockResolvedValue(odGame(991822, [880001, 880002, 880003], [880004, 880005, 880006], Date.now()));
+    const members = vi.spyOn(prisma.teamMember, "findMany");
+    const standins = vi.spyOn(prisma.standinAssignment, "findMany");
+    expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(0);
+    expect(members).not.toHaveBeenCalled();
+    expect(standins).not.toHaveBeenCalled();
+  });
+});
+
 describe("durable import reliability", () => {
   afterEach(() => {
     vi.useRealTimers();

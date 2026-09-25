@@ -3,6 +3,7 @@
 // Set OPENDOTA_API_KEY for higher rate limits (optional).
 
 import type { PubStats } from "./pub-stats";
+import { databaseDiagnostics } from "./db-observability";
 
 const BASE = "https://api.opendota.com/api";
 const STEAM64_BASE = BigInt("76561197960265728");
@@ -165,6 +166,8 @@ export async function fetchOpenDotaMatch(
 ): Promise<OpenDotaMatch | null> {
   const signal = boundedSignal(OPEN_DOTA_MATCH_TIMEOUT_MS, options);
   if (!signal) return null;
+  const started = performance.now();
+  let success = false;
   try {
     const res = await fetch(withKey(`${BASE}/matches/${dotaMatchId}`), {
       cache: "no-store",
@@ -175,9 +178,12 @@ export async function fetchOpenDotaMatch(
     if (!res.ok) return null;
     const data = await res.json();
     if (!data || data.error || !Array.isArray(data.players)) return null;
+    success = true;
     return data as OpenDotaMatch;
   } catch {
     return null;
+  } finally {
+    databaseDiagnostics.provider("match", performance.now() - started, success);
   }
 }
 
@@ -194,6 +200,8 @@ export async function fetchRecentMatchIds(
 ): Promise<number[] | null> {
   const signal = boundedSignal(OPEN_DOTA_RECENT_TIMEOUT_MS, options);
   if (!signal) return null;
+  const started = performance.now();
+  let success = false;
   try {
     const res = await fetch(
       withKey(`${BASE}/players/${accountId}/recentMatches`),
@@ -202,12 +210,16 @@ export async function fetchRecentMatchIds(
     if (!res.ok) return null;
     const data = await res.json();
     if (!Array.isArray(data)) return null;
-    return data
+    const ids = data
       .slice(0, limit)
       .map((m: { match_id?: number }) => m.match_id)
       .filter((x): x is number => typeof x === "number");
+    success = true;
+    return ids;
   } catch {
     return null;
+  } finally {
+    databaseDiagnostics.provider("recent", performance.now() - started, success);
   }
 }
 
@@ -359,6 +371,8 @@ export async function fetchLeagueMatchIds(
 ): Promise<number[] | null> {
   const signal = boundedSignal(OPEN_DOTA_LEAGUE_TIMEOUT_MS, options);
   if (!signal) return null;
+  const started = performance.now();
+  let success = false;
   try {
     const res = await fetch(withKey(`${BASE}/leagues/${leagueId}/matchIds`), {
       cache: "no-store",
@@ -387,8 +401,11 @@ export async function fetchLeagueMatchIds(
       seen.add(id);
       ids.push(id);
     }
+    success = true;
     return ids;
   } catch {
     return null;
+  } finally {
+    databaseDiagnostics.provider("league", performance.now() - started, success);
   }
 }

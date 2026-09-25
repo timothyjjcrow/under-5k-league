@@ -1,5 +1,6 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
+import { stampResultChange } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,9 @@ export async function POST() {
   ) {
     return new NextResponse(null, { status: 404 });
   }
+  // Fixture writers bypass domain commands. Fence pending work from the
+  // previous fixture as well as expiring persistent Next cache entries.
+  await stampResultChange();
   revalidateTag("games", { expire: 0 });
   revalidatePath("/", "layout");
   return NextResponse.json({ ok: true });

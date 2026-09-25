@@ -45,7 +45,7 @@ import {
   MATCH_STATUS,
   SCRIM_STATUS,
 } from "@/lib/constants";
-import { seasonSettingScopeWhere } from "@/lib/settings";
+import { seasonSettingScopeWhere, SETTING_KEYS } from "@/lib/settings";
 import { createBackupReceipt } from "@/lib/backup-receipt.mjs";
 import { postgresDatabaseIdentity } from "@/lib/postgres-identity.mjs";
 import { reactivateSeason } from "@/lib/season";
@@ -167,6 +167,7 @@ describe("deleteSeason", () => {
   it("deletes an archived season and everything hanging off it", async () => {
     vi.mocked(updateTag).mockClear();
     const { season, match } = await archivedSeasonWithHistory();
+    await prisma.setting.create({ data: { key: SETTING_KEYS.PUBLIC_GAME_REVISION, value: "before-delete" } });
 
     const res = await deleteSeason({}, deleteFd(season));
 
@@ -198,6 +199,9 @@ describe("deleteSeason", () => {
     });
     expect(log?.summary).toContain(season.name);
     expect(updateTag).toHaveBeenCalledWith("games");
+    expect((await prisma.setting.findUniqueOrThrow({
+      where: { key: SETTING_KEYS.PUBLIC_GAME_REVISION },
+    })).value).not.toBe("before-delete");
   });
 
   it("refuses the ACTIVE season at read time", async () => {

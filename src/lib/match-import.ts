@@ -26,7 +26,7 @@ import {
   getSetting,
   leagueSyncSkipKey,
   resultAnnouncedKey,
-  SETTING_KEYS,
+  stampResultChange,
   weekReminderKey,
   claimProviderCooldown,
 } from "./settings";
@@ -1213,12 +1213,7 @@ export async function importGameForMatch(
               ),
             );
           }
-          const changedAt = new Date().toISOString();
-          await tx.setting.upsert({
-            where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-            create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-            update: { value: changedAt },
-          });
+          await stampResultChange(tx);
           return {
             projection,
             priorStatus: fresh.status,
@@ -1641,28 +1636,35 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   // The `"benchmarks":` key only ever appears as a line's own field — a
   // player whose persona name is literally `benchmarks` serializes with a
   // comma after it, so the colon keeps the marker probe honest.
-  // Count + bounded fetch, never the whole table: the rows exist only to
-  // process `limit` of them, and the count alone feeds `remaining` — on a
-  // legacy DB the old unbounded findMany read every un-enriched game's
-  // box-score JSON per button press to process 12.
+  // Fetch only this batch. Count remaining work afterward so a concurrent
+  // correction/deletion is reflected accurately without reading its JSON.
   const unenriched = { NOT: { players: { contains: '"benchmarks":' } } };
-  const [total, batch] = await Promise.all([
-    prisma.game.count({ where: unenriched }),
-    prisma.game.findMany({
-      where: unenriched,
-      orderBy: { fetchedAt: "asc" },
-      take: limit,
-      select: { id: true, dotaMatchId: true, players: true },
-    }),
-  ]);
+  const batch = await prisma.game.findMany({
+    where: unenriched,
+    orderBy: [{ fetchedAt: "asc" }, { id: "asc" }],
+    take: limit,
+    select: { id: true, dotaMatchId: true, players: true },
+  });
 
   let enriched = 0;
   let failed = 0;
   // A failed game keeps its stored JSON but moves to the back of the
   // fetchedAt-ordered queue — otherwise a dozen permanently-unfetchable games
   // at the head would starve every later run of this bounded batch.
-  const requeue = (id: string) =>
-    prisma.game.update({ where: { id }, data: { fetchedAt: new Date() } });
+  const writeIfUnchanged = (
+    game: { id: string; players: string },
+    data: { players?: string; fetchedAt?: Date },
+  ) => prisma.$transaction(async (tx) => {
+    const changed = await tx.game.updateMany({
+      where: { id: game.id, players: game.players },
+      data,
+    });
+    if (changed.count !== 1) return false;
+    await stampResultChange(tx);
+    return true;
+  });
+  const requeue = (game: { id: string; players: string }) =>
+    writeIfUnchanged(game, { fetchedAt: new Date() });
   for (const game of batch) {
     let lines: PlayerStat[];
     try {
@@ -1671,14 +1673,14 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
       lines = parsed as PlayerStat[];
     } catch {
       failed++; // malformed JSON — leave it alone rather than guess
-      await requeue(game.id);
+      await requeue(game);
       continue;
     }
 
     const od = await fetchOpenDotaMatch(game.dotaMatchId);
     if (!od) {
       failed++;
-      await requeue(game.id);
+      await requeue(game);
       continue;
     }
 
@@ -1704,17 +1706,21 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
       };
     });
 
-    await prisma.game.update({
-      where: { id: game.id },
-      data: { players: JSON.stringify(merged) },
-    });
-    enriched++;
+    // Provider IO happened outside the transaction. A newer identity repair,
+    // enrichment or deletion wins this CAS, so old boxscore attribution can
+    // never be restored by the delayed response. Only a committed change
+    // advances the public data revision and existing parked-tab cursor.
+    if (await writeIfUnchanged(game, { players: JSON.stringify(merged) })) {
+      enriched++;
+    } else {
+      failed++;
+    }
   }
 
   return {
     enriched,
     failed,
-    remaining: total - batch.length + failed,
+    remaining: await prisma.game.count({ where: unenriched }),
   };
 }
 
@@ -1843,9 +1849,9 @@ export async function syncLeagueGames(
   const newlySkipped: string[] = [];
   const evidenceById = new Map<string, ImportCandidateSnapshot>();
 
-  // Building account sets is O(matches × roster queries) — do it only once a
-  // fetched game actually needs classifying, so a steady-state auto run
-  // (everything known or skipped) touches no roster tables at all.
+  // Classification needs account sets, not per-player attribution. Read the
+  // season's roster and fixture standins once when a candidate first needs
+  // them; keep transactional gatherTeamAccounts for the eventual write.
   const accountsByMatch = new Map<
     string,
     { home: Set<number>; away: Set<number>; teamSize: number }
@@ -1853,9 +1859,55 @@ export async function syncLeagueGames(
   let accountsReady = false;
   const ensureAccounts = async () => {
     if (accountsReady) return;
-    for (const m of scheduled) {
-      const { homeSet, awaySet, teamSize } = await gatherTeamAccounts(m);
-      accountsByMatch.set(m.id, { home: homeSet, away: awaySet, teamSize });
+    const eligible = scheduled.filter((match) =>
+      match.status !== MATCH_STATUS.COMPLETED && match.games.length < match.bestOf);
+    if (eligible.length === 0) {
+      accountsReady = true;
+      return;
+    }
+    const identitySelect = {
+      steamId: true,
+      dotaAccountIdV2: true,
+      legacyDotaAccountId: true,
+    } as const;
+    const [members, standins] = await Promise.all([
+      prisma.teamMember.findMany({
+        where: { seasonId },
+        select: { teamId: true, user: { select: identitySelect } },
+      }),
+      prisma.standinAssignment.findMany({
+        // A season-scoped relation predicate avoids a large IN parameter
+        // list when many fixtures are pending. Closed fixture standins are
+        // irrelevant to classification; scheduled retains ownership context.
+        where: { match: { seasonId, status: { not: MATCH_STATUS.COMPLETED } } },
+        select: { matchId: true, teamId: true, standin: { select: identitySelect } },
+      }),
+    ]);
+    const teamAccounts = new Map<string, Set<number>>();
+    for (const member of members) {
+      const account = effectiveDotaAccountId(member.user);
+      if (account == null) continue;
+      const accounts = teamAccounts.get(member.teamId) ?? new Set<number>();
+      accounts.add(account);
+      teamAccounts.set(member.teamId, accounts);
+    }
+    const fixtureStandins = new Map<string, typeof standins>();
+    for (const standin of standins) {
+      const bookings = fixtureStandins.get(standin.matchId) ?? [];
+      bookings.push(standin);
+      fixtureStandins.set(standin.matchId, bookings);
+    }
+    for (const match of eligible) {
+      // Clone per fixture so one match's cover cannot leak into its rematch.
+      const home = new Set(teamAccounts.get(match.homeTeamId));
+      const away = new Set(teamAccounts.get(match.awayTeamId));
+      for (const booking of fixtureStandins.get(match.id) ?? []) {
+        const account = effectiveDotaAccountId(booking.standin);
+        if (account == null) continue;
+        if (booking.teamId === match.homeTeamId) home.add(account);
+        else if (booking.teamId === match.awayTeamId) away.add(account);
+      }
+      accountsByMatch.set(match.id, { home, away, teamSize: season.teamSize });
     }
     accountsReady = true;
   };

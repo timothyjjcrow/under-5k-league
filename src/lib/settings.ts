@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
 
 // Tiny key-value store (the `Setting` model) for league-global config that an
@@ -43,6 +44,9 @@ export const SETTING_KEYS = {
   // parked client — not just the one whose ping performed the import — can
   // see the league changed and refresh itself.
   RESULT_CHANGED_AT: "resultChangedAt",
+  // Opaque generation for public game caches. Unlike the display timestamp,
+  // two mutations in the same millisecond must never share this identity.
+  PUBLIC_GAME_REVISION: "publicGameRevision",
   // ISO timestamp of the last failed-announcement retry sweep (throttle).
   ANNOUNCE_RETRY_AT: "announceRetryAt",
   // The pinned Discord inhouse queue board, as JSON. A live row is
@@ -316,13 +320,23 @@ export async function claimThrottle(
  * with the mutation that clients must observe.
  */
 export async function stampResultChange(
-  db: Pick<Prisma.TransactionClient, "setting"> = prisma,
+  db?: Pick<Prisma.TransactionClient, "setting">,
 ): Promise<void> {
+  if (!db) {
+    await prisma.$transaction((tx) => stampResultChange(tx));
+    return;
+  }
   const value = new Date().toISOString();
   await db.setting.upsert({
     where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
     create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value },
     update: { value },
+  });
+  const revision = randomUUID();
+  await db.setting.upsert({
+    where: { key: SETTING_KEYS.PUBLIC_GAME_REVISION },
+    create: { key: SETTING_KEYS.PUBLIC_GAME_REVISION, value: revision },
+    update: { value: revision },
   });
 }
 

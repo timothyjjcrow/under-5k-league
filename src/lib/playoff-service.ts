@@ -19,7 +19,7 @@ import {
   championAnnouncedKey,
   playoffGamesArchiveKey,
   resultAnnouncedKey,
-  SETTING_KEYS,
+  stampResultChange,
   weekReminderKey,
 } from "./settings";
 import { regularSeasonStatus } from "./schedule-status";
@@ -441,12 +441,7 @@ export async function createPlayoffBracket(
           data: { status: SEASON_STATUS.PLAYOFFS, championTeamId: null },
         });
         if (phaseClaim.count === 0) throw new BracketBuildRaceError();
-        const changedAt = new Date().toISOString();
-        await tx.setting.upsert({
-          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-          update: { value: changedAt },
-        });
+        await stampResultChange(tx);
 
         return {
           ...removed,
@@ -557,12 +552,7 @@ export async function returnToRegularSeason(
           },
         });
         if (moved.count !== 1) throw new BracketBuildRaceError();
-        const changedAt = new Date().toISOString();
-        await tx.setting.upsert({
-          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-          update: { value: changedAt },
-        });
+        await stampResultChange(tx);
         return removed;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -766,12 +756,7 @@ export async function advancePlayoffBracket(
             },
             data: { status: SCRIM_STATUS.CANCELLED },
           });
-          const changedAt = new Date().toISOString();
-          await tx.setting.upsert({
-            where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-            create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-            update: { value: changedAt },
-          });
+          await stampResultChange(tx);
           return finalNow.winnerTeamId;
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -919,12 +904,7 @@ export async function advancePlayoffBracket(
             scheduledAt,
           })),
         });
-        const changedAt = new Date().toISOString();
-        await tx.setting.upsert({
-          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-          update: { value: changedAt },
-        });
+        await stampResultChange(tx);
       },
       // Serializable so the reset (also Serializable, touching the same
       // marker/match/season rows) and this build are guaranteed to serialize —

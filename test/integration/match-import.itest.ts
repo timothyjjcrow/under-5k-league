@@ -852,6 +852,10 @@ describe("enrichStoredGames", () => {
       heroDamage: 24000,
       benchmarks: { gold_per_min: { raw: 480, pct: 0.66 } },
     });
+    expect(await prisma.setting.findUnique({ where: { key: SETTING_KEYS.PUBLIC_GAME_REVISION } }))
+      .toMatchObject({ value: expect.any(String) });
+    expect(await prisma.setting.findUnique({ where: { key: SETTING_KEYS.RESULT_CHANGED_AT } }))
+      .toMatchObject({ value: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
 
     // Second run finds nothing left to enrich and never hits the network.
     vi.mocked(fetchOpenDotaMatch).mockClear();
@@ -914,6 +918,49 @@ describe("enrichStoredGames", () => {
       where: { NOT: { players: { contains: '"benchmarks":' } } },
     });
     expect(count).toBe(1);
+    expect(await prisma.setting.findUnique({ where: { key: SETTING_KEYS.PUBLIC_GAME_REVISION } }))
+      .toMatchObject({ value: expect.any(String) });
+  });
+
+  it("preserves an identity correction committed during the provider lookup", async () => {
+    const game = await legacyGame("9006");
+    const corrected = JSON.stringify([{ ...LEGACY_LINE, userId: "corrected-user", teamId: "corrected-team" }]);
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async () => {
+      await prisma.game.update({ where: { id: game.id }, data: { players: corrected } });
+      return { match_id: 9006, radiant_win: true, duration: 2000, start_time: 1, players: [] };
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, failed: 1, remaining: 1 });
+    expect((await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players).toBe(corrected);
+    expect(await prisma.setting.findUnique({ where: { key: SETTING_KEYS.PUBLIC_GAME_REVISION } })).toBeNull();
+  });
+
+  it("does not requeue or stamp a newer boxscore after a failed provider lookup", async () => {
+    const game = await legacyGame("9007");
+    const originalFetchedAt = new Date(Date.now() - 60_000);
+    await prisma.game.update({ where: { id: game.id }, data: { fetchedAt: originalFetchedAt } });
+    const corrected = JSON.stringify([{ ...LEGACY_LINE, userId: "corrected-user" }]);
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async () => {
+      await prisma.game.update({ where: { id: game.id }, data: { players: corrected } });
+      return null;
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, failed: 1, remaining: 1 });
+    expect(await prisma.game.findUniqueOrThrow({ where: { id: game.id } }))
+      .toMatchObject({ players: corrected, fetchedAt: originalFetchedAt });
+    expect(await prisma.setting.findUnique({ where: { key: SETTING_KEYS.PUBLIC_GAME_REVISION } })).toBeNull();
+  });
+
+  it("tolerates a game removed during provider IO and reports the actual remaining queue", async () => {
+    const game = await legacyGame("9008");
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async () => {
+      await prisma.game.delete({ where: { id: game.id } });
+      return { match_id: 9008, radiant_win: true, duration: 2000, start_time: 1, players: [] };
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, failed: 1, remaining: 0 });
+    expect(await prisma.game.count()).toBe(0);
+    expect(await prisma.setting.findUnique({ where: { key: SETTING_KEYS.PUBLIC_GAME_REVISION } })).toBeNull();
   });
 
   it("rotates a failing game to the back so it can't starve the batch", async () => {

@@ -6,6 +6,9 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Prisma 5 engine counters distinguish connection waits from query time.
+  // Only fixed numeric metrics are exposed through our private diagnostics.
+  previewFeatures = ["metrics"]
 }
 
 datasource db {

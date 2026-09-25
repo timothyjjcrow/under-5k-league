@@ -713,6 +713,8 @@ export async function deleteSeason(
         },
       });
       if (gone.count === 0) throw new SeasonBecameActiveError();
+      // The global public snapshot revision must survive the season cascade.
+      await stampResultChange(tx);
     });
   } catch (e) {
     if (e instanceof SeasonBecameActiveError) {
@@ -893,12 +895,7 @@ export async function setSeasonPhase(
           data: { status: target },
         });
         if (flipped.count === 1) {
-          const changedAt = new Date().toISOString();
-          await tx.setting.upsert({
-            where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-            create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-            update: { value: changedAt },
-          });
+          await stampResultChange(tx);
         }
         return {
           error:
@@ -1580,6 +1577,8 @@ export async function renameTeam(
           },
         });
         if (changed.count === 0) throw new CaptainStateChangedError();
+        // Record snapshots embed team names; fence older in-flight refreshes.
+        await stampResultChange(tx);
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -3592,12 +3591,7 @@ export async function recordResult(
             where: { matchId: match.id },
           });
         }
-        const changedAt = new Date().toISOString();
-        await tx.setting.upsert({
-          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-          update: { value: changedAt },
-        });
+        await stampResultChange(tx);
         // The score and its announcement source change together. Deleting the
         // old generation makes any not-yet-delivered payload fail its source
         // check, while a crash after this commit leaves a completedAt-backed
@@ -5129,12 +5123,7 @@ export async function reopenMatch(
         if (match.phase === MATCH_PHASE.REGULAR) {
           await markWeekHonorsStale(tx, match.seasonId, match.week);
         }
-        const changedAt = new Date().toISOString();
-        await tx.setting.upsert({
-          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-          update: { value: changedAt },
-        });
+        await stampResultChange(tx);
         return {
           seasonId: match.seasonId,
           week: match.week,
@@ -5432,12 +5421,7 @@ export async function removeGame(
             summary: `Removed Dota game ${fresh.dotaMatchId} from fixture ${match.id} (week ${match.week}); score ${match.homeScore}-${match.awayScore} → ${projection.homeScore}-${projection.awayScore}`.slice(0, 500),
           },
         });
-        const changedAt = new Date().toISOString();
-        await tx.setting.upsert({
-          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
-          create: { key: SETTING_KEYS.RESULT_CHANGED_AT, value: changedAt },
-          update: { value: changedAt },
-        });
+        await stampResultChange(tx);
         return {
           matchId: match.id,
           seasonId: match.seasonId,

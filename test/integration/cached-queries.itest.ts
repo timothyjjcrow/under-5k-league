@@ -11,6 +11,7 @@ import {
   fetchSeasonGameScores,
   fetchSeasonGamesForRecap,
 } from "@/lib/cached-queries";
+import { fetchPublicGameSnapshot } from "@/lib/public-game-snapshot";
 
 // The perf pass replaced five inline `prisma.game.findMany(...)` stat scans
 // with cached wrappers (unstable_cache, 60s TTL) in src/lib/cached-queries.ts.
@@ -166,8 +167,7 @@ describe("cached-queries data-equivalence", () => {
     // never leak B's games.
     expect(leadersA.every((g) => g.match.week === 1)).toBe(true);
 
-    // getSeasonGamesForRecap === the recap/awards scan (scores + duration,
-    // deliberately NO orderBy — computeSeasonAwards' ties follow row order).
+    // Recap ties follow fetchedAt, then stable ID, independent of query plan.
     const recapA = await fetchSeasonGamesForRecap(a.season.id);
     const recapB = await fetchSeasonGamesForRecap(b.season.id);
     expect(recapA).toHaveLength(3);
@@ -175,6 +175,7 @@ describe("cached-queries data-equivalence", () => {
     expect(recapA).toEqual(
       await prisma.game.findMany({
         where: { match: { seasonId: a.season.id } },
+        orderBy: [{ fetchedAt: "asc" }, { id: "asc" }],
         select: {
           matchId: true,
           radiantWin: true,
@@ -214,5 +215,50 @@ describe("cached-queries data-equivalence", () => {
       ...[rows[1].id, rows[2].id].sort(),
       rows[0].id,
     ]);
+  });
+
+  it("keeps the canonical season snapshot complete and preserves opposing recap chronology", async () => {
+    const a = await seedSeasonWithGames("Scoped", 3);
+    await seedSeasonWithGames("Other", 2, false);
+    const games = await prisma.game.findMany({
+      where: { matchId: a.match.id }, orderBy: { id: "asc" },
+    });
+    for (const [index, game] of games.entries()) {
+      await prisma.game.update({
+        where: { id: game.id },
+        data: { fetchedAt: new Date((3 - index) * 1000) },
+      });
+    }
+    const snapshot = await fetchPublicGameSnapshot(a.season.id);
+    expect(snapshot).toHaveLength(3);
+    expect(snapshot.every((game) => game.matchId === a.match.id)).toBe(true);
+    expect(snapshot.every((game) => typeof game.fetchedAtMs === "number")).toBe(true);
+    expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot);
+    expect((await fetchSeasonGamesForRecap(a.season.id)).map((game) => game.players))
+      .toEqual([...games].reverse().map((game) => game.players));
+    expect(await fetchPublicGameSnapshot("missing-season")).toEqual([]);
+  });
+
+  it("keeps score reads to one datasource statement and only loads requested context", async () => {
+    const { season } = await seedSeasonWithGames("Statements", 2);
+    async function statements() {
+      const metrics = await prisma.$metrics.json();
+      const counter = metrics.counters.find((entry) => entry.key === "prisma_datasource_queries_total");
+      expect(counter, "Prisma engine metrics must be enabled for the SQL regression check").toBeDefined();
+      return counter!.value;
+    }
+    async function measure(read: () => Promise<unknown>) {
+      const before = await statements();
+      await read();
+      return (await statements()) - before;
+    }
+    expect(await measure(() => prisma.game.findMany({
+      where: { match: { seasonId: season.id } }, select: { players: true, radiantWin: true },
+    }))).toBe(1);
+    expect(await measure(() => fetchSeasonGameScores(season.id))).toBe(1);
+    expect(await measure(() => fetchSeasonGamesForRecap(season.id))).toBe(1);
+    expect(await measure(() => fetchSeasonGameLeaders(season.id))).toBe(2);
+    // One Game, one flat Match context, and one bulk Team-name statement.
+    expect(await measure(fetchAllGamesForRecords)).toBe(3);
   });
 });

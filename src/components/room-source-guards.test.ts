@@ -123,7 +123,8 @@ describe("result-sync ping fetch deadline", () => {
     // The pure interleaving test only protects the comparison rule. This
     // contract guard proves the root Server Component actually supplies the
     // render-time causality boundary and the client uses it on its first tick.
-    expect(layout).toContain("getSetting(SETTING_KEYS.RESULT_CHANGED_AT)");
+    expect(layout).toContain("getPublicReadSignals()");
+    expect(layout).toContain("resultCursorAtRender = publicReadSignals.resultChangedAt");
     expect(layout).toMatch(
       /<ResultSyncPing\s+initialCursor=\{[A-Za-z_$][\w$]*\}\s*\/>/,
     );

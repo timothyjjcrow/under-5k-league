@@ -1,161 +1,120 @@
-import { unstable_cache } from "next/cache";
 import { prisma } from "./prisma";
+import {
+  fetchPublicGameSnapshot,
+  getPublicGameSnapshot,
+  fetchPublicMatchContext,
+  fetchPublicTeamNames,
+  getPublicMatchContext,
+  getPublicTeamNames,
+  type PublicGameSnapshot,
+  type PublicMatchContext,
+  type PublicTeamNames,
+} from "./public-game-snapshot";
 
-// The all-games stat roll-ups (leaders, hero meta, records, hall of fame,
-// player profiles) recompute from every stored Game on each request — a
-// player's userId lives inside each row's `players` JSON, not a column, so
-// there is no way to query "games for player X" without scanning the table.
-// The exported `get*` wrappers cache the raw, VIEWER-INDEPENDENT scans for a
-// short window; the derived math still runs per request, but the expensive DB
-// read is shared across all viewers instead of repeated per view.
-//
-// Each scan is split into a plain `fetch*` (the actual query — unit-tested for
-// data-equivalence in test/integration/cached-queries.itest.ts, since
-// unstable_cache needs the Next server runtime and can't run under vitest) and
-// a `get*` cache wrapper. Pages import the `get*` versions.
-//
-// Every entry is tagged "games". Server Actions expire it with updateTag for
-// read-your-own-writes; the sync Route Handler uses revalidateTag with
-// `{ expire: 0 }`, the blocking Route Handler equivalent. The TTL remains a
-// defensive bound if an out-of-band database writer bypasses those paths.
+// Viewer-independent projections share one games-tagged, 60-second snapshot
+// instead of independently scanning all history for metadata, careers and
+// records. Season readers keep their SQL predicate. Session/permission reads
+// remain outside this cache. The fetch* seams bypass it for equivalence tests.
 
-const REVALIDATE_SECONDS = 60;
-const CACHE_TAGS = ["games"];
+const gameLines = (games: PublicGameSnapshot) =>
+  games.map(({ id, players }) => ({ id, players }));
+const gameScores = (games: PublicGameSnapshot) =>
+  games.map(({ players, radiantWin }) => ({ players, radiantWin }));
 
-/** Every game as {id, players} — attribute games to a player via the userId
- *  embedded in the box-score JSON (player profiles). */
-export function fetchAllGameLines() {
-  return prisma.game.findMany({ select: { id: true, players: true } });
+function recordGames(games: PublicGameSnapshot, contexts: PublicMatchContext, teams: PublicTeamNames) {
+  const byMatch = new Map(contexts.map((match) => [match.id, match]));
+  const byTeam = new Map(teams.map((team) => [team.id, team.name]));
+  return games.flatMap(({ id, startTime, matchId, radiantWin, durationSecs,
+    radiantScore, direScore, players }) => {
+    const match = byMatch.get(matchId);
+    if (!match) return []; // A concurrent deletion can finish an older render.
+    const home = byTeam.get(match.homeTeamId), away = byTeam.get(match.awayTeamId);
+    if (home === undefined || away === undefined) return [];
+    return [{
+    id, startTime, matchId, radiantWin, durationSecs, radiantScore, direScore, players,
+    match: {
+      seasonId: match.seasonId,
+      homeTeam: { name: home },
+      awayTeam: { name: away },
+    },
+  }]; }).sort((a, b) => {
+    // Unknown OpenDota time belongs after dated games, never before them.
+    const aTime = a.startTime > 0 ? a.startTime : Number.MAX_SAFE_INTEGER;
+    const bTime = b.startTime > 0 ? b.startTime : Number.MAX_SAFE_INTEGER;
+    return aTime - bTime || a.id.localeCompare(b.id);
+  });
 }
-export const getAllGameLines = unstable_cache(
-  fetchAllGameLines,
-  ["all-game-lines"],
-  {
-    revalidate: REVALIDATE_SECONDS,
-    tags: CACHE_TAGS,
-  },
-);
 
-/** Every game's box score + win flag, all seasons — Hall of Fame. */
-export function fetchAllGameScores() {
-  return prisma.game.findMany({ select: { players: true, radiantWin: true } });
+function recapGames(games: PublicGameSnapshot) {
+  return [...games]
+    .sort((a, b) => a.fetchedAtMs - b.fetchedAtMs || a.id.localeCompare(b.id))
+    .map(({ matchId, radiantWin, radiantScore, direScore, durationSecs, players }) => ({
+      matchId, radiantWin, radiantScore, direScore, durationSecs, players,
+    }));
 }
-export const getAllGameScores = unstable_cache(
-  fetchAllGameScores,
-  ["all-game-scores"],
-  {
-    revalidate: REVALIDATE_SECONDS,
-    tags: CACHE_TAGS,
-  },
-);
 
-/** Every game with matchup context, chronological — the record book. */
-export function fetchAllGamesForRecords() {
-  return prisma.game
-    .findMany({
-      select: {
-        id: true,
-        startTime: true,
-        matchId: true,
-        radiantWin: true,
-        durationSecs: true,
-        radiantScore: true,
-        direScore: true,
-        players: true,
-        match: {
-          select: {
-            seasonId: true,
-            homeTeam: { select: { name: true } },
-            awayTeam: { select: { name: true } },
-          },
-        },
-      },
-    })
-    .then((games) =>
-      games.sort((a, b) => {
-        // OpenDota time is the authoritative chronology. Legacy 0 means
-        // unknown, so it belongs after every dated game rather than becoming
-        // the league's fictional first achiever. CUID is a stable/import-time
-        // final key and cannot be rewritten by a later enrichment fetch.
-        const aTime = a.startTime > 0 ? a.startTime : Number.MAX_SAFE_INTEGER;
-        const bTime = b.startTime > 0 ? b.startTime : Number.MAX_SAFE_INTEGER;
-        return aTime - bTime || a.id.localeCompare(b.id);
-      }),
-    );
+function leaderGames(games: PublicGameSnapshot, contexts: PublicMatchContext) {
+  const byMatch = new Map(contexts.map((match) => [match.id, match]));
+  return games.flatMap(({ players, radiantWin, matchId }) => {
+    const match = byMatch.get(matchId);
+    return match ? [{ players, radiantWin, match: { week: match.week, phase: match.phase } }] : [];
+  });
 }
-export const getAllGamesForRecords = unstable_cache(
-  fetchAllGamesForRecords,
-  ["records-games"],
-  { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
-);
 
-/** Every game with the fields the opponent scouting report needs, all seasons.
- *  The match preview builds both teams' dossiers from every game ever played,
- *  so this is an unbounded scan on a page captains open on match night. */
+export async function fetchAllGameLines() {
+  return gameLines(await fetchPublicGameSnapshot(null));
+}
+export async function getAllGameLines() {
+  return gameLines(await getPublicGameSnapshot(null));
+}
+export async function fetchAllGameScores() {
+  return gameScores(await fetchPublicGameSnapshot(null));
+}
+export async function getAllGameScores() {
+  return gameScores(await getPublicGameSnapshot(null));
+}
+export async function fetchAllGamesForRecords() {
+  return recordGames(...await Promise.all([
+    fetchPublicGameSnapshot(null), fetchPublicMatchContext(null), fetchPublicTeamNames(null),
+  ]));
+}
+export async function getAllGamesForRecords() {
+  return recordGames(...await Promise.all([
+    getPublicGameSnapshot(null), getPublicMatchContext(null), getPublicTeamNames(null),
+  ]));
+}
+
+/** Keep this direct query: the match preview awaits it in nested Suspense.
+ * An unstable_cache wrapper previously hung that stream (e2e-mid/match.spec.ts).
+ * Indexed participant reads can later narrow its scope without moving this
+ * rendering boundary. */
 export function fetchAllGamesForScouting() {
   return prisma.game.findMany({
     select: {
-      players: true,
-      radiantWin: true,
-      durationSecs: true,
-      startTime: true,
+      players: true, radiantWin: true, durationSecs: true, startTime: true,
     },
   });
 }
-// Deliberately NOT wrapped in unstable_cache. The match preview awaits this
-// inside a nested <Suspense> async component, and there the cache wrapper never
-// resolved — the whole scouting card silently vanished from the page (caught by
-// e2e-mid/match.spec.ts). The raw scan is still shared here so the query lives
-// with its siblings and stays covered by the data-equivalence test.
 
-/** One season's games with box score + win flag — Hero meta page. */
-export function fetchSeasonGameScores(seasonId: string) {
-  return prisma.game.findMany({
-    where: { match: { seasonId } },
-    select: { players: true, radiantWin: true },
-  });
+export async function fetchSeasonGameScores(seasonId: string) {
+  return gameScores(await fetchPublicGameSnapshot(seasonId));
 }
-export const getSeasonGameScores = unstable_cache(
-  fetchSeasonGameScores,
-  ["season-game-scores"],
-  { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
-);
-
-/** One season's games with scores/duration — the recap/awards page. Stable
- *  ordering makes equal-margin award ties deterministic across databases. */
-export function fetchSeasonGamesForRecap(seasonId: string) {
-  return prisma.game.findMany({
-    where: { match: { seasonId } },
-    orderBy: [{ fetchedAt: "asc" }, { id: "asc" }],
-    select: {
-      matchId: true,
-      radiantWin: true,
-      radiantScore: true,
-      direScore: true,
-      durationSecs: true,
-      players: true,
-    },
-  });
+export async function getSeasonGameScores(seasonId: string) {
+  return gameScores(await getPublicGameSnapshot(seasonId));
 }
-export const getSeasonGamesForRecap = unstable_cache(
-  fetchSeasonGamesForRecap,
-  ["season-games-recap"],
-  { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
-);
-
-/** One season's games with week/phase context — the Leaders boards. */
-export function fetchSeasonGameLeaders(seasonId: string) {
-  return prisma.game.findMany({
-    where: { match: { seasonId } },
-    select: {
-      players: true,
-      radiantWin: true,
-      match: { select: { week: true, phase: true } },
-    },
-  });
+export async function fetchSeasonGamesForRecap(seasonId: string) {
+  return recapGames(await fetchPublicGameSnapshot(seasonId));
 }
-export const getSeasonGameLeaders = unstable_cache(
-  fetchSeasonGameLeaders,
-  ["season-game-leaders"],
-  { revalidate: REVALIDATE_SECONDS, tags: CACHE_TAGS },
-);
+export async function getSeasonGamesForRecap(seasonId: string) {
+  return recapGames(await getPublicGameSnapshot(seasonId));
+}
+export async function fetchSeasonGameLeaders(seasonId: string) {
+  return leaderGames(...await Promise.all([
+    fetchPublicGameSnapshot(seasonId), fetchPublicMatchContext(seasonId),
+  ]));
+}
+export async function getSeasonGameLeaders(seasonId: string) {
+  return leaderGames(...await Promise.all([
+    getPublicGameSnapshot(seasonId), getPublicMatchContext(seasonId),
+  ]));
+}

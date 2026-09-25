@@ -21,7 +21,8 @@ import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { resolveSiteUrl } from "@/lib/site-url";
-import { getSetting, SETTING_KEYS } from "@/lib/settings";
+import { getPublicReadSignals } from "@/lib/public-read-signals";
+import { getPublicHasHistory } from "@/lib/public-navigation";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
@@ -61,21 +62,18 @@ export const viewport: Viewport = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [user, season, archivedSeason, resultCursorAtRender] =
+  const [user, season, hasHistory, publicReadSignals] =
     await Promise.all([
       getSessionUser(),
       getActiveSeason(),
-      prisma.season.findFirst({
-        where: { isActive: false },
-        select: { id: true },
-      }),
+      getPublicHasHistory(null),
       // This is the causality boundary for ResultSyncPing's first heartbeat.
       // If a concurrent request changes a result after this render, even a
       // heartbeat that loses the import claim can see the cursor advance and
       // refresh the stale RSC payload.
-      getSetting(SETTING_KEYS.RESULT_CHANGED_AT),
+      getPublicReadSignals(),
     ]);
-  const hasHistory = archivedSeason != null;
+  const resultCursorAtRender = publicReadSignals.resultChangedAt;
   const myTeam =
     user && season
       ? await prisma.teamMember.findFirst({

@@ -53,4 +53,36 @@ validation and PostgreSQL native-object postflight passed. Full final CI remains
 required after all stages. PostgreSQL test setup restored SQLite and removed its
 disposable database.
 
-Current status: stage 2 implementation beginning. No production changes made.
+Stage 2 implementation: shared, season-scoped public Game snapshots with a
+database revision committed alongside result changes; separate optional match
+context and team names; process-local coalescing bounded to 256 pending keys;
+complete uncached fallback above the 1.9 MB cache-envelope budget. Stable public
+history navigation is cached; session, membership, active-season authority and
+transactional eligibility reads remain fresh. Result scanning batches its two
+identity reads across fixtures. Enrichment uses source-JSON compare-and-swap.
+
+Diagnostics retain only bounded operation counts/timings, fixed provider kinds,
+and numeric Prisma engine counters. Private admin visibility distinguishes pool
+waits/timeouts from unreachable-database errors; raw queries, argument values,
+credentials and provider errors are excluded. Engine sampling is coalesced and
+limited to 250 ms so diagnostic failure cannot replace a query outcome.
+
+Measured Prisma datasource SQL statements per uncached data projection: season
+scores 1, recap 1, leaders 2, records 3. A trial nested snapshot required 4 even
+for scores and was replaced by flat queries. Twenty concurrent same-generation
+readers share one Game read in the tested process; different instances may each
+perform a cold read. Historical aggregation is still complete, not truncated;
+indexed participant queries are Stage 3 work.
+
+Stage 2 verification: 2,443 full-suite unit tests, type checks and lint
+passed; final cache-cap/navigation changes passed 16 focused tests. Eight SQLite
+integration suites passed 241 tests with five PostgreSQL-only cases; PostgreSQL
+passed all 246 with zero skips, and all eight migrations plus 17 required native
+objects passed postflight. Both US and EU passed all six import/cache browser
+checks, including first-response freshness before the original cache TTL and
+authorization isolation. A fixture-cleanup correction passed an additional cache
+test in both regions and left no owned records. SQLite/client restoration and
+disposable database removal were verified.
+
+Current status: Stage 3 historical participation implementation. No production
+changes made; all eight stages and final release gates remain required.
