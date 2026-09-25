@@ -30,6 +30,7 @@ import {
   draftRescheduledMessage,
   draftScheduledMessage,
   captainAssignedMessage,
+  playerAwayMessage,
   playerOutMessage,
   rescheduleDeclinedMessage,
   rescheduleProposedMessage,
@@ -660,6 +661,77 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
   });
 });
 
+describe("playerAwayMessage", () => {
+  const fixture = (week: number, whenMs: number | null, matchId?: string) => ({
+    homeName: "Radiant Raccoons",
+    awayName: "Dire Wolves",
+    week,
+    isPlayoff: false,
+    whenMs,
+    matchId,
+  });
+
+  it("sends nothing for an empty range", () => {
+    expect(playerAwayMessage("Dendi", [])).toBe("");
+  });
+
+  it("is exactly the one-match OUT message for a single fixture", () => {
+    // The captain reads the same words whichever way the player said it.
+    const one = fixture(4, 1_800_000_000_000, "m4");
+    expect(playerAwayMessage("Dendi", [one])).toBe(
+      playerOutMessage({ playerName: "Dendi", ...one }),
+    );
+  });
+
+  it("lists every fixture once, each with its reader-local kickoff and page", () => {
+    const msg = playerAwayMessage("Dendi", [
+      fixture(3, 1_800_000_000_000, "m3"),
+      fixture(4, 1_800_604_800_000, "m4"),
+      { ...fixture(5, null, "m5"), isPlayoff: true },
+    ]);
+    const lines = msg.split("\n");
+    expect(lines).toHaveLength(5); // header, three fixtures, footer
+    expect(lines[0]).toContain("**Dendi**");
+    expect(lines[0]).toContain("3 matches");
+    expect(lines[1]).toContain("Week 3 match");
+    expect(lines[1]).toContain("<t:1800000000:F>");
+    expect(lines[1]).toMatch(/<[^<>\s]*\/matches\/m3>/);
+    expect(lines[2]).toContain("<t:1800604800:F>");
+    expect(lines[3]).toContain("Playoff match");
+    expect(lines[3]).not.toContain("<t:");
+    expect(lines[4]).toContain("line up standins");
+  });
+
+  it("labels a tiebreaker like the one-match message does", () => {
+    const msg = playerAwayMessage("Dendi", [
+      { ...fixture(6, null), isTiebreaker: true },
+      fixture(7, null),
+    ]);
+    expect(msg).toContain("Tiebreaker match");
+  });
+
+  it("stays under Discord's limit however long the range, and says what it cut", () => {
+    const long = "x".repeat(32);
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      homeName: long,
+      awayName: long,
+      week: i + 1,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000 + i * 604_800_000,
+      matchId: `match-${i}`,
+    }));
+    const msg = playerAwayMessage(long, many);
+    // Room is left for the captain mentions sendDiscordMessage prepends.
+    expect(msg.length).toBeLessThanOrEqual(1_800);
+    expect(msg).toMatch(/…and \d+ more/);
+    const lines = msg.split("\n");
+    const shown = lines.filter((l) => l.includes("/matches/")).length;
+    const more = Number(/…and (\d+) more/.exec(msg)![1]);
+    expect(shown + more).toBe(40);
+    expect(lines[lines.length - 1]).toContain("line up standins");
+  });
+});
+
 describe("weekReminderMessage", () => {
   it("lists fixtures with reader-local timestamps, check-ins, and links", () => {
     const msg = weekReminderMessage({
@@ -1188,6 +1260,10 @@ describe("no message unfurls a link preview", () => {
         week: 1,
         isPlayoff: false,
       }),
+      playerAwayMessage("A", [
+        { homeName: "H", awayName: "W", week: 1, isPlayoff: false, whenMs: 1_800_000_000_000, matchId: "m1" },
+        { homeName: "H", awayName: "W", week: 2, isPlayoff: false, whenMs: null, matchId: "m2" },
+      ]),
       rescheduleProposedMessage({
         homeName: "H",
         awayName: "W",
@@ -1298,6 +1374,10 @@ describe("no player-supplied name can inject markdown", () => {
       week: 1,
       isPlayoff: false,
     }),
+    playerAwayMessage(EVIL, [
+      { homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: null },
+      { homeName: EVIL, awayName: EVIL, week: 2, isPlayoff: false, whenMs: 1_800_000_000_000, matchId: "m2" },
+    ]),
     rescheduleProposedMessage({
       homeName: EVIL,
       awayName: EVIL,
@@ -1428,6 +1508,12 @@ describe("no player-supplied name can inject markdown", () => {
       ],
     });
     expect(reminder.split("\n")).toHaveLength(4); // header, fixture, waiting, footer
+    // One line per fixture: a persona newline must not forge a fixture row.
+    const away = playerAwayMessage(nl, [
+      { homeName: nl, awayName: nl, week: 1, isPlayoff: false, whenMs: null },
+      { homeName: nl, awayName: nl, week: 2, isPlayoff: false, whenMs: null },
+    ]);
+    expect(away.split("\n")).toHaveLength(4); // header, two fixtures, footer
     // The slips block is one line per SIDE, so a newline in a persona would
     // forge a row and make the message lie about who was in the game.
     const slips = inhouseResultMessage({

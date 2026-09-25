@@ -1,6 +1,9 @@
 // Pure match-night RSVP math: given a team's roster and the recorded
 // availability rows, who's confirmed, who's out, and who hasn't answered.
 
+import { MATCH_STATUS } from "./constants";
+import { matchCheckinOpen, postAuctionWorkOpen } from "./league-lifecycle";
+
 export const AVAILABILITY = {
   IN: "IN",
   OUT: "OUT",
@@ -114,4 +117,78 @@ export function parseAvailabilityStatus(
   raw: string,
 ): AvailabilityStatus | null {
   return raw === AVAILABILITY.IN || raw === AVAILABILITY.OUT ? raw : null;
+}
+
+/**
+ * The per-match, per-player claimThrottle key behind every OUT announcement.
+ * One-match OUTs and "I'm away" ranges claim the SAME key, so saying it both
+ * ways inside RSVP_OUT_PING_THROTTLE_SECONDS pings the captain once.
+ */
+export function outPingThrottleKey(matchId: string, userId: string): string {
+  return `outPing:${matchId}:${userId}`;
+}
+
+/**
+ * Why a player can't answer a fixture's check-in. setAvailability refuses with
+ * the long message; the away-dates action reports a short label per fixture.
+ * One list, so the two paths can never disagree about who may answer.
+ */
+export const CHECKIN_REFUSAL = {
+  FINISHED: "FINISHED",
+  PHASE: "PHASE",
+  KICKOFF_PASSED: "KICKOFF_PASSED",
+  NO_KICKOFF: "NO_KICKOFF",
+  COVERED: "COVERED",
+  NOT_PLAYING: "NOT_PLAYING",
+  WITHDRAWN: "WITHDRAWN",
+  INELIGIBLE: "INELIGIBLE",
+} as const;
+
+export type CheckinRefusal =
+  (typeof CHECKIN_REFUSAL)[keyof typeof CHECKIN_REFUSAL];
+
+/** setAvailability's refusal copy, byte-for-byte what it has always said. */
+export const CHECKIN_REFUSAL_MESSAGE: Record<CheckinRefusal, string> = {
+  FINISHED: "That match is already finished",
+  PHASE: "Check-in is not open in this league phase",
+  KICKOFF_PASSED:
+    "Check-in is closed because that kickoff has passed — the result is still outstanding",
+  NO_KICKOFF: "That match does not have a kickoff yet",
+  COVERED:
+    "A standin is covering your seat for this match, so you are not in its playing roster",
+  NOT_PLAYING: "You're not playing in this match",
+  WITHDRAWN: "A withdrawn team cannot check in for this match.",
+  INELIGIBLE:
+    "You're not playing in this match — the roster or cover assignment changed.",
+};
+
+/**
+ * The fixture half of the check-in gate: null when `matchCheckinOpen` lets
+ * this fixture be answered, otherwise the most specific reason it can't be.
+ * The player half (roster seat, standin cover) needs the database — see
+ * `resolveCheckinSeat` in availability-service.ts.
+ */
+export function checkinClosedReason(
+  seasonStatus: string,
+  draftStatus: string | null | undefined,
+  match: { status: string; scheduledAt: Date | null },
+  nowMs: number,
+): CheckinRefusal | null {
+  if (
+    matchCheckinOpen(
+      seasonStatus,
+      draftStatus,
+      match.status,
+      match.scheduledAt,
+      nowMs,
+    )
+  ) {
+    return null;
+  }
+  if (match.status === MATCH_STATUS.COMPLETED) return CHECKIN_REFUSAL.FINISHED;
+  if (!postAuctionWorkOpen(seasonStatus, draftStatus)) {
+    return CHECKIN_REFUSAL.PHASE;
+  }
+  if (match.scheduledAt) return CHECKIN_REFUSAL.KICKOFF_PASSED;
+  return CHECKIN_REFUSAL.NO_KICKOFF;
 }

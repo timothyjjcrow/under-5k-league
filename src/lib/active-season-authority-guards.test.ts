@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const authorityFiles = [
   "src/app/actions/admin.ts",
   "src/app/actions/availability.ts",
+  "src/lib/availability-service.ts",
   "src/lib/reschedule-service.ts",
   "src/lib/result-sync-service.ts",
 ];
