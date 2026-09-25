@@ -139,7 +139,7 @@ export function CheckinBanner({
         className={
           panel
             ? "mt-3 grid grid-cols-2 gap-2 [&_button]:w-full [&_form]:min-w-0"
-            : "flex shrink-0 gap-2"
+            : "grid w-full min-w-0 grid-cols-1 gap-2 [&_button]:w-full sm:flex sm:w-auto sm:shrink-0 sm:[&_button]:w-auto"
         }
       >
         <ActionForm action={setAvailability} hidden={{ matchId, status: "IN", expectedScheduleRevision: String(scheduleRevision) }}>
