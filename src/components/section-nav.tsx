@@ -72,6 +72,8 @@ export function SectionNav({
   const resolvedHash = useRef("");
   useEffect(() => {
     const observed = new Set<string>();
+    const initialHash = window.location.hash.slice(1);
+    let mounted = true;
     resolvedHash.current = "";
     const resolveHash = () => {
       const id = window.location.hash.slice(1);
@@ -106,6 +108,20 @@ export function SectionNav({
     const mutations = new MutationObserver(observeSections);
     mutations.observe(document.body, { childList: true, subtree: true });
     observeSections();
+    // A reload with a hash can restore the old scroll position after the
+    // first reveal, leaving the heading behind the sticky header. Reapply
+    // the same destination once layout and fonts have settled.
+    const revealAfterPaint = () => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!mounted) return;
+        const id = window.location.hash.slice(1);
+        if (id === initialHash && items.some((item) => item.id === id))
+          revealSection(id, false);
+      }));
+    };
+    if (document.readyState === "complete") revealAfterPaint();
+    else window.addEventListener("load", revealAfterPaint, { once: true });
+    void document.fonts.ready.then(revealAfterPaint);
     const onHashChange = () => {
       resolvedHash.current = "";
       resolveHash();
@@ -114,8 +130,10 @@ export function SectionNav({
     window.addEventListener("popstate", onHashChange);
     window.addEventListener("section-ready", observeSections);
     return () => {
+      mounted = false;
       observer.disconnect();
       mutations.disconnect();
+      window.removeEventListener("load", revealAfterPaint);
       window.removeEventListener("hashchange", onHashChange);
       window.removeEventListener("popstate", onHashChange);
       window.removeEventListener("section-ready", observeSections);
