@@ -1105,7 +1105,7 @@ export default async function PlayerProfilePage({
                         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                           <span className="text-muted">Inhouse game</span>
                           <Link
-                            href={`/inhouse/history#result-${recentInhouse.id}`}
+                            href={`/inhouse/history?game=${recentInhouse.id}#result-${recentInhouse.id}`}
                             className="font-medium hover:text-info hover:underline"
                           >
                             <LocalTime
@@ -1654,7 +1654,7 @@ async function InhouseCareerCard({ userId }: { userId: string }) {
             return (
               <Link
                 key={lobby.id}
-                href={`/inhouse/history#result-${lobby.id}`}
+                href={`/inhouse/history?game=${lobby.id}#result-${lobby.id}`}
                 className="flex items-center gap-3 py-2 text-sm transition-colors hover:bg-surface-2/40"
               >
                 <span className="w-24 shrink-0 text-xs text-muted">

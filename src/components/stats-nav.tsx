@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { getSessionUser } from "@/lib/auth";
+import { textLink } from "@/components/ui";
 
 export type StatsSection = "leaders" | "meta" | "records" | "compare";
 
@@ -45,7 +47,22 @@ export function StatsNav({
   );
 }
 
-export function StatsDataNotice({
+type StatsDataNoticeProps = Parameters<typeof StatsDataNoticeBody>[0];
+
+/**
+ * Players see that some games are still being processed; the repair steps
+ * (remove, re-import, update the hero catalogue) are admin work, so only
+ * admins see them, with a link to the data-quality page.
+ */
+export async function StatsDataNotice(
+  props: Omit<StatsDataNoticeProps, "isAdmin">,
+) {
+  const viewer = await getSessionUser();
+  return <StatsDataNoticeBody {...props} isAdmin={viewer?.role === "ADMIN"} />;
+}
+
+export function StatsDataNoticeBody({
+  isAdmin = false,
   invalidLines,
   malformedGames,
   unusableGames = 0,
@@ -53,6 +70,7 @@ export function StatsDataNotice({
   unmappedLines = 0,
   invalidGameMetrics = 0,
 }: {
+  isAdmin?: boolean;
   invalidLines: number;
   malformedGames: number;
   /** Valid JSON that is empty, partial, or violates 5v5 uniqueness. */
@@ -73,6 +91,14 @@ export function StatsDataNotice({
     invalidGameMetrics === 0
   )
     return null;
+  if (!isAdmin) {
+    return (
+      <p className="mb-6 rounded-xl border border-line bg-surface-2/60 px-4 py-3 text-sm text-muted">
+        A few imported games are still being checked, so some stats may be
+        missing for now.
+      </p>
+    );
+  }
   const details = [
     malformedGames > 0
       ? `${malformedGames} game${malformedGames === 1 ? " has" : "s have"} unreadable player data`
@@ -110,9 +136,13 @@ export function StatsDataNotice({
           ? "Administrators should inspect the affected match, remove the bad import, and import that game again. "
           : ""}
         {unknownHeroLines > 0
-          ? "Unknown hero IDs require an update to the bundled hero catalogue."
+          ? "Unknown hero IDs require an update to the bundled hero catalogue. "
           : ""}
+        <Link href="/admin/data-quality" className={textLink("text-xs")}>
+          Open data quality →
+        </Link>
       </p>
+      <p className="mt-1 text-xs text-muted">Only admins see these details.</p>
     </div>
   );
 }

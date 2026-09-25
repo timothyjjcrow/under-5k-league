@@ -376,7 +376,12 @@ export default async function MePage({
               <RankBadge rankTier={dbUser?.rankTier} />
             </div>
             <a
-              href={dbUser?.profileUrl ?? "#"}
+              // A player whose Steam profile URL was never fetched still has
+              // a Steam id; "#" opened a blank tab.
+              href={
+                dbUser?.profileUrl ||
+                `https://steamcommunity.com/profiles/${encodeURIComponent(user.steamId)}`
+              }
               target="_blank"
               rel="noreferrer"
               className="break-all text-sm text-muted hover:text-fg"

@@ -1,3 +1,4 @@
+import { getSessionUser } from "@/lib/auth";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import {
   HeroMetaExplorer,
@@ -192,6 +193,7 @@ export default async function MetaPage({
   );
 
   if (meta.rows.length === 0) {
+    const viewerIsAdmin = (await getSessionUser())?.role === "ADMIN";
     return (
       <div className="space-y-6">
         {pageTitle}
@@ -207,8 +209,12 @@ export default async function MetaPage({
               ? unknownHeroLines > 0 &&
                 unusableGames === 0 &&
                 malformedGames === 0
-                ? "Games are imported, but their heroes are missing from the bundled catalogue. Update the hero catalogue before publishing this meta report."
-                : "Games are imported, but no trusted hero data is available. Inspect and re-import incomplete box scores; unknown hero IDs require a hero-catalogue update."
+                ? viewerIsAdmin
+                  ? "Games are imported, but their heroes are missing from the bundled catalogue. Update the hero catalogue before publishing this meta report."
+                  : "Games are imported, but their hero data is still being checked. The meta report fills in once it is."
+                : viewerIsAdmin
+                  ? "Games are imported, but no trusted hero data is available. Inspect and re-import incomplete box scores; unknown hero IDs require a hero-catalogue update."
+                  : "Games are imported, but their hero data is still being checked. The meta report fills in once it is."
               : "The meta report fills in once match games are imported."
           }
         />

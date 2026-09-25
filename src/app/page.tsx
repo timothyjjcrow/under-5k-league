@@ -2637,11 +2637,13 @@ async function LeaguePulse({
 }) {
   // Shared, tag-busted scan (cached-queries.ts) rather than a private copy of
   // the same query — an all-games roll-up repeated per request per viewer.
-  const [games, honorReadiness] = await Promise.all([
+  const [games, honorReadiness, viewer] = await Promise.all([
     getSeasonGameLeaders(seasonId),
     getSeasonHonorReadiness(seasonId),
+    getSessionUser(),
   ]);
   if (games.length === 0 && honorReadiness.length === 0) return null;
+  const viewerIsAdmin = viewer?.role === "ADMIN";
 
   const parsed = games.map((g) => {
     const decoded = decodeGamePlayers(g.players);
@@ -2739,11 +2741,23 @@ async function LeaguePulse({
             <span aria-hidden className="shrink-0">
               ⚠
             </span>
-            <span>
-              Some imported games are omitted from League pulse. Incomplete or
-              invalid 5v5 box scores must be inspected, removed, and
-              re-imported; unknown hero IDs require a hero-catalogue update.
-            </span>
+            {/* The repair steps are admin work; players only need to know
+                some games are not counted yet. */}
+            {viewerIsAdmin ? (
+              <span>
+                Some imported games are omitted from League pulse. Incomplete or
+                invalid 5v5 box scores must be inspected, removed, and
+                re-imported; unknown hero IDs require a hero-catalogue update.{" "}
+                <Link href="/admin/data-quality" className={textLink()}>
+                  Open data quality →
+                </Link>
+              </span>
+            ) : (
+              <span className="text-muted">
+                A few games are still being checked, so they are not counted
+                here yet.
+              </span>
+            )}
           </div>
         ) : null}
         {latestPending ? (
