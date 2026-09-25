@@ -145,6 +145,7 @@ async function archivedSeasonWithHistory() {
     data: [
       { key: `championAnnounced:${season.id}`, value: "sent" },
       { key: `weekReminder:${season.id}:1:123`, value: "sent" },
+      { key: `draftReminder:${season.id}:1`, value: "sent" },
       { key: `playoffRoundBuilt:${season.id}:2`, value: "done" },
       { key: `playoffGamesArchive:${season.id}`, value: "[]" },
       { key: `tiebreakerGamesArchive:${season.id}`, value: "[]" },
@@ -189,6 +190,12 @@ describe("deleteSeason", () => {
         where: seasonSettingScopeWhere(season.id, [match.id]),
       }),
     ).toBe(0);
+    // The scoped count above can't see a family the scope forgot to list.
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `draftReminder:${season.id}:1` },
+      }),
+    ).toBeNull();
     expect(
       await prisma.setting.findUnique({ where: { key: "discordWebhookUrl" } }),
     ).toMatchObject({ value: "global-setting-survives" });

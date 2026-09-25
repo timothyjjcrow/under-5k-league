@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   ANNOUNCE_FAILED_PREFIX,
   championAnnouncedKey,
+  draftReminderKey,
   honorsAnnouncedKey,
   honorsAnnouncedPrefix,
   resultAnnouncedKey,
@@ -108,6 +109,50 @@ describe("automation gate database reads", () => {
     expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
       nextWakeAtMs: NOW,
       reason: "REMINDER",
+    });
+  });
+
+  it("reads the draft-night reminder schedule and its current-revision marker", async () => {
+    await prisma.setting.create({
+      data: {
+        key: SETTING_KEYS.DISCORD_WEBHOOK_URL,
+        value: "https://discord.com/api/webhooks/123456/fake-test-token-123456",
+      },
+    });
+    const draftAt = NOW + 30 * 60 * 60_000;
+    const season = await makeSeason({
+      status: "SIGNUPS",
+      draftAt: new Date(draftAt),
+      draftRevision: 2,
+    });
+
+    // Outside the window: the worker is told to wake exactly when it opens.
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: draftAt - 24 * 60 * 60_000,
+      reason: "REMINDER",
+    });
+
+    // Inside it, only the CURRENT revision's marker counts as done.
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { draftAt: new Date(NOW + 2 * 60 * 60_000) },
+    });
+    await prisma.setting.create({
+      data: { key: draftReminderKey(season.id, 1), value: "sent:v2:old:1" },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "REMINDER",
+    });
+    await prisma.setting.create({
+      data: {
+        key: draftReminderKey(season.id, 2),
+        value: "sent:v2:11111111-1111-4111-8111-111111111111:1",
+      },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      reason: null,
     });
   });
 

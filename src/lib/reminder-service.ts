@@ -4,10 +4,13 @@ import { prisma } from "./prisma";
 import {
   MATCH_PHASE,
   MATCH_STATUS,
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
   SEASON_STATUS,
   WEEK_REMINDER,
 } from "./constants";
 import {
+  draftReminderAnnouncement,
   getWebhookUrl,
   sendDiscordMessage,
   weekReminderAnnouncement,
@@ -17,7 +20,9 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "./availability";
-import { weekReminderKey } from "./settings";
+import { draftReminderKey, weekReminderKey } from "./settings";
+import { draftReminderDue } from "./draft-setup";
+import { DRAFT_READINESS, draftReadiness } from "./draft-readiness";
 import { raceHook } from "./race-hook";
 import { mentionsOf } from "./discord-mentions";
 import {
@@ -237,6 +242,175 @@ export async function maybeAnnounceUpcomingWeek(season: {
     // else, so a team name or persona in the same message stays inert. The
     // builder omits these ids whenever their fixture/waiter line cannot fit in
     // Discord's 2,000-character body limit.
+    mentionsOf(announcement.mentionUserIds),
+    {
+      dedupeKey: announcementDedupeKey("reminder", claim),
+      marker: { key: claim.key, eventId: claim.eventId },
+    },
+  );
+  if (!sent) {
+    await markAnnouncementFailed(claim);
+    return false;
+  }
+  return markAnnouncementSent(claim);
+}
+
+/**
+ * Scheduled draft-night reminder: the first automation pass after the draft
+ * enters the DRAFT_REMINDER window posts the time (reader-local <t:…:F> and
+ * <t:…:R>), the pool and captain counts, and links to the draft room and the
+ * signup page. It mentions the designated captains (the auction cannot run
+ * without them) and the linked players who haven't confirmed THIS draft time.
+ *
+ * Due only while setup is open (SIGNUPS, or DRAFT with the auction not yet
+ * started) and draftAt is still ahead; draftReminderDue is the one definition
+ * of that window, shared with the automation gate. Announced at most once per
+ * draftAt REVISION: the marker key carries season + draftRevision, so moving
+ * the draft re-arms the reminder under a fresh key, and setDraftNight
+ * invalidates any in-flight claim or queued send for the old time. The claim
+ * machinery is the week reminder's: an atomic CREATE, a lease that recovers a
+ * process death, and a failed send that stays retryable instead of eating the
+ * announcement. No webhook returns before the claim, so it never burns one.
+ */
+export async function maybeAnnounceDraftNight(season: {
+  id: string;
+  status: string;
+  draftAt: Date | null;
+  draftRevision: number;
+}): Promise<boolean> {
+  if (
+    season.status !== SEASON_STATUS.SIGNUPS &&
+    season.status !== SEASON_STATUS.DRAFT
+  ) {
+    return false;
+  }
+  const now = Date.now();
+  const draftAtMs = season.draftAt?.getTime() ?? null;
+  // Cheap pre-check before any IO; the real Draft status is read below.
+  if (
+    draftAtMs == null ||
+    !draftReminderDue(season.status, null, draftAtMs, now)
+  ) {
+    return false;
+  }
+  if (!(await getWebhookUrl())) return false;
+
+  const markerKey = draftReminderKey(season.id, season.draftRevision);
+  const [draft, existing] = await Promise.all([
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
+    prisma.setting.findUnique({
+      where: { key: markerKey },
+      select: { value: true },
+    }),
+  ]);
+  if (!draftReminderDue(season.status, draft?.status, draftAtMs, now)) {
+    return false;
+  }
+  if (existing && !recoverableAnnouncementMarker(existing.value, now)) {
+    return false;
+  }
+
+  const claim = await claimAnnouncementMarker(markerKey, now);
+  if (!claim) return false;
+
+  // Test seam: between the probe above and the re-read below, an admin can
+  // move the draft (setDraftNight) or press Start (startDraft).
+  await raceHook("draftReminder.afterClaim");
+
+  // Re-read everything the message states AFTER the claim, so the post can't
+  // quote a time or a pool that changed while this run was deciding.
+  const [current, currentDraft, registrations, teams] = await Promise.all([
+    prisma.season.findUnique({
+      where: { id: season.id },
+      select: {
+        name: true,
+        status: true,
+        isActive: true,
+        draftAt: true,
+        draftRevision: true,
+      },
+    }),
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
+    prisma.registration.findMany({
+      where: {
+        seasonId: season.id,
+        status: REGISTRATION_STATUS.ACTIVE,
+        type: REGISTRATION_TYPE.PLAYER,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: {
+        userId: true,
+        draftConfirmedRevision: true,
+        draftConfirmedAt: true,
+        user: { select: { name: true, discordId: true } },
+      },
+    }),
+    prisma.team.findMany({
+      where: { seasonId: season.id },
+      orderBy: [{ draftOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: {
+        captainId: true,
+        captain: { select: { name: true, discordId: true } },
+      },
+    }),
+  ]);
+  const currentDraftAtMs = current?.draftAt?.getTime() ?? null;
+  if (
+    !current?.isActive ||
+    current.draftRevision !== season.draftRevision ||
+    currentDraftAtMs !== draftAtMs ||
+    !draftReminderDue(
+      current.status,
+      currentDraft?.status,
+      currentDraftAtMs,
+      Date.now(),
+    )
+  ) {
+    // Release rather than burn: a moved draft re-arms under its own revision
+    // key, and a started auction or archived season never passes the probe
+    // above again, so releasing cannot loop.
+    await releaseAnnouncementClaim(claim);
+    return false;
+  }
+
+  // Captains are always named on their own line, so they're left out of the
+  // unconfirmed list rather than printed (and counted) twice. Linked players
+  // sort first so the capped unconfirmed slots go to people a mention reaches.
+  const captainIds = new Set(teams.map((t) => t.captainId));
+  const unconfirmed = registrations.filter(
+    (r) =>
+      !captainIds.has(r.userId) &&
+      draftReadiness(r, current.draftRevision) !== DRAFT_READINESS.READY,
+  );
+  const linkedFirst = [
+    ...unconfirmed.filter((r) => r.user.discordId),
+    ...unconfirmed.filter((r) => !r.user.discordId),
+  ];
+
+  const announcement = draftReminderAnnouncement({
+    seasonName: current.name,
+    draftAtMs: currentDraftAtMs!,
+    playerSignupsOpen: current.status === SEASON_STATUS.SIGNUPS,
+    playerCount: registrations.length,
+    captains: teams.map((t) => ({
+      name: t.captain.name,
+      discordId: t.captain.discordId,
+    })),
+    unconfirmed: linkedFirst.map((r) => ({
+      name: r.user.name,
+      discordId: r.user.discordId,
+    })),
+  });
+  const sent = await sendDiscordMessage(
+    announcement.content,
+    // Exactly the ids visibly named in the post; parse:[] still blocks every
+    // other mention, so a persona in the same message stays inert.
     mentionsOf(announcement.mentionUserIds),
     {
       dedupeKey: announcementDedupeKey("reminder", claim),

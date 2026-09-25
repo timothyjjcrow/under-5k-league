@@ -805,6 +805,142 @@ export function weekReminderMessage(m: WeekReminderInput): string {
   return weekReminderAnnouncement(m).content;
 }
 
+/**
+ * Name at most this many unconfirmed players in the draft-night reminder.
+ * The post goes to the whole league channel, and one that is mostly a column
+ * of pings reads as spam and gets the channel muted, which costs every later
+ * announcement too (the WAITING_SHOWN argument). Twenty still covers every
+ * straggler in a typical 4-6 team pool, where most players have already
+ * confirmed; past it the line states how many more, and the admin card lists
+ * every one of them for a personal chase. The service orders linked players
+ * first, so the capped slots go to people a mention can actually reach.
+ */
+const DRAFT_UNCONFIRMED_SHOWN = 20;
+
+export type DraftReminderPerson = { name: string; discordId: string | null };
+
+export type DraftReminderInput = {
+  /** Admin-authored, so not escaped (the draftScheduledMessage rule). */
+  seasonName: string;
+  /** Epoch ms of Season.draftAt; rendered as <t:…> so readers see their zone. */
+  draftAtMs: number;
+  /** Season still in SIGNUPS: new PLAYER signups close when the auction starts
+   *  (startDraft moves the season to DRAFT; registrationGate then refuses). */
+  playerSignupsOpen: boolean;
+  /** ACTIVE PLAYER registrations, captains included. */
+  playerCount: number;
+  /** Designated captains in draft order. Always mentioned where linked: they
+   *  are the people the auction cannot run without. */
+  captains: DraftReminderPerson[];
+  /** Non-captain ACTIVE players who haven't confirmed the CURRENT draftAt
+   *  revision, in the order they should be shown. */
+  unconfirmed: DraftReminderPerson[];
+};
+
+export type DraftReminderAnnouncement = {
+  content: string;
+  /** Exact linked users visibly named in `content` (see WeekReminderAnnouncement). */
+  mentionUserIds: string[];
+};
+
+/**
+ * The draft-night reminder, with its mention allowlist built from exactly the
+ * names that survived packing into Discord's 2,000-character limit. Captains
+ * are packed first (the draft needs them), then unconfirmed players up to
+ * DRAFT_UNCONFIRMED_SHOWN; anyone who doesn't fit is counted, never pinged.
+ */
+export function draftReminderAnnouncement(
+  m: DraftReminderInput,
+): DraftReminderAnnouncement {
+  const site = resolveSiteUrl();
+  const t = Math.floor(m.draftAtMs / 1000);
+  const captainCount = m.captains.length;
+  const unconfirmedCount = m.unconfirmed.length;
+  const header = `⏰ **Draft night reminder: the ${m.seasonName} draft is scheduled for <t:${t}:F> (<t:${t}:R>).**`;
+  const counts =
+    `**${m.playerCount}** player${m.playerCount === 1 ? "" : "s"} signed up, ` +
+    `**${captainCount}** captain${captainCount === 1 ? "" : "s"} designated. ` +
+    (m.playerSignupsOpen
+      ? "Player signups stay open until the auction starts."
+      : "Player signups are closed; standins can still sign up.");
+  const footer = `Draft room: <${site}/draft> · Signup page: <${site}/me>`;
+
+  const mentionable = (p: DraftReminderPerson): string | null => {
+    const id = p.discordId?.trim();
+    return id && normalizeMentionAllowlist({ users: [id] }) ? id : null;
+  };
+  const who = (people: DraftReminderPerson[], shown: number): string => {
+    const names = people
+      .slice(0, shown)
+      .map((p) => {
+        const id = mentionable(p);
+        return id ? `<@${id}>` : name(p.name);
+      })
+      .join(", ");
+    const extra = people.length - shown;
+    return `${names}${extra > 0 ? ` +${extra} more` : ""}`;
+  };
+  const render = (captainsShown: number, unconfirmedShown: number): string => {
+    const lines = [header, counts];
+    if (captainCount > 0) {
+      lines.push(
+        captainsShown > 0
+          ? `Captains, be in the draft room before the auction starts: ${who(m.captains, captainsShown)}`
+          : "Captains, be in the draft room before the auction starts.",
+      );
+    }
+    if (unconfirmedCount > 0) {
+      lines.push(
+        unconfirmedShown > 0
+          ? `Still to confirm this draft time (${unconfirmedCount}): ${who(m.unconfirmed, unconfirmedShown)}. Confirm on the signup page.`
+          : `${unconfirmedCount} player${unconfirmedCount === 1 ? " is" : "s are"} still to confirm this draft time. Confirm on the signup page.`,
+      );
+    }
+    lines.push(footer);
+    return lines.join("\n");
+  };
+  const fits = (content: string) => content.length <= DISCORD_CONTENT_MAX;
+
+  if (!fits(render(0, 0))) {
+    // Defensive last resort for corrupted/unbounded input (an absurd season
+    // name or site URL). Deliverable and explicit, and it names nobody, so
+    // nobody is allowlisted.
+    return {
+      content: `⏰ **Draft night reminder: the draft is scheduled for <t:${t}:F> (<t:${t}:R>).** Captains and players, check the league site for the draft room and signups.`,
+      mentionUserIds: [],
+    };
+  }
+  let captainsShown = 0;
+  while (
+    captainsShown < captainCount &&
+    fits(render(captainsShown + 1, 0))
+  ) {
+    captainsShown += 1;
+  }
+  const unconfirmedLimit = Math.min(unconfirmedCount, DRAFT_UNCONFIRMED_SHOWN);
+  let unconfirmedShown = 0;
+  while (
+    unconfirmedShown < unconfirmedLimit &&
+    fits(render(captainsShown, unconfirmedShown + 1))
+  ) {
+    unconfirmedShown += 1;
+  }
+
+  const content = render(captainsShown, unconfirmedShown);
+  const mentionUserIds = [
+    ...new Set(
+      [
+        ...m.captains.slice(0, captainsShown),
+        ...m.unconfirmed.slice(0, unconfirmedShown),
+      ].flatMap((p) => {
+        const id = mentionable(p);
+        return id ? [id] : [];
+      }),
+    ),
+  ];
+  return { content, mentionUserIds };
+}
+
 export function weeklyHonorsMessage(honors: {
   week: number;
   playerName: string | null;
