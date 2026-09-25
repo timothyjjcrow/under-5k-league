@@ -24,6 +24,7 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
+import { ImportProgress } from "@/components/import-progress";
 import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
@@ -222,7 +223,7 @@ export const metadata = { title: "Admin" };
 // 60s is the Hobby-plan ceiling; the actions themselves stop well before it.
 export const maxDuration = 60;
 
-export default async function AdminPage({ searchParams }: { searchParams: Promise<{ newsPage?: string | string[] }> }) {
+export default async function AdminPage({ searchParams }: { searchParams: Promise<{ newsPage?: string | string[]; importPage?: string | string[] }> }) {
   const user = await getSessionUser();
   if (!user) redirect("/login?next=/admin");
   if (user.role !== "ADMIN") {
@@ -340,6 +341,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </AdminAnchor>
           <AdminAnchor id="adm-sync">
             <AutoSyncHealth season={season} />
+            <Suspense fallback={<CardSkeleton rows={3} />}>
+              <ImportProgress seasonId={season.id} page={(await searchParams).importPage} query={await searchParams} />
+            </Suspense>
           </AdminAnchor>
           {season.status !== "SIGNUPS" && season.status !== "DRAFT" ? setupControls : null}
           <LeagueControls season={season} />

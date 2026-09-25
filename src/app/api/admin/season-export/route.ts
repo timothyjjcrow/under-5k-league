@@ -36,6 +36,7 @@ async function readSeasonArchive(
     fantasyRosters,
     reschedules,
     adminActions,
+    importSuppressions,
   ] = await Promise.all([
     tx.registration.findMany({
       where: { seasonId },
@@ -79,6 +80,10 @@ async function readSeasonArchive(
     tx.rescheduleRequest.findMany({ where: { match: { seasonId } } }),
     // Relationless by design: audit history survives a season deletion.
     tx.adminAction.findMany({
+      where: { seasonId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    tx.importSuppression.findMany({
       where: { seasonId },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
@@ -196,6 +201,7 @@ async function readSeasonArchive(
     reschedules,
     settings,
     adminActions,
+    importSuppressions,
   };
 }
 
@@ -268,7 +274,7 @@ export async function GET(req: NextRequest) {
   }
 
   const core = {
-    formatVersion: 3,
+    formatVersion: 4,
     artifactPurpose: "AUDIT_ARCHIVE_ONLY",
     restorable: false,
     recoveryWarning:
@@ -290,6 +296,7 @@ export async function GET(req: NextRequest) {
       fantasyRosters: archive.fantasyRosters.length,
       settings: archive.settings.length,
       adminActions: archive.adminActions.length,
+      importSuppressions: archive.importSuppressions.length,
     },
   };
   const digest = createHash("sha256")

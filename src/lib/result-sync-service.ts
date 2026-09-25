@@ -224,7 +224,7 @@ async function syncDueMatches(
         signal: options.signal,
       });
       leagueImported = res.imported;
-      if (res.unreachable || res.deadlineReached) {
+      if (res.unreachable || res.deadlineReached || res.pending) {
         // Roll our own claim back so the next tick can retry immediately —
         // otherwise every outage tick costs one full throttle interval (the
         // roster path's rollback pattern). Value-scoped to the exact ISO
@@ -376,7 +376,7 @@ async function syncDueMatches(
         where: { id: m.id },
         data: { autoSyncAttempts: 0 },
       });
-    } else if (res.unreachable) {
+    } else if (res.unreachable && !res.deadlineReached && !res.pending) {
       // OpenDota was down or rate-limiting, so finding nothing proves nothing.
       // Roll the speculative increment back — otherwise a brief outage pushed
       // every match of the night into hours-long backoff and the results only
@@ -384,6 +384,19 @@ async function syncDueMatches(
       await prisma.match.update({
         where: { id: m.id },
         data: { autoSyncAttempts: { decrement: 1 } },
+      });
+    }
+    if (res.pending && !res.deadlineReached && res.imported === 0) {
+      // Durable retry/review work is not an empty scan, but it DID have its
+      // turn. Keep this scan's fairness cursor so one quarantined fixture
+      // cannot repeatedly beat unrelated fixtures to the oldest-first slot.
+      await prisma.match.updateMany({
+        where: {
+          id: m.id,
+          autoSyncedAt: new Date(nowMs),
+          autoSyncAttempts: m.autoSyncAttempts + 1,
+        },
+        data: { autoSyncAttempts: m.autoSyncAttempts },
       });
     }
     if (res.deadlineReached) {

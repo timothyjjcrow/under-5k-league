@@ -72,6 +72,8 @@ export async function resetDb() {
   await prisma.newsPost.deleteMany();
   // DotaMatchClaim is intentionally polymorphic and has no FK to either Game
   // or ScrimGame, so neither event cascade can clear the shared ownership row.
+  await prisma.importCandidate.deleteMany();
+  await prisma.importSuppression.deleteMany();
   await prisma.dotaMatchClaim.deleteMany();
   await prisma.game.deleteMany();
   await prisma.standinAssignment.deleteMany();

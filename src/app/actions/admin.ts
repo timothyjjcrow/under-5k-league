@@ -5172,8 +5172,9 @@ export async function removeGame(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let admin: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    admin = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -5220,14 +5221,6 @@ export async function removeGame(
   const resultLock = await matchResultLockReason(prisma, game.match);
   if (resultLock) return { error: resultLock };
 
-  // Remember the removal BEFORE deleting the row. Both importers decide
-  // "already recorded" from the Game rows themselves, so without this the next
-  // /api/sync ping — from any page view, the admin's own tab included — simply
-  // re-imported the game, undoing the correction inside a minute with no error
-  // anywhere. Skip-first is what closes the gap: while the row still exists the
-  // unique dotaMatchId refuses a racing import, so there is no instant in which
-  // the game is both importable and unremembered.
-  await rememberImportSkip(game.match.seasonId, game.dotaMatchId);
 
   let corrected: {
     matchId: string;
@@ -5256,6 +5249,8 @@ export async function removeGame(
                 phase: true,
                 bracketSlot: true,
                 status: true,
+                homeScore: true,
+                awayScore: true,
                 bestOf: true,
                 homeTeamId: true,
                 awayTeamId: true,
@@ -5350,6 +5345,9 @@ export async function removeGame(
             data: { fantasyLockedAt: new Date() },
           });
         }
+        // The exclusion and removal are one correction: concurrent removals
+        // cannot overwrite each other's IDs and a rollback leaves neither.
+        await rememberImportSkip(match.seasonId, fresh.dotaMatchId, tx);
         const removed = await tx.game.deleteMany({ where: { id: fresh.id } });
         if (removed.count === 0) {
           throw new ResultWriteError("That game is already gone");
@@ -5421,6 +5419,19 @@ export async function removeGame(
         if (match.phase === MATCH_PHASE.REGULAR) {
           await markWeekHonorsStale(tx, match.seasonId, match.week);
         }
+        // A consequential correction and its actor/history are one command.
+        // If the required audit cannot be stored, the game and suppression
+        // roll back together instead of leaving an untraceable correction.
+        await raceHook("admin.removeGame.beforeAudit");
+        await tx.adminAction.create({
+          data: {
+            actorId: admin.id,
+            actorName: admin.name,
+            action: "removeGame",
+            seasonId: match.seasonId,
+            summary: `Removed Dota game ${fresh.dotaMatchId} from fixture ${match.id} (week ${match.week}); score ${match.homeScore}-${match.awayScore} → ${projection.homeScore}-${projection.awayScore}`.slice(0, 500),
+          },
+        });
         const changedAt = new Date().toISOString();
         await tx.setting.upsert({
           where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
@@ -5452,7 +5463,7 @@ export async function removeGame(
   }
 
   // The deletion is already committed. Expire every public game aggregate
-  // before attempting Discord, honors, bracket, or audit follow-ups so a
+  // before attempting Discord, honors, or bracket follow-ups so a
   // transient secondary failure can never leave the removed game publicly
   // visible while the action misleadingly reports a generic failure.
   const followUpFailures: string[] = [];
@@ -5536,13 +5547,6 @@ export async function removeGame(
       );
     }
   }
-  await runFollowUp("admin audit log", () =>
-    logAdminAction({
-      action: "removeGame",
-      summary: `Removed imported game ${game.dotaMatchId} from a week ${game.match.week} match`,
-      seasonId: game.match.seasonId,
-    }),
-  );
   const followUpWarning =
     followUpFailures.length > 0
       ? ` The removal is saved, but ${followUpFailures.join(

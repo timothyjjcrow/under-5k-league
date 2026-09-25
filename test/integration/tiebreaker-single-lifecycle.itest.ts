@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), updateTag: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), getSessionUser: vi.fn(async () => null) }));
+vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })), getSessionUser: vi.fn(async () => null) }));
 vi.mock("@/lib/discord", async (original) => ({
   ...(await original<typeof import("@/lib/discord")>()),
   getWebhookUrl: vi.fn(async () => ""),

@@ -15,7 +15,7 @@ vi.mock("next/cache", () => ({
   updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
-  requireAdmin: vi.fn(),
+  requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })),
   requireUser: vi.fn(),
   // logAdminAction resolves the actor itself; an undefined mock throws inside
   // its try/catch and silently skips the rows the forfeit test asserts on.
@@ -245,6 +245,19 @@ describe("removeGame — the removal must survive automatic re-import", () => {
     const skips = await loadImportSkips(season.id);
     expect(skips.has("777001")).toBe(true);
     expect(await getSetting(honorsMarker)).toMatch(/^stale:/);
+    expect(await prisma.adminAction.findMany({ where: { action: "removeGame" } })).toEqual([
+      expect.objectContaining({ actorId: "test-admin", actorName: "Test administrator", seasonId: season.id, summary: expect.stringContaining("777001") }),
+    ]);
+  });
+
+  it("rolls back the removal and suppression if the required audit boundary fails", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const game = await addGameToMatch(matches[0].id, "777001-audit-failure", matches[0].homeTeamId);
+    setRaceHook(onceAt("admin.removeGame.beforeAudit", async () => { throw new Error("required audit unavailable"); }));
+    await expect(removeGame(empty, fd({ gameId: game.id }))).rejects.toThrow("required audit unavailable");
+    expect(await prisma.game.findUnique({ where: { id: game.id } })).not.toBeNull();
+    expect(await prisma.importSuppression.count({ where: { seasonId: season.id } })).toBe(0);
+    expect(await prisma.adminAction.count({ where: { action: "removeGame" } })).toBe(0);
   });
 
   it("does not reopen Fantasy when the last legacy game is removed", async () => {
@@ -338,7 +351,7 @@ describe("removeGame — the removal must survive automatic re-import", () => {
     expect(vi.mocked(updateTag)).toHaveBeenCalledWith("games");
   });
 
-  it("keeps the memory per-season and bounded, not per-match", async () => {
+  it("keeps intentional exclusions per-season without evicting prior removals", async () => {
     const { season, matches } = await seasonWithSchedule();
     const a = await addGameToMatch(
       matches[0].id,
@@ -356,7 +369,7 @@ describe("removeGame — the removal must survive automatic re-import", () => {
     expect([...skips].sort()).toEqual(["777003", "777004"]);
   });
 
-  it("tolerates corrupt skip memory rather than failing the removal", async () => {
+  it("records a removal independently but fails automatic reads closed for corrupt legacy memory", async () => {
     const { season, matches } = await seasonWithSchedule();
     await setSetting(`importSkip:${season.id}`, "{not json");
     const game = await addGameToMatch(
@@ -366,7 +379,8 @@ describe("removeGame — the removal must survive automatic re-import", () => {
     );
     const res = await removeGame(empty, fd({ gameId: game.id }));
     expect(res?.error).toBeUndefined();
-    expect(await loadImportSkips(season.id)).toEqual(new Set(["777005"]));
+    expect(await prisma.importSuppression.findUnique({ where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: "777005" } } })).not.toBeNull();
+    await expect(loadImportSkips(season.id)).rejects.toThrow();
   });
 
   it("deletes the game, recomputes the series, clears the ruling, and bumps the cursor together", async () => {

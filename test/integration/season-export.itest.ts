@@ -177,6 +177,13 @@ async function stageSeason(name: string, isActive = true) {
       seasonId: season.id,
     },
   });
+  await prisma.importSuppression.create({
+    data: { seasonId: season.id, dotaMatchId: `${name}-excluded`, reason: "ADMIN_REMOVAL" },
+  });
+  await prisma.importCandidate.create({
+    data: { seasonId: season.id, dotaMatchId: `${name}-pending`, payload: "PRIVATE_TRANSIENT_EVIDENCE",
+      expiresAt: new Date(Date.now() + 60_000) },
+  });
   return {
     season,
     home,
@@ -228,7 +235,7 @@ describe("GET /api/admin/season-export", () => {
     );
 
     const body = await res.json();
-    expect(body.formatVersion).toBe(3);
+    expect(body.formatVersion).toBe(4);
     expect(body.artifactPurpose).toBe("AUDIT_ARCHIVE_ONLY");
     expect(body.restorable).toBe(false);
     expect(body.recoveryWarning).toMatch(/cannot restore/i);
@@ -360,6 +367,12 @@ describe("GET /api/admin/season-export", () => {
     );
     expect(body.adminActions).toHaveLength(1);
     expect(body.adminActions[0].summary).toContain("Alpha");
+    expect(body.importSuppressions).toHaveLength(1);
+    expect(body.importSuppressions[0]).toMatchObject({
+      seasonId: a.season.id, dotaMatchId: "Alpha-excluded", reason: "ADMIN_REMOVAL",
+    });
+    expect(body).not.toHaveProperty("importCandidates");
+    expect(JSON.stringify(body)).not.toContain("PRIVATE_TRANSIENT_EVIDENCE");
 
     expect(body.counts).toEqual({
       users: 5,
@@ -377,6 +390,7 @@ describe("GET /api/admin/season-export", () => {
       fantasyRosters: 1,
       settings: 2,
       adminActions: 1,
+      importSuppressions: 1,
     });
   });
 

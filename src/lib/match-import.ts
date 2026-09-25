@@ -6,6 +6,7 @@ import {
   fetchLeagueMatchIds,
   canStartOpenDotaFetch,
   openDotaBudgetExpired,
+  OPEN_DOTA_MATCH_TIMEOUT_MS,
   type OpenDotaMatch,
   type OpenDotaPlayer,
   type OpenDotaFetchOptions,
@@ -25,7 +26,6 @@ import {
   getSetting,
   leagueSyncSkipKey,
   resultAnnouncedKey,
-  setSetting,
   SETTING_KEYS,
   weekReminderKey,
   claimProviderCooldown,
@@ -56,6 +56,19 @@ import {
   eligibleScrimMeetingKickoffs,
   isWithinScrimResultWindow,
 } from "./scrim-window";
+import {
+  expireImportCandidates,
+  hasFinalImportDetails,
+  IMPORT_COMMIT_RESERVE_MS,
+  loadImportCandidates,
+  loadImportSuppressions,
+  readImportEvidence,
+  recordImportDecision,
+  recordImportFetchFailure,
+  rememberImportSuppression,
+  saveImportEvidence,
+  type ImportCandidateSnapshot,
+} from "./import-candidates";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
@@ -292,16 +305,7 @@ function hasFinalLeagueMatchDetails(
   match: OpenDotaMatch,
   expectedMatchId: number,
 ): boolean {
-  return (
-    match.match_id === expectedMatchId &&
-    Number.isFinite(match.start_time) &&
-    match.start_time > 0 &&
-    Number.isFinite(match.duration) &&
-    match.duration > 0 &&
-    typeof match.radiant_win === "boolean" &&
-    Array.isArray(match.players) &&
-    match.players.length >= 10
-  );
+  return hasFinalImportDetails(match, expectedMatchId);
 }
 
 /** Max gap between consecutive games of one series. A real Bo2/Bo3 is played
@@ -461,7 +465,10 @@ type MatchRow = {
 };
 
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
-export async function gatherTeamAccounts(match: MatchRow) {
+export async function gatherTeamAccounts(
+  match: MatchRow,
+  db: Pick<Prisma.TransactionClient, "season" | "teamMember" | "standinAssignment" | "registration"> = prisma,
+) {
   // Select-narrowed: this runs on every import AND every auto-sync roster
   // scan, and only the identity fields read by `add` are selected.
   const userSelect = {
@@ -472,18 +479,18 @@ export async function gatherTeamAccounts(match: MatchRow) {
     legacyDotaAccountId: true,
   } as const;
   const [season, members, standins, registrants] = await Promise.all([
-    prisma.season.findUnique({
+    db.season.findUnique({
       where: { id: match.seasonId },
       select: { teamSize: true },
     }),
-    prisma.teamMember.findMany({
+    db.teamMember.findMany({
       where: {
         seasonId: match.seasonId,
         teamId: { in: [match.homeTeamId, match.awayTeamId] },
       },
       select: { teamId: true, user: { select: userSelect } },
     }),
-    prisma.standinAssignment.findMany({
+    db.standinAssignment.findMany({
       where: { matchId: match.id },
       select: { teamId: true, standin: { select: userSelect } },
     }),
@@ -491,7 +498,7 @@ export async function gatherTeamAccounts(match: MatchRow) {
     // has no TeamMember row anymore, but their line should still carry their
     // userId (career, fantasy, honors). They stay OUT of the team account
     // sets, so classifyGame remains roster-strict.
-    prisma.registration.findMany({
+    db.registration.findMany({
       where: { seasonId: match.seasonId },
       select: { user: { select: userSelect } },
     }),
@@ -598,7 +605,11 @@ export type PlayerStat = ReturnType<typeof buildPlayers>[number];
  * changed under it during the OpenDota fetch. A throw, not a return: the
  * callback's resolution would COMMIT, and the point is to roll back.
  */
-class ImportRaceError extends Error {}
+class ImportRaceError extends Error {
+  constructor(message: string, readonly code: ImportFailureCode = "STALE_FIXTURE") {
+    super(message);
+  }
+}
 
 // PostgreSQL can abort this Serializable write when a reminder is claimed or
 // finalized at the same moment the first game moves a fixture out of
@@ -790,9 +801,16 @@ export async function recomputeSeries(matchId: string) {
   }
 }
 
+export type ImportFailureCode =
+  | "RETRYABLE"
+  | "STALE_FIXTURE"
+  | "OWNED_ELSEWHERE"
+  | "ADMIN_SUPPRESSED"
+  | "INVALID_PAYLOAD";
+
 export type ImportResult =
   | ({ ok: true; downstreamPending?: boolean } & SeriesProjection)
-  | { ok: false; error: string; deadlineReached?: boolean };
+  | { ok: false; error: string; code?: ImportFailureCode; deadlineReached?: boolean };
 
 export type ImportGameOptions = {
   /** Re-assert captaincy in the decisive write snapshot after OpenDota I/O. */
@@ -806,7 +824,52 @@ export type ImportGameOptions = {
   signal?: AbortSignal;
   /** Internal league-scan handoff: a finalized provider row already fetched. */
   prefetchedLeagueMatch?: OpenDotaMatch;
+  /** Automatic scans recheck intentional exclusions in the write snapshot. */
+  respectImportSkips?: boolean;
 };
+
+/** Re-run in the decisive Serializable snapshot; no transaction spans provider IO. */
+async function fixtureWindowFailure(
+  db: Pick<Prisma.TransactionClient, "match" | "scrim">,
+  match: { id: string; seasonId: string; homeTeamId: string; awayTeamId: string; scheduledAt: Date | null },
+  od: OpenDotaMatch,
+): Promise<string | null> {
+  if (!match.scheduledAt) {
+    return "This fixture has no kickoff time, so the site cannot verify which meeting this game belongs to — ask an admin to import it";
+  }
+  const kickoffMs = match.scheduledAt.getTime();
+  if (!isWithinLeagueResultWindow(od.start_time, kickoffMs)) {
+    return "That Dota game is outside this fixture's result window — ask an admin if the kickoff was recorded incorrectly";
+  }
+  const [otherMeetings, scrimMeetings] = await Promise.all([
+    db.match.findMany({
+      where: {
+        seasonId: match.seasonId, id: { not: match.id }, scheduledAt: { not: null },
+        OR: [
+          { homeTeamId: match.homeTeamId, awayTeamId: match.awayTeamId },
+          { homeTeamId: match.awayTeamId, awayTeamId: match.homeTeamId },
+        ],
+      },
+      select: { scheduledAt: true },
+    }),
+    db.scrim.findMany({
+      where: {
+        seasonId: match.seasonId,
+        status: { in: [SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE, SCRIM_STATUS.COMPLETED] },
+        OR: [
+          { hostTeamId: match.homeTeamId, opponentTeamId: match.awayTeamId },
+          { hostTeamId: match.awayTeamId, opponentTeamId: match.homeTeamId },
+        ],
+      },
+      select: { scheduledAt: true },
+    }),
+  ]);
+  return claimsGame(od.start_time * 1000, kickoffMs,
+    eligibleCompetingMeetingKickoffs(od.start_time, {
+      league: otherMeetings.map((row) => row.scheduledAt!.getTime()),
+      scrims: scrimMeetings.map((row) => row.scheduledAt.getTime()),
+    })) ? null : "That Dota game is closer to another meeting between these teams — import it there instead";
+}
 
 /** Fetch (or reuse) a Dota match and record it against a scheduled league match. */
 export async function importGameForMatch(
@@ -879,12 +942,13 @@ export async function importGameForMatch(
   ]);
   if (existing) {
     return existing.matchId === matchId
-      ? { ok: false, error: "That game is already recorded here" }
-      : { ok: false, error: "That game is already recorded for another match" };
+      ? { ok: false, error: "That game is already recorded here", code: "OWNED_ELSEWHERE" }
+      : { ok: false, error: "That game is already recorded for another match", code: "OWNED_ELSEWHERE" };
   }
   if (existingScrim || existingClaim) {
     return {
       ok: false,
+      code: "OWNED_ELSEWHERE",
       error:
         existingClaim?.kind === DOTA_MATCH_KIND.SCRIM || existingScrim
           ? "That game is already recorded as a scrim"
@@ -946,102 +1010,16 @@ export async function importGameForMatch(
     }
     return {
       ok: false,
+      code: "RETRYABLE",
       error:
         "Could not fetch that match from OpenDota (is the id correct and the match public?)",
     };
   }
 
   if (options.enforceFixtureWindow) {
-    if (!match.scheduledAt) {
-      return {
-        ok: false,
-        error:
-          "This fixture has no kickoff time, so the site cannot verify which meeting this game belongs to — ask an admin to import it",
-      };
-    }
-    const gameStartMs = Number(od.start_time) * 1000;
-    const kickoffMs = match.scheduledAt.getTime();
-    if (!isWithinLeagueResultWindow(od.start_time, kickoffMs)) {
-      return {
-        ok: false,
-        error:
-          "That Dota game is outside this fixture's result window — ask an admin if the kickoff was recorded incorrectly",
-      };
-    }
-    const [otherMeetings, scrimMeetings] = await Promise.all([
-      prisma.match.findMany({
-        where: {
-          seasonId: match.seasonId,
-          id: { not: match.id },
-          scheduledAt: { not: null },
-          OR: [
-            {
-              homeTeamId: match.homeTeamId,
-              awayTeamId: match.awayTeamId,
-            },
-            {
-              homeTeamId: match.awayTeamId,
-              awayTeamId: match.homeTeamId,
-            },
-          ],
-        },
-        select: { scheduledAt: true },
-      }),
-      prisma.scrim.findMany({
-        where: {
-          seasonId: match.seasonId,
-          status: {
-            in: [
-              SCRIM_STATUS.SCHEDULED,
-              SCRIM_STATUS.LIVE,
-              SCRIM_STATUS.COMPLETED,
-            ],
-          },
-          OR: [
-            {
-              hostTeamId: match.homeTeamId,
-              opponentTeamId: match.awayTeamId,
-            },
-            {
-              hostTeamId: match.awayTeamId,
-              opponentTeamId: match.homeTeamId,
-            },
-          ],
-        },
-        select: { scheduledAt: true },
-      }),
-    ]);
-    if (
-      !claimsGame(
-        gameStartMs,
-        kickoffMs,
-        eligibleCompetingMeetingKickoffs(od.start_time, {
-          league: otherMeetings.map((other) => other.scheduledAt!.getTime()),
-          scrims: scrimMeetings.map((other) => other.scheduledAt.getTime()),
-        }),
-      )
-    ) {
-      return {
-        ok: false,
-        error:
-          "That Dota game is closer to another meeting between these teams — import it there instead",
-      };
-    }
+    const failure = await fixtureWindowFailure(prisma, match, od);
+    if (failure) return { ok: false, error: failure, code: "STALE_FIXTURE" };
   }
-
-  const { accountMap, homeSet, awaySet, teamSize } =
-    await gatherTeamAccounts(match);
-  const cls = classifyGame(
-    od,
-    { teamId: match.homeTeamId, accountIds: homeSet },
-    { teamId: match.awayTeamId, accountIds: awaySet },
-    Math.min(3, teamSize),
-  );
-  if (!cls.ok)
-    return {
-      ok: false,
-      error: cls.reason ?? "Game does not match these teams",
-    };
 
   let committed:
     | {
@@ -1133,6 +1111,25 @@ export async function importGameForMatch(
               `This best-of-${fresh.bestOf} already has all ${fresh.bestOf} of its games`,
             );
           }
+          if (options.enforceFixtureWindow) {
+            const failure = await fixtureWindowFailure(tx, fresh, od);
+            if (failure) throw new ImportRaceError(failure, "STALE_FIXTURE");
+          }
+          if (options.respectImportSkips &&
+              (await loadImportSuppressions(fresh.seasonId, tx)).has(dotaMatchId)) {
+            throw new ImportRaceError("An administrator excluded this game from automatic import", "ADMIN_SUPPRESSED");
+          }
+          // Classification/attribution belongs to the write snapshot too:
+          // roster and standin changes during provider IO must not be stamped
+          // into a result as if the stale participants still represented it.
+          // Historical lineup integration can replace this resolver while
+          // retaining this transaction boundary and the shared buildPlayers.
+          const { accountMap, homeSet, awaySet, teamSize } = await gatherTeamAccounts(fresh, tx);
+          const cls = classifyGame(od,
+            { teamId: fresh.homeTeamId, accountIds: homeSet },
+            { teamId: fresh.awayTeamId, accountIds: awaySet },
+            Math.min(3, teamSize));
+          if (!cls.ok) throw new ImportRaceError(cls.reason ?? "Game does not match these teams", "STALE_FIXTURE");
           // One global claim arbitrates official games and casual scrims. The
           // two result tables deliberately stay separate so scrim stats can
           // never leak into league roll-ups, but this shared unique key keeps
@@ -1158,6 +1155,11 @@ export async function importGameForMatch(
               winnerTeamId: cls.winnerTeamId,
               players: JSON.stringify(buildPlayers(od, accountMap)),
             },
+          });
+          // Durable fetch evidence is no longer needed once the authoritative
+          // game owns it. Clear it in the same command, never before commit.
+          await tx.importCandidate.deleteMany({
+            where: { seasonId: fresh.seasonId, dotaMatchId: String(od.match_id) },
           });
           // Fantasy is a one-way competitive lock. Stamping the Season row in
           // the same Serializable command as the first imported game gives the
@@ -1230,13 +1232,14 @@ export async function importGameForMatch(
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
     } catch (e) {
-      if (e instanceof ImportRaceError) return { ok: false, error: e.message };
+      if (e instanceof ImportRaceError) return { ok: false, error: e.message, code: e.code };
       // The dedupe check above races with concurrent imports (an OpenDota
       // fetch sits between check and create) — the unique index is the real
       // arbiter.
       if ((e as { code?: string }).code === "P2002") {
         return {
           ok: false,
+          code: "OWNED_ELSEWHERE",
           error: "That game was just recorded by someone else",
         };
       }
@@ -1248,6 +1251,7 @@ export async function importGameForMatch(
         if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) continue;
         return {
           ok: false,
+          code: "RETRYABLE",
           error:
             "This fixture changed while the game was being recorded — try again",
         };
@@ -1315,6 +1319,8 @@ export async function importGameForMatch(
 export type AutoDetectResult = {
   imported: number;
   scanned: number;
+  pending?: boolean;
+  reviewRequired?: boolean;
   error?: string;
   /** At least one roster lookup couldn't reach OpenDota, so "found nothing"
    *  proves nothing. Callers use this to avoid counting the scan as empty. */
@@ -1328,55 +1334,9 @@ export type AutoDetectResult = {
  * importing any that validate as a game between the two teams. Needs players to
  * have "Expose Public Match Data" enabled in Dota.
  */
-/**
- * Games an admin explicitly REMOVED, remembered so the background importers
- * stop re-adding them.
- *
- * `removeGame` is the panel's own repair path for a mis-attributed import, and
- * without this memory it did not work at all during the window it exists for.
- * BOTH import paths decide "already recorded" from the Game rows themselves —
- * `autoDetectGamesForMatch`'s `recorded` set and `syncLeagueGames`' unique-id
- * check — so deleting the row simply made the game a fresh candidate again, and
- * the next `/api/sync` ping re-imported it. That ping comes from any page view,
- * including the admin's own tab, so the correction was typically undone inside a
- * minute — silently, because the removal had already toasted success.
- *
- * Bounded like the league skip list. The admin's MANUAL detect / league-sync
- * buttons pass `ignoreSkips`, so a deliberate re-import is still one click: this
- * only ever stops the AUTOMATIC paths from reversing a deliberate removal.
- */
-const importSkipKey = (seasonId: string) => `importSkip:${seasonId}`;
-
-export async function loadImportSkips(seasonId: string): Promise<Set<string>> {
-  try {
-    const parsed = JSON.parse(
-      (await getSetting(importSkipKey(seasonId))) ?? "[]",
-    );
-    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
-  } catch {
-    // corrupt skip memory — start fresh rather than fail the caller
-    return new Set();
-  }
-}
-
-/**
- * Record a removal. Callers must do this BEFORE deleting the Game row, not
- * after: the unique `dotaMatchId` is what makes the gap safe. With the row still
- * present a racing import is refused by the constraint, so writing the skip
- * first leaves no window in which the game is both importable and unremembered.
- */
-export async function rememberImportSkip(
-  seasonId: string,
-  dotaMatchId: string,
-) {
-  const skips = await loadImportSkips(seasonId);
-  if (skips.has(dotaMatchId)) return;
-  skips.add(dotaMatchId);
-  await setSetting(
-    importSkipKey(seasonId),
-    JSON.stringify([...skips].slice(-AUTO_SYNC.LEAGUE_SKIP_MEMORY)),
-  );
-}
+/** Legacy aliases retained for official and scrim correction/scanning callers. */
+export const loadImportSkips = loadImportSuppressions;
+export const rememberImportSkip = rememberImportSuppression;
 
 export async function autoDetectGamesForMatch(
   matchId: string,
@@ -1494,7 +1454,12 @@ export async function autoDetectGamesForMatch(
   ]);
 
   const minPerSide = Math.min(3, teamSize);
-  const valid: SeriesCandidate[] = [];
+  const valid: (SeriesCandidate & { details: OpenDotaMatch })[] = [];
+  await expireImportCandidates();
+  const cached = new Map((await loadImportCandidates(match.seasonId, candidateIdStrings))
+    .map((row) => [row.dotaMatchId, row]));
+  let discoveryComplete = !unreachable;
+  let reviewRequired = false;
   // Wall-clock budget: each candidate is a separate OpenDota round trip (8s
   // timeout each), so a slow API turned one scan into minutes of work and the
   // serverless function was killed before it could return. Stopping early is
@@ -1502,12 +1467,38 @@ export async function autoDetectGamesForMatch(
   // off (already-imported games are skipped by the `recorded` set above).
   const scanDeadline = Date.now() + SCAN_BUDGET_MS;
   for (const id of candidateIds) {
-    if (Date.now() > scanDeadline || budgetStopped()) break;
     if (recorded.has(String(id))) continue;
-    const od = await fetchOpenDotaMatch(String(id), fetchOptions);
-    if (!od) {
-      if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) break;
+    const saved = cached.get(String(id));
+    if (bounded && saved?.status === "NEEDS_REVIEW") {
+      discoveryComplete = false;
+      reviewRequired = true;
       continue;
+    }
+    // A league-feed IGNORED decision is not a roster-scan exclusion: this
+    // independent discovery set may provide the missing ownership evidence.
+    if (bounded && saved?.status === "RETRYABLE" && saved.nextAttemptAt && saved.nextAttemptAt.getTime() > Date.now()) {
+      discoveryComplete = false;
+      continue;
+    }
+    let od = readImportEvidence(saved?.payload ?? null, String(id));
+    if (!od) {
+      if (Date.now() > scanDeadline || budgetStopped() ||
+          (bounded && !canStartOpenDotaFetch(fetchOptions, OPEN_DOTA_MATCH_TIMEOUT_MS + IMPORT_COMMIT_RESERVE_MS))) {
+        discoveryComplete = false;
+        break;
+      }
+      od = await fetchOpenDotaMatch(String(id), {
+        ...fetchOptions,
+        deadlineMs: opts.deadlineMs === undefined ? undefined : opts.deadlineMs - IMPORT_COMMIT_RESERVE_MS,
+      });
+      if (!od || !hasFinalLeagueMatchDetails(od, id)) {
+        discoveryComplete = false;
+        if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) break;
+        await recordImportFetchFailure(match.seasonId, String(id), od ? "DETAILS_NOT_FINAL" : "PROVIDER_UNAVAILABLE");
+        continue;
+      }
+      const persisted = await saveImportEvidence(match.seasonId, od, saved);
+      if (persisted) cached.set(String(id), persisted);
     }
     const cls = classifyGame(
       od,
@@ -1520,16 +1511,20 @@ export async function autoDetectGamesForMatch(
         id,
         startTime: od.start_time ?? 0,
         winnerTeamId: cls.winnerTeamId,
+        details: od,
       });
     }
   }
 
-  if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
+  if (!discoveryComplete || budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
     return {
       imported: 0,
       scanned: accounts.length,
       unreachable,
-      deadlineReached: true,
+      pending: true,
+      ...(reviewRequired ? { reviewRequired: true, error: "Some game details need administrator review" } : {}),
+      ...(budgetStopped() || (bounded && !canStartOpenDotaFetch(fetchOptions, OPEN_DOTA_MATCH_TIMEOUT_MS + IMPORT_COMMIT_RESERVE_MS))
+        ? { deadlineReached: true } : {}),
     };
   }
 
@@ -1603,14 +1598,23 @@ export async function autoDetectGamesForMatch(
       expectedCaptainId: opts.expectedCaptainId,
       deadlineMs: opts.deadlineMs,
       signal: opts.signal,
+      prefetchedLeagueMatch: c.details,
+      enforceFixtureWindow: match.scheduledAt != null,
+      respectImportSkips: !opts.ignoreSkips,
     });
     if (r.ok) imported++;
-    else if (r.deadlineReached) break;
+    else {
+      await recordImportDecision(cached.get(String(c.id)), r.code ?? "STALE_FIXTURE",
+        r.code !== "OWNED_ELSEWHERE" && r.code !== "ADMIN_SUPPRESSED");
+      discoveryComplete = false;
+      break;
+    }
   }
   return {
     imported,
     scanned: accounts.length,
     unreachable,
+    ...(!discoveryComplete ? { pending: true } : {}),
     ...(budgetStopped() || openDotaBudgetExpired(fetchOptions)
       ? { deadlineReached: true }
       : {}),
@@ -1717,6 +1721,9 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
 export type LeagueSyncResult = {
   imported: number;
   scanned: number;
+  /** Discovery/assignment has durable retry work; do not count it as empty. */
+  pending?: boolean;
+  reviewRequired?: boolean;
   error?: string;
   /** OpenDota didn't answer — the caller may retry sooner than usual. */
   unreachable?: boolean;
@@ -1737,13 +1744,14 @@ const LEAGUE_GAME_LOOKUP_BATCH_SIZE = 500;
  * tagged with the league id, so no per-player public match data is required.
  *
  * `auto: true` (the result-sync path, fired unattended every few minutes)
- * bounds the run: at most LEAGUE_MAX_FETCHES_PER_RUN unknown ids are fetched
- * (a typo'd league id can list thousands), and ids that fetched but didn't
- * import are remembered in a per-season skip list so they're never refetched —
- * without it every never-importable league game (scrims in the league lobby,
- * games of manually-recorded matches) costs a fetch per run forever. The
- * admin's manual button runs unbounded and ignores the skip list, because a
- * skipped game can become importable after a roster/standin change.
+ * bounds provider calls and persists each finalized payload before continuing.
+ * A later pass resumes discovery without repeating successful provider work.
+ * Cached payloads are reclassified against current fixtures/rosters every pass;
+ * only missing provider evidence backs off, then enters administrator review.
+ * The legacy scanner skip list remains readable for compatibility, while new
+ * decisions use revision-fenced candidate rows. Intentional administrator
+ * exclusions are separate and never expire. Manual sync can retry provider
+ * failures and reconsider legacy scan decisions.
  */
 export async function syncLeagueGames(
   seasonId: string,
@@ -1771,6 +1779,7 @@ export async function syncLeagueGames(
     return { imported: 0, scanned: 0, deadlineReached: true };
   }
 
+  await expireImportCandidates();
   const leagueMatchIds = await fetchLeagueMatchIds(
     season.dotaLeagueId,
     fetchOptions,
@@ -1825,13 +1834,14 @@ export async function syncLeagueGames(
     }
   }
   const skip = new Set(skipList);
-  // Admin removals are honoured by the automatic feed too, but kept OUT of
-  // `skipList` so the write-back below can't fold them into the league's own
-  // rolling memory (they have separate lifetimes and separate override buttons).
+  // Legacy automated exclusions remain a distinct compatibility input.
+  // Intentional removals are independently protected by durable unique rows
+  // and are rechecked in the final automatic-import transaction.
   if (opts.auto) {
     for (const id of await loadImportSkips(seasonId)) skip.add(id);
   }
   const newlySkipped: string[] = [];
+  const evidenceById = new Map<string, ImportCandidateSnapshot>();
 
   // Building account sets is O(matches × roster queries) — do it only once a
   // fetched game actually needs classifying, so a steady-state auto run
@@ -1856,6 +1866,13 @@ export async function syncLeagueGames(
   let fetches = 0;
   let imported = 0;
   let deadlineReached = false;
+  let discoveryComplete = true;
+  let reviewRequired = false;
+  const detailFetchOptions = {
+    ...fetchOptions,
+    deadlineMs: fetchOptions.deadlineMs === undefined
+      ? undefined : fetchOptions.deadlineMs - IMPORT_COMMIT_RESERVE_MS,
+  };
   // Phase 1 — fetch, classify, and BUFFER per fixture instead of importing per
   // feed id. The feed lists newest-first, so a "one for fun" game after a
   // decided night used to import BEFORE the real games (the series wasn't
@@ -1910,29 +1927,53 @@ export async function syncLeagueGames(
       }
     }
 
-    for (const dotaId of batch) {
+    const cached = new Map((await loadImportCandidates(seasonId, idsToCheck))
+      .map((row) => [row.dotaMatchId, row]));
+    for (const row of cached.values()) evidenceById.set(row.dotaMatchId, row);
+    for (const dotaId of new Set(batch)) {
       const idStr = String(dotaId);
       if (skip.has(idStr)) continue;
       if (recorded.has(idStr)) continue;
-      if (fetches >= maxFetches) break feed;
-      if (budgetStopped()) {
-        deadlineReached = true;
-        break feed;
+      const saved = cached.get(idStr);
+      if (opts.auto && saved?.status === "NEEDS_REVIEW") {
+        discoveryComplete = false;
+        reviewRequired = true;
+        continue;
       }
-      fetches++;
-      const od = await fetchOpenDotaMatch(idStr, fetchOptions);
+      if (opts.auto && saved?.status === "RETRYABLE" && saved.nextAttemptAt && saved.nextAttemptAt.getTime() > Date.now()) {
+        discoveryComplete = false;
+        continue;
+      }
+      let od = readImportEvidence(saved?.payload ?? null, idStr);
       if (!od) {
-        if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
-          deadlineReached = true;
+        if (fetches >= maxFetches ||
+            (opts.auto && !canStartOpenDotaFetch(fetchOptions, OPEN_DOTA_MATCH_TIMEOUT_MS + IMPORT_COMMIT_RESERVE_MS))) {
+          discoveryComplete = false;
+          deadlineReached = budgetStopped() || fetches < maxFetches;
           break feed;
         }
-        continue; // transient fetch failure — retry later, never skip-listed
+        fetches++;
+        od = await fetchOpenDotaMatch(idStr, detailFetchOptions);
+        if (!od || !hasFinalLeagueMatchDetails(od, dotaId)) {
+          discoveryComplete = false;
+          // Deadline cancellation is not a provider failure and must not
+          // spend retry attempts or quarantine an otherwise healthy game.
+          if (budgetStopped() || openDotaBudgetExpired(detailFetchOptions)) {
+            deadlineReached = true;
+            break feed;
+          }
+          await recordImportFetchFailure(seasonId, idStr, od ? "DETAILS_NOT_FINAL" : "PROVIDER_UNAVAILABLE");
+          continue;
+        }
+        // Persist before classification, including when this fetch used the
+        // final slice of its budget. The next pass reuses this successful IO.
+        const persisted = await saveImportEvidence(seasonId, od, saved);
+        if (persisted) evidenceById.set(idStr, persisted);
       }
-      if (!hasFinalLeagueMatchDetails(od, dotaId)) {
-        // The id feed can lead the parsed match endpoint by a few minutes.
-        // Retry next run instead of permanently classifying a partial row as
-        // unrelated to every roster.
-        continue;
+      if (budgetStopped()) {
+        discoveryComplete = false;
+        deadlineReached = true;
+        break feed;
       }
       await ensureAccounts();
 
@@ -2000,11 +2041,9 @@ export async function syncLeagueGames(
         return cls.ok ? [{ scrim }] : [];
       });
       if (fits.length === 0) {
-        // A real booked scrim belongs to the scrim importer, but this official
-        // league-ticket scanner has already classified it conclusively. Keep
-        // that id in this scanner's private skip memory so it does not spend
-        // the provider budget again. The scrim scanner/manual import do not
-        // read leagueSyncSkip and remain free to claim the game.
+        // A booked scrim belongs to its own importer. Keep the fetched
+        // evidence and decision, not a global administrator exclusion; the
+        // scrim importer remains free to claim it.
         if (scrimFits.length > 0) {
           newlySkipped.push(idStr);
           skip.add(idStr);
@@ -2071,6 +2110,20 @@ export async function syncLeagueGames(
     }
   }
 
+  if (!discoveryComplete) {
+    // A newest-first partial buffer cannot prove which game was first or
+    // which session was real. Persist evidence, then resume discovery next
+    // pass; independent roster detection remains a safe fallback.
+    for (const id of new Set(newlySkipped)) {
+      await recordImportDecision(evidenceById.get(id), "NO_ELIGIBLE_FIXTURE");
+    }
+    return {
+      imported: 0, scanned: leagueMatchIds.length, pending: true,
+      ...(reviewRequired ? { reviewRequired: true, error: "Some game details need administrator review before automatic feed assignment can continue" } : {}),
+      ...(deadlineReached ? { deadlineReached: true } : {}),
+    };
+  }
+
   // Phase 2 — per match, keep only the real series (biggest session, clinch
   // stop) and import it in PLAY order. Play order is itself a backstop: each
   // import runs recomputeSeries, so once the series decides, the funnel's own
@@ -2090,6 +2143,8 @@ export async function syncLeagueGames(
       const r = await importGameForMatch(matchId, c.idStr, {
         ...fetchOptions,
         prefetchedLeagueMatch: c.details,
+        enforceFixtureWindow: true,
+        respectImportSkips: !!opts.auto,
       });
       if (r.ok) {
         imported++;
@@ -2097,31 +2152,33 @@ export async function syncLeagueGames(
         deadlineReached = true;
         break;
       } else {
-        // A refused import (recorded for another match, full series, manual
-        // result) won't succeed next run either — stop refetching it.
-        newlySkipped.push(c.idStr);
+        // A stale fixture or transaction conflict can become valid again.
+        // Keep its payload and retry reason; never poison a permanent skip.
+        const retryable = r.code !== "OWNED_ELSEWHERE" && r.code !== "ADMIN_SUPPRESSED";
+        await recordImportDecision(evidenceById.get(c.idStr), r.code ?? "STALE_FIXTURE", retryable);
+        if (retryable) discoveryComplete = false;
+        // A missing earlier game must not let a later one leapfrog it.
+        break;
       }
     }
     if (deadlineReached) break;
     for (const c of candidates) {
-      // The bonus/warmup games pickSeriesGames dropped: fetched, classified,
-      // and deliberately not imported — remember them so the automatic feed
-      // never refetches a game it has already judged. The manual admin button
-      // ignores the skip list, so a wrongly-dropped game stays importable.
+      // Preserve the bonus/warmup decision alongside bounded evidence. It is
+      // reclassified on later passes because fixture or roster repairs can
+      // change eligibility; it is never an intentional removal suppression.
       if (!chosenIds.has(c.idStr)) newlySkipped.push(c.idStr);
     }
   }
-  if (opts.auto && newlySkipped.length > 0) {
-    await setSetting(
-      skipKey,
-      JSON.stringify(
-        [...skipList, ...newlySkipped].slice(-AUTO_SYNC.LEAGUE_SKIP_MEMORY),
-      ),
-    );
+  for (const id of new Set(newlySkipped)) {
+    // Mutable roster/window/session decisions explain the last classification.
+    // Valid cached payloads are reconsidered every pass; these rows never act
+    // as permanent exclusions or hide a newly eligible earlier game.
+    await recordImportDecision(evidenceById.get(id), "NO_ELIGIBLE_FIXTURE_OR_SERIES_GAME");
   }
   return {
     imported,
     scanned: leagueMatchIds.length,
+    ...(!discoveryComplete ? { pending: true } : {}),
     ...(deadlineReached ? { deadlineReached: true } : {}),
   };
 }

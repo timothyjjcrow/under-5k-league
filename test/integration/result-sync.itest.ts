@@ -17,9 +17,16 @@ import {
 import { steamIdToAccountId } from "@/lib/dota";
 import { runResultSync } from "@/lib/result-sync-service";
 import { nominatePlayer } from "@/lib/draft-service";
-import { importGameForMatch, syncLeagueGames } from "@/lib/match-import";
+import { importGameForMatch, loadImportSkips, rememberImportSkip, syncLeagueGames } from "@/lib/match-import";
 import { importScrimGame } from "@/lib/scrim-result-service";
 import { SETTING_KEYS, weekReminderKey } from "@/lib/settings";
+import {
+  expireImportCandidates,
+  IMPORT_CANDIDATE_MAX_ATTEMPTS,
+  recordImportDecision,
+  recordImportFetchFailure,
+  saveImportEvidence,
+} from "@/lib/import-candidates";
 import {
   claimAnnouncementMarker,
   markAnnouncementSent,
@@ -734,10 +741,10 @@ describe("result sync — league matches (integration)", () => {
     expect(result).toMatchObject({ imported: 0, scanned: 1 });
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
     expect(
-      await prisma.setting.findUnique({
-        where: { key: `leagueSyncSkip:${season.id}` },
+      await prisma.importCandidate.findUnique({
+        where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: String(G) } },
       }),
-    ).toMatchObject({ value: JSON.stringify([String(G)]) });
+    ).toMatchObject({ status: "IGNORED", nextAttemptAt: expect.any(Date) });
   });
 
   it("keeps an old game with its completed meeting, not a future rematch", async () => {
@@ -776,10 +783,10 @@ describe("result sync — league matches (integration)", () => {
     expect(result).toMatchObject({ imported: 0, scanned: 1 });
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
     expect(
-      await prisma.setting.findUnique({
-        where: { key: `leagueSyncSkip:${season.id}` },
+      await prisma.importCandidate.findUnique({
+        where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: String(G) } },
       }),
-    ).toMatchObject({ value: JSON.stringify([String(G)]) });
+    ).toMatchObject({ status: "IGNORED", nextAttemptAt: expect.any(Date) });
   });
 
   it("re-reads due fixtures only when this run owns the league-feed claim", async () => {
@@ -1433,6 +1440,178 @@ describe("result sync — a claim that needs a staged interleaving", () => {
   });
 });
 
+describe("durable import reliability", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("resumes a slow newest-first feed without refetching or assigning a partial series", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -2 * HOUR, bestOf: 5 });
+    await prisma.season.update({ where: { id: season.id }, data: { dotaLeagueId: "19191" } });
+    const base = Date.now() - 2 * HOUR;
+    const ids = [991005, 991004, 991003, 991002, 991001];
+    mockLeague.mockResolvedValue(ids);
+    mockMatch.mockImplementation(async (id) => {
+      vi.setSystemTime(Date.now() + 9_000);
+      return odGame(Number(id), homeAccts, awayAccts, base + (Number(id) - 991001) * 20 * 60_000);
+    });
+
+    const first = await syncLeagueGames(season.id, { auto: true, deadlineMs: Date.now() + 45_000 });
+    expect(first).toMatchObject({ imported: 0, pending: true, deadlineReached: true });
+    expect(await prisma.game.count()).toBe(0);
+    expect(await prisma.importCandidate.count({ where: { status: "READY" } })).toBe(4);
+
+    const second = await syncLeagueGames(season.id, { auto: true, deadlineMs: Date.now() + 45_000 });
+    expect(second.imported).toBe(3); // first three wins clinch; two bonus games stay out
+    expect(mockMatch).toHaveBeenCalledTimes(5); // each successful provider fetch exactly once
+    const stored = await prisma.game.findMany({ where: { matchId: match.id }, orderBy: { startTime: "asc" } });
+    expect(stored.map((game) => game.dotaMatchId)).toEqual(["991001", "991002", "991003"]);
+    expect(await prisma.importCandidate.count({ where: { dotaMatchId: { in: stored.map((game) => game.dotaMatchId) } } })).toBe(0);
+  });
+
+  it("retains concurrent exclusions and legacy memory, and rolls back failed corrections", async () => {
+    const season = await makeSeason();
+    await prisma.setting.create({ data: { key: `importSkip:${season.id}`, value: JSON.stringify(["legacy"]) } });
+    await Promise.all([rememberImportSkip(season.id, "removed-a"), rememberImportSkip(season.id, "removed-b")]);
+    expect([...(await loadImportSkips(season.id))].sort()).toEqual(["legacy", "removed-a", "removed-b"]);
+    await expect(prisma.$transaction(async (tx) => {
+      await rememberImportSkip(season.id, "rolled-back", tx);
+      throw new Error("correction failed");
+    })).rejects.toThrow("correction failed");
+    expect((await loadImportSkips(season.id)).has("rolled-back")).toBe(false);
+  });
+
+  it("rechecks the committed kickoff after a reschedule during provider IO", async () => {
+    const { match, homeAccts, awayAccts } = await setupNight({ offsetMs: -HOUR });
+    const details = odGame(991101, homeAccts, awayAccts, match.scheduledAt!.getTime());
+    mockMatch.mockImplementation(async () => {
+      await prisma.match.update({ where: { id: match.id }, data: { scheduledAt: new Date(Date.now() + 30 * 24 * HOUR) } });
+      return details;
+    });
+    const result = await importGameForMatch(match.id, String(details.match_id), { enforceFixtureWindow: true });
+    expect(result).toMatchObject({ ok: false, code: "STALE_FIXTURE", error: expect.stringMatching(/outside.*window/i) });
+    expect(await prisma.game.count()).toBe(0);
+    expect(await prisma.dotaMatchClaim.count()).toBe(0);
+  });
+
+  it("honors an exclusion created after discovery and before assignment", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -HOUR });
+    mockMatch.mockImplementation(async () => {
+      await rememberImportSkip(season.id, "991102");
+      return odGame(991102, homeAccts, awayAccts, match.scheduledAt!.getTime());
+    });
+    expect(await importGameForMatch(match.id, "991102", { respectImportSkips: true }))
+      .toMatchObject({ ok: false, code: "ADMIN_SUPPRESSED" });
+    expect(await prisma.game.count()).toBe(0);
+  });
+
+  it("retries exhausted Serializable conflicts using the saved payload", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({ where: { id: season.id }, data: { dotaLeagueId: "19192" } });
+    mockLeague.mockResolvedValue([991201]);
+    mockMatch.mockResolvedValue(odGame(991201, homeAccts, awayAccts, match.scheduledAt!.getTime()));
+    const transaction = vi.spyOn(prisma, "$transaction").mockRejectedValue(Object.assign(new Error("serialization conflict"), { code: "P2034" }));
+    const first = await syncLeagueGames(season.id, { auto: true });
+    expect(first).toMatchObject({ imported: 0, pending: true });
+    expect(transaction).toHaveBeenCalledTimes(3);
+    transaction.mockRestore();
+    const candidate = await prisma.importCandidate.findUniqueOrThrow({ where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: "991201" } } });
+    expect(candidate).toMatchObject({ status: "RETRYABLE", reason: "RETRYABLE", payload: expect.any(String) });
+    expect(await prisma.setting.findUnique({ where: { key: `leagueSyncSkip:${season.id}` } })).toBeNull();
+    await prisma.importCandidate.update({ where: { id: candidate.id }, data: { nextAttemptAt: new Date(0) } });
+    const second = await syncLeagueGames(season.id, { auto: true });
+    expect(second.imported).toBe(1);
+    expect(mockMatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("quarantines repeated provider failures without evicting administrator exclusions", async () => {
+    const season = await makeSeason();
+    for (let i = 0; i < IMPORT_CANDIDATE_MAX_ATTEMPTS; i++) {
+      await recordImportFetchFailure(season.id, "991301", "PROVIDER_UNAVAILABLE");
+    }
+    const failed = await prisma.importCandidate.findUniqueOrThrow({ where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: "991301" } } });
+    expect(failed).toMatchObject({ status: "NEEDS_REVIEW", attempts: IMPORT_CANDIDATE_MAX_ATTEMPTS, payload: null });
+    await rememberImportSkip(season.id, "991302");
+    await prisma.importCandidate.update({ where: { id: failed.id }, data: { expiresAt: new Date(0) } });
+    await expireImportCandidates();
+    expect(await prisma.importCandidate.count()).toBe(0);
+    expect((await loadImportSkips(season.id)).has("991302")).toBe(true);
+  });
+
+  it("does not let a quarantined fixture monopolize the roster fallback", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -5 * HOUR });
+    await prisma.match.update({ where: { id: match.id }, data: { autoSyncedAt: new Date(0) } });
+    const secondHome = await makeTeam(season.id, "Second Home", 2);
+    const secondAway = await makeTeam(season.id, "Second Away", 3);
+    const otherHome: number[] = [], otherAway: number[] = [];
+    for (const [team, accounts] of [[secondHome, otherHome], [secondAway, otherAway]] as const) {
+      for (let i = 0; i < 3; i++) {
+        const user = await makeUser(`Other ${team.id} ${i}`);
+        await prisma.teamMember.create({ data: { seasonId: season.id, teamId: team.id, userId: user.id, price: 0 } });
+        accounts.push(steamIdToAccountId(user.steamId)!);
+      }
+    }
+    const second = await prisma.match.create({ data: {
+      seasonId: season.id, homeTeamId: secondHome.id, awayTeamId: secondAway.id,
+      week: 1, phase: MATCH_PHASE.REGULAR, bestOf: 1,
+      scheduledAt: match.scheduledAt, autoSyncedAt: new Date(1),
+    } });
+    await prisma.importCandidate.create({ data: {
+      seasonId: season.id, dotaMatchId: "991401", status: "NEEDS_REVIEW", reason: "PROVIDER_UNAVAILABLE",
+      attempts: IMPORT_CANDIDATE_MAX_ATTEMPTS, expiresAt: new Date(Date.now() + 24 * HOUR),
+    } });
+    await saveImportEvidence(season.id, odGame(991402, otherHome, otherAway, second.scheduledAt!.getTime()));
+    mockRecent.mockImplementation(async (account) => [...homeAccts, ...awayAccts].includes(account) ? [991401] : [991402]);
+
+    expect((await runResultSync({ deadlineMs: Date.now() + 45_000 })).imported).toBe(0);
+    const attempted = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(attempted.autoSyncAttempts).toBe(0);
+    expect(attempted.autoSyncedAt!.getTime()).toBeGreaterThan(1);
+    await backdateThrottle(SETTING_KEYS.ROSTER_AUTO_SYNC_AT, HOUR);
+    expect((await runResultSync({ deadlineMs: Date.now() + 45_000 })).imported).toBe(1);
+    expect(await prisma.game.count({ where: { matchId: second.id } })).toBe(1);
+    expect(mockMatch).not.toHaveBeenCalled();
+  });
+
+  it("reconsiders an earlier cached game immediately after a kickoff repair", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: 30 * 24 * HOUR });
+    await prisma.season.update({ where: { id: season.id }, data: { dotaLeagueId: "19193" } });
+    const kickoff = Date.now() - 2 * HOUR;
+    const first = { ...odGame(991501, homeAccts, awayAccts, kickoff), radiant_win: false };
+    const bonus = odGame(991502, homeAccts, awayAccts, kickoff + HOUR);
+    mockLeague.mockResolvedValue([991501]);
+    mockMatch.mockImplementation(async (id) => id === "991501" ? first : bonus);
+    expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(0);
+    expect(await prisma.importCandidate.findFirst({ where: { dotaMatchId: "991501" } })).toMatchObject({ status: "IGNORED" });
+    await prisma.match.update({ where: { id: match.id }, data: { scheduledAt: new Date(kickoff) } });
+    mockLeague.mockResolvedValue([991502, 991501]);
+    expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(1);
+    expect((await prisma.game.findMany()).map((row) => row.dotaMatchId)).toEqual(["991501"]);
+    expect(mockMatch).toHaveBeenCalledTimes(2); // cached earlier game was reclassified, not refetched
+  });
+
+  it("fences stale decisions and late provider success against administrator recovery", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -HOUR });
+    const details = odGame(991601, homeAccts, awayAccts, match.scheduledAt!.getTime());
+    const beforeRetry = await saveImportEvidence(season.id, details);
+    expect(beforeRetry).not.toBeNull();
+    await prisma.importCandidate.update({ where: { id: beforeRetry!.id }, data: { revision: { increment: 1 }, status: "READY", reason: null } });
+    await recordImportDecision(beforeRetry!, "NO_ELIGIBLE_FIXTURE");
+    expect(await prisma.importCandidate.findUnique({ where: { id: beforeRetry!.id } })).toMatchObject({ status: "READY", revision: 1 });
+
+    const beforeIgnore = await prisma.importCandidate.findUniqueOrThrow({ where: { id: beforeRetry!.id } });
+    await rememberImportSkip(season.id, "991601");
+    expect(await saveImportEvidence(season.id, details, beforeIgnore)).toBeNull();
+    await recordImportFetchFailure(season.id, "991601", "LATE_PROVIDER_FAILURE");
+    expect(await prisma.importCandidate.findUnique({ where: { id: beforeRetry!.id } })).toMatchObject({ status: "IGNORED", reason: "ADMIN_SUPPRESSED", payload: null });
+    await prisma.dotaMatchClaim.create({ data: { dotaMatchId: "991602", kind: "LEAGUE", contextId: match.id } });
+    await recordImportFetchFailure(season.id, "991602", "LATE_PROVIDER_FAILURE");
+    expect(await prisma.importCandidate.findFirst({ where: { dotaMatchId: "991602" } })).toBeNull();
+  });
+});
+
 describe("syncLeagueGames — booked scrim ownership", () => {
   it("remembers a scrim-only feed game without blocking manual scrim import", async () => {
     const { season, home, away } = await setupNight({
@@ -1469,10 +1648,10 @@ describe("syncLeagueGames — booked scrim ownership", () => {
     expect(first).toMatchObject({ imported: 0, scanned: 1 });
     expect(mockMatch).toHaveBeenCalledTimes(1);
     expect(
-      await prisma.setting.findUnique({
-        where: { key: `leagueSyncSkip:${season.id}` },
+      await prisma.importCandidate.findUnique({
+        where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: String(SCRIM_GAME) } },
       }),
-    ).toMatchObject({ value: JSON.stringify([String(SCRIM_GAME)]) });
+    ).toMatchObject({ status: "IGNORED", nextAttemptAt: expect.any(Date) });
     // This is deliberately not the shared admin-removal skip read by the
     // scrim scanner. The official feed must not hide the game from scrims.
     expect(
@@ -1523,10 +1702,10 @@ describe("syncLeagueGames — booked scrim ownership", () => {
     expect(result).toMatchObject({ imported: 0, scanned: 1 });
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
     expect(
-      await prisma.setting.findUnique({
-        where: { key: `leagueSyncSkip:${season.id}` },
+      await prisma.importCandidate.findUnique({
+        where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: String(SCRIM_GAME) } },
       }),
-    ).toMatchObject({ value: JSON.stringify([String(SCRIM_GAME)]) });
+    ).toMatchObject({ status: "IGNORED", nextAttemptAt: expect.any(Date) });
 
     mockMatch.mockClear();
     await syncLeagueGames(season.id, { auto: true });
@@ -1666,10 +1845,10 @@ describe("syncLeagueGames — the clinch-stop applies to the league feed too", (
 
     // The dropped bonus game is remembered — the automatic feed never
     // refetches a game it has already judged.
-    const skipRaw = await prisma.setting.findUnique({
-      where: { key: `leagueSyncSkip:${season.id}` },
+    const ignored = await prisma.importCandidate.findUnique({
+      where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: String(BONUS) } },
     });
-    expect(skipRaw?.value ?? "").toContain(String(BONUS));
+    expect(ignored).toMatchObject({ status: "IGNORED", nextAttemptAt: expect.any(Date) });
   });
 
   it("drops a warmup scrim hours before the real series (session split)", async () => {

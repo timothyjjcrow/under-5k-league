@@ -137,6 +137,43 @@ model Season {
   bids           Bid[]
   fantasyRosters FantasyRoster[]
   scrims         Scrim[]
+  importSuppressions ImportSuppression[]
+  importCandidates   ImportCandidate[]
+}
+
+// Deliberate exclusions survive retries and cannot overwrite one another.
+model ImportSuppression {
+  id          String   @id @default(uuid())
+  seasonId    String
+  dotaMatchId String
+  createdAt   DateTime @default(now())
+  reason      String   @default("ADMIN_REMOVAL")
+  season      Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, dotaMatchId])
+}
+
+// Provider evidence is bounded and temporary; fixture eligibility is rechecked
+// at commit time. Retryable failures never become deliberate exclusions.
+model ImportCandidate {
+  id            String   @id @default(uuid())
+  seasonId      String
+  dotaMatchId   String
+  payload       String?
+  status        String   @default("PENDING") // PENDING | READY | RETRYABLE | IGNORED | NEEDS_REVIEW
+  reason        String?
+  attempts      Int      @default(0)
+  revision      Int      @default(0)
+  fetchedAt     DateTime?
+  nextAttemptAt DateTime?
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  season        Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, dotaMatchId])
+  @@index([seasonId, status, nextAttemptAt])
+  @@index([expiresAt])
 }
 
 model Registration {
