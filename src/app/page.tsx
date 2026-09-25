@@ -274,13 +274,21 @@ export default async function Home() {
       </>
     );
   } else if (standinRegistrationOpen) {
+    // Someone without a team mid-season can still play tonight: the inhouse
+    // queue has no season gate, and it was otherwise the last thing on the
+    // page, below the news.
     heroAction = (
-      <Link
-        href={standinRegistrationHref}
-        className={buttonClasses("primary", "lg")}
-      >
-        {standinRegistrationLabel}
-      </Link>
+      <>
+        <Link
+          href={standinRegistrationHref}
+          className={buttonClasses("primary", "lg")}
+        >
+          {standinRegistrationLabel}
+        </Link>
+        <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
+          Play an inhouse →
+        </Link>
+      </>
     );
   }
 
@@ -561,8 +569,8 @@ function SeasonViewSkeleton() {
         ))}
       </div>
       <div className="skeleton h-20 rounded-xl" />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
         ))}
       </div>
@@ -1927,7 +1935,7 @@ async function SeasonView({
   // the first full-width band on the page while the primary one — your match,
   // your team, the table — started below it.
   const sideGames = (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       <SideGameLink
         href="/pickem"
         icon="🔮"
@@ -1947,6 +1955,12 @@ async function SeasonView({
         icon="🧙"
         title="Fantasy"
         hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
+      />
+      <SideGameLink
+        href="/inhouse"
+        icon="⚔️"
+        title="Inhouse"
+        hint="Pick-up 5v5s, any night"
       />
       <SideGameLink
         href="/leaders"

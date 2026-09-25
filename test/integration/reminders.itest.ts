@@ -62,10 +62,18 @@ describe("week reminder (integration)", () => {
     expect(mockSend).toHaveBeenCalledTimes(1);
     expect(mockSend.mock.calls[0][0]).toContain("Week 1");
     expect(mockSend.mock.calls[0][0]).toContain("<t:");
+    // Kickoff is ahead, so pick'em is still open and the post says so.
+    expect(mockSend.mock.calls[0][0]).toContain("Pick'em closes at kickoff");
 
     // And it stays quiet forever after (marker persisted).
     expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
     expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves pick'em out of a reminder sent after kickoff", async () => {
+    const { season } = await setupWeek(-1);
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    expect(mockSend.mock.calls[0][0]).not.toContain("Pick'em");
   });
 
   it("announces separate kickoff clusters in one numbered week", async () => {

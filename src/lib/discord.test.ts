@@ -687,6 +687,13 @@ describe("weekReminderMessage", () => {
     expect(msg).toContain("/matches/m1");
   });
 
+  it("points at pick'em only while it is open", () => {
+    const open = weekReminderMessage({ week: 3, isPlayoff: false, fixtures: [], pickemOpen: true });
+    expect(open).toMatch(/Pick'em closes at kickoff: <.*\/pickem>$/);
+    const closed = weekReminderMessage({ week: 3, isPlayoff: false, fixtures: [] });
+    expect(closed).not.toContain("pickem");
+  });
+
   it("labels playoff rounds without a week number", () => {
     const msg = weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [] });
     expect(msg).toContain("Playoff matches");

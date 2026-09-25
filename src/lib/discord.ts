@@ -610,6 +610,8 @@ export type WeekReminderInput = {
   isPlayoff: boolean;
   isTiebreaker?: boolean;
   fixtures: WeekReminderFixture[];
+  /** Pick'em is still open on at least one of these fixtures. */
+  pickemOpen?: boolean;
 };
 
 export type WeekReminderAnnouncement = {
@@ -688,7 +690,11 @@ export function weekReminderAnnouncement(
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week} matches`
     : m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
-  const footer = "RSVP on your match page so captains can plan standins early.";
+  const footer =
+    "RSVP on your match page so captains can plan standins early." +
+    // The reminder is the one weekly post everyone sees; pick'em otherwise
+    // relies on people remembering to visit the page before kickoff.
+    (m.pickemOpen ? ` Pick'em closes at kickoff: <${site}/pickem>` : "");
   const lines = [`⏰ **${label} coming up — check in!**`];
   const includedMentions: string[] = [];
   let shownFixtures = 0;

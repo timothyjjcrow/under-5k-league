@@ -1,3 +1,4 @@
+import { predictionOpen } from "./pickem";
 import { isPlayoffPhase } from "./league-lifecycle";
 import { prisma } from "./prisma";
 import {
@@ -228,6 +229,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     isPlayoff: isPlayoffPhase(next.phase),
     isTiebreaker: next.phase === MATCH_PHASE.TIEBREAKER,
     fixtures,
+    pickemOpen: matches.some((m) => predictionOpen(m)),
   });
   const sent = await sendDiscordMessage(
     announcement.content,
