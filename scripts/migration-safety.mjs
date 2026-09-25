@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url";
 
 export const BASELINE_MIGRATION = "20260804000000_baseline";
 export const MIGRATION_SHA256 = Object.freeze({
+  "20260925030000_accepted_match_cover":
+    "6bb8996d37e93d625ef98da4856b47976ac7f833512537119aa6581457de554e",
   "20260925020000_historical_participation":
     "f5a63e8fbf76a6cc0754038799467339c31ff6725a6903c33a635f609b475937",
   "20260925010000_resumable_import":

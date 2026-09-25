@@ -337,6 +337,7 @@ model Match {
   scheduleRevision Int @default(0)
   logisticsRevision Int @default(0)
   lineups          MatchLineup[]
+  coverRequests    CoverRequest[]
   status           String    @default("SCHEDULED") // SCHEDULED | LIVE | COMPLETED
   homeScore        Int       @default(0)
   awayScore        Int       @default(0)
@@ -419,6 +420,11 @@ model StandinAssignment {
   teamId          String
   standinUserId   String
   replacingUserId String?
+  coverRequestId String? @unique
+  acceptedOfferId String? @unique
+  consentStatus String @default("LEGACY_UNKNOWN")
+  acceptedScheduleRevision Int?
+  acceptedAt DateTime?
   createdAt       DateTime @default(now())
 
   match    Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
@@ -598,6 +604,7 @@ model LeagueAnnouncement {
   status        String    @default("PENDING") // PENDING | SENDING | SENT | CANCELLED
   attempts      Int       @default(0)
   availableAt   DateTime  @default(now())
+  expiresAt     DateTime?
   claimedAt     DateTime?
   claimToken    String?
   // Marker-backed work is sent only while the current Setting value still
@@ -610,6 +617,7 @@ model LeagueAnnouncement {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  @@index([status, expiresAt])
   @@index([status, availableAt, createdAt])
   @@index([markerKey, status])
 }
@@ -1118,4 +1126,98 @@ model MatchLineupSeat {
 
   @@unique([lineupId, seatKey])
   @@unique([lineupId, userId])
+}
+
+
+// Match-specific cover retains offers and decisions after operational release.
+model CoverRequest {
+  id                       String   @id // UUID supplied by command
+  matchId                  String
+  teamId                   String
+  replacingUserId          String?  // null = genuine vacancy
+  seatKey                  String   // roster:<userId> or vacancy:<requestUUID>
+  activeSeatKey            String?  @unique // canonical JSON [match, team, seatKey]
+  position                 Int?     // requested/planned role, never actual played role
+  note                     String?  // <=300 characters, public
+  status                   String   @default("OPEN") // OPEN | FILLED | CANCELLED | CLOSED
+  revision                 Int      @default(0)
+  scheduleRevision         Int
+  scheduledAtSnapshot      DateTime
+  createdById              String
+  createdByName            String
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  closedAt                 DateTime?
+  closeReason              String?
+  match                    Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  volunteers               CoverVolunteer[]
+  offers                   CoverOffer[]
+  decisions                CoverEligibilityDecision[]
+  @@index([matchId, status])
+  @@index([status, scheduledAtSnapshot])
+}
+
+model CoverVolunteer {
+  id                       String   @id @default(cuid())
+  requestId                String
+  userId                   String
+  status                   String   // AVAILABLE | WITHDRAWN | RECONFIRM_REQUIRED
+  scheduleRevision         Int
+  updatedAt                DateTime @updatedAt
+  request                  CoverRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  @@unique([requestId, userId])
+  @@index([userId, status])
+}
+
+model CoverOffer {
+  id                       String   @id // UUID also provides command idempotency
+  requestId                String
+  targetUserId             String
+  targetNameSnapshot       String
+  targetAccountId          Float?   // unsigned provider ID; factual at acceptance only
+  kind                     String   @default("INITIAL") // INITIAL | RECONFIRMATION | ADMIN_EXCEPTION
+  status                   String   @default("OFFERED") // OFFERED | ACCEPTED | DECLINED | EXPIRED | WITHDRAWN | ADMIN_RECORDED
+  revision                 Int      @default(0)
+  activeRequestKey         String?  @unique // requestId only while OFFERED
+  scheduleRevision         Int
+  requestRevision          Int
+  scheduledAtSnapshot      DateTime
+  offeredById              String
+  offeredByName             String
+  offeredAt                DateTime @default(now())
+  expiresAt                DateTime
+  respondedAt              DateTime? // also observed recording time for ADMIN_RECORDED
+  acceptedAt               DateTime?
+  endedAt                  DateTime? // acceptance effective only before this instant
+  endReason                String?
+  assignmentId             String? // historical scalar; operational row may later disappear
+  offerDecisionId          String? // scalar pointer to append-only decision receipt
+  acceptanceDecisionId     String?
+  request                  CoverRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  @@index([targetUserId, status, expiresAt])
+  @@index([status, expiresAt])
+  @@index([requestId, acceptedAt])
+}
+
+model CoverEligibilityDecision {
+  id                       String   @id @default(cuid())
+  commandKey               String   @unique // response/create UUID; retries reuse this receipt
+  commandFingerprint       String   // binds command to actor, target, request and response
+  requestId                String
+  offerId                  String? // optional for denied offer creation; historical scalar
+  candidateUserId          String
+  actorId                  String
+  actorName                String
+  stage                    String   // OFFER | ACCEPT | RECONFIRM | ADMIN_EXCEPTION
+  outcome                  String   // ELIGIBLE | ADVISORY_ACKNOWLEDGED | DENIED | EXCEPTION_APPROVED
+  policyVersion            String   // COVER_V1
+  scheduleRevision         Int
+  requestRevision          Int
+  factsFingerprint         String   // digest of normalized bounded eligibility facts
+  factsJson                String   // versioned allowlisted facts, not a raw user/provider dump
+  reason                   String?  // required for exception; <=300 chars
+  createdAt                DateTime @default(now())
+  request                  CoverRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  @@index([requestId, createdAt])
+  @@index([candidateUserId, createdAt])
 }

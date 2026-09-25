@@ -38,6 +38,7 @@ async function readSeasonArchive(
     adminActions,
     importSuppressions,
     rosterTenures, draftRuns, draftLots, gameParticipants, matchLineups, matchLineupSeats,
+    coverRequests, coverVolunteers, coverOffers, coverEligibilityDecisions,
   ] = await Promise.all([
     tx.registration.findMany({
       where: { seasonId },
@@ -94,6 +95,10 @@ async function readSeasonArchive(
     tx.gameParticipant.findMany({ where: { game: { match: { seasonId } } }, orderBy: [{ gameId: "asc" }, { sourceLineIndex: "asc" }] }),
     tx.matchLineup.findMany({ where: { match: { seasonId } }, orderBy: { id: "asc" } }),
     tx.matchLineupSeat.findMany({ where: { lineup: { match: { seasonId } } }, orderBy: { id: "asc" } }),
+    tx.coverRequest.findMany({ where: { match: { seasonId } }, orderBy: { id: "asc" } }),
+    tx.coverVolunteer.findMany({ where: { request: { match: { seasonId } } }, orderBy: { id: "asc" } }),
+    tx.coverOffer.findMany({ where: { request: { match: { seasonId } } }, orderBy: { id: "asc" } }),
+    tx.coverEligibilityDecision.findMany({ where: { request: { match: { seasonId } } }, orderBy: { id: "asc" } }),
   ]);
 
   const matchIds = matches.map((match) => match.id);
@@ -164,6 +169,11 @@ async function readSeasonArchive(
   for (const row of matchLineupSeats) { userIds.add(row.userId); if (row.replacingUserId) userIds.add(row.replacingUserId); }
   for (const row of matchLineups) { userIds.add(row.createdById); userIds.add(row.confirmedById); }
 
+  for (const row of coverRequests) { userIds.add(row.createdById); if (row.replacingUserId) userIds.add(row.replacingUserId); }
+  for (const row of coverVolunteers) userIds.add(row.userId);
+  for (const row of coverOffers) { userIds.add(row.targetUserId); userIds.add(row.offeredById); }
+  for (const row of coverEligibilityDecisions) { userIds.add(row.candidateUserId); userIds.add(row.actorId); }
+
   // A single identity table covers every foreign id, including fantasy
   // managers, predictors, standins, and admins who may not have registered.
   // OAuth ownership ids, roles, private scouting snapshots, and inhouse state
@@ -225,6 +235,7 @@ async function readSeasonArchive(
     adminActions,
     importSuppressions,
     rosterTenures, draftRuns, draftLots, gameParticipants, matchLineups, matchLineupSeats,
+    coverRequests, coverVolunteers, coverOffers, coverEligibilityDecisions,
   };
 }
 
@@ -297,7 +308,7 @@ export async function GET(req: NextRequest) {
   }
 
   const core = {
-    formatVersion: 5,
+    formatVersion: 6,
     artifactPurpose: "AUDIT_ARCHIVE_ONLY",
     restorable: false,
     recoveryWarning:
@@ -326,6 +337,10 @@ export async function GET(req: NextRequest) {
       gameParticipants: archive.gameParticipants.length,
       matchLineups: archive.matchLineups.length,
       matchLineupSeats: archive.matchLineupSeats.length,
+      coverRequests: archive.coverRequests.length,
+      coverVolunteers: archive.coverVolunteers.length,
+      coverOffers: archive.coverOffers.length,
+      coverEligibilityDecisions: archive.coverEligibilityDecisions.length,
     },
   };
   const digest = createHash("sha256")

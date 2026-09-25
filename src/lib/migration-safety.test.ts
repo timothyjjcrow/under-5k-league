@@ -135,6 +135,7 @@ describe("migration SQL safety gate", () => {
       "20260914000000_manual_player_medal",
       "20260925010000_resumable_import",
       "20260925020000_historical_participation",
+      "20260925030000_accepted_match_cover",
     ]);
   });
 
