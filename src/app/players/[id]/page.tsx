@@ -23,6 +23,7 @@ import { roleLabels } from "@/lib/roles";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { matchPhaseLabel } from "@/lib/schedule";
 import { getSessionUser } from "@/lib/auth";
+import { loadCredSnapshot } from "@/lib/inhouse-cred-summary";
 import { DiscordTag } from "@/components/discord-tag";
 import {
   currentStreak,
@@ -1314,22 +1315,35 @@ export default async function PlayerProfilePage({
                 title="Achievements"
                 subtitle="Earned across every season's imported games"
               />
-              <CardBody className="flex flex-wrap gap-2">
-                {badges.map((b) => (
-                  <span
-                    key={b.key}
-                    title={b.desc}
-                    className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 px-3 py-1 text-sm"
-                  >
-                    <span aria-hidden>{b.emoji}</span>
-                    {b.label}
-                    {b.count > 1 ? (
-                      <span className="font-mono text-xs tabular-nums text-muted">
-                        ×{b.count}
+              {/* Each badge says what it is for in visible text: the
+                  description used to live only in a hover tooltip, which a
+                  phone never shows. */}
+              <CardBody>
+                <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {badges.map((b) => (
+                    <li
+                      key={b.key}
+                      className="flex min-w-0 items-start gap-2.5 rounded-lg border border-line bg-surface-2/50 px-3 py-2"
+                    >
+                      <span aria-hidden className="text-lg leading-6">
+                        {b.emoji}
                       </span>
-                    ) : null}
-                  </span>
-                ))}
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium">
+                          {b.label}
+                          {b.count > 1 ? (
+                            <span className="ml-1.5 font-mono text-xs tabular-nums text-muted">
+                              ×{b.count}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="block text-xs text-muted">
+                          {b.desc}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </CardBody>
             </Card>
           ) : null}
@@ -1339,7 +1353,7 @@ export default async function PlayerProfilePage({
           {/* Inhouse career — only stream for players with a completed game. */}
           {recentInhouse ? (
             <Suspense fallback={<CardSkeleton rows={3} />}>
-              <InhouseCareerCard userId={user.id} />
+              <InhouseCareerCard userId={user.id} isSelf={isSelf} />
             </Suspense>
           ) : null}
         </section>
@@ -1574,9 +1588,16 @@ function Connection({
 // The player's ladder identity, surfaced where people actually look each
 // other up. Rank comes from the FULL ladder (Elo accumulates globally); the
 // recent-game rows come from a separate small query with box scores.
-async function InhouseCareerCard({ userId }: { userId: string }) {
-  const [ladder, recent] = await Promise.all([
+async function InhouseCareerCard({
+  userId,
+  isSelf,
+}: {
+  userId: string;
+  isSelf: boolean;
+}) {
+  const [ladder, wallet, recent] = await Promise.all([
     loadInhouseLadder(),
+    loadCredSnapshot(userId, 0),
     prisma.inhouseLobby.findMany({
       where: {
         status: INHOUSE_STATUS.COMPLETED,
@@ -1647,6 +1668,36 @@ async function InhouseCareerCard({ userId }: { userId: string }) {
             <Badge tone="neutral">provisional</Badge>
           ) : null}
         </div>
+        {/* Cred was the inhouse ladder's second board and appeared nowhere on
+            a profile. Net profit is public (the ladder shows it to everyone);
+            the spendable balance is shown only to its owner. */}
+        {wallet.net != null || isSelf ? (
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+            {wallet.net != null ? (
+              <span className="tabular-nums">
+                <span
+                  className={cn(
+                    "font-semibold",
+                    wallet.net > 0
+                      ? "text-success"
+                      : wallet.net < 0
+                        ? "text-danger"
+                        : "text-muted",
+                  )}
+                >
+                  {wallet.net > 0 ? `+${wallet.net}` : wallet.net}
+                </span>
+                <span className="text-muted"> Cred from betting</span>
+              </span>
+            ) : null}
+            {isSelf ? (
+              <span className="tabular-nums text-muted">
+                <span className="font-semibold text-fg">{wallet.balance}</span>{" "}
+                Cred to bet
+              </span>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="divide-y divide-line/60 border-t border-line/60">
           {games.map(({ lobby, line, won, playedAt }) => {

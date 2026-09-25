@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { meetings, topAffinities, type MeetingGame } from "./compare";
+import {
+  compareDefaults,
+  meetings,
+  topAffinities,
+  type MeetingGame,
+} from "./compare";
 
 function game(
   radiantWin: boolean,
@@ -152,5 +157,41 @@ describe("topAffinities", () => {
       1,
     );
     expect(dead.nemesis?.userId).toBe("k"); // identical rows — userId decides
+  });
+});
+
+describe("compareDefaults", () => {
+  const none = { aParam: undefined, bParam: undefined, aId: undefined, bId: undefined };
+
+  it("starts with the viewer as player A on a bare visit", () => {
+    expect(compareDefaults({ ...none, viewerId: "me" })).toEqual({ a: "me", b: "" });
+  });
+
+  it("puts the viewer opposite a player the link already named", () => {
+    expect(
+      compareDefaults({ ...none, aParam: "them", aId: "them", viewerId: "me" }),
+    ).toEqual({ a: "them", b: "me" });
+    expect(
+      compareDefaults({ ...none, bParam: "them", bId: "them", viewerId: "me" }),
+    ).toEqual({ a: "me", b: "them" });
+  });
+
+  it("never overrides a slot the URL named, even with an unknown player", () => {
+    expect(
+      compareDefaults({ ...none, aParam: "ghost", bParam: "them", bId: "them", viewerId: "me" }),
+    ).toEqual({ a: "", b: "them" });
+    expect(
+      compareDefaults({ aParam: "x", bParam: "y", aId: "x", bId: "y", viewerId: "me" }),
+    ).toEqual({ a: "x", b: "y" });
+  });
+
+  it("never pairs the viewer with themselves", () => {
+    expect(
+      compareDefaults({ ...none, aParam: "me", aId: "me", viewerId: "me" }),
+    ).toEqual({ a: "me", b: "" });
+  });
+
+  it("leaves both empty for a viewer without league games", () => {
+    expect(compareDefaults({ ...none, viewerId: null })).toEqual({ a: "", b: "" });
   });
 });

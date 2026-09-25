@@ -1,6 +1,7 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { cache } from "react";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 import type { Metadata } from "next";
 import { getAllGameScores } from "@/lib/cached-queries";
 import {
@@ -9,7 +10,7 @@ import {
   decodeGamePlayers,
   trustedGamePlayers,
 } from "@/lib/player-stats";
-import { meetings } from "@/lib/compare";
+import { compareDefaults, meetings } from "@/lib/compare";
 import { heroById } from "@/lib/heroes";
 import { formatNetWorth } from "@/lib/utils";
 import {
@@ -179,6 +180,17 @@ export default async function ComparePage({
   const userOf = new Map(users.map((u) => [u.id, u]));
   const a = aId ? userOf.get(aId) : undefined;
   const b = bId ? userOf.get(bId) : undefined;
+  // Only the selects' starting value changes; nothing runs until Compare.
+  const viewer = await getSessionUser();
+  const { a: defaultA, b: defaultB } = compareDefaults({
+    aParam: aId,
+    bParam: bId,
+    aId: a?.id,
+    bId: b?.id,
+    // A repeated query key is a broken link, not an empty slot.
+    viewerId:
+      !malformedSelection && viewer && userOf.has(viewer.id) ? viewer.id : null,
+  });
   const invalidSelection = malformedSelection || (!!aId && !a) || (!!bId && !b);
   const comparable = !!a && !!b && a.id !== b.id;
   const linesByUser = new Map<string, PlayerGameLine[]>();
@@ -266,7 +278,7 @@ export default async function ComparePage({
                 Player A
                 <select
                   name="a"
-                  defaultValue={a?.id ?? ""}
+                  defaultValue={defaultA}
                   className="mt-1 block h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60 sm:h-10"
                 >
                   <option value="" disabled>
@@ -283,7 +295,7 @@ export default async function ComparePage({
                 Player B
                 <select
                   name="b"
-                  defaultValue={b?.id ?? ""}
+                  defaultValue={defaultB}
                   className="mt-1 block h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60 sm:h-10"
                 >
                   <option value="" disabled>

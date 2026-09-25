@@ -120,3 +120,27 @@ export function topAffinities(
     duo: top(together, (a, b) => b.wins - a.wins),
   };
 }
+
+/**
+ * Starting values for the Compare page's two selects. Whichever slot the URL
+ * left empty is filled with the viewer, when the viewer has league games of
+ * their own: "me vs them" is the comparison people come for, and a profile's
+ * "Compare vs…" link arrives with only the other player set. A slot the URL
+ * named, even with an unknown id, is never overridden, and the viewer never
+ * fills both slots.
+ */
+export function compareDefaults(o: {
+  /** Raw query values: undefined when the key was absent or blank. */
+  aParam: string | undefined;
+  bParam: string | undefined;
+  /** The query values that resolved to a selectable player. */
+  aId: string | undefined;
+  bId: string | undefined;
+  /** The viewer, only when they are selectable (have league games). */
+  viewerId: string | null;
+}): { a: string; b: string } {
+  const me = o.viewerId;
+  const a = o.aId ?? (!o.aParam && me && me !== o.bId ? me : "");
+  const b = o.bId ?? (!o.bParam && me && a && me !== a ? me : "");
+  return { a, b };
+}

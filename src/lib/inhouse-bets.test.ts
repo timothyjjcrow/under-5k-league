@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   allocate,
   betGateError,
+  credBetView,
   potTier,
   potView,
   settleBets,
@@ -719,6 +720,52 @@ describe("settleBets — conservation property (seeded random pools)", () => {
       expect(count, `the seed never produced a ${shape} pool`).toBeGreaterThan(
         0,
       );
+    }
+  });
+});
+
+describe("credBetView", () => {
+  it("shows a bet still in play with its stake and no delta", () => {
+    expect(credBetView({ outcome: null, payout: null, stake: 60 })).toEqual({
+      label: "60 staked, in play",
+      delta: null,
+      tone: "muted",
+    });
+  });
+
+  it("reads wins and losses from the stored net payout", () => {
+    expect(credBetView({ outcome: "WON", payout: 40, stake: 50 })).toMatchObject({
+      label: "Won",
+      delta: 40,
+      tone: "success",
+    });
+    expect(credBetView({ outcome: "LOST", payout: -50, stake: 50 })).toMatchObject({
+      label: "Lost",
+      delta: -50,
+      tone: "danger",
+    });
+  });
+
+  it("explains a settled bet nobody matched instead of showing a bare zero", () => {
+    for (const outcome of ["WON", "LOST"]) {
+      const view = credBetView({ outcome, payout: 0, stake: 100 });
+      expect(view.delta).toBe(0);
+      expect(view.label).toMatch(/nobody took the other side/i);
+    }
+  });
+
+  it("names the reason for every refund", () => {
+    expect(
+      credBetView({ outcome: "VOID_LINEUP", payout: 0, stake: 20 }).label,
+    ).toMatch(/other side/);
+    expect(
+      credBetView({ outcome: "VOID_LATE", payout: 0, stake: 20 }).label,
+    ).toMatch(/after the game started/);
+    expect(
+      credBetView({ outcome: "REFUNDED", payout: 0, stake: 20 }).label,
+    ).toMatch(/didn't count/);
+    for (const outcome of ["VOID_LINEUP", "VOID_LATE", "REFUNDED"]) {
+      expect(credBetView({ outcome, payout: 0, stake: 20 }).delta).toBe(0);
     }
   });
 });

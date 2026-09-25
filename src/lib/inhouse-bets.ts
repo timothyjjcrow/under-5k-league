@@ -1,4 +1,4 @@
-import { INHOUSE_BETS, INHOUSE_STATUS } from "./constants";
+import { INHOUSE_BET_OUTCOME, INHOUSE_BETS, INHOUSE_STATUS } from "./constants";
 
 // Pure inhouse betting math. Every DB effect lives in inhouse-bet-service.ts;
 // this file only encodes the money rules so they can be unit-tested in
@@ -376,4 +376,65 @@ export function tierLabel(t: PotTier): string {
   if (t === "high") return "HIGH STAKES";
   if (t === "contested") return "CONTESTED";
   return "";
+}
+
+/**
+ * How one of a player's own bets reads in their history (the inhouse page's
+ * "Your Cred" strip and the profile card). `delta` is the net change the bet
+ * made to the balance, or null while it is still in play; it is the stored
+ * `payout`, which already excludes the returned stake.
+ *
+ * Every void and refund says WHY in words the player can act on, because "0"
+ * next to a bet they remember placing otherwise reads as lost money. A settled
+ * bet with nothing matched says so too: the other side never staked, so the
+ * whole stake came home and the result made no difference.
+ */
+export function credBetView(bet: {
+  outcome: string | null;
+  payout: number | null;
+  stake: number;
+}): {
+  label: string;
+  delta: number | null;
+  tone: "success" | "danger" | "muted";
+} {
+  const payout = bet.payout ?? 0;
+  switch (bet.outcome) {
+    case null:
+      return {
+        label: `${bet.stake} staked, in play`,
+        delta: null,
+        tone: "muted",
+      };
+    case INHOUSE_BET_OUTCOME.WON:
+    case INHOUSE_BET_OUTCOME.LOST:
+      if (payout === 0) {
+        return {
+          label: "Nobody took the other side, stake returned",
+          delta: 0,
+          tone: "muted",
+        };
+      }
+      return payout > 0
+        ? { label: "Won", delta: payout, tone: "success" }
+        : { label: "Lost", delta: payout, tone: "danger" };
+    case INHOUSE_BET_OUTCOME.VOID_LINEUP:
+      return {
+        label: "Refunded, you played on the other side",
+        delta: 0,
+        tone: "muted",
+      };
+    case INHOUSE_BET_OUTCOME.VOID_LATE:
+      return {
+        label: "Refunded, placed after the game started",
+        delta: 0,
+        tone: "muted",
+      };
+    default:
+      return {
+        label: "Refunded, the game didn't count",
+        delta: 0,
+        tone: "muted",
+      };
+  }
 }
