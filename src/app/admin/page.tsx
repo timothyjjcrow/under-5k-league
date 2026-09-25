@@ -176,6 +176,7 @@ import {
 } from "@/lib/season-phase-policy";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { mmrWeightedBudgets } from "@/lib/draft";
+import { captainMmrWarning, unverifiedCaptainMmrs } from "@/lib/captain-mmr";
 import {
   captainTransferOpen,
   draftSeatPlan,
@@ -901,6 +902,29 @@ async function loadSeasonAdminData(seasonId: string) {
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
 type Season = NonNullable<Awaited<ReturnType<typeof getActiveSeason>>>;
 
+/**
+ * Captains whose MMR will weight their budget at Start with no medal backing
+ * it. Built from the SAME rows the projected budgets use (the captain's ACTIVE
+ * PLAYER registration MMR, 0 when missing, which startDraft also reads as
+ * unknown) plus the captain's current medal, and shared by the Captains &
+ * draft card and the next-step banner so the two can never name different
+ * captains. Empty once setup closes: from Start on, Team.budget is the
+ * authoritative money and captain MMR no longer moves it.
+ */
+function unverifiedCaptainMmrsFor(season: Season, data: AdminData) {
+  if (!draftSetupOpen(season.status, data.draft?.status)) return [];
+  const mmrByUser = new Map(data.players.map((p) => [p.userId, p.mmr]));
+  return unverifiedCaptainMmrs(
+    season.budgetMmrWeight,
+    data.teams.map((t) => ({
+      teamId: t.id,
+      name: t.captain.name,
+      mmr: mmrByUser.get(t.captainId) ?? 0,
+      rankTier: t.captain.rankTier,
+    })),
+  );
+}
+
 function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
   const attention = matchAttention(data.matches);
   const names = new Map(data.teams.map((team) => [team.id, team.name]));
@@ -1004,6 +1028,9 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
       .length,
     hasChampion: championPresentation.championTeamId != null,
     unlinkedDiscordCount: data.unlinkedDiscord,
+    unverifiedCaptainMmrNames: unverifiedCaptainMmrsFor(season, data).map(
+      (c) => c.name,
+    ),
   });
   const hasPlayedResult = data.matches.some(
     (match) => match.status === MATCH_STATUS.COMPLETED,
@@ -1399,6 +1426,10 @@ function CaptainControls({
   );
   const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
   const collateral = data.collateral;
+  const unverifiedMmr = unverifiedCaptainMmrsFor(season, data);
+  const unverifiedMmrByTeam = new Map(
+    unverifiedMmr.map((c) => [c.teamId, c]),
+  );
 
   // Starting the draft locks addCaptain/removeCaptain, but it is NOT a one-way
   // door — this comment used to say it was, and the confirm below repeated it.
@@ -1459,7 +1490,10 @@ function CaptainControls({
     " is refused once any result has been recorded." +
     (season.draftAt
       ? ` Draft confirmations: ${confirmationCounts.ready} of ${confirmationCounts.total} ready; ${confirmationCounts.awaiting} awaiting${confirmationCounts.stale ? `; ${confirmationCounts.stale} must reconfirm` : ""}. This is a warning only and does not block the draft.`
-      : " No draft night is scheduled, so players have not been asked to confirm one.");
+      : " No draft night is scheduled, so players have not been asked to confirm one.") +
+    // DB-only, so it belongs in the base confirm: the Suspense fallback button
+    // carries it too, and a click before the Discord line lands still warns.
+    captainMmrWarning(unverifiedMmr);
   const startDisabled = !setupOpen || !canStart;
 
   return (
@@ -1925,6 +1959,19 @@ function CaptainControls({
                         </ActionForm>
                       ) : null}
                     </div>
+                    {unverifiedMmrByTeam.has(t.id) ? (
+                      /* Its own line, not beside the budget badge: that row
+                         is already at its phone-width limit, and the reason
+                         has to be readable without a hover. */
+                      <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                        <Badge tone="accent" className="shrink-0">
+                          unverified MMR
+                        </Badge>
+                        <span className="min-w-0">
+                          {unverifiedMmrByTeam.get(t.id)!.reason}
+                        </span>
+                      </p>
+                    ) : null}
                     {captainReg.get(t.captainId) && setupOpen ? (
                       <div className="mt-1.5">
                         <DraftReadinessBadge

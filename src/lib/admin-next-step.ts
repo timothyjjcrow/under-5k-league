@@ -1,3 +1,4 @@
+import { captainNameRun } from "./captain-mmr";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 
 /**
@@ -52,6 +53,13 @@ export type AdminPhaseInput = {
    * auto-join happen.
    */
   unlinkedDiscordCount?: number;
+  /**
+   * Captains whose MMR will weight their Start budget without a medal backing
+   * it (`unverifiedCaptainMmrs`, captain-mmr.ts). Optional and DB-derived for
+   * the same blocking-path reason as the Discord count; empty when the MMR
+   * weighting is off, since flat budgets have nothing to verify.
+   */
+  unverifiedCaptainMmrNames?: readonly string[];
 };
 
 export type AdminNextStep = {
@@ -71,6 +79,18 @@ function discordChaseNote(i: AdminPhaseInput): string {
   const unlinked = i.unlinkedDiscordCount ?? 0;
   if (unlinked === 0) return "";
   return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord notifications card names them).`;
+}
+
+/**
+ * The pre-draft captain MMR line, on the same two "Next step: Start draft"
+ * variants as the Discord note: Start is where captain MMR turns into budget
+ * money, so this is the moment it is still free to check. Warn-and-name only;
+ * Start stays available.
+ */
+function captainMmrNote(i: AdminPhaseInput): string {
+  const names = i.unverifiedCaptainMmrNames ?? [];
+  if (names.length === 0) return "";
+  return ` Also: ${captainNameRun(names)} ${names.length === 1 ? "has" : "have"} unverified MMR that sets draft budgets. Check ${names.length === 1 ? "it" : "each"} with Edit medal & MMR on the Captains & draft card first; a medal that matches the MMR marks it verified.`;
 }
 
 export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
@@ -111,6 +131,7 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
       title: "Next step: Start draft.",
       detail:
         `${teamCount} captain(s) ready. Set the draft night and randomize the order first if you want to — starting the auction locks captain changes until it finishes (Abort draft is the way back).` +
+        captainMmrNote(i) +
         discordChaseNote(i),
       tone: "action",
     };
@@ -145,9 +166,11 @@ export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
       title: "Next step: Start draft.",
       detail:
         "The season is in the Draft phase but the auction hasn't been started yet — nothing happens until you press Start draft." +
-        // Same note as the SIGNUPS start-draft step: the auction hasn't run,
-        // so chasing joins is exactly as cheap here — dropping it just because
-        // the admin clicked the phase button early would be arbitrary.
+        // Same notes as the SIGNUPS start-draft step: the auction hasn't run,
+        // so checking captain MMR and chasing joins is exactly as cheap here —
+        // dropping them just because the admin clicked the phase button early
+        // would be arbitrary.
+        captainMmrNote(i) +
         discordChaseNote(i),
       tone: "action",
     };
