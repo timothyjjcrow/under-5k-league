@@ -30,12 +30,15 @@ test.beforeEach(async ({ page }) => {
     where: { id: season.id },
     data: { status: "REGULAR_SEASON", isActive: true },
   });
+  // Direct fixture writes bypass the season commands' public revision stamp.
+  // Expire the previous fixture before asserting archived-season navigation.
+  expect((await page.request.post("/api/test/cache")).ok()).toBe(true);
   await page.goto(
     `/api/auth/dev?name=${encodeURIComponent(displayName)}&steamId=76561190000991001&admin=1&redirect=/features`,
   );
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({ request }) => {
   try {
     if (season) {
       await db.season.update({
@@ -44,6 +47,7 @@ test.afterAll(async () => {
       });
     }
     if (archiveId) await db.season.delete({ where: { id: archiveId } });
+    expect((await request.post("/api/test/cache")).ok()).toBe(true);
   } finally {
     await db.$disconnect();
   }

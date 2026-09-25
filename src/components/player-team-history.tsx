@@ -20,7 +20,7 @@ export function PlayerTeamHistory({ appearances, teams, tenures }: {
           const team = teamOf.get(row.teamId);
           return <div key={row.teamId} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
             <Link className={textLink("py-1")} href={`/seasons/${row.seasonId}`}>{team?.seasonName ?? "Season"}</Link>
-            <Link className={textLink("min-w-0 flex-1 py-1")} href={`/teams/${row.teamId}`}>{team?.name ?? "Former team"}</Link>
+            <Link className={textLink("min-w-0 basis-full py-1 sm:basis-48 sm:flex-1")} href={`/teams/${row.teamId}`}><span className="block truncate">{team?.name ?? "Former team"}</span></Link>
             <span>{row.games} games · {row.wins} map wins</span>
             <span title="Completed series in which this player appeared">{row.seriesWins}–{row.seriesLosses}–{row.seriesDraws} series</span>
             {row.championshipContribution ? <span className="text-accent" title="Recorded an appearance for the champion during this season">🏆 Championship contribution</span> : null}
