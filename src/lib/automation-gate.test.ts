@@ -60,8 +60,9 @@ import {
   type AutomationGateSeason,
 } from "./automation-gate";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
-import { AUTO_SYNC, INHOUSE, WEEK_REMINDER } from "./constants";
+import { AUTO_SYNC, DRAFT_REMINDER, INHOUSE, WEEK_REMINDER } from "./constants";
 import {
+  draftReminderKey,
   honorsAnnouncedKey,
   resultAnnouncedKey,
   SETTING_KEYS,
@@ -98,6 +99,8 @@ function season(
     status: "SIGNUPS",
     dotaLeagueId: null,
     championTeamId: null,
+    draftAt: null,
+    draftRevision: 0,
     draft: null,
     matches: [],
     ...overrides,
@@ -149,7 +152,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 6,
+      version: 7,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -243,7 +246,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 6,
+      version: 7,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -716,6 +719,87 @@ describe("computeAutomationGateSnapshot", () => {
       reason: "REMINDER",
     });
     expect(kickoff - WEEK_REMINDER.AHEAD_HOURS * 3_600_000).toBeLessThan(NOW);
+  });
+
+  it("wakes for the draft-night reminder window and follows its revision marker", () => {
+    const uuidA = "11111111-1111-4111-8111-111111111111";
+    const uuidB = "22222222-2222-4222-8222-222222222222";
+    const quiet = {
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      reason: null,
+    };
+    const gate = (
+      seasonOverrides: Partial<AutomationGateSeason>,
+      settings: Record<string, string> = {},
+      leagueWebhookConfigured = true,
+    ) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          seasons: [season({ draftRevision: 3, ...seasonOverrides })],
+          leagueWebhookConfigured,
+          settings,
+        }),
+        NOW,
+      );
+    const window = DRAFT_REMINDER.AHEAD_HOURS * 3_600_000;
+
+    // Before the window: wake exactly when it opens.
+    const later = NOW + window + 6 * 3_600_000;
+    expect(gate({ draftAt: new Date(later) })).toMatchObject({
+      nextWakeAtMs: later - window,
+      reason: "REMINDER",
+    });
+
+    // Inside the window with no marker (or a failed one): due now, in both
+    // setup phases.
+    const soon = NOW + 2 * 3_600_000;
+    const key = draftReminderKey("season-1", 3);
+    expect(gate({ draftAt: new Date(soon) })).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "REMINDER",
+    });
+    expect(
+      gate(
+        {
+          status: "DRAFT",
+          draftAt: new Date(soon),
+          draft: { status: "NOT_STARTED", bidEndsAt: null, nominationEndsAt: null },
+        },
+        { [key]: `failed:v2:${uuidA}:${NOW - 1_000}` },
+      ),
+    ).toMatchObject({ nextWakeAtMs: NOW, reason: "REMINDER" });
+
+    // A live claim wakes at its lease expiry; a sent marker is done. A marker
+    // for an OLD revision says nothing about the current one.
+    const claimExpiry = NOW + 55_000;
+    expect(
+      gate(
+        { draftAt: new Date(soon) },
+        { [key]: `claim:v2:${claimExpiry}:${uuidA}:${uuidB}` },
+      ),
+    ).toMatchObject({ nextWakeAtMs: claimExpiry, reason: "REMINDER" });
+    expect(
+      gate({ draftAt: new Date(soon) }, { [key]: `sent:v2:${uuidA}:${NOW}` }),
+    ).toMatchObject(quiet);
+    expect(
+      gate(
+        { draftAt: new Date(soon) },
+        { [draftReminderKey("season-1", 2)]: `sent:v2:${uuidA}:${NOW}` },
+      ),
+    ).toMatchObject({ nextWakeAtMs: NOW, reason: "REMINDER" });
+
+    // Silent once the draft time has passed, once the auction started, with
+    // no draft time, and with no league webhook to post through.
+    expect(gate({ draftAt: new Date(NOW - 1_000) })).toMatchObject(quiet);
+    expect(
+      gate({
+        status: "DRAFT",
+        draftAt: new Date(soon),
+        draft: { status: "COMPLETE", bidEndsAt: null, nominationEndsAt: null },
+      }),
+    ).toMatchObject(quiet);
+    expect(gate({ draftAt: null })).toMatchObject(quiet);
+    expect(gate({ draftAt: new Date(soon) }, {}, false)).toMatchObject(quiet);
   });
 
   it("detects a decided playoff round and missing series-result recovery", () => {
@@ -1192,7 +1276,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 6,
+      version: 7,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

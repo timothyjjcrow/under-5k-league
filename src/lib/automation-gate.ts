@@ -14,6 +14,7 @@ import {
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { databaseNow } from "./database-time";
+import { draftReminderOpensAt, draftSetupOpen } from "./draft-setup";
 import { detectIntervalSeconds } from "./inhouse";
 import { inhouseBoardNeedsSync } from "./inhouse-board-service";
 import { prisma } from "./prisma";
@@ -30,6 +31,7 @@ import {
   ANNOUNCE_FAILED_PREFIX,
   CHAMPION_ANNOUNCED_PREFIX,
   championAnnouncedKey,
+  draftReminderKey,
   honorsAnnouncedKey,
   RESULT_ANNOUNCED_PREFIX,
   resultAnnouncedKey,
@@ -122,6 +124,8 @@ export type AutomationGateSeason = {
   status: string;
   dotaLeagueId: string | null;
   championTeamId: string | null;
+  draftAt: Date | null;
+  draftRevision: number;
   draft: {
     status: string;
     bidEndsAt: Date | null;
@@ -854,6 +858,34 @@ export function computeAutomationGateSnapshot(
     }
   }
 
+  // The draft-night reminder (maybeAnnounceDraftNight): wake when its window
+  // opens, then follow its per-revision marker like a week-reminder cluster.
+  // The window closes at draftAt itself, and only while setup is open.
+  if (
+    season &&
+    inputs.leagueWebhookConfigured &&
+    season.draftAt &&
+    draftSetupOpen(season.status, season.draft?.status)
+  ) {
+    invariant(
+      Number.isSafeInteger(season.draftRevision) && season.draftRevision >= 0,
+      "draft revision is invalid",
+    );
+    const draftAtMs = dateMs(season.draftAt, "season.draftAt");
+    const opensAt = draftReminderOpensAt(draftAtMs);
+    if (nowMs < opensAt) {
+      addCandidate(candidates, nowMs, opensAt, "REMINDER");
+    } else if (nowMs < draftAtMs) {
+      const markerAt = genericMarkerWakeAt(
+        inputs.settings[draftReminderKey(season.id, season.draftRevision)],
+        nowMs,
+      );
+      if (markerAt !== null && markerAt < draftAtMs) {
+        addCandidate(candidates, nowMs, markerAt, "REMINDER");
+      }
+    }
+  }
+
   if (season?.status === SEASON_STATUS.REGULAR_SEASON &&
       tiebreakerNeedsAdvancement(season.matches)) {
     addCandidate(candidates, nowMs, nowMs, "TIEBREAKER_REPAIR");
@@ -1045,6 +1077,8 @@ export async function loadAutomationGateSnapshot(
         status: true,
         dotaLeagueId: true,
         championTeamId: true,
+        draftAt: true,
+        draftRevision: true,
         draft: {
           select: {
             status: true,
@@ -1081,6 +1115,9 @@ export async function loadAutomationGateSnapshot(
   const markerKeys = new Set<string>();
   if (season) {
     markerKeys.add(championAnnouncedKey(season.id));
+    if (season.draftAt && draftSetupOpen(season.status, season.draft?.status)) {
+      markerKeys.add(draftReminderKey(season.id, season.draftRevision));
+    }
     for (const match of season.matches) {
       if (match.status === MATCH_STATUS.COMPLETED) {
         markerKeys.add(resultAnnouncedKey(match.id));

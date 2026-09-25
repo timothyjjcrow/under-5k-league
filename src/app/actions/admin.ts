@@ -135,6 +135,7 @@ import {
 } from "@/lib/inhouse-board-service";
 import {
   championAnnouncedKey,
+  draftReminderPrefix,
   getSetting,
   resultAnnouncedKey,
   seasonSettingScopeWhere,
@@ -7228,6 +7229,18 @@ export async function setDraftNight(
             : { draftAt: when },
         });
         if (updated.count === 0) throw new ActiveSeasonChangedError();
+        if (changed) {
+          // A draft-night reminder claimed or queued for the OLD time must
+          // not post it. Dropping the old revisions' in-flight markers makes
+          // any queued send fail its outbox source check; a reminder already
+          // delivered stays recorded, and the new revision re-arms under its
+          // own key (maybeAnnounceDraftNight).
+          await invalidatePendingAnnouncementMarkers(
+            tx,
+            draftReminderPrefix(expectedActiveSeasonId),
+            { prefix: true },
+          );
+        }
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );

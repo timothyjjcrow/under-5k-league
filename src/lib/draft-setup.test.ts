@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { DRAFT_REMINDER, DRAFT_STATUS, SEASON_STATUS } from "./constants";
 import {
   captainTransferOpen,
+  draftReminderDue,
+  draftReminderOpensAt,
   draftSeatPlan,
   draftSetupLockedMessage,
   draftSetupOpen,
@@ -36,6 +38,46 @@ describe("draftSetupOpen", () => {
     expect(draftSetupLockedMessage(SEASON_STATUS.COMPLETE, null)).toMatch(
       /historical.*read-only/i,
     );
+  });
+});
+
+describe("draftReminderDue", () => {
+  const DRAFT_AT = Date.parse("2026-09-20T19:00:00.000Z");
+  const HOUR = 3_600_000;
+
+  it("opens the documented window ahead of draft night", () => {
+    expect(DRAFT_REMINDER.AHEAD_HOURS).toBe(24);
+    expect(draftReminderOpensAt(DRAFT_AT)).toBe(DRAFT_AT - 24 * HOUR);
+  });
+
+  it("is due from the window opening until (not including) draftAt", () => {
+    const due = (nowMs: number) =>
+      draftReminderDue(SEASON_STATUS.SIGNUPS, null, DRAFT_AT, nowMs);
+    expect(due(DRAFT_AT - 24 * HOUR - 1)).toBe(false);
+    expect(due(DRAFT_AT - 24 * HOUR)).toBe(true);
+    expect(due(DRAFT_AT - 1)).toBe(true);
+    expect(due(DRAFT_AT)).toBe(false);
+    expect(due(DRAFT_AT + HOUR)).toBe(false);
+  });
+
+  it("needs a scheduled time and an auction that hasn't started", () => {
+    const now = DRAFT_AT - HOUR;
+    expect(draftReminderDue(SEASON_STATUS.SIGNUPS, null, null, now)).toBe(false);
+    expect(
+      draftReminderDue(SEASON_STATUS.DRAFT, DRAFT_STATUS.NOT_STARTED, DRAFT_AT, now),
+    ).toBe(true);
+    for (const status of [
+      DRAFT_STATUS.IN_PROGRESS,
+      DRAFT_STATUS.PAUSED,
+      DRAFT_STATUS.COMPLETE,
+    ]) {
+      expect(draftReminderDue(SEASON_STATUS.DRAFT, status, DRAFT_AT, now)).toBe(
+        false,
+      );
+    }
+    expect(
+      draftReminderDue(SEASON_STATUS.REGULAR_SEASON, null, DRAFT_AT, now),
+    ).toBe(false);
   });
 });
 

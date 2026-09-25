@@ -438,6 +438,17 @@ export const WEEK_REMINDER = {
   BEHIND_HOURS: 3, // still worth announcing shortly after kickoff
 } as const;
 
+// Draft-night Discord reminder: announced by the same leased worker once the
+// scheduled Season.draftAt is inside the window. Sent at most once per draftAt
+// REVISION (atomic Setting-row claim keyed on season + draftRevision), so
+// moving the draft re-arms it: every old confirmation just went stale and the
+// league needs telling again. Unlike the match-night reminder there is NO
+// "behind" allowance: the admin presses Start, the draft-started post takes
+// over, and a reminder about a time that has already passed is only noise.
+export const DRAFT_REMINDER = {
+  AHEAD_HOURS: 24, // same lead as the match-night reminder
+} as const;
+
 // A player declaring OUT pings their captain. The "was it already OUT?" check
 // alone doesn't cover a player flipping OUT→IN→OUT while they decide, and that
 // used to be a harmless duplicate channel post — now it's a repeat phone buzz

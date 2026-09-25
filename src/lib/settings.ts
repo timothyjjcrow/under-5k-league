@@ -69,10 +69,11 @@ export const SETTING_KEYS = {
 // ---------------------------------------------------------------------------
 // The DYNAMIC keyspace. Beyond the fixed keys above, the Setting table hosts
 // per-entity rows: exactly-once markers (resultAnnounced:<matchId>,
-// weekReminder:<season>:<week>:<kickoffMs>, honorsAnnounced:<season>:<week>,
-// playoffRoundBuilt:<season>:<round>), JSON state blobs
-// (playoffGamesArchive:<season>, importSkip:<season>, leagueSyncSkip:<season>)
-// and per-pair throttles (outPing:<matchId>:<userId>, providerCooldown:*).
+// weekReminder:<season>:<week>:<kickoffMs>, draftReminder:<season>:<revision>,
+// honorsAnnounced:<season>:<week>, playoffRoundBuilt:<season>:<round>), JSON
+// state blobs (playoffGamesArchive:<season>, importSkip:<season>,
+// leagueSyncSkip:<season>) and per-pair throttles
+// (outPing:<matchId>:<userId>, providerCooldown:*).
 // Multi-file key formats
 // are built ONLY through the helpers below — a prefix that drifts between the
 // writer and the sweep that startsWith-matches it fails silently, with no
@@ -130,6 +131,20 @@ export function weekReminderKey(
 
 export function weekReminderPrefix(seasonId: string): string {
   return `weekReminder:${seasonId}:`;
+}
+
+/**
+ * Exactly-once marker for the draft-night reminder, one per draftAt REVISION.
+ * The revision (not the timestamp) is the identity: it bumps on every real
+ * change, including change-away-then-back, which is exactly when the old
+ * confirmations went stale and the league needs a fresh reminder.
+ */
+export function draftReminderKey(seasonId: string, revision: number): string {
+  return `${draftReminderPrefix(seasonId)}${revision}`;
+}
+
+export function draftReminderPrefix(seasonId: string): string {
+  return `draftReminder:${seasonId}:`;
 }
 
 /**
@@ -249,6 +264,7 @@ export function seasonSettingScopeWhere(
   const seasonScope: Prisma.SettingWhereInput[] = [
     { key: championAnnouncedKey(seasonId) },
     { key: { startsWith: weekReminderPrefix(seasonId) } },
+    { key: { startsWith: draftReminderPrefix(seasonId) } },
     { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
     { key: playoffGamesArchiveKey(seasonId) },
     { key: tiebreakerGamesArchiveKey(seasonId) },

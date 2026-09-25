@@ -57,7 +57,10 @@ import {
 import { getSeasonHonorReadiness } from "./honors-readiness-service";
 import { HONOR_WEEK_STATE } from "./honors-readiness";
 import { getActiveSeason, singleActiveSeason } from "./season";
-import { maybeAnnounceUpcomingWeek } from "./reminder-service";
+import {
+  maybeAnnounceDraftNight,
+  maybeAnnounceUpcomingWeek,
+} from "./reminder-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { recoverableAnnouncementMarker } from "./announcement-marker";
 
@@ -1152,6 +1155,21 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.REMINDER);
       logStepFailure("reminder", error);
+    }
+  }
+
+  // The draft-night reminder is phase-disjoint from the week reminder above
+  // (setup phases vs REGULAR_SEASON/PLAYOFFS), so at most one of them does any
+  // work in a run; it still gets its own budget check and failure isolation.
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    skipped.push(RESULT_SYNC_SKIPPED.REMINDER);
+  } else {
+    try {
+      const season = await getActiveSeason();
+      if (season) await maybeAnnounceDraftNight(season);
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.REMINDER);
+      logStepFailure("draft-reminder", error);
     }
   }
 

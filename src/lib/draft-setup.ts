@@ -1,4 +1,5 @@
 import {
+  DRAFT_REMINDER,
   DRAFT_STATUS,
   SEASON_STATUS,
   type DraftStatus,
@@ -20,6 +21,30 @@ export function draftSetupOpen(
   const auctionNotStarted =
     !draftStatus || draftStatus === DRAFT_STATUS.NOT_STARTED;
   return setupPhase && auctionNotStarted;
+}
+
+/** When the draft-night reminder window opens for a scheduled draft. */
+export function draftReminderOpensAt(draftAtMs: number): number {
+  return draftAtMs - DRAFT_REMINDER.AHEAD_HOURS * 3_600_000;
+}
+
+/**
+ * Is the draft-night reminder due right now? Setup must still be open (the
+ * auction hasn't started, see draftSetupOpen), a time must be scheduled, and
+ * that time must be inside the window and still AHEAD: the window closes at
+ * draftAt itself. One definition for the reminder service and the automation
+ * gate, so the worker wakes exactly when the service would act.
+ */
+export function draftReminderDue(
+  seasonStatus: SeasonStatus | string,
+  draftStatus: DraftStatus | string | null | undefined,
+  draftAtMs: number | null | undefined,
+  nowMs: number,
+): boolean {
+  if (draftAtMs == null || !draftSetupOpen(seasonStatus, draftStatus)) {
+    return false;
+  }
+  return nowMs >= draftReminderOpensAt(draftAtMs) && nowMs < draftAtMs;
 }
 
 /** Captaincy can change after the auction, but never while its turn state is

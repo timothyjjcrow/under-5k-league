@@ -29,6 +29,7 @@ import {
   draftAbortedMessage,
   draftRescheduledMessage,
   draftScheduledMessage,
+  draftReminderAnnouncement,
   captainAssignedMessage,
   playerAwayMessage,
   playerOutMessage,
@@ -299,6 +300,195 @@ describe("draft scheduling", () => {
     );
     expect(signupMessage("Dendi", 3, 20)).not.toContain("Draft night");
     expect(signupMessage("Dendi", 3, 20, null)).not.toContain("Draft night");
+  });
+});
+
+describe("draftReminderAnnouncement", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const base = {
+    seasonName: "Season 3",
+    draftAtMs: 1_800_000_000_000,
+    playerSignupsOpen: true,
+    playerCount: 14,
+    captains: [
+      { name: "Dendi", discordId: "111111111111111111" },
+      { name: "Puppey", discordId: null },
+    ],
+    unconfirmed: [
+      { name: "Miracle-", discordId: "222222222222222222" },
+      { name: "N0tail", discordId: null },
+    ],
+  };
+  const visibleMentions = (content: string) =>
+    [...content.matchAll(/<@(\d{17,20})>/g)].map((m) => m[1]);
+
+  it("renders the whole reminder reader-local, with counts and both links", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftReminderAnnouncement(base);
+    expect(announcement.content).toBe(
+      [
+        "⏰ **Draft night reminder: the Season 3 draft is scheduled for <t:1800000000:F> (<t:1800000000:R>).**",
+        "**14** players signed up, **2** captains designated. Player signups stay open until the auction starts.",
+        "Captains, be in the draft room before the auction starts: <@111111111111111111>, Puppey",
+        "Still to confirm this draft time (2): <@222222222222222222>, N0tail. Confirm on the signup page.",
+        "Draft room: <https://league.example/draft> · Signup page: <https://league.example/me>",
+      ].join("\n"),
+    );
+    // Only the linked captain and the linked straggler; exactly the visible tokens.
+    expect(announcement.mentionUserIds).toEqual([
+      "111111111111111111",
+      "222222222222222222",
+    ]);
+    expect(announcement.content).not.toContain("1800000000000");
+  });
+
+  it("says truthfully whether player signups are still open", () => {
+    const open = draftReminderAnnouncement(base).content;
+    expect(open).toContain("Player signups stay open until the auction starts.");
+    const closed = draftReminderAnnouncement({
+      ...base,
+      playerSignupsOpen: false,
+    }).content;
+    expect(closed).toContain(
+      "Player signups are closed; standins can still sign up.",
+    );
+    expect(closed).not.toContain("stay open");
+  });
+
+  it("uses singular counts and drops lines that have nobody in them", () => {
+    const msg = draftReminderAnnouncement({
+      ...base,
+      playerCount: 1,
+      captains: [{ name: "Solo", discordId: null }],
+      unconfirmed: [],
+    }).content;
+    expect(msg).toContain("**1** player signed up, **1** captain designated.");
+    expect(msg).not.toContain("Still to confirm");
+
+    const bare = draftReminderAnnouncement({
+      ...base,
+      playerCount: 0,
+      captains: [],
+      unconfirmed: [],
+    });
+    expect(bare.content).toContain("**0** players signed up, **0** captains designated.");
+    expect(bare.content).not.toContain("Captains, be in");
+    expect(bare.content.split("\n")).toHaveLength(3); // header, counts, links
+    expect(bare.mentionUserIds).toEqual([]);
+  });
+
+  it("never mentions an id that isn't a real snowflake", () => {
+    const announcement = draftReminderAnnouncement({
+      ...base,
+      captains: [{ name: "Typo", discordId: "123" }],
+      unconfirmed: [{ name: "Blank", discordId: "   " }],
+    });
+    expect(announcement.content).not.toContain("<@123>");
+    expect(announcement.content).toContain("Typo");
+    expect(announcement.content).toContain("Blank");
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("caps the unconfirmed list and pings only the names it shows", () => {
+    const unconfirmed = Array.from({ length: 25 }, (_, i) => ({
+      name: `Player ${i + 1}`,
+      discordId: (BigInt("700000000000000000") + BigInt(i)).toString(),
+    }));
+    const announcement = draftReminderAnnouncement({ ...base, unconfirmed });
+    expect(announcement.content).toContain("Still to confirm this draft time (25):");
+    expect(announcement.content).toContain("+5 more. Confirm on the signup page.");
+    expect(announcement.content).toContain(`<@${unconfirmed[19].discordId}>`);
+    expect(announcement.content).not.toContain(`<@${unconfirmed[20].discordId}>`);
+    expect(announcement.mentionUserIds).not.toContain(unconfirmed[20].discordId);
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(announcement.content)),
+    );
+  });
+
+  it("packs captains first under Discord's 2,000-character limit", () => {
+    const captains = Array.from({ length: 60 }, (_, i) => ({
+      name: `A Very Long Captain Persona Number ${i + 1}`,
+      discordId: i % 2 ? null : (BigInt("600000000000000000") + BigInt(i)).toString(),
+    }));
+    const unconfirmed = Array.from({ length: 10 }, (_, i) => ({
+      name: `Straggler ${i + 1}`,
+      discordId: (BigInt("500000000000000000") + BigInt(i)).toString(),
+    }));
+    const announcement = draftReminderAnnouncement({
+      ...base,
+      playerCount: 200,
+      captains,
+      unconfirmed,
+    });
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+    // Every allowlisted id is already visible, so transport materialization
+    // can't prepend anyone who was packed out of the body.
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    expect(delivered).toMatch(/Captains, be in the draft room before the auction starts: .* \+\d+ more/);
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(delivered)),
+    );
+    // Captains ate most of the budget; the stragglers get what is left.
+    expect(delivered).toMatch(
+      /Still to confirm this draft time \(10\): .* \+\d+ more\. Confirm on the signup page\./,
+    );
+    expect(announcement.mentionUserIds).not.toContain(unconfirmed[9].discordId);
+    expect(delivered).toContain("/draft>");
+  });
+
+  it("collapses stragglers to a count when no name fits", () => {
+    const straggler = { name: "Late", discordId: "500000000000000001" };
+    // The longest captain persona that still leaves the post deliverable
+    // leaves no room for even one straggler's mention.
+    let announcement = draftReminderAnnouncement(base);
+    for (let len = 1_900; len > 0; len -= 1) {
+      announcement = draftReminderAnnouncement({
+        ...base,
+        captains: [{ name: "C".repeat(len), discordId: null }],
+        unconfirmed: [straggler],
+      });
+      if (announcement.content.includes("C".repeat(len))) break;
+    }
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.content).toContain(
+      "1 player is still to confirm this draft time. Confirm on the signup page.",
+    );
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("falls back to a deliverable post that names nobody", () => {
+    const announcement = draftReminderAnnouncement({
+      ...base,
+      seasonName: "S".repeat(2_100),
+    });
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.content).toContain("<t:1800000000:F>");
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("uses no em-dashes in any variant", () => {
+    const variants = [
+      draftReminderAnnouncement(base),
+      draftReminderAnnouncement({ ...base, playerSignupsOpen: false }),
+      draftReminderAnnouncement({ ...base, captains: [], unconfirmed: [] }),
+      draftReminderAnnouncement({ ...base, seasonName: "S".repeat(2_100) }),
+      draftReminderAnnouncement({
+        ...base,
+        unconfirmed: Array.from({ length: 30 }, (_, i) => ({
+          name: `P${i}`,
+          discordId: null,
+        })),
+      }),
+    ];
+    for (const { content } of variants) {
+      expect(content).not.toContain("—");
+    }
   });
 });
 
@@ -1191,6 +1381,14 @@ describe("no message unfurls a link preview", () => {
       draftScheduledMessage("S1", 1_800_000_000_000),
       draftRescheduledMessage("S1", 1_800_000_000_000),
       draftCancelledMessage("S1"),
+      draftReminderAnnouncement({
+        seasonName: "S1",
+        draftAtMs: 1_800_000_000_000,
+        playerSignupsOpen: true,
+        playerCount: 3,
+        captains: [{ name: "A", discordId: null }],
+        unconfirmed: [{ name: "B", discordId: null }],
+      }).content,
       captainAssignedMessage("A", "T", "123"),
       draftStartedMessage("S1"),
       draftCompleteMessage("S1"),
@@ -1453,6 +1651,14 @@ describe("no player-supplied name can inject markdown", () => {
         },
       ],
     }),
+    draftReminderAnnouncement({
+      seasonName: "Season 1",
+      draftAtMs: 1_800_000_000_000,
+      playerSignupsOpen: true,
+      playerCount: 2,
+      captains: [{ name: EVIL, discordId: null }],
+      unconfirmed: [{ name: EVIL, discordId: null }],
+    }).content,
     adminRetimeMessage({
       clearedRsvps: 2,
       moves: [
@@ -1514,6 +1720,16 @@ describe("no player-supplied name can inject markdown", () => {
       { homeName: nl, awayName: nl, week: 2, isPlayoff: false, whenMs: null },
     ]);
     expect(away.split("\n")).toHaveLength(4); // header, two fixtures, footer
+    const draftReminder = draftReminderAnnouncement({
+      seasonName: "Season 1",
+      draftAtMs: 1_800_000_000_000,
+      playerSignupsOpen: true,
+      playerCount: 2,
+      captains: [{ name: nl, discordId: null }],
+      unconfirmed: [{ name: nl, discordId: null }],
+    }).content;
+    // header, counts, captains, unconfirmed, links
+    expect(draftReminder.split("\n")).toHaveLength(5);
     // The slips block is one line per SIDE, so a newline in a persona would
     // forge a row and make the message lie about who was in the game.
     const slips = inhouseResultMessage({
@@ -1556,6 +1772,16 @@ describe("no player-supplied name can inject markdown", () => {
         ],
       }),
     ).toContain("<@456789012345678901>");
+    const draftReminder = draftReminderAnnouncement({
+      seasonName: "Season 1",
+      draftAtMs: 1_800_000_000_000,
+      playerSignupsOpen: true,
+      playerCount: 2,
+      captains: [{ name: "x", discordId: "456789012345678901" }],
+      unconfirmed: [{ name: "y", discordId: "556789012345678901" }],
+    }).content;
+    expect(draftReminder).toContain("<@456789012345678901>");
+    expect(draftReminder).toContain("<@556789012345678901>");
   });
 
   it("leaves ordinary names alone", () => {
