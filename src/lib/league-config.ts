@@ -37,7 +37,9 @@ export function createLeagueConfig(env: LeagueEnvironment) {
   const day = env.NEXT_PUBLIC_MATCH_DAY?.trim() || (europe ? "" : "Sundays");
   const time = env.NEXT_PUBLIC_MATCH_TIME?.trim() || (europe ? "" : "6:00 PM");
   const announced = Boolean(day && time);
-  const timezone = env.NEXT_PUBLIC_LEAGUE_TIMEZONE?.trim() || (europe ? timeZone : "PST");
+  // "Pacific", not "PST": the league night stays on the local clock, which is
+  // PDT for most of the year.
+  const timezone = env.NEXT_PUBLIC_LEAGUE_TIMEZONE?.trim() || (europe ? timeZone : "Pacific");
   const inhouseLeagueName = env.NEXT_PUBLIC_INHOUSE_LEAGUE_NAME?.trim() ||
     (europe ? "European inhouse league ticket (to be configured)" : "Under 5K In-House League");
 

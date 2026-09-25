@@ -13,6 +13,8 @@ import { invalidateMatchLineups } from "./match-lineups";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import { findFixtureConflict } from "./fixture-conflict";
+import { rescheduleDeadline } from "./schedule";
 
 export type AcceptedReschedule = {
   homeName: string;
@@ -103,6 +105,62 @@ function assertSaneProposedTime(proposedTime: Date, now = new Date()): void {
     throw new UserFacingError("That time is too far out — check the year");
 }
 
+/**
+ * The league-calendar rules a new kickoff must satisfy, checked when a time is
+ * proposed AND again when it is accepted (a proposal can sit open while the
+ * rest of the schedule moves). Scrims are checked separately by the callers.
+ */
+async function assertFitsLeagueCalendar(
+  tx: Prisma.TransactionClient,
+  match: {
+    id: string;
+    seasonId: string;
+    phase: string;
+    homeTeamId: string;
+    awayTeamId: string;
+  },
+  firstMatchNight: Date | null,
+  proposedTime: Date,
+): Promise<void> {
+  const clash = await findFixtureConflict(tx, {
+    seasonId: match.seasonId,
+    teamIds: [match.homeTeamId, match.awayTeamId],
+    scheduledAt: proposedTime,
+    exceptMatchId: match.id,
+  });
+  if (clash)
+    throw new UserFacingError(
+      `That is within four hours of ${clash.homeName} vs ${clash.awayName} (${clash.label}) — pick another time`,
+    );
+  if (match.phase !== MATCH_PHASE.REGULAR) return;
+  const [lastRegular, firstPostseason] = await Promise.all([
+    tx.match.aggregate({
+      where: { seasonId: match.seasonId, phase: MATCH_PHASE.REGULAR },
+      _max: { week: true },
+    }),
+    tx.match.findFirst({
+      where: {
+        seasonId: match.seasonId,
+        phase: { not: MATCH_PHASE.REGULAR },
+        scheduledAt: { not: null },
+      },
+      orderBy: { scheduledAt: "asc" },
+      select: { scheduledAt: true },
+    }),
+  ]);
+  const deadline = rescheduleDeadline({
+    phase: match.phase,
+    firstMatchNight,
+    lastRegularWeek: lastRegular._max.week ?? 0,
+    earliestPostseasonKickoffMs: firstPostseason?.scheduledAt?.getTime() ?? null,
+    nowMs: Date.now(),
+  });
+  if (deadline && proposedTime.getTime() >= deadline.getTime())
+    throw new UserFacingError(
+      "Regular-season matches must be played before the playoffs start — pick an earlier time, or ask an admin",
+    );
+}
+
 /** Create (or supersede) the match's open proposal. Captains only. */
 export async function proposeReschedule(
   userId: string,
@@ -132,6 +190,7 @@ export async function proposeReschedule(
               select: {
                 id: true,
                 status: true,
+                firstMatchNight: true,
                 draft: { select: { status: true } },
               },
             })
@@ -185,6 +244,12 @@ export async function proposeReschedule(
             "One of these teams has a booked scrim within four hours of that time",
           );
         }
+        await assertFitsLeagueCalendar(
+          tx,
+          match,
+          activeSeason.firstMatchNight,
+          proposedTime,
+        );
 
         await tx.rescheduleRequest.updateMany({
           where: { matchId, status: "PENDING" },
@@ -280,6 +345,7 @@ export async function respondReschedule(
             select: {
               id: true,
               status: true,
+              firstMatchNight: true,
               draft: { select: { status: true } },
             },
           })
@@ -320,6 +386,12 @@ export async function respondReschedule(
             "One of these teams now has a booked scrim within four hours of that time",
           );
         }
+        await assertFitsLeagueCalendar(
+          tx,
+          match,
+          activeSeason.firstMatchNight,
+          request.proposedTime,
+        );
 
         const accepted = await tx.rescheduleRequest.updateMany({
           where: { id: requestId, status: "PENDING" },

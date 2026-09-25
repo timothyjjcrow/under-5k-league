@@ -18,7 +18,9 @@ import {
   matchNightForWeek,
   shiftMatchNight,
   upcomingMatchNight,
+  rescheduleDeadline,
 } from "./schedule";
+import { LEAGUE_CONFIG } from "./league-config";
 
 describe("matchNightForWeek", () => {
   const first = new Date("2026-07-12T18:00:00-07:00");
@@ -32,9 +34,26 @@ describe("matchNightForWeek", () => {
     expect(w3.getTime() - first.getTime()).toBe(14 * 24 * 3600 * 1000);
   });
 
-  it("keeps the existing US fixed intervals across daylight saving", () => {
+  it("keeps fixed intervals when no timezone is given", () => {
     const first = new Date("2026-10-25T18:00:00-07:00");
     expect(matchNightForWeek(first, 2, null).toISOString()).toBe("2026-11-02T01:00:00.000Z");
+  });
+
+  it("keeps the US match night at 6 PM Pacific when daylight saving ends", () => {
+    const first = new Date("2026-10-25T18:00:00-07:00");
+    // Nov 1 2026: clocks fall back, so 6 PM PST is 02:00 UTC, not 01:00.
+    expect(matchNightForWeek(first, 2, "America/Los_Angeles").toISOString())
+      .toBe("2026-11-02T02:00:00.000Z");
+    // And back again in March.
+    expect(matchNightForWeek(new Date("2027-03-07T18:00:00-08:00"), 2, "America/Los_Angeles")
+      .toISOString()).toBe("2027-03-15T01:00:00.000Z");
+  });
+
+  it("defaults to the league's configured clock in every region", () => {
+    // The US league used fixed UTC intervals until 2026-09; no region may.
+    const first = new Date("2026-10-25T18:00:00-07:00");
+    expect(matchNightForWeek(first, 2)).toEqual(matchNightForWeek(first, 2, LEAGUE_CONFIG.timeZone));
+    expect(matchNightForWeek(first, 2)).not.toEqual(matchNightForWeek(first, 2, null));
   });
 
   it.each([
@@ -117,6 +136,44 @@ describe("upcomingMatchNight", () => {
     const first = new Date("2026-10-18T20:00:00+02:00");
     const now = new Date("2026-10-25T20:00:00+01:00").getTime();
     expect(upcomingMatchNight(first, 2, now, "Europe/Berlin").getTime()).toBe(now);
+  });
+});
+
+describe("rescheduleDeadline", () => {
+  const first = new Date("2026-09-06T18:00:00-07:00");
+  const base = {
+    phase: "REGULAR",
+    firstMatchNight: first,
+    lastRegularWeek: 5,
+    earliestPostseasonKickoffMs: null,
+    nowMs: new Date("2026-09-20T12:00:00-07:00").getTime(),
+    timeZone: "America/Los_Angeles",
+  };
+
+  it("is the league night after the last regular week", () => {
+    expect(rescheduleDeadline(base)?.toISOString()).toBe(
+      matchNightForWeek(first, 6, "America/Los_Angeles").toISOString(),
+    );
+  });
+
+  it("prefers a postseason kickoff already on the calendar", () => {
+    const ms = new Date("2026-10-08T18:00:00-07:00").getTime();
+    expect(rescheduleDeadline({ ...base, earliestPostseasonKickoffMs: ms })?.getTime()).toBe(ms);
+  });
+
+  it("rolls forward like the playoff bracket when the season slipped", () => {
+    const late = new Date("2026-10-20T12:00:00-07:00").getTime();
+    const deadline = rescheduleDeadline({ ...base, nowMs: late })!;
+    expect(deadline.getTime()).toBeGreaterThan(late);
+    // Sunday Oct 25, 6 PM Pacific.
+    expect(deadline.toISOString()).toBe("2026-10-26T01:00:00.000Z");
+  });
+
+  it("sets no limit without a first night, or for postseason matches", () => {
+    expect(rescheduleDeadline({ ...base, firstMatchNight: null })).toBeNull();
+    expect(rescheduleDeadline({ ...base, phase: "PLAYOFF" })).toBeNull();
+    expect(rescheduleDeadline({ ...base, phase: "TIEBREAKER" })).toBeNull();
+    expect(rescheduleDeadline({ ...base, lastRegularWeek: 0 })).toBeNull();
   });
 });
 

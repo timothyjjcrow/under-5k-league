@@ -17,7 +17,7 @@ describe("regional league configuration", () => {
       gameServerRegionId: 2,
       inhouseLeagueName: "Under 5K In-House League",
       inhouseLeagueConfigured: true,
-      matchSchedule: { label: "Sundays at 6:00 PM PST", announced: true },
+      matchSchedule: { label: "Sundays at 6:00 PM Pacific", announced: true },
     });
   });
 

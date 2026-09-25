@@ -787,3 +787,124 @@ describe("reschedule — the acceptance carries the match's booked standins", ()
     expect(outcome).not.toHaveProperty("standinUserIds");
   });
 });
+
+describe("reschedule league-calendar rules (integration)", () => {
+  const HOUR = 60 * 60 * 1000;
+  const WEEK = 7 * 24 * HOUR;
+
+  /** Three teams: A plays B, then A plays C one hour after the B night. */
+  async function setupThreeTeams(firstMatchNight: Date | null = null) {
+    const season = await makeSeason({
+      status: SEASON_STATUS.REGULAR_SEASON,
+      firstMatchNight,
+    });
+    const a = await makeTeam(season.id, "Alpha", 0);
+    const b = await makeTeam(season.id, "Bravo", 1);
+    const c = await makeTeam(season.id, "Charlie", 2);
+    const ab = await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 1, phase: "REGULAR",
+        homeTeamId: a.id, awayTeamId: b.id, scheduledAt: ORIGINAL_NIGHT,
+      },
+    });
+    const ac = await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 2, phase: "REGULAR",
+        homeTeamId: a.id, awayTeamId: c.id,
+        scheduledAt: new Date(ORIGINAL_NIGHT.getTime() + WEEK),
+      },
+    });
+    return { season, a, b, c, ab, ac };
+  }
+
+  it("refuses a time within four hours of either team's other fixture", async () => {
+    const { a, ab, ac } = await setupThreeTeams();
+    const onTopOfAc = new Date(ac.scheduledAt!.getTime() + HOUR);
+    await expect(proposeReschedule(a.captainId, ab.id, onTopOfAc)).rejects.toThrow(
+      /within four hours of Alpha vs Charlie \(Week 2\)/,
+    );
+    expect(await pendingFor(ab.id)).toBeNull();
+
+    // Five hours clear is fine: two fixtures the same day is the captains' call.
+    const sameDay = new Date(ac.scheduledAt!.getTime() - 5 * HOUR);
+    await proposeReschedule(a.captainId, ab.id, sameDay);
+    expect((await pendingFor(ab.id))?.proposedTime.getTime()).toBe(sameDay.getTime());
+  });
+
+  it("re-checks the clash at acceptance, after the rest of the schedule moved", async () => {
+    const { a, b, ab, ac } = await setupThreeTeams();
+    const target = new Date(ORIGINAL_NIGHT.getTime() + 24 * HOUR);
+    expect(target.getTime()).toBeLessThan(ac.scheduledAt!.getTime() - 4 * HOUR);
+    await proposeReschedule(b.captainId, ab.id, target);
+    // An admin moves Alpha's other match onto that night while it sits open.
+    await prisma.match.update({
+      where: { id: ac.id },
+      data: { scheduledAt: new Date(target.getTime() + 2 * HOUR) },
+    });
+    const pending = await pendingFor(ab.id);
+    await expect(respondReschedule(a.captainId, pending!.id, true)).rejects.toThrow(
+      /within four hours/,
+    );
+    const unchanged = await prisma.match.findUniqueOrThrow({ where: { id: ab.id } });
+    expect(unchanged.scheduledAt?.getTime()).toBe(ORIGINAL_NIGHT.getTime());
+    expect((await pendingFor(ab.id))?.status).toBe("PENDING");
+  });
+
+  it("ignores the team's played fixtures", async () => {
+    const { a, ab, ac } = await setupThreeTeams();
+    await prisma.match.update({
+      where: { id: ac.id },
+      data: { status: MATCH_STATUS.COMPLETED, homeScore: 2, awayScore: 0 },
+    });
+    await proposeReschedule(a.captainId, ab.id, ac.scheduledAt!);
+    expect(await pendingFor(ab.id)).not.toBeNull();
+  });
+
+  it("keeps a regular match before the playoff night", async () => {
+    // Week 1 is ORIGINAL_NIGHT, so the last regular week (2) is followed by the
+    // playoff night one week after it.
+    const { a, b, ab } = await setupThreeTeams(ORIGINAL_NIGHT);
+    const playoffNight = new Date(ORIGINAL_NIGHT.getTime() + 2 * WEEK);
+    const tooLate = new Date(playoffNight.getTime() + 24 * HOUR);
+    await expect(proposeReschedule(a.captainId, ab.id, tooLate)).rejects.toThrow(
+      /before the playoffs start/,
+    );
+    // Moving it later inside the regular season is still the captains' call.
+    const inTime = new Date(playoffNight.getTime() - 24 * HOUR);
+    await proposeReschedule(b.captainId, ab.id, inTime);
+    expect(await pendingFor(ab.id)).not.toBeNull();
+  });
+
+  it("uses a playoff kickoff already on the calendar as the limit", async () => {
+    const { season, a, b, c, ab } = await setupThreeTeams();
+    const earlyPlayoff = new Date(ORIGINAL_NIGHT.getTime() + 36 * HOUR);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 3, phase: "PLAYOFF", bracketSlot: "R1M1",
+        homeTeamId: b.id, awayTeamId: c.id,
+        scheduledAt: earlyPlayoff,
+      },
+    });
+    await expect(
+      proposeReschedule(a.captainId, ab.id, new Date(earlyPlayoff.getTime() + 6 * HOUR)),
+    ).rejects.toThrow(/before the playoffs start/);
+  });
+
+  it("puts no playoff limit on a playoff match", async () => {
+    const { season, b, c } = await setupThreeTeams(ORIGINAL_NIGHT);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.PLAYOFFS },
+    });
+    const playoff = await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 3, phase: "PLAYOFF", bracketSlot: "R1M1",
+        homeTeamId: b.id, awayTeamId: c.id,
+        scheduledAt: new Date(ORIGINAL_NIGHT.getTime() + 2 * WEEK),
+      },
+    });
+    const muchLater = new Date(ORIGINAL_NIGHT.getTime() + 4 * WEEK);
+    await proposeReschedule(b.captainId, playoff.id, muchLater);
+    expect(await pendingFor(playoff.id)).not.toBeNull();
+  });
+});

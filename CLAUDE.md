@@ -2830,9 +2830,13 @@ ask it made twice. What that turned into:
   browser-computed epoch; prefill via `defaultTs`, never a server-formatted
   string) + `localDate(fd, raw, ts)` in the action. Discord messages carry
   times as `<t:epoch:F>` (reader-local), never formatted strings.
-- KNOWN LIMITATION: week math is fixed-ms (`matchNightForWeek`, cascade
-  deltas) — seasons spanning a DST transition drift the league night by an
-  hour after the switch; per-match Set time corrects it.
+- Week math follows the league's configured clock (`LEAGUE_CONFIG.timeZone`)
+  in BOTH regions: `matchNightForWeek`, `shiftMatchNight` and
+  `upcomingMatchNight` keep "Sundays 6 PM" at 6 PM across daylight saving.
+  The US league used fixed-ms UTC intervals until 2026-09, which moved every
+  fixture after the November clock change an hour early. Passing `null` still
+  gives fixed intervals (tests only). Stored kickoffs are never rewritten;
+  per-match Set time and the week mover correct any old fixture.
 
 ## Rescheduling (done)
 

@@ -7,9 +7,12 @@ import { LEAGUE_CONFIG } from "./league-config";
 export type Pairing = { home: string; away: string };
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-// Existing US seasons were generated in UTC intervals. Preserve their anchors
-// and future playoff dates; new EU seasons follow the configured local clock.
-const SCHEDULE_TIME_ZONE = LEAGUE_CONFIG.region === "eu" ? LEAGUE_CONFIG.timeZone : null;
+// Both leagues follow their configured local clock, so "Sundays at 6 PM" stays
+// 6 PM after daylight saving ends. The US league used fixed UTC intervals until
+// 2026-09, which moved every fixture after the November clock change an hour
+// earlier. Stored kickoffs are never rewritten by this: it only decides the
+// dates that generation, playoff rounds and the week mover compute next.
+const SCHEDULE_TIME_ZONE: string | null = LEAGUE_CONFIG.timeZone;
 
 function wallTime(date: Date, formatter: Intl.DateTimeFormat): number {
   const parts = Object.fromEntries(
@@ -101,6 +104,37 @@ export function upcomingMatchNight(
     next = matchNightForWeek(firstNight, nextWeek, timeZone);
   }
   return next;
+}
+
+/**
+ * The latest kickoff a captain-agreed reschedule may choose for a REGULAR
+ * match, or null when there is no limit to enforce.
+ *
+ * `startPlayoffs` refuses while any regular result is outstanding, so a
+ * regular match moved past the playoff night blocks the whole bracket. The
+ * limit is the earliest playoff kickoff already on the calendar, otherwise the
+ * league night after the last regular week (rolled forward the way
+ * `createPlayoffBracket` rolls it). Playoff and tiebreaker matches have no
+ * limit here: moving one only delays its own round.
+ */
+export function rescheduleDeadline(options: {
+  phase: string;
+  firstMatchNight: Date | null;
+  lastRegularWeek: number;
+  earliestPostseasonKickoffMs: number | null;
+  nowMs: number;
+  timeZone?: string | null;
+}): Date | null {
+  if (options.phase !== MATCH_PHASE.REGULAR) return null;
+  if (options.earliestPostseasonKickoffMs != null)
+    return new Date(options.earliestPostseasonKickoffMs);
+  if (!options.firstMatchNight || options.lastRegularWeek < 1) return null;
+  return upcomingMatchNight(
+    options.firstMatchNight,
+    options.lastRegularWeek + 1,
+    options.nowMs,
+    options.timeZone === undefined ? SCHEDULE_TIME_ZONE : options.timeZone,
+  );
 }
 
 /**
