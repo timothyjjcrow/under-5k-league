@@ -113,9 +113,14 @@ export function upcomingMatchNight(
  * `startPlayoffs` refuses while any regular result is outstanding, so a
  * regular match moved past the playoff night blocks the whole bracket. The
  * limit is the earliest playoff kickoff already on the calendar, otherwise the
- * league night after the last regular week (rolled forward the way
- * `createPlayoffBracket` rolls it). Playoff and tiebreaker matches have no
- * limit here: moving one only delays its own round.
+ * planned playoff night: the league night after the last regular week.
+ *
+ * Once that planned night has passed with no bracket on the calendar, the
+ * season has slipped and the playoff date is an admin decision the site can't
+ * see, so there is no limit. Rolling forward to the next league night instead
+ * would refuse any reschedule past this week's night, a rule no admin chose.
+ * Playoff and tiebreaker matches have no limit here: moving one only delays
+ * its own round.
  */
 export function rescheduleDeadline(options: {
   phase: string;
@@ -129,12 +134,12 @@ export function rescheduleDeadline(options: {
   if (options.earliestPostseasonKickoffMs != null)
     return new Date(options.earliestPostseasonKickoffMs);
   if (!options.firstMatchNight || options.lastRegularWeek < 1) return null;
-  return upcomingMatchNight(
+  const planned = matchNightForWeek(
     options.firstMatchNight,
     options.lastRegularWeek + 1,
-    options.nowMs,
     options.timeZone === undefined ? SCHEDULE_TIME_ZONE : options.timeZone,
   );
+  return planned.getTime() > options.nowMs ? planned : null;
 }
 
 /**

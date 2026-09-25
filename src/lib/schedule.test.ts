@@ -161,12 +161,27 @@ describe("rescheduleDeadline", () => {
     expect(rescheduleDeadline({ ...base, earliestPostseasonKickoffMs: ms })?.getTime()).toBe(ms);
   });
 
-  it("rolls forward like the playoff bracket when the season slipped", () => {
-    const late = new Date("2026-10-20T12:00:00-07:00").getTime();
-    const deadline = rescheduleDeadline({ ...base, nowMs: late })!;
-    expect(deadline.getTime()).toBeGreaterThan(late);
-    // Sunday Oct 25, 6 PM Pacific.
-    expect(deadline.toISOString()).toBe("2026-10-26T01:00:00.000Z");
+  it("sets no limit once the planned playoff night has passed without a bracket", () => {
+    const planned = matchNightForWeek(first, 6, "America/Los_Angeles").getTime();
+    // A slipped season: the playoff date is now the admin's call, and a
+    // limit rolled forward to this week's league night would refuse any
+    // reschedule past it.
+    expect(rescheduleDeadline({ ...base, nowMs: planned })).toBeNull();
+    expect(
+      rescheduleDeadline({
+        ...base,
+        nowMs: new Date("2026-10-20T12:00:00-07:00").getTime(),
+      }),
+    ).toBeNull();
+    // A bracket already on the calendar still sets the limit.
+    const kickoff = new Date("2026-10-25T18:00:00-07:00").getTime();
+    expect(
+      rescheduleDeadline({
+        ...base,
+        nowMs: planned + 864e5,
+        earliestPostseasonKickoffMs: kickoff,
+      })?.getTime(),
+    ).toBe(kickoff);
   });
 
   it("sets no limit without a first night, or for postseason matches", () => {
