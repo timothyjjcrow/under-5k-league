@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { rebuildGameParticipants } from "./game-participants";
-import { applyImportLineups, loadImportLineups, type ImportIdentity, type ImportLineup } from "./import-lineups";
+import type { ImportIdentity } from "./import-lineups";
 import {
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
@@ -469,8 +469,7 @@ type MatchRow = {
 /** Build the account-id sets (roster + standins) for a scheduled match's teams. */
 export async function gatherTeamAccounts(
   match: MatchRow,
-  db: Pick<Prisma.TransactionClient, "season" | "teamMember" | "standinAssignment" | "registration" | "matchLineup"> = prisma,
-  gameStartTime?: number,
+  db: Pick<Prisma.TransactionClient, "season" | "teamMember" | "standinAssignment" | "registration"> = prisma,
 ) {
   // Select-narrowed: this runs on every import AND every auto-sync roster
   // scan, and only the identity fields read by `add` are selected.
@@ -538,9 +537,7 @@ export async function gatherTeamAccounts(
     accountMap.set(acc, { userId: r.user.id, name: r.user.name, teamId: null });
   }
 
-  const current = { accountMap, homeSet, awaySet, teamSize: season?.teamSize ?? 5 };
-  if (gameStartTime === undefined) return current;
-  return applyImportLineups(current, match, await loadImportLineups(db, { matchId: match.id }), gameStartTime);
+  return { accountMap, homeSet, awaySet, teamSize: season?.teamSize ?? 5 };
 }
 
 /**
@@ -1144,9 +1141,7 @@ export async function importGameForMatch(
           // Classification/attribution belongs to the write snapshot too:
           // roster and standin changes during provider IO must not be stamped
           // into a result as if the stale participants still represented it.
-          // Confirmed lineup intervals resolve historical games; uncovered
-          // legacy games retain the current-roster compatibility resolver.
-          const { accountMap, homeSet, awaySet, teamSize } = await gatherTeamAccounts(fresh, tx, od.start_time);
+          const { accountMap, homeSet, awaySet, teamSize } = await gatherTeamAccounts(fresh, tx);
           const cls = classifyGame(od,
             { teamId: fresh.homeTeamId, accountIds: homeSet },
             { teamId: fresh.awayTeamId, accountIds: awaySet },
@@ -1400,14 +1395,8 @@ export async function autoDetectGamesForMatch(
     };
   }
 
-  const [{ homeSet, awaySet, teamSize }, historicalLineups] = await Promise.all([
-    gatherTeamAccounts(match), loadImportLineups(prisma, { matchId: match.id }),
-  ]);
-  const accounts = [...new Set([
-    ...homeSet, ...awaySet,
-    ...[...historicalLineups].sort((a, b) => b.confirmedAt.getTime() - a.confirmedAt.getTime())
-      .flatMap((lineup) => lineup.seats.flatMap((seat) => seat.accountId === null ? [] : [seat.accountId])),
-  ])].slice(0, 20);
+  const { homeSet, awaySet, teamSize } = await gatherTeamAccounts(match);
+  const accounts = [...new Set([...homeSet, ...awaySet])].slice(0, 20);
   const fetchOptions: OpenDotaFetchOptions = {
     deadlineMs: opts.deadlineMs,
     signal: opts.signal,
@@ -1525,11 +1514,10 @@ export async function autoDetectGamesForMatch(
       const persisted = await saveImportEvidence(match.seasonId, od, saved);
       if (persisted) cached.set(String(id), persisted);
     }
-    const historical = applyImportLineups({ homeSet, awaySet }, match, historicalLineups, od.start_time);
     const cls = classifyGame(
       od,
-      { teamId: match.homeTeamId, accountIds: historical.homeSet },
-      { teamId: match.awayTeamId, accountIds: historical.awaySet },
+      { teamId: match.homeTeamId, accountIds: homeSet },
+      { teamId: match.awayTeamId, accountIds: awaySet },
       minPerSide,
     );
     if (cls.ok) {
@@ -1892,7 +1880,6 @@ export async function syncLeagueGames(
     string,
     { home: Set<number>; away: Set<number>; teamSize: number }
   >();
-  let historicalLineups: ImportLineup[] = [];
   let accountsReady = false;
   const ensureAccounts = async () => {
     if (accountsReady) return;
@@ -1907,7 +1894,7 @@ export async function syncLeagueGames(
       dotaAccountIdV2: true,
       legacyDotaAccountId: true,
     } as const;
-    const [members, standins, lineups] = await Promise.all([
+    const [members, standins] = await Promise.all([
       prisma.teamMember.findMany({
         where: { seasonId },
         select: { teamId: true, user: { select: identitySelect } },
@@ -1919,9 +1906,7 @@ export async function syncLeagueGames(
         where: { match: { seasonId, status: { not: MATCH_STATUS.COMPLETED } } },
         select: { matchId: true, teamId: true, standin: { select: identitySelect } },
       }),
-      loadImportLineups(prisma, { match: { seasonId, status: { not: MATCH_STATUS.COMPLETED } } }),
     ]);
-    historicalLineups = lineups;
     const teamAccounts = new Map<string, Set<number>>();
     for (const member of members) {
       const account = effectiveDotaAccountId(member.user);
@@ -2091,11 +2076,10 @@ export async function syncLeagueGames(
         ) {
           continue;
         }
-        const historical = applyImportLineups({ homeSet: acc.home, awaySet: acc.away }, m, historicalLineups, od.start_time);
         const cls = classifyGame(
           od,
-          { teamId: m.homeTeamId, accountIds: historical.homeSet },
-          { teamId: m.awayTeamId, accountIds: historical.awaySet },
+          { teamId: m.homeTeamId, accountIds: acc.home },
+          { teamId: m.awayTeamId, accountIds: acc.away },
           Math.min(3, acc.teamSize),
         );
         if (cls.ok) {

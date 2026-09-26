@@ -8,6 +8,10 @@ import { UserFacingError } from "./user-facing-error";
 import { stampResultChange } from "./settings";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
 
+// Captains no longer confirm playing lineups (the match-page card was removed
+// 2026-09-26) and result imports never read MatchLineup rows. What remains in
+// use: loadLineupCandidates (who may check in for a side) and the invalidation
+// helpers, which keep any leftover confirmed rows marked superseded.
 type LineupDb = Pick<Prisma.TransactionClient, "match" | "matchLineup">;
 export type LineupActor = { id: string; name: string; role: string };
 export type LineupSelection = { userId: string; position: number | null };
