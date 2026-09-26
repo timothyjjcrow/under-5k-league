@@ -13,6 +13,7 @@ import { RelayClient, relayConnection } from "./relay-client.mjs";
 import { runWithProcessLock } from "./process-lock.mjs";
 import { gameServerRegions } from "./region.mjs";
 import { lobbyHealth } from "./health.mjs";
+import { offlineWatchdog, OFFLINE_RESTART_MS } from "./watchdog.mjs";
 
 const serverRegions = gameServerRegions(process.env.DOTA_GAME_SERVER_REGIONS, process.env.DOTA_GAME_SERVER_REGION);
 const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
@@ -160,9 +161,11 @@ dota.router.on(ESOMsg.k_ESOMsg_CacheUnsubscribed, (cache) => {
 });
 dota.on("disconnectedFromGC", () => {
   controller.online = false;
+  console.log("[dota-bot] Game Coordinator disconnected");
 });
-user.on("disconnected", () => {
+user.on("disconnected", (eresult) => {
   controller.online = false;
+  console.log(`[dota-bot] Steam disconnected (result ${eresult}); waiting for automatic reconnect`);
 });
 user.on("error", () => {
   controller.online = false;
@@ -263,6 +266,17 @@ server.listen(
   () => console.log("[dota-bot] Control service listening"),
 );
 relay.start();
+// A dropped Steam connection that never recovers leaves a live, silent, offline
+// process. Exit non-zero so launchd/systemd start a fresh one (see watchdog.mjs).
+const offlineTooLong = offlineWatchdog();
+setInterval(() => {
+  if (!offlineTooLong({ online: controller.online, stopped: steamStopped })) return;
+  console.error(`[dota-bot] Offline for ${OFFLINE_RESTART_MS / 60_000} minutes after losing Steam; exiting so the service restarts.`);
+  relay.stop();
+  user.logOff();
+  server.close(() => process.exit(1));
+  setTimeout(() => process.exit(1), 3000).unref();
+}, 30_000).unref();
 user.logOn(savedAuth ? {
   refreshToken: savedAuth.refreshToken,
   steamID: savedAuth.steamId,
