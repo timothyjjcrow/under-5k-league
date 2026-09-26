@@ -19,7 +19,7 @@ vi.mock("@/lib/discord", async (importOriginal) => {
   };
 });
 
-import { setDraftNight } from "@/app/actions/admin";
+import { setDraftNight, startDraft } from "@/app/actions/admin";
 import { requireAdmin } from "@/lib/auth";
 import {
   getWebhookUrl,
@@ -239,10 +239,9 @@ describe("draft-night reminder (integration)", () => {
     expect(reminderCalls()).toHaveLength(1);
   });
 
-  it("re-arms when the draft moves, quoting the new time", async () => {
+  it("a move inside the window after a delivered reminder does not ping everyone again", async () => {
     const { season } = await setupDraftNight(4);
     expect(await maybeAnnounceDraftNight(season)).toBe(true);
-    expect(await maybeAnnounceDraftNight(season)).toBe(false);
 
     const admin = await makeUser("Admin", "ADMIN");
     vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
@@ -259,16 +258,15 @@ describe("draft-night reminder (integration)", () => {
 
     const current = await reload(season.id);
     expect(current.draftRevision).toBe(2);
-    expect(await maybeAnnounceDraftNight(current)).toBe(true);
+    // The "Draft rescheduled" post carries the new time; the reminder that
+    // pings every captain and straggler is not repeated for it.
     expect(await maybeAnnounceDraftNight(current)).toBe(false);
-
-    const reminders = reminderCalls();
-    expect(reminders).toHaveLength(2);
-    expect(String(reminders[1][0])).toContain(
-      `<t:${Math.floor(moved.getTime() / 1000)}:F>`,
-    );
-    // The first reminder's delivered marker is history, not in-flight, so
-    // the move keeps it; the new revision has its own.
+    expect(reminderCalls()).toHaveLength(1);
+    expect(
+      mockSend.mock.calls.some((call) => String(call[0]).includes(`<t:${Math.floor(moved.getTime() / 1000)}:`)),
+    ).toBe(true);
+    // The first reminder's delivered marker is history; the new revision is
+    // recorded as covered so the worker never retries it.
     expect(
       (await prisma.setting.findUnique({ where: { key: draftReminderKey(season.id, 1) } }))
         ?.value,
@@ -277,6 +275,51 @@ describe("draft-night reminder (integration)", () => {
       (await prisma.setting.findUnique({ where: { key: draftReminderKey(season.id, 2) } }))
         ?.value,
     ).toMatch(/^sent:v2:/);
+  });
+
+  it("re-arms when the draft moves out of the window, quoting the new time once it is close", async () => {
+    const { season } = await setupDraftNight(4);
+    expect(await maybeAnnounceDraftNight(season)).toBe(true);
+
+    const admin = await makeUser("Admin", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    const result = await setDraftNight(
+      {},
+      fd({
+        expectedActiveSeasonId: season.id,
+        draftAt: "next week",
+        draftAtTs: Date.now() + 7 * 24 * HOUR,
+      }),
+    );
+    expect(result?.error).toBeUndefined();
+    const current = await reload(season.id);
+    expect(current.draftRevision).toBe(2);
+    expect(await prisma.setting.findUnique({ where: { key: draftReminderKey(season.id, 2) } })).toBeNull();
+    expect(await maybeAnnounceDraftNight(current)).toBe(false);
+
+    // A week passes: the same revision is now inside its window.
+    const close = new Date(Date.now() + 6 * HOUR);
+    const later = await prisma.season.update({ where: { id: season.id }, data: { draftAt: close } });
+    expect(await maybeAnnounceDraftNight(later)).toBe(true);
+    const reminders = reminderCalls();
+    expect(reminders).toHaveLength(2);
+    expect(String(reminders[1][0])).toContain(
+      `<t:${Math.floor(close.getTime() / 1000)}:F>`,
+    );
+  });
+
+  it("a first draft time set inside the window still gets its reminder", async () => {
+    const { season } = await setupDraftNight(null);
+    const admin = await makeUser("Admin", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    const when = new Date(Date.now() + 5 * HOUR);
+    const result = await setDraftNight(
+      {},
+      fd({ expectedActiveSeasonId: season.id, draftAt: "tonight", draftAtTs: when.getTime() }),
+    );
+    expect(result?.error).toBeUndefined();
+    expect(await maybeAnnounceDraftNight(await reload(season.id))).toBe(true);
+    expect(reminderCalls()).toHaveLength(1);
   });
 
   it("retries a failed send under the same event instead of eating it", async () => {
@@ -378,6 +421,22 @@ describe("draft-night reminder (integration)", () => {
     );
     expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
     expect((await reload(season.id)).draftRevision).toBe(2);
+  });
+
+  it("starting the auction drops an in-flight reminder so it can't post afterwards", async () => {
+    const { season } = await setupDraftNight(4);
+    const admin = await makeUser("Admin", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    const key = draftReminderKey(season.id, 1);
+    const claim = await claimAnnouncementMarker(key);
+    expect(claim).not.toBeNull();
+
+    const started = await startDraft({}, fd({ expectedActiveSeasonId: season.id }));
+    expect(started?.error).toBeUndefined();
+    expect((await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } })).status).toBe(
+      DRAFT_STATUS.IN_PROGRESS,
+    );
+    expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
   });
 
   it("is wired into the automation worker", async () => {

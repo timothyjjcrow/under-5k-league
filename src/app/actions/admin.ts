@@ -55,6 +55,7 @@ import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
 import {
   captainTransferOpen,
+  draftReminderDue,
   draftSeatPlan,
   draftSetupLockedMessage,
   draftSetupOpen,
@@ -135,6 +136,7 @@ import {
 } from "@/lib/inhouse-board-service";
 import {
   championAnnouncedKey,
+  draftReminderKey,
   draftReminderPrefix,
   getSetting,
   resultAnnouncedKey,
@@ -150,7 +152,10 @@ import {
   markWeekHonorsStale,
   maybeAnnounceWeekHonors,
 } from "@/lib/honors-service";
-import { invalidatePendingAnnouncementMarkers } from "@/lib/announcement-marker";
+import {
+  invalidatePendingAnnouncementMarkers,
+  recordAnnouncementCovered,
+} from "@/lib/announcement-marker";
 import {
   medalProvesIneligible,
   promoteGateError,
@@ -2475,6 +2480,13 @@ export async function startDraft(
           data: { status: SEASON_STATUS.DRAFT },
         });
         if (phaseClaim.count === 0) throw new ActiveSeasonChangedError();
+        // A draft-night reminder still queued ("be there before the auction
+        // starts") must not post once it has started.
+        await invalidatePendingAnnouncementMarkers(
+          tx,
+          draftReminderPrefix(currentSeason.id),
+          { prefix: true },
+        );
         await startDraftRun(tx, {
           seasonId: currentSeason.id, actor, rules: {
             teamSize: currentSeason.teamSize, draftBudget: currentSeason.draftBudget,
@@ -7240,6 +7252,24 @@ export async function setDraftNight(
             draftReminderPrefix(expectedActiveSeasonId),
             { prefix: true },
           );
+          // Only DELIVERED reminders survive the line above. If one already
+          // pinged everyone and the new time is inside the reminder window,
+          // the rescheduled post below carries the change: without this, every
+          // tweak on draft day would ping every captain again.
+          const nowMs = Date.now();
+          if (
+            when &&
+            draftReminderDue(currentSeason.status, draft?.status, when.getTime(), nowMs) &&
+            (await tx.setting.count({
+              where: { key: { startsWith: draftReminderPrefix(expectedActiveSeasonId) } },
+            })) > 0
+          ) {
+            await recordAnnouncementCovered(
+              tx,
+              draftReminderKey(expectedActiveSeasonId, currentSeason.draftRevision + 1),
+              nowMs,
+            );
+          }
         }
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },

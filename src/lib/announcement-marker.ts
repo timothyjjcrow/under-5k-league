@@ -125,6 +125,23 @@ export async function invalidatePendingAnnouncementMarkers(
 }
 
 /**
+ * Record a marker as already delivered without sending anything, because the
+ * caller's own announcement covers it. Create-only: an existing marker (a
+ * claim, a failure or a real delivery) is never overwritten.
+ */
+export async function recordAnnouncementCovered(
+  tx: Pick<Prisma.TransactionClient, "setting">,
+  key: string,
+  nowMs = Date.now(),
+): Promise<void> {
+  await tx.setting.upsert({
+    where: { key },
+    create: { key, value: `${SENT_PREFIX}${randomUUID()}:${nowMs}` },
+    update: {},
+  });
+}
+
+/**
  * Atomically claim a once-only marker with an expiring lease. The event id is
  * preserved across failed/stale retries so the durable outbox can deduplicate
  * the crash gap between enqueueing a message and finalizing this marker.
