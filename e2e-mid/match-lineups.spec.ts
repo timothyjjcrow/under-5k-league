@@ -118,12 +118,12 @@ test("players check in, captains confirm, and midseries cover keeps earlier line
     await page.getByRole("button", { name: "✓ I'm in", exact: true }).click();
     await expect(page.getByText("You're confirmed ✓ — change it here if plans shift.", { exact: true })).toBeVisible();
     await login(page, f.users[0], path);
-    await own().getByLabel(`Planned position for ${f.users[0].name}`, { exact: true }).selectOption("1");
+    await expect(own().getByRole("combobox")).toHaveCount(0);
     await own().getByRole("button", { name: "Confirm playing lineup" }).click();
     await expect(own()).toContainText("Confirmed · revision 1");
     const original = await db.matchLineup.findFirstOrThrow({ where: { matchId: f.matchId, teamId: f.homeId }, include: { seats: true } });
     expect(original.seats).toHaveLength(f.teamSize);
-    expect(original.seats.filter((seat) => seat.position != null)).toHaveLength(1);
+    expect(original.seats.filter((seat) => seat.position != null)).toHaveLength(0);
 
     const publicContext = await browser.newContext();
     try {
@@ -164,6 +164,7 @@ test("players check in, captains confirm, and midseries cover keeps earlier line
     await expect(own()).toContainText("Confirmed · revision 2");
     const replacement = await db.matchLineup.findFirstOrThrow({ where: { matchId: f.matchId, teamId: f.homeId, activeKey: { not: null } }, include: { seats: true } });
     expect(replacement.seats.some((seat) => seat.userId === f.users[f.teamSize * 2].id && seat.acceptanceStatusSnapshot === "UNKNOWN")).toBe(true);
+    expect(replacement.seats.every((seat) => seat.position == null)).toBe(true);
     expect(await db.matchLineupSeat.findMany({ where: { lineupId: original.id }, orderBy: { id: "asc" } })).toEqual([...original.seats].sort((a, b) => a.id.localeCompare(b.id)));
     expect((await db.matchLineup.findUniqueOrThrow({ where: { id: original.id } })).supersededAt).not.toBeNull();
     expect((await db.game.findUniqueOrThrow({ where: { id: f.gameId } })).players).toBe(firstGamePlayers);
