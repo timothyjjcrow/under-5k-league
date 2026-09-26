@@ -1,7 +1,7 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
 import { Suspense } from "react";
-import { MatchLineups } from "@/components/match-lineups";
+import { LiveSeriesCheckin } from "@/components/live-series-checkin";
 import { fetchGamesForScouting } from "@/lib/game-participants";
 import { GameIdentityEditor } from "@/components/game-identity-editor";
 import {
@@ -136,7 +136,6 @@ export default async function MatchDetailPage({
       awayTeam: true,
       games: { orderBy: { startTime: "asc" } },
       standins: { include: { standin: true, replaced: true } },
-      _count: { select: { lineups: true } },
       season: {
         select: {
           isActive: true,
@@ -591,9 +590,9 @@ export default async function MatchDetailPage({
         )}
       </section>
 
-      {match._count.lineups > 0 || (match.season.isActive && match.status !== "COMPLETED") ? (
-        <Suspense fallback={<p className="text-sm text-muted">Loading playing lineups…</p>}>
-          <MatchLineups matchId={match.id} />
+      {match.status === "LIVE" && match.season.isActive ? (
+        <Suspense fallback={null}>
+          <LiveSeriesCheckin matchId={match.id} />
         </Suspense>
       ) : null}
       {showCaptainTools ? (
@@ -702,8 +701,8 @@ async function MatchPreview({
   const rsvpByUser = new Map(rsvps.map((r) => [r.userId, r.status]));
 
   // Mirror setAvailability's decisive capability gate: an RSVP is about one
-  // published, upcoming match night. LIVE readiness is rendered with the
-  // playing-lineup controls, including after the first game's import.
+  // published, upcoming match night. LIVE readiness is its own banner
+  // (LiveSeriesCheckin), including after the first game's import.
   const [previewSeason, previewDraft] = await Promise.all([
     prisma.season.findUnique({
       where: { id: match.seasonId },

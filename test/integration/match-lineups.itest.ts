@@ -6,9 +6,7 @@ vi.mock("@/lib/discord", async (original) => ({ ...(await original<typeof import
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { setMatchTime } from "@/app/actions/admin";
-import { confirmLineupAction } from "@/app/actions/match-lineups";
 import { setAvailability } from "@/app/actions/availability";
-import { captainAssignStandin } from "@/app/actions/standins";
 import { confirmMatchLineup, invalidateMatchLineups, invalidateTeamLineups } from "@/lib/match-lineups";
 import { assignStandinGuarded, removeStandinGuarded } from "@/lib/standin-service";
 import { makeSeason, makeUser, raceN, sessionFor } from "./factories";
@@ -205,51 +203,10 @@ describe("confirmed playing lineups", () => {
     expect(await prisma.matchLineup.findUnique({ where: { id: saved.id } })).toMatchObject({ status: "SUPERSEDED" });
   });
 
-  it("a captain brings in a standin and re-confirms through the real forms, and no position is ever saved", async () => {
-    const { season, match, home, people } = await setup();
-    const confirmForm = async (playerIds: string[]) => {
-      const fresh = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
-      const active = await prisma.matchLineup.findFirst({ where: { matchId: match.id, teamId: home.id }, orderBy: { revision: "desc" } });
-      const result = form({ matchId: match.id, teamId: home.id, expectedScheduleRevision: String(fresh.scheduleRevision),
-        expectedLogisticsRevision: String(fresh.logisticsRevision), expectedLineupRevision: String(active?.revision ?? 0) });
-      for (const id of playerIds) result.append("playerId", id);
-      // A stale tab that still renders the old dropdown must not smuggle a position in.
-      result.set(`position:${playerIds[0]}`, "1");
-      return result;
-    };
-    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[0]));
-    expect((await confirmLineupAction({}, await confirmForm([people[0].id, people[1].id, people[2].id])))?.message).toMatch(/confirmed/);
-
-    const standin = await makeUser("Pre-match cover");
-    await prisma.registration.create({ data: { seasonId: season.id, userId: standin.id, type: "STANDIN", mmr: 2700 } });
-    expect((await captainAssignStandin({}, form({ matchId: match.id, standinUserId: standin.id, replacingUserId: people[1].id })))?.message).toBeTruthy();
-    expect(await prisma.matchLineup.findFirst({ where: { matchId: match.id, teamId: home.id, revision: 1 } })).toMatchObject({ status: "SUPERSEDED" });
-
-    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
-    const fresh = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
-    expect((await setAvailability({}, form({ matchId: match.id, status: "IN", expectedScheduleRevision: String(fresh.scheduleRevision) })))?.error).toBeUndefined();
-
-    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[0]));
-    expect((await confirmLineupAction({}, await confirmForm([people[0].id, standin.id, people[2].id])))?.message).toMatch(/confirmed/);
-    const saved = await prisma.matchLineup.findFirstOrThrow({ where: { matchId: match.id, teamId: home.id, activeKey: { not: null } }, include: { seats: true } });
-    expect(saved).toMatchObject({ status: "CONFIRMED", revision: 2 });
-    expect(saved.seats.map((seat) => seat.userId).sort()).toEqual([people[0].id, standin.id, people[2].id].sort());
-    expect(saved.seats.find((seat) => seat.userId === standin.id)).toMatchObject({ entryKind: "STANDIN", replacingUserId: people[1].id });
-    expect(await prisma.matchLineupSeat.count({ where: { position: { not: null } } })).toBe(0);
-  });
-
-  it("concurrent submissions leave one active revision and return a reviewable result", async () => {
-    const { people, request } = await setup();
-    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[0]));
-    const opts = request();
-    const makeForm = () => {
-      const result = form({ matchId: opts.matchId, teamId: opts.teamId, expectedScheduleRevision: "0", expectedLogisticsRevision: "0", expectedLineupRevision: "0" });
-      for (const selected of opts.selections) result.append("playerId", selected.userId);
-      return result;
-    };
-    const results = await raceN(2, () => confirmLineupAction({}, makeForm()));
-    expect(results.some((result) => result?.message)).toBe(true);
-    expect(results.every((result) => result?.message || result?.error)).toBe(true);
+  it("concurrent confirmations leave one active revision", async () => {
+    const { request } = await setup();
+    const results = await raceN(2, () => confirmMatchLineup(request()).then(() => "ok", () => "lost"));
+    expect(results).toContain("ok");
     expect(await prisma.matchLineup.count({ where: { activeKey: { not: null } } })).toBe(1);
   });
 });

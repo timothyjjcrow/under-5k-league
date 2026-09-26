@@ -103,42 +103,36 @@ async function login(page: Page, user: Fixture["users"][number], path: string) {
 
 // This deliberately exercises existing production actions through their real
 // forms. Direct writes only establish suite-owned starting states (incl LIVE).
-test("players check in, captains confirm, and midseries cover keeps earlier lineup facts private and intact", async ({ page, request, browser }) => {
+// Captains no longer confirm a "playing lineup": check-ins and standin cover are
+// the whole flow, and nothing on the page asks for more.
+test("players check in and captains bring in standins without any lineup confirmation", async ({ page, request, browser }) => {
   test.setTimeout(90_000);
   await withFixture(request, false, async (f) => {
     const noErrors = trackPageErrors(page);
     const path = `/matches/${f.matchId}`;
+    const noLineupCard = async (target: Page) => {
+      await expect(target.getByRole("region", { name: "Playing lineups", exact: true })).toHaveCount(0);
+      await expect(target.getByRole("region", { name: `${f.homeName} playing lineup`, exact: true })).toHaveCount(0);
+      await expect(target.getByRole("button", { name: "Confirm playing lineup" })).toHaveCount(0);
+    };
     await login(page, f.users[0], path);
-    const own = () => page.getByRole("region", { name: `${f.homeName} playing lineup`, exact: true });
-    await expect(own().getByRole("checkbox")).toHaveCount(f.teamSize);
-    await expect(own().getByRole("button", { name: "Confirm playing lineup" })).toBeDisabled();
-    await expect(own()).toContainText(`${f.users[f.teamSize - 1].name} · Awaiting check-in`);
+    await expect(page.getByRole("heading", { name: "Match center", exact: true })).toBeVisible();
+    await noLineupCard(page);
 
     await login(page, f.users[f.teamSize - 1], path);
     await page.getByRole("button", { name: "✓ I'm in", exact: true }).click();
     await expect(page.getByText("You're confirmed ✓ — change it here if plans shift.", { exact: true })).toBeVisible();
-    await login(page, f.users[0], path);
-    await expect(own().getByRole("combobox")).toHaveCount(0);
-    await own().getByRole("button", { name: "Confirm playing lineup" }).click();
-    await expect(own()).toContainText("Confirmed · revision 1");
-    const original = await db.matchLineup.findFirstOrThrow({ where: { matchId: f.matchId, teamId: f.homeId }, include: { seats: true } });
-    expect(original.seats).toHaveLength(f.teamSize);
-    expect(original.seats.filter((seat) => seat.position != null)).toHaveLength(0);
+    await noLineupCard(page);
 
     const publicContext = await browser.newContext();
     try {
       const publicPage = await publicContext.newPage();
-      const response = await publicPage.goto(`http://localhost:3212${path}`);
-      const publicPlan = publicPage.getByRole("region", { name: "Playing lineups", exact: true });
-      await expect(publicPlan).toContainText(f.users[0].name);
-      await expect(publicPlan.getByRole("checkbox")).toHaveCount(0);
-      await expect(publicPlan).not.toContainText("Checked in");
-      await expect(publicPlan).not.toContainText("Awaiting check-in");
-      expect(await response!.text()).not.toContain("availabilityAt");
+      await publicPage.goto(`http://localhost:3212${path}`);
+      await noLineupCard(publicPage);
     } finally { await publicContext.close(); }
 
     await db.match.update({ where: { id: f.matchId }, data: { status: "LIVE" } });
-    await page.reload();
+    await login(page, f.users[0], path);
     await expect(page.getByRole("button", { name: "✓ Ready for the next game", exact: true })).toHaveCount(1);
     const firstGamePlayers = JSON.stringify(f.users.slice(0, f.teamSize * 2).map((user, i) => ({
       userId: user.id, teamId: i < f.teamSize ? f.homeId : f.awayId, accountId: 290000000 + i,
@@ -154,24 +148,26 @@ test("players check in, captains confirm, and midseries cover keeps earlier line
     await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(f.users[f.teamSize * 2].id);
     await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
     await page.getByRole("button", { name: "Assign standin", exact: true }).click();
-    await expect(own()).toContainText("Previous plan superseded");
+    await expect.poll(() => db.standinAssignment.count({ where: {
+      matchId: f.matchId, teamId: f.homeId, standinUserId: f.users[f.teamSize * 2].id, replacingUserId: f.users[1].id,
+    } })).toBe(1);
+    await noLineupCard(page);
+
     await login(page, f.users[f.teamSize * 2], path);
     await page.getByRole("button", { name: "✓ Ready for the next game", exact: true }).click();
     await expect(page.getByText("You're ready for the remaining games ✓ — change it here if plans shift.", { exact: true })).toBeVisible();
-    await login(page, f.users[0], path);
-    await expect(own()).toContainText("offer acceptance is unknown");
-    await own().getByRole("button", { name: "Confirm playing lineup" }).click();
-    await expect(own()).toContainText("Confirmed · revision 2");
-    const replacement = await db.matchLineup.findFirstOrThrow({ where: { matchId: f.matchId, teamId: f.homeId, activeKey: { not: null } }, include: { seats: true } });
-    expect(replacement.seats.some((seat) => seat.userId === f.users[f.teamSize * 2].id && seat.acceptanceStatusSnapshot === "UNKNOWN")).toBe(true);
-    expect(replacement.seats.every((seat) => seat.position == null)).toBe(true);
-    expect(await db.matchLineupSeat.findMany({ where: { lineupId: original.id }, orderBy: { id: "asc" } })).toEqual([...original.seats].sort((a, b) => a.id.localeCompare(b.id)));
-    expect((await db.matchLineup.findUniqueOrThrow({ where: { id: original.id } })).supersededAt).not.toBeNull();
+    // The covered player is out of the series, so they get no readiness prompt.
+    await login(page, f.users[1], path);
+    await expect(page.getByRole("heading", { name: "Game 1", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "✓ Ready for the next game", exact: true })).toHaveCount(0);
+
+    expect(await db.matchLineup.count({ where: { matchId: f.matchId } })).toBe(0);
     expect((await db.game.findUniqueOrThrow({ where: { id: f.gameId } })).players).toBe(firstGamePlayers);
+    await login(page, f.users[f.teamSize * 2], path);
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      await own().scrollIntoViewIfNeeded();
-      await expectNoHorizontalOverflow(page, `playing lineup at ${width}px`);
+      await page.locator("#match-live-checkin").scrollIntoViewIfNeeded();
+      await expectNoHorizontalOverflow(page, `live check-in at ${width}px`);
     }
     noErrors();
   });
