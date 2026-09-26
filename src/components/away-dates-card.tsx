@@ -34,6 +34,13 @@ const FIELD =
 
 const plural = (n: number) => (n === 1 ? "fixture" : "fixtures");
 
+/** The calendar day after a date input's "YYYY-MM-DD" value. Pure calendar
+ * math in UTC, so no time zone can shift the day. */
+const dayAfter = (value: string) => {
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isNaN(ms) ? undefined : new Date(ms + 86_400_000).toISOString().slice(0, 10);
+};
+
 export function AwayDatesCard({
   seasonId,
   fixtures,
@@ -129,7 +136,7 @@ export function AwayDatesCard({
                 name="awayBack"
                 type="date"
                 required
-                min={fromValue || undefined}
+                min={fromValue ? dayAfter(fromValue) : undefined}
                 aria-describedby={backHintId}
                 onChange={(e) => setBackValue(e.currentTarget.value)}
                 className={FIELD}

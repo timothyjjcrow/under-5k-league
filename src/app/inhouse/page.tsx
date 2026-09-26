@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Suspense } from "react";
+import { Fragment, Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
@@ -1262,7 +1262,7 @@ function LadderKey({
   cred: CredBoard;
 }) {
   if (rows.length === 0) return null;
-  const clauses: string[] = [];
+  const clauses: React.ReactNode[] = [];
   if (rows.some((r) => r.games < PROVISIONAL_GAMES)) {
     clauses.push(
       `A dash instead of a rank means provisional: under ${PROVISIONAL_GAMES} games, listed after the ranked players with a dimmed Elo.`,
@@ -1275,14 +1275,25 @@ function LadderKey({
   }
   if (cred.hasBets) {
     clauses.push(
-      "Cred is the net won or lost betting on their own games, never a balance. A dash there means no bets yet, and #1 to #3 mark the top three by Cred, ranked separately from Elo.",
+      <>
+        Cred is the net won or lost betting on their own games, never a balance.
+        {/* The Cred column (its dashes and #1 to #3 marks) is hidden on phones. */}
+        <span className="hidden sm:inline">
+          {" "}A dash there means no bets yet, and #1 to #3 mark the top three by Cred, ranked separately from Elo.
+        </span>
+      </>,
     );
   }
   if (clauses.length === 0) return null;
   return (
     <div className="border-t border-line px-4 py-3 sm:px-5">
       <p className="max-w-3xl text-xs leading-relaxed text-muted">
-        {clauses.join(" ")}
+        {clauses.map((clause, i) => (
+          <Fragment key={i}>
+            {i > 0 ? " " : null}
+            {clause}
+          </Fragment>
+        ))}
       </p>
     </div>
   );
@@ -1425,7 +1436,7 @@ function YourMonth({
     return (
       <p className="border-b border-line bg-accent/5 px-4 py-3 text-sm text-muted sm:px-5">
         You haven&apos;t played an inhouse this month yet.{" "}
-        {MONTH_MIN_GAMES} games puts you on this board.{" "}
+        {MONTH_MIN_GAMES} games gets you a rank.{" "}
         <a href="#live-room" className={textLink()}>
           Join the queue
         </a>

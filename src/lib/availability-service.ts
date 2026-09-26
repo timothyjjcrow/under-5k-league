@@ -392,6 +392,8 @@ export async function markAwayRange(opts: {
         gone,
       };
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    // A 90-day range can hold a dozen fixtures, each judged with several reads
+    // before any write; Prisma's 5s default is too tight on a cold database.
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20_000 },
   );
 }
