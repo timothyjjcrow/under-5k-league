@@ -5,6 +5,9 @@ import {
   discordLinkNote,
   fullPlayerChoiceOpen,
   mergeAccountRefresh,
+  mmrLeadLine,
+  mmrPreviewLine,
+  mmrRulesLine,
   rejoinPausedByDraft,
   signupSummary,
   withdrawConfirmText,
@@ -428,5 +431,84 @@ describe("withdrawConfirmText", () => {
   it("tells a standin they can re-register until the season ends", () => {
     expect(text("STANDIN", "PLAYOFFS")).toMatch(/until the season ends/);
     expect(text("STANDIN", "DRAFT", "IN_PROGRESS")).toMatch(/until the season ends/);
+  });
+});
+
+describe("MMR field copy", () => {
+  // Legend 3 (tier 53): star band 3388–3541, padded to 2965–3964.
+  const LEGEND_3 = 53;
+
+  it("leads with the medal and what a blank does", () => {
+    expect(mmrLeadLine(LEGEND_3)).toBe(
+      "Your Legend 3 medal ≈ 2965–3964 MMR. Leave it blank and we'll list you at 2965, or type your exact MMR.",
+    );
+    expect(mmrLeadLine(null)).toBe(
+      "Type your MMR, or leave it blank if you're not sure.",
+    );
+    // A window whose floor is 0: a blank stays unknown, so don't promise a number.
+    expect(mmrLeadLine(11)).toMatch(/^Your Herald 1 medal ≈ 0–\d+ MMR\. Type your exact MMR/);
+    // Divine 1's window (4220–5219) runs past the ceiling: the display
+    // stops at it. A window that starts above it has no lead line at all.
+    expect(mmrLeadLine(71)).toMatch(/≈ 4220–5000 MMR\./);
+    expect(mmrLeadLine(80)).toBeNull();
+  });
+
+  it("keeps the ceiling and names the admin review above the soft limit", () => {
+    expect(mmrRulesLine(0)).toBe(
+      "We don't take anyone over 5000 MMR (no Immortals).",
+    );
+    expect(mmrRulesLine(4500)).toMatch(
+      /Above 4500 you can still sign up, and an admin reviews your signup\.$/,
+    );
+  });
+
+  const preview = (typed: string, extra: Partial<Parameters<typeof mmrPreviewLine>[0]> = {}) =>
+    mmrPreviewLine({
+      typed,
+      rankTier: LEGEND_3,
+      storedMmr: null,
+      frozen: false,
+      ...extra,
+    })?.text ?? null;
+
+  it("shows the number a new signup will be listed at, as the server would store it", () => {
+    expect(preview("3300")).toBe("You'll be listed at 3300 MMR.");
+    expect(preview("")).toBe(
+      "Left blank, you'll be listed at 2965 MMR, your medal's low end.",
+    );
+    expect(preview("4400")).toBe(
+      "4400 is outside your medal's range, so you'll be listed at 2965 MMR.",
+    );
+    expect(preview("3300", { rankTier: null })).toBe("You'll be listed at 3300 MMR.");
+    expect(preview("", { rankTier: null })).toBe("You'll be listed at an unknown MMR.");
+  });
+
+  it("clears an implausible claim to unknown when the medal's floor is 0", () => {
+    expect(preview("4000", { rankTier: 11 })).toMatch(
+      /^4000 doesn't fit your medal, so you'll be listed at an unknown MMR/,
+    );
+  });
+
+  it("warns over the ceiling and stays quiet on input the browser refuses", () => {
+    expect(
+      mmrPreviewLine({ typed: "5200", rankTier: LEGEND_3, storedMmr: null, frozen: false }),
+    ).toEqual({
+      tone: "danger",
+      text: "Over 5000 MMR: this league can't take the signup.",
+    });
+    expect(preview("0")).toBeNull();
+    expect(preview("3.5")).toBeNull();
+    expect(preview("-1")).toBeNull();
+  });
+
+  it("never re-clamps an unchanged stored number, and freezes it during the auction", () => {
+    // An admin correction outside the window survives an unchanged resubmit.
+    expect(preview("4400", { storedMmr: 4400 })).toBe("You're listed at 4400 MMR.");
+    expect(preview("", { storedMmr: 0 })).toBe("You're listed at an unknown MMR.");
+    // A changed number is judged like a new one.
+    expect(preview("4401", { storedMmr: 4400 })).toMatch(/listed at 2965 MMR/);
+    expect(preview("1500", { storedMmr: 4400, frozen: true })).toBe(
+      "The draft is running, so you stay listed at 4400 MMR until it ends.",
+    );
   });
 });

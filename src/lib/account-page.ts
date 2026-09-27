@@ -4,10 +4,16 @@
 import type { ActionResult } from "./action-result";
 import {
   DRAFT_STATUS,
+  HARD_MMR_CEILING,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_STATUS,
 } from "./constants";
+import {
+  clampMmrToRank,
+  mmrRangeForRankTier,
+  rankMedalName,
+} from "./rank";
 import { parseHeroList } from "./heroes";
 import { DOTA_ROLES, roleLabels } from "./roles";
 
@@ -321,7 +327,7 @@ export function mergeAccountRefresh(
 }
 
 /** The auction is running (live or paused): the pool is frozen. */
-function auctionRunning(draftStatus: string | null | undefined): boolean {
+export function auctionRunning(draftStatus: string | null | undefined): boolean {
   return (
     draftStatus === DRAFT_STATUS.IN_PROGRESS ||
     draftStatus === DRAFT_STATUS.PAUSED
@@ -396,4 +402,99 @@ export function withdrawConfirmText(input: {
     return `${ask} You'll leave the free-agent pool, so admins can't sign you to a team. You can rejoin from this page until the season ends.`;
   }
   return `${ask} You'll leave the draft pool, so captains can't pick you. You can rejoin from this page, but not while the draft is running.`;
+}
+
+/**
+ * The one line above the MMR box: the medal first, since many players don't
+ * know their exact number, then what a blank does. The window's display is
+ * capped at the ceiling, the form's max, even where the tolerance runs past
+ * it. Null when the medal alone rules the player out (the page says so in
+ * its own danger line).
+ */
+export function mmrLeadLine(rankTier: number | null | undefined): string | null {
+  const window = mmrRangeForRankTier(rankTier);
+  if (!window) {
+    return "Type your MMR, or leave it blank if you're not sure.";
+  }
+  const max =
+    window.max === null
+      ? HARD_MMR_CEILING
+      : Math.min(window.max, HARD_MMR_CEILING);
+  if (window.min > HARD_MMR_CEILING) return null;
+  const medal = `Your ${rankMedalName(rankTier)} medal ≈ ${window.min}–${max} MMR.`;
+  return window.min > 0
+    ? `${medal} Leave it blank and we'll list you at ${window.min}, or type your exact MMR.`
+    : `${medal} Type your exact MMR, or leave it blank if you're not sure.`;
+}
+
+/** The ceiling and the soft limit, in one short line under the MMR box. */
+export function mmrRulesLine(softLimit: number): string {
+  const ceiling = `We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`;
+  return softLimit > 0
+    ? `${ceiling} Above ${softLimit} you can still sign up, and an admin reviews your signup.`
+    : ceiling;
+}
+
+export type MmrPreviewInput = {
+  /** The MMR box's raw value ("" when blank). */
+  typed: string;
+  rankTier: number | null;
+  /** This season's stored MMR when a signup row exists (any status). */
+  storedMmr: number | null;
+  /** An active full-player signup while the auction runs: the server keeps
+   *  the stored number whatever is typed. */
+  frozen: boolean;
+};
+
+/**
+ * "You'll be listed at …", updated as the player types. DISPLAY ONLY: it
+ * mirrors saveRegistration (the raw claim is judged against the ceiling, an
+ * unchanged number is never re-clamped, a live auction freezes it, anything
+ * else outside the medal's window snaps to its floor), but the server still
+ * decides and says so in its toast. Null when the box holds something the
+ * browser will refuse anyway.
+ */
+export function mmrPreviewLine(
+  input: MmrPreviewInput,
+): { tone: "muted" | "danger"; text: string } | null {
+  const raw = input.typed.trim();
+  if (raw !== "" && !/^\d+$/.test(raw)) return null;
+  const typed = raw === "" ? 0 : Number(raw);
+  if (typed > HARD_MMR_CEILING) {
+    return {
+      tone: "danger",
+      text: `Over ${HARD_MMR_CEILING} MMR: this league can't take the signup.`,
+    };
+  }
+  if (raw !== "" && typed === 0) return null;
+  const listed = (mmr: number) =>
+    mmr > 0 ? `${mmr} MMR` : "an unknown MMR";
+  if (input.frozen && input.storedMmr != null) {
+    return {
+      tone: "muted",
+      text: `The draft is running, so you stay listed at ${listed(input.storedMmr)} until it ends.`,
+    };
+  }
+  if (input.storedMmr != null && typed === input.storedMmr) {
+    return { tone: "muted", text: `You're listed at ${listed(typed)}.` };
+  }
+  const check = clampMmrToRank(typed, input.rankTier);
+  if (check.mmr === 0) {
+    return {
+      tone: "muted",
+      text: check.adjusted
+        ? `${typed} doesn't fit your medal, so you'll be listed at an unknown MMR and captains will judge by the medal.`
+        : "You'll be listed at an unknown MMR.",
+    };
+  }
+  if (!check.adjusted) {
+    return { tone: "muted", text: `You'll be listed at ${check.mmr} MMR.` };
+  }
+  return {
+    tone: "muted",
+    text:
+      typed === 0
+        ? `Left blank, you'll be listed at ${check.mmr} MMR, your medal's low end.`
+        : `${typed} is outside your medal's range, so you'll be listed at ${check.mmr} MMR.`,
+  };
 }

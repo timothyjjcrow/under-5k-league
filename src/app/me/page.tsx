@@ -30,7 +30,10 @@ import {
 } from "@/components/account-next-steps";
 import {
   accountNextSteps,
+  auctionRunning,
   fullPlayerChoiceOpen,
+  mmrLeadLine,
+  mmrRulesLine,
   rejoinPausedByDraft,
   signupSummary,
   withdrawConfirmText,
@@ -53,12 +56,7 @@ import {
 import { registrationSeasonClosedError } from "@/lib/registration";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
 import { draftSetupOpen } from "@/lib/draft-setup";
-import {
-  formatMmrRange,
-  mmrRangeForRankTier,
-  rankMedalName,
-  rankTierExactMinMmr,
-} from "@/lib/rank";
+import { rankMedalName, rankTierExactMinMmr } from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchRoundLabel } from "@/lib/schedule";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
@@ -67,6 +65,7 @@ import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
+import { MmrField } from "@/components/mmr-field";
 import { SavedSignupForm } from "@/components/saved-signup-form";
 import { AwayDatesCard } from "@/components/away-dates-card";
 import { listAwayFixtures } from "@/lib/availability-service";
@@ -150,9 +149,9 @@ export default async function MePage({
   // to its floor by saveRegistration, so tell the player up front. A medal
   // whose EXACT band floor clears the hard ceiling (Divine 3+/Immortal) is
   // ineligible outright — registrationGate will reject it whatever they type.
-  const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
   const medalFloor = rankTierExactMinMmr(dbUser?.rankTier ?? null);
   const medalBlocked = medalFloor != null && medalFloor > HARD_MMR_CEILING;
+  const mmrLead = mmrLeadLine(dbUser?.rankTier ?? null);
 
   // Your-season context: the roster seat (from DRAFT on) or, for standins,
   // the matches they've been assigned to cover.
@@ -648,60 +647,44 @@ export default async function MePage({
                   <div>
                     <label
                       htmlFor="mmr"
-                      className="mb-1.5 block text-sm font-medium"
+                      className="block text-sm font-medium"
                     >
                       Dota 2 MMR
                     </label>
-                    <input
-                      id="mmr"
-                      name="mmr"
-                      type="number"
-                      // min=1: a typed 0 fails native validation, while BLANK stays
-                      // allowed — 0 is the stored "unknown" sentinel, never typed.
-                      min={1}
-                      max={HARD_MMR_CEILING}
-                      // `|| ""` (not ??): a stored unknown (0) must render blank,
-                      // or resubmitting the form trips the min=1 validation.
-                      defaultValue={form?.mmr || ""}
-                      placeholder="e.g. 3200"
-                      className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-                    />
-                    <p className="mt-1 text-xs text-muted">
-                      {mmrWindow && mmrWindow.min > 0
-                        ? "Not sure? Leave it blank — we'll estimate it from your ranked medal. "
-                        : "Unranked or not sure? Leave it blank — captains will see your ranked medal instead, and you can update it later. "}
-                      Used to help balance the draft. Be honest!
-                      {season.maxMmr > 0
-                        ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
-                        : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}
-                    </p>
+                    {/* The medal first: many players don't know their exact
+                        number. The line under the box shows what will be
+                        stored as they type (display only; the server still
+                        judges the raw claim and clamps it). */}
                     {medalBlocked ? (
-                      <p className="mt-1 text-xs text-danger">
+                      <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-danger">
                         Your {rankMedalName(dbUser?.rankTier)} medal puts you
                         above {HARD_MMR_CEILING} MMR, so this league can&apos;t
                         take your signup.
                       </p>
-                    ) : mmrWindow ? (
-                      <p className="mt-1 text-xs text-muted">
-                        Your {rankMedalName(dbUser?.rankTier)} medal puts you
-                        around{" "}
-                        <strong>
-                          {/* Display capped at the ceiling — the form's max —
-                          even where the tolerance window runs past it. */}
-                          {formatMmrRange({
-                            min: mmrWindow.min,
-                            max:
-                              mmrWindow.max === null
-                                ? HARD_MMR_CEILING
-                                : Math.min(mmrWindow.max, HARD_MMR_CEILING),
-                          })}
-                        </strong>{" "}
-                        MMR —{" "}
-                        {mmrWindow.min > 0
-                          ? `a value outside that range is automatically set to ${mmrWindow.min}.`
-                          : "a value outside that range is treated as unknown (captains judge by your medal)."}
+                    ) : mmrLead ? (
+                      <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-muted">
+                        {mmrLead}
                       </p>
                     ) : null}
+                    <MmrField
+                      // Remount when the saved number changes, so the preview
+                      // starts from what the server stored.
+                      key={String(reg?.mmr ?? "new")}
+                      // `|| ""` (not ??): a stored unknown (0) must render
+                      // blank, or resubmitting trips the min=1 validation.
+                      defaultValue={String(form?.mmr || "")}
+                      rankTier={dbUser?.rankTier ?? null}
+                      storedMmr={reg ? reg.mmr : null}
+                      frozen={
+                        reg?.type === REGISTRATION_TYPE.PLAYER &&
+                        reg.status === REGISTRATION_STATUS.ACTIVE &&
+                        auctionRunning(draft?.status)
+                      }
+                      describedBy={medalBlocked || mmrLead ? "mmr-lead" : undefined}
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      {mmrRulesLine(season.maxMmr)}
+                    </p>
                   </div>
 
                   {/* Out of the optional disclosure: one tap each, and the
