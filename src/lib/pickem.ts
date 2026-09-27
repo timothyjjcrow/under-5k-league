@@ -140,7 +140,7 @@ export type PickemStanding = {
  * Fame print under it, so the rule and its explanation can't drift apart.
  */
 export const PICKEM_RANKING_NOTE =
-  "Most correct picks ranks first; a tie goes to fewer misses. Equal records share a place.";
+  "Ranked by correct picks; a tie goes to whoever missed fewer. Equal records share a place.";
 
 /**
  * Grade every prediction against completed matches and rank the oracles.
@@ -267,8 +267,8 @@ export function pickHistory<
 >(matches: T[], picks: ReadonlyMap<string, string>): PickHistoryRow<T>[] {
   // A TBD kickoff sorts after any real one in its week.
   const at = (m: T) => m.scheduledAt?.getTime() ?? 0;
-  // Reversed first so the stable sort leaves same-week, same-time rows in
-  // newest-created-first order.
+  // Rows with the same week and kickoff keep the reverse of the input order
+  // (a stable sort after the reverse), so the list never reshuffles.
   return [...matches]
     .reverse()
     .flatMap((match) => {
