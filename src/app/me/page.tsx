@@ -348,94 +348,6 @@ export default async function MePage({
         </CardBody>
       </Card>
 
-      <Card id="profile-identity" className="scroll-mt-24">
-        {/* Two separate defects, both here all along, and only one of them is
-            about width.
-
-            THE SQUASH is what `shrink-0` fixes: Avatar sets width/height but
-            bakes in no shrink floor (callers pass one), so beside the name
-            block and the button column it rendered 19px wide inside its 56px
-            box — measured still squashed at 430px, i.e. on every phone made.
-            It is not width-dependent and no overflow check can see it.
-
-            THE OVERFLOW is the 17-digit SteamID64, one unbreakable token,
-            pushing this row past its own card: 58px at 320px, 18px at 360px,
-            3px at 375px, and gone by 390px. `min-w-0` + `break-all` and
-            `flex-wrap` + `basis-full` EACH fix that on their own (verified by
-            reverting one at a time) — both are kept because they do different
-            jobs: the first stops the id widening the row, the second gives the
-            buttons their own line rather than a 135px sliver of this one.
-
-            Note which item carries the floor. It goes on the column that is
-            ALLOWED to leave the line; a min-width on the min-w-0 child instead
-            is the trap that broke the player profile hero. */}
-        <CardBody className="flex flex-wrap items-center gap-4">
-          <Avatar
-            name={user.name}
-            src={user.avatar}
-            size={56}
-            className="shrink-0"
-          />
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-display text-xl font-semibold">
-                {user.name}
-              </span>
-              {user.role === "ADMIN" ? (
-                <Badge tone="accent">Admin</Badge>
-              ) : null}
-              <RankBadge rankTier={dbUser?.rankTier} />
-            </div>
-            <a
-              // A player whose Steam profile URL was never fetched still has
-              // a Steam id; "#" opened a blank tab.
-              href={
-                dbUser?.profileUrl ||
-                `https://steamcommunity.com/profiles/${encodeURIComponent(user.steamId)}`
-              }
-              target="_blank"
-              rel="noreferrer"
-              className="break-all text-sm text-muted hover:text-fg"
-            >
-              Steam: {user.steamId}
-            </a>
-          </div>
-          <div className="ml-auto flex basis-full flex-col items-end gap-2 sm:basis-auto">
-            <ActionForm action={refreshSteamProfile}>
-              <SubmitButton variant="secondary" size="sm">
-                Refresh from Steam
-              </SubmitButton>
-            </ActionForm>
-            <Link
-              href={`/players/${user.id}`}
-              className={textLink("whitespace-nowrap text-sm")}
-            >
-              View my public profile →
-            </Link>
-          </div>
-        </CardBody>
-      </Card>
-
-      <DotaAccountCard
-        effectiveId={
-          dbUser
-            ? effectiveDotaAccountId(dbUser)
-            : steamIdToAccountId(user.steamId)
-        }
-        steamAccountId={steamIdToAccountId(user.steamId)}
-        override={dbUser ? storedDotaAccountId(dbUser) : null}
-        rankTier={dbUser?.rankTier ?? null}
-        fhUnavailable={dbUser?.fhUnavailable ?? null}
-      />
-
-      <Suspense fallback={<Card><CardBody><p role="status">Checking Discord reachability… Your signup form is ready below.</p></CardBody></Card>}>
-        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} />
-      </Suspense>
-
-      <Suspense fallback={null}>
-        <AwayDatesSection userId={user.id} />
-      </Suspense>
-
       <section id="profile-signup" className="scroll-mt-24">
       {!season ? (
         <Card>
@@ -724,8 +636,8 @@ export default async function MePage({
                 <p className="font-medium text-fg">Registration is closed.</p>
                 <p className="mt-1 text-muted">
                   {isRegistered
-                    ? "Your final signup details stay attached to this season's history. Your Steam, Dota and Discord profile settings above remain editable."
-                    : "This season has finished. Watch the dashboard for the next season; your Steam, Dota and Discord profile settings above are ready to carry forward."}
+                    ? "Your final signup details stay attached to this season's history. Your Discord, Steam and Dota settings below remain editable."
+                    : "This season has finished. Watch the dashboard for the next season; your Discord, Steam and Dota settings below are ready to carry forward."}
                 </p>
               </div>
             ) : (
@@ -1021,6 +933,94 @@ export default async function MePage({
         </Card>
       )}
       </section>
+
+      <Suspense fallback={null}>
+        <AwayDatesSection userId={user.id} />
+      </Suspense>
+
+      <Suspense fallback={<Card><CardBody><p role="status">Checking your Discord…</p></CardBody></Card>}>
+        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} />
+      </Suspense>
+
+      <Card id="profile-identity" className="scroll-mt-24">
+        {/* Two separate defects, both here all along, and only one of them is
+            about width.
+
+            THE SQUASH is what `shrink-0` fixes: Avatar sets width/height but
+            bakes in no shrink floor (callers pass one), so beside the name
+            block and the button column it rendered 19px wide inside its 56px
+            box — measured still squashed at 430px, i.e. on every phone made.
+            It is not width-dependent and no overflow check can see it.
+
+            THE OVERFLOW is the 17-digit SteamID64, one unbreakable token,
+            pushing this row past its own card: 58px at 320px, 18px at 360px,
+            3px at 375px, and gone by 390px. `min-w-0` + `break-all` and
+            `flex-wrap` + `basis-full` EACH fix that on their own (verified by
+            reverting one at a time) — both are kept because they do different
+            jobs: the first stops the id widening the row, the second gives the
+            buttons their own line rather than a 135px sliver of this one.
+
+            Note which item carries the floor. It goes on the column that is
+            ALLOWED to leave the line; a min-width on the min-w-0 child instead
+            is the trap that broke the player profile hero. */}
+        <CardBody className="flex flex-wrap items-center gap-4">
+          <Avatar
+            name={user.name}
+            src={user.avatar}
+            size={56}
+            className="shrink-0"
+          />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-display text-xl font-semibold">
+                {user.name}
+              </span>
+              {user.role === "ADMIN" ? (
+                <Badge tone="accent">Admin</Badge>
+              ) : null}
+              <RankBadge rankTier={dbUser?.rankTier} />
+            </div>
+            <a
+              // A player whose Steam profile URL was never fetched still has
+              // a Steam id; "#" opened a blank tab.
+              href={
+                dbUser?.profileUrl ||
+                `https://steamcommunity.com/profiles/${encodeURIComponent(user.steamId)}`
+              }
+              target="_blank"
+              rel="noreferrer"
+              className="break-all text-sm text-muted hover:text-fg"
+            >
+              Steam: {user.steamId}
+            </a>
+          </div>
+          <div className="ml-auto flex basis-full flex-col items-end gap-2 sm:basis-auto">
+            <ActionForm action={refreshSteamProfile}>
+              <SubmitButton variant="secondary" size="sm">
+                Refresh from Steam
+              </SubmitButton>
+            </ActionForm>
+            <Link
+              href={`/players/${user.id}`}
+              className={textLink("whitespace-nowrap text-sm")}
+            >
+              View my public profile →
+            </Link>
+          </div>
+        </CardBody>
+      </Card>
+
+      <DotaAccountCard
+        effectiveId={
+          dbUser
+            ? effectiveDotaAccountId(dbUser)
+            : steamIdToAccountId(user.steamId)
+        }
+        steamAccountId={steamIdToAccountId(user.steamId)}
+        override={dbUser ? storedDotaAccountId(dbUser) : null}
+        rankTier={dbUser?.rankTier ?? null}
+        fhUnavailable={dbUser?.fhUnavailable ?? null}
+      />
     </div>
   );
 }
@@ -1343,7 +1343,7 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
                   {!isRegistered && signupsOpen ? (
                     <span className="text-xs text-muted">
                       This leaves the page — if you&apos;ve started filling in
-                      the signup below, save it first.
+                      the signup above, save it first.
                     </span>
                   ) : null}
                 </div>
