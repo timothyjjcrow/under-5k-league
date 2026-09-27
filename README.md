@@ -46,9 +46,8 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
 - **Match scheduling** — admins set match date/times; players see when they play
   next on their dashboard, team page, and the schedule.
 - **Evergreen inhouses** — a season-independent pickup queue with presence,
-  exact queue priority, ready checks, captain voting, a snake draft, optional
-  Cred betting, OpenDota result recovery, Elo/Cred ladders, and a permanent
-  paginated history.
+  exact queue priority, ready checks, captain voting, a snake draft, OpenDota
+  result recovery, an Elo ladder, and a permanent paginated history.
 - **Admin control panel** to run the whole league (phases, captains, draft,
   schedule, results) — hidden unless you're an admin.
 - **Smooth UX** — toast notifications on every action, graceful
@@ -194,12 +193,9 @@ live state preserves the same order, a failed ready check restores the exact
 original position, and timed auto-picks break equal MMR with
 `queuedAt` + `userId`.
 
-Cred recovery uses one shared resolver. A successful cancel or void targets
-that action's own lobby before returning; global room/site heartbeats attempt up
-to 25 eligible lobbies oldest-first, isolate failures per row, and rotate a
-failed row to the back for the next pass. `InhouseLobby.completedAt` is the
-immutable result-recency clock. Mutable `updatedAt` is only the settlement retry
-cursor and must never drive a result banner or “last game” label.
+`InhouseLobby.completedAt` is the immutable result-recency clock. Mutable
+`updatedAt` changes on any later write to the row and must never drive a result
+banner or “last game” label.
 
 The site and Discord board choose the newest **formed** completed lobby
 (`createdAt`, then `id`) for proof-of-life. They report its played end from the

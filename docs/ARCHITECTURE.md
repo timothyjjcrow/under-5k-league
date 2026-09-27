@@ -21,7 +21,7 @@ season** (when a drafted league is running, it hangs off the at-most-one
 `SIGNUPS → DRAFT → REGULAR_SEASON → PLAYOFFS → COMPLETE` and gates which pages
 and nav links exist; zero active rows is the real offseason), and **inhouses** — a
 season-independent pick-up mode with its own queue, lobby state machine, Elo
-ladder, and play-money betting, coupled to the league only through the shared
+ladder, and pinned Discord queue board, coupled to the league only through the shared
 identity and opportunistic reuse of the latest trusted `Registration.mmr`; it
 has no `seasonId` or league-phase gate. There is no websocket. Interactive
 rooms still use HTTP polling; anonymous polls are side-effect-free, while
@@ -454,52 +454,36 @@ completion, and the real no-active-season offseason.
    Captains act normally; timed auto-pick and the displayed pool both rank MMR
    descending, then exact `[queuedAt, userId]`. An admin has an explicitly
    labelled recovery pick without receiving captain-only title/chime attention.
-6. **Betting window** — the `DRAFTING → READY` transition stamps
-   `betsCloseAt` (+45s) via one shared `readyTransitionData` at both write
-   sites. Players bet Cred **only on their own team, once, immutably**
-   (`src/lib/inhouse-bets.ts` pure matched-pool math,
-   `src/lib/inhouse-bet-service.ts` for every money write). Pressing Start
-   never closes the window.
-7. **Game setup** — READY/IN_PROGRESS render the fixed `GGD2L Inhouse` lobby
+6. **Game setup** — READY/IN_PROGRESS render the fixed `GGD2L Inhouse` lobby
    name, `ggd2l` password, required `Under 5K In-House League` ticket, and team
    voice channels. Player-account matching remains authoritative; the ticket
    is what makes the private game available to OpenDota for that scan.
-8. **Result detection and publication** — OpenDota only, no manual winner:
+7. **Result detection and publication** — OpenDota only, no manual winner:
    background scan
    (`maybeAutoDetectResult`), the detect button, or a pasted match id all
    converge on `buildResult` (league `classifyGame` reuse; emits `teamFixes`
    when players sat on the opposite side they were drafted to — the played game
    is the truth). `applyResult` first commits the guarded
-   `IN_PROGRESS → COMPLETED` claim plus side fixes and immutable `completedAt`,
-   tries the canonical bet settlement, computes full-history Elo, then claims
-   that exact completed match again to store `eloDeltas` and the exact durable
-   RESULT payload in one transaction. A leased outbox worker sends only after
+   `IN_PROGRESS → COMPLETED` claim plus side fixes, immutable `completedAt` and
+   the exact durable RESULT payload in one transaction, computes full-history
+   Elo, then claims that exact completed match again to store `eloDeltas`. A leased outbox worker sends only after
    commit and outside every transaction. A racing void cancels the RESULT only
    while it is still PENDING; if it is already SENDING or SENT, the durable
    sequence-2 correction waits behind or follows it. `updatedAt` is not result
    chronology; it remains mutable operational state.
-9. **Corrections and settlement** — every successful admin cancel is audited;
-   every successful void is audited and posts a correction even with no bets.
-   Cancel and void contain no bespoke money math, but each explicitly invokes
-   the same single-winner `resolveUnsettledBets` with its own lobby id before
-   returning. That targeted call prevents an older stranded pot from consuming
-   the action's immediate consistency attempt. Global state reads select up to
-   25 eligible rows oldest-first by `[updatedAt, id]`; each row is isolated so
-   later rows still run after a failure, and a failed row is best-effort touched
-   to rotate it behind the backlog. `completedAt` remains immutable throughout.
-   A bettor sees an explicit pending settlement instead of a silently missing
-   Cred delta.
-10. **Ladders and history** — Elo is derive-don't-store
+8. **Corrections** — every successful admin cancel is audited; every
+   successful void is audited and posts a correction.
+9. **Ladders and history** — Elo is derive-don't-store
     (`summarizeInhouse`, K=32, recomputed from all COMPLETED lobbies on ladder
     and stat reads); the live room reads the stored per-game delta. `/inhouse`
-    shows Elo plus the zero-sum Cred-profit ladder. `/inhouse/history` includes
+    shows the Elo ladder. `/inhouse/history` includes
     every completed lobby, 100 per page, displays
     `matchStartTime ?? startedAt ?? createdAt`, and gives admins an exact-row
     void. Cancelled/voided lobbies are excluded. The shared site/Discord
     proof-of-life loader chooses the newest formed completed lobby by
     `[createdAt desc, id desc]` and reports played start plus duration, falling
-    back to `completedAt`; it never uses settlement cursor `updatedAt`.
-11. **The board** — a single pinned, self-editing Discord message
+    back to `completedAt`; it never uses the mutable `updatedAt`.
+10. **The board** — a single pinned, self-editing Discord message
     (`src/lib/inhouse-board.ts` render / `inhouse-board-service.ts` service)
     showing the live queue; digest-gated so a motionless queue costs zero
     Discord requests. A pre-POST compare-and-swap reservation prevents duplicate
@@ -511,7 +495,7 @@ completion, and the real no-active-season offseason.
     it. Repainted from both resolver chains.
 
 Lazy resolution mirrors the draft. A state read runs heartbeat → abandoned-
-lobby sweep → bet sweep → formation → ready check → captain vote → stalled
+lobby sweep → formation → ready check → captain vote → stalled
 pick → auto-detect → board repaint; the tenth join also attempts formation
 synchronously. The authenticated maintenance worker runs the equivalent chain
 sitewide so an unwatched lobby still resolves. Inhouse result and void Discord messages use the durable
@@ -527,7 +511,7 @@ before `sentAt` commits. Routine queue/cancel notifications remain best-effort.
 
 | Layer                       | Convention                                                                                                                                                   | Examples                                                                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Pure logic (no DB, no IO)   | `src/lib/<name>.ts` + sibling `<name>.test.ts`                                                                                                               | `draft.ts`, `standings.ts`, `schedule.ts`, `inhouse.ts`, `inhouse-bets.ts`, `rank.ts`, `scenarios.ts`                                   |
+| Pure logic (no DB, no IO)   | `src/lib/<name>.ts` + sibling `<name>.test.ts`                                                                                                               | `draft.ts`, `standings.ts`, `schedule.ts`, `inhouse.ts`, `rank.ts`, `scenarios.ts`                                                    |
 | DB services (transactional) | `src/lib/<name>-service.ts`, covered by `test/integration/*.itest.ts`                                                                                        | `draft-service.ts`, `inhouse-service.ts`, `playoff-service.ts`, `standin-service.ts`, `reschedule-service.ts`, `result-sync-service.ts` |
 | Thin mutations              | `src/app/actions/*.ts` (server actions: auth + parse + delegate + toast + Discord send + revalidate) and `src/app/api/*` route handlers for the polled rooms | `actions/admin.ts`, `actions/registration.ts`, `api/draft/*`, `api/inhouse`                                                             |
 | Server pages                | `src/app/**/page.tsx` — query Prisma directly (no read API), run pure libs, serialize plain props                                                            | `page.tsx` (dashboard), `schedule/page.tsx`                                                                                             |
@@ -570,17 +554,11 @@ Rules that follow from the layering:
   at read time (through `src/lib/cached-queries.ts` for the whole-table
   scans — `unstable_cache`, 60s TTL, tag `"games"`, busted by every import
   path). Deliberate exceptions, each with a stated reason:
-  `InhouseLobby.eloDeltas`/`betDeltas` (stamped once at completion so the
+  `InhouseLobby.eloDeltas` (stamped once at completion so the
   1.5s poll path never scans history), immutable `InhouseLobby.completedAt`
-  (stable result recency while retryable work mutates `updatedAt`),
+  (stable result recency while later writes move `updatedAt`), and
   `InhouseLobbyPlayer.wins/losses/games` plus `queuedAt` (record/queue snapshots
-  frozen at formation), and
-  `InhouseCredit.balance` (a
-  mutable column because the affordability check must be re-assertable in the
-  WHERE of the debit — `InhouseCreditEntry` is the provenance ledger). The
-  ledger has one deliberate non-append exception: reversing a voided game's
-  FLOOR top-up deletes that FLOOR receipt so its once-per-UTC-day key is
-  released and the admin's correction does not consume the player's safety net.
+  frozen at formation).
 - **Feedback contract.** Mutations return `ActionResult`
   (`src/lib/action-result.ts`), rendered through `<ActionForm>` /
   `<SubmitButton>` (`src/components/action-form.tsx`) into the global
@@ -632,7 +610,7 @@ directly.
 | `/recap`           | Season awards page                                                                             | Nav on COMPLETE; `?season=`                                                                        | `computeSeasonAwards`                                                                                         |
 | `/seasons`         | Season history + audit archive/delete; offseason-only reactivation                              | Nav once an archive exists; reactivation disabled while a season is active                         | —                                                                                                             |
 | `/seasons/[id]`    | Season archive: standings, bracket, rosters                                                    | Same                                                                                               | Recomputed from archived rows                                                                                 |
-| `/inhouse`         | Inhouse room + scene stats + Elo/Cred ladder + results                                         | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`, `credProfitBoard`                                                   |
+| `/inhouse`         | Inhouse room + scene stats + Elo ladder + results                                              | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`                                                                      |
 | `/inhouse/history` | Complete completed-lobby archive, 100 rows per `?page=N`, exact-row admin void                 | Always                                                                                             | Stable formation ordering; authoritative played-time fallback                                                 |
 | `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Evergreen: Explore, mobile menu, footer                                                            | `NewsPost`; create request receipts; `NewsMedia`                                                              |
 | `/features`        | Phase-aware feature tour with honest live/locked destinations                                  | Always                                                                                             | `featureAvailability`, live counts, viewer-aware closing CTA                                                  |
@@ -646,7 +624,7 @@ tick takes a 1,200/min/IP preflight before session or database work, then a
 signed-in user also takes a 300/min/user allowance. Bid, nominate, and
 admin-nominate share one 120/min-per-user mutation bucket;
 `/api/inhouse` — single POST dispatch (`{action: state|join|leave|accept|
-decline|vote|pick|start|detect|record|bet|cancel|void}`); valid JSON object and
+decline|vote|pick|start|detect|record|cancel|void}`); valid JSON object and
 explicit action required. Every call requires the JSON media type. Public state
 reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
@@ -763,10 +741,10 @@ enums, so every status column is a string whose allowed values live in
 - `InhouseQueueEntry` — userId-unique rolling queue with `lastSeenAt`
   presence heartbeat.
 - `InhouseLobby` — the game + state machine + result columns (`boxScore`
-  JSON, `winnerTeam`, `eloDeltas`, `betDeltas`, `betsCloseAt`,
-  `matchStartTime`, immutable result clock `completedAt`, `betSettlement` —
-  indexed, the bet sweeper's probe). Its mutable `updatedAt` orders oldest-first
-  settlement retries and is never result chronology.
+  JSON, `winnerTeam`, `eloDeltas`, `matchStartTime`, immutable result clock
+  `completedAt`). Its mutable `updatedAt` is never result chronology. The
+  retired Cred columns (`betDeltas`, `betsCloseAt`, `betSettlement`) remain in
+  the schema, dormant.
 - `InhouseLobbyPlayer` — `@@unique([lobbyId, userId])`; team, captaincy,
   pick order, MMR + record + exact original `queuedAt` snapshot, vote,
   ready-check `acceptedAt`.
@@ -774,13 +752,10 @@ enums, so every status column is a string whose allowed values live in
   `@@unique([lobbyId, kind])` deduplicates events, sequence preserves
   result-before-correction order, and a 30-second claim lease makes failed or
   interrupted sends retryable without holding a database transaction open.
-- `InhouseBet` — `@@unique([lobbyId, userId])` **is** the double-spend guard;
-  team frozen at placement for lineup-void grading.
-- `InhouseCredit` — the mutable balance column (deliberate exception, §4).
-- `InhouseCreditEntry` — provenance ledger; `@@unique([reason, refId])` is the
-  idempotence key (wager legs, the once-per-day floor, the one-time grant).
-  Result reversal preserves wager history with REVERSAL rows but deletes that
-  lobby's FLOOR receipt to release the daily key. **No FK on purpose.**
+- `InhouseBet`, `InhouseCredit`, `InhouseCreditEntry` — dormant. Cred betting
+  was removed in September 2026 by the owner's decision; the tables were left
+  in place (no destructive migration) and nothing in the app reads or writes
+  them.
 
 **Infrastructure**
 
@@ -865,8 +840,7 @@ an expired RUNNING lease before taking ownership.
 | Result sync, roster scan (`syncDueMatches` → `autoDetectGamesForMatch`) | Claims one due fixture and roster-scans OpenDota | Every pass in REGULAR_SEASON/PLAYOFFS when the match throttle permits | Global `rosterAutoSyncAt`, per-match compare-and-set, exponential empty-scan backoff; recent-list and match calls receive the worker deadline/abort signal, and an unreachable/deadline scan releases its throttle for recovery |
 | Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, per-season skip memory, and the same deadline/abort propagation; manual admin sync remains a bounded override |
 | Playoff reconciliation (`advancePlayoffBracket`) | Repairs a committed result whose immediate round-build/crown handoff was interrupted | Every maintenance pass while PLAYOFFS | Round claims plus Serializable revalidation of current source winners/final; committed work is idempotently rediscovered |
-| Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, bet sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; `/api/inhouse` state reads retain immediate interactive resolution | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor |
-| Bet sweeper (`resolveUnsettledBets`) | Settles, refunds, or reverses stranded pots | Maintenance/inhouse resolver chains; cancel/void also target their own lobby immediately | Global calls attempt ≤25 oldest-first, isolate failures per row, and rotate a failed row; immutable `completedAt` remains result chronology |
+| Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; `/api/inhouse` state reads retain immediate interactive resolution | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor |
 | League marker reconciliation | Recovers series, champion, reminder, and honor announcement generations | Immediate domain path plus bounded maintenance retry sweep | 90s marker leases recover pre-enqueue death; stable generation/dedupe keys reuse the same `LeagueAnnouncement` after enqueue-before-finalize death; exact-value finalization cannot overwrite a newer claim |
 | League outbox (`deliverLeagueAnnouncements`) | Sends all league-channel webhook work in global creation order | One immediate bounded attempt after enqueue; maintenance drains existing work before creating/retrying later marker events | PENDING/SENDING/SENT/CANCELLED, tokened 30s claims, bounded batches, exponential backoff; an earlier non-terminal row blocks later rows. Discord accept-before-`SENT` death can still duplicate once on recovery (at-least-once) |
 | Inhouse result recovery/outbox (`reconcileMissingInhouseResultAnnouncements` / `deliverInhouseAnnouncements`) | Reconstructs missing completion-derived Elo/result work, then sends RESULT/RESULT_VOIDED in per-lobby order | Maintenance/inhouse reconciliation plus an immediate post-commit delivery attempt | Source completion and `dotaMatchId` are revalidated; unique `(lobbyId, kind)`, sequence, tokened 30s claims, cancellation of invalidated unsent results, and backoff. The same unavoidable Discord accept/commit duplicate gap applies |
@@ -902,7 +876,6 @@ season/team name) — reserved for exactly the five actions with no in-app undo.
 | Auto-sync health           | Read-only: per-match scan state, league throttle, cursor, skip memory                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Dota league integration    | `setLeagueId`, `syncLeagueAction`, `enrichGamesAction`, `syncAllRanks`                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Discord (streamed)         | Webhook set/clear ×3 (league / inhouse board / inhouse alerts; board-webhook moves attempt teardown, alert moves never touch it), ping role, test sends, board post/remove/interrupted-post recovery, ping-health checklist + reach count                                                                                                                                                                                                                                              |
-| Inhouse betting (streamed) | Zero-sum + ledger drift alarms, stranded pots, negative balances, `adjustCredAction` (confirm — deliberately not DangerSubmit; reversible)                                                                                                                                                                                                                                                                                                                                             |
 | Admin activity (streamed)  | `recentAdminActions(40)` — the append-only `AdminAction` log (coverage is partial; see the log's call sites)                                                                                                                                                                                                                                                                                                                                                                           |
 | League news                | create/pin/delete (`src/app/actions/news.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Security                   | `revokeAllSessions` (confirm)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |

@@ -191,8 +191,9 @@ export function queueSlots<T extends { away: boolean }>(
 
 /**
  * A stable 4-digit code for a lobby, derived from its id. The public setup card
- * now uses fixed Dota credentials; this per-lobby value remains the admin's
- * typed confirmation token when force-cancelling a live game with bets.
+ * uses fixed Dota credentials; this per-lobby value is the short "#1234" label
+ * the room header shows, so players and admins can tell back-to-back games
+ * apart when they talk about one.
  */
 export function inhouseLobbyCode(lobbyId: string): string {
   let h = 0;

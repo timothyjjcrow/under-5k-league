@@ -1,10 +1,9 @@
 "use server";
 
-// Thin auth/parse/toast wrapper around `voidLastResult` — the inhouse-bets
-// actions pattern. All the void reasoning (the live-stakes refusal, the
-// guarded COMPLETED→CANCELLED claim, the AdminAction record, the pot
-// announcement) lives in inhouse-service.ts; what belongs here is the
-// session, the form, and the toast.
+// Thin auth/parse/toast wrapper around `voidLastResult`. All the void
+// reasoning (the guarded COMPLETED→CANCELLED claim, the AdminAction record,
+// the correction announcement) lives in inhouse-service.ts; what belongs here
+// is the session, the form, and the toast.
 //
 // It exists because the room's void button is gated on `state.lastResult`,
 // which is built only for a viewer who PLAYED in the completed game and only
@@ -38,7 +37,6 @@ export async function voidInhouseResult(
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
   return {
-    message:
-      "Result voided — the ladder recalculates without it, and any Cred payouts reverse to pre-game balances",
+    message: "Result voided — the ladder recalculates without it",
   };
 }

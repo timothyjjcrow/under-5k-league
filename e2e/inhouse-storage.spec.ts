@@ -65,8 +65,6 @@ for (const mode of ["unavailable", "write-blocked"] as const) {
             direScore: 20,
             myTeamWon: true,
             eloDelta: 16,
-            credDelta: null,
-            credPending: false,
           },
         },
       });

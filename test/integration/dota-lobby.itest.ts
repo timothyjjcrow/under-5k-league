@@ -305,13 +305,11 @@ describe("Dota lobby authorization and settings", () => {
     }
     expect(fetch).not.toHaveBeenCalled();
   });
-  it("marks only the confirmed in-house game started without extending bets", async () => {
+  it("marks only the confirmed in-house game started", async () => {
     const user = await makeUser("Captain");
-    const deadline = new Date(Date.now() + 120000);
     const lobby = await prisma.inhouseLobby.create({
       data: {
         status: "READY",
-        betsCloseAt: deadline,
         players: { create: { userId: user.id, team: 1, isCaptain: true } },
       },
     });
@@ -327,7 +325,7 @@ describe("Dota lobby authorization and settings", () => {
     await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
     expect(
       await prisma.inhouseLobby.findUnique({ where: { id: lobby.id } }),
-    ).toMatchObject({ status: "IN_PROGRESS", betsCloseAt: deadline });
+    ).toMatchObject({ status: "IN_PROGRESS", startedAt: expect.any(Date) });
     await prisma.inhouseLobby.update({
       where: { id: lobby.id },
       data: { status: "CANCELLED" },

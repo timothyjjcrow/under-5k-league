@@ -553,8 +553,7 @@ export default async function FeaturesPage() {
             <h3>Make your picks.</h3>
             <p>
               Choose the winners, see how the community voted, and climb the
-              oracle board. In inhouses, you can also back your own side with
-              Cred and track your net winnings.
+              oracle board.
             </p>
             <TourLink
               href="/pickem"

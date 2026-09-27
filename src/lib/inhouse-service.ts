@@ -3,8 +3,6 @@ import { prisma } from "./prisma";
 import {
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
-  INHOUSE_BET_STATUS,
-  INHOUSE_BETS,
   INHOUSE_STATUS,
 } from "./constants";
 import {
@@ -21,13 +19,6 @@ import {
 } from "./inhouse";
 import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
 import type { InhouseBoxPlayer } from "./inhouse-box";
-import {
-  potTier,
-  potView,
-  type PotTier,
-  type Settlement,
-} from "./inhouse-bets";
-import { resolveUnsettledBets, settleInhouseBets } from "./inhouse-bet-service";
 import {
   canStartOpenDotaFetch,
   fetchOpenDotaMatch,
@@ -113,34 +104,6 @@ async function refreshQueueIdleDeadline(tx: Tx, nowMs = Date.now()) {
   await tx.inhouseQueueEntry.updateMany({
     data: { idleExpiresAt: queueIdleDeadline(nowMs) },
   });
-}
-
-/**
- * The DRAFTING → READY transition, written in ONE place because there are TWO
- * write sites for it and only one of them is the path anyone thinks about:
- * `applyPick`'s advance claim (the last pick lands) and `restoreLostPickTurn`'s
- * recovery (a DRAFTING lobby found off the clock).
- *
- * `betsCloseAt` is stamped here, inside the same claim `data` as the status, and
- * by nothing else in the codebase. That is what makes the betting window
- * un-pushable by an interested party — unlike `startedAt`, which `startGame`
- * writes whenever someone presses Start, deliberately including long after the
- * game (see the late-bet void). It also means a lost claim leaves NO window
- * behind: nothing happened, so nothing is half-opened.
- *
- * Miss the second site and the failure is silent in the worst way — a lobby
- * recovered through the lost-turn path arrives with betting off, no error
- * anywhere, and ten players who simply never see the panel. That is the standin
- * announcement's four-call-sites shape with money attached, which is why this is
- * a function and not a copied literal.
- */
-function readyTransitionData(nowMs: number) {
-  return {
-    status: INHOUSE_STATUS.READY,
-    pickTeam: null,
-    pickEndsAt: null,
-    betsCloseAt: new Date(nowMs + INHOUSE_BETS.WINDOW_SECONDS * 1000),
-  };
 }
 
 type WinLoss = { wins: number; losses: number; winRate: number; games: number };
@@ -842,7 +805,9 @@ async function applyPick(
     where: { id: lobby.id, status: INHOUSE_STATUS.DRAFTING },
     data:
       next === null
-        ? readyTransitionData(Date.now())
+        ? // Draft complete: teams lock and the lobby waits for Start. The
+          // other writer of this transition is restoreLostPickTurn.
+          { status: INHOUSE_STATUS.READY, pickTeam: null, pickEndsAt: null }
         : { pickTeam: next, pickEndsAt: pickDeadline() },
   });
   if (advanced.count === 0) {
@@ -883,12 +848,10 @@ async function restoreLostPickTurn(): Promise<boolean> {
     where: { id: lobby.id, status: INHOUSE_STATUS.DRAFTING, pickTeam: null },
     data:
       next === null
-        ? // The shared block writes `pickTeam: null` back over the null the
-          // WHERE above just asserted. That no-op is the whole price of having
-          // ONE definition of what reaching READY means — and a hand-written
-          // variant here is exactly how this branch, the one nobody thinks
-          // about, ends up as the one that forgets to open the betting window.
-          readyTransitionData(Date.now())
+        ? // Every seat is filled, so the draft is over: the same DRAFTING →
+          // READY transition applyPick's advance writes. `pickTeam` is already
+          // null (the WHERE asserts it).
+          { status: INHOUSE_STATUS.READY, pickEndsAt: null }
         : { pickTeam: next, pickEndsAt: pickDeadline() },
   });
   return claim.count > 0;
@@ -1364,15 +1327,13 @@ function buildResult(
 async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   // The claim AND the teamFixes loop commit together, as one transaction.
   //
-  // They used to be separate statements, which was harmless until betting
-  // existed and is a money bug now. The claim commits on its own, so between
-  // it and the end of the loop the row reads COMPLETED with a PENDING pot but
-  // the DRAFT roster — and `resolveUnsettledBets` runs on EVERY page view of
-  // the entire site via /api/sync. A rival landing in that gap wins the
-  // settlement claim and pays out against the side each player was DRAFTED
-  // onto rather than the side they PLAYED, so a slot swap pays the wrong five
-  // and VOID_LINEUP never fires at all. It is permanent, too: settlement is
-  // single-winner, so the real call below then finds nothing to do.
+  // The claim on its own would commit a COMPLETED lobby still carrying the
+  // DRAFT roster, and a reader in that gap rates it wrong: the result
+  // reconciler (reconcileMissingInhouseResultAnnouncements, run by the
+  // automation worker) stamps Elo off `InhouseLobbyPlayer.team`, so a slot swap
+  // would credit the win to a player who actually lost. If the request dies
+  // before the loop lands, everything rolls back and a retry is byte-identical
+  // to the happy path.
   //
   // The Elo scan deliberately stays OUTSIDE — it is a full-history read that
   // has no business holding a write transaction open.
@@ -1384,41 +1345,25 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   // CI while a local --discover had been green, because the discover ran BEFORE
   // the inline version was written. Keep `data` a flat object literal; hoist any
   // expression that needs a conditional.
-  // `matchStartTime` is persisted into the EXISTING claim below rather than read
-  // from `r` at settlement time: any check performed AFTER a claim has to be
-  // computable from COLUMNS, because the request holding this BuiltResult is
-  // allowed to die (serverless, a dropped connection, a deploy). The late-bet
-  // void keys on Valve's own start_time, the one timestamp ten interested
-  // parties cannot forge, so the lazy sweeper hours later must reach the
-  // identical verdict to the fast path — and it can only do that if the number
-  // is on the row. Costs one field in a write that was already happening, and
-  // if the claim loses, nothing was stamped.
   //
-  // The guard below it is BELT-AND-BRACES and UNREACHABLE TODAY, said plainly
-  // because "defensive" and "untested gap" look identical from here. Both
+  // `matchStartTime` is Valve's own start_time for the played game, persisted
+  // so the archive, the player profile and the board can date a game by when
+  // it was actually played (`matchStartTime ?? startedAt ?? createdAt`). Both
   // result paths already floor start_time at the lobby createdAt (recordMatch
   // refuses below it; findInhouseGame skips below it), so a 0 or missing value
-  // cannot arrive — which is also why no test can kill this predicate. It stays
-  // because the failure it prevents is silent and TOTAL: new Date(0) is 1970,
-  // every bet is then placedAt > matchStart, and the WHOLE pot voids to
-  // VOID_LATE. Nobody wins, nobody loses, and the feature simply looks broken
-  // with no error anywhere. Null instead means we cannot establish when the game
-  // began, so the late-bet rule is not enforced and the pot settles normally —
-  // failing OPEN, the right side when the uncertainty is ours not the bettor
-  // side's. If a THIRD result path is ever added, this is what stops it.
+  // cannot arrive today; the guard stays so a future third result path can
+  // never date a game to 1970. Null falls back to the next date in that chain.
   const matchStart =
     Number.isFinite(r.startTime) && r.startTime > 0
       ? new Date(r.startTime * 1000)
       : null;
-  // Stable result recency. `updatedAt` also moves when a stranded pot retries,
-  // which can otherwise resurrect an older game's banner above the real latest
-  // result. Hoisted to keep the guarded claim's data block flat for the mutation
-  // ratchet (same rule as matchStart immediately above).
+  // Stable result recency, never `updatedAt`. Hoisted to keep the guarded
+  // claim's data block flat for the mutation ratchet (same rule as matchStart
+  // immediately above).
   const completedAt = new Date();
-  // Truthful without the optional wager receipt block, so the durable event
-  // can commit with COMPLETED. Finalization enriches a still-pending row after
-  // settlement, but a process death can no longer erase the result itself.
-  const baseResultContent = inhouseResultAnnouncementContent(r);
+  // The durable announcement commits with COMPLETED, so a process death after
+  // this transaction can no longer erase the result itself.
+  const resultContent = inhouseResultAnnouncementContent(r);
 
   const claimed = await prisma.$transaction(async (tx) => {
     const claim = await tx.inhouseLobby.updateMany({
@@ -1440,18 +1385,16 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
     if (claim.count === 0) return false;
 
     // Seam: the claim is written but NOT committed. This is the window the
-    // transaction exists to close — a rival `resolveUnsettledBets` (which
-    // /api/sync runs on every page view of the entire site) must not be able
-    // to see a COMPLETED lobby carrying the DRAFT roster. A test yields here
-    // and either kills this request or runs that sweeper from a second
-    // connection; racing cannot steer an interleaving this narrow.
+    // transaction exists to close — no reader may see a COMPLETED lobby
+    // carrying the DRAFT roster. A test yields here and kills this request;
+    // racing cannot steer an interleaving this narrow.
     await raceHook("inhouse.applyResult.beforeTeamFixes");
 
     // Move anyone who played the opposite side onto the side they actually
     // played (see buildResult). Inside the claim's transaction so no reader
     // can ever see a COMPLETED lobby carrying the draft's roster —
-    // summarizeInhouse rates off InhouseLobbyPlayer.team and settlement voids
-    // off it, so a visible half-state mis-rates the game AND mis-pays the pot.
+    // summarizeInhouse rates off InhouseLobbyPlayer.team, so a visible
+    // half-state would mis-rate the game.
     for (const fix of r.teamFixes) {
       await tx.inhouseLobbyPlayer.updateMany({
         where: { lobbyId, userId: fix.userId },
@@ -1463,7 +1406,7 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
         lobbyId,
         kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
         sequence: 1,
-        content: baseResultContent,
+        content: resultContent,
         resultMatchId: r.dotaMatchId,
       },
     });
@@ -1472,36 +1415,10 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   });
   if (!claimed) return false;
 
-  // Exact process-death seam: everything above is committed, while betting,
-  // Elo and optional announcement enrichment have not started. The heartbeat
-  // reconciler must be able to finish from columns alone after this point.
+  // Exact process-death seam: everything above is committed, while the Elo
+  // stamp has not started. The heartbeat reconciler must be able to finish
+  // from columns alone after this point.
   await raceHook("inhouse.applyResult.afterPrimaryCommit");
-
-  // Pay the pot. Both boundaries around this call are load-bearing:
-  //
-  //   * AFTER the teamFixes loop, because that loop rewrites the very column
-  //     settlement reads — `InhouseLobbyPlayer.team`, the side each player
-  //     actually played. Settling first would compare every frozen bet against
-  //     the DRAFT instead of the game, which prices a two-man slot swap in the
-  //     hand-hosted Dota lobby as a live arbitrage instead of voiding both
-  //     halves of it.
-  //   * BEFORE the history scan below, because that scan is the slow unwindowed
-  //     one and the `eloDeltas` write under it is the ONE write in this
-  //     function that is not a claim. Money must not sit downstream of the
-  //     least-guarded statement here.
-  //
-  // The try/catch is mandatory, not defensive habit. This runs from resolver
-  // chains that /api/sync executes on every page view of the entire site, so a
-  // bug in the betting code must never be able to stop the Elo stamp, the
-  // result cursor or the Discord announcement — ten people playing Dota do not
-  // care that the pot failed. A settlement left PENDING is retried by
-  // `resolveUnsettledBets` on the next poll from anywhere.
-  let settlement: Settlement | null = null;
-  try {
-    settlement = await settleInhouseBets(lobbyId);
-  } catch {
-    console.error("[inhouse-bets] settlement failed (BET_SETTLEMENT_FAILED)");
-  }
 
   // Stamp each participant's Elo swing from THIS game: the lobby is now the
   // newest completed one, so summarizeInhouse's lastChange IS this game's
@@ -1530,40 +1447,21 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
     if (participants.has(rec.userId)) deltas[rec.userId] = rec.lastChange;
   }
 
-  // Built before the finalization claim so the row lock below is held only for
-  // the Elo write and its durable outbox insert.
-  //
-  // The third boundary: the announcement is downstream of the settlement, which
-  // is the only order that lets it carry the slips block (who was in for what).
-  // Names come off the history scan already in hand rather than a fresh query.
-  // `settlement` is null whenever this caller didn't win the settlement claim,
-  // whenever nobody bet, and whenever the try/catch above swallowed a bug —
-  // in all three the post reads exactly as it did before betting existed.
-  const nameOf = new Map(
-    thisLobby?.players.map((p) => [p.userId, p.user.name]) ?? [],
-  );
-  const slips = settlement
-    ? settlement.bets.map((b) => ({ ...b, name: nameOf.get(b.userId) ?? "?" }))
-    : null;
-
-  const resultContent = inhouseResultAnnouncementContent(r, slips);
-
-  // A completed result is still voidable while settlement/history are being
-  // computed. The old update-by-id below could therefore restore eloDeltas on
-  // a CANCELLED lobby, then publish a stale result after the void correction.
+  // A completed result is still voidable while the history is being scanned.
+  // The old update-by-id below could therefore restore eloDeltas on a
+  // CANCELLED lobby, then publish a stale result after the void correction.
   // Yield while everything is still read-only so the exact interleaving can be
   // tested without deadlocking a rival on this row.
   await raceHook("inhouse.applyResult.beforeFinalizationClaim");
 
   // Finalize only if this exact result is still current. COMPLETED already
-  // committed with a truthful base outbox row; this transaction stamps Elo and
-  // enriches that row with wager receipts only while it is still pending. No
-  // network call runs while this transaction is open. voidLastResult
-  // serializes publication through the same outbox:
+  // committed with its outbox row; this transaction stamps Elo. No network
+  // call runs while this transaction is open. voidLastResult serializes
+  // publication through the same outbox:
   //
-  //   * void wins first -> this claim loses, so no result event exists;
-  //   * finalization wins first -> void cancels an unsent result, or queues its
-  //     correction behind an already-leased/sent result.
+  //   * either way, the void cancels a still-unsent result or queues its
+  //     correction behind an already-leased/sent one;
+  //   * if the void wins first, this claim also loses, so no Elo is stamped.
   const finalized = await prisma.$transaction(async (tx) => {
     const claim = await tx.inhouseLobby.updateMany({
       where: {
@@ -1574,17 +1472,6 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
       data: { eloDeltas: JSON.stringify(deltas) },
     });
     if (claim.count === 0) return false;
-    if (settlement) {
-      await tx.inhouseAnnouncement.updateMany({
-        where: {
-          lobbyId,
-          kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT,
-          status: INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
-          resultMatchId: r.dotaMatchId,
-        },
-        data: { content: resultContent },
-      });
-    }
     await stampResultChange(tx);
     return true;
   });
@@ -1983,56 +1870,7 @@ export async function voidLastResult(
     };
   }
 
-  // Refuse while a LIVE lobby is holding stakes.
-  //
-  // Voiding this game makes the sweeper reverse its payouts, and a reversal is
-  // an unfloored `{ increment: -payout }`. If a winner has already staked
-  // those winnings on the lobby that is running right now, the claw-back takes
-  // them below zero — a state nothing else in the system can produce, whose
-  // only symptom is a player mysteriously unable to bet. (`adjustCred` is the
-  // repair and now works on a negative balance, but "the admin can clean it
-  // up afterwards" is not a design.) Waiting costs the admin one game; the
-  // alternative costs a player their balance silently.
-  //
-  // Read-time only, deliberately. Re-asserting this at the write means a
-  // Serializable pair with `placeInhouseBet` — it reads the lobby and writes a
-  // bet, this counts bets and writes the lobby — and SSI only spots the cycle
-  // if BOTH sides are Serializable, so it would mean putting the hot betting
-  // path on Serializable with P2034 retries to close a gap of milliseconds
-  // that requires an admin to press Void in the exact instant someone stakes.
-  // The residual case lands on the honest side: a negative balance an admin
-  // can now actually fix.
-  const liveStakes = await prisma.inhouseBet.count({
-    where: {
-      confirmedAt: { not: null },
-      lobby: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-    },
-  });
-  if (liveStakes > 0) {
-    return {
-      ok: false,
-      error:
-        "There's a live game with Cred staked on it — void this result once that game has finished.",
-    };
-  }
-
-  // The pot, read BEFORE the claim — unlike cancelLobby, which reads its
-  // figures afterwards, this one has no choice: the claim NULLS dotaMatchId and
-  // blanks the box score, so a moment later there is nothing left that names
-  // which game was removed. Stakes themselves don't move (a reversal rewrites
-  // outcomes and balances, never `stake`), so reading early costs no accuracy;
-  // the figures are only USED below, past the claim, so a losing void still
-  // logs and announces nothing.
-  const pot = await prisma.inhouseBet.aggregate({
-    where: { lobbyId: last.id, confirmedAt: { not: null } },
-    _sum: { stake: true },
-    _count: { _all: true },
-  });
-  const betCount = pot._count._all;
-  const staked = pot._sum.stake ?? 0;
   const voidContent = inhouseResultVoidedMessage({
-    betCount,
-    staked,
     dotaMatchId: last.dotaMatchId,
   });
 
@@ -2079,46 +1917,28 @@ export async function voidLastResult(
     return { ok: false, error: "That result was already voided" };
   }
   // The lobby cancellation and correction outbox are durable at this point.
-  // Signal before cursor, settlement, and audit follow-ups so none of those
-  // best-effort steps can hide the correction from a sleeping worker.
+  // Signal before the cursor and audit follow-ups so neither best-effort step
+  // can hide the correction from a sleeping worker.
   invalidateAutomationGateBestEffort();
   await stampResultChange();
 
-  // Await the canonical settlement resolver before returning. The state flip
-  // remains the single source of truth for *why* money moves; invoking the
-  // existing sweeper here merely closes the window where a successful admin
-  // action still showed the old payout/refund until somebody next polled.
-  // Best-effort for the same reason as the site-wide resolver chain: a betting
-  // failure cannot roll back the already-committed void, and the next poll can
-  // retry the unchanged settlement state.
-  try {
-    await resolveUnsettledBets(last.id);
-  } catch {
-    console.error("[inhouse-bets] post-void sweep failed (BET_SWEEP_FAILED)");
-  }
-
   // Post-claim, so only the winner of a concurrent void writes the record —
-  // the cancelLobby ordering. This action erases a result and every payout that
-  // came off it, and until now it left NO trace anywhere: the lobby reads
-  // CANCELLED like any abandoned game, the Elo swing simply recomputes away,
-  // and the match id that would identify the game is gone. The AdminAction row
-  // IS the whole record, which is why the id and the pot go in the summary
-  // rather than being left to a join that has nothing to join against.
+  // the cancelLobby ordering. The lobby reads CANCELLED like any abandoned
+  // game, the Elo swing simply recomputes away, and the claim has nulled the
+  // match id that would identify the game. The AdminAction row IS the whole
+  // record, which is why the id goes in the summary rather than being left to
+  // a join that has nothing to join against.
   await logAdminAction({
     action: "voidLastResult",
     summary: `Voided the inhouse result${
       last.dotaMatchId ? ` (match ${last.dotaMatchId})` : ""
-    } — ${
-      betCount > 0
-        ? `${betCount} confirmed bet(s), ${staked} Cred staked, reversed to pre-game balances`
-        : "no Cred was staked on it"
     }`,
   });
 
-  // Every successful void corrects Discord, including a betless game. The
-  // outbox event was committed with the state flip above, and this post-commit
-  // attempt preserves the old immediate UX without making a transport failure
-  // permanent. It rides the ALERT webhook, never the board's.
+  // Every successful void corrects Discord: the published winner is now false.
+  // The outbox event was committed with the state flip above, and this
+  // post-commit attempt preserves the old immediate UX without making a
+  // transport failure permanent. It rides the ALERT webhook, never the board's.
   try {
     await deliverInhouseAnnouncements({ lobbyId: last.id });
   } catch {
@@ -2131,10 +1951,8 @@ export async function voidLastResult(
 
 export async function cancelLobby(
   viewer: SessionUser,
-  opts?: { force?: boolean },
 ): Promise<InhouseActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  const force = opts?.force === true;
   const lobby = await prisma.inhouseLobby.findFirst({
     where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
   });
@@ -2152,36 +1970,10 @@ export async function cancelLobby(
     // Guarded transition: if the result landed between the admin's read and
     // this write (auto-detect closing the lobby mid-confirm-dialog), the
     // cancel must lose — a played game keeps its result and nobody re-queues.
-    //
-    // Second predicate, unless the admin explicitly forced it: an IN_PROGRESS
-    // lobby with confirmed bets on it must not be cancelled casually, because
-    // under any betting design cancelling a live game IS an undo for a losing
-    // bet — the game is half-played, everyone can see how it is going, and the
-    // sweeper refunds the pot in full. The gate is the reopenMatch pattern
-    // (relation filter in the WHERE, not an `if` above it) so it survives the
-    // result landing between the admin's read and this write.
-    //
-    // Only the IN_PROGRESS branch: the window opens at READY, but a lobby
-    // cancelled there has no result to unwind and nothing to read off, so the
-    // refund is uncontroversial.
-    //
-    // And admins are deliberately NOT locked out. An unkillable lobby holds the
-    // single active slot — no new game can form and its own ten are refused the
-    // queue — for the six hours until the abandon sweep, which is a strictly
-    // worse failure than a forced cancel that leaves an AdminAction behind.
     const claim = await tx.inhouseLobby.updateMany({
       where: {
         id: lobby.id,
         status: { in: INHOUSE_ACTIVE_STATUSES },
-        OR: force
-          ? undefined
-          : [
-              { status: { not: INHOUSE_STATUS.IN_PROGRESS } },
-              {
-                status: INHOUSE_STATUS.IN_PROGRESS,
-                bets: { none: { confirmedAt: { not: null } } },
-              },
-            ],
       },
       data: {
         status: INHOUSE_STATUS.CANCELLED,
@@ -2221,58 +2013,17 @@ export async function cancelLobby(
     return true;
   });
   if (!cancelled) {
-    // The claim now has two ways to lose, and "nothing happened" is the one
-    // answer an admin cannot act on (the reopenMatch lesson). Re-read to say
-    // WHICH — a live pot is the recoverable one, and the sentence has to name
-    // the override, because the admin's next move is the only thing that
-    // unblocks the single active lobby slot.
-    const staked = force
-      ? 0
-      : await prisma.inhouseBet.count({
-          where: {
-            lobbyId: lobby.id,
-            confirmedAt: { not: null },
-            lobby: { status: INHOUSE_STATUS.IN_PROGRESS },
-          },
-        });
-    if (staked > 0) {
-      return {
-        ok: false,
-        error: `${staked} ${
-          staked === 1 ? "player has" : "players have"
-        } Cred staked on this live game — cancelling refunds the pot in full. Use the forced cancel if that's really what you want.`,
-      };
-    }
     return {
       ok: false,
       error: "The lobby just finished — its result is in, nothing to cancel.",
     };
   }
   // Every successful admin cancellation is destructive and therefore gets an
-  // audit row, not only the forced/money-bearing variant. Read after the claim
-  // so a losing cancel logs nothing; stake figures remain stable through a
-  // refund, which changes outcomes and balances but never the original stake.
-  const pot = await prisma.inhouseBet.aggregate({
-    where: { lobbyId: lobby.id, confirmedAt: { not: null } },
-    _sum: { stake: true },
-    _count: { _all: true },
-  });
+  // audit row. Written after the claim so a losing cancel logs nothing.
   await logAdminAction({
     action: "cancelLobby",
-    summary: `${force ? "Force-cancelled" : "Cancelled"} the inhouse (${lobby.status}) with ${
-      players.length
-    } player(s) — ${pot._count._all} confirmed bet(s), ${
-      pot._sum.stake ?? 0
-    } Cred staked`,
+    summary: `Cancelled the inhouse (${lobby.status}) with ${players.length} player(s)`,
   });
-
-  // Synchronous best-effort sweep: the action returns after the canonical
-  // refund path has had a chance to synchronize balances with CANCELLED.
-  try {
-    await resolveUnsettledBets(lobby.id);
-  } catch {
-    console.error("[inhouse-bets] post-cancel sweep failed (BET_SWEEP_FAILED)");
-  }
   return { ok: true };
 }
 
@@ -2333,40 +2084,13 @@ type ReadyCheckBlock = {
   }[];
 };
 
-/**
- * The live pot, as the room's panel renders it. PUBLIC — every slip is visible
- * to everyone the instant it lands, because the panel is a live argument
- * ("they're 160 ahead — somebody take it") and a pot nobody can see is an
- * argument nobody can join.
- *
- * `covered` per slip comes from the SAME `potView` settlement reads, so the
- * button's promise ("100 staked · 40 covered · 60 comes home") and the payout
- * agree to the Cred. Two copies of that arithmetic is the `avgKnownMmr`
- * mistake — one average, three inline definitions, disagreeing on screen.
- */
-type PotBlock = {
-  /** Epoch ms, or null once the window has closed — the room shows no clock. */
-  closesAt: number | null;
-  pool1: number;
-  pool2: number;
-  matched: number;
-  tier: PotTier;
-  slips: {
-    userId: string;
-    name: string;
-    team: number;
-    stake: number;
-    covered: number;
-  }[];
-};
-
 /** Everything the inhouse room client needs, tailored to the viewing user. */
 export async function getInhouseState(
   viewer: SessionUser | null,
   /**
    * `runMaintenance: false` turns this into a side-effect-free spectator
-   * snapshot. Anonymous traffic must never be able to settle bets, advance a
-   * lobby, call OpenDota, or edit Discord; the leased one-minute worker and
+   * snapshot. Anonymous traffic must never be able to advance a lobby, call
+   * OpenDota, or edit Discord; the leased one-minute worker and
    * authenticated room participants retain those recovery paths.
    *
    * Set `syncBoard: false` on the mutation path so a button press never waits
@@ -2390,16 +2114,6 @@ export async function getInhouseState(
     // maybeFormLobby can form the next game on this poll instead of the one
     // after.
     await resolveAbandonedLobby();
-    // …then the pot, immediately, and for the same reason the abandon sweep
-    // runs first: that sweep is what flips a dead lobby to CANCELLED, so a
-    // stake stranded on it becomes refundable on THIS poll rather than the
-    // next one. The authenticated one-minute worker retries this independently
-    // when no participant has the room open.
-    try {
-      await resolveUnsettledBets();
-    } catch {
-      console.error("[inhouse-bets] resolver failed (BET_SWEEP_FAILED)");
-    }
     await maybeFormLobby();
     await resolveReadyCheck();
     await resolveCaptainVote();
@@ -2431,7 +2145,6 @@ export async function getInhouseState(
         radiantTeam: true,
         winnerTeam: true,
         startedAt: true,
-        betsCloseAt: true,
         startedBy: { select: { name: true } },
         players: {
           select: {
@@ -2491,12 +2204,7 @@ export async function getInhouseState(
     pool: PlayerView[];
     vote: VoteBlock | null;
     readyCheck: ReadyCheckBlock | null;
-    pot: PotBlock | null;
   } = null;
-
-  // Filled alongside the lobby below; the `me` block needs it too (the viewer's
-  // own slip and whether they can still place one).
-  let pot: PotBlock | null = null;
 
   if (lobbyRow) {
     const buildTeam = (team: number) => {
@@ -2575,53 +2283,6 @@ export async function getInhouseState(
       };
     }
 
-    // BUDGETED: one query, and only for a lobby that actually has a betting
-    // window. `betsCloseAt` is stamped once, on the DRAFTING → READY
-    // transition, and the confirm claim requires `betsCloseAt > now` — so a
-    // lobby without it provably has no bets, and the four phases before READY
-    // (where the room polls hardest) pay nothing at all for this feature.
-    if (lobbyRow.betsCloseAt) {
-      const bets = await prisma.inhouseBet.findMany({
-        where: { lobbyId: lobbyRow.id, confirmedAt: { not: null } },
-        select: { userId: true, team: true, stake: true, placedAt: true },
-        // Placement order — the slips are a log of the argument as it happened.
-        // userId breaks the tie the way the rest of the repo does, so two
-        // pollers can never render the same pot in two orders.
-        orderBy: [{ placedAt: "asc" }, { userId: "asc" }],
-      });
-      const rows = bets.map((b) => ({
-        userId: b.userId,
-        team: b.team,
-        stake: b.stake,
-        placedAtMs: b.placedAt.getTime(),
-      }));
-      const view = potView(rows);
-      const nameOf = new Map(
-        lobbyRow.players.map((p) => [p.userId, p.user.name]),
-      );
-      pot = {
-        // Null once it has passed, not a stale timestamp the room has to judge
-        // for itself: "is the window open" is one question with one answer, and
-        // the server is the only clock that matters (the room already folds its
-        // skew against `now`).
-        closesAt:
-          lobbyRow.betsCloseAt.getTime() > now
-            ? lobbyRow.betsCloseAt.getTime()
-            : null,
-        pool1: view.pool1,
-        pool2: view.pool2,
-        matched: view.matched,
-        tier: potTier(view.pool1 + view.pool2),
-        slips: rows.map((b) => ({
-          userId: b.userId,
-          name: nameOf.get(b.userId) ?? "?",
-          team: b.team,
-          stake: b.stake,
-          covered: view.coveredByUser[b.userId] ?? 0,
-        })),
-      };
-    }
-
     lobby = {
       id: lobbyRow.id,
       status: lobbyRow.status,
@@ -2650,7 +2311,6 @@ export async function getInhouseState(
         .map(toView),
       vote,
       readyCheck,
-      pot,
     };
   }
 
@@ -2673,8 +2333,8 @@ export async function getInhouseState(
   // COMPLETED lobby instantly, so the room would silently snap to the queue.
   // Probe cheaply (the 1.5s poll must not scan history every tick) for a
   // completed lobby the viewer just played. `completedAt` is immutable result
-  // time; `updatedAt` is deliberately not used because a delayed Cred retry
-  // changes it and would resurface an old game as the newest banner.
+  // time; `updatedAt` is deliberately not used because any later write to the
+  // row would resurface an old game as the newest banner.
   let lastResult: null | {
     lobbyId: string;
     winnerSide: "Radiant" | "Dire";
@@ -2682,14 +2342,6 @@ export async function getInhouseState(
     direScore: number;
     myTeamWon: boolean;
     eloDelta: number;
-    /**
-     * The viewer's net Cred from that game, or null when they didn't bet — so
-     * the banner omits the line entirely rather than announcing "+0 Cred" to
-     * the eight people who sat the pot out.
-     */
-    credDelta: number | null;
-    /** True when this bettor's payout/refund is still on the retryable sweep. */
-    credPending: boolean;
   } = null;
   if (viewer) {
     const recent = await prisma.inhouseLobby.findFirst({
@@ -2706,15 +2358,9 @@ export async function getInhouseState(
         radiantScore: true,
         direScore: true,
         eloDeltas: true,
-        betDeltas: true,
-        betSettlement: true,
         players: {
           where: { userId: viewer.id },
           select: { userId: true, team: true },
-        },
-        bets: {
-          where: { userId: viewer.id, confirmedAt: { not: null } },
-          select: { id: true },
         },
       },
     });
@@ -2727,18 +2373,6 @@ export async function getInhouseState(
       } catch {
         // Malformed JSON — show the result without a delta.
       }
-      // The eloDeltas precedent exactly: stamped once at settlement, read off
-      // the row this query already fetched. ZERO extra queries on the poll
-      // path, and never re-derived — a banner that recomputed the pot would
-      // disagree with the ledger the moment anything was voided.
-      let credDelta: number | null = null;
-      try {
-        const map = JSON.parse(recent.betDeltas) as Record<string, unknown>;
-        const v = map[viewer.id];
-        if (typeof v === "number" && Number.isFinite(v)) credDelta = v;
-      } catch {
-        // Malformed JSON — show the result without a Cred line.
-      }
       const myPlayer = recent.players.find((pl) => pl.userId === viewer.id);
       lastResult = {
         lobbyId: recent.id,
@@ -2748,36 +2382,8 @@ export async function getInhouseState(
         direScore: recent.direScore ?? 0,
         myTeamWon: myPlayer?.team === recent.winnerTeam,
         eloDelta,
-        credDelta,
-        credPending:
-          recent.bets.length > 0 &&
-          recent.betSettlement === INHOUSE_BET_STATUS.PENDING,
       };
     }
-  }
-
-  // The viewer's own slip, read straight off the pot so the panel's "40 of your
-  // 100 is covered" is literally the same arithmetic everyone else's row shows.
-  const myBet =
-    myLobbyPlayer && pot
-      ? (pot.slips.find((s) => s.userId === myLobbyPlayer.userId) ?? null)
-      : null;
-
-  // BUDGETED: the balance is fetched only when there is something to spend it
-  // on (a seat in the lobby) or something to reconcile (a game that just
-  // finished). A spectator idling on /inhouse pays nothing for it.
-  //
-  // A plain read, deliberately NOT `ensureCredAccount`: the poll path must not
-  // write, and it doesn't need to — START_BALANCE is the column default the row
-  // will be created with, so a player who has never bet sees the number they
-  // are about to be funded with, and their first bet writes the account.
-  let cred: number | null = null;
-  if (viewer && (inLobby || lastResult)) {
-    const acct = await prisma.inhouseCredit.findUnique({
-      where: { userId: viewer.id },
-      select: { balance: true },
-    });
-    cred = acct?.balance ?? INHOUSE_BETS.START_BALANCE;
   }
 
   // Long-unseen or freshly requeued players retain their position while
@@ -2807,14 +2413,9 @@ export async function getInhouseState(
       awayCount: queue.length - presentCount,
       lobbySize: INHOUSE.LOBBY_SIZE,
       // lobbyView is shared with loadBoardSnapshot so the two builders can
-      // never describe the same lobby differently. The pot is taken off the
-      // block already built above rather than re-counted: `pool1 + pool2` is
-      // the total staked, and it is null on exactly the lobbies that have no
-      // betting window — the same test `potFrom` applies on the board's own
-      // path, which is what keeps the two out of a digest fight.
-      lobby: lobbyRow
-        ? lobbyView(lobbyRow, pot ? pot.pool1 + pot.pool2 : null)
-        : null,
+      // never describe the same lobby differently (a disagreement would make
+      // the two paths repaint each other's digest in a loop).
+      lobby: lobbyRow ? lobbyView(lobbyRow) : null,
       siteUrl: resolveSiteUrl(),
       nowMs: now,
     });
@@ -2864,22 +2465,6 @@ export async function getInhouseState(
         lobby?.status === INHOUSE_STATUS.IN_PROGRESS &&
         (inLobby || viewer?.role === "ADMIN"),
       canCancel: !!lobby && viewer?.role === "ADMIN",
-      /** Play-money balance; null when signed out (nothing to show). */
-      cred,
-      myBet: myBet
-        ? { stake: myBet.stake, team: myBet.team, covered: myBet.covered }
-        : null,
-      // ELIGIBILITY only — one of the ten, on a side, window still open, hasn't
-      // bet. Never "is signed in": /api/inhouse answers `state` before its 401
-      // gate, so a session proves nothing about a seat in this lobby, and the
-      // write re-derives membership from InhouseLobbyPlayer regardless.
-      //
-      // Affordability is deliberately NOT folded in here. It depends on the
-      // stake, and `betGateError` is the one place that decides it — the room
-      // already calls it for the chip it is about to enable, and a second
-      // definition of "can you bet" is exactly how a disabled button and the
-      // sentence explaining it end up telling different stories.
-      canBet: inLobby && myTeam != null && !myBet && pot?.closesAt != null,
     },
   };
 }

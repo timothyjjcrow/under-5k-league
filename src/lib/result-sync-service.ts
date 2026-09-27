@@ -28,7 +28,6 @@ import {
   resolveReadyCheck,
   resolveStalledPick,
 } from "./inhouse-service";
-import { resolveUnsettledBets } from "./inhouse-bet-service";
 import {
   CHAMPION_ANNOUNCED_PREFIX,
   championAnnouncedKey,
@@ -465,32 +464,10 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
     prisma.inhouseQueueEntry.count(),
   ]);
 
-  // Settle/refund any stranded pot BEFORE the early return below — deliberately
-  // not down in the resolver chain past it, and for exactly the reason the board
-  // repaint inside that branch exists. "No lobby, empty queue" is not a quiet
-  // state for money: it is the state a pot gets stranded in. The request that
-  // won the COMPLETED claim can die before the payout, and every result path
-  // requires IN_PROGRESS, so nothing re-triggers it; meanwhile the ten who
-  // played have closed their tabs and the room has nobody polling it. Below the
-  // early return this sweep would first run whenever the NEXT lobby forms —
-  // hours or days of a debited stake with no outcome, on the one feature where
-  // "it caught up eventually" is not an acceptable answer.
-  //
-  // Wrapped, alone among the resolvers: the shared automation worker executes
-  // this chain, so a bug in a play-money feature must never
-  // be able to stop ten people playing Dota (or a league match importing).
-  if (canStartWork(options)) {
-    try {
-      await resolveUnsettledBets();
-    } catch (e) {
-      logStepFailure("inhouse-bet-sweep", e);
-    }
-  }
-
   // Repair the crash window from releases that committed COMPLETED before the
-  // durable outbox row existed. Bet settlement runs first because the rebuilt
-  // message includes its persisted receipt. Both repairs are best-effort; no
-  // notification plumbing may block live lobby state progression.
+  // durable outbox row existed. Best-effort: no notification plumbing may
+  // block live lobby state progression. It runs before the early return below
+  // because a finished game with nobody queued is exactly the state it repairs.
   if (canStartWork(options)) {
     try {
       const repaired = await reconcileMissingInhouseResultAnnouncements({
@@ -628,12 +605,6 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
   // five minutes behind on exactly the stretch that decides whether a game
   // happens. Present-only so a ghost row can't hold every client at the fast
   // cadence until the 180s prune catches it.
-  //
-  // An open BETTING window needs no clause of its own: `betsCloseAt` is stamped
-  // only on the DRAFTING→READY transition, and READY is one of
-  // INHOUSE_ACTIVE_STATUSES — so `stillActive` already pins every client to the
-  // fast cadence for the whole 45 seconds and beyond. A `betsCloseAt > now`
-  // test here would be dead code wearing the look of a live guard.
   return {
     recorded,
     watch: !!stillActive || present > 0 || announcementsPending,

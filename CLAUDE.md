@@ -768,12 +768,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - **Every state transition is a guarded claim (2026-07 hardening — keep it
   that way)**: `applyResult` first claims
   `updateMany({id, status: IN_PROGRESS})` with team fixes (a cancel racing the
-  seconds-long OpenDota fetch must never be overwritten), then after settlement
-  and Elo calculation claims the same COMPLETED + `dotaMatchId` result before
-  stamping `eloDeltas` and attempting Discord. That short final transaction
-  holds the lobby row across the bounded webhook call so a void is totally
-  ordered with publication: void-first suppresses the stale result; result-
-  first commits before the correction. `cancelLobby`
+  seconds-long OpenDota fetch must never be overwritten), then, after the Elo
+  calculation, claims the same COMPLETED + `dotaMatchId` result again to stamp
+  `eloDeltas` (a void that landed first makes that claim lose). No network call
+  runs inside either transaction: the RESULT outbox row commits with COMPLETED,
+  and publication happens after commit through the durable outbox, which
+  orders it with a void — `voidLastResult` cancels a still-unsent RESULT, or
+  queues its correction behind one already sending or sent. `cancelLobby`
   re-claims inside its tx (loses to a landed result, skips the requeue);
   `applyPick` claims the target row `{team: null}` (double-click = one turn)
   and AUTO-ASSIGNS the final pool player (no dead-air last clock);
@@ -809,9 +810,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   inActiveLobby guard. The whole feature was down until an admin visited
   /inhouse. It runs first among the PHASE resolvers in both entry points:
   `getInhouseState` runs it after the viewer heartbeat; result-sync's
-  `syncInhouse` first runs the always-on bet sweep, then reaches abandonment
-  when there is active/queued work. The latter is what reaches a lobby nobody
-  is polling, which is how one gets abandoned. Its write guard-claims the
+  `syncInhouse` reaches it whenever there is active/queued work. The latter is
+  what reaches a lobby nobody is polling, which is how one gets abandoned. Its write guard-claims the
   status it read, so a late Start or a landed result always wins. Floors are
   deliberately generous (`ABANDON_READY_HOURS` 3, `ABANDON_IN_PROGRESS_HOURS`
   6 off `startedAt`): Start can be pressed after the game and the manual
@@ -821,13 +821,14 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - **`InhouseLobby.eloDeltas`** (JSON userId → Elo swing) is stamped by the
   successful exact-result FINALIZATION claim; the room's post-game banner
   reads it — never re-derive the ladder on the poll path. COMPLETED is claimed
-  earlier, before settlement/history, and there is not yet a durable
-  finalization marker or outbox: a process death in that gap can leave an empty
-  delta map and no Discord retry. `InhouseLobby.completedAt` is stamped in that
-  first guarded completion transaction and is the immutable result-recency
-  clock. `updatedAt` is deliberately NOT chronology: eligible settlement rows
-  use it as their oldest-first retry cursor, and a failed attempt touches it to
-  rotate that row behind the rest of the backlog.
+  earlier, before the history scan, in one transaction with the side fixes and
+  the durable RESULT outbox row; a process death in the gap leaves an empty
+  delta map, which the automation worker's
+  `reconcileMissingInhouseResultAnnouncements` repairs within its one-hour
+  window. `InhouseLobby.completedAt` is stamped in that first guarded
+  completion transaction and is the immutable result-recency clock.
+  `updatedAt` is deliberately NOT chronology: any later write to the row (the
+  Elo stamp, a void) moves it.
   **`InhouseLobbyPlayer.wins/losses/games`** are
   record snapshots frozen at formation (safe: results can't land while the
   lobby is active) — the vote/draft views and RECORD ordering read them, so
@@ -853,9 +854,11 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   so an abandoned IN_PROGRESS lobby scans at a trickle, not forever at rate.
 - **Discord result publication**: `inhouseResultMessage` (score, duration, MVP
   via the league's `gameMvp`, OpenDota link) is attempted by the guarded exact-
-  result finalization above. A successful void always attempts a correction,
-  including a betless game. Ordering is serialized, but delivery remains
-  best-effort/at-most-once: there is no inhouse outbox or failed-send retry.
+  result finalization above. A successful void always attempts a correction.
+  Both ride the durable inhouse announcement outbox
+  (`inhouse-announcement-outbox.ts`), which keeps a void behind a result
+  already in flight; a failed send stays PENDING and the automation worker
+  retries it.
 - **Surfaces added**: `/inhouse/history` (every completed game, paginated 100
   per page — played-time fallback, score, winner, MVP, OpenDota link, exact-row
   admin void; linked from "All results →");
@@ -926,7 +929,7 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 - **Models** (`schema.prisma`): `InhouseQueueEntry` (one global rolling queue,
   `userId` unique), `InhouseLobby` (the game + phase state machine; immutable
-  result-recency `completedAt`; mutable settlement retry cursor `updatedAt`),
+  result-recency `completedAt`; `updatedAt` is not result chronology),
   `InhouseLobbyPlayer` (`team` 1/2, `isCaptain`, `pickIndex`, `mmr` + exact
   `queuedAt` snapshots, `acceptedAt` for the ready check,
   `votedMethod`/`votedNomineeId` for the captain vote). One active lobby at a
@@ -977,8 +980,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   game reaches OpenDota; step 3 points each player to their team's
   Discord voice channel (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side
   highlighted via `me.myTeam`). Lobby details and channel names are constants.
-  `inhouseLobbyCode` remains only as the per-lobby typed confirmation token for
-  force-cancelling a live game with bets.
+  `inhouseLobbyCode` remains only as the short "#1234" lobby label in the
+  room header.
 - **Captain-selection vote**: a filled lobby opens in `READY_CHECK`; after all
   ten accept it enters `CAPTAIN_VOTE`. The players choose `VOTE` (elect
   specific players), `MMR` (highest 2), or `RECORD` (best 2 inhouse records).
@@ -1002,7 +1005,7 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `constants.ts` (`INHOUSE`: LOBBY_SIZE 10, TEAM_SIZE 5, VOTE_SECONDS 25,
   PICK_SECONDS 60; `CAPTAIN_METHOD` labels).
 - **Service (DB, transactional)**: `src/lib/inhouse-service.ts` — a state read
-  runs heartbeat → abandoned-lobby sweep → bet sweep → formation → ready
+  runs heartbeat → abandoned-lobby sweep → formation → ready
   check → captain vote → stalled pick → result detection → board repaint.
   `joinQueue`/`leaveQueue`, `acceptMatch`/`declineMatch`, `castVote`, `makePick`,
   `startGame`, `autoDetectResult`, `recordMatch`, `cancelLobby`, and
@@ -1045,7 +1048,7 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   resolvable accounts isn't blamed on OpenDota either.
 - **API**: one dispatch endpoint `POST /api/inhouse` (`{ action, ... }`; actions:
   `state`/`join`/`leave`/`accept`/`decline`/`vote`/`pick`/`start`/`detect`/
-  `record`/`bet`/`cancel`/`void`). The body must be a valid JSON object with an
+  `record`/`cancel`/`void`). The body must be a valid JSON object with an
   explicit non-empty action; malformed/missing/unknown actions are 400. Public
   state uses 1,200/min/IP; mutations use 300/min/signed-in user (IP fallback
   only for signed-out attempts). Successful mutations return fresh viewer-
@@ -1188,247 +1191,15 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   players at MMR 0), and the vote's whole premise is that the card tells you
   what you are voting for.
 
-## Inhouse betting — "Cred" (done)
+## Inhouse betting — "Cred" (removed)
 
-Play-money wagering on inhouse games. `src/lib/inhouse-bets.ts` (pure, tested),
-`src/lib/inhouse-bet-service.ts` (DB), `test/integration/inhouse-bets.itest.ts`.
-
-**THE TRIPWIRE, first because every safety argument below rests on it: Cred is
-WORTHLESS.** It cannot be bought, sold, transferred, gifted, or spent on
-anything. The anti-collusion reasoning is only sound while there is nothing to
-collude FOR — so the moment anyone proposes making Cred buy something real,
-this whole feature has to be reconsidered from scratch, not patched.
-
-**A player may bet ONLY on their own team, once, immutably.** That is the
-anti-throw rule and it is the reason the feature is shippable at all: you can
-never hold a position that pays you for losing. `@@unique([lobbyId, userId])`
-is what enforces single-shot — it is the double-spend guard, not a nicety, so
-two tabs cannot both charge.
-
-**Pools are MATCHED, and that is the load-bearing economic choice.** Each
-side's stakes are matched against the other's (`M = min(pool1, pool2)`), matched
-Cred pays even money, unmatched Cred is returned untouched. It was chosen over
-house-backed Elo odds specifically because **a payout must be funded by an
-opposing stake**: a throw conspiracy can only ever win what honest players on
-the throwing side voluntarily risked, where a house mints currency from nothing
-with no counterparty to notice. The same property makes perfect information
-worth exactly ZERO — a side that already knows it lost stakes nothing, so
-`M = 0` and the winners collect nothing. That is a property of the mechanism,
-not a check that can have a bug in it. **Never add odds, a house, a rake, or
-any MMR/Elo input to the price**; each one reintroduces the money printer and
-the MMR-sandbag exploit at a stroke (`joinQueue` trusts a free-typed MMR for
-unregistered accounts, so a price that reads MMR is a price players can set).
-
-**Bet size touches the Elo ladder in NO way, and this is not up for revisiting.**
-`summarizeInhouse` keeps its exact signature; no stake is an input to any
-rating. Three reasons: the expectation is the two sides' AVERAGE rating, so a
-stake-scaled K lets one player's wallet move the yardstick the other nine are
-rated against without their consent — precisely the class the own-team rule
-exists to eliminate; it destroys the reproducibility that makes `voidLastResult`
-safe (that works BECAUSE nothing is stored and every rating recomputes on read);
-and the blast radius is four independent full-history scans plus the RECORD
-captain-vote ordering. The visible payoff instead is a SECOND ladder — net Cred
-profit, as a column beside Elo on `/inhouse`. Elo is skill, Cred is nerve, and
-being #8 in one and #1 in the other is the point.
-
-**The window opens at the DRAFTING→READY transition and closes on `betsCloseAt`
-ALONE — pressing Start does not close it.** Nobody should ever be the person
-who closed the ante, and Start has to stay instant. `betsCloseAt` is stamped by
-`readyTransitionData(nowMs)`, which exists because there are **TWO write sites
-that set `status: READY`** — `applyPick`'s advance claim and
-`restoreLostPickTurn` — and wiring only the first is invisible: a lobby
-recovered through the lost-turn path would arrive with betting silently off and
-no error anywhere. Same shape as the standin announcement's four call sites.
-One definition; don't hand-write the second. It is deliberately NOT keyed on
-`startedAt`, which an interested party can push forward simply by pressing
-Start later — the pick'em lesson, lock on a timestamp nobody can rewrite.
-
-**Settlement follows `applyResult`'s COMPLETED + `teamFixes` transaction, and
-its POSITION is load-bearing in both directions.** It runs AFTER the
-`teamFixes` loop, because that loop rewrites the very column the lineup void
-reads; and BEFORE the full-history Elo scan plus exact-result finalization
-claim, because money must not sit downstream of the slow unwindowed work. It is
-wrapped in try/catch that logs and continues: `/api/sync` runs this chain on
-every page view sitewide, so a play-money bug must never stop Elo finalization,
-the cursor, the announcement attempt, or ten people playing Dota. A PENDING
-settlement is independently recoverable even though result finalization itself
-does not yet have a durable retry marker.
-
-**Any check performed AFTER a claim must be computable from COLUMNS.** This is
-the generalised rule and it is why `matchStartTime` is persisted into
-`applyResult`'s existing claim `data` rather than passed along: the request
-holding `BuiltResult` in hand is allowed to die, and the lazy sweeper has to
-reach the same late-bet verdict as the fast path. Settlement crash recovery is
-then byte-identical to the happy path instead of a second, weaker
-implementation.
-
-**Two voids, and they are removed BEFORE the pools are computed.** Ordering is
-the whole thing — compute pools first and the survivors get matched against
-money that was refunded, silently overpaying. `VOID_LINEUP`: the bettor's
-post-`teamFixes` team ≠ the side they bet on. Two players swapping slots in the
-hand-hosted Dota lobby would otherwise walk a big stake onto the strong side
-(`classifyGame`'s side assignment is a tolerant MAJORITY vote, so a 1-for-1 swap
-classifies cleanly); voiding makes a swap EV-zero in BOTH directions, so nobody
-arranges one. `VOID_LATE`: placed after the played game's own `start_time` —
-Valve's clock is the one timestamp ten interested parties cannot forge. A bet
-that is both is labelled `VOID_LATE`, fixed and documented, because settlement
-must name one outcome.
-
-**ONE refund rule, not four.** `resolveUnsettledBets()` probes the indexed
-`betSettlement` column and has three branches, each its own guarded claim:
-PENDING+COMPLETED ⇒ settle, PENDING+CANCELLED ⇒ refund in full,
-SETTLED+CANCELLED ⇒ reverse to exact pre-game balances. Terminal transitions
-still contain no hand-written payout/refund math, but cancel and void do contain
-a shared betting-service call: after their guarded state change, `cancelLobby`
-and `voidLastResult` explicitly call
-`resolveUnsettledBets(theirLobbyId)` so an older backlog row cannot consume the
-immediate consistency attempt promised to that action's players.
-
-The untargeted resolver used by both state-read paths selects up to 25 eligible
-rows ordered by `[updatedAt asc, id asc]`. Every lobby is attempted in its own
-guarded settlement/refund/reversal transaction; one poisoned row is caught so
-every later row still runs, then best-effort touched to move its `updatedAt`
-cursor to the back. All failures are reported together only after the batch.
-This mutable retry order cannot change result recency because immutable
-`completedAt` owns that contract. The global resolver runs from both
-state-read paths, including `syncInhouse` **above** the
-`!active && queued === 0` early return, which is the stranded-pot state: game
-over, everyone closed their tabs, nobody polling. Later lazy paths retry any
-failed targeted cancel/void sweep.
-
-**`cancelLobby` gained the one guard on hardened code**: its IN_PROGRESS branch
-now requires `bets: { none: { confirmedAt: { not: null } } }` unless literal
-`force: true` is passed, because cancelling a live game is otherwise an admin
-undo for a losing bet. EVERY successful admin cancellation writes an
-`AdminAction` naming the phase, players and exact pot; force changes the audit
-wording, not whether a row exists. It immediately invokes the canonical refund
-sweep above. There is no Discord cancellation message. Admins are NOT locked
-out on purpose — an unkillable lobby holding the single active slot for six
-hours is a strictly worse failure than a logged override.
-
-**THE RECOVERY PATHS ARE WHERE THE BUGS WERE.** An adversarial audit run _after_
-the whole suite was green (1035 unit, 528 pg, 52/52 ratchet, 19+27 e2e) found six
-blockers, four of which lost or minted Cred, and every suite passed against all
-of them. The happy path had been tested hard and the failure paths barely. If you
-extend this feature, spend your testing budget on what happens when a lobby dies,
-not on what happens when it doesn't. What was wrong, and what each rule now is:
-
-- **`applyResult`'s COMPLETED claim and its `teamFixes` loop commit in ONE
-  transaction.** They used to be separate statements — harmless before betting,
-  a money bug after. The claim commits alone, so between it and the end of the
-  loop the row reads COMPLETED with a PENDING pot but the DRAFT roster, and
-  `resolveUnsettledBets` runs on EVERY page view sitewide. A rival in that gap
-  settles against the drafted sides: the wrong five get paid, `VOID_LINEUP`
-  never fires, and it is permanent because settlement is single-winner. The Elo
-  history scan stays OUTSIDE the transaction — it is a full-history read with no
-  business holding a write open.
-- **`voidLastResult` refuses while ANY lobby in `INHOUSE_ACTIVE_STATUSES` holds
-  a confirmed bet.** Reversal is an unfloored decrement, so a winner who has
-  already staked those winnings on the live game goes NEGATIVE. Read-time only,
-  deliberately: re-asserting it at the write makes a write-skew pair with
-  `placeInhouseBet` (it reads the lobby and writes a bet; this counts bets and
-  writes the lobby), and SSI only spots the cycle when BOTH sides are
-  Serializable — so closing a gap of milliseconds would put the hot betting path
-  on Serializable with P2034 retries. The residual case now lands on a balance an
-  admin can actually fix, which is the next rule.
-- **`adjustCred`'s no-overdraw predicate applies to DEBITS ONLY.** It was
-  `gte: Math.max(0, -delta)`, which on a CREDIT evaluates to `gte: 0` — so a
-  negative balance refused the one operation that repairs it. The bug and its own
-  fix were locked together.
-- **`reverseLobbyBets` claws back the FLOOR top-up and DELETES its ledger row.**
-  Reversing only the wager legs MINTED up to 100 Cred: a player floored after a
-  loss kept the top-up when the game was voided. Deleted rather than offset
-  because `refId` is `<userId>:<utc-day>` and the `@@unique` IS the once-a-day
-  rule — an offsetting row leaves the key burned, punishing the player for an
-  admin's void.
-- **`applyFloor`'s balance write is a compare-and-swap, and its receipt follows
-  the movement.** It is the ONE absolute assignment in the money layer
-  (everything else is a relative `{ increment }`) over a row the transaction has
-  not written, so under READ COMMITTED an admin `adjustCred` in the gap was a
-  lost update. `count === 0` SKIPS — not a throw, because the settlement it runs
-  inside is already correct and losing a top-up costs a player 100 play-money
-  Cred where a lost update costs the books their integrity.
-- **`ensureCredAccount` wraps the account create and its GRANT receipt in one
-  transaction.** They were two statements under a comment claiming "the unique
-  makes the retry free" — wrong about its own function, because the
-  `if (existing) return` fast path above means there IS no retry. A death between
-  them left a funded account with no provenance, permanently.
-
-**Two coverage limits, stated because "no test moved" is what a gap looks like
-too.** `applyFloor`'s CAS-declines branch needs a rival committing inside
-settlement's own transaction and there is no seam in `inhouse-bet-service.ts` to
-steer one, so it is pinned by a `[source]` assertion (the
-`room-source-guards.test.ts` precedent) rather than a behavioural test — verified
-non-vacuous by restoring the absolute write and watching only the source guard go
-red. Replace it with a real test if a seam ever lands there. And the FIX 1 race
-is pinned by two tests: a SQLite-runnable one asserting the sweeper finds nothing
-to mis-settle, plus a Postgres-only second-connection test that is skipped
-everywhere else — `npm run test:pg` is the only thing that runs it.
-
-**Deliberate deviations from house style, each with its reason:**
-
-- **`InhouseCredit.balance` is a MUTABLE column, not a SUM over the ledger.**
-  Against this repo's derive-don't-store idiom, and forced: the affordability
-  test has to be re-asserted in the WHERE of the debit itself
-  (`balance: { gte: stake }`), and you cannot atomically re-assert a SUM in one
-  Prisma statement. The ledger is provenance; the column is the claim.
-- **The payout `{ increment }` is BLIND, and must stay that way.** The
-  settlement claim already elected exactly one winner, so there is no rival —
-  same reasoning as `Team.budget`. Do not "fix" it into a conditional write;
-  that would make settlement non-idempotent in the wrong direction.
-- **The `RETURN` ledger leg carries the WHOLE stake, not just the unmatched
-  part** (despite what the reason's name suggests). `credProfitBoard` sums
-  `{STAKE, RETURN, WIN, LOSS, REFUND, REVERSAL}`, so STAKE(−s) and RETURN(+s)
-  must cancel for the board to reduce to net profit. Any split where RETURN is
-  partial makes the board read 0 for every winner.
-- **The once-a-day floor uses a `findUnique` probe, not a P2002 catch.** Inside
-  an open interactive transaction a P2002 POISONS the transaction on Postgres
-  (`current transaction is aborted`). The `@@unique([reason, refId])` is still
-  the real guard — a genuine collision rolls the settlement back and the
-  sweeper's retry sees the row.
-
-**The profit board ranks NET PROFIT, never balance** — `INHOUSE_CRED_PROFIT_REASONS`
-excludes `GRANT`, `FLOOR` and `ADJUST` for that reason. It is what makes the
-bankruptcy floor safe: a player parked at the floor mints liquidity but can
-never mint SCORE, so the designated-donor farm has nothing to farm, and
-attendance stops being rankable. **Never add a "total staked" board beside it** —
-volume is the one number a bet-max-every-game behaviour farms perfectly.
-
-**`MAX_STAKE` is FLAT at 100 forever, never a fraction of balance.** A newcomer
-and the ladder leader cap out at the same number on night one (so the economy
-cannot compound into a rich-get-richer spiral), and a conspiracy's take is
-bounded at five stakes per game.
-
-**The pinned Discord board carries the pot ONLY in the frozen LIVE state.**
-THE DIGEST IS THE COST MODEL — put a live pot or a countdown in it and the board
-burns one PATCH every `BOARD_MIN_SECONDS` forever, on the message whose entire
-design is "a motionless queue costs zero requests". Both digest builders
-(`loadBoardSnapshot` and `getInhouseState`) must agree on null-vs-0 for a
-bet-free lobby, or alternating paths repaint each other in a loop.
-
-**The ratchet caught the overdraft guard being untested, and the reason is the
-one this file keeps re-learning.** `placeInhouseBet`'s
-`balance: { gte: stake }` came back `[unprotected]` on the first discover even
-though a RACED overdraft test existed — because that test raced one player
-against THEMSELVES on one lobby, where `@@unique([lobbyId, userId])` stops the
-loser first: its bet-create raises P2002, which rolls back its own transaction,
-debit included. The balance predicate never fires, so deleting it changes
-nothing. **"Something upstream serializes this" only ever covers rivals from
-the SAME path.** The rival from a different path is `adjustCred` — an admin
-correcting a balance while that player places their FIRST bet meets no unique
-constraint at all, and unguarded the account goes NEGATIVE (verified: −100),
-a state nothing else can produce and whose only symptom is a player later
-unable to bet for no visible reason. That test now exists; deleting the
-predicate turns it red.
-
-**Known gaps** (deliberate, stated rather than hidden): two friends splitting
-winnings out of band is unfixable and mostly harmless (the currency buys
-nothing, and net-profit ranking drives an alternating arrangement to ~0 for
-both); a thrower can hold no position and let a confederate collect, bounded at
-500 Cred in a game where nine people watch him feed and his Elo takes the real
-hit; and a stake can be locked for 3–6 hours if a lobby is abandoned rather than
-played — refunds make that EV-neutral, and the room SAYS SO at bet time rather
-than letting someone discover it.
+Cred betting was removed in September 2026 by the owner's decision. Its tables
+and columns (`InhouseBet`, `InhouseCredit`, `InhouseCreditEntry`, and
+`InhouseLobby.betsCloseAt`/`betSettlement`/`betDeltas`) are left dormant in
+`schema.prisma` — no destructive migration — and nothing in the app reads or
+writes them. The only code that still names them is the local seed, fixture
+and night-check resets, which wipe them so an old local database resets
+cleanly. Bringing wagering back would need a fresh design, not a revert.
 
 ## Draft edge cases (done)
 
@@ -1852,7 +1623,7 @@ already in the `Setting` table.
   `[createdAt desc, id desc]`; its `lastEndedAtMs` is the best played start
   (`matchStartTime ?? startedAt ?? createdAt`) plus `durationSecs`, falling back
   to immutable `completedAt` when an end cannot be derived. Generic `updatedAt`
-  is NEVER read for this — settlement retry rotation is not a new game. Every
+  is NEVER read for this — a later write to an old row is not a new game. Every
   figure is monotonic or completes-with-a-state-change — NEVER a trailing
   window like "games this week", which would silently rot through the exact
   quiet stretch it exists to paper over. Anything missing is OMITTED, never
@@ -1872,9 +1643,8 @@ already in the `Setting` table.
   board silently burns one PATCH every `BOARD_MIN_SECONDS` forever, on an empty
   queue. A motionless queue currently costs zero requests — verified live.
 - **`syncInhouse` repaints the board on its EARLY-RETURN path too** (queue
-  empty AND no lobby). The bet sweep ALWAYS runs before this branch so a
-  stranded PENDING/SETTLED pot still settles, refunds or reverses; only the
-  phase resolvers are skipped. No one may be polling the room, yet this is the
+  empty AND no lobby). The result-announcement reconciler still runs before
+  this branch; only the phase resolvers are skipped. No one may be polling the room, yet this is the
   state the board is most likely to be lying about: a game that just ENDED
   leaves the board reading "game in progress", and the last player can leave
   and close the tab in one breath. Pinned by `runResultSync` tests in
@@ -2269,8 +2039,7 @@ calls the SAME memoised `loadBoardStats` the pinned Discord board uses, so the
 channel and site agree on proof-of-life counts, result and MVP. The loader
 selects the newest formed COMPLETED lobby by `[createdAt desc, id desc]` and
 reports `lastEndedAtMs` as its played start plus `durationSecs`, falling back to
-immutable `completedAt` when needed. It never reads `updatedAt`, the settlement
-retry cursor. Archive, recent-result and player-profile dates remain played
+immutable `completedAt` when needed. It never reads `updatedAt`. Archive, recent-result and player-profile dates remain played
 starts via `matchStartTime ?? startedAt ?? createdAt`; SceneStats/board show the
 corresponding played end. The empty queue, which is ~95% of views, stops reading
 as a dead league. Recent
@@ -3174,7 +2943,7 @@ and `setAvailability` now carry the archived-season refusal that only
 it a captain on last season's unplayed fixture could import a game — which runs
 `recomputeSeries` → the bracket → every cross-season board.
 
-**Money surface: `voidLastResult` takes an explicit `lobbyId`** and
+**`voidLastResult` takes an explicit `lobbyId`** and
 `/inhouse/history` renders a per-row admin Void. The room button (gated on the
 viewer having PLAYED the game, within 10 minutes) meant the documented use case
 — players report a wrong auto-import to an admin who wasn't one of the ten —

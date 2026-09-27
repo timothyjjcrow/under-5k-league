@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     );
     if (kind === "inhouse" && playable && status.state === "started") {
       // The GC has confirmed a running game. A cancelled/replaced lobby can
-      // never be resurrected by this delayed response; betting deadlines stay fixed.
+      // never be resurrected by this delayed response.
       await prisma.inhouseLobby.updateMany({
         where: { id, status: "READY" },
         data: { status: "IN_PROGRESS", startedAt: new Date() },

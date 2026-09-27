@@ -112,15 +112,8 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
 }) => {
   test.setTimeout(180_000);
   const errors = trackPageErrors(page);
-  let statePolls = 0;
-  page.on("request", (request) => {
-    if (
-      request.url().endsWith("/api/inhouse") &&
-      request.postData()?.includes('"action":"state"')
-    )
-      statePolls += 1;
-  });
-  page.on("dialog", (d) => d.accept()); // the Start-game confirm
+  // The Start-game confirm, and the admin cancel at the end.
+  page.on("dialog", (d) => d.accept());
 
   // Nine API players queue up (MMRs below the observer's, so the observer
   // captains team 1 when the vote lands on Highest MMR).
@@ -261,54 +254,17 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   }
   await expect(page.getByText(/inhouse team [12]/).first()).toBeVisible();
 
-  // --- Betting: the 45s window opens on this same transition ---------------
-  // The panel has to sit ABOVE the setup card — it is the one thing that has
-  // to be read before everyone leaves for the Dota client.
-  await expect(page.getByLabel("Betting pot")).toBeVisible();
-  // Nobody has staked yet, so the observer's own bet is the whole pool and
-  // NOTHING is covered — the button must say so before it is pressed, which is
-  // the honesty this design turns on.
-  const chip = page.getByRole("button", { name: /^Bet 10 Cred on/ });
-  await expect(chip).toBeVisible();
-  await chip.click();
-
-  // The slip lands and is immutable — the chips go away rather than offering a
-  // raise that the server would refuse. Anchor on "Your bet:" rather than the
-  // bare amount: the success toast says "10 Cred on Radiant — your slip is in
-  // the pot" at the same moment, and a looser matcher is a strict-mode flake
-  // that only fires while the toast is still on screen.
-  await expect(page.getByText(/Your bet: 10 Cred on/)).toBeVisible();
-  // Betting into an empty pool must SAY it is not live — the whole design
-  // rests on nobody discovering that after the fact.
-  await expect(page.getByText(/It needs a taker/)).toBeVisible();
   await captureRoom(page, "setup");
 
-  // The pot panel is the widest thing added to this room — two side-by-side
-  // pool bars, a slip list with player names, and a chip row — and the room's
-  // only overflow tripwire covers the QUEUE view, four phases earlier. Check
-  // the phase that actually holds it, at the narrowest real phone.
+  // The setup phase carries the widest cards in the room (the copy chips and
+  // both rosters); the room's other overflow tripwire covers only the QUEUE.
+  // Check this phase at the narrowest real phone too.
   await page.setViewportSize({ width: 375, height: 812 });
-  await expect(page.getByLabel("Betting pot")).toBeVisible();
+  await expect(page.getByText("Teams are set!")).toBeVisible();
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
   await page.setViewportSize({ width: 1280, height: 720 });
-  await expect(
-    page.getByRole("button", { name: /^Bet 10 Cred on/ }),
-  ).toHaveCount(0);
-  // …and it shows in the pool bar's accessible name, which is the only place a
-  // screen reader learns the pot exists at all.
-  await expect(
-    page.getByLabel(/: 10 Cred staked, 0 of it covered/),
-  ).toBeVisible();
 
-  // A second bet is refused server-side even if the UI is bypassed — the
-  // single-shot rule is the double-spend guard, not a rendering decision.
-  const second = await act(players[0], { action: "bet", stake: 10 });
-  const secondAgain = await act(players[0], { action: "bet", stake: 10 });
-  expect(second.ok).toBe(true);
-  expect(secondAgain.ok).toBe(false);
-
-  // The observer (team 1 captain) starts the game from the UI. Start must NOT
-  // close betting — nobody should be the person who closed the ante.
+  // The observer (team 1 captain) starts the game from the UI.
   await page.getByRole("button", { name: /Start the game/ }).click();
 
   // Live view: pulsing banner, elapsed clock, auto-detect controls, rosters.
@@ -318,12 +274,6 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   ).toBeVisible();
   await expect(page.getByText("Radiant").first()).toBeVisible();
   await expect(page.getByText("Dire").first()).toBeVisible();
-  // Starting early must keep the pot live for its original 45-second window,
-  // including prompt coverage updates for a player who already placed a bet.
-  const pollsWhenStarted = statePolls;
-  await expect
-    .poll(() => statePolls, { timeout: 6_000 })
-    .toBeGreaterThanOrEqual(pollsWhenStarted + 2);
   await captureRoom(page, "in-progress");
 
   // A normal bystander can still line up while this game is live. Signed-out
@@ -362,86 +312,17 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   expect(spectatorErrors).toEqual([]);
   await spectatorBrowser.close();
 
-  // Clean up: admin scraps the lobby so a re-run starts from a clean queue.
-  // A PLAIN cancel is now refused — this lobby is IN_PROGRESS with confirmed
-  // bets, and cancelling a live game is otherwise an admin undo for a losing
-  // bet. Assert the refusal rather than just forcing past it: it is the one
-  // guard this feature added to previously hardened code, and a silent
-  // regression there is worth catching in a browser too.
-  const refused = await act(admin, { action: "cancel" });
-  expect(refused.ok).toBe(false);
-
-  // …and drive the real recovery through the BROWSER, because the refusal above
-  // is only half the story: one 10-Cred bet makes a live lobby un-cancellable,
-  // which holds the single active-lobby slot and stops the whole league forming
-  // a game. If the only way out is a hand-written API call, the feature has a
-  // liveness bug however green the service tests are.
+  // Clean up through the BROWSER: an admin scraps the live lobby so a re-run
+  // starts from a clean queue. A live game needs no override any more (that
+  // existed only for Cred staked on it), so the plain cancel is the one
+  // control, and its confirm is accepted by the dialog handler above.
   await page.goto(
     "/api/auth/dev?name=IH+Admin+UI&steamId=76561190000002998&admin=1&redirect=/inhouse",
   );
-
-  // The two destructive controls must never share a pixel: while a plain cancel
-  // is guaranteed to refuse, it is not rendered at all.
   await expect(
-    page.getByRole("button", { name: "Admin: cancel this lobby" }),
+    page.getByRole("button", { name: /force-cancel/i }),
   ).toHaveCount(0);
-  const forceTrigger = page.getByRole("button", {
-    name: /force-cancel this live game/i,
-  });
-  await expect(forceTrigger).toBeVisible();
-  await forceTrigger.click();
-
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  // The confirm has to state what dies — the /admin rule. It names the real pot.
-  await expect(
-    dialog.getByText(/Cred across .* refunded in full/),
-  ).toBeVisible();
-
-  const confirmBtn = dialog.getByRole("button", {
-    name: /Force-cancel|Scrap/i,
-  });
-  await expect(confirmBtn).toBeDisabled();
-
-  // Focus starts inside the dialog, wraps in both directions, Escape restores
-  // the trigger, and the document cannot scroll behind the destructive choice.
-  const field = dialog.getByRole("textbox");
-  const keepGame = dialog.getByRole("button", { name: "Keep the game" });
-  await expect(field).toBeFocused();
-  expect(await page.evaluate(() => document.body.style.overflow)).toBe(
-    "hidden",
-  );
-  await field.press("Shift+Tab");
-  await expect(keepGame).toBeFocused();
-  await keepGame.press("Tab");
-  await expect(field).toBeFocused();
-  await field.press("Escape");
-  await expect(dialog).toHaveCount(0);
-  await expect(forceTrigger).toBeFocused();
-  expect(await page.evaluate(() => document.body.style.overflow)).not.toBe(
-    "hidden",
-  );
-
-  // Reopen to exercise the typed destructive action itself.
-  await forceTrigger.click();
-  await expect(dialog).toBeVisible();
-
-  // The token is the lobby's own code, quoted in the prompt. A wrong code must
-  // not arm it, and Enter must not complete it — reflex-confirming a control
-  // that refunds ten people's stakes is the exact thing being prevented.
-  const prompt = await dialog.getByText(/Type the lobby code/).innerText();
-  const code = /(\d{3,})/.exec(prompt)?.[1] ?? "";
-  expect(code).not.toEqual("");
-
-  await field.fill(code.slice(0, -1) + (code.endsWith("0") ? "1" : "0"));
-  await expect(confirmBtn).toBeDisabled();
-  await field.fill(code);
-  await expect(confirmBtn).toBeEnabled();
-  await field.press("Enter");
-  await expect(dialog).toBeVisible(); // Enter is preventDefault'ed — still armed.
-
-  await confirmBtn.click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Admin: cancel this lobby" }).click();
   // The slot is free again: the room falls back to the queue view.
   await expect(
     page.getByRole("heading", { name: "Inhouse queue", exact: true }),

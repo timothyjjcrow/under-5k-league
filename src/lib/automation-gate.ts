@@ -4,7 +4,6 @@ import {
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
-  INHOUSE_BET_STATUS,
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -155,14 +154,12 @@ export type AutomationGateInputs = {
     startedAt: Date | null;
     detectedAt: Date | null;
     updatedAt: Date;
-    betsCloseAt: Date | null;
   }>;
   queue: Array<{
     joinedAt: Date;
     lastSeenAt: Date;
     idleExpiresAt: Date | null;
   }>;
-  unsettledBet: boolean;
   repairableInhouseResult: boolean;
   leagueOutbox: Array<{
     id: string;
@@ -701,16 +698,6 @@ export function computeAutomationGateSnapshot(
       const deadline = optionalDateMs(value, label);
       addCandidate(candidates, nowMs, deadline ?? nowMs, "INHOUSE");
     };
-    if (
-      (lobby.status === INHOUSE_STATUS.READY ||
-        lobby.status === INHOUSE_STATUS.IN_PROGRESS) &&
-      lobby.betsCloseAt
-    ) {
-      const betsCloseAt = dateMs(lobby.betsCloseAt, "lobby.betsCloseAt");
-      if (betsCloseAt > nowMs) {
-        addCandidate(candidates, nowMs, betsCloseAt, "INHOUSE");
-      }
-    }
     if (lobby.status === INHOUSE_STATUS.READY_CHECK) {
       lobbyDeadline(lobby.acceptEndsAt, "lobby.acceptEndsAt");
     } else if (lobby.status === INHOUSE_STATUS.CAPTAIN_VOTE) {
@@ -745,7 +732,7 @@ export function computeAutomationGateSnapshot(
       );
     }
   }
-  if (inputs.unsettledBet || inputs.repairableInhouseResult) {
+  if (inputs.repairableInhouseResult) {
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
   }
 
@@ -1136,7 +1123,6 @@ export async function loadAutomationGateSnapshot(
     settingRows,
     activeLobbies,
     queue,
-    unsettledBet,
     repairableInhouseResult,
     leagueOutbox,
     inhouseOutboxes,
@@ -1189,7 +1175,6 @@ export async function loadAutomationGateSnapshot(
         startedAt: true,
         detectedAt: true,
         updatedAt: true,
-        betsCloseAt: true,
       },
     }),
     prisma.inhouseQueueEntry.findMany({
@@ -1198,23 +1183,6 @@ export async function loadAutomationGateSnapshot(
         lastSeenAt: true,
         idleExpiresAt: true,
       },
-    }),
-    prisma.inhouseLobby.findFirst({
-      where: {
-        OR: [
-          {
-            betSettlement: INHOUSE_BET_STATUS.PENDING,
-            status: {
-              in: [INHOUSE_STATUS.COMPLETED, INHOUSE_STATUS.CANCELLED],
-            },
-          },
-          {
-            betSettlement: INHOUSE_BET_STATUS.SETTLED,
-            status: INHOUSE_STATUS.CANCELLED,
-          },
-        ],
-      },
-      select: { id: true },
     }),
     prisma.inhouseLobby.findFirst({
       where: {
@@ -1294,7 +1262,6 @@ export async function loadAutomationGateSnapshot(
         leagueWebhookConfigured && discordMutationsAllowed(),
       activeLobbies,
       queue,
-      unsettledBet: unsettledBet !== null,
       repairableInhouseResult: repairableInhouseResult !== null,
       leagueOutbox,
       inhouseOutboxes,
