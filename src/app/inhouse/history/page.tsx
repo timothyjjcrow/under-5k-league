@@ -1,3 +1,4 @@
+import { shareMetadata } from "@/lib/share-metadata";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
@@ -29,11 +30,10 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
-export const metadata = {
-  title: "Inhouse history",
-  description:
-    "Every completed inhouse game — scores, MVPs, and box-score links.",
-};
+export const metadata = shareMetadata(
+  "Inhouse history",
+  "Every completed inhouse game — scores, MVPs, and box-score links.",
+);
 
 const HISTORY_RESULT_SELECT = {
   id: true,

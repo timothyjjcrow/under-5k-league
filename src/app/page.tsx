@@ -115,6 +115,7 @@ import {
   canViewAvailabilitySummary,
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
+import { homeMetadata } from "@/lib/link-preview-metadata";
 
 const PHASE_ORDER = [
   "SIGNUPS",
@@ -136,6 +137,12 @@ function fmtWhen(d: Date | null): string | null {
   // Delegates to formatMatchTime — these strings are LocalTime hydration
   // snapshots, so drifting from the client's formatter causes flicker.
   return d ? formatMatchTime(d, "full") : null;
+}
+
+// "Copy invite link" shares this page, so its link preview carries the
+// season, its phase and what a visitor can do now.
+export function generateMetadata() {
+  return homeMetadata();
 }
 
 export default async function Home() {

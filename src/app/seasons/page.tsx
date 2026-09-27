@@ -1,3 +1,5 @@
+import { shareMetadata } from "@/lib/share-metadata";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
@@ -19,7 +21,11 @@ import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { productionDeleteBackupRequired } from "@/lib/backup-receipt.mjs";
 
-export const metadata = { title: "Season history" };
+export const metadata = shareMetadata(
+  "Season history",
+  `Every ${LEAGUE_CONFIG.name} season: champions, final standings and results.`,
+  "/seasons",
+);
 
 export default async function SeasonsPage() {
   const [seasons, viewer] = await Promise.all([

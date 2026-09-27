@@ -1,3 +1,4 @@
+import { shareMetadata } from "@/lib/share-metadata";
 import { Suspense } from "react";
 import { listPage } from "@/lib/list-page";
 import Link from "next/link";
@@ -32,11 +33,11 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = {
-  title: "Scrims",
-  description:
-    "Post team availability, book casual league scrims, and review scrim-only results and statistics.",
-};
+export const metadata = shareMetadata(
+  "Scrims",
+  "Post team availability, book casual league scrims, and review scrim-only results and statistics.",
+  "/scrims",
+);
 
 const inputClass =
   "h-10 rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60";

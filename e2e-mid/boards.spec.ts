@@ -341,6 +341,60 @@ test("public statistics metadata is route-specific and invalid archives are noin
   );
 });
 
+test("league pages unfurl with their page name, the season and the fixture", async ({
+  page,
+}) => {
+  // Discord shows og:title and og:description, not the tab title. They used
+  // to read "GGD2L" and one shared sentence on every page below.
+  await page.goto("/");
+  const brand = await page.getByRole("banner").locator("img[alt]").first().getAttribute("alt");
+  await expect(page).toHaveTitle(brand!);
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    / · (Regular season|Playoffs)$/,
+  );
+  for (const [path, title, description] of [
+    ["/schedule", "Schedule", /fixtures, kickoff times, results and standings/],
+    ["/teams", "Teams", /teams, rosters and results/],
+    ["/players", "Players", /signup, standin and roster/],
+    ["/seasons", "Season history", /champions, final standings and results/],
+    ["/inhouse", "Inhouse", /Pick-up Dota 2 games/],
+    ["/scrims", "Scrims", /book casual league scrims/],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+      "content",
+      title,
+    );
+    await expect(
+      page.locator('meta[property="og:description"]'),
+    ).toHaveAttribute("content", description);
+    await expect(page.locator('meta[property="og:description"]')).not.toHaveAttribute(
+      "content",
+      /4\.5K/,
+    );
+  }
+
+  // A fixture names its round and teams, then its kickoff, live score or result.
+  await page.goto("/schedule");
+  const matchHref = await page
+    .locator('#main a[href^="/matches/"]')
+    .first()
+    .getAttribute("href");
+  expect(matchHref).toBeTruthy();
+  await page.goto(matchHref!);
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    /^.+ · .+ vs .+$/,
+  );
+  await expect(
+    page.locator('meta[property="og:description"]'),
+  ).toHaveAttribute(
+    "content",
+    / · (.+ won \d+–\d+|Drawn \d+–\d+|Live · \d+–\d+ · Best of \d+|.+ · Best of \d+)/,
+  );
+});
+
 test("public stat and content pages stay inside a 360px viewport", async ({
   page,
 }) => {

@@ -29,10 +29,10 @@ import {
   getPublicSeasonHasGames,
 } from "@/lib/public-navigation";
 import { joinSeasonCta, type NavContent } from "@/lib/site-nav";
+import { siteDescription } from "@/lib/link-preview";
 
 const SITE_URL = resolveSiteUrl();
-const DESCRIPTION =
-  "An amateur Dota 2 league built around a soft 4.5K MMR limit — sign in with Steam, join the season, get drafted, and compete.";
+const DESCRIPTION = siteDescription();
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

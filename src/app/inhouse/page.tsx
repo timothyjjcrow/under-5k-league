@@ -1,3 +1,4 @@
+import { shareMetadata } from "@/lib/share-metadata";
 import Link from "next/link";
 import { Fragment, Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
@@ -51,11 +52,11 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
-export const metadata = {
-  title: "Inhouse",
-  description:
-    "Pick-up Dota 2 games, drafted live: queue up, vote captains, draft teams, and play — results auto-record from OpenDota onto the Elo ladder.",
-};
+export const metadata = shareMetadata(
+  "Inhouse",
+  "Pick-up Dota 2 games, drafted live: queue up, vote captains, draft teams, and play — results auto-record from OpenDota onto the Elo ladder.",
+  "/inhouse",
+);
 
 export default async function InhousePage({
   searchParams,

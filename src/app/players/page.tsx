@@ -1,3 +1,4 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "next/link";
 import { Suspense } from "react";
 import { hasText } from "@/lib/utils";
@@ -48,7 +49,10 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Players" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("players");
+}
 
 export default async function PlayersPage() {
   // Compare players fills from imported games; before the league's first one

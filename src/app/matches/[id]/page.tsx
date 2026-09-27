@@ -13,7 +13,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { shareMetadata } from "@/lib/share-metadata";
+import { matchMetadata } from "@/lib/link-preview-metadata";
 import { AUTO_SYNC, LEAGUE_GAME_MODE } from "@/lib/constants";
 import {
   howToHostParts,
@@ -114,17 +114,11 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const match = await prisma.match.findUnique({
-    where: { id },
-    select: {
-      homeTeam: { select: { name: true } },
-      awayTeam: { select: { name: true } },
-    },
-  });
+  // The round and teams, then the kickoff, live score or result.
+  const metadata = await matchMetadata(id);
   // notFound() in metadata runs before the shell streams → real 404 status.
-  if (!match) notFound();
-  const title = `${match.homeTeam.name} vs ${match.awayTeam.name}`;
-  return shareMetadata(title, `${title} — box score and results in ${LEAGUE_CONFIG.name}.`);
+  if (!metadata) notFound();
+  return metadata;
 }
 
 export default async function MatchDetailPage({

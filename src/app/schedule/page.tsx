@@ -1,3 +1,4 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import { calendarFeedLinks } from "@/lib/calendar-links";
 import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
@@ -72,7 +73,10 @@ import {
 } from "@/lib/visibility";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
-export const metadata = { title: "Schedule" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("schedule");
+}
 
 type MatchStandin = StandinAssignment & {
   standin: User;

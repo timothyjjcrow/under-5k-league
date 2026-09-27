@@ -1,3 +1,4 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { getPublicLeagueContent } from "@/lib/public-navigation";
@@ -30,7 +31,10 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Teams" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("teams");
+}
 
 export default async function TeamsPage() {
   const season = await getActiveSeason();
