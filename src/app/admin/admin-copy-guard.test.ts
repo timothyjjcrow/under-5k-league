@@ -204,4 +204,31 @@ describe("admin copy names only controls that exist", () => {
       "registrationId={captainReg.get(t.captainId)!.id}",
     );
   });
+
+  // In-page links ("Set the league id →") point at collapsed sections. A
+  // plain hash only OPENS a collapsed section when the jump bar lists that id
+  // (SectionNav reveals on hashchange for its own items), so a link needs both
+  // the anchor and the jump-bar entry — otherwise it scrolls to a shut
+  // disclosure, or nowhere.
+  it("every in-page #adm- link lands on a section the jump bar can open", () => {
+    const page = read("src/app/admin/page.tsx");
+    const targets = [
+      ...new Set([...page.matchAll(/href="#(adm-[a-z-]+)"/g)].map((m) => m[1])),
+    ];
+    expect(targets).toContain("adm-league");
+    for (const id of targets) {
+      expect(page.includes(`id="${id}"`), `no element renders id="${id}"`).toBe(true);
+      expect(
+        page.includes(`id: "${id}"`),
+        `#${id} is linked but missing from the jump bar, so the hash cannot open it`,
+      ).toBe(true);
+    }
+  });
+
+  // The missing-ticket warning is only worth anything if the page wires it.
+  it("the phase card renders the missing-ticket warning from the next step", () => {
+    const page = read("src/app/admin/page.tsx");
+    expect(page).toContain("hasLeagueTicket: !!season.dotaLeagueId");
+    expect(page).toContain("nextStep.ticketWarning");
+  });
 });

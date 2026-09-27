@@ -424,6 +424,12 @@ export const MATCH_SCHEDULE = LEAGUE_CONFIG.matchSchedule;
 // home page so players know where they'll be playing.
 export const GAME_SERVER_REGION = LEAGUE_CONFIG.gameServerRegion;
 
+// The league's game mode. The lobby bot creates season and inhouse lobbies
+// with `id` (Dota's DOTA_GAMEMODE_CM), and the match page's "How to host" line
+// and the bot panel print `name`, so what captains are told can't drift from
+// what the bot actually sets.
+export const LEAGUE_GAME_MODE = { id: 2, name: "Captains Mode" } as const;
+
 // MMR policy. 4.5K is a SOFT limit, not a hard cap: players above it can still
 // sign up, but they're reviewed before the draft (`Season.maxMmr` is that
 // per-season soft/review threshold — default `SOFT_MMR_LIMIT`, 0 = no soft
