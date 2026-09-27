@@ -146,6 +146,7 @@ describe("discord message formatters", () => {
       homeScore: 0,
       awayScore: 2,
       label: "Week 3",
+      hasGames: true,
     });
     expect(msg).toContain("**Week 3:**");
     expect(msg).toContain("A 0–2 B");
@@ -153,6 +154,27 @@ describe("discord message formatters", () => {
     // Ends with the match page, angle-bracketed so Discord doesn't unfurl it.
     expect(msg).toMatch(/Box score: <https?:\/\/[^>]+\/matches\/m42>$/);
     expect(msg).not.toMatch(/eliminated|advance/);
+  });
+
+  it("promises a box score only when a game was imported", () => {
+    const base = {
+      matchId: "m8",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 2,
+      awayScore: 0,
+      label: "Week 2",
+    };
+    // An admin's manual score for a played series (private match data, or a
+    // ticketless lobby) has no games: its page reads "no games recorded".
+    const manual = matchResultMessage({ ...base, hasGames: false });
+    expect(manual).toContain("**A** take the series!");
+    expect(manual).toMatch(/Match page: <[^>]+\/matches\/m8>$/);
+    expect(manual).not.toContain("Box score");
+    // A forfeit ruling on a series that already had an imported game does.
+    expect(
+      matchResultMessage({ ...base, forfeit: true, hasGames: true }),
+    ).toMatch(/Box score: <[^>]+\/matches\/m8>$/);
   });
 
   it("handles draws", () => {
