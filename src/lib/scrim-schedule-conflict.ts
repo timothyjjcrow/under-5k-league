@@ -89,9 +89,9 @@ export function describeScrimConflict(
 
 /**
  * What clears the clash, worded to start a sentence ("…, then try again").
- * A booked scrim has a Cancel button on its page. A LIVE one doesn't — the
- * cancel is refused once games can be recorded, and its page offers only
- * "End series" — so pointing at Cancel would name a control that isn't there.
+ * A booked scrim has a Cancel button on its page. A LIVE one doesn't —
+ * cancelScrim refuses a live scrim and its page offers only "End series" —
+ * so pointing at Cancel would name a control that isn't there.
  */
 export function scrimConflictFix(
   conflict: Pick<ScrimConflict, "status">,
