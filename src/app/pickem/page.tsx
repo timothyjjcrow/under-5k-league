@@ -36,6 +36,11 @@ import { PickemSubmitButton } from "@/components/pickem-submit-button";
 import { PickemDeadlineRefresh } from "@/components/pickem-deadline-refresh";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
+import {
+  matchRoundLabel,
+  playoffTotalRounds,
+  roundGroupLabel,
+} from "@/lib/schedule";
 
 type PickemSearchParams = { season?: string | string[] };
 
@@ -169,6 +174,10 @@ export default async function PickemPage({
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
+  // Playoff rows keep counting weeks; name them by their round instead.
+  const playoffRounds = playoffTotalRounds(matches);
+  const roundLabel = (m: (typeof matches)[number]) =>
+    matchRoundLabel(m, playoffRounds);
   const userName = new Map(users.map((u) => [u.id, u.name]));
   const userAvatar = new Map(users.map((u) => [u.id, u.avatar]));
   const myPicks = viewer
@@ -335,16 +344,15 @@ export default async function PickemPage({
                             <CardBody className="space-y-2.5">
                               <div className="flex items-center justify-between text-xs text-muted">
                                 <span>
-                                  Week {m.week}
-                                  {m.phase !== "REGULAR" ? (
-                                    <Badge tone="accent" className="ml-2">
-                                      {m.phase === "FINAL"
-                                        ? "Final"
-                                        : m.phase === "TIEBREAKER"
-                                          ? "Tiebreaker"
-                                          : "Playoff"}
+                                  {m.phase === "REGULAR" ? (
+                                    roundLabel(m)
+                                  ) : (
+                                    <Badge tone="accent">
+                                      {matchRoundLabel(m, playoffRounds, {
+                                        bestOf: true,
+                                      })}
                                     </Badge>
-                                  ) : null}
+                                  )}
                                 </span>
                                 <span className="flex items-center gap-2">
                                   {m.scheduledAt ? (
@@ -386,8 +394,8 @@ export default async function PickemPage({
                               >
                                 <fieldset className="min-w-0">
                                   <legend className="sr-only">
-                                    Pick the winner of Week {m.week}: {homeName}{" "}
-                                    versus {awayName}
+                                    Pick the winner — {roundLabel(m)}:{" "}
+                                    {homeName} versus {awayName}
                                   </legend>
                                   <div className="flex items-center gap-2">
                                     <div className="min-w-0 flex-1">
@@ -417,10 +425,11 @@ export default async function PickemPage({
                   const nextKickoff = weekMatches.find(
                     (match) => match.scheduledAt,
                   )?.scheduledAt;
+                  const groupLabel = roundGroupLabel(weekMatches, playoffRounds);
                   return isFirstGroup ? (
                     <section key={week} className="space-y-3">
                       <h3 className="text-sm font-semibold">
-                        Week {week}
+                        {groupLabel}
                         <span className="font-normal text-muted">
                           {headerAside}
                         </span>
@@ -435,7 +444,7 @@ export default async function PickemPage({
                       className="rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3"
                     >
                       <summary className="cursor-pointer text-sm font-semibold marker:text-muted">
-                        Week {week}
+                        {groupLabel}
                         <span className="font-normal text-muted">
                           {headerAside}
                         </span>
@@ -506,7 +515,7 @@ export default async function PickemPage({
                         href={`/matches/${m.id}`}
                         className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
                       >
-                        Week {m.week}: {teamName.get(m.homeTeamId) ?? "?"} vs{" "}
+                        {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"} vs{" "}
                         {teamName.get(m.awayTeamId) ?? "?"}
                       </Link>
                       <span className="shrink-0 text-xs text-muted">
@@ -558,7 +567,7 @@ export default async function PickemPage({
                         href={`/matches/${m.id}`}
                         className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
                       >
-                        Week {m.week}: {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                        {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"}{" "}
                         <span className="font-mono text-xs">
                           {m.homeScore}–{m.awayScore}
                         </span>{" "}
@@ -609,7 +618,7 @@ export default async function PickemPage({
                         href={`/matches/${m.id}`}
                         className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
                       >
-                        Week {m.week}: {teamName.get(m.homeTeamId)}{" "}
+                        {roundLabel(m)}: {teamName.get(m.homeTeamId)}{" "}
                         <span className="font-mono text-xs">
                           {m.homeScore}–{m.awayScore}
                         </span>{" "}

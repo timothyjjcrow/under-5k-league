@@ -62,7 +62,7 @@ export type MatchView = {
 
 export type WeekView = {
   week: number;
-  /** Rendered in place of "Week N" (playoff rounds: "Semifinals", "Final"). */
+  /** Rendered in place of "Week N" (playoff rounds: "Semifinals", "Grand final"). */
   label?: string;
   completed: number;
   total: number;
@@ -188,7 +188,7 @@ export function ScheduleWeeks({
                 className="h-1.5 w-1.5 rounded-full bg-success"
                 aria-hidden
               />
-              Final
+              Final score
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span
@@ -311,10 +311,13 @@ export function ScheduleWeeks({
                     )}
                   >
                     {completed}
-                    <span className="text-muted"> / {total}</span>
+                    <span className="text-muted"> of {total}</span>
                   </span>
+                  {/* "Final" is the grand final's word alone — a round
+                      header reading "Grand final · 0 / 1 FINAL" said it twice
+                      and meant two different things. */}
                   <span className="mt-0.5 block text-[10px] uppercase tracking-wider">
-                    {total ? "Final" : "Bye"}
+                    {total ? "Played" : "Bye"}
                   </span>
                 </span>
               </h3>
@@ -460,7 +463,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
   const status = m.done
     ? m.forfeit
       ? "Forfeit"
-      : "Final"
+      : "Final score"
     : m.live
       ? "Live"
       : m.awaitingResult
@@ -530,7 +533,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
         </span>
         {m.isFinalPhase ? (
           <Badge tone="accent" className="ml-auto">
-            Final
+            Grand final
           </Badge>
         ) : null}
         {m.forfeit ? (

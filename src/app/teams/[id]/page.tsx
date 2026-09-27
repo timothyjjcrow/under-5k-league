@@ -18,7 +18,7 @@ import { seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import type { TeamScenario } from "@/lib/scenarios";
 import { headToHead, recentForm } from "@/lib/team-matches";
-import { matchPhaseLabel } from "@/lib/schedule";
+import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
 import { roleCoverage } from "@/lib/pool-stats";
 import {
   summarizePlayerGames,
@@ -199,6 +199,7 @@ export default async function TeamPage({
   const teamHeroes = summarizePlayerGames(teamLines).topHeroes;
 
   const playoffField = projectPlayoffField(allTeams, allMatches);
+  const playoffRounds = playoffTotalRounds(allMatches);
   const standings = playoffField.standings;
   const rank = standings.findIndex((s) => s.teamId === id) + 1;
   const row = standings.find((s) => s.teamId === id);
@@ -538,7 +539,7 @@ export default async function TeamPage({
                       className="group flex h-full min-w-0 flex-col gap-3 bg-surface px-5 py-4 text-sm transition-colors hover:bg-surface-2"
                     >
                       <span className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                        <span>{matchPhaseLabel(m.phase, m.week)}</span>
+                        <span>{matchRoundLabel(m, playoffRounds)}</span>
                         {m.status === "COMPLETED" ? (
                           <Badge
                             tone={

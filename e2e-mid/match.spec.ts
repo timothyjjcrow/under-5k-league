@@ -15,7 +15,7 @@ test("a completed match page renders the box score with an MVP chip", async ({
   // the header hamburger also has aria-expanded) and open its first match.
   await page.locator('#main button[aria-expanded="false"]').first().click();
   await page
-    .getByRole("article", { name: / · Final$/ })
+    .getByRole("article", { name: / · Final score$/ })
     .first()
     .getByRole("link", { name: "details →" })
     .click();

@@ -83,7 +83,7 @@ test("match return restores an opened past week and the clicked scoreboard posit
   await week.click();
   await expect(page).toHaveURL(/weeks=1/);
   const details = page
-    .getByRole("article", { name: / · Final$/ })
+    .getByRole("article", { name: / · Final score$/ })
     .first()
     .getByRole("link", { name: "details →" });
   await details.evaluate((link) =>

@@ -2,6 +2,19 @@
 // unit-tested. Only the pieces calendar apps actually need: VCALENDAR,
 // VEVENT with UTC times, text escaping, and CRLF line endings.
 
+import { LEAGUE_CONFIG } from "./league-config";
+
+/**
+ * PRODID naming this league's calendar: "-//GGD2L//League Schedule//EN", or
+ * "GGD2L Europe" on that site. The name comes from deploy config, so any
+ * character that could break the `-//owner//product//EN` shape is dropped.
+ */
+export function calendarProductId(leagueName: string): string {
+  const product =
+    leagueName.replace(/[^A-Za-z0-9 .-]+/g, "").trim() || "GGD2L";
+  return `-//${product}//League Schedule//EN`;
+}
+
 export type CalendarEvent = {
   /** Globally unique id, e.g. `${matchId}@league.example`. */
   uid: string;
@@ -68,7 +81,7 @@ export function buildCalendar(name: string, events: CalendarEvent[]): string {
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//LD2L//League Schedule//EN",
+    `PRODID:${calendarProductId(LEAGUE_CONFIG.name)}`,
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${escapeIcsText(name)}`,
