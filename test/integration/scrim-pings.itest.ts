@@ -110,6 +110,53 @@ describe("scrim pings (integration)", () => {
     );
   });
 
+  it("still reports a committed post as posted when the ping list can't be read", async () => {
+    const { season, captains } = await league(3);
+    const [poster] = captains;
+    const night = NIGHT();
+    actAs(poster.user);
+    const realFindMany = prisma.team.findMany.bind(prisma.team);
+    let failed = false;
+    // Fail only the post-commit "other captains" read (the one that
+    // excludes the host team); every other team read goes through.
+    const read = vi
+      .spyOn(prisma.team, "findMany")
+      .mockImplementation(((args: Parameters<typeof prisma.team.findMany>[0]) => {
+        const where = args?.where as { id?: { not?: string } } | undefined;
+        if (where?.id?.not === poster.team.id) {
+          failed = true;
+          return Promise.reject(
+            new Error("connect failed: postgresql://league:hunter2@db.internal/ld2l"),
+          );
+        }
+        return realFindMany(args);
+      }) as unknown as typeof prisma.team.findMany);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await createScrimAction(
+        empty,
+        fd({ scheduledAt: "picked", scheduledAtTs: String(night.getTime()) }),
+      );
+
+      expect(failed).toBe(true);
+      expect(result?.ok).toBe(true);
+      expect(result?.error).toBeUndefined();
+      expect(
+        await prisma.scrim.count({
+          where: { seasonId: season.id, hostTeamId: poster.team.id },
+        }),
+      ).toBe(1);
+      expect(sends()).toHaveLength(0);
+      expect(logged).toHaveBeenCalledWith("[scrims] SCRIM_PING_LIST_FAILED");
+      expect(JSON.stringify(logged.mock.calls.map(String))).not.toContain(
+        "hunter2",
+      );
+    } finally {
+      read.mockRestore();
+      logged.mockRestore();
+    }
+  });
+
   it("pings only the posting captain on a claim, and says what the booking withdrew", async () => {
     const { captains } = await league(3);
     const [host, joiner, bystander] = captains;

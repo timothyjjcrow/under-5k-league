@@ -514,20 +514,27 @@ export async function createScrim(
   }
   // The captains who could claim it: every other team still in the league.
   // Read after the commit — a ping list has no business in the transaction.
-  const otherCaptains = await prisma.team.findMany({
-    where: {
-      seasonId: posted.seasonId,
-      withdrawn: false,
-      id: { not: posted.hostTeam.id },
-    },
-    select: { captainId: true },
-  });
-  return {
-    ...posted,
-    notifyUserIds: otherCaptains
+  // The scrim is posted by now, so a failed read costs the ping, never the
+  // booking: throwing here would tell the captain the post failed and send
+  // them to post the same time again.
+  let notifyUserIds: string[] = [];
+  try {
+    const otherCaptains = await prisma.team.findMany({
+      where: {
+        seasonId: posted.seasonId,
+        withdrawn: false,
+        id: { not: posted.hostTeam.id },
+      },
+      select: { captainId: true },
+    });
+    notifyUserIds = otherCaptains
       .map((team) => team.captainId)
-      .filter((captainId) => captainId !== viewerId),
-  };
+      .filter((captainId) => captainId !== viewerId);
+  } catch {
+    // Never log the raw error: a database failure can carry a connection URL.
+    console.error("[scrims] SCRIM_PING_LIST_FAILED");
+  }
+  return { ...posted, notifyUserIds };
 }
 
 /** An opposing captain atomically claims an OPEN offer for their own team. */
