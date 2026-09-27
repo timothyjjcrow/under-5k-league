@@ -274,3 +274,28 @@ export function draftViewerStake(s: {
   const id = s.me.userId;
   return !!id && s.available.some((p) => p.userId === id);
 }
+
+/**
+ * A team card's roster in reading order: the captain first, then everyone else
+ * in the order they arrived (the payload sorts members by price, highest
+ * first).
+ *
+ * Keyed on the captain FLAG, never on price. Captains are usually the $0 row,
+ * which is why a price sort put them at the bottom of their own team — but a
+ * captaincy transfer promotes a player who was bought, and that row keeps its
+ * nonzero price. Stable: the non-captain order is left exactly as given.
+ */
+export function rosterDisplayOrder<M extends { isCaptain: boolean }>(
+  members: readonly M[],
+): M[] {
+  return [
+    ...members.filter((m) => m.isCaptain),
+    ...members.filter((m) => !m.isCaptain),
+  ];
+}
+
+/** "3 open seats" / "1 open seat" for a team card, or null when full. */
+export function openSeatsLabel(need: number): string | null {
+  if (need <= 0) return null;
+  return `${need} open ${need === 1 ? "seat" : "seats"}`;
+}

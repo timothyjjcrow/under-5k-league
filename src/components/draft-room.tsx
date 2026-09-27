@@ -30,7 +30,9 @@ import {
   draftViewerStake,
   maxBid,
   nextNominatorIndex,
+  openSeatsLabel,
   outbidLatchAfter,
+  rosterDisplayOrder,
   stripDraftTitleFlag,
 } from "@/lib/draft";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
@@ -2102,10 +2104,15 @@ function AuctionPrimer({
 }
 
 function TeamsGrid({ state }: { state: DraftState }) {
-  // A player is up for auction → the "max bid" lines can flag who's priced out.
+  // A player is up for auction → the "max bid" lines can flag who's priced
+  // out. Outside a live lot there is nothing to bid on, so the cards show just
+  // the budget (a waiting-room "max $77" meant nothing to anyone).
   const nominationLive = !!state.nominatedPlayer;
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <section
+      aria-label="Team rosters"
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+    >
       {state.teams.map((t) => {
         const onClock =
           state.status === "IN_PROGRESS" && t.id === state.nominatorTeamId;
@@ -2122,6 +2129,7 @@ function TeamsGrid({ state }: { state: DraftState }) {
           state.teamSize,
           state.minBid,
         );
+        const openSeats = openSeatsLabel(t.need);
         return (
           <div
             key={t.id}
@@ -2169,7 +2177,7 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   ) : null}
                 </div>
                 <div className="text-xs text-muted">
-                  {t.members.length}/{state.teamSize} · needs {t.need}
+                  {t.members.length}/{state.teamSize} players
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
@@ -2184,15 +2192,13 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   ${t.budget}
                   {state.budgetsProjected ? " projected" : null}
                 </Badge>
-                {t.need === 0 ? (
+                {!nominationLive ? null : t.need === 0 ? (
                   <span className="text-[10px] text-muted">full</span>
                 ) : (
                   <span
                     className={cn(
                       "text-[10px] tabular-nums",
-                      nominationLive && cap <= state.currentBid
-                        ? "text-danger"
-                        : "text-muted",
+                      cap <= state.currentBid ? "text-danger" : "text-muted",
                     )}
                   >
                     max ${cap}
@@ -2201,42 +2207,39 @@ function TeamsGrid({ state }: { state: DraftState }) {
               </div>
             </div>
             <div className="space-y-1 p-3">
-              {Array.from({ length: state.teamSize }).map((_, i) => {
-                const m = t.members[i];
-                return m ? (
-                  <div
-                    key={m.userId}
-                    className="flex items-center justify-between gap-2 text-sm"
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <Avatar name={m.name} src={m.avatar} size={20} />
-                      <PlayerLink
-                        userId={m.userId}
-                        className="min-w-6 truncate"
-                      >
-                        {m.name}
-                      </PlayerLink>
-                      {m.isCaptain ? (
-                        <span className="shrink-0">
-                          <Badge tone="accent">C</Badge>
-                        </span>
-                      ) : null}
-                      <RankBadge rankTier={m.rankTier} />
-                    </span>
-                    <span className="shrink-0 text-muted">
-                      {m.isCaptain ? "—" : `$${m.price}`}
-                    </span>
-                  </div>
-                ) : (
-                  <div key={i} className="py-1 text-sm text-muted">
-                    Empty slot
-                  </div>
-                );
-              })}
+              {/* Captain first, then purchases — never a price sort, which put
+                  the $0 captain below the players they bought. */}
+              {rosterDisplayOrder(t.members).map((m) => (
+                <div
+                  key={m.userId}
+                  className="flex items-center justify-between gap-2 text-sm"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Avatar name={m.name} src={m.avatar} size={20} />
+                    <PlayerLink userId={m.userId} className="min-w-6 truncate">
+                      {m.name}
+                    </PlayerLink>
+                    {m.isCaptain ? (
+                      <span className="shrink-0">
+                        <Badge tone="accent">C</Badge>
+                      </span>
+                    ) : null}
+                    <RankBadge rankTier={m.rankTier} />
+                  </span>
+                  <span className="shrink-0 text-muted">
+                    {m.isCaptain ? "—" : `$${m.price}`}
+                  </span>
+                </div>
+              ))}
+              {/* One line for every open seat: five "Empty slot" rows per card
+                  made six teams about 1,500px tall on a phone. */}
+              {openSeats ? (
+                <div className="py-1 text-sm text-muted">{openSeats}</div>
+              ) : null}
             </div>
           </div>
         );
       })}
-    </div>
+    </section>
   );
 }

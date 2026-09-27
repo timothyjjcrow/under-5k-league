@@ -8,6 +8,8 @@ import {
   draftViewerStake,
   nextNominatorIndex,
   mmrWeightedBudgets,
+  openSeatsLabel,
+  rosterDisplayOrder,
   outbidLatchAfter,
   stripDraftTitleFlag,
   type DraftTeam,
@@ -451,5 +453,53 @@ describe("shuffle", () => {
   it("handles empty and single-element lists", () => {
     expect(shuffle([])).toEqual([]);
     expect(shuffle(["only"])).toEqual(["only"]);
+  });
+});
+
+describe("rosterDisplayOrder", () => {
+  const m = (userId: string, isCaptain: boolean, price: number) => ({
+    userId,
+    isCaptain,
+    price,
+  });
+
+  it("puts the $0 captain above the players the team bought", () => {
+    // The payload arrives price-desc, which used to list the captain last.
+    const rows = [m("p30", false, 12), m("p8", false, 3), m("cap", true, 0)];
+    expect(rosterDisplayOrder(rows).map((r) => r.userId)).toEqual([
+      "cap",
+      "p30",
+      "p8",
+    ]);
+  });
+
+  it("keys on the captain flag, not the price — a transferred captain keeps theirs", () => {
+    // transferCaptaincy promotes a bought player (price stays 9) and demotes
+    // the old captain to a $0 member. Sorting by price would bury neither
+    // correctly; the flag is the only honest key.
+    const rows = [m("newcap", true, 9), m("p1", false, 4), m("oldcap", false, 0)];
+    expect(rosterDisplayOrder(rows).map((r) => r.userId)).toEqual([
+      "newcap",
+      "p1",
+      "oldcap",
+    ]);
+  });
+
+  it("leaves the non-captain order exactly as given, and never drops a row", () => {
+    const rows = [m("a", false, 5), m("b", false, 5), m("c", false, 1)];
+    expect(rosterDisplayOrder(rows)).toEqual(rows);
+    expect(rosterDisplayOrder([])).toEqual([]);
+  });
+});
+
+describe("openSeatsLabel", () => {
+  it("folds every open seat into one line", () => {
+    expect(openSeatsLabel(3)).toBe("3 open seats");
+    expect(openSeatsLabel(1)).toBe("1 open seat");
+  });
+
+  it("says nothing for a full roster", () => {
+    expect(openSeatsLabel(0)).toBeNull();
+    expect(openSeatsLabel(-1)).toBeNull();
   });
 });
