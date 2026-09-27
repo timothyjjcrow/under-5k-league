@@ -112,10 +112,14 @@ jobs:
           node-version: "22.x"
           cache: npm
       - run: npm ci
+      # Shipped dependencies block on ANY advisory. Dev-only tools (test,
+      # lint, build helpers) block only on high/critical here, so a fresh
+      # low/moderate advisory in a linter plugin cannot hold a match-night
+      # hotfix; dependency-audit.yml reports those weekly instead.
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=low
-      - name: Full dependency audit
-        run: npm audit --audit-level=low
+      - name: Full dependency audit (high and critical)
+        run: npm audit --audit-level=high
       - name: Validate committed SQLite schema
         run: npx prisma validate
       - run: npx prisma generate
