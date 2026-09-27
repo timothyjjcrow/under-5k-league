@@ -590,3 +590,44 @@ export function nominationWaitLine(o: {
   }
   return `Waiting for ${o.nominatorName} to nominate a player…`;
 }
+
+/**
+ * The team an ADMIN can nominate for right now: the team on the clock, when a
+ * captain has dropped off (phone died, still in voice) and asks the admin to
+ * put up a player at a price. The server already lets an admin nominate for
+ * the team on the clock (nominatePlayer); this decides when the room offers it
+ * and what the opening bid is capped at — that TEAM's max bid, never the
+ * admin's own (an admin without a team has none).
+ *
+ * Null when the viewer isn't an admin, when they are the captain on the clock
+ * (their own nominate bar covers it), when no nomination turn is running, or
+ * when the team on the clock couldn't open a lot at the minimum bid.
+ */
+export function adminNominationTeam(s: {
+  status: string;
+  seasonStatus: string;
+  nominatedUserId: string | null;
+  nominatorTeamId: string | null;
+  teams: readonly {
+    id: string;
+    name: string;
+    budget: number;
+    members: readonly unknown[];
+  }[];
+  teamSize: number;
+  minBid: number;
+  me: { isAdmin: boolean; canNominate: boolean };
+}): { id: string; name: string; maxBid: number } | null {
+  if (!s.me.isAdmin || s.me.canNominate) return null;
+  if (s.seasonStatus !== "DRAFT" || s.status !== "IN_PROGRESS") return null;
+  if (s.nominatedUserId || !s.nominatorTeamId) return null;
+  const team = s.teams.find((t) => t.id === s.nominatorTeamId);
+  if (!team) return null;
+  const cap = maxBid(
+    { id: team.id, budget: team.budget, rosterCount: team.members.length },
+    s.teamSize,
+    s.minBid,
+  );
+  if (cap < s.minBid) return null;
+  return { id: team.id, name: team.name, maxBid: cap };
+}

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  adminNominationTeam,
   bidAllowanceLine,
   captainStatusLine,
   uncoveredRoles,
@@ -871,5 +872,59 @@ describe("nominationWaitLine", () => {
     expect(
       nominationWaitLine({ paused: false, myTurn: false, nominatorName: "Team 4" }),
     ).toBe("Waiting for Team 4 to nominate a player…");
+  });
+});
+
+describe("adminNominationTeam", () => {
+  const live = {
+    status: "IN_PROGRESS",
+    seasonStatus: "DRAFT",
+    nominatedUserId: null,
+    nominatorTeamId: "t2",
+    teams: [
+      { id: "t1", name: "Team 1", budget: 100, members: [{}] },
+      // Captain + 1 bought: 3 open seats at teamSize 5, so $2 stays reserved.
+      { id: "t2", name: "Team 2", budget: 40, members: [{}, {}] },
+    ],
+    teamSize: 5,
+    minBid: 1,
+    me: { isAdmin: true, canNominate: false },
+  };
+
+  it("offers the team on the clock, capped at THAT team's max bid", () => {
+    expect(adminNominationTeam(live)).toEqual({
+      id: "t2",
+      name: "Team 2",
+      maxBid: 38,
+    });
+  });
+
+  it("is only for admins who aren't nominating for their own team", () => {
+    expect(
+      adminNominationTeam({ ...live, me: { isAdmin: false, canNominate: false } }),
+    ).toBeNull();
+    // The admin IS the captain on the clock: their own nominate bar covers it.
+    expect(
+      adminNominationTeam({ ...live, me: { isAdmin: true, canNominate: true } }),
+    ).toBeNull();
+  });
+
+  it("needs a running nomination turn", () => {
+    expect(adminNominationTeam({ ...live, status: "PAUSED" })).toBeNull();
+    expect(adminNominationTeam({ ...live, status: "COMPLETE" })).toBeNull();
+    expect(
+      adminNominationTeam({ ...live, seasonStatus: "REGULAR_SEASON" }),
+    ).toBeNull();
+    expect(adminNominationTeam({ ...live, nominatedUserId: "p1" })).toBeNull();
+    expect(adminNominationTeam({ ...live, nominatorTeamId: null })).toBeNull();
+    expect(adminNominationTeam({ ...live, nominatorTeamId: "gone" })).toBeNull();
+  });
+
+  it("is withheld when the team on the clock can't open a lot", () => {
+    const broke = {
+      ...live,
+      teams: [{ id: "t2", name: "Team 2", budget: 2, members: [{}, {}] }],
+    };
+    expect(adminNominationTeam(broke)).toBeNull();
   });
 });

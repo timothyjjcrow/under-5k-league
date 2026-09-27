@@ -1399,8 +1399,16 @@ export async function nominatePlayer(
     };
     if (!Number.isInteger(amount) || amount < DEFAULTS.MIN_BID)
       return { ok: false as const, error: "Bid too low" };
-    if (amount > maxBid(team, season.teamSize))
-      return { ok: false as const, error: "You can't afford that opening bid" };
+    const openingCap = maxBid(team, season.teamSize);
+    if (amount > openingCap)
+      return {
+        ok: false as const,
+        // An admin nominating for the team on the clock needs that TEAM's cap.
+        error:
+          nominator.captainId === viewer.id
+            ? "You can't afford that opening bid"
+            : `${nominator.name} can open at $${openingCap} at most`,
+      };
 
     const bidEndsAt = new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000);
     // Claim the nomination slot: if the auto-skip resolver (or an admin

@@ -26,6 +26,7 @@ import {
 } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
+  adminNominationTeam,
   bidAllowanceLine,
   captainStatusLine,
   draftAlertsReachViewer,
@@ -987,7 +988,37 @@ export function DraftRoom({
     !state.nominatedPlayer &&
     !!me.myTeamId &&
     state.nominatorTeamId === me.myTeamId;
-  const canLineUp = me.canNominate || iAmNext || myTurnPaused;
+  // An admin can nominate for the team on the clock (a captain who dropped
+  // off and asks for "Player X at $5"), capped at that team's max bid.
+  const adminTeam = adminNominationTeam({
+    status: state.status,
+    seasonStatus: state.seasonStatus,
+    nominatedUserId: state.nominatedUserId,
+    nominatorTeamId: state.nominatorTeamId,
+    teams: state.teams,
+    teamSize: state.teamSize,
+    minBid: state.minBid,
+    me,
+  });
+  const canLineUp = me.canNominate || iAmNext || myTurnPaused || !!adminTeam;
+  const nominateCap = adminTeam ? adminTeam.maxBid : me.myMaxBid;
+  // Same endpoint and turn check for both; the admin confirms because the
+  // nomination spends another team's turn.
+  const nominate = (playerId: string, amount: number) => {
+    if (adminTeam) {
+      const name =
+        state.available.find((p) => p.userId === playerId)?.name ??
+        "this player";
+      if (
+        !window.confirm(
+          `Nominate ${name} for ${adminTeam.name} at $${amount}? This uses ${adminTeam.name}'s turn.`,
+        )
+      ) {
+        return;
+      }
+    }
+    act("/api/draft/nominate", { playerId, amount });
+  };
   const linedUpName = selected
     ? (state.available.find((p) => p.userId === selected)?.name ?? null)
     : null;
@@ -1439,17 +1470,14 @@ export function DraftRoom({
                   ? `Re-bid $${state.currentBid + 1}`
                   : `Bid $${state.currentBid + 1}`}
               </button>
-            ) : !state.nominatedPlayer && me.canNominate && selected ? (
+            ) : !state.nominatedPlayer &&
+              (me.canNominate || adminTeam) &&
+              selected ? (
               <button
                 type="button"
-                onClick={() =>
-                  act("/api/draft/nominate", {
-                    playerId: selected,
-                    amount: nomAmount,
-                  })
-                }
+                onClick={() => nominate(selected, nomAmount)}
                 disabled={
-                  pending || nomAmount < state.minBid || nomAmount > me.myMaxBid
+                  pending || nomAmount < state.minBid || nomAmount > nominateCap
                 }
                 className={buttonClasses(
                   "accent",
@@ -1754,11 +1782,43 @@ export function DraftRoom({
                 selected={selected}
                 nomAmount={nomAmount}
                 setNomAmount={setNomAmount}
+                maxBid={me.myMaxBid}
                 pending={pending}
-                onNominate={(playerId, amount) =>
-                  act("/api/draft/nominate", { playerId, amount })
-                }
+                onNominate={nominate}
               />
+            ) : adminTeam ? (
+              <div className="space-y-3">
+                <NominateBar
+                  state={state}
+                  selected={selected}
+                  nomAmount={nomAmount}
+                  setNomAmount={setNomAmount}
+                  maxBid={adminTeam.maxBid}
+                  forTeamName={adminTeam.name}
+                  pending={pending}
+                  onNominate={nominate}
+                />
+                <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+                  <span>Or let the draft choose:</span>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => {
+                      // Skipping a captain's turn is intrusive — confirm it.
+                      if (
+                        window.confirm(
+                          `Auto-nominate the top player for ${adminTeam.name}? Use this when they're absent — it takes their turn.`,
+                        )
+                      ) {
+                        act("/api/draft/admin-nominate", {});
+                      }
+                    }}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    Auto-nominate top player
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="flex flex-col items-center gap-3 py-4">
                 <p
@@ -1777,28 +1837,6 @@ export function DraftRoom({
                   <p className="text-center text-sm text-muted">
                     {lineUpHint(linedUpName)}
                   </p>
-                ) : null}
-                {/* Hidden while PAUSED: nominatePlayer refuses any non-live
-                    draft, so in the pause → settle → resume flow this button
-                    could only walk the admin through the confirm into a
-                    "Draft is not live" toast. Resume is the real next step. */}
-                {me.isAdmin && !paused ? (
-                  <button
-                    disabled={pending}
-                    onClick={() => {
-                      // Skipping a captain's turn is intrusive — confirm it.
-                      if (
-                        window.confirm(
-                          `Auto-nominate the top player for ${nominatorName}? Use this when they're absent — it takes their turn.`,
-                        )
-                      ) {
-                        act("/api/draft/admin-nominate", {});
-                      }
-                    }}
-                    className={buttonClasses("secondary", "sm")}
-                  >
-                    Admin: auto-nominate top player
-                  </button>
                 ) : null}
               </div>
             )}
@@ -2239,6 +2277,8 @@ function NominateBar({
   selected,
   nomAmount,
   setNomAmount,
+  maxBid,
+  forTeamName,
   pending,
   onNominate,
 }: {
@@ -2246,13 +2286,23 @@ function NominateBar({
   selected: string | null;
   nomAmount: number;
   setNomAmount: (n: number) => void;
+  /** Opening-bid cap: the nominating TEAM's max bid (an admin has none). */
+  maxBid: number;
+  /** Set when an admin nominates on behalf of the team on the clock. */
+  forTeamName?: string;
   pending: boolean;
   onNominate: (playerId: string, amount: number) => void;
 }) {
   const player = state.available.find((p) => p.userId === selected);
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Badge tone="accent">You&apos;re on the clock</Badge>
+      <Badge tone="accent">
+        {forTeamName ? (
+          <>Nominating for {forTeamName}</>
+        ) : (
+          <>You&apos;re on the clock</>
+        )}
+      </Badge>
       {player ? (
         <span className="flex items-center gap-2 text-sm">
           <Avatar name={player.name} src={player.avatar} size={24} />
@@ -2276,7 +2326,7 @@ function NominateBar({
           id="nom-amount"
           type="number"
           min={state.minBid}
-          max={state.me.myMaxBid}
+          max={maxBid}
           value={nomAmount}
           onChange={(e) => setNomAmount(Number(e.target.value))}
           className="h-9 w-20 rounded-md border border-line bg-surface-2/50 px-2 text-center text-sm"
@@ -2286,13 +2336,17 @@ function NominateBar({
             pending ||
             !selected ||
             nomAmount < state.minBid ||
-            nomAmount > state.me.myMaxBid
+            nomAmount > maxBid
           }
           onClick={() => selected && onNominate(selected, nomAmount)}
           aria-busy={pending}
           className={buttonClasses("accent", "sm")}
         >
-          {pending ? "Submitting…" : "Nominate"}
+          {pending
+            ? "Submitting…"
+            : forTeamName
+              ? `Nominate for ${forTeamName}`
+              : "Nominate"}
         </button>
       </div>
     </div>

@@ -318,3 +318,94 @@ describe("draft service — client state expectations", () => {
     ]);
   });
 });
+
+// A captain drops off (phone died, still in voice) and asks the admin to put
+// up a player at a price. The room sends the admin's pick through the same
+// /api/draft/nominate → nominatePlayer path a captain uses, with the same
+// turn expectation, so the nomination claim re-asserts the turn it was
+// composed for.
+describe("nominatePlayer — admin nominating a chosen player for the team on the clock", () => {
+  async function turnOf(seasonId: string) {
+    const turn = await prisma.draft.findUniqueOrThrow({ where: { seasonId } });
+    if (!turn.nominatorTeamId || !turn.nominationEndsAt) {
+      throw new Error("expected a nomination turn");
+    }
+    return {
+      draftVersion: turn.updatedAt.getTime(),
+      nominatorTeamId: turn.nominatorTeamId,
+      nominationEndsAt: turn.nominationEndsAt.getTime(),
+    };
+  }
+
+  it("opens the lot for the team on the clock at the admin's chosen player and price", async () => {
+    const { season, capA, spare } = await liveDraft();
+    const res = await nominatePlayer(
+      season.id,
+      await admin(),
+      spare.id, // not the top-MMR player the auto-nominate would take
+      7,
+      await turnOf(season.id),
+    );
+    expect(res.ok).toBe(true);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft).toMatchObject({
+      nominatedUserId: spare.id,
+      currentBid: 7,
+      currentBidTeamId: capA.team.id,
+      nominationEndsAt: null,
+    });
+    const bids = await prisma.bid.findMany({ where: { draftId: draft.id } });
+    expect(bids).toHaveLength(1);
+    expect(bids[0]).toMatchObject({ teamId: capA.team.id, amount: 7 });
+  });
+
+  it("caps the opening bid at the nominating TEAM's max bid and says so", async () => {
+    const { season, capA, star } = await liveDraft();
+    // teamSize 3, $100: one seat stays reserved at $1, so $99 is the cap.
+    const res = await nominatePlayer(
+      season.id,
+      await admin(),
+      star.id,
+      100,
+      await turnOf(season.id),
+    );
+    expect(res).toMatchObject({ ok: false });
+    if (!res.ok) {
+      expect(res.error).toBe(`${capA.team.name} can open at $99 at most`);
+    }
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatedUserId).toBeNull();
+  });
+
+  it("refuses when the turn moved on while the admin was choosing", async () => {
+    const { season, capB, star } = await liveDraft();
+    const stale = await turnOf(season.id);
+    // The clock ran out and the rotation handed the turn to the next team.
+    await prisma.draft.update({
+      where: { seasonId: season.id },
+      data: {
+        nominatorTeamId: capB.team.id,
+        nominationIndex: 1,
+        nominationEndsAt: new Date(Date.now() + 90_000),
+      },
+    });
+    const res = await nominatePlayer(
+      season.id,
+      await admin(),
+      star.id,
+      5,
+      stale,
+    );
+    expect(res).toMatchObject({ ok: false });
+    if (!res.ok) expect(res.error).toMatch(/nomination turn changed/i);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatedUserId).toBeNull();
+    expect(await prisma.bid.count({ where: { draftId: draft.id } })).toBe(0);
+  });
+});
