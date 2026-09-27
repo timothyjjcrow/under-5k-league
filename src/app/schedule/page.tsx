@@ -39,8 +39,10 @@ import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
 import {
+  captainOverdueResults,
   regularSeasonStatus,
   pendingResultsMessage,
+  resultOverdue,
   standingsCaption,
 } from "@/lib/schedule-status";
 import {
@@ -334,6 +336,19 @@ export default async function SchedulePage() {
     (season.status === "REGULAR_SEASON" || season.status === "DRAFT")
       ? teamByeWeek(matches, viewerTeam.id, scheduleNow)
       : null;
+  // A captain whose fixture outlived the automatic result check is asked to
+  // report it, on the row and at the top of the page; everyone else keeps
+  // the row's plain "Awaiting result".
+  const captainTeamIds = new Set(
+    viewer ? teams.filter((t) => t.captainId === viewer.id).map((t) => t.id) : [],
+  );
+  const reportDue = captainOverdueResults(
+    matches,
+    captainTeamIds,
+    season.status,
+    freshFrom,
+  );
+  const reportDueIds = new Set(reportDue.map((m) => m.id));
   const myRsvp = myNextMatch
     ? ((rsvpsByMatch.get(myNextMatch.id) ?? []).find(
         (r) => r.userId === viewer!.id,
@@ -426,10 +441,8 @@ export default async function SchedulePage() {
           }
         : undefined,
       done: m.status === "COMPLETED",
-      awaitingResult:
-        m.status === "SCHEDULED" &&
-        m.scheduledAt != null &&
-        m.scheduledAt.getTime() < freshFrom,
+      awaitingResult: resultOverdue(m, freshFrom),
+      reportResult: reportDueIds.has(m.id),
       forfeit: m.forfeit,
       live: m.status === "LIVE",
       homeWin: m.winnerTeamId === m.homeTeamId,
@@ -713,6 +726,21 @@ export default async function SchedulePage() {
         />
       ) : null}
 
+      {reportDue.length > 0 ? (
+        <ReportResultPrompt
+          match={reportDue[0]}
+          more={reportDue.length - 1}
+          label={matchRoundLabel(reportDue[0], playoffGrouping.totalRounds)}
+          opponent={
+            teamName.get(
+              captainTeamIds.has(reportDue[0].homeTeamId)
+                ? reportDue[0].awayTeamId
+                : reportDue[0].homeTeamId,
+            ) ?? "your opponent"
+          }
+        />
+      ) : null}
+
       {scheduleEditingOpen && untimedOpen.length > 0 ? (
         <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
           <span aria-hidden className="text-lg leading-none">
@@ -951,6 +979,43 @@ export default async function SchedulePage() {
           />
         </AnalysisDisclosure>
       ) : null}
+    </div>
+  );
+}
+
+// A captain's own fixture that is past the automatic result check: say
+// which one, and send them straight to the match page's report tools.
+function ReportResultPrompt({
+  match,
+  more,
+  label,
+  opponent,
+}: {
+  match: Match;
+  more: number;
+  label: string;
+  opponent: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+      <div className="min-w-[14rem] flex-1">
+        <div className="font-medium [overflow-wrap:anywhere]">
+          Your {label} result against {opponent} hasn&apos;t come through
+        </div>
+        <div className="text-muted">
+          It didn&apos;t import by itself. Report it from the match page
+          (auto-fetch, or paste the Dota match ID) so it counts.
+          {more > 0
+            ? ` ${more} more of your results ${more === 1 ? "is" : "are"} missing too; each is marked “Result needed” below.`
+            : ""}
+        </div>
+      </div>
+      <Link
+        href={`/matches/${match.id}#match-tools`}
+        className={buttonClasses("primary", "sm")}
+      >
+        Report result →
+      </Link>
     </div>
   );
 }

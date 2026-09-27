@@ -47,6 +47,8 @@ export type MatchView = {
   /** Ruled/defaulted result — the score was never played; badge it. */
   forfeit: boolean;
   awaitingResult?: boolean;
+  /** The viewer captains a side of this overdue fixture and can report it. */
+  reportResult?: boolean;
   /** Series in progress — some games imported, not decided (auto-sync makes
    *  "Bo3 at 1–0" a common minutes-fresh state worth showing live). */
   live: boolean;
@@ -611,8 +613,10 @@ function MatchRow({ match: m }: { match: MatchView }) {
       : "Final score"
     : m.live
       ? "Live"
-      : m.awaitingResult
-        ? "Awaiting result"
+      : m.reportResult
+        ? "Result needed"
+        : m.awaitingResult
+          ? "Awaiting result"
         : m.whenTs != null
           ? "Upcoming"
           : "Time TBD";
@@ -778,6 +782,18 @@ function MatchRow({ match: m }: { match: MatchView }) {
         </span>
         {m.reschedulePending ? (
           <RescheduleChip matchId={m.id} pending={m.reschedulePending} />
+        ) : null}
+        {m.reportResult ? (
+          <Link
+            href={`/matches/${m.id}#match-tools`}
+            className="relative z-10 inline-flex min-h-11 shrink-0 items-center rounded px-1 text-xs font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+          >
+            Report result
+            <span className="sr-only">
+              : {m.homeName} vs {m.awayName}
+            </span>
+            <span aria-hidden>&nbsp;→</span>
+          </Link>
         ) : null}
         <Link
           href={`/matches/${m.id}`}

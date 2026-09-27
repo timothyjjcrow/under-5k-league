@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  captainOverdueResults,
   regularSeasonStatus,
   pendingResultsMessage,
+  resultOverdue,
   standingsCaption,
 } from "./schedule-status";
 
@@ -114,5 +116,88 @@ describe("standingsCaption", () => {
         eligibleTeams: 1,
       }),
     ).toBe("No results yet");
+  });
+});
+
+describe("captainOverdueResults", () => {
+  const freshFrom = Date.parse("2026-09-20T00:00:00Z");
+  const fixture = (
+    id: string,
+    kickoff: string | null,
+    extra: Partial<{
+      status: string;
+      phase: string;
+      homeTeamId: string;
+      awayTeamId: string;
+    }> = {},
+  ) => ({
+    id,
+    phase: "REGULAR",
+    status: "SCHEDULED",
+    scheduledAt: kickoff ? new Date(kickoff) : null,
+    homeTeamId: "mine",
+    awayTeamId: "them",
+    ...extra,
+  });
+
+  it("lists the captain's own unreported fixtures past the sync window, oldest first", () => {
+    const due = captainOverdueResults(
+      [
+        fixture("later", "2026-09-13T01:00:00Z"),
+        fixture("earlier", "2026-09-06T01:00:00Z", {
+          homeTeamId: "them",
+          awayTeamId: "mine",
+        }),
+      ],
+      new Set(["mine"]),
+      "REGULAR_SEASON",
+      freshFrom,
+    );
+    expect(due.map((m) => m.id)).toEqual(["earlier", "later"]);
+  });
+
+  it("leaves out fresh, untimed, started, finished and other teams' fixtures", () => {
+    const due = captainOverdueResults(
+      [
+        fixture("fresh", "2026-09-21T01:00:00Z"),
+        fixture("untimed", null),
+        fixture("live", "2026-09-06T01:00:00Z", { status: "LIVE" }),
+        fixture("done", "2026-09-06T01:00:00Z", { status: "COMPLETED" }),
+        fixture("others", "2026-09-06T01:00:00Z", {
+          homeTeamId: "a",
+          awayTeamId: "b",
+        }),
+      ],
+      new Set(["mine"]),
+      "REGULAR_SEASON",
+      freshFrom,
+    );
+    expect(due).toEqual([]);
+  });
+
+  it("only asks while captains can still report in this phase", () => {
+    const regular = fixture("regular", "2026-09-06T01:00:00Z");
+    const semi = fixture("semi", "2026-09-06T01:00:00Z", { phase: "PLAYOFF" });
+    const mine = new Set(["mine"]);
+    expect(
+      captainOverdueResults([regular, semi], mine, "PLAYOFFS", freshFrom).map(
+        (m) => m.id,
+      ),
+    ).toEqual(["semi"]);
+    expect(
+      captainOverdueResults([regular, semi], mine, "COMPLETE", freshFrom),
+    ).toEqual([]);
+    expect(
+      captainOverdueResults([regular], new Set(), "REGULAR_SEASON", freshFrom),
+    ).toEqual([]);
+  });
+
+  it("marks the same fixtures overdue for everyone", () => {
+    expect(
+      resultOverdue(fixture("x", "2026-09-06T01:00:00Z"), freshFrom),
+    ).toBe(true);
+    expect(
+      resultOverdue(fixture("x", "2026-09-21T01:00:00Z"), freshFrom),
+    ).toBe(false);
   });
 });

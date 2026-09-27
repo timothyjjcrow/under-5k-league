@@ -70,4 +70,18 @@ describe("ScheduleWeeks match cards", () => {
     });
     expect(html).toMatch(/aria-label="Time change proposed[^"]*"[^>]*relative z-10/);
   });
+
+  it("asks the captain of an overdue fixture to report it", () => {
+    const html = render({ awaitingResult: true, reportResult: true });
+    expect(html).toContain('aria-label="Radiant Raiders vs Dire Wolves · Result needed"');
+    expect(html).not.toContain("Awaiting result");
+    expect(hrefs(html)).toEqual(["/matches/m1#match-tools", "/matches/m1"]);
+    expect(html).toContain("Report result");
+  });
+
+  it("tells everyone else the result is awaited, with no report link", () => {
+    const html = render({ awaitingResult: true });
+    expect(html).toContain("Awaiting result");
+    expect(hrefs(html)).toEqual(["/matches/m1"]);
+  });
 });
