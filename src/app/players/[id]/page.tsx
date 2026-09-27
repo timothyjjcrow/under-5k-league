@@ -85,6 +85,8 @@ import {
   gradeFor,
   gradeTone,
   percentLabel,
+  REPORT_CARD_MIN_GRADED,
+  reportVerdicts,
 } from "@/lib/benchmarks";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { canViewLeagueContact } from "@/lib/visibility";
@@ -403,8 +405,9 @@ export default async function PlayerProfilePage({
   const badges = achievementsFor(achievementLines);
   // Career report card: worldwide percentile benchmarks over every graded line.
   const reportCard = careerReportCard(gameRows.map((r) => r.stat));
-  const overallGrade =
-    reportCard.avgPct != null ? gradeFor(reportCard.avgPct) : null;
+  // No letter grades until there are enough graded games to mean something,
+  // and "Work on" only for the player themselves.
+  const verdicts = reportVerdicts(reportCard, isSelf);
 
   // Per-hero W-L/KDA for the hero card — a pure fold over lines already in
   // memory (zero new queries). ScoutGame is the exact shape the match-preview
@@ -1200,21 +1203,26 @@ export default async function PlayerProfilePage({
                   subtitle={`How they stack up vs the world on their heroes — OpenDota percentiles over ${reportCard.graded} graded game${reportCard.graded === 1 ? "" : "s"}`}
                 />
                 <CardBody className="space-y-4">
-                  {overallGrade != null && reportCard.avgPct != null ? (
+                  {!verdicts.graded ? (
+                    <p className="text-xs text-muted">
+                      Grades appear after {REPORT_CARD_MIN_GRADED} graded
+                      games.
+                    </p>
+                  ) : verdicts.overall != null && reportCard.avgPct != null ? (
                     <div className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                       <span
                         className={cn(
                           "font-display text-4xl font-bold leading-none",
-                          gradeTone(overallGrade) === "success"
+                          gradeTone(verdicts.overall) === "success"
                             ? "text-success"
-                            : gradeTone(overallGrade) === "accent"
+                            : gradeTone(verdicts.overall) === "accent"
                               ? "text-accent"
-                              : gradeTone(overallGrade) === "muted"
+                              : gradeTone(verdicts.overall) === "muted"
                                 ? "text-muted"
                                 : "text-fg/80",
                         )}
                       >
-                        {overallGrade}
+                        {verdicts.overall}
                       </span>
                       <span className="text-sm text-muted">
                         overall — {percentLabel(reportCard.avgPct)} vs the world
@@ -1224,8 +1232,10 @@ export default async function PlayerProfilePage({
                   ) : null}
                   <ul className="space-y-2">
                     {reportCard.metrics.map((m) => {
-                      const grade = gradeFor(m.avgPct);
-                      const tone = gradeTone(grade);
+                      // Below the minimum the bar stays neutral and no
+                      // letter shows: a colour is a verdict too.
+                      const grade = verdicts.graded ? gradeFor(m.avgPct) : null;
+                      const tone = grade ? gradeTone(grade) : "muted";
                       return (
                         <li
                           key={m.key}
@@ -1236,7 +1246,7 @@ export default async function PlayerProfilePage({
                           </span>
                           <span
                             role="img"
-                            aria-label={`${m.label}: ${percentLabel(m.avgPct)}, grade ${grade}`}
+                            aria-label={`${m.label}: ${percentLabel(m.avgPct)}${grade ? `, grade ${grade}` : ""}`}
                             className="min-w-0 flex-1"
                           >
                             <span className="block h-2 w-full overflow-hidden rounded-full bg-surface-2">
@@ -1248,7 +1258,9 @@ export default async function PlayerProfilePage({
                                     : tone === "accent"
                                       ? "bg-accent/80"
                                       : tone === "muted"
-                                        ? "bg-line"
+                                        ? grade
+                                          ? "bg-line"
+                                          : "bg-muted/60"
                                         : "bg-fg/40",
                                 )}
                                 style={{
@@ -1259,37 +1271,41 @@ export default async function PlayerProfilePage({
                           </span>
                           <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">
                             {percentLabel(m.avgPct).replace(" percentile", "")}
-                            <b
-                              className={cn(
-                                "ml-1.5 font-semibold",
-                                tone === "success"
-                                  ? "text-success"
-                                  : tone === "accent"
-                                    ? "text-accent"
-                                    : "text-fg/80",
-                              )}
-                            >
-                              {grade}
-                            </b>
+                            {grade ? (
+                              <b
+                                className={cn(
+                                  "ml-1.5 font-semibold",
+                                  tone === "success"
+                                    ? "text-success"
+                                    : tone === "accent"
+                                      ? "text-accent"
+                                      : "text-fg/80",
+                                )}
+                              >
+                                {grade}
+                              </b>
+                            ) : null}
                           </span>
                         </li>
                       );
                     })}
                   </ul>
-                  {reportCard.best || reportCard.focus ? (
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {reportCard.best ? (
+                  {verdicts.best || verdicts.focus ? (
+                    // auto-fit: visitors never get "Work on", so a lone
+                    // Strength callout takes the full width, not half a row.
+                    <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
+                      {verdicts.best ? (
                         <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-xs">
                           <span aria-hidden>💪</span> <b>Strength:</b>{" "}
-                          {reportCard.best.label} —{" "}
-                          {percentLabel(reportCard.best.avgPct)}
+                          {verdicts.best.label} —{" "}
+                          {percentLabel(verdicts.best.avgPct)}
                         </div>
                       ) : null}
-                      {reportCard.focus ? (
+                      {verdicts.focus ? (
                         <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
                           <span aria-hidden>🎯</span> <b>Work on:</b>{" "}
-                          {reportCard.focus.label} —{" "}
-                          {percentLabel(reportCard.focus.avgPct)}
+                          {verdicts.focus.label} —{" "}
+                          {percentLabel(verdicts.focus.avgPct)}
                         </div>
                       ) : null}
                     </div>
@@ -1317,7 +1333,10 @@ export default async function PlayerProfilePage({
                       <div className="text-xs font-medium uppercase tracking-wide text-muted">
                         In this league
                       </div>
-                      <HeroPool heroes={leagueHeroes} />
+                      <HeroPool
+                        heroes={leagueHeroes}
+                        minGamesForRate={HERO_RATE_MIN_GAMES}
+                      />
                     </div>
                   ) : null}
                   {hasText(selfPickedHeroes) ? (
@@ -1333,7 +1352,11 @@ export default async function PlayerProfilePage({
                       <div className="text-xs font-medium uppercase tracking-wide text-muted">
                         Most played (pubs)
                       </div>
-                      <HeroPool heroes={pubHeroes} limit={5} />
+                      <HeroPool
+                        heroes={pubHeroes}
+                        limit={5}
+                        minGamesForRate={HERO_RATE_MIN_GAMES}
+                      />
                     </div>
                   ) : null}
                 </CardBody>
@@ -1443,6 +1466,9 @@ export default async function PlayerProfilePage({
     </div>
   );
 }
+
+/** Games on a hero before its win rate gets a colour; below it, a plain W–L. */
+const HERO_RATE_MIN_GAMES = 3;
 
 /** Latest series shown before "Show all". */
 const HISTORY_PREVIEW = 5;

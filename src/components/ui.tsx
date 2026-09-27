@@ -999,17 +999,25 @@ export function HeroIcon({
 export function HeroPool({
   heroes,
   limit = 8,
+  minGamesForRate = 0,
 }: {
   /** `kda` is optional and additive: entries without it render byte-identical
    *  to before it existed (team pages and pub heroes pass nothing). */
   heroes: { heroId: number; games: number; wins: number; kda?: number }[];
   limit?: number;
+  /**
+   * Below this many games a hero shows a plain W–L with no colour and an empty
+   * bar: "1g · 100% W" in green reads as a trend when it is one game. The
+   * default 0 keeps every existing caller byte-identical.
+   */
+  minGamesForRate?: number;
 }) {
   return (
     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
       {heroes.slice(0, limit).map((h) => {
         const hero = heroById(h.heroId);
         const winPct = Math.round((h.wins / h.games) * 100);
+        const judged = h.games >= minGamesForRate;
         // Green when clearly winning, red when clearly losing, neutral around even.
         const tone = winPct >= 60 ? "win" : winPct >= 40 ? "even" : "loss";
         return (
@@ -1029,19 +1037,27 @@ export function HeroPool({
                 </div>
                 <div className="text-muted">
                   {h.games}g ·{" "}
-                  <span
-                    className={cn(
-                      "font-semibold",
-                      tone === "win"
-                        ? "text-success"
-                        : tone === "loss"
-                          ? "text-danger"
-                          : "text-fg",
-                    )}
-                  >
-                    {winPct}%
-                  </span>{" "}
-                  W
+                  {judged ? (
+                    <>
+                      <span
+                        className={cn(
+                          "font-semibold",
+                          tone === "win"
+                            ? "text-success"
+                            : tone === "loss"
+                              ? "text-danger"
+                              : "text-fg",
+                        )}
+                      >
+                        {winPct}%
+                      </span>{" "}
+                      W
+                    </>
+                  ) : (
+                    <span className="tabular-nums">
+                      {h.wins}–{h.games - h.wins}
+                    </span>
+                  )}
                   {h.kda != null ? (
                     <span className="tabular-nums"> · {h.kda} KDA</span>
                   ) : null}
@@ -1049,17 +1065,19 @@ export function HeroPool({
               </div>
             </div>
             <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2">
-              <div
-                className={cn(
-                  "bar-fill h-full rounded-full",
-                  tone === "win"
-                    ? "bg-success/70"
-                    : tone === "loss"
-                      ? "bg-danger/70"
-                      : "bg-muted/60",
-                )}
-                style={{ width: `${winPct}%` }}
-              />
+              {judged ? (
+                <div
+                  className={cn(
+                    "bar-fill h-full rounded-full",
+                    tone === "win"
+                      ? "bg-success/70"
+                      : tone === "loss"
+                        ? "bg-danger/70"
+                        : "bg-muted/60",
+                  )}
+                  style={{ width: `${winPct}%` }}
+                />
+              ) : null}
             </div>
           </div>
         );
