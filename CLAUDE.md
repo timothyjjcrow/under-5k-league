@@ -1372,7 +1372,8 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
   from `recomputeSeries` on the transition to decided, idempotent through an
   atomic `resultAnnounced:<matchId>` Setting CREATE; admin `recordResult`
   always sends but upserts the same marker so a later game import can't
-  double-post), playoff bracket (`startPlayoffs`), the champion
+  double-post; the post may carry one broken-record line — see Record book),
+  playoff bracket (`startPlayoffs`), the champion
   (`advancePlayoffBracket`), and inhouse moments: lobby formed
   (`maybeFormLobby`, captured in-tx/sent post-commit) plus a queue-filling ping
   (`joinQueue` — fires only on an upward crossing of `INHOUSE.QUEUE_PING_AT`,
@@ -2315,10 +2316,22 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   contributions and ⚔️ series wins via `appearanceCareers`
   (`src/lib/appearance-careers.ts`), game counts via pure `careerGameCounts`
   (`src/lib/hall-of-fame.ts`, tested; team cuids are globally unique so
-  cross-season membership just works), 🎯 career fantasy
-  points (`pointsByPlayer` over all games ever), 🔮 all-time oracle record
+  cross-season membership just works), career impact points
+  (`pointsByPlayer` over all games ever), 🔮 all-time oracle record
   (`pickemStandings` over all predictions, min 3 graded). Linked from
   `/seasons` and the footer.
+- **It waits for a champion.** Until `resolveChampionPresentation` accepts at
+  least one season (`hasOfficialChampion`, `src/lib/official-champion.ts`,
+  itested) the page is one short note pointing at Leaders and the Record
+  book — a first-season Hall of Fame is a page of empty or one-season boards.
+  After that, Champions lead; the game-performance boards appear only once
+  trusted games span two seasons, and each section renders only when it has
+  rows. The Record book's "Career legends →" link follows the same gate.
+- **Equal scores share a place and ties at the cutoff show** (`topPlaces`,
+  tested — `competitionRanks`, so 1, 1, 3). A board keeps everyone placed in
+  the top 5, capped at 10 rows with a "+N more tied" line; decimal boards rank
+  on the displayed tenth (`placeKey`) so two players who READ the same never
+  get different places.
 
 ## Power rankings (done, branch: bigger-features)
 
@@ -2400,11 +2413,14 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## Hero meta page (done)
 
-- `/meta`: league-wide hero report from imported box scores — pick/win rates,
-  most-contested table, an "established" win-rate view (adaptive
-  `metaMinPicks` floor), signature player per hero, untouched-pool card. Pure
-  `heroMeta`/`metaMinPicks` in `src/lib/hero-meta.ts` (tested); the explorer
-  UI is `src/components/hero-meta-explorer.tsx`. Only complete, unique 5v5
+- `/meta`: league-wide hero report from imported box scores — ONE sortable
+  table of picked heroes (`HeroMetaTable`, `src/components/hero-meta-table.tsx`:
+  picks / W–L / win % / most played by; sorts in place, no URL state), the
+  never-picked pool folded into ONE `<details>` line, and a two-line headline.
+  "Best win rate" only names a hero with `META_HEADLINE_MIN_PICKS` (8) picks
+  (`metaHeadlines`, exact cross-multiplied rate, more picks breaks ties) — a
+  3-0 hero is not a headline. Pure `heroMeta`/`metaHeadlines` in
+  `src/lib/hero-meta.ts` (tested). Only complete, unique 5v5
   boxes enter the denominator; a game containing an unknown hero id is omitted
   as a whole so known-hero coverage cannot exceed 100%, with a catalogue-update
   diagnostic. Deleted signature owners remain visible as `Former player`.
@@ -2413,17 +2429,30 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## Record book (done)
 
-- `/records`: all-time single-game records across every season — player
-  records (kills, assists, net worth, GPM, last hits, deaths) and game
-  records (longest/fastest by `durationSecs`, bloodiest/biggest stomp by kill
-  score; 0–0 or 0-duration games never qualify — unreported ≠ record). Pure
-  `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps a
-  tie, so `fetchAllGamesForRecords` orders by OpenDota start time, puts unknown
-  chronology last, then uses id as a deterministic key. Malformed/partial/
+- `/records`: all-time single-game records across every season, as two
+  compact lists (Player records, Match records; one row per record: title,
+  mark, holder + hero, match link) with a season switcher once two seasons
+  have games. Player records: kills, assists, hero/tower damage, healing,
+  net worth, GPM, XPM, last hits, denies. **There is deliberately no "Most
+  deaths"** — the book never names a player for their worst game. Game
+  records: longest/fastest by `durationSecs`, bloodiest/biggest stomp/closest
+  by kill score; 0–0 or 0-duration games never qualify — unreported ≠ record.
+  Pure `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps
+  a tie, so games are ordered by OpenDota start time, unknown chronology last,
+  then id (`compareRecordChronology`, shared by the cached scan and the
+  announcement). Malformed/partial/
   duplicated boxes are omitted from both player and game records; unsafe
   stored duration/score values are neutralized and diagnosed. The UI discloses
   the first-achiever policy. Linked from Statistics navigation, Explore/mobile
   discovery, the footer, and Hall of Fame.
+- **A broken player record rides the series result post** — at most ONE line,
+  inside `announceSeriesResultOnce`'s existing send-once marker (no new send,
+  no new marker). `brokenPlayerRecord` compares the book with and without the
+  series' games and stays silent until `RECORD_ANNOUNCE_MIN_GAMES` (20)
+  complete games exist OUTSIDE the series — before that every game "breaks" a
+  record. Strictly greater only (an equalled mark keeps its first achiever).
+  The lookup (`src/lib/record-announce.ts`) is best-effort: a failure drops
+  the line, never the result post.
 
 ## Hero report cards (done, branch: ambitious-features)
 
