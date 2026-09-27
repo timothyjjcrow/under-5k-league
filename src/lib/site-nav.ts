@@ -14,6 +14,7 @@
 
 import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import { featureAvailability } from "./features-lifecycle";
+import { draftPhasePresentation, seasonPhaseLabel } from "./season-copy";
 
 /**
  * `season` pages are the league's own chapter and sit in the primary row (the
@@ -157,6 +158,47 @@ export function seasonNav(
     }
   }
   return links;
+}
+
+export type HeaderStatus = { label: string; href: string; live: boolean };
+
+/**
+ * The header's status chip: what is happening in the league right now.
+ * While the auction runs it reads "Draft live" and opens the draft room;
+ * while any series is being played it reads "Series live" and opens this
+ * week's fixtures. Otherwise it names the phase and links Home. It used to
+ * name the phase only, so nothing in the header said a draft or a match was
+ * on. `null` in the offseason.
+ */
+export function headerStatus({
+  phase,
+  draftStatus,
+  seriesLive,
+}: {
+  phase: string | null;
+  draftStatus: string | null;
+  /** A match in the active season is LIVE. */
+  seriesLive: boolean;
+}): HeaderStatus | null {
+  if (!phase) return null;
+  if (
+    phase === SEASON_STATUS.DRAFT &&
+    draftPhasePresentation(draftStatus).live
+  ) {
+    return { label: "Draft live", href: "/draft", live: true };
+  }
+  if (seriesLive && phase === SEASON_STATUS.REGULAR_SEASON) {
+    return { label: "Series live", href: "/schedule#this-week", live: true };
+  }
+  // The playoff schedule leads with the bracket; it has no week anchor.
+  if (seriesLive && phase === SEASON_STATUS.PLAYOFFS) {
+    return { label: "Series live", href: "/schedule", live: true };
+  }
+  return {
+    label: seasonPhaseLabel(phase, draftStatus),
+    href: "/",
+    live: false,
+  };
 }
 
 /** A button that takes a visitor to the signup form. */

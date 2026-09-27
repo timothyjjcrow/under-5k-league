@@ -24,6 +24,15 @@ describe("shared-shell query efficiency", () => {
       /user && season\?\.status === "SIGNUPS"\s*\?\s*prisma\.registration/,
     );
   });
+
+  // The header's "Series live" chip reads one indexed row behind the shared
+  // public snapshot, never a list or a count of the season's matches.
+  it("checks for a live series through the cached public snapshot", () => {
+    expect(LAYOUT).toContain("getPublicHasLiveMatch(season.id)");
+    expect(LAYOUT).not.toMatch(/prisma\.match\./);
+    expect(PUBLIC_NAVIGATION).toMatch(/prisma\.match\.findFirst\(\{/);
+    expect(PUBLIC_NAVIGATION).not.toMatch(/prisma\.match\.(?:count|findMany)\(/);
+  });
 });
 
 describe("homepage query efficiency", () => {

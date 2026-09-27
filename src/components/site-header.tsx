@@ -7,9 +7,10 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge } from "@/components/ui";
 import { MerchLink } from "@/components/merch-link";
-import { seasonPhaseLabel, seasonPhaseTone } from "@/lib/season-copy";
+import { seasonPhaseTone } from "@/lib/season-copy";
 import {
   exploreNav,
+  headerStatus,
   phoneDock,
   seasonNav,
   type DockIconName,
@@ -53,6 +54,7 @@ export function SiteHeader({
   draftStatus = null,
   hasHistory = false,
   join = null,
+  seriesLive = false,
 }: {
   user: HeaderUser;
   phase: string | null;
@@ -63,6 +65,8 @@ export function SiteHeader({
   hasHistory?: boolean;
   /** "Join Season N" during signups, for a viewer who hasn't joined. */
   join?: JoinCta | null;
+  /** A match in the active season is LIVE right now. */
+  seriesLive?: boolean;
 }) {
   const pathname = usePathname();
   // Every list below comes from src/lib/site-nav.ts, which the footer shares:
@@ -72,8 +76,8 @@ export function SiteHeader({
   // The logo is the home link on wide screens.
   const desktopItems = items.filter((item) => item.href !== "/");
   const exploreSections = exploreNav(navState);
-  const phaseLabel = seasonPhaseLabel(phase, draftStatus);
-  const phaseTone = seasonPhaseTone(phase);
+  const status = headerStatus({ phase, draftStatus, seriesLive });
+  const statusPath = status?.href.split("#")[0];
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
   // Three disclosures: the desktop Explore dropdown, the account menu (every
   // width) and the phone tab bar's sheet. Phones used to add a ☰ menu and an
@@ -170,7 +174,7 @@ export function SiteHeader({
   return (
     <>
       <header className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur">
-        <div className="mx-auto flex h-20 w-full max-w-7xl items-center gap-3 px-4 sm:px-6 xl:gap-4">
+        <div className="mx-auto flex h-20 w-full max-w-7xl items-center gap-2 px-4 sm:gap-3 sm:px-6 xl:gap-4">
           <Link
             href="/"
             aria-label={`${LEAGUE_CONFIG.name} — home`}
@@ -188,17 +192,39 @@ export function SiteHeader({
             />
           </Link>
 
-          {/* Internal pages need league context without making users scroll to
-            the footer. Keep it inside the existing 80px header (draft-room
-            sticky offsets depend on that height). */}
-          {pathname !== "/" && seasonName && phase ? (
+          {/* What is happening in the league right now, on every width. A
+            live draft or series links to it from every page, Home included;
+            otherwise the chip names the phase on inner pages and links Home,
+            whose hero already says it. Kept inside the 80px header (draft-room
+            sticky offsets depend on that height). On a narrow phone the
+            label may truncate rather than push the account button off. */}
+          {status && seasonName && (status.live || pathname !== "/") ? (
             <Link
-              href="/"
-              aria-label={`League status: ${seasonName} — ${phaseLabel}`}
-              className="hidden shrink-0 items-center gap-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:flex"
-              title={`${seasonName} · ${phaseLabel}`}
+              href={status.href}
+              aria-label={`League status: ${seasonName} — ${status.label}`}
+              aria-current={pathname === statusPath ? "page" : undefined}
+              className="flex min-h-11 min-w-0 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:shrink-0"
+              title={`${seasonName} · ${status.label}`}
             >
-              <Badge tone={phaseTone}>{phaseLabel}</Badge>
+              <Badge
+                tone={status.live ? "danger" : seasonPhaseTone(phase)}
+                className="min-w-0 max-w-full"
+              >
+                {status.live ? (
+                  <span aria-hidden className="relative flex h-1.5 w-1.5 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-danger" />
+                  </span>
+                ) : null}
+                <span className="truncate">
+                  {/* The season's name fits beside the label only between
+                    phone and desktop widths; the desktop row is full. */}
+                  <span className="hidden sm:inline lg:hidden">
+                    {seasonName} ·{" "}
+                  </span>
+                  {status.label}
+                </span>
+              </Badge>
             </Link>
           ) : null}
 

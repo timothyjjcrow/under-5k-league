@@ -22,7 +22,10 @@ import { getActiveSeason } from "@/lib/season";
 import { prisma } from "@/lib/prisma";
 import { resolveSiteUrl } from "@/lib/site-url";
 import { getPublicReadSignals } from "@/lib/public-read-signals";
-import { getPublicHasHistory } from "@/lib/public-navigation";
+import {
+  getPublicHasHistory,
+  getPublicHasLiveMatch,
+} from "@/lib/public-navigation";
 import { joinSeasonCta } from "@/lib/site-nav";
 
 const SITE_URL = resolveSiteUrl();
@@ -75,7 +78,7 @@ export default async function RootLayout({
       getPublicReadSignals(),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
-  const [myTeam, draft, registration] = await Promise.all([
+  const [myTeam, draft, registration, seriesLive] = await Promise.all([
     user && season
       ? prisma.teamMember.findFirst({
           where: { seasonId: season.id, userId: user.id },
@@ -99,6 +102,11 @@ export default async function RootLayout({
           select: { status: true },
         })
       : null,
+    // The header's "Series live" chip: one indexed row behind the shared
+    // public snapshot, and only while matches can be live.
+    season?.status === "REGULAR_SEASON" || season?.status === "PLAYOFFS"
+      ? getPublicHasLiveMatch(season.id)
+      : false,
   ]);
   const draftStatus = draft?.status ?? null;
   const join = joinSeasonCta({
@@ -127,6 +135,7 @@ export default async function RootLayout({
           draftStatus={draftStatus}
           hasHistory={hasHistory}
           join={join}
+          seriesLive={seriesLive}
         />
         <main
           id="main"

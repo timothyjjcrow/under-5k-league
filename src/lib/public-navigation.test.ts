@@ -3,9 +3,13 @@ import { expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   revision: "before-archive",
   findFirst: vi.fn(),
+  matchFindFirst: vi.fn(),
   entries: new Map<string, unknown>(),
 }));
-vi.mock("./prisma", () => ({ prisma: { season: { findFirst: mocks.findFirst } } }));
+vi.mock("./prisma", () => ({ prisma: {
+  season: { findFirst: mocks.findFirst },
+  match: { findFirst: mocks.matchFindFirst },
+} }));
 vi.mock("./public-read-signals", () => ({
   getPublicReadSignals: async () => ({ publicGameRevision: mocks.revision }),
 }));
@@ -42,4 +46,26 @@ it("caches only public history existence and follows false → true → false re
   expect(await getPublicHasHistory(null)).toBe(false);
   expect(await getPublicHasHistory(null)).toBe(false);
   expect(mocks.findFirst).toHaveBeenCalledTimes(3);
+});
+
+it("reads one LIVE match per season and revision for the header's chip", async () => {
+  const { getPublicHasLiveMatch } = await import("./public-navigation");
+  mocks.revision = "before-game-one";
+  mocks.matchFindFirst.mockResolvedValue(null);
+  expect(await getPublicHasLiveMatch("season-1")).toBe(false);
+  expect(await getPublicHasLiveMatch("season-1")).toBe(false);
+  expect(mocks.matchFindFirst).toHaveBeenCalledTimes(1);
+  expect(mocks.matchFindFirst).toHaveBeenCalledWith({
+    where: { seasonId: "season-1", status: "LIVE" }, select: { id: true },
+  });
+
+  // Game one imports: the revision moves in the same transaction.
+  mocks.matchFindFirst.mockResolvedValue({ id: "match-1" });
+  mocks.revision = "after-game-one";
+  expect(await getPublicHasLiveMatch("season-1")).toBe(true);
+  expect(mocks.matchFindFirst).toHaveBeenCalledTimes(2);
+
+  // No active season, no query.
+  expect(await getPublicHasLiveMatch(null)).toBe(false);
+  expect(mocks.matchFindFirst).toHaveBeenCalledTimes(2);
 });

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { seasonPhaseLabel } from "./season-copy";
 import {
   DRAFT_STATUS,
   REGISTRATION_STATUS,
@@ -9,6 +10,7 @@ import {
 import {
   exploreNav,
   footerNav,
+  headerStatus,
   joinSeasonCta,
   phoneDock,
   seasonNav,
@@ -223,6 +225,70 @@ describe("footer", () => {
   });
 });
 
+describe("header status chip", () => {
+  it("links a running auction and a series in progress from every page", () => {
+    expect(
+      headerStatus({
+        phase: SEASON_STATUS.DRAFT,
+        draftStatus: DRAFT_STATUS.IN_PROGRESS,
+        seriesLive: false,
+      }),
+    ).toEqual({ label: "Draft live", href: "/draft", live: true });
+    expect(
+      headerStatus({
+        phase: SEASON_STATUS.REGULAR_SEASON,
+        draftStatus: null,
+        seriesLive: true,
+      }),
+    ).toEqual({ label: "Series live", href: "/schedule#this-week", live: true });
+    expect(
+      headerStatus({
+        phase: SEASON_STATUS.PLAYOFFS,
+        draftStatus: null,
+        seriesLive: true,
+      }),
+    ).toEqual({ label: "Series live", href: "/schedule", live: true });
+  });
+
+  it("otherwise names the phase with the shared label and links Home", () => {
+    for (const phase of PHASES) {
+      for (const draftStatus of DRAFTS) {
+        const status = headerStatus({ phase, draftStatus, seriesLive: false });
+        if (phase === null) {
+          expect(status).toBeNull();
+          continue;
+        }
+        if (
+          phase === SEASON_STATUS.DRAFT &&
+          draftStatus === DRAFT_STATUS.IN_PROGRESS
+        ) {
+          continue;
+        }
+        expect(status).toEqual({
+          label: seasonPhaseLabel(phase, draftStatus),
+          href: "/",
+          live: false,
+        });
+      }
+    }
+  });
+
+  it("only reports a live series while matches can be played", () => {
+    for (const phase of [
+      SEASON_STATUS.SIGNUPS,
+      SEASON_STATUS.DRAFT,
+      SEASON_STATUS.COMPLETE,
+    ]) {
+      expect(
+        headerStatus({ phase, draftStatus: null, seriesLive: true })?.live,
+      ).toBe(false);
+    }
+    expect(
+      headerStatus({ phase: null, draftStatus: null, seriesLive: true }),
+    ).toBeNull();
+  });
+});
+
 describe("join button during signups", () => {
   const signups = {
     phase: SEASON_STATUS.SIGNUPS,
@@ -362,12 +428,15 @@ describe("navigation surfaces", () => {
       ["footer", footer],
     ] as const) {
       expect(file, name).toContain('from "@/lib/site-nav"');
-      expect(file, name).toContain("seasonPhaseLabel(");
       expect(file, name).not.toMatch(/\blabel:\s*["'`]/);
       expect(file, name).not.toMatch(/PHASE_LABEL|PHASE_TONE/);
     }
     expect(header).toContain("seasonNav(");
     expect(header).toContain("exploreNav(");
+    // The header's chip takes its phase name from headerStatus, which uses
+    // seasonPhaseLabel (pinned above); the footer uses it directly.
+    expect(header).toContain("headerStatus(");
+    expect(footer).toContain("seasonPhaseLabel(");
     expect(footer).toContain("footerNav(");
     // The footer is no second site map.
     expect(footer).not.toContain("seasonNav(");

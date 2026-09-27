@@ -121,6 +121,14 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(playerPage.getByText(/Available ·/)).toBeVisible({
     timeout: 15_000,
   });
+  // Every page loaded from now on says the auction is live in its header,
+  // and the chip opens the draft room.
+  await playerPage.goto("/news");
+  await expect(
+    playerPage
+      .getByRole("banner")
+      .getByRole("link", { name: /^League status: .+ — Draft live$/ }),
+  ).toHaveAttribute("href", "/draft");
   await playerContext.close();
 
   await expect(page).toHaveURL(/\/draft/);
