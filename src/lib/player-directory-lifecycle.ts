@@ -108,3 +108,25 @@ export function playerDirectoryPresentation(
     availabilityHint: "undrafted",
   };
 }
+
+/**
+ * Whether a player's profile still shows "Wants to captain". It is news only
+ * while captains are being picked, the same window the /players badge and
+ * filter use, and only for a full player who isn't on a team yet (a
+ * designated captain already has one).
+ */
+export function profileWantsCaptain(input: {
+  wantsCaptain: boolean;
+  onTeam: boolean;
+  standin: boolean;
+  seasonStatus: SeasonStatus | string;
+  draftStatus: DraftStatus | string | null | undefined;
+}): boolean {
+  return (
+    input.wantsCaptain &&
+    !input.onTeam &&
+    !input.standin &&
+    playerDirectoryPresentation(input.seasonStatus, input.draftStatus)
+      .captainSelectionOpen
+  );
+}

@@ -20,6 +20,7 @@ import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { projectPlayoffField } from "@/lib/playoff-field";
+import { profileWantsCaptain } from "@/lib/player-directory-lifecycle";
 import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { getSessionUser } from "@/lib/auth";
@@ -198,6 +199,7 @@ export default async function PlayerProfilePage({
     recordRows,
     viewerRegistration,
     coversServed,
+    draft,
   ] = await Promise.all([
     season
       ? prisma.registration.findUnique({
@@ -255,6 +257,13 @@ export default async function PlayerProfilePage({
         },
       },
     }),
+    // Only for the "Wants to captain" badge's window (captain selection).
+    season
+      ? prisma.draft.findUnique({
+          where: { seasonId: season.id },
+          select: { status: true },
+        })
+      : null,
   ]);
   // Pass 2: only THIS player's games carry the heavy match/team/season joins
   // that feed the match history, stat tiles, achievements, and report card.
@@ -605,9 +614,17 @@ export default async function PlayerProfilePage({
   // from before the form had one "About you" box keep two answers; they show
   // joined, never one dropped.
   const signupAbout = activeReg ? aboutText(activeReg) || null : null;
-  // Only while they could still be picked as one; once on a team (or when
-  // they already captain) it is old news.
-  const wantsCaptainNow = !!activeReg?.wantsCaptain && !team && !isStandin;
+  // Only while they could still be picked as one (the /players badge's
+  // window); once the auction starts, or once on a team, it is old news.
+  const wantsCaptainNow =
+    !!season &&
+    profileWantsCaptain({
+      wantsCaptain: !!activeReg?.wantsCaptain,
+      onTeam: !!team,
+      standin: isStandin,
+      seasonStatus: season.status,
+      draftStatus: draft?.status,
+    });
   const selfPickedHeroes = activeReg?.favoriteHeroes;
   const heroCardVisible =
     leagueHeroes.length > 0 ||

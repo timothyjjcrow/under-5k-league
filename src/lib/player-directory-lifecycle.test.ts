@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
-import { playerDirectoryPresentation } from "./player-directory-lifecycle";
+import {
+  playerDirectoryPresentation,
+  profileWantsCaptain,
+} from "./player-directory-lifecycle";
 
 describe("playerDirectoryPresentation", () => {
   it("keeps captain interest visible throughout the real setup window", () => {
@@ -86,5 +89,57 @@ describe("playerDirectoryPresentation", () => {
       captainSelectionOpen: false,
       showDraftStatus: true,
     });
+  });
+});
+
+describe("profileWantsCaptain", () => {
+  const volunteer = {
+    wantsCaptain: true,
+    onTeam: false,
+    standin: false,
+  };
+
+  it("shows while captains are being picked", () => {
+    for (const [seasonStatus, draftStatus] of [
+      [SEASON_STATUS.SIGNUPS, null],
+      [SEASON_STATUS.DRAFT, DRAFT_STATUS.NOT_STARTED],
+    ] as const) {
+      expect(
+        profileWantsCaptain({ ...volunteer, seasonStatus, draftStatus }),
+      ).toBe(true);
+    }
+  });
+
+  it("stops once the auction starts, as the /players badge does", () => {
+    for (const [seasonStatus, draftStatus] of [
+      [SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS],
+      [SEASON_STATUS.DRAFT, DRAFT_STATUS.PAUSED],
+      [SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.PLAYOFFS, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.COMPLETE, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.REGULAR_SEASON, null],
+    ] as const) {
+      expect(
+        profileWantsCaptain({ ...volunteer, seasonStatus, draftStatus }),
+        `${seasonStatus}/${draftStatus}`,
+      ).toBe(false);
+    }
+  });
+
+  it("is never shown for a rostered player, a standin or a non-volunteer", () => {
+    const open = {
+      seasonStatus: SEASON_STATUS.SIGNUPS,
+      draftStatus: null,
+    };
+    expect(profileWantsCaptain({ ...volunteer, ...open, onTeam: true })).toBe(
+      false,
+    );
+    expect(profileWantsCaptain({ ...volunteer, ...open, standin: true })).toBe(
+      false,
+    );
+    expect(
+      profileWantsCaptain({ ...volunteer, ...open, wantsCaptain: false }),
+    ).toBe(false);
   });
 });
