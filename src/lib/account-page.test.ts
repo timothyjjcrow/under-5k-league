@@ -3,8 +3,11 @@ import {
   accountNextSteps,
   discordCardCtas,
   discordLinkNote,
+  fullPlayerChoiceOpen,
   mergeAccountRefresh,
+  rejoinPausedByDraft,
   signupSummary,
+  withdrawConfirmText,
   type AccountStepInput,
   type DiscordCardInput,
 } from "./account-page";
@@ -348,5 +351,82 @@ describe("mergeAccountRefresh", () => {
     expect(
       mergeAccountRefresh({ error: "Steam down" }, { error: "OpenDota down" }),
     ).toEqual({ error: "Steam down · OpenDota down" });
+  });
+});
+
+describe("fullPlayerChoiceOpen", () => {
+  const open = (
+    seasonStatus: string,
+    existing: { type: string; status: string } | null,
+    draftStatus: string | null = null,
+  ) => fullPlayerChoiceOpen({ seasonStatus, draftStatus, existing });
+  const player = (status: string) => ({ type: "PLAYER", status });
+  const standin = (status: string) => ({ type: "STANDIN", status });
+
+  it("is open to everyone during signups", () => {
+    expect(open("SIGNUPS", null)).toBe(true);
+    expect(open("SIGNUPS", standin("ACTIVE"))).toBe(true);
+    expect(open("SIGNUPS", player("WITHDRAWN"))).toBe(true);
+  });
+
+  it("stays closed to newcomers and standins once signups close", () => {
+    for (const phase of ["DRAFT", "REGULAR_SEASON", "PLAYOFFS"]) {
+      expect(open(phase, null)).toBe(false);
+      expect(open(phase, standin("ACTIVE"))).toBe(false);
+      expect(open(phase, standin("WITHDRAWN"))).toBe(false);
+    }
+  });
+
+  it("lets a withdrawn full player undo it, except while the auction runs", () => {
+    expect(open("DRAFT", player("WITHDRAWN"), null)).toBe(true);
+    expect(open("DRAFT", player("WITHDRAWN"), "NOT_STARTED")).toBe(true);
+    expect(open("DRAFT", player("WITHDRAWN"), "IN_PROGRESS")).toBe(false);
+    expect(open("DRAFT", player("WITHDRAWN"), "PAUSED")).toBe(false);
+    expect(open("DRAFT", player("WITHDRAWN"), "COMPLETE")).toBe(true);
+    expect(open("REGULAR_SEASON", player("WITHDRAWN"), "COMPLETE")).toBe(true);
+  });
+
+  it("keeps an active full player's choice, and never reopens an admin removal", () => {
+    expect(open("DRAFT", player("ACTIVE"), "IN_PROGRESS")).toBe(true);
+    expect(open("PLAYOFFS", player("ACTIVE"), "COMPLETE")).toBe(true);
+    expect(open("DRAFT", player("REMOVED"))).toBe(false);
+  });
+
+  it("pauses a withdrawn full player's return only while the auction runs", () => {
+    const paused = (existing: { type: string; status: string }, draftStatus: string) =>
+      rejoinPausedByDraft({ seasonStatus: "DRAFT", draftStatus, existing });
+    expect(paused(player("WITHDRAWN"), "IN_PROGRESS")).toBe(true);
+    expect(paused(player("WITHDRAWN"), "PAUSED")).toBe(true);
+    expect(paused(player("WITHDRAWN"), "NOT_STARTED")).toBe(false);
+    expect(paused(player("ACTIVE"), "IN_PROGRESS")).toBe(false);
+    expect(paused(standin("WITHDRAWN"), "IN_PROGRESS")).toBe(false);
+  });
+});
+
+describe("withdrawConfirmText", () => {
+  const text = (type: string, seasonStatus: string, draftStatus: string | null = null) =>
+    withdrawConfirmText({ type, seasonStatus, draftStatus });
+
+  it("always starts with the question and names the pool left", () => {
+    expect(text("PLAYER", "SIGNUPS")).toMatch(/^Withdraw from this season\? You'll leave the draft pool/);
+    expect(text("STANDIN", "REGULAR_SEASON")).toMatch(/standin pool/);
+  });
+
+  it("says a player can come back, but not during the draft", () => {
+    expect(text("PLAYER", "SIGNUPS")).toMatch(/not while the draft is running/);
+    expect(text("PLAYER", "DRAFT", "NOT_STARTED")).toMatch(/not while the draft is running/);
+    expect(text("PLAYER", "DRAFT", "IN_PROGRESS")).toMatch(/can't rejoin until the draft finishes/);
+    expect(text("PLAYER", "DRAFT", "PAUSED")).toMatch(/can't rejoin until the draft finishes/);
+  });
+
+  it("speaks of the free-agent pool once the draft is over", () => {
+    expect(text("PLAYER", "DRAFT", "COMPLETE")).toMatch(/free-agent pool/);
+    expect(text("PLAYER", "REGULAR_SEASON", "COMPLETE")).toMatch(/free-agent pool/);
+    expect(text("PLAYER", "PLAYOFFS", null)).toMatch(/free-agent pool/);
+  });
+
+  it("tells a standin they can re-register until the season ends", () => {
+    expect(text("STANDIN", "PLAYOFFS")).toMatch(/until the season ends/);
+    expect(text("STANDIN", "DRAFT", "IN_PROGRESS")).toMatch(/until the season ends/);
   });
 });

@@ -1364,6 +1364,64 @@ describe("saveRegistration — draft-night locks (live auction)", () => {
     expect((await regFor(season.id, user.id))?.status).toBe("WITHDRAWN");
   });
 
+  it.each([null, "NOT_STARTED"])(
+    "a WITHDRAWN full player can undo it during draft setup (draft row: %s)",
+    async (draftStatus) => {
+      // /me offers the Full player choice here (fullPlayerChoiceOpen); this
+      // is the server rule that promise rests on.
+      const season = await makeSeason({ status: "DRAFT" });
+      if (draftStatus) {
+        await prisma.draft.create({
+          data: { seasonId: season.id, status: draftStatus },
+        });
+      }
+      const user = await makeUser("Setup Returner");
+      await prisma.registration.create({
+        data: {
+          seasonId: season.id,
+          userId: user.id,
+          type: "PLAYER",
+          status: "WITHDRAWN",
+          mmr: 3000,
+          roles: "",
+        },
+      });
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+      const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+
+      expect(res?.error).toBeUndefined();
+      const reg = await regFor(season.id, user.id);
+      expect(reg?.status).toBe("ACTIVE");
+      expect(reg?.type).toBe("PLAYER");
+    },
+  );
+
+  it("a WITHDRAWN full player can't come back as a standin mid-auction either", async () => {
+    // Why /me shows a "wait for the draft" note instead of a standin-only
+    // form to this player while the auction runs (rejoinPausedByDraft).
+    const season = await liveDraftSeason();
+    const user = await makeUser("Mid Draft Standin Switch");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "WITHDRAWN",
+        mmr: 3000,
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+
+    expect(res?.error).toMatch(/draft is running/i);
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.status).toBe("WITHDRAWN");
+    expect(reg?.type).toBe("PLAYER");
+  });
+
   it("the re-entry lock lifts once the draft completes", async () => {
     const season = await liveDraftSeason("COMPLETE");
     const user = await makeUser("Post Draft Returner");

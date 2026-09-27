@@ -30,7 +30,10 @@ import {
 } from "@/components/account-next-steps";
 import {
   accountNextSteps,
+  fullPlayerChoiceOpen,
+  rejoinPausedByDraft,
   signupSummary,
+  withdrawConfirmText,
   type AccountStepInput,
 } from "@/lib/account-page";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
@@ -171,11 +174,18 @@ export default async function MePage({
     season?.status ?? "",
   );
   // Post-signups, PLAYER stays available only to those already registered as
-  // one (matches registrationGate — standins can't upgrade mid-season). The
+  // one, withdrawn included (matches registrationGate — standins can't upgrade
+  // mid-season), and not to a withdrawn player while the auction runs. The
   // locked tile must also not stay default-checked: disabled radios don't
   // submit, so the form would silently fall back to PLAYER and get rejected.
-  const playerLocked =
-    !signupsOpen && !(isRegistered && reg?.type === "PLAYER");
+  const signupChoice = {
+    seasonStatus: season?.status ?? "",
+    draftStatus: draft?.status,
+    existing: reg ? { type: reg.type, status: reg.status } : null,
+  };
+  const playerLocked = !fullPlayerChoiceOpen(signupChoice);
+  // A withdrawn full player can't return at all while the auction runs.
+  const rejoinPaused = rejoinPausedByDraft(signupChoice);
   const myRoles = parseRoles(form?.roles);
   const myDraftReadiness = reg
     ? draftReadiness(reg, season?.draftRevision ?? 0)
@@ -247,7 +257,11 @@ export default async function MePage({
                     : "The season is complete, so registrations are closed."
                   : isRegistered
                     ? `You're currently ${reg?.type === "STANDIN" ? "a standin" : "signed up to play"}.`
-                    : signupsOpen
+                    : reg?.status === REGISTRATION_STATUS.WITHDRAWN
+                      ? rejoinPaused
+                        ? "You withdrew from this season."
+                        : "You withdrew from this season. You can rejoin below."
+                      : signupsOpen
                       ? "Fill this out to join the season."
                       : "Player signups are closed, but you can still register as a standin."
             }
@@ -517,6 +531,15 @@ export default async function MePage({
                   {isRegistered
                     ? "Your final signup details stay attached to this season's history. Your Discord, Steam and Dota settings below remain editable."
                     : "This season has finished. Watch the dashboard for the next season; your Discord, Steam and Dota settings below are ready to carry forward."}
+                </p>
+              </div>
+            ) : rejoinPaused ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm">
+                <p className="font-medium text-fg">The draft is running.</p>
+                <p className="mt-1 text-muted">
+                  You withdrew, so you&apos;re not in the pool captains are
+                  bidding on. Once the draft finishes you can rejoin here, as a
+                  full player or a standin.
                 </p>
               </div>
             ) : (
@@ -799,7 +822,11 @@ export default async function MePage({
                         <SubmitButton
                           variant="ghost"
                           size="sm"
-                          confirm="Withdraw from this season?"
+                          confirm={withdrawConfirmText({
+                            type: reg?.type ?? REGISTRATION_TYPE.PLAYER,
+                            seasonStatus: season.status,
+                            draftStatus: draft?.status,
+                          })}
                         >
                           Withdraw from this season
                         </SubmitButton>

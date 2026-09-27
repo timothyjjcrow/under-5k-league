@@ -2,6 +2,12 @@
 // the page reads the facts and these helpers decide what to say.
 
 import type { ActionResult } from "./action-result";
+import {
+  DRAFT_STATUS,
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+  SEASON_STATUS,
+} from "./constants";
 import { parseHeroList } from "./heroes";
 import { DOTA_ROLES, roleLabels } from "./roles";
 
@@ -312,4 +318,82 @@ export function mergeAccountRefresh(
     dotaError ?? dota?.message,
   ].filter((part): part is string => !!part);
   return { message: parts.join(" · ") || "Steam and Dota info refreshed" };
+}
+
+/** The auction is running (live or paused): the pool is frozen. */
+function auctionRunning(draftStatus: string | null | undefined): boolean {
+  return (
+    draftStatus === DRAFT_STATUS.IN_PROGRESS ||
+    draftStatus === DRAFT_STATUS.PAUSED
+  );
+}
+
+export type SignupChoiceInput = {
+  seasonStatus: string;
+  /** The season's draft row status; null or undefined when there is none. */
+  draftStatus: string | null | undefined;
+  /** This season's signup, in any status; null when there is none. */
+  existing: { type: string; status: string } | null;
+};
+
+/**
+ * Whether "Full player" is a real choice on the signup form. Mirrors the
+ * server instead of guessing: registrationGate takes anyone as a full player
+ * during SIGNUPS and lets a former full player (still active, or withdrawn by
+ * their own hand) keep or retake it later, and saveRegistration refuses a
+ * withdrawn player's return only while the auction runs. The page used to
+ * lock the choice for every withdrawn player after SIGNUPS, so an accidental
+ * withdrawal during draft setup could not be undone. An admin removal never
+ * reaches the form at all.
+ */
+export function fullPlayerChoiceOpen(input: SignupChoiceInput): boolean {
+  if (input.seasonStatus === SEASON_STATUS.SIGNUPS) return true;
+  const existing = input.existing;
+  if (!existing || existing.type !== REGISTRATION_TYPE.PLAYER) return false;
+  if (existing.status === REGISTRATION_STATUS.ACTIVE) return true;
+  return (
+    existing.status === REGISTRATION_STATUS.WITHDRAWN &&
+    !auctionRunning(input.draftStatus)
+  );
+}
+
+/**
+ * A self-withdrawn full player can't come back at all while the auction
+ * runs: saveRegistration refuses both the return as a player and the switch
+ * to standin until the draft finishes.
+ */
+export function rejoinPausedByDraft(input: SignupChoiceInput): boolean {
+  return (
+    input.existing?.type === REGISTRATION_TYPE.PLAYER &&
+    input.existing.status === REGISTRATION_STATUS.WITHDRAWN &&
+    auctionRunning(input.draftStatus)
+  );
+}
+
+/**
+ * The Withdraw button's confirm, said before the click: which pool you leave
+ * and when you can come back, by what the server actually allows (a former
+ * full player may rejoin as one in any phase except while the auction runs;
+ * a standin may re-register until the season ends).
+ */
+export function withdrawConfirmText(input: {
+  type: string;
+  seasonStatus: string;
+  draftStatus: string | null | undefined;
+}): string {
+  const ask = "Withdraw from this season?";
+  if (input.type === REGISTRATION_TYPE.STANDIN) {
+    return `${ask} You'll leave the standin pool, so captains can't book you as cover. You can register again from this page until the season ends.`;
+  }
+  if (auctionRunning(input.draftStatus)) {
+    return `${ask} You'll leave the draft pool now, and you can't rejoin until the draft finishes.`;
+  }
+  const draftDone =
+    input.draftStatus === DRAFT_STATUS.COMPLETE ||
+    (input.seasonStatus !== SEASON_STATUS.SIGNUPS &&
+      input.seasonStatus !== SEASON_STATUS.DRAFT);
+  if (draftDone) {
+    return `${ask} You'll leave the free-agent pool, so admins can't sign you to a team. You can rejoin from this page until the season ends.`;
+  }
+  return `${ask} You'll leave the draft pool, so captains can't pick you. You can rejoin from this page, but not while the draft is running.`;
 }
