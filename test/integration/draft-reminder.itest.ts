@@ -439,6 +439,27 @@ describe("draft-night reminder (integration)", () => {
     expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
   });
 
+  it("the draft-started post mentions the linked captains and nobody else", async () => {
+    const { season, ids } = await setupDraftNight(4);
+    const admin = await makeUser("Admin", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+
+    const started = await startDraft({}, fd({ expectedActiveSeasonId: season.id }));
+    expect(started?.error).toBeUndefined();
+
+    const live = mockSend.mock.calls.filter((call) =>
+      String(call[0]).includes("draft is LIVE"),
+    );
+    expect(live).toHaveLength(1);
+    const [content, mentions] = live[0];
+    // Cap A linked, Cap B didn't: one ping, one plain name. The linked
+    // players in the pool are not captains and must not be pinged.
+    expect(mentions).toEqual({ users: [ids.capA] });
+    expect(content).toContain(`<@${ids.capA}>, Cap B`);
+    expect(content).not.toContain(`<@${ids.linkedLate}>`);
+    expect(materializeAllowedMentions(content, mentions)).toBe(content);
+  });
+
   it("is wired into the automation worker", async () => {
     const { season } = await setupDraftNight(4);
 

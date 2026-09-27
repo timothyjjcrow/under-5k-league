@@ -6,7 +6,7 @@ import {
   rescheduleMessage,
   adminRetimeMessage,
   signupMessage,
-  draftStartedMessage,
+  draftStartedAnnouncement,
   draftCompleteMessage,
   regularSeasonStartedMessage,
   freeAgentSignedMessage,
@@ -121,11 +121,6 @@ describe("discord message formatters", () => {
     expect(signupMessage("Zai", 1, 20)).toContain("1 player in");
   });
 
-  it("links the draft room when the draft starts", () => {
-    const msg = draftStartedMessage("Season 1");
-    expect(msg).toContain("Season 1");
-    expect(msg).toContain("/draft");
-  });
 
   it("links the teams page when the draft completes", () => {
     expect(draftCompleteMessage("Season 1")).toContain("/teams");
@@ -592,6 +587,86 @@ describe("draftReminderAnnouncement", () => {
     for (const { content } of variants) {
       expect(content).not.toContain("—");
     }
+  });
+});
+
+describe("draftStartedAnnouncement", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const captains = [
+    { name: "Dendi", discordId: "111111111111111111" },
+    { name: "Puppey", discordId: null },
+    { name: "Typo", discordId: "123" },
+  ];
+  const visibleMentions = (content: string) =>
+    [...content.matchAll(/<@(\d{17,20})>/g)].map((m) => m[1]);
+
+  it("links the room and mentions only the linked captains", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains,
+    });
+    expect(announcement.content).toBe(
+      [
+        "🔨 **The Season 1 draft is LIVE!** Watch the auction: <https://league.example/draft>",
+        "Captains, you're on the clock. If your nomination timer runs out, the site nominates for you: <@111111111111111111>, Puppey, Typo",
+      ].join("\n"),
+    );
+    // A captain without a real snowflake is named, never pinged.
+    expect(announcement.mentionUserIds).toEqual(["111111111111111111"]);
+    expect(announcement.content).not.toContain("—");
+  });
+
+  it("still says what to do when no captain is known", () => {
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: [],
+    });
+    expect(announcement.content).toContain("/draft>");
+    expect(announcement.content).toMatch(/the site nominates for you\.$/);
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("packs captains under Discord's limit and pings only the ones shown", () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({
+      name: `A Very Long Captain Persona Number ${i + 1}`,
+      discordId: i % 3 ? null : (BigInt("600000000000000000") + BigInt(i)).toString(),
+    }));
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: many,
+    });
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    expect(delivered).toMatch(/ \+\d+ more$/);
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(delivered)),
+    );
+    expect(announcement.mentionUserIds).not.toContain(many[117].discordId);
+  });
+
+  it("falls back to a deliverable post that names nobody", () => {
+    const announcement = draftStartedAnnouncement({
+      seasonName: "S".repeat(2_100),
+      captains,
+    });
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("escapes a captain name", () => {
+    const content = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: [{ name: "[free mmr](https://evil.test)\nfake line", discordId: null }],
+    }).content;
+    expect(content).not.toContain("](");
+    expect(content.split("\n")).toHaveLength(2);
   });
 });
 
@@ -1290,7 +1365,7 @@ describe("no message unfurls a link preview", () => {
         unconfirmed: [{ name: "B", discordId: null }],
       }).content,
       captainAssignedMessage("A", "T", "123"),
-      draftStartedMessage("S1"),
+      draftStartedAnnouncement({ seasonName: "S1", captains: [] }).content,
       draftCompleteMessage("S1"),
       playerSoldMessage("A", "T", 5),
       matchResultMessage({

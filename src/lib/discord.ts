@@ -95,8 +95,48 @@ export function captainAssignedMessage(
   return `🧭 ${captain}, **you now captain ${name(teamName)}.** Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
 }
 
-export function draftStartedMessage(seasonName: string): string {
-  return `🔨 **The ${seasonName} draft is LIVE!** Captains are on the clock — watch the auction at <${resolveSiteUrl()}/draft>`;
+export type DraftStartedInput = {
+  /** Admin-authored, so not escaped (the draftScheduledMessage rule). */
+  seasonName: string;
+  /** The designated captains, in draft order. */
+  captains: DraftReminderPerson[];
+};
+
+/**
+ * The draft is live. It mentions the captains who linked Discord, and nobody
+ * else: a captain who isn't watching the channel misses the start, and the
+ * site nominates for them when their nomination clock runs out. Everyone else
+ * only needs the link. Captains who haven't linked are named as plain text, so
+ * the channel still sees who is on the clock. Packed under Discord's 2,000
+ * characters like the draft-night reminder, and the allowlist holds exactly
+ * the mentions that made it into the text.
+ */
+export function draftStartedAnnouncement(
+  m: DraftStartedInput,
+): DraftReminderAnnouncement {
+  const site = resolveSiteUrl();
+  const header = `🔨 **The ${m.seasonName} draft is LIVE!** Watch the auction: <${site}/draft>`;
+  const call =
+    "Captains, you're on the clock. If your nomination timer runs out, the site nominates for you";
+  const render = (shown: number): string =>
+    shown > 0
+      ? `${header}\n${call}: ${peopleList(m.captains, shown)}`
+      : `${header}\n${call}.`;
+  const fits = (content: string) => content.length <= DISCORD_CONTENT_MAX;
+  if (!fits(render(0))) {
+    // Defensive last resort for an absurd season name or site URL: still
+    // deliverable, and it names nobody, so nobody is allowlisted.
+    return {
+      content: "🔨 **The draft is LIVE!** Captains, join the draft room now.",
+      mentionUserIds: [],
+    };
+  }
+  let shown = 0;
+  while (shown < m.captains.length && fits(render(shown + 1))) shown += 1;
+  return {
+    content: render(shown),
+    mentionUserIds: mentionIdsOf(m.captains.slice(0, shown)),
+  };
 }
 
 export function draftCompleteMessage(seasonName: string): string {
@@ -761,21 +801,7 @@ export function draftReminderAnnouncement(
       : "Player signups are closed; standins can still sign up.");
   const footer = `Draft room: <${site}/draft> · Signup page: <${site}/me>`;
 
-  const mentionable = (p: DraftReminderPerson): string | null => {
-    const id = p.discordId?.trim();
-    return id && normalizeMentionAllowlist({ users: [id] }) ? id : null;
-  };
-  const who = (people: DraftReminderPerson[], shown: number): string => {
-    const names = people
-      .slice(0, shown)
-      .map((p) => {
-        const id = mentionable(p);
-        return id ? `<@${id}>` : name(p.name);
-      })
-      .join(", ");
-    const extra = people.length - shown;
-    return `${names}${extra > 0 ? ` +${extra} more` : ""}`;
-  };
+  const who = peopleList;
   const render = (captainsShown: number, unconfirmedShown: number): string => {
     const lines = [header, counts];
     if (captainCount > 0) {
@@ -823,18 +849,42 @@ export function draftReminderAnnouncement(
   }
 
   const content = render(captainsShown, unconfirmedShown);
-  const mentionUserIds = [
+  const mentionUserIds = mentionIdsOf([
+    ...m.captains.slice(0, captainsShown),
+    ...m.unconfirmed.slice(0, unconfirmedShown),
+  ]);
+  return { content, mentionUserIds };
+}
+
+/** A person's snowflake when it is a real one a mention can reach, else null. */
+function mentionableId(p: DraftReminderPerson): string | null {
+  const id = p.discordId?.trim();
+  return id && normalizeMentionAllowlist({ users: [id] }) ? id : null;
+}
+
+/** `<@id>` for a linked person, their escaped site name otherwise. */
+function personLabel(p: DraftReminderPerson): string {
+  const id = mentionableId(p);
+  return id ? `<@${id}>` : name(p.name);
+}
+
+/** The first `shown` people, comma-separated, plus "+N more" for the rest. */
+function peopleList(people: DraftReminderPerson[], shown: number): string {
+  const names = people.slice(0, shown).map(personLabel).join(", ");
+  const extra = people.length - shown;
+  return `${names}${extra > 0 ? ` +${extra} more` : ""}`;
+}
+
+/** The distinct mentionable ids among `people`, in order. */
+function mentionIdsOf(people: DraftReminderPerson[]): string[] {
+  return [
     ...new Set(
-      [
-        ...m.captains.slice(0, captainsShown),
-        ...m.unconfirmed.slice(0, unconfirmedShown),
-      ].flatMap((p) => {
-        const id = mentionable(p);
+      people.flatMap((p) => {
+        const id = mentionableId(p);
         return id ? [id] : [];
       }),
     ),
   ];
-  return { content, mentionUserIds };
 }
 
 export function weeklyHonorsMessage(honors: {
