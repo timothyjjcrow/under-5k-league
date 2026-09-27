@@ -257,9 +257,10 @@ export default async function PlayerProfilePage({
 
   // A signup row exists for WITHDRAWN/REMOVED players too — only an ACTIVE one
   // may render as a live signup (MMR, roles, Standin badge, their goals and
-  // note for captains). WITHDRAWN gets an honest badge instead of reading as a
-  // biddable "Registered"; REMOVED renders exactly as unregistered — a
-  // moderation decision is not a public scarlet letter.
+  // note for captains). Both render exactly as unregistered: the subtitle is
+  // the bare season name, never "Registered", so nobody reads them as
+  // biddable, and whether someone withdrew or was removed is theirs (on /me)
+  // and the admins' to know, not a public label.
   const activeReg =
     registration?.status === REGISTRATION_STATUS.ACTIVE ? registration : null;
   const canSeeLeagueContact = canViewLeagueContact(
@@ -267,8 +268,6 @@ export default async function PlayerProfilePage({
     id,
     viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE,
   );
-  const withdrewThisSeason =
-    registration?.status === REGISTRATION_STATUS.WITHDRAWN;
 
   // All-time league records THIS player holds. Same mapping as /records
   // (shared toRecordGames) so the chips can never disagree with the book.
@@ -754,9 +753,6 @@ export default async function PlayerProfilePage({
                 {isStandin ? <Badge tone="info">Standin</Badge> : null}
                 {wantsCaptainNow ? (
                   <Badge tone="neutral">Wants to captain</Badge>
-                ) : null}
-                {withdrewThisSeason ? (
-                  <Badge tone="neutral">Withdrew this season</Badge>
                 ) : null}
                 <RankMedal rankTier={user.rankTier} size={34} showLabel />
               </div>
