@@ -698,19 +698,24 @@ export default async function TeamPage({
                         m.userId,
                         viewerHasActiveRegistration,
                       ) ? (
+                        // Shown on phones too: match night is when teammates
+                        // look each other up. Still members-only.
                         <DiscordTag
                           name={m.user.discordName}
                           verified={!!m.user.discordId}
-                          className="hidden sm:inline-flex"
                         />
                       ) : null}
-                      <RoleBadges
-                        roles={rolesByUser.get(m.userId)}
-                        className="hidden sm:inline-flex"
-                      />
+                      <RoleBadges roles={rolesByUser.get(m.userId)} />
                     </div>
                   </div>
-                  <span className="shrink-0 font-mono text-muted">
+                  {/* Prices matter while the draft is ahead; after it, phones
+                      give the room to the name and contact chips. */}
+                  <span
+                    className={cn(
+                      "shrink-0 font-mono text-muted",
+                      !draftAhead && "hidden sm:inline",
+                    )}
+                  >
                     {m.isCaptain ? "—" : `$${m.price}`}
                   </span>
                 </div>
