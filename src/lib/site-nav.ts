@@ -79,9 +79,10 @@ const teamsExist = ({ phase }: NavState) =>
 
 // Schedule, Fantasy and Pick'em have nothing to show until the auction has
 // sold every roster: before that they open onto "opens after the draft"
-// screens (Fantasy narrows this further, below). This is the feature tour's own POST_AUCTION rule, so the menus and
-// the tour agree. A completed auction can publish fixtures before the admin
-// moves the season on, which is why this reads the auction and not the phase.
+// screens (Fantasy narrows this further, below). This is the feature tour's
+// own POST_AUCTION rule, so the menus and the tour agree. A completed auction
+// can publish fixtures before the admin moves the season on, which is why
+// this reads the auction and not the phase.
 const afterAuction = ({
   phase,
   draftStatus,
