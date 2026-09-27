@@ -70,7 +70,7 @@ describe("site navigation", () => {
     ]);
     expect(full.map((section) => section.links.map((l) => l.label))).toEqual([
       ["Scrims", "Fantasy", "Pick'em"],
-      ["Leaders", "Hero meta", "Compare players", "Record book"],
+      ["Leaders", "Hero meta", "Record book", "Compare players"],
       ["League news", "Feature tour", "Hall of Fame", "Season history"],
     ]);
   });

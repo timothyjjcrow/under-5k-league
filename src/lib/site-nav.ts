@@ -103,13 +103,14 @@ const NAV_PAGES: readonly NavPage[] = [
   { href: "/pickem", label: "Pick'em", group: "play", visible: afterAuction },
   { href: "/leaders", label: "Leaders", group: "stats", visible: resultsPhase },
   { href: "/meta", label: "Hero meta", group: "stats", visible: resultsPhase },
+  // Same order as the statistics pages' own tab bar (stats-nav.tsx).
+  { href: "/records", label: "Record book", group: "stats", visible: always },
   {
     href: "/players/compare",
     label: "Compare players",
     group: "stats",
     visible: always,
   },
-  { href: "/records", label: "Record book", group: "stats", visible: always },
   { href: "/news", label: "League news", group: "league", visible: always },
   { href: "/features", label: "Feature tour", group: "league", visible: always },
   { href: "/hall-of-fame", label: "Hall of Fame", group: "league", visible: always },
