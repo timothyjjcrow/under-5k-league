@@ -97,6 +97,7 @@ import {
   FormStrip,
   HeroIcon,
   KDA,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -235,8 +236,10 @@ export default async function MatchDetailPage({
 
   return (
     <div className="space-y-6">
+      {/* The page's h1 names the fixture, like its tab title and link
+          preview, so someone moving by headings knows which match this is. */}
       <PageTitle
-        title="Match center"
+        title={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
         subtitle={`${match.season.name} · ${postseasonLabel}`}
         action={
           <ContextBackLink
@@ -272,7 +275,7 @@ export default async function MatchDetailPage({
                   : tiebreakerStage === 4 ? "If the team from Game 2 wins, the bracket is complete. If the team from Game 3 wins, both teams play Game 5."
                     : "Deciding final: winner finishes first, loser finishes second in the tiebreaker."
           }</p> : null}
-          <Link href={match.season.isActive ? "/schedule#tiebreakers" : `/seasons/${match.seasonId}`} className="inline-block py-1 text-info hover:underline">{match.season.isActive ? "View full tiebreaker bracket →" : "View tiebreaker results →"}</Link>
+          <Link href={match.season.isActive ? "/schedule#tiebreakers" : `/seasons/${match.seasonId}`} className="inline-block py-1 text-info hover:underline">{match.season.isActive ? "View full tiebreaker bracket" : "View tiebreaker results"} <LinkArrow /></Link>
         </div>
       ) : null}
 
@@ -442,7 +445,9 @@ export default async function MatchDetailPage({
                       </span>
                     </>
                   ) : (
-                    <span className="text-muted">Box score →</span>
+                    <span className="text-muted">
+                      Box score <LinkArrow />
+                    </span>
                   )}
                 </a>
               );
@@ -527,6 +532,7 @@ export default async function MatchDetailPage({
               >
                 <CardHeader
                   title={`Game ${i + 1}`}
+                  headingLevel={2}
                   // 0s / 0-0 means the header stats never got reported — showing
                   // "0m 0s · 0-0 kills" reads as a real (absurd) game.
                   subtitle={
@@ -552,7 +558,7 @@ export default async function MatchDetailPage({
                         rel="noreferrer"
                         className={textLink("text-xs")}
                       >
-                        OpenDota ↗
+                        OpenDota <LinkArrow out />
                       </a>
                     </div>
                   }
@@ -1034,6 +1040,7 @@ async function StakesBanner({
     <Card className="border-accent/30">
       <CardHeader
         title="Tonight's stakes"
+        headingLevel={2}
         subtitle="How each feasible result changes playoff qualification"
       />
       <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">

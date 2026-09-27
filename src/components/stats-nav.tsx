@@ -2,7 +2,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { getSessionUser } from "@/lib/auth";
 import { getPublicLeagueContent } from "@/lib/public-navigation";
-import { textLink } from "@/components/ui";
+import { LinkArrow, textLink } from "@/components/ui";
 
 export type StatsSection = "leaders" | "meta" | "records" | "compare";
 
@@ -147,7 +147,7 @@ export function StatsDataNoticeBody({
           ? "Unknown hero IDs require an update to the bundled hero catalogue. "
           : ""}
         <Link href="/admin/data-quality" className={textLink("text-xs")}>
-          Open data quality →
+          Open data quality <LinkArrow />
         </Link>
       </p>
       <p className="mt-1 text-xs text-muted">Only admins see these details.</p>

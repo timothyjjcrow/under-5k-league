@@ -13,6 +13,7 @@ import {
   Avatar,
   Card,
   CardBody,
+  EmojiLead,
   EmptyState,
   PageTitle,
   PlayerLink,
@@ -42,7 +43,7 @@ function BoardCard({ board, userOf }: { board: Board; userOf: Map<string, User> 
     <Card className="h-full">
       <CardBody className="h-full">
         <div className="mb-4">
-          <h3 className="font-display text-xl font-bold">{board.title}</h3>
+          <h3 className="font-display text-xl font-bold"><EmojiLead text={board.title} /></h3>
           <p className="mt-1 text-sm leading-relaxed text-muted">{board.subtitle}</p>
         </div>
         {board.rows.length === 0 ? (

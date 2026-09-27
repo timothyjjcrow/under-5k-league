@@ -426,7 +426,7 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     page.getByRole("heading", { name: "League offseason" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Review Season 9 (fixture) →" }),
+    page.getByRole("link", { name: "Review Season 9 (fixture)" }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page, "/ offseason home");
 

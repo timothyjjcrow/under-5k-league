@@ -21,6 +21,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   buttonClasses,
@@ -145,6 +146,7 @@ export default async function InhouseHistoryPage({
       <Card className="overflow-hidden">
         <CardHeader
           title="Completed games"
+          headingLevel={2}
           subtitle={
             total > 0
               ? `${first}–${last} of ${total}, newest first${linkedOutsidePage ? " · linked game shown above" : ""}`
@@ -265,7 +267,7 @@ export default async function InhouseHistoryPage({
                                 "inline-flex min-h-11 items-center text-xs",
                               )}
                             >
-                              OpenDota ↗
+                              OpenDota <LinkArrow out />
                             </a>
                           ) : null}
                           {isAdmin ? (
@@ -330,7 +332,7 @@ export default async function InhouseHistoryPage({
                       href={`/inhouse/history?page=${page + 1}`}
                       className={buttonClasses("secondary", "sm")}
                     >
-                      Older games →
+                      Older games <LinkArrow />
                     </Link>
                   ) : (
                     <span />

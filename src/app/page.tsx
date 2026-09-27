@@ -60,6 +60,7 @@ import {
   EmptyState,
   FormStrip,
   HeroIcon,
+  LinkArrow,
   LinkifiedText,
   PlayerLink,
   Progress,
@@ -162,14 +163,14 @@ export default async function Home() {
         />
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href="/inhouse" className={buttonClasses("accent")}>
-            Play an inhouse →
+            Play an inhouse <LinkArrow />
           </Link>
           {latestSeason ? (
             <Link
               href={`/seasons/${latestSeason.id}`}
               className={buttonClasses("secondary")}
             >
-              Review {latestSeason.name} →
+              Review {latestSeason.name} <LinkArrow />
             </Link>
           ) : (
             <Link href="/features" className={buttonClasses("secondary")}>
@@ -213,8 +214,8 @@ export default async function Home() {
     !isRemovedReg;
   const standinRegistrationHref = user ? "/me" : "/login?next=/me";
   const standinRegistrationLabel = user
-    ? "Register as a standin →"
-    : "Sign in to stand in →";
+    ? "Register as a standin"
+    : "Sign in to stand in";
   let heroAction: ReactNode = null;
   if (season.status === "SIGNUPS") {
     // The feature tour rides along during signups — new visitors can't see
@@ -228,7 +229,7 @@ export default async function Home() {
       <>
         {/* next=/me: signing in "to join" should land on the signup form. */}
         <Link href="/login?next=/me" className={buttonClasses("primary", "lg")}>
-          Sign in with Steam to join →
+          Sign in with Steam to join <LinkArrow />
         </Link>
         {tourLink}
       </>
@@ -242,7 +243,7 @@ export default async function Home() {
     ) : !isActiveReg ? (
       <>
         <Link href="/me" className={buttonClasses("primary", "lg")}>
-          Join the season →
+          Join the season <LinkArrow />
         </Link>
         {tourLink}
       </>
@@ -260,7 +261,7 @@ export default async function Home() {
             href={standinRegistrationHref}
             className={buttonClasses("secondary", "lg")}
           >
-            {standinRegistrationLabel}
+            {standinRegistrationLabel} <LinkArrow />
           </Link>
         ) : null}
       </>
@@ -275,10 +276,10 @@ export default async function Home() {
           href={standinRegistrationHref}
           className={buttonClasses("primary", "lg")}
         >
-          {standinRegistrationLabel}
+          {standinRegistrationLabel} <LinkArrow />
         </Link>
         <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
-          Play an inhouse →
+          Play an inhouse <LinkArrow />
         </Link>
       </>
     );
@@ -412,7 +413,9 @@ export default async function Home() {
         <span className="font-display text-lg font-semibold">
           {champion.name}
         </span>
-        <Badge tone="accent">🏆 Champions</Badge>
+        <Badge tone="accent">
+          <span aria-hidden="true">🏆</span> Champions
+        </Badge>
       </span>
     ) : null;
     heroAction = (
@@ -420,7 +423,7 @@ export default async function Home() {
         href={`/recap?season=${season.id}`}
         className={buttonClasses("accent", "lg")}
       >
-        Relive the season →
+        Relive the season <LinkArrow />
       </Link>
     );
   }
@@ -607,7 +610,8 @@ async function PinnedNotices() {
           href={`/news?${new URLSearchParams({ post: post.id })}`}
           className="block py-2 text-fg hover:text-info"
         >
-          📌 Pinned notice: {post.title} →
+          <span aria-hidden="true">📌</span> Pinned notice: {post.title}{" "}
+          <LinkArrow />
         </Link>
       ))}
     </aside>
@@ -626,7 +630,7 @@ async function LeagueNews() {
         subtitle="The latest from the admins"
         action={
           <Link href="/news" className={textLink("text-sm")}>
-            All news →
+            All news <LinkArrow />
           </Link>
         }
       />
@@ -644,7 +648,12 @@ async function LeagueNews() {
                     href={`/news?${new URLSearchParams({ post: p.id })}#${p.id}`}
                     className="hover:text-info"
                   >
-                    {p.pinned ? "📌 " : ""}
+                    {p.pinned ? (
+                      <>
+                        <span aria-hidden="true">📌 </span>
+                        <span className="sr-only">Pinned: </span>
+                      </>
+                    ) : null}
                     {p.title}
                   </Link>
                 </h3>
@@ -753,7 +762,7 @@ async function MyNextMatch({
           href="/schedule#fixtures"
           className={buttonClasses("secondary", "sm", "mt-3 w-full")}
         >
-          See this week&apos;s schedule →
+          See this week&apos;s schedule <LinkArrow />
         </Link>
       </Card>
     );
@@ -809,7 +818,7 @@ async function MyNextMatch({
             </strong>
           </span>
           <Link href={`/matches/${next.id}`} className={textLink("shrink-0")}>
-            Respond →
+            Respond <LinkArrow />
           </Link>
         </div>
       ) : null}
@@ -1128,7 +1137,7 @@ async function InhouseStrip() {
         <span className="truncate text-muted">{label}</span>
       </span>
       <span className="shrink-0 font-medium text-accent group-hover:underline">
-        {cta} →
+        {cta} <LinkArrow />
       </span>
     </Link>
   );
@@ -1168,7 +1177,7 @@ function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <InviteLink />
         <Link href="/features" className={textLink("text-sm")}>
-          What&apos;s coming →
+          What&apos;s coming <LinkArrow />
         </Link>
       </div>
       <p className="mt-2 text-xs text-muted">
@@ -1343,11 +1352,17 @@ async function SignupsView({
                         : "You’re signed up to play"}
                 </Badge>
                 <Link href="/me" className={buttonClasses("secondary")}>
-                  {myDraftReadiness === DRAFT_READINESS.STALE
-                    ? "Reconfirm draft night →"
-                    : myDraftReadiness === DRAFT_READINESS.AWAITING
-                      ? "Confirm draft night →"
-                      : "Review your signup"}
+                  {myDraftReadiness === DRAFT_READINESS.STALE ? (
+                    <>
+                      Reconfirm draft night <LinkArrow />
+                    </>
+                  ) : myDraftReadiness === DRAFT_READINESS.AWAITING ? (
+                    <>
+                      Confirm draft night <LinkArrow />
+                    </>
+                  ) : (
+                    "Review your signup"
+                  )}
                 </Link>
               </div>
             ) : isStandin ? (
@@ -1366,7 +1381,7 @@ async function SignupsView({
               </div>
             ) : (
               <Link href="/me" className={buttonClasses("primary", "lg")}>
-                Join the season →
+                Join the season <LinkArrow />
               </Link>
             )}
             {/* One Discord CTA in <main> at a time. A signed-up player who
@@ -1437,7 +1452,7 @@ async function SignupsView({
           }
           action={
             <Link href="/players" className={textLink("text-sm")}>
-              View all →
+              View all <LinkArrow />
             </Link>
           }
         />
@@ -1622,7 +1637,7 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
         title="Live from the draft room"
         action={
           <Link href="/draft" className={buttonClasses("accent", "sm")}>
-            Watch live →
+            Watch live <LinkArrow />
           </Link>
         }
       />
@@ -2012,7 +2027,7 @@ async function SeasonView({
                 href="/schedule#playoff-bracket"
                 className={textLink("text-sm")}
               >
-                Full bracket →
+                Full bracket <LinkArrow />
               </Link>
             }
           />
@@ -2035,7 +2050,7 @@ async function SeasonView({
                   href="/schedule#playoff-bracket"
                   className={buttonClasses("secondary", "sm")}
                 >
-                  Open playoff schedule →
+                  Open playoff schedule <LinkArrow />
                 </Link>
               }
             />
@@ -2085,7 +2100,7 @@ async function SeasonView({
                   href="/schedule#standings"
                   className={textLink("text-sm")}
                 >
-                  Full standings →
+                  Full standings <LinkArrow />
                 </Link>
               }
             />
@@ -2246,7 +2261,7 @@ async function SeasonView({
                   href={`/teams/${myTeam.id}`}
                   className={textLink("inline-block text-sm font-medium")}
                 >
-                  Team page →
+                  Team page <LinkArrow />
                 </Link>
               </CardBody>
             </Card>
@@ -2327,7 +2342,7 @@ async function SeasonView({
                   "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
-                Full schedule →
+                Full schedule <LinkArrow />
               </Link>
             </Card>
           ) : null}
@@ -2397,7 +2412,7 @@ async function SeasonView({
                           {m.winnerTeamId
                             ? `${teamName.get(m.winnerTeamId) ?? "Winning team"} won the series`
                             : "Series drawn"}{" "}
-                          · Match details →
+                          · Match details
                         </p>
                       </Link>
                     </li>
@@ -2410,7 +2425,7 @@ async function SeasonView({
                   "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
-                All results →
+                All results <LinkArrow />
               </Link>
             </Card>
           ) : null}
@@ -2512,7 +2527,7 @@ async function ThisWeek({
         title={title}
         action={
           <Link href="/schedule#fixtures" className={textLink("text-sm")}>
-            Full schedule →
+            Full schedule <LinkArrow />
           </Link>
         }
       />
@@ -2798,7 +2813,7 @@ async function LeaguePulse({
         title="League pulse"
         action={
           <Link href="/leaders" className={textLink("text-sm")}>
-            Leaders →
+            Leaders <LinkArrow />
           </Link>
         }
       />
@@ -2816,7 +2831,7 @@ async function LeaguePulse({
                 invalid 5v5 box scores must be inspected, removed, and
                 re-imported; unknown hero IDs require a hero-catalogue update.{" "}
                 <Link href="/admin/data-quality" className={textLink()}>
-                  Open data quality →
+                  Open data quality <LinkArrow />
                 </Link>
               </span>
             ) : (
@@ -3098,7 +3113,7 @@ async function CompleteView({
               title="Final standings"
               action={
                 <Link href="/schedule#fixtures" className={textLink("text-sm")}>
-                  Full schedule →
+                  Full schedule <LinkArrow />
                 </Link>
               }
             />
@@ -3133,7 +3148,7 @@ async function CompleteView({
                   href={`/recap?season=${season.id}`}
                   className={buttonClasses("accent")}
                 >
-                  🏆 Season recap →
+                  <span aria-hidden="true">🏆</span> Season recap <LinkArrow />
                 </Link>
                 <Link href="/leaders" className={buttonClasses("secondary")}>
                   Leaderboards

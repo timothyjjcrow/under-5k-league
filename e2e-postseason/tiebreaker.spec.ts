@@ -245,7 +245,7 @@ for (const resetFinal of [false, true]) {
     await bracket.screenshot({ path: testInfo.outputPath("three-team-bracket-opening-mobile.png") });
     await opening.click();
     await expect(page.getByText("Playoff tiebreaker · Best of 1.", { exact: true })).toBeVisible();
-    const fullBracketLink = page.getByRole("link", { name: "View full tiebreaker bracket →", exact: true });
+    const fullBracketLink = page.getByRole("link", { name: "View full tiebreaker bracket", exact: true });
     await expect(fullBracketLink).toHaveAttribute("href", "/schedule#tiebreakers");
     await expect(fullBracketLink).toBeVisible();
     await expectNoHorizontalOverflow(page, "three-team opening match context");

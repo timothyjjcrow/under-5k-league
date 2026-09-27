@@ -7,6 +7,7 @@ import { type Hero, heroById, heroIcon, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
 import { splitLinks } from "@/lib/linkify";
+import { splitLeadingEmoji } from "@/lib/leading-emoji";
 import { CountUp } from "./count-up";
 import { NewsMedia } from "./news-media";
 import { TeamLogoImage } from "./team-logo-image";
@@ -348,6 +349,34 @@ export function textLink(className?: string) {
     "rounded text-info hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
     TAP_SAFE,
     className,
+  );
+}
+
+/**
+ * The arrow after a link's words: "Full schedule →", or "OpenDota ↗" with
+ * `out` (only for a link that leaves the site). Hidden from screen readers,
+ * which otherwise read the glyph ("right arrow") as part of the link's name.
+ * `textLink()` returns class names only, so the arrow is its own element:
+ * keep it on the SAME source line as the words before it, or JSX drops the
+ * space between them.
+ */
+export function LinkArrow({ out = false }: { out?: boolean }) {
+  return <span aria-hidden="true">{out ? "↗" : "→"}</span>;
+}
+
+/**
+ * A label that may open with a decorative emoji ("🏆 Championship
+ * contributions"). The emoji stays on screen but is hidden from screen
+ * readers, which would otherwise read its name ("trophy") before the words on
+ * every heading. Labels without a leading emoji render unchanged.
+ */
+export function EmojiLead({ text }: { text: string }) {
+  const { emoji, rest } = splitLeadingEmoji(text);
+  if (!emoji) return <>{text}</>;
+  return (
+    <>
+      <span aria-hidden="true">{emoji}</span> {rest}
+    </>
   );
 }
 

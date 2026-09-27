@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LinkArrow } from "@/components/ui";
 import type { PlayoffFieldProjection } from "@/lib/playoff-field";
 import type { ScenarioReport } from "@/lib/scenarios";
 import { TIEBREAKER_RULES, TIEBREAKER_SUMMARY } from "@/lib/tiebreaker-format";
@@ -105,7 +106,7 @@ export function TiebreakerNotice({
           href="/schedule#tiebreakers"
           className="inline-block py-1 text-info hover:underline"
         >
-          View tiebreaker bracket →
+          View tiebreaker bracket <LinkArrow />
         </Link>
       ) : null}
     </aside>

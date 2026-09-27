@@ -105,7 +105,7 @@ function PlayerRecordCard({
       <CardBody className="flex h-full flex-col">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">{record.emoji} {record.title}</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-accent"><span aria-hidden="true">{record.emoji}</span> {record.title}</h3>
             <p className="mt-2 font-display text-3xl font-bold leading-none tabular-nums text-fg sm:text-4xl">{playerValue(record)}</p>
           </div>
           <span
@@ -268,7 +268,7 @@ export default async function RecordsPage({
                   <Card key={record.key}>
                     <CardBody className="flex h-full flex-col gap-3 sm:flex-row sm:items-center">
                       <div className="min-w-0 flex-1">
-                        <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">{record.emoji} {record.title}</h3>
+                        <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-accent"><span aria-hidden="true">{record.emoji}</span> {record.title}</h3>
                         <p className="mt-1 text-sm text-muted">{GAME_DESCRIPTION[record.key]}</p>
                         <p className="mt-3 truncate text-sm font-semibold">{matchupOf.get(record.matchId) ?? "League match"}</p>
                         <p className="text-xs text-muted">{seasonName.get(record.seasonId) ?? "Unknown season"} · final score {record.score}</p>

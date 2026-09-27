@@ -633,7 +633,7 @@ export default async function TeamsPage() {
             {recap.biggestSpend ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  💸 Biggest spend
+                  <span aria-hidden="true">💸</span> Biggest spend
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.biggestSpend.name} · ${recap.biggestSpend.price}
@@ -646,7 +646,7 @@ export default async function TeamsPage() {
             {recap.bestValue ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  🕵️ Best steal
+                  <span aria-hidden="true">🕵️</span> Best steal
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.bestValue.name} · ${recap.bestValue.price}
@@ -659,7 +659,7 @@ export default async function TeamsPage() {
             {recap.topSpender ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  🐳 Top spender
+                  <span aria-hidden="true">🐳</span> Top spender
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.topSpender.teamName}
@@ -673,7 +673,7 @@ export default async function TeamsPage() {
             (recap.bargainHunter.teamId ?? recap.bargainHunter.teamName) !== (recap.topSpender?.teamId ?? recap.topSpender?.teamName) ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  🧾 Bargain hunter
+                  <span aria-hidden="true">🧾</span> Bargain hunter
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.bargainHunter.teamName}
