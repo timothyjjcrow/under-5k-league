@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
-test("home and schedule agree on progress and preserve the full standings behind the simple view", async ({
+test("home and schedule agree on progress and show one standings table with game difference", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
@@ -23,33 +23,27 @@ test("home and schedule agree on progress and preserve the full standings behind
         page.locator("h1 + p").filter({ hasText: progress! }),
       ).toBeVisible();
     }
-    const overview = page.getByRole("table", {
-      name: "League standings overview",
+    const table = page.getByRole("table", {
+      name: "League standings",
+      exact: true,
     });
-    await expect(overview).toBeVisible();
-    const teams = await overview
+    await expect(table).toBeVisible();
+    const teams = await table
       .locator('a[href^="/teams/"]')
       .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
     expect(teams.length).toBeGreaterThan(0);
-    await page
-      .getByRole("button", { name: "Detailed statistics", exact: true })
-      .click();
-    await expect(overview).toHaveCount(0);
-    const detailed = page.getByRole("table").first();
-    expect(
-      await detailed
-        .locator('a[href^="/teams/"]')
-        .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-    ).toEqual(teams);
-    await expect(page.getByRole("button", { name: /^Pts/ })).toBeVisible();
-    await page
-      .getByRole("button", { name: "Simple standings", exact: true })
-      .click();
-    await expect(overview).toBeVisible();
-    await expectNoHorizontalOverflow(
-      page,
-      `${path} simple and detailed standings`,
-    );
+    // One layout: no Simple/Detailed toggle and no sort buttons, and game
+    // difference (the first tiebreak) stays on screen on a phone.
+    await expect(
+      page.getByRole("button", { name: /Detailed statistics|Simple standings/ }),
+    ).toHaveCount(0);
+    await expect(table.getByRole("button")).toHaveCount(0);
+    for (const header of ["Series won, drawn and lost", "Game difference", "Points"]) {
+      await expect(
+        table.getByRole("columnheader", { name: header, exact: true }),
+      ).toBeVisible();
+    }
+    await expectNoHorizontalOverflow(page, `${path} standings`);
   }
   // The fixture's live/future matches are unfinished, not overdue results.
   await expect(

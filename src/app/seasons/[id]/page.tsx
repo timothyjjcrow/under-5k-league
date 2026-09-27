@@ -311,7 +311,6 @@ export default async function SeasonArchivePage({
           />
           <CardBody className="p-0">
             <StandingsTable
-              overview
               standings={standings}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}

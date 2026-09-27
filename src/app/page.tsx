@@ -2136,7 +2136,6 @@ async function SeasonView({
             />
             <CardBody className="p-0">
               <StandingsTable
-                overview
                 standings={standings}
                 totalTeams={standings.length}
                 eligibleTeams={playoffField.eligibleTeamIds.length}
@@ -3149,7 +3148,6 @@ async function CompleteView({
             />
             <CardBody className="p-0">
               <StandingsTable
-                overview
                 standings={standings}
                 teamName={teamName}
                 teamLogoUrl={teamLogoUrl}

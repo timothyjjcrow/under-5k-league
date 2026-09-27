@@ -900,7 +900,6 @@ export default async function SchedulePage() {
           />
           <CardBody className="p-0">
             <StandingsTable
-              overview
               standings={standings}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}

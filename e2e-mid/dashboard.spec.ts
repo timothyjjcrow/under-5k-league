@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // The mid-season dashboard: standings, the This-week strip (with the staged
-// LIVE match), and the sortable standings table's client behavior.
+// LIVE match), and the standings table's phone layout.
 
 test("dashboard shows the regular-season hero, standings, and a LIVE chip", async ({
   page,
@@ -49,23 +49,35 @@ test("dashboard has no horizontal page overflow on a phone", async ({
   assertNoErrors();
 });
 
-test("standings headers sort on click and speak their state via aria-sort", async ({
+test("standings columns line up on a phone, with points at the right edge", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
 
-  await page
-    .getByRole("button", { name: "Detailed statistics", exact: true })
-    .click();
-  const ptsButton = page.getByRole("button", { name: /^Pts/i }).first();
-  await expect(ptsButton).toBeVisible();
-  const th = page.locator("th", { has: ptsButton }).first();
-
-  await ptsButton.click();
-  await expect(th).toHaveAttribute("aria-sort", "descending");
-  await ptsButton.click();
-  await expect(th).toHaveAttribute("aria-sort", "ascending");
+  const table = page.getByRole("table", { name: "League standings", exact: true });
+  await expect(table).toBeVisible();
+  // Last 5 hides on phones. It is the last column, so no visible cell slides
+  // onto its zero-width <col>: points ends where the table ends.
+  await expect(
+    table.getByRole("columnheader", {
+      name: "Last 5",
+      exact: true,
+      includeHidden: true,
+    }),
+  ).toBeHidden();
+  const tableBox = (await table.boundingBox())!;
+  const pointsHeader = table.getByRole("columnheader", { name: "Points", exact: true });
+  const headerBox = (await pointsHeader.boundingBox())!;
+  expect(
+    Math.abs(tableBox.x + tableBox.width - (headerBox.x + headerBox.width)),
+  ).toBeLessThan(2);
+  const firstRow = table.locator("tbody tr").first();
+  const lastCell = firstRow.locator("td:visible").last();
+  const cellBox = (await lastCell.boundingBox())!;
+  expect(Math.abs(cellBox.x - headerBox.x)).toBeLessThan(2);
+  expect(Math.abs(cellBox.width - headerBox.width)).toBeLessThan(2);
 
   assertNoErrors();
 });
