@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PlayoffOutlook, outlookSummary, shortOutlook, playoffStatusLine } from "./playoff-outlook";
+import { PlayoffOutlook, outlookSummary, shortOutlook, playoffStatusLine, playoffPathLines } from "./playoff-outlook";
 import type { ScenarioOutlook, TeamScenario } from "@/lib/scenarios";
 
 const result = (overrides: Partial<ScenarioOutlook> = {}): ScenarioOutlook => ({
@@ -104,4 +104,64 @@ describe("playoff outlook presentation", () => {
     expect(outlookSummary(result({ total: 3, qualified: 1, qualificationTiebreaker: 1, eliminated: 1 })))
       .toBe("qualify in 1 of 3; qualification tiebreaker in 1 of 3; eliminated in 1 of 3.");
   });
+
+  describe("results that all lead to the same place", () => {
+    const same = (overrides: Partial<ScenarioOutlook>) => ({
+      win: result(overrides), draw: result(overrides), loss: result(overrides),
+    });
+
+    it("folds identical win, draw and loss lines into one", () => {
+      const scenario = team({ nextMatchId: "m", paths: same({ eliminated: 1 }),
+        outlook: result({ total: 3, eliminated: 3 }) });
+      expect(playoffPathLines(scenario, "m")).toEqual([{
+        key: "any", label: "Any result", description: "Out",
+        detail: "Eliminated from playoffs.",
+      }]);
+    });
+
+    it("folds the feasible pair when a loss is impossible", () => {
+      const scenario = team({ nextMatchId: "m",
+        outlook: result({ total: 2, qualified: 2 }),
+        paths: { win: result({ qualified: 1 }), draw: result({ qualified: 1 }), loss: null } });
+      expect(playoffPathLines(scenario, "m").map((line) => line.label)).toEqual(["Any result"]);
+    });
+
+    it("keeps separate lines when the result matters, and a lone feasible line as is", () => {
+      const differs = team({ nextMatchId: "m",
+        paths: { win: result({ qualified: 1 }), draw: result({ qualified: 1 }), loss: result({ eliminated: 1 }) } });
+      expect(playoffPathLines(differs, "m").map((line) => line.label)).toEqual(["Win", "Draw", "Loss"]);
+      const lone = team({ nextMatchId: "m", paths: { win: result({ qualified: 1 }), draw: null, loss: null } });
+      expect(playoffPathLines(lone, "m").map((line) => line.label)).toEqual(["Win"]);
+    });
+
+    it.each([
+      [{ qualified: 1 }, "Qualified for playoffs"],
+      [{ eliminated: 1 }, "Eliminated"],
+      [{ qualificationTiebreaker: 1 }, "Playoff spot decided by tiebreaker"],
+    ])("shows a settled team's status alone (%o)", (verdict, status) => {
+      const scenario = team({ nextMatchId: "m", paths: same(verdict),
+        outlook: result({ total: 3, ...Object.fromEntries(
+          Object.entries(verdict).map(([k]) => [k, 3])) }) });
+      for (const compact of [true, false]) {
+        const html = renderToStaticMarkup(createElement(PlayoffOutlook, { scenario, matchId: "m", compact }));
+        expect(html).toContain(status);
+        expect(html).not.toContain("playoff-paths");
+        expect(html).not.toMatch(/>(Win|Draw|Loss|Any result)</);
+      }
+    });
+
+    it("keeps one line when the result doesn't matter but other games still do", () => {
+      const mixed = result({ total: 2, qualified: 1, eliminated: 1 });
+      const scenario = team({ nextMatchId: "m", outlook: result({ total: 6, qualified: 3, eliminated: 3 }),
+        paths: { win: mixed, draw: mixed, loss: mixed } });
+      const html = renderToStaticMarkup(createElement(PlayoffOutlook, { scenario, matchId: "m" }));
+      expect(html).toContain("Playoff spot still open");
+      expect(html).toContain(">Any result</dt>");
+      expect(html).toContain(">Qualify or out</dd>");
+      expect(html).not.toMatch(/>(Win|Draw|Loss)</);
+      // The disclosure states the overall counts once, not per result.
+      expect(html.match(/qualify in 3 of 6; eliminated in 3 of 6\./g)).toHaveLength(1);
+    });
+  });
 });
+

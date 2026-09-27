@@ -20,7 +20,7 @@ import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
 import { weekStartsCollapsed } from "@/lib/schedule";
-import type { playoffPathLines } from "@/components/playoff-outlook";
+import type { PlayoffPathLine } from "@/components/playoff-outlook";
 
 export type RsvpSide = {
   confirmed: number;
@@ -40,8 +40,8 @@ export type MatchView = {
   homeScore: number;
   awayScore: number;
   playoffPaths?: {
-    home: ReturnType<typeof playoffPathLines>;
-    away: ReturnType<typeof playoffPathLines>;
+    home: PlayoffPathLine[];
+    away: PlayoffPathLine[];
   };
   done: boolean;
   /** Ruled/defaulted result — the score was never played; badge it. */
@@ -711,7 +711,15 @@ function MatchRow({ match: m }: { match: MatchView }) {
               {side.paths && side.paths.length > 0 ? (
                 <dl className="space-y-1 pb-2 text-[11px] leading-relaxed">
                   {side.paths.map((path) => (
-                    <div key={path.key} className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-1.5">
+                    <div
+                      key={path.key}
+                      className={cn(
+                        "grid gap-1.5",
+                        path.key === "any"
+                          ? "grid-cols-[auto_minmax(0,1fr)]"
+                          : "grid-cols-[2.5rem_minmax(0,1fr)]",
+                      )}
+                    >
                       <dt className="font-medium text-accent">{path.label}</dt>
                       <dd className="text-muted [overflow-wrap:anywhere]">{path.description}</dd>
                     </div>
