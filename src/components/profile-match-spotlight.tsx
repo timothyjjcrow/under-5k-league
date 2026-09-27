@@ -3,7 +3,7 @@ import { LocalTime } from "@/components/local-time";
 import { Badge, TeamCrest } from "@/components/ui";
 import { formatMatchTime } from "@/lib/match-time";
 import { profileMatchState } from "@/lib/profile-match";
-import { matchPhaseLabel, type SlateMatch } from "@/lib/schedule";
+import { matchRoundLabel, type SlateMatch } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 
 type SpotlightMatch = SlateMatch & {
@@ -12,17 +12,23 @@ type SpotlightMatch = SlateMatch & {
   homeTeamId: string;
   awayTeamId: string;
   forfeit: boolean;
+  /** Names the playoff round ("R1M0" is a semifinal in a 4-team bracket). */
+  bracketSlot: string | null;
 };
 
 /** A compact, navigable scoreboard shared by team and player overviews. */
 export function ProfileMatchSpotlight({
   match,
   teams,
+  playoffRounds,
   nowMs,
   teamContext = false,
 }: {
   match: SpotlightMatch;
   teams: { id: string; name: string; logoUrl: string | null }[];
+  /** playoffTotalRounds of the match's season, so a playoff fixture reads
+   *  "Semifinal" like everywhere else. */
+  playoffRounds: number;
   nowMs: number;
   teamContext?: boolean;
 }) {
@@ -60,7 +66,7 @@ export function ProfileMatchSpotlight({
           {state}
         </span>
         <span className="text-xs text-muted">
-          {matchPhaseLabel(match.phase, match.week)}
+          {matchRoundLabel(match, playoffRounds)}
         </span>
       </div>
       <div className="my-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 sm:gap-6">

@@ -35,6 +35,7 @@ import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
   HARD_MMR_CEILING,
+  MATCH_PHASE,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
 } from "@/lib/constants";
@@ -48,7 +49,8 @@ import {
   rankTierExactMinMmr,
 } from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
-import { matchPhaseLabel } from "@/lib/schedule";
+import { matchRoundLabel } from "@/lib/schedule";
+import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
@@ -176,6 +178,13 @@ export default async function MePage({
       : null,
   ]);
   const form = reg ?? previous;
+  // A booked playoff fixture is named by its round ("Semifinal"), the way the
+  // match page, /schedule and Discord name it. Only read when one is booked.
+  const playoffRounds = await loadPlayoffRoundsBySeason(
+    (standinAssignments ?? [])
+      .filter((a) => a.match.phase === MATCH_PHASE.PLAYOFF)
+      .map((a) => a.match.seasonId),
+  );
 
   // The medal's plausible MMR window — signup claims outside it are snapped
   // to its floor by saveRegistration, so tell the player up front. A medal
@@ -657,7 +666,10 @@ export default async function MePage({
                           >
                             <div className="flex flex-wrap items-center gap-2 text-sm">
                               <Badge tone="info">
-                                {matchPhaseLabel(a.match.phase, a.match.week)}
+                                {matchRoundLabel(
+                                  a.match,
+                                  playoffRounds.get(a.match.seasonId) ?? 0,
+                                )}
                               </Badge>
                               <span className="min-w-0">
                                 Filling in for{" "}

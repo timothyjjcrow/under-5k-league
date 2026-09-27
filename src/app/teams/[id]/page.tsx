@@ -493,6 +493,7 @@ export default async function TeamPage({
           <ProfileMatchSpotlight
             match={featuredMatch}
             teams={allTeams}
+            playoffRounds={playoffRounds}
             nowMs={nowMs}
           />
         ) : null}

@@ -16,6 +16,7 @@ import {
 } from "./factories";
 import {
   DRAFT_STATUS,
+  MATCH_PHASE,
   MATCH_STATUS,
   SCRIM_STATUS,
   SEASON_STATUS,
@@ -829,6 +830,30 @@ describe("reschedule league-calendar rules (integration)", () => {
     const sameDay = new Date(ac.scheduledAt!.getTime() - 5 * HOUR);
     await proposeReschedule(a.captainId, ab.id, sameDay);
     expect((await pendingFor(ab.id))?.proposedTime.getTime()).toBe(sameDay.getTime());
+  });
+
+  it("names a playoff clash by its round, the way the rest of the site does", async () => {
+    const { season, a, b, c, ab } = await setupThreeTeams();
+    const d = await makeTeam(season.id, "Delta", 3);
+    // A 4-team bracket: its two first-round slots are the semifinals.
+    const semiNight = new Date(ORIGINAL_NIGHT.getTime() + 2 * WEEK);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 3, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M0", homeTeamId: a.id, awayTeamId: d.id,
+        scheduledAt: semiNight,
+      },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 3, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1", homeTeamId: b.id, awayTeamId: c.id,
+        scheduledAt: semiNight,
+      },
+    });
+    await expect(
+      proposeReschedule(a.captainId, ab.id, new Date(semiNight.getTime() + HOUR)),
+    ).rejects.toThrow(/within four hours of Alpha vs Delta \(Semifinal\)/);
   });
 
   it("re-checks the clash at acceptance, after the rest of the schedule moved", async () => {
