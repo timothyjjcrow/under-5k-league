@@ -1,4 +1,5 @@
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { MISSING_LEAGUE_TICKET_WARNING } from "./match-hosting";
 
 /**
  * "What do I do next?" for the admin panel.
@@ -52,6 +53,12 @@ export type AdminPhaseInput = {
    * auto-join happen.
    */
   unlinkedDiscordCount?: number;
+  /**
+   * Whether the season has a Valve league ticket (Season.dotaLeagueId).
+   * Optional: only an explicit `false` raises the ticket warning, so a caller
+   * that doesn't know says nothing rather than crying wolf.
+   */
+  hasLeagueTicket?: boolean;
 };
 
 export type AdminNextStep = {
@@ -60,6 +67,13 @@ export type AdminNextStep = {
   /** What it unlocks, or what stays broken until it happens. */
   detail: string;
   tone: "action" | "waiting" | "warning" | "done";
+  /**
+   * Set while the season has no league ticket and is still running. Its own
+   * field rather than part of `detail` because it is a standing condition, not
+   * this phase's step: it has to show from the first signup (Valve needs about
+   * 15 days) through the start of the season, whatever the step is.
+   */
+  ticketWarning?: string;
 };
 
 /**
@@ -73,7 +87,22 @@ function discordChaseNote(i: AdminPhaseInput): string {
   return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord notifications card names them).`;
 }
 
+/** Phases in which a missing league ticket still costs results. */
+const TICKET_PHASES: ReadonlySet<string> = new Set([
+  SEASON_STATUS.SIGNUPS,
+  SEASON_STATUS.DRAFT,
+  SEASON_STATUS.REGULAR_SEASON,
+  SEASON_STATUS.PLAYOFFS,
+]);
+
 export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
+  const step = phaseStep(i);
+  return i.hasLeagueTicket === false && TICKET_PHASES.has(i.seasonStatus)
+    ? { ...step, ticketWarning: MISSING_LEAGUE_TICKET_WARNING }
+    : step;
+}
+
+function phaseStep(i: AdminPhaseInput): AdminNextStep {
   const {
     seasonStatus,
     draftStatus,

@@ -14,7 +14,8 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
-import { AUTO_SYNC } from "@/lib/constants";
+import { AUTO_SYNC, LEAGUE_GAME_MODE } from "@/lib/constants";
+import { howToHostParts, NO_TICKET_RESULT_NOTE } from "@/lib/match-hosting";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
 import { seatValue } from "@/lib/standin";
@@ -1676,6 +1677,15 @@ async function ReportResultSection({
         : `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. Player-account recovery protects the result if an old or incorrect ticket is used.`;
   return (
     <div className="space-y-6">
+      <HowToHost
+        parts={howToHostParts({
+          homeTeamName: match.homeTeam.name,
+          bestOf: match.bestOf,
+          region: LEAGUE_CONFIG.gameServerRegion,
+          mode: LEAGUE_GAME_MODE.name,
+        })}
+        note={match.season.dotaLeagueId ? null : NO_TICKET_RESULT_NOTE}
+      />
       {lobbyBotKindEnabled("season") ? (
         <DotaLobbyControls
           key={`${match.id}:${match.homeScore}:${match.awayScore}`}
@@ -1714,6 +1724,35 @@ async function ReportResultSection({
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+/**
+ * The one-line hosting summary both captains always get — who hosts, which
+ * server, which mode, how many lobbies — whether or not the season has a
+ * league ticket. Built from LEAGUE_CONFIG, LEAGUE_GAME_MODE and the match's
+ * own bestOf (howToHostParts), so it can't drift from the rules. A ticketed
+ * season adds the league id via LeagueLobbyChecklist; a ticketless one gets
+ * the note on what to do when the result doesn't import by itself.
+ */
+function HowToHost({
+  parts,
+  note,
+}: {
+  parts: string[];
+  note: string | null;
+}) {
+  return (
+    <section
+      aria-label="How to host"
+      className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm [overflow-wrap:anywhere]"
+    >
+      <p>
+        <b className="text-fg">How to host:</b>{" "}
+        <span className="text-muted">{parts.join(" · ")}</span>
+      </p>
+      {note ? <p className="mt-1 text-xs text-muted">{note}</p> : null}
+    </section>
   );
 }
 

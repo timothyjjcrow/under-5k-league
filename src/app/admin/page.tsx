@@ -1006,6 +1006,7 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
       .length,
     hasChampion: championPresentation.championTeamId != null,
     unlinkedDiscordCount: data.unlinkedDiscord,
+    hasLeagueTicket: !!season.dotaLeagueId,
   });
   const hasPlayedResult = data.matches.some(
     (match) => match.status === MATCH_STATUS.COMPLETED,
@@ -1141,6 +1142,18 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
           <b className="text-fg">{nextStep.title}</b>
           {nextStep.detail ? <> {nextStep.detail}</> : null}
         </div>
+        {/* A standing condition, not this phase's step: Valve needs about 15
+            days to issue a ticket, so this shows from the first signup rather
+            than surfacing when week 1 is already lost. The link opens the
+            collapsed league-id section (the jump bar reveals it on hash). */}
+        {nextStep.ticketWarning ? (
+          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
+            {nextStep.ticketWarning}{" "}
+            <a href="#adm-league" className={textLink()}>
+              Set the league id →
+            </a>
+          </p>
+        ) : null}
         <ActionForm
           action={renameSeason}
           hidden={{
@@ -1711,6 +1724,18 @@ function CaptainControls({
                   ? `${boughtCount} non-captain member${boughtCount === 1 ? " is" : "s are"} already assigned — Start is blocked to protect later-season roster data`
                   : "captain-only teams — ready for a fresh auction"}
               </li>
+              {/* Beside draft night on purpose: that is when week 1 gets its
+                  date, and the ticket has to be applied for ~15 days before. */}
+              {!season.dotaLeagueId ? (
+                <li className="rounded-md border border-danger/40 px-3 py-2 text-muted sm:col-span-2">
+                  <b className="text-fg">League ticket:</b> not set — Valve
+                  needs about 15 days to issue one; without it, league games
+                  may not reach OpenDota.{" "}
+                  <a href="#adm-league" className={textLink()}>
+                    Set the league id →
+                  </a>
+                </li>
+              ) : null}
             </ul>
             {!canStart && startBlocker ? (
               <p className="mt-2 text-xs font-medium text-accent">
