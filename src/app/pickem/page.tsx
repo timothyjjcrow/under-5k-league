@@ -288,13 +288,7 @@ export default async function PickemPage({
           {nextOpenDeadline != null ? (
             <PickemDeadlineRefresh targetMs={nextOpenDeadline} />
           ) : null}
-          <SectionTitle
-            aside={
-              viewer
-                ? "· picks lock at the match's scheduled start"
-                : "· sign in to lock in your calls"
-            }
-          >
+          <SectionTitle aside="· picks lock at kickoff; the crowd's picks stay hidden until then">
             Upcoming matches
           </SectionTitle>
           {open.length === 0 ? (
@@ -322,17 +316,18 @@ export default async function PickemPage({
                           <Card key={m.id}>
                             <CardBody className="space-y-2.5">
                               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted">
-                                <span className="shrink-0 whitespace-nowrap">
-                                  {m.phase === "REGULAR" ? (
-                                    roundLabel(m)
-                                  ) : (
+                                {/* A regular week is already the group's
+                                    heading; a playoff card still names its
+                                    round and series length. */}
+                                {m.phase === "REGULAR" ? null : (
+                                  <span className="shrink-0 whitespace-nowrap">
                                     <Badge tone="accent">
                                       {matchRoundLabel(m, playoffRounds, {
                                         bestOf: true,
                                       })}
                                     </Badge>
-                                  )}
-                                </span>
+                                  </span>
+                                )}
                                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                   {m.scheduledAt ? (
                                     <>
@@ -372,12 +367,11 @@ export default async function PickemPage({
                                 home={pickSide(m.homeTeamId)}
                                 away={pickSide(m.awayTeamId)}
                                 pickedTeamId={myPicks.get(m.id) ?? null}
-                                canSubmit={viewer != null}
+                                signInHref={
+                                  viewer ? undefined : "/login?next=/pickem"
+                                }
                                 locksAt={m.scheduledAt?.getTime() ?? null}
                               />
-                              <div className="text-center text-[11px] text-muted">
-                                Community split stays hidden until picks lock.
-                              </div>
                             </CardBody>
                           </Card>
                         );

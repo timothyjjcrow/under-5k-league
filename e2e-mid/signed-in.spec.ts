@@ -58,10 +58,11 @@ test("pick'em hides open splits and saves a call", async ({ page }) => {
     has: page.getByRole("heading", { name: /Upcoming matches/ }),
   });
   await expect(upcoming).toBeVisible();
+  // Said once, in the section heading, not repeated on every card.
   await expect(
-    upcoming
-      .getByText("Community split stays hidden until picks lock.")
-      .first(),
+    upcoming.getByRole("heading", {
+      name: /the crowd's picks stay hidden until then/,
+    }),
   ).toBeVisible();
   await expect(upcoming.getByText(/^crowd:/i)).toHaveCount(0);
 
@@ -91,6 +92,23 @@ test("Fantasy and Pick'em fit a narrow phone", async ({ page }) => {
     ).toBeVisible();
     await expectNoHorizontalOverflow(page, path);
   }
+
+  // On a phone the two teams are stacked rows, not two halves that cut
+  // the names to "Roshan's …".
+  const pair = page.locator("fieldset").first().locator("button[aria-pressed]");
+  await expect(pair).toHaveCount(2);
+  const first = (await pair.nth(0).boundingBox())!;
+  const second = (await pair.nth(1).boundingBox())!;
+  expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
+  expect(Math.round(second.width)).toBe(Math.round(first.width));
+  const clipped = await pair.evaluateAll((buttons) =>
+    buttons.flatMap((button) =>
+      [...button.querySelectorAll("span:not(.sr-only):not([aria-hidden])")]
+        .filter((span) => span.scrollWidth > span.clientWidth + 1)
+        .map((span) => span.textContent ?? ""),
+    ),
+  );
+  expect(clipped, "pick'em team names cut off").toEqual([]);
 
   assertNoErrors();
 });

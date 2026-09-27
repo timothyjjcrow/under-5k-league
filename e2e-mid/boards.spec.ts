@@ -312,6 +312,28 @@ test("failed news media degrades to its source link", async ({ page }) => {
   assertNoErrors();
 });
 
+test("signed-out pick'em cards offer one sign-in button each", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/pickem");
+  const upcoming = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /Upcoming matches/ }),
+  });
+  await expect(upcoming).toBeVisible();
+  // No greyed-out team buttons that do nothing on tap: each card names the
+  // matchup and carries one sign-in link that comes back to /pickem.
+  await expect(upcoming.locator("button[aria-pressed]")).toHaveCount(0);
+  const signIn = upcoming.getByRole("link", {
+    name: /^Sign in with Steam to pick/,
+  });
+  await expect(signIn.first()).toBeVisible();
+  await expect(signIn.first()).toHaveAttribute("href", "/login?next=/pickem");
+  await expectNoHorizontalOverflow(page, "/pickem signed out");
+  assertNoErrors();
+});
+
 test("public statistics metadata is route-specific and invalid archives are noindex not-found pages", async ({
   page,
 }) => {
