@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPoolInhouseInfo,
+  buildPoolLastSeasons,
   filterAndSortPlayers,
   filterPoolRows,
+  lastSeasonTitle,
+  lastSeasonToken,
   inhouseToken,
   pubHeroTitle,
   pubTitle,
   pubToken,
   sortByInhouseRecord,
+  type PoolLastSeason,
   type PoolPlayer,
   type PoolScoutInfo,
 } from "./player-pool";
@@ -296,6 +300,156 @@ describe("scouting token copy", () => {
     );
     expect(pubHeroTitle({ heroId: 99999, games: 1, wins: 1 })).toBe(
       "Hero #99999 — 1 pub game, 100% won",
+    );
+  });
+});
+
+describe("buildPoolLastSeasons (returning players' last league season)", () => {
+  const seasons = [
+    { id: "s3", name: "Season 3" },
+    { id: "s2", name: "Season 2" },
+  ];
+  const teamNames = new Map([
+    ["t-dire", "Dire Straits"],
+    ["t-rad", "Radiant Rascals"],
+    ["t-old", "Old Guard"],
+  ]);
+  const app = (
+    userId: string,
+    teamId: string,
+    seasonId: string,
+    games: number,
+    w = 0,
+    l = 0,
+    d = 0,
+  ) => ({
+    userId,
+    teamId,
+    seasonId,
+    games,
+    seriesWins: w,
+    seriesLosses: l,
+    seriesDraws: d,
+  });
+  const member = (
+    userId: string,
+    teamId: string,
+    seasonId: string,
+    price: number,
+    isCaptain = false,
+  ) => ({ userId, teamId, seasonId, price, isCaptain });
+  const build = (
+    over: Partial<Parameters<typeof buildPoolLastSeasons>[0]> = {},
+  ) =>
+    buildPoolLastSeasons({
+      userIds: ["u1", "u2", "u3", "u4", "new"],
+      seasons,
+      appearances: [],
+      memberships: [],
+      teamNames,
+      champions: new Map(),
+      ...over,
+    });
+
+  it("renders nothing for first-timers or a league with no earlier season", () => {
+    expect(build()).toEqual({});
+    expect(
+      build({
+        seasons: [],
+        appearances: [app("u1", "t-dire", "s3", 5, 3, 1)],
+        memberships: [member("u1", "t-dire", "s3", 12)],
+      }),
+    ).toEqual({});
+  });
+
+  it("takes the most recent earlier season with the roster team's record and price", () => {
+    const out = build({
+      appearances: [
+        app("u1", "t-old", "s2", 8, 5, 1),
+        app("u1", "t-dire", "s3", 7, 4, 3),
+      ],
+      memberships: [
+        member("u1", "t-old", "s2", 20),
+        member("u1", "t-dire", "s3", 12),
+      ],
+      champions: new Map([["s3", "t-dire"]]),
+    });
+    expect(out.u1).toEqual({
+      seasonName: "Season 3",
+      teamName: "Dire Straits",
+      record: { wins: 4, losses: 3, draws: 0 },
+      price: 12,
+      captain: false,
+      champion: true,
+    });
+    expect(lastSeasonToken(out.u1)).toBe(
+      "Season 3: Dire Straits · 4–3 series · $12 · 🏆 champion",
+    );
+  });
+
+  it("marks captains without a price, even after a price carried over", () => {
+    const out = build({
+      appearances: [app("u2", "t-rad", "s3", 6, 2, 2, 1)],
+      memberships: [member("u2", "t-rad", "s3", 9, true)],
+    });
+    expect(out.u2).toMatchObject({ captain: true, price: null });
+    expect(lastSeasonToken(out.u2)).toBe(
+      "Season 3: Radiant Rascals (captain) · 2–2–1 series",
+    );
+  });
+
+  it("uses the team they played most for when they had no roster row (a standin)", () => {
+    const out = build({
+      appearances: [
+        app("u3", "t-rad", "s3", 1, 1, 0),
+        app("u3", "t-dire", "s3", 3, 1, 2),
+      ],
+    });
+    expect(out.u3).toMatchObject({
+      teamName: "Dire Straits",
+      record: { wins: 1, losses: 2, draws: 0 },
+      price: null,
+      captain: false,
+    });
+  });
+
+  it("keeps a roster-only season (no imported games) without a record", () => {
+    const out = build({
+      memberships: [member("u4", "t-old", "s2", 0)],
+    });
+    expect(out.u4).toEqual({
+      seasonName: "Season 2",
+      teamName: "Old Guard",
+      record: null,
+      price: null,
+      captain: false,
+      champion: false,
+    });
+    expect(lastSeasonToken(out.u4)).toBe("Season 2: Old Guard");
+  });
+
+  it("ignores users outside the pool and seasons that aren't earlier ones", () => {
+    const out = build({
+      appearances: [
+        app("someone-else", "t-dire", "s3", 4, 2, 0),
+        app("u1", "t-dire", "current", 4, 2, 0),
+      ],
+      memberships: [member("u1", "t-dire", "current", 5)],
+    });
+    expect(out).toEqual({});
+  });
+
+  it("spells the token out in its title", () => {
+    const ls: PoolLastSeason = {
+      seasonName: "Season 3",
+      teamName: "Dire Straits",
+      record: { wins: 4, losses: 3, draws: 1 },
+      price: 12,
+      captain: false,
+      champion: true,
+    };
+    expect(lastSeasonTitle(ls)).toBe(
+      "Season 3: played for Dire Straits · series they played in: 4 won, 3 lost, 1 drawn · drafted for $12 · won the title",
     );
   });
 });

@@ -52,9 +52,27 @@ export type PoolPubRecord = {
  *  shape — one parallel record keyed by userId (the PoolDraftInfo precedent),
  *  so PoolPlayer and the shared filter lib stay untouched. Entries are only
  *  present when there is something to show; a missing key renders nothing. */
+/** A returning player's most recent earlier league season (see
+ *  buildPoolLastSeasons). */
+export type PoolLastSeason = {
+  seasonName: string;
+  teamName: string;
+  /** Completed series this player appeared in for that team, the profile's
+   *  "Seasons played" count; null when none were recorded. */
+  record: { wins: number; losses: number; draws: number } | null;
+  /** What that team paid for them at the auction; null for a captain, a $0
+   *  free-agent signing, or someone who played for a team without a roster
+   *  row there (a standin, or a player released later). */
+  price: number | null;
+  captain: boolean;
+  /** That team won the season's title. */
+  champion: boolean;
+};
+
 export type PoolScout = {
   inhouse?: PoolInhouseRecord;
   pub?: PoolPubRecord;
+  lastSeason?: PoolLastSeason;
   /** Signup "goals" — the row's quote fallback when captainNote is empty
    *  (only sent when it will actually render; payload trimming). */
   statement?: string;
@@ -157,6 +175,139 @@ export function pubHeroTitle(h: {
   const name = heroById(h.heroId)?.name ?? `Hero #${h.heroId}`;
   const pct = h.games > 0 ? `, ${Math.round((h.wins / h.games) * 100)}% won` : "";
   return `${name} — ${h.games} pub game${h.games === 1 ? "" : "s"}${pct}`;
+}
+
+/**
+ * Each returning player's most recent EARLIER league season: the team they
+ * played for, their series record there, their auction price and whether
+ * that team won the title. The same facts as the profile's Seasons card
+ * (recorded appearances first, then the season's final roster), boiled down
+ * to one scouting token. Data-presence gated like every pool token: a player
+ * with no earlier season gets no entry, so a first season renders unchanged.
+ *
+ * Within the chosen season the roster team wins when they also played for it;
+ * otherwise the team they played the most games for (a standin, or a player
+ * released mid-season); otherwise the roster team with no record (a season
+ * with no imported games).
+ */
+export function buildPoolLastSeasons(input: {
+  userIds: Iterable<string>;
+  /** Earlier seasons, NEWEST FIRST. Anything not listed is ignored. */
+  seasons: readonly { id: string; name: string }[];
+  /** appearanceCareers rows (any users; filtered here). */
+  appearances: readonly {
+    userId: string;
+    teamId: string;
+    seasonId: string;
+    games: number;
+    seriesWins: number;
+    seriesLosses: number;
+    seriesDraws: number;
+  }[];
+  /** TeamMember rows in those seasons (at most one per user per season). */
+  memberships: readonly {
+    userId: string;
+    teamId: string;
+    seasonId: string;
+    price: number;
+    isCaptain: boolean;
+  }[];
+  teamNames: ReadonlyMap<string, string>;
+  /** seasonId → champion teamId, for seasons with a resolved champion. */
+  champions: ReadonlyMap<string, string>;
+}): Record<string, PoolLastSeason> {
+  const want = new Set(input.userIds);
+  const order = new Map(input.seasons.map((season, i) => [season.id, i]));
+  const byUser = new Map<
+    string,
+    {
+      apps: (typeof input.appearances)[number][];
+      rows: (typeof input.memberships)[number][];
+    }
+  >();
+  const slot = (userId: string) => {
+    let entry = byUser.get(userId);
+    if (!entry) byUser.set(userId, (entry = { apps: [], rows: [] }));
+    return entry;
+  };
+  for (const a of input.appearances) {
+    if (want.has(a.userId) && order.has(a.seasonId) && a.games > 0) {
+      slot(a.userId).apps.push(a);
+    }
+  }
+  for (const m of input.memberships) {
+    if (want.has(m.userId) && order.has(m.seasonId)) slot(m.userId).rows.push(m);
+  }
+
+  const out: Record<string, PoolLastSeason> = {};
+  for (const [userId, { apps, rows }] of byUser) {
+    const rank = (seasonId: string) => order.get(seasonId) ?? Infinity;
+    const seasonId = [...apps, ...rows]
+      .map((x) => x.seasonId)
+      .sort((a, b) => rank(a) - rank(b))[0];
+    const season = input.seasons[rank(seasonId)];
+    const seasonApps = apps
+      .filter((a) => a.seasonId === seasonId)
+      .sort((a, b) => b.games - a.games || a.teamId.localeCompare(b.teamId));
+    const roster = rows.find((m) => m.seasonId === seasonId);
+    const teamId =
+      roster && seasonApps.some((a) => a.teamId === roster.teamId)
+        ? roster.teamId
+        : (seasonApps[0]?.teamId ?? roster?.teamId);
+    const teamName = teamId ? input.teamNames.get(teamId) : undefined;
+    if (!season || !teamId || teamName === undefined) continue;
+    const app = seasonApps.find((a) => a.teamId === teamId);
+    const rostered = roster?.teamId === teamId ? roster : undefined;
+    out[userId] = {
+      seasonName: season.name,
+      teamName,
+      record:
+        app && app.seriesWins + app.seriesLosses + app.seriesDraws > 0
+          ? {
+              wins: app.seriesWins,
+              losses: app.seriesLosses,
+              draws: app.seriesDraws,
+            }
+          : null,
+      price:
+        rostered && !rostered.isCaptain && rostered.price > 0
+          ? rostered.price
+          : null,
+      captain: !!rostered?.isCaptain,
+      champion: input.champions.get(seasonId) === teamId,
+    };
+  }
+  return out;
+}
+
+/** "Season 3: Dire Straits · 4–3 series · $12 · 🏆 champion". */
+export function lastSeasonToken(ls: PoolLastSeason): string {
+  const parts = [
+    `${ls.seasonName}: ${ls.teamName}${ls.captain ? " (captain)" : ""}`,
+  ];
+  if (ls.record) {
+    const { wins, losses, draws } = ls.record;
+    parts.push(`${wins}–${losses}${draws > 0 ? `–${draws}` : ""} series`);
+  }
+  if (ls.price != null) parts.push(`$${ls.price}`);
+  if (ls.champion) parts.push("🏆 champion");
+  return parts.join(" · ");
+}
+
+/** Hover detail for the token, spelled out. */
+export function lastSeasonTitle(ls: PoolLastSeason): string {
+  const parts = [
+    `${ls.seasonName}: played for ${ls.teamName}${ls.captain ? " as captain" : ""}`,
+  ];
+  if (ls.record) {
+    const { wins, losses, draws } = ls.record;
+    parts.push(
+      `series they played in: ${wins} won, ${losses} lost${draws > 0 ? `, ${draws} drawn` : ""}`,
+    );
+  }
+  if (ls.price != null) parts.push(`drafted for $${ls.price}`);
+  if (ls.champion) parts.push("won the title");
+  return parts.join(" · ");
 }
 
 /**

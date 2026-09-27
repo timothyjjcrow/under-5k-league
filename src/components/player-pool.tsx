@@ -23,6 +23,8 @@ import {
   filterPoolRows,
   inhouseTitle,
   inhouseToken,
+  lastSeasonTitle,
+  lastSeasonToken,
   pubHeroTitle,
   pubTitle,
   pubToken,
@@ -431,7 +433,17 @@ export function PlayerPool({
                     <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
                       {/* Facts before actions: the scouting tokens lead, the
                         outbound links follow. Plain text — no new tap targets
-                        on a line already carrying two. */}
+                        on a line already carrying two. The league's own
+                        history goes first: for a returning player it is the
+                        most direct evidence a captain has. */}
+                      {sc?.lastSeason ? (
+                        <span
+                          className="tabular-nums"
+                          title={lastSeasonTitle(sc.lastSeason)}
+                        >
+                          {lastSeasonToken(sc.lastSeason)}
+                        </span>
+                      ) : null}
                       {ih ? (
                         <span
                           className="tabular-nums lg:hidden"

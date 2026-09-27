@@ -8,6 +8,7 @@ import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { PlayerPool, type PoolDraftInfo } from "@/components/player-pool";
 import { averageMmr } from "@/lib/pool-stats";
 import { loadInhouseLadder } from "@/lib/inhouse-ladder";
+import { loadPoolLastSeasons } from "@/lib/pool-history";
 import {
   buildPoolInhouseInfo,
   type PoolScout,
@@ -178,13 +179,15 @@ export default async function PlayersPage() {
   // an empty league ships an empty map and the pool renders as before.
   // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
-  const inhouseInfo = buildPoolInhouseInfo(
-    ladder,
-    poolRegistrations.map((p) => p.userId),
-  );
+  const poolUserIds = poolRegistrations.map((p) => p.userId);
+  const inhouseInfo = buildPoolInhouseInfo(ladder, poolUserIds);
+  // Returning players' last league season (team, series record, price,
+  // title). One small query and nothing else until an earlier season exists.
+  const lastSeasons = await loadPoolLastSeasons(season, poolUserIds);
   const scout: PoolScoutInfo = {};
   for (const p of poolRegistrations) {
     const entry: PoolScout = {};
+    if (lastSeasons[p.userId]) entry.lastSeason = lastSeasons[p.userId];
     if (inhouseInfo[p.userId]) entry.inhouse = inhouseInfo[p.userId];
     const pub = poolPubRecord(p.user.pubStats);
     if (pub) entry.pub = pub;
@@ -192,7 +195,9 @@ export default async function PlayersPage() {
     if (!hasText(p.captainNote) && hasText(p.statement)) {
       entry.statement = p.statement;
     }
-    if (entry.inhouse || entry.pub || entry.statement) scout[p.userId] = entry;
+    if (entry.lastSeason || entry.inhouse || entry.pub || entry.statement) {
+      scout[p.userId] = entry;
+    }
   }
 
   return (
