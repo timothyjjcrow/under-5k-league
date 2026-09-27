@@ -370,7 +370,7 @@ the shared `hasLaterBracketRound` rule. `/recap` keeps the champion, bracket,
 and completed series even when there are zero imported Dota games; only
 player-stat awards become unavailable. `/seasons` and `/seasons/[id]` recompute
 archived standings and brackets from stored rows; `/hall-of-fame` rolls up
-cross-season careers (`src/lib/hall-of-fame.ts`, career fantasy points,
+cross-season careers (`src/lib/hall-of-fame.ts`, career impact points,
 all-time oracle). `/seasons` also hosts a non-restorable JSON audit archive
 (`/api/admin/season-export`) and `deleteSeason` behind the strongest confirm
 tier plus a recent full-database backup receipt in production.

@@ -755,9 +755,11 @@ the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
   re-sorts by standings with W–L(–D), points, and diff. Team detail
   (`/teams/[id]`) adds recent-form chips + head-to-head (pure `recentForm` /
   `headToHead` in `src/lib/team-matches.ts`, tested) and a draft-spend summary.
-- **Leaders** `/leaders` — six leaderboards (wins, KDA, win rate, kills,
-  assists, games) via pure `topBy` (`player-stats.ts`); rate boards use an
-  adaptive min-games floor.
+- **Leaders** `/leaders` — opens on Weekly honors, then player boards (KDA,
+  kills and assists PER GAME, kill involvement, sustain, GPM, net worth, most
+  games) via pure `topBy` (`player-stats.ts`); rate boards use an adaptive
+  min-games floor. No wins or win-rate board on purpose (they ranked the
+  team's record), no per-board search (the viewer's row is pinned).
 - **Dashboard** (`src/app/page.tsx`) shows a compact playoff bracket during
   PLAYOFFS and a champion/final-standings recap on COMPLETE. Bracket
   round-grouping is pure `slotRound` / `groupPlayoffRounds` (`schedule.ts`,
@@ -2331,8 +2333,10 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 ## Weekly honors (done, branch: bigger-features)
 
 - Pure `weeklyHonors` (`src/lib/honors.ts`, tested): Player of the Week =
-  best fantasy points that week (same `fantasyPoints` identity as the
-  fantasy league); Team of the Week = most game wins, points tiebreak.
+  most points that week (same `fantasyPoints` identity as the fantasy
+  league); Team of the Week = most game wins, points tiebreak. Publicly that
+  score is "impact points" (Leaders, Hall of Fame, recap MVP, Discord), and
+  every surface quotes `impactPointsRule()` (`fantasy.ts`) to explain it.
 - Publication authority is `evaluateHonorWeeks` in
   `src/lib/honors-readiness.ts`, loaded by
   `src/lib/honors-readiness-service.ts`. It ignores postseason matches and
