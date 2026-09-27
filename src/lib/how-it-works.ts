@@ -2,6 +2,7 @@
 
 import { HARD_MMR_CEILING, REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
+import { matchNightText } from "./season-copy";
 import { joinSeasonCta } from "./site-nav";
 
 /**
@@ -10,13 +11,14 @@ import { joinSeasonCta } from "./site-nav";
  * The old feature tour always showed the regional default, so it could
  * disagree with Home ("Sundays at 6:00 PM Pacific" beside "Wednesdays, 8pm
  * ET"), and on Europe, whose default is empty, it said "to be announced" after
- * the admin had announced one.
+ * the admin had announced one. The page puts a full stop after it, so a typed
+ * one is dropped (matchNightText).
  */
 export function seasonMatchNight(
   seasonSchedule: string | null | undefined,
   fallback: string = LEAGUE_CONFIG.matchSchedule.label,
 ): string {
-  return seasonSchedule?.trim() || fallback;
+  return matchNightText(seasonSchedule) ?? fallback;
 }
 
 /**

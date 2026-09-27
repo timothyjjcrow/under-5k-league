@@ -13,7 +13,7 @@ import {
   SEASON_STATUS,
 } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
-import { seasonPhaseLabel } from "./season-copy";
+import { matchNightText, seasonPhaseLabel } from "./season-copy";
 import { formatLeagueTime } from "./zoned-time";
 
 export type LinkPreview = { title: string; description: string };
@@ -92,8 +92,8 @@ export function homePreview(
       return { title, description };
     }
     case SEASON_STATUS.REGULAR_SEASON: {
-      // Admin-typed; a trailing full stop would double up.
-      const night = season.matchSchedule?.trim().replace(/[.\s]+$/, "") ||
+      const night =
+        matchNightText(season.matchSchedule) ??
         (LEAGUE_CONFIG.matchSchedule.announced
           ? LEAGUE_CONFIG.matchSchedule.label
           : null);

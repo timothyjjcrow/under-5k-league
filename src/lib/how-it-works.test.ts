@@ -15,8 +15,17 @@ describe("seasonMatchNight", () => {
     ).toBe("Wednesdays, 8pm ET");
   });
 
+  it("drops a typed full stop, since the page ends the sentence itself", () => {
+    expect(
+      seasonMatchNight(" Wednesdays, 8pm ET. ", "Sundays at 6:00 PM Pacific"),
+    ).toBe("Wednesdays, 8pm ET");
+    expect(seasonMatchNight("Sundays 6 PM CET...", "fallback")).toBe(
+      "Sundays 6 PM CET",
+    );
+  });
+
   it("falls back to the regional default only when the season has none", () => {
-    for (const unset of [null, undefined, "", "   "]) {
+    for (const unset of [null, undefined, "", "   ", " . "]) {
       expect(seasonMatchNight(unset, "Sundays at 6:00 PM Pacific")).toBe(
         "Sundays at 6:00 PM Pacific",
       );

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   draftPhasePresentation,
+  matchNightText,
   phaseSubtitle,
   seasonPhaseLabel,
   seasonPhaseTone,
@@ -170,5 +171,21 @@ describe("seasonPhaseTone", () => {
     expect(seasonPhaseTone(SEASON_STATUS.COMPLETE)).toBe("accent");
     expect(seasonPhaseTone(null)).toBe("neutral");
     expect(seasonPhaseTone("SOMETHING_NEW")).toBe("neutral");
+  });
+});
+
+describe("matchNightText", () => {
+  // Every surface quoting it ends the sentence itself, so an admin's own full
+  // stop printed "Wednesdays, 8pm ET.. Games are on…".
+  it("trims the admin's text and drops a trailing full stop", () => {
+    expect(matchNightText("Wednesdays, 8pm ET")).toBe("Wednesdays, 8pm ET");
+    expect(matchNightText("  Wednesdays, 8pm ET.  ")).toBe("Wednesdays, 8pm ET");
+    expect(matchNightText("Sundays 6 p.m. CET...")).toBe("Sundays 6 p.m. CET");
+  });
+
+  it("is null when the admin hasn't set one", () => {
+    for (const unset of [null, undefined, "", "   ", ".", " . "]) {
+      expect(matchNightText(unset)).toBeNull();
+    }
   });
 });

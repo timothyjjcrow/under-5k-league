@@ -199,3 +199,13 @@ export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
       return "";
   }
 }
+
+/**
+ * The admin-typed match night (`Season.matchSchedule`), ready to quote in a
+ * sentence: trimmed, and without a trailing full stop, because every surface
+ * that quotes it ends the sentence itself ("Wednesdays, 8pm ET.. Games are
+ * on…" otherwise). Null when the admin hasn't set one.
+ */
+export function matchNightText(raw: string | null | undefined): string | null {
+  return raw?.trim().replace(/[.\s]+$/, "") || null;
+}
