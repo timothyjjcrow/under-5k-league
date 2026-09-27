@@ -1,3 +1,5 @@
+import { zoneLabel, zoneName } from "./zone-label";
+
 export type LeagueRegion = "us" | "eu";
 
 type LeagueEnvironment = {
@@ -37,9 +39,10 @@ export function createLeagueConfig(env: LeagueEnvironment) {
   const day = env.NEXT_PUBLIC_MATCH_DAY?.trim() || (europe ? "" : "Sundays");
   const time = env.NEXT_PUBLIC_MATCH_TIME?.trim() || (europe ? "" : "6:00 PM");
   const announced = Boolean(day && time);
-  // "Pacific", not "PST": the league night stays on the local clock, which is
-  // PDT for most of the year.
-  const timezone = env.NEXT_PUBLIC_LEAGUE_TIMEZONE?.trim() || (europe ? timeZone : "Pacific");
+  // The zone in plain words: "Pacific", not "PST" (the league night stays on
+  // the local clock, which is PDT for most of the year), and "Berlin", never
+  // the raw "Europe/Berlin" id.
+  const timezone = zoneName(timeZone);
   const inhouseLeagueName = env.NEXT_PUBLIC_INHOUSE_LEAGUE_NAME?.trim() ||
     (europe ? "European inhouse league ticket (to be configured)" : "Under 5K In-House League");
 
@@ -71,7 +74,9 @@ export function createLeagueConfig(env: LeagueEnvironment) {
       time,
       timezone,
       announced,
-      label: announced ? `${day} at ${time} ${timezone}` : "Match night to be announced",
+      label: announced
+        ? `${day} at ${time} ${zoneLabel(timeZone)}`
+        : "Match night to be announced",
     },
   } as const;
 }

@@ -51,8 +51,10 @@ import {
 import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
+  AUTO_SYNC,
   HARD_MMR_CEILING,
   MATCH_PHASE,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
 } from "@/lib/constants";
@@ -62,6 +64,7 @@ import { draftSetupOpen } from "@/lib/draft-setup";
 import { rankMedalName, rankTierExactMinMmr } from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchRoundLabel } from "@/lib/schedule";
+import { seasonMatchNightLabel } from "@/lib/match-night";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
@@ -122,9 +125,12 @@ export default async function MePage({
       : null,
   ]);
 
+  // Async server component: Date.now is request-time state, not render replay.
+  // eslint-disable-next-line react-hooks/purity
+  const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
   // Returning player: no signup for this season yet, but one from a past
   // season — carry those answers into the fresh form so they don't retype.
-  const [previous, standinAssignments] = await Promise.all([
+  const [previous, standinAssignments, nextTeamMatch] = await Promise.all([
     season && !reg
       ? prisma.registration.findFirst({
           where: { userId: user.id, NOT: { seasonId: season.id } },
@@ -139,14 +145,52 @@ export default async function MePage({
           orderBy: { match: { week: "asc" } },
         })
       : null,
+    // A rostered player's next fixture, shown under "Your team" instead of
+    // the signup-era match-night callout. The dashboard's freshness rule: a
+    // days-old fixture nobody reported isn't "next".
+    season && member
+      ? prisma.match.findFirst({
+          where: {
+            seasonId: season.id,
+            status: { not: MATCH_STATUS.COMPLETED },
+            AND: [
+              {
+                OR: [
+                  { homeTeamId: member.teamId },
+                  { awayTeamId: member.teamId },
+                ],
+              },
+              {
+                OR: [
+                  { scheduledAt: null },
+                  { scheduledAt: { gte: freshFrom } },
+                ],
+              },
+            ],
+          },
+          orderBy: [
+            { scheduledAt: { sort: "asc", nulls: "last" } },
+            { week: "asc" },
+            { createdAt: "asc" },
+          ],
+          include: {
+            homeTeam: { select: { name: true } },
+            awayTeam: { select: { name: true } },
+          },
+        })
+      : null,
   ]);
   const form = reg ?? previous;
-  // A booked playoff fixture is named by its round ("Semifinal"), the way the
-  // match page, /schedule and Discord name it. Only read when one is booked.
+  // A playoff fixture (booked cover, or the team's next match) is named by
+  // its round ("Semifinal"), the way the match page, /schedule and Discord
+  // name it. Only read when one is shown.
   const playoffRounds = await loadPlayoffRoundsBySeason(
-    (standinAssignments ?? [])
-      .filter((a) => a.match.phase === MATCH_PHASE.PLAYOFF)
-      .map((a) => a.match.seasonId),
+    [
+      ...(standinAssignments ?? []).map((a) => a.match),
+      ...(nextTeamMatch ? [nextTeamMatch] : []),
+    ]
+      .filter((m) => m.phase === MATCH_PHASE.PLAYOFF)
+      .map((m) => m.seasonId),
   );
 
   // The medal's plausible MMR window — signup claims outside it are snapped
@@ -477,6 +521,43 @@ export default async function MePage({
                 </div>
               </Link>
             ) : null}
+            {member && nextTeamMatch ? (
+              <Link
+                href={`/matches/${nextTeamMatch.id}`}
+                className="block rounded-lg border border-line bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-muted/60"
+              >
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  Your next match
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
+                  <Badge tone="info">
+                    {matchRoundLabel(
+                      nextTeamMatch,
+                      playoffRounds.get(nextTeamMatch.seasonId) ?? 0,
+                    )}
+                  </Badge>
+                  <span className="min-w-0">
+                    vs{" "}
+                    <span className="font-medium text-fg">
+                      {nextTeamMatch.homeTeamId === member.teamId
+                        ? nextTeamMatch.awayTeam.name
+                        : nextTeamMatch.homeTeam.name}
+                    </span>
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  {nextTeamMatch.scheduledAt ? (
+                    <LocalTime
+                      ts={nextTeamMatch.scheduledAt.getTime()}
+                      variant="full"
+                      initial={formatMatchTime(nextTeamMatch.scheduledAt, "full")}
+                    />
+                  ) : (
+                    "Time TBD"
+                  )}
+                </div>
+              </Link>
+            ) : null}
 
             {/* Renders for a STANDIN signup (empty state included) and for ANY
                 unrostered signup that actually holds a booking — undrafted
@@ -591,17 +672,22 @@ export default async function MePage({
               </div>
             ) : (
               <>
-                <ScheduleCallout
-                  label={season.matchSchedule}
-                  description={
-                    playerLocked ||
-                    (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN)
-                      ? "Games run weekly. Captains book standins for this night when one of their players can't make it."
-                      : isRegistered
-                        ? "Games run weekly on this night."
-                        : undefined
-                  }
-                />
+                {/* The weekly slot is for deciding whether to sign up. Once
+                    the player is on a team or booked as cover, the fixture
+                    listed above says when they play. */}
+                {member || (standinAssignments?.length ?? 0) > 0 ? null : (
+                  <ScheduleCallout
+                    label={seasonMatchNightLabel(season)}
+                    description={
+                      playerLocked ||
+                      (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN)
+                        ? "Games run weekly. Captains book standins for this night when one of their players can't make it."
+                        : isRegistered
+                          ? "Games run weekly on this night."
+                          : undefined
+                    }
+                  />
+                )}
                 {returningPlan && previous ? (
                   <ReturningJoinCard
                     plan={returningPlan}

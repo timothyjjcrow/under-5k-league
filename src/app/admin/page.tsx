@@ -158,6 +158,7 @@ import {
   groupPlayoffRounds,
   hasLaterBracketRound,
 } from "@/lib/schedule";
+import { weeklyMatchNightLabel } from "@/lib/match-night";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { playoffSetupRevision } from "@/lib/playoff-command";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
@@ -1308,7 +1309,10 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
             Save schedule
           </SubmitButton>
           <span className="text-xs text-muted">
-            shown before signup{season.matchSchedule ? "" : " · using default"}
+            {/* Once the schedule has kickoffs, pages print week 1's slot. */}
+            {season.firstMatchNight
+              ? `fixtures set it now: ${weeklyMatchNightLabel(season.firstMatchNight)}`
+              : `shown before signup${season.matchSchedule ? "" : " · using default"}`}
           </span>
         </ActionForm>
         <ActionForm

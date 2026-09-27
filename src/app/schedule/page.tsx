@@ -5,6 +5,7 @@ import { RegularSeasonProgress } from "@/components/league-progress";
 import { leagueProgress } from "@/lib/league-progress";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
+import { seasonMatchNightLabel } from "@/lib/match-night";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
@@ -816,7 +817,7 @@ export default async function SchedulePage() {
 
       <AnalysisDisclosure title="Match times & calendar help">
         <ScheduleCallout
-          label={season.matchSchedule}
+          label={seasonMatchNightLabel(season)}
           description={calloutDescription(season.status)}
         />
         <p className="text-sm leading-relaxed text-muted">
