@@ -1363,9 +1363,11 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
   note and hide Remove (clearing the DB key can't touch env). Regression guard:
   don't reintroduce any client render of the raw URL.
 - Announces: new player signups (with countdown to the draft threshold), draft
-  started (`startDraft`), every auction sale (`resolveExpiredNomination`,
-  captured in-tx and sent post-commit — one message per sale, idempotent),
-  draft complete (both draft-service resolvers), match results — every decided
+  started (`startDraft`, mentions the linked captains), draft complete (both
+  draft-service resolvers: ONE teams post mentioning each linked drafted
+  player, then the recap, queued with `afterResponse` so the captain whose
+  request closed the last lot never waits on Discord; single sales post
+  nothing, the room shows them), match results — every decided
   series announces via `announceSeriesResultOnce` (`match-import.ts`, fired
   from `recomputeSeries` on the transition to decided, idempotent through an
   atomic `resultAnnounced:<matchId>` Setting CREATE; admin `recordResult`
