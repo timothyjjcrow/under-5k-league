@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
-import { MATCH_STATUS } from "./constants";
-import { matchPhaseLabel } from "./schedule";
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { loadPlayoffRoundsBySeason } from "./playoff-rounds";
+import { matchRoundLabel } from "./schedule";
 
 // A team can't play two league fixtures inside this window. Same span as the
 // standin and scrim clash rules: a Bo3 plus warm-up runs about three hours.
@@ -8,7 +9,7 @@ export const FIXTURE_CONFLICT_WINDOW_MS = 4 * 60 * 60 * 1000;
 
 export type FixtureConflict = {
   id: string;
-  /** "Week 3", "Playoffs", … */
+  /** "Week 3", "Tiebreaker", "Semifinal", … — `matchRoundLabel`. */
   label: string;
   homeName: string;
   awayName: string;
@@ -49,16 +50,24 @@ export async function findFixtureConflict(
       id: true,
       week: true,
       phase: true,
+      bracketSlot: true,
       homeTeam: { select: { name: true } },
       awayTeam: { select: { name: true } },
     },
   });
-  return clash
-    ? {
-        id: clash.id,
-        label: matchPhaseLabel(clash.phase, clash.week),
-        homeName: clash.homeTeam.name,
-        awayName: clash.awayTeam.name,
-      }
-    : null;
+  if (!clash) return null;
+  // Name a playoff clash by its round, like the rest of the site. Read only on
+  // this refusal path, never for a time that fits.
+  const playoffRounds =
+    clash.phase === MATCH_PHASE.PLAYOFF
+      ? ((await loadPlayoffRoundsBySeason([options.seasonId], db)).get(
+          options.seasonId,
+        ) ?? 0)
+      : 0;
+  return {
+    id: clash.id,
+    label: matchRoundLabel(clash, playoffRounds),
+    homeName: clash.homeTeam.name,
+    awayName: clash.awayTeam.name,
+  };
 }
