@@ -74,7 +74,7 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Your profile" };
+export const metadata = { title: "My account" };
 
 // The Discord OAuth callback bounces outcomes back here as ?discord=<code>.
 // Map only KNOWN codes to copy — never echo the raw query value (same
@@ -302,7 +302,7 @@ export default async function MePage({
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <PageTitle title="Your profile" />
+      <PageTitle title="My account" />
       <Card>
         <CardHeader
           headingLevel={2}
@@ -410,7 +410,7 @@ export default async function MePage({
               href={`/players/${user.id}`}
               className={textLink("whitespace-nowrap text-sm")}
             >
-              View public profile →
+              View my public profile →
             </Link>
           </div>
         </CardBody>

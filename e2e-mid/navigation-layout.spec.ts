@@ -173,7 +173,7 @@ for (const phase of [
           account.getByRole("link", { name: "Admin", exact: true }),
         ).toBeVisible();
         await expect(
-          account.getByRole("link", { name: "My profile", exact: true }),
+          account.getByRole("link", { name: "My account", exact: true }),
         ).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(accountButton).toBeFocused();
@@ -222,7 +222,7 @@ test("desktop disclosures work by keyboard, dismiss each other, and follow links
   await page.locator("h1").click();
   await expect(account).toHaveCount(0);
   await accountButton.click();
-  await account.getByRole("link", { name: "My profile" }).click();
+  await account.getByRole("link", { name: "My account" }).click();
   await expect(page).toHaveURL(/\/me$/);
   await expect(account).toHaveCount(0);
 

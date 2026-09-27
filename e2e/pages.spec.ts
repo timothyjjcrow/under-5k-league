@@ -156,13 +156,13 @@ test("internal pages keep the active league phase visible in the header", async 
   ).toBeVisible();
 });
 
-test("mobile menu surfaces club pages and My profile", async ({ page }) => {
+test("mobile menu surfaces club pages and My account", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  // Signed in, so the account group carries My profile.
+  // Signed in, so the account group carries My account.
   await page.goto(
     "/api/auth/dev?name=Menu+Tester&steamId=76561190000000042&redirect=/",
   );
-  const profile = page.getByRole("link", { name: "My profile — Menu Tester" });
+  const profile = page.getByRole("link", { name: "My account — Menu Tester" });
   const menuButton = page.getByRole("button", { name: "Open menu" });
   await expect(profile).toHaveCSS("min-height", "44px");
   await expect(menuButton).toHaveCSS("height", "44px");
@@ -180,7 +180,7 @@ test("mobile menu surfaces club pages and My profile", async ({ page }) => {
   await expect(
     menu.getByRole("link", { name: "Compare players" }),
   ).toBeVisible();
-  await expect(menu.getByRole("link", { name: "My profile" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "My account" })).toBeVisible();
   // SIGNUPS phase: Features is already an inline nav item — Explore must not
   // duplicate it.
   await expect(menu.getByRole("link", { name: "Features" })).toHaveCount(1);
@@ -229,7 +229,7 @@ test("profile page renders the searchable hero picker", async ({ page }) => {
   const steamId = "76561199" + String(Date.now()).slice(-9);
   await page.goto(`/api/auth/dev?name=HeroFan&steamId=${steamId}&redirect=/me`);
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Dota / Dotabuff account", level: 2 }),

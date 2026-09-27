@@ -28,7 +28,7 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   await cta.click();
 
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   await expect(page.getByRole("radio", { name: /Standin/ })).toBeChecked();
 
@@ -112,7 +112,7 @@ test("mobile /me identity card fits its card", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 844 });
   await page.goto("/me");
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   // Wait for the identity card itself, not just the page heading — the first
   // cut of this test measured before it rendered, got "element missing", and

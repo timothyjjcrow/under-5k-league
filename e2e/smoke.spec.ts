@@ -18,7 +18,7 @@ test("a new player can sign in and join the season", async ({ page }) => {
   await page.goto(
     `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/me`,
   );
-  await expect(page.getByRole("heading", { name: "Your profile" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "My account" })).toBeVisible();
 
   await page.getByLabel("Dota 2 MMR").fill("3500");
   await page.getByRole("button", { name: /Join the season|Update signup/ }).click();
@@ -28,7 +28,7 @@ test("a new player can sign in and join the season", async ({ page }) => {
 
   // A player with an active signup but no imported league games gets one
   // plain status heading instead of a blank stat area.
-  await page.getByRole("link", { name: "View public profile →" }).click();
+  await page.getByRole("link", { name: "View my public profile →" }).click();
   await expect(page.getByRole("heading", { name })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "No league games yet" }),

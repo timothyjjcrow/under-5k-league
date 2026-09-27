@@ -399,7 +399,7 @@ export function SiteHeader({
               <div ref={accountRef} className="relative">
                 <Link
                   href="/me"
-                  aria-label={`My profile — ${user.name}`}
+                  aria-label={`My account — ${user.name}`}
                   className="flex min-h-11 items-center rounded-full border border-line p-1 text-sm hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:hidden"
                 >
                   <Avatar name={user.name} src={user.avatar} size={28} />
@@ -442,7 +442,7 @@ export function SiteHeader({
                       aria-current={pathname === "/me" ? "page" : undefined}
                       className="flex min-h-11 items-center rounded-lg px-3 text-sm text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
                     >
-                      My profile
+                      My account
                     </Link>
                     {user.role === "ADMIN" ? (
                       <Link
@@ -601,7 +601,7 @@ export function SiteHeader({
                           : "text-muted hover:bg-surface-2/60 hover:text-fg",
                       )}
                     >
-                      My profile
+                      My account
                     </Link>
                   ) : null}
                   {user ? (
