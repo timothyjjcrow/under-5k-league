@@ -454,8 +454,9 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     await expect(
       page.getByText("League offseason", { exact: true }),
     ).toBeVisible();
+    // The footer lists Season history too; this is the page's own pointer.
     await expect(
-      page.getByRole("link", { name: "Season history" }),
+      page.locator("#main").getByRole("link", { name: "Season history" }),
     ).toBeVisible();
     await expectNoHorizontalOverflow(page, `${path} offseason`);
   }

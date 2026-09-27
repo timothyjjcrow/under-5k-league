@@ -77,7 +77,10 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // Before Start draft, the dashboard must say setup/waiting rather than tell
   // every visitor that captains are actively bidding.
   await page.goto("/");
-  await expect(page.getByText("Draft setup", { exact: true })).toBeVisible();
+  // The phase badge appears in the hero and the footer — scope to main.
+  await expect(
+    page.locator("#main").getByText("Draft setup", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/draft is being prepared/i)).toBeVisible();
   await expect(
     page.getByRole("link", { name: "View the draft room →" }),

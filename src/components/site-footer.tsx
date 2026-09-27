@@ -72,7 +72,12 @@ export function SiteFooter({
                 >
                   {section.links.map((l) => (
                     <li key={l.href}>
-                      <Link href={l.href} className={FOOTER_LINK_CLASS}>
+                      {/* inline-block so the 32px hit box takes up its own
+                          height instead of overlapping the next row. */}
+                      <Link
+                        href={l.href}
+                        className={`${FOOTER_LINK_CLASS} inline-block`}
+                      >
                         {l.label}
                       </Link>
                     </li>
